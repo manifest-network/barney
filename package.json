@@ -33,7 +33,7 @@
     "@cosmos-kit/react": "2.22.3",
     "@cosmos-kit/web3auth": "npm:@manifest-network/web3auth@2.16.6-ll.1",
     "@interchain-ui/react": "1.26.2",
-    "@manifest-network/manifestjs": "file:../manifestjs",
+    "@manifest-network/manifestjs": "2.2.0-billing-v2.0",
     "axios": "1.13.2",
     "chain-registry": "2.0.140",
     "react": "19.2.3",
