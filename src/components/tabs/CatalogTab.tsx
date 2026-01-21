@@ -503,7 +503,7 @@ function ProviderCard({
             className="font-mono text-xs text-gray-500 hover:text-gray-300"
             title={`Click to copy: ${provider.uuid}`}
           >
-            {provider.uuid.slice(0, 8)}...
+            {provider.uuid}
             <span className="ml-1 text-gray-600">{copied ? '(copied!)' : '(copy)'}</span>
           </button>
         </div>
@@ -571,7 +571,7 @@ function SKURow({
           className="font-mono text-xs text-gray-500 hover:text-gray-300"
           title={`Click to copy: ${sku.uuid}`}
         >
-          {sku.uuid.slice(0, 8)}...
+          {sku.uuid}
           <span className="ml-1 text-gray-600">{copied ? '(copied!)' : '(copy)'}</span>
         </button>
       </td>

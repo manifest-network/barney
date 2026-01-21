@@ -346,7 +346,6 @@ function LeaseCard({
 }) {
   const { signArbitrary } = useChain(CHAIN_NAME);
 
-  const [showFullUuid, setShowFullUuid] = useState(false);
   const [connectionInfo, setConnectionInfo] = useState<ConnectionInfo | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -414,27 +413,19 @@ function LeaseCard({
       <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
+            <span className="font-mono text-sm text-gray-400">{lease.uuid}</span>
             <button
-              onClick={() => setShowFullUuid(!showFullUuid)}
-              className="font-mono text-sm text-gray-400 hover:text-white"
-              title="Click to toggle full UUID"
+              onClick={() => copyToClipboard(lease.uuid)}
+              className="text-xs text-blue-400 hover:text-blue-300"
             >
-              {showFullUuid ? lease.uuid : `${lease.uuid.slice(0, 16)}...`}
+              Copy
             </button>
-            {showFullUuid && (
-              <button
-                onClick={() => copyToClipboard(lease.uuid)}
-                className="text-xs text-blue-400 hover:text-blue-300"
-              >
-                Copy
-              </button>
-            )}
             <span className={`rounded px-2 py-0.5 text-xs ${colors.bg} ${colors.text}`}>
               {stateLabels[lease.state]}
             </span>
           </div>
           <div className="mt-1 text-sm text-gray-500">
-            Provider: {provider ? formatAddress(provider.address) : lease.provider_uuid.slice(0, 8) + '...'}
+            Provider: {provider ? formatAddress(provider.address) : lease.provider_uuid}
           </div>
         </div>
         <div className="flex gap-2">
@@ -582,7 +573,7 @@ function LeaseCard({
             return (
               <div key={idx} className="flex items-center justify-between text-sm">
                 <span className="text-white">
-                  {sku?.name || item.sku_uuid.slice(0, 8) + '...'} × {item.quantity}
+                  {sku?.name || item.sku_uuid} × {item.quantity}
                 </span>
                 <span className="text-gray-400">
                   {pricePerHour.toFixed(4)} {symbol}/hr each

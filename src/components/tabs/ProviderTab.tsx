@@ -438,27 +438,19 @@ function PendingLeaseCard({
 }) {
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
-  const [showFullUuid, setShowFullUuid] = useState(false);
 
   return (
     <div className="rounded-lg border border-yellow-600/30 bg-yellow-900/10 p-4">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
+            <span className="font-mono text-sm text-gray-300">{lease.uuid}</span>
             <button
-              onClick={() => setShowFullUuid(!showFullUuid)}
-              className="font-mono text-sm text-gray-300 hover:text-white"
+              onClick={() => copyToClipboard(lease.uuid)}
+              className="text-xs text-blue-400 hover:text-blue-300"
             >
-              {showFullUuid ? lease.uuid : `${lease.uuid.slice(0, 20)}...`}
+              Copy
             </button>
-            {showFullUuid && (
-              <button
-                onClick={() => copyToClipboard(lease.uuid)}
-                className="text-xs text-blue-400 hover:text-blue-300"
-              >
-                Copy
-              </button>
-            )}
           </div>
           <div className="mt-1 text-sm text-gray-400">
             Tenant: <span className="font-mono">{formatAddress(lease.tenant)}</span>
@@ -493,7 +485,7 @@ function PendingLeaseCard({
           return (
             <div key={idx} className="mt-1 flex justify-between text-sm">
               <span className="text-white">
-                {sku?.name || item.sku_uuid.slice(0, 8) + '...'} × {item.quantity}
+                {sku?.name || item.sku_uuid} × {item.quantity}
               </span>
               <span className="text-gray-400">
                 {formatPrice(item.locked_price.amount, item.locked_price.denom)}/sec
@@ -550,7 +542,6 @@ function ActiveLeaseCard({
   onClose: (reason?: string) => void;
   txLoading: boolean;
 }) {
-  const [showFullUuid, setShowFullUuid] = useState(false);
   const [showCloseForm, setShowCloseForm] = useState(false);
   const [closeReason, setCloseReason] = useState('');
 
@@ -573,20 +564,13 @@ function ActiveLeaseCard({
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
+            <span className="font-mono text-sm text-gray-300">{lease.uuid}</span>
             <button
-              onClick={() => setShowFullUuid(!showFullUuid)}
-              className="font-mono text-sm text-gray-300 hover:text-white"
+              onClick={() => copyToClipboard(lease.uuid)}
+              className="text-xs text-blue-400 hover:text-blue-300"
             >
-              {showFullUuid ? lease.uuid : `${lease.uuid.slice(0, 20)}...`}
+              Copy
             </button>
-            {showFullUuid && (
-              <button
-                onClick={() => copyToClipboard(lease.uuid)}
-                className="text-xs text-blue-400 hover:text-blue-300"
-              >
-                Copy
-              </button>
-            )}
           </div>
           <div className="mt-1 text-sm text-gray-400">
             Tenant: <span className="font-mono">{formatAddress(lease.tenant)}</span>
@@ -617,7 +601,7 @@ function ActiveLeaseCard({
           return (
             <div key={idx} className="flex justify-between text-sm">
               <span className="text-white">
-                {sku?.name || item.sku_uuid.slice(0, 8) + '...'} × {item.quantity}
+                {sku?.name || item.sku_uuid} × {item.quantity}
               </span>
             </div>
           );
