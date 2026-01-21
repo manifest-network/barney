@@ -1,0 +1,14 @@
+diff --git a/node_modules/@cosmos-kit/web3auth/esm/extension/signer.js b/node_modules/@cosmos-kit/web3auth/esm/extension/signer.js
+index 1234567..abcdefg 100644
+--- a/node_modules/@cosmos-kit/web3auth/esm/extension/signer.js
++++ b/node_modules/@cosmos-kit/web3auth/esm/extension/signer.js
+@@ -89,7 +89,8 @@ export class Web3AuthSigner {
+         return response;
+     }
+     async signAmino(signerAddress, signDoc) {
+-        if (signDoc.chain_id !== this.chain.chain_id) {
++        // Allow empty chain_id for ADR-036 off-chain signing
++        if (signDoc.chain_id && signDoc.chain_id !== this.chain.chain_id) {
+             throw new Error('Chain ID mismatch');
+         }
+         const signData = {
