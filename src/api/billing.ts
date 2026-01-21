@@ -28,6 +28,7 @@ export interface Lease {
   rejected_at?: string;
   expired_at?: string;
   rejection_reason?: string;
+  closure_reason?: string;
 }
 
 export interface LeasesResponse {

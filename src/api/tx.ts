@@ -268,13 +268,15 @@ export async function cancelLease(
 export async function closeLease(
   signer: OfflineSigner,
   sender: string,
-  leaseUuids: string[]
+  leaseUuids: string[],
+  reason?: string
 ): Promise<TxResult> {
   const msg = {
     typeUrl: MsgCloseLease.typeUrl,
     value: MsgCloseLease.fromPartial({
       sender,
       leaseUuids,
+      reason: reason ?? '',
     }),
   };
 

@@ -116,14 +116,14 @@ export function LeasesTab() {
     }
   };
 
-  const handleCloseLease = async (leaseUuid: string) => {
+  const handleCloseLease = async (leaseUuid: string, reason?: string) => {
     if (!address) return;
 
     try {
       const signer = getOfflineSigner();
       setTxStatus({ loading: true, message: 'Closing lease...' });
 
-      const result: TxResult = await closeLease(signer, address, [leaseUuid]);
+      const result: TxResult = await closeLease(signer, address, [leaseUuid], reason);
 
       if (result.success) {
         setTxStatus({ loading: false, message: `Lease closed! Tx: ${result.transactionHash}` });
@@ -340,7 +340,7 @@ function LeaseCard({
   getSKU: (uuid: string) => SKU | undefined;
   getProvider: (uuid: string) => Provider | undefined;
   onCancel: (uuid: string) => void;
-  onClose: (uuid: string) => void;
+  onClose: (uuid: string, reason?: string) => void;
   txLoading: boolean;
   tenantAddress?: string;
 }) {
@@ -350,6 +350,8 @@ function LeaseCard({
   const [connectionInfo, setConnectionInfo] = useState<ConnectionInfo | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [showCloseForm, setShowCloseForm] = useState(false);
+  const [closeReason, setCloseReason] = useState('');
 
   const provider = getProvider(lease.provider_uuid);
   const colors = stateColors[lease.state];
@@ -456,7 +458,7 @@ function LeaseCard({
                 {connectionLoading ? 'Loading...' : 'Get Connection'}
               </button>
               <button
-                onClick={() => onClose(lease.uuid)}
+                onClick={() => setShowCloseForm(!showCloseForm)}
                 disabled={txLoading}
                 className="rounded border border-orange-600 px-3 py-1 text-sm text-orange-400 hover:bg-orange-900/20 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -527,6 +529,45 @@ function LeaseCard({
         </div>
       )}
 
+      {/* Close Form */}
+      {showCloseForm && (
+        <div className="mb-4 rounded border border-orange-600/30 bg-orange-900/10 p-3">
+          <label className="mb-1 block text-sm text-gray-400">Closure Reason (optional)</label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={closeReason}
+              onChange={(e) => setCloseReason(e.target.value)}
+              placeholder="e.g., No longer needed"
+              maxLength={256}
+              className="flex-1 rounded border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-orange-500 focus:outline-none"
+              disabled={txLoading}
+            />
+            <button
+              onClick={() => {
+                onClose(lease.uuid, closeReason || undefined);
+                setShowCloseForm(false);
+                setCloseReason('');
+              }}
+              disabled={txLoading}
+              className="rounded bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Confirm Close
+            </button>
+            <button
+              onClick={() => {
+                setShowCloseForm(false);
+                setCloseReason('');
+              }}
+              disabled={txLoading}
+              className="rounded border border-gray-600 px-3 py-2 text-sm text-gray-400 hover:bg-gray-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Lease Items */}
       <div className="mb-4 rounded bg-gray-700/30 p-3">
         <div className="mb-2 text-xs font-medium uppercase text-gray-500">Items</div>
@@ -561,7 +602,12 @@ function LeaseCard({
         <div>Created: {formatDate(lease.created_at)}</div>
         <div>Last Settled: {formatDate(lease.last_settled_at)}</div>
         {lease.acknowledged_at && <div>Acknowledged: {formatDate(lease.acknowledged_at)}</div>}
-        {lease.closed_at && <div>Closed: {formatDate(lease.closed_at)}</div>}
+        {lease.closed_at && (
+          <div>
+            Closed: {formatDate(lease.closed_at)}
+            {lease.closure_reason && <span className="text-gray-400"> - {lease.closure_reason}</span>}
+          </div>
+        )}
         {lease.rejected_at && (
           <div className="text-red-400">
             Rejected: {formatDate(lease.rejected_at)}

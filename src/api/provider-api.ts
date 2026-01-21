@@ -62,20 +62,24 @@ export async function getLeaseConnectionInfo(
   // Normalize the API URL (remove trailing slash)
   const baseUrl = providerApiUrl.replace(/\/$/, '');
 
-  // In development, use the Vite proxy for localhost URLs to bypass CORS
+  // In development, use the proxy to bypass CORS
+  // The proxy dynamically routes to the target specified in X-Proxy-Target header
   let url: string;
-  if (import.meta.env.DEV && baseUrl.includes('localhost:8080')) {
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${authToken}`,
+    'Content-Type': 'application/json',
+  };
+
+  if (import.meta.env.DEV) {
     url = `/proxy-provider/v1/leases/${leaseUuid}/connection`;
+    headers['X-Proxy-Target'] = baseUrl;
   } else {
     url = `${baseUrl}/v1/leases/${leaseUuid}/connection`;
   }
 
   const response = await fetch(url, {
     method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${authToken}`,
-      'Content-Type': 'application/json',
-    },
+    headers,
   });
 
   if (!response.ok) {

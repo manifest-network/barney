@@ -173,14 +173,14 @@ export function ProviderTab() {
     }
   };
 
-  const handleCloseLease = async (leaseUuid: string) => {
+  const handleCloseLease = async (leaseUuid: string, reason?: string) => {
     if (!address) return;
 
     try {
       const signer = getOfflineSigner();
       setTxStatus({ loading: true, message: 'Closing lease...' });
 
-      const result: TxResult = await closeLease(signer, address, [leaseUuid]);
+      const result: TxResult = await closeLease(signer, address, [leaseUuid], reason);
 
       if (result.success) {
         setTxStatus({ loading: false, message: `Lease closed! Tx: ${result.transactionHash}` });
@@ -412,7 +412,7 @@ export function ProviderTab() {
                 getSKU={getSKU}
                 withdrawable={withdrawableAmounts.get(lease.uuid) || []}
                 onWithdraw={() => handleWithdraw([lease.uuid])}
-                onClose={() => handleCloseLease(lease.uuid)}
+                onClose={(reason) => handleCloseLease(lease.uuid, reason)}
                 txLoading={txStatus?.loading || false}
               />
             ))}
@@ -547,10 +547,12 @@ function ActiveLeaseCard({
   getSKU: (uuid: string) => SKU | undefined;
   withdrawable: Coin[];
   onWithdraw: () => void;
-  onClose: () => void;
+  onClose: (reason?: string) => void;
   txLoading: boolean;
 }) {
   const [showFullUuid, setShowFullUuid] = useState(false);
+  const [showCloseForm, setShowCloseForm] = useState(false);
+  const [closeReason, setCloseReason] = useState('');
 
   const hourlyRate = () => {
     let total = 0;
@@ -631,13 +633,42 @@ function ActiveLeaseCard({
           Withdraw
         </button>
         <button
-          onClick={onClose}
+          onClick={() => setShowCloseForm(!showCloseForm)}
           disabled={txLoading}
           className="rounded border border-orange-600 px-3 py-1 text-sm text-orange-400 hover:bg-orange-900/20 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Close Lease
         </button>
       </div>
+
+      {/* Close Form */}
+      {showCloseForm && (
+        <div className="mt-3 border-t border-gray-700 pt-3">
+          <label className="mb-1 block text-sm text-gray-400">Closure Reason (optional)</label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={closeReason}
+              onChange={(e) => setCloseReason(e.target.value)}
+              placeholder="e.g., Resource decommissioned"
+              maxLength={256}
+              className="flex-1 rounded border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-orange-500 focus:outline-none"
+              disabled={txLoading}
+            />
+            <button
+              onClick={() => {
+                onClose(closeReason || undefined);
+                setShowCloseForm(false);
+                setCloseReason('');
+              }}
+              disabled={txLoading}
+              className="rounded bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Confirm Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

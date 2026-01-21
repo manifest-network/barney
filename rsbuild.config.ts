@@ -21,10 +21,18 @@ export default defineConfig({
   server: {
     proxy: {
       '/proxy-provider': {
-        target: 'https://localhost:8080',
+        target: 'https://localhost:8080', // Default, overridden by router
         changeOrigin: true,
         secure: false,
         pathRewrite: { '^/proxy-provider': '' },
+        router: (req) => {
+          // Dynamic target from X-Proxy-Target header
+          const target = req.headers['x-proxy-target'];
+          if (target && typeof target === 'string') {
+            return target;
+          }
+          return 'https://localhost:8080';
+        },
       },
     },
   },
