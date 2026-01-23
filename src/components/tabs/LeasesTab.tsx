@@ -8,19 +8,25 @@ import { DENOM_METADATA, formatPrice } from '../../api/config';
 import {
   createSignMessage,
   createAuthToken,
+  createLeaseDataSignMessage,
+  createLeaseDataAuthToken,
   getLeaseConnectionInfo,
+  uploadLeaseData,
   type ConnectionInfo,
 } from '../../api/provider-api';
+import { sha256, toHex, validatePayloadSize, getPayloadSize, MAX_PAYLOAD_SIZE } from '../../utils/hash';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh';
+import { AutoRefreshIndicator } from '../AutoRefreshIndicator';
 
 const CHAIN_NAME = 'manifestlocal';
 
-const stateColors: Record<LeaseState, { bg: string; text: string }> = {
-  LEASE_STATE_UNSPECIFIED: { bg: 'bg-gray-700', text: 'text-gray-400' },
-  LEASE_STATE_PENDING: { bg: 'bg-yellow-900/50', text: 'text-yellow-400' },
-  LEASE_STATE_ACTIVE: { bg: 'bg-green-900/50', text: 'text-green-400' },
-  LEASE_STATE_CLOSED: { bg: 'bg-gray-700', text: 'text-gray-400' },
-  LEASE_STATE_REJECTED: { bg: 'bg-red-900/50', text: 'text-red-400' },
-  LEASE_STATE_EXPIRED: { bg: 'bg-gray-700', text: 'text-gray-500' },
+const stateBadgeClasses: Record<LeaseState, string> = {
+  LEASE_STATE_UNSPECIFIED: 'badge badge-neutral',
+  LEASE_STATE_PENDING: 'badge badge-warning',
+  LEASE_STATE_ACTIVE: 'badge badge-success',
+  LEASE_STATE_CLOSED: 'badge badge-neutral',
+  LEASE_STATE_REJECTED: 'badge badge-error',
+  LEASE_STATE_EXPIRED: 'badge badge-neutral',
 };
 
 const stateLabels: Record<LeaseState, string> = {
@@ -45,7 +51,7 @@ function copyToClipboard(text: string) {
 }
 
 export function LeasesTab() {
-  const { address, isWalletConnected, openView, getOfflineSigner } = useChain(CHAIN_NAME);
+  const { address, isWalletConnected, openView, getOfflineSigner, signArbitrary } = useChain(CHAIN_NAME);
 
   const [stateFilter, setStateFilter] = useState<LeaseState | 'all'>('all');
   const [showCreateLease, setShowCreateLease] = useState(false);
@@ -56,6 +62,7 @@ export function LeasesTab() {
   const [error, setError] = useState<string | null>(null);
   const [isInAllowedList, setIsInAllowedList] = useState(false);
   const [txStatus, setTxStatus] = useState<{ loading: boolean; message: string } | null>(null);
+  const [selectedLeases, setSelectedLeases] = useState<Set<string>>(new Set());
 
   const fetchData = useCallback(async () => {
     if (!address) {
@@ -65,7 +72,9 @@ export function LeasesTab() {
     }
 
     try {
-      setLoading(true);
+      if (leases.length === 0) {
+        setLoading(true);
+      }
       setError(null);
 
       const [leasesData, providersData, skusData, billingParams] = await Promise.all([
@@ -84,11 +93,13 @@ export function LeasesTab() {
     } finally {
       setLoading(false);
     }
-  }, [address]);
+  }, [address, leases.length]);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  const autoRefresh = useAutoRefresh(fetchData, {
+    interval: 5000, // 5 seconds
+    enabled: true,
+    immediate: true,
+  });
 
   const getSKU = (uuid: string) => skus.find((s) => s.uuid === uuid);
   const getProvider = (uuid: string) => providers.find((p) => p.uuid === uuid);
@@ -136,17 +147,76 @@ export function LeasesTab() {
     }
   };
 
-  const handleCreateLease = async (items: { skuUuid: string; quantity: number }[]) => {
+  const handleCreateLease = async (
+    items: { skuUuid: string; quantity: number }[],
+    payload?: Uint8Array,
+    metaHash?: Uint8Array,
+    providerUuid?: string
+  ) => {
     if (!address) return;
 
     try {
       const signer = getOfflineSigner();
       setTxStatus({ loading: true, message: 'Creating lease...' });
 
-      const result: TxResult = await createLease(signer, address, items);
+      const result: TxResult = await createLease(signer, address, items, metaHash);
 
       if (result.success) {
-        setTxStatus({ loading: false, message: `Lease created! Tx: ${result.transactionHash}` });
+        // If we have payload, we need to upload it to the provider
+        if (payload && metaHash && providerUuid) {
+          setTxStatus({ loading: true, message: 'Uploading payload to provider...' });
+
+          // Find the provider to get their API URL
+          const provider = providers.find((p) => p.uuid === providerUuid);
+          if (!provider?.api_url) {
+            setTxStatus({ loading: false, message: `Lease created but provider has no API URL. Tx: ${result.transactionHash}` });
+            setShowCreateLease(false);
+            await fetchData();
+            return;
+          }
+
+          // Refresh leases to find the newly created one
+          const updatedLeases = await getLeasesByTenant(address);
+          const metaHashHex = toHex(metaHash);
+
+          // Find the new pending lease with matching meta_hash
+          const newLease = updatedLeases.find(
+            (l) => l.state === 'LEASE_STATE_PENDING' && l.meta_hash === metaHashHex
+          );
+
+          if (!newLease) {
+            setTxStatus({ loading: false, message: `Lease created but couldn't find it to upload payload. Tx: ${result.transactionHash}` });
+            setShowCreateLease(false);
+            await fetchData();
+            return;
+          }
+
+          try {
+            // Create auth token for payload upload
+            const timestamp = Math.floor(Date.now() / 1000);
+            const signMessage = createLeaseDataSignMessage(newLease.uuid, metaHashHex, timestamp);
+            const signResult = await signArbitrary(address, signMessage);
+
+            const authToken = createLeaseDataAuthToken(
+              address,
+              newLease.uuid,
+              metaHashHex,
+              timestamp,
+              signResult.pub_key.value,
+              signResult.signature
+            );
+
+            await uploadLeaseData(provider.api_url, newLease.uuid, payload, authToken);
+            setTxStatus({ loading: false, message: `Lease created and payload uploaded! Tx: ${result.transactionHash}` });
+          } catch (uploadErr) {
+            setTxStatus({
+              loading: false,
+              message: `Lease created but payload upload failed: ${uploadErr instanceof Error ? uploadErr.message : 'Unknown error'}. Tx: ${result.transactionHash}`,
+            });
+          }
+        } else {
+          setTxStatus({ loading: false, message: `Lease created! Tx: ${result.transactionHash}` });
+        }
         setShowCreateLease(false);
         await fetchData();
       } else {
@@ -157,14 +227,110 @@ export function LeasesTab() {
     }
   };
 
+  // Batch operations
+  const handleBatchCancel = async () => {
+    if (!address || selectedLeases.size === 0) return;
+
+    const pendingSelected = Array.from(selectedLeases).filter((uuid) => {
+      const lease = leases.find((l) => l.uuid === uuid);
+      return lease?.state === 'LEASE_STATE_PENDING';
+    });
+
+    if (pendingSelected.length === 0) {
+      setTxStatus({ loading: false, message: 'No pending leases selected' });
+      return;
+    }
+
+    try {
+      const signer = getOfflineSigner();
+      setTxStatus({ loading: true, message: `Cancelling ${pendingSelected.length} lease(s)...` });
+
+      const result: TxResult = await cancelLease(signer, address, pendingSelected);
+
+      if (result.success) {
+        setTxStatus({ loading: false, message: `${pendingSelected.length} lease(s) cancelled! Tx: ${result.transactionHash}` });
+        setSelectedLeases(new Set());
+        await fetchData();
+      } else {
+        setTxStatus({ loading: false, message: `Failed: ${result.error}` });
+      }
+    } catch (err) {
+      setTxStatus({ loading: false, message: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` });
+    }
+  };
+
+  const handleBatchClose = async (reason?: string) => {
+    if (!address || selectedLeases.size === 0) return;
+
+    const activeSelected = Array.from(selectedLeases).filter((uuid) => {
+      const lease = leases.find((l) => l.uuid === uuid);
+      return lease?.state === 'LEASE_STATE_ACTIVE';
+    });
+
+    if (activeSelected.length === 0) {
+      setTxStatus({ loading: false, message: 'No active leases selected' });
+      return;
+    }
+
+    try {
+      const signer = getOfflineSigner();
+      setTxStatus({ loading: true, message: `Closing ${activeSelected.length} lease(s)...` });
+
+      const result: TxResult = await closeLease(signer, address, activeSelected, reason);
+
+      if (result.success) {
+        setTxStatus({ loading: false, message: `${activeSelected.length} lease(s) closed! Tx: ${result.transactionHash}` });
+        setSelectedLeases(new Set());
+        await fetchData();
+      } else {
+        setTxStatus({ loading: false, message: `Failed: ${result.error}` });
+      }
+    } catch (err) {
+      setTxStatus({ loading: false, message: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` });
+    }
+  };
+
+  const toggleLeaseSelection = (uuid: string) => {
+    setSelectedLeases((prev) => {
+      const next = new Set(prev);
+      if (next.has(uuid)) {
+        next.delete(uuid);
+      } else {
+        next.add(uuid);
+      }
+      return next;
+    });
+  };
+
+  const selectAllFiltered = () => {
+    const actionableLeases = filteredLeases.filter(
+      (l) => l.state === 'LEASE_STATE_PENDING' || l.state === 'LEASE_STATE_ACTIVE'
+    );
+    setSelectedLeases(new Set(actionableLeases.map((l) => l.uuid)));
+  };
+
+  const deselectAll = () => {
+    setSelectedLeases(new Set());
+  };
+
+  // Count selected by state
+  const selectedPendingCount = Array.from(selectedLeases).filter((uuid) => {
+    const lease = leases.find((l) => l.uuid === uuid);
+    return lease?.state === 'LEASE_STATE_PENDING';
+  }).length;
+
+  const selectedActiveCount = Array.from(selectedLeases).filter((uuid) => {
+    const lease = leases.find((l) => l.uuid === uuid);
+    return lease?.state === 'LEASE_STATE_ACTIVE';
+  }).length;
+
   if (!isWalletConnected) {
     return (
-      <div className="rounded-lg border border-gray-700 bg-gray-800 p-8 text-center">
-        <p className="mb-4 text-gray-400">Connect your wallet to view and manage your leases</p>
-        <button
-          onClick={() => openView()}
-          className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
-        >
+      <div className="card-static p-12 text-center">
+        <div className="mb-6 text-6xl">📋</div>
+        <h2 className="mb-4 text-2xl font-heading font-semibold">Connect Your Wallet</h2>
+        <p className="mb-8 text-muted">Connect your wallet to view and manage your leases</p>
+        <button onClick={() => openView()} className="btn btn-primary btn-lg btn-pill">
           Connect Wallet
         </button>
       </div>
@@ -174,16 +340,16 @@ export function LeasesTab() {
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <div className="text-gray-400">Loading leases...</div>
+        <div className="text-muted animate-pulse">Loading leases...</div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="rounded-lg border border-red-700 bg-red-900/20 p-4 text-red-400">
-        Error: {error}
-        <button onClick={fetchData} className="ml-4 text-blue-400 hover:text-blue-300">
+      <div className="card-static p-4 border-error-500/50 bg-error-500/10">
+        <span className="text-error">Error: {error}</span>
+        <button onClick={autoRefresh.refresh} className="ml-4 text-primary-400 hover:underline">
           Retry
         </button>
       </div>
@@ -194,12 +360,12 @@ export function LeasesTab() {
     <div className="space-y-6">
       {/* Billing Module Status */}
       {isInAllowedList && (
-        <div className="rounded-lg border border-blue-700 bg-blue-900/20 p-4">
+        <div className="card-static p-4 border-primary-500/50 bg-primary-500/10">
           <div className="flex items-center gap-2">
-            <span className="text-blue-400">★</span>
-            <span className="font-medium text-blue-300">Billing Module Admin</span>
+            <span className="text-primary-400">★</span>
+            <span className="font-medium text-primary-300">Billing Module Admin</span>
           </div>
-          <p className="mt-1 text-sm text-blue-400/80">
+          <p className="mt-1 text-sm text-primary-400/80">
             Your wallet is in the billing module allowed list.
           </p>
         </div>
@@ -208,12 +374,12 @@ export function LeasesTab() {
       {/* Transaction Status */}
       {txStatus && (
         <div
-          className={`rounded-lg border p-4 ${
+          className={`card-static p-4 ${
             txStatus.loading
-              ? 'border-blue-700 bg-blue-900/20 text-blue-300'
+              ? 'border-primary-500/50 bg-primary-500/10 text-primary-300'
               : txStatus.message.includes('Failed') || txStatus.message.includes('Error')
-              ? 'border-red-700 bg-red-900/20 text-red-300'
-              : 'border-green-700 bg-green-900/20 text-green-300'
+              ? 'border-error-500/50 bg-error-500/10 text-error'
+              : 'border-success-500/50 bg-success-500/10 text-success'
           }`}
         >
           {txStatus.loading && <span className="mr-2">⏳</span>}
@@ -221,7 +387,7 @@ export function LeasesTab() {
           {!txStatus.loading && (
             <button
               onClick={() => setTxStatus(null)}
-              className="ml-4 text-gray-400 hover:text-white"
+              className="ml-4 text-muted hover:text-primary"
             >
               Dismiss
             </button>
@@ -231,35 +397,80 @@ export function LeasesTab() {
 
       {/* Controls */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-400">Filter:</span>
-          <select
-            value={stateFilter}
-            onChange={(e) => setStateFilter(e.target.value as LeaseState | 'all')}
-            className="rounded border border-gray-600 bg-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
-          >
-            <option value="all">All States</option>
-            <option value="LEASE_STATE_PENDING">Pending</option>
-            <option value="LEASE_STATE_ACTIVE">Active</option>
-            <option value="LEASE_STATE_CLOSED">Closed</option>
-            <option value="LEASE_STATE_REJECTED">Rejected</option>
-            <option value="LEASE_STATE_EXPIRED">Expired</option>
-          </select>
-          <button
-            onClick={fetchData}
-            className="rounded border border-gray-600 px-3 py-1.5 text-sm text-gray-400 hover:bg-gray-700 hover:text-white"
-          >
-            Refresh
-          </button>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted">Filter:</span>
+            <select
+              value={stateFilter}
+              onChange={(e) => setStateFilter(e.target.value as LeaseState | 'all')}
+              className="input select text-sm py-1.5"
+            >
+              <option value="all">All States</option>
+              <option value="LEASE_STATE_PENDING">Pending</option>
+              <option value="LEASE_STATE_ACTIVE">Active</option>
+              <option value="LEASE_STATE_CLOSED">Closed</option>
+              <option value="LEASE_STATE_REJECTED">Rejected</option>
+              <option value="LEASE_STATE_EXPIRED">Expired</option>
+            </select>
+          </div>
+          <AutoRefreshIndicator autoRefresh={autoRefresh} intervalSeconds={5} />
         </div>
         <button
           onClick={() => setShowCreateLease(true)}
           disabled={providers.length === 0}
-          className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn btn-primary"
         >
           + Create Lease
         </button>
       </div>
+
+      {/* Batch Selection Controls */}
+      {filteredLeases.some((l) => l.state === 'LEASE_STATE_PENDING' || l.state === 'LEASE_STATE_ACTIVE') && (
+        <div className="flex flex-wrap items-center gap-4 card-static p-3">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={selectAllFiltered}
+              className="text-sm text-primary-400 hover:text-primary-300"
+            >
+              Select All
+            </button>
+            <span className="text-surface-600">|</span>
+            <button
+              onClick={deselectAll}
+              className="text-sm text-muted hover:text-primary"
+            >
+              Deselect All
+            </button>
+            {selectedLeases.size > 0 && (
+              <span className="ml-2 text-sm text-muted">
+                ({selectedLeases.size} selected)
+              </span>
+            )}
+          </div>
+          {selectedLeases.size > 0 && (
+            <div className="flex items-center gap-2">
+              {selectedPendingCount > 0 && (
+                <button
+                  onClick={handleBatchCancel}
+                  disabled={txStatus?.loading}
+                  className="btn btn-danger btn-sm"
+                >
+                  Cancel {selectedPendingCount} Pending
+                </button>
+              )}
+              {selectedActiveCount > 0 && (
+                <button
+                  onClick={() => handleBatchClose()}
+                  disabled={txStatus?.loading}
+                  className="btn btn-secondary btn-sm"
+                >
+                  Close {selectedActiveCount} Active
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-4">
@@ -272,10 +483,14 @@ export function LeasesTab() {
           ] as LeaseState[]
         ).map((state) => {
           const count = leases.filter((l) => l.state === state).length;
+          const colorClass = state === 'LEASE_STATE_PENDING' ? 'text-warning'
+            : state === 'LEASE_STATE_ACTIVE' ? 'text-success'
+            : state === 'LEASE_STATE_REJECTED' ? 'text-error'
+            : 'text-muted';
           return (
-            <div key={state} className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-              <div className="text-2xl font-bold text-white">{count}</div>
-              <div className={`text-sm ${stateColors[state].text}`}>{stateLabels[state]}</div>
+            <div key={state} className="stat-card">
+              <div className={`stat-value ${colorClass}`}>{count}</div>
+              <div className="stat-label">{stateLabels[state]}</div>
             </div>
           );
         })}
@@ -284,17 +499,17 @@ export function LeasesTab() {
       {/* Leases List */}
       <div className="space-y-4">
         {filteredLeases.length === 0 ? (
-          <div className="rounded-lg border border-gray-700 bg-gray-800 p-8 text-center">
-            <p className="text-gray-400">No leases found</p>
+          <div className="card-static p-8 text-center">
+            <p className="text-muted">No leases found</p>
             {providers.length > 0 ? (
               <button
                 onClick={() => setShowCreateLease(true)}
-                className="mt-4 text-blue-400 hover:text-blue-300"
+                className="mt-4 text-primary-400 hover:text-primary-300"
               >
                 Create your first lease
               </button>
             ) : (
-              <p className="mt-2 text-sm text-gray-500">No active providers available</p>
+              <p className="mt-2 text-sm text-dim">No active providers available</p>
             )}
           </div>
         ) : (
@@ -308,6 +523,8 @@ export function LeasesTab() {
               onClose={handleCloseLease}
               txLoading={txStatus?.loading || false}
               tenantAddress={address}
+              isSelected={selectedLeases.has(lease.uuid)}
+              onToggleSelect={() => toggleLeaseSelection(lease.uuid)}
             />
           ))
         )}
@@ -335,6 +552,8 @@ function LeaseCard({
   onClose,
   txLoading,
   tenantAddress,
+  isSelected,
+  onToggleSelect,
 }: {
   lease: Lease;
   getSKU: (uuid: string) => SKU | undefined;
@@ -343,6 +562,8 @@ function LeaseCard({
   onClose: (uuid: string, reason?: string) => void;
   txLoading: boolean;
   tenantAddress?: string;
+  isSelected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const { signArbitrary } = useChain(CHAIN_NAME);
 
@@ -353,7 +574,7 @@ function LeaseCard({
   const [closeReason, setCloseReason] = useState('');
 
   const provider = getProvider(lease.provider_uuid);
-  const colors = stateColors[lease.state];
+  const badgeClass = stateBadgeClasses[lease.state];
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr || dateStr === '0001-01-01T00:00:00Z') return '-';
@@ -408,32 +629,44 @@ function LeaseCard({
     }
   };
 
+  const canSelect = lease.state === 'LEASE_STATE_PENDING' || lease.state === 'LEASE_STATE_ACTIVE';
+
   return (
-    <div className="rounded-lg border border-gray-700 bg-gray-800 p-6">
+    <div className={`card-static p-6 ${isSelected ? 'border-primary-500' : ''}`}>
       <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-3">
-            <span className="font-mono text-sm text-gray-400">{lease.uuid}</span>
+        <div className="flex items-start gap-3">
+          {canSelect && onToggleSelect && (
+            <input
+              type="checkbox"
+              checked={isSelected || false}
+              onChange={onToggleSelect}
+              className="mt-1 h-4 w-4 rounded border-surface-600 bg-surface-700 text-primary-600 focus:ring-primary-500 focus:ring-offset-surface-800"
+            />
+          )}
+          <div>
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-sm text-muted">{lease.uuid}</span>
             <button
               onClick={() => copyToClipboard(lease.uuid)}
-              className="text-xs text-blue-400 hover:text-blue-300"
+              className="text-xs text-primary-400 hover:text-primary-300"
             >
               Copy
             </button>
-            <span className={`rounded px-2 py-0.5 text-xs ${colors.bg} ${colors.text}`}>
+            <span className={badgeClass}>
               {stateLabels[lease.state]}
             </span>
           </div>
-          <div className="mt-1 text-sm text-gray-500">
+          <div className="mt-1 text-sm text-dim">
             Provider: {provider ? formatAddress(provider.address) : lease.provider_uuid}
           </div>
+        </div>
         </div>
         <div className="flex gap-2">
           {lease.state === 'LEASE_STATE_PENDING' && (
             <button
               onClick={() => onCancel(lease.uuid)}
               disabled={txLoading}
-              className="rounded border border-red-600 px-3 py-1 text-sm text-red-400 hover:bg-red-900/20 disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn btn-danger btn-sm"
             >
               Cancel
             </button>
@@ -443,7 +676,7 @@ function LeaseCard({
               <button
                 onClick={handleGetConnectionInfo}
                 disabled={connectionLoading || !provider?.api_url}
-                className="rounded border border-blue-600 px-3 py-1 text-sm text-blue-400 hover:bg-blue-900/20 disabled:cursor-not-allowed disabled:opacity-50"
+                className="btn btn-primary btn-sm"
                 title={!provider?.api_url ? 'Provider has no API URL configured' : undefined}
               >
                 {connectionLoading ? 'Loading...' : 'Get Connection'}
@@ -451,7 +684,7 @@ function LeaseCard({
               <button
                 onClick={() => setShowCloseForm(!showCloseForm)}
                 disabled={txLoading}
-                className="rounded border border-orange-600 px-3 py-1 text-sm text-orange-400 hover:bg-orange-900/20 disabled:cursor-not-allowed disabled:opacity-50"
+                className="btn btn-secondary btn-sm"
               >
                 Close
               </button>
@@ -462,11 +695,11 @@ function LeaseCard({
 
       {/* Connection Info */}
       {connectionError && (
-        <div className="mb-4 rounded border border-red-600/30 bg-red-900/10 p-3 text-sm text-red-400">
+        <div className="mb-4 rounded-lg border border-error-500/30 bg-error-500/10 p-3 text-sm text-error">
           {connectionError}
           <button
             onClick={() => setConnectionError(null)}
-            className="ml-2 text-gray-400 hover:text-white"
+            className="ml-2 text-muted hover:text-primary"
           >
             ✕
           </button>
@@ -474,33 +707,33 @@ function LeaseCard({
       )}
 
       {connectionInfo && (
-        <div className="mb-4 rounded border border-blue-600/30 bg-blue-900/10 p-3">
+        <div className="mb-4 rounded-lg border border-primary-500/30 bg-primary-500/10 p-3">
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-medium uppercase text-blue-400">Connection Info</span>
+            <span className="text-xs font-medium uppercase text-primary-400">Connection Info</span>
             <button
               onClick={() => setConnectionInfo(null)}
-              className="text-gray-400 hover:text-white"
+              className="text-muted hover:text-primary"
             >
               ✕
             </button>
           </div>
           <div className="space-y-1 text-sm">
             <div>
-              <span className="text-gray-400">Host: </span>
-              <span className="font-mono text-white">{connectionInfo.connection.host}</span>
+              <span className="text-muted">Host: </span>
+              <span className="font-mono text-primary">{connectionInfo.connection.host}</span>
             </div>
             <div>
-              <span className="text-gray-400">Port: </span>
-              <span className="font-mono text-white">{connectionInfo.connection.port}</span>
+              <span className="text-muted">Port: </span>
+              <span className="font-mono text-primary">{connectionInfo.connection.port}</span>
             </div>
             <div>
-              <span className="text-gray-400">Protocol: </span>
-              <span className="font-mono text-white">{connectionInfo.connection.protocol}</span>
+              <span className="text-muted">Protocol: </span>
+              <span className="font-mono text-primary">{connectionInfo.connection.protocol}</span>
             </div>
             {connectionInfo.connection.metadata && (
               <div>
-                <span className="text-gray-400">Metadata: </span>
-                <span className="font-mono text-white">
+                <span className="text-muted">Metadata: </span>
+                <span className="font-mono text-primary">
                   {JSON.stringify(connectionInfo.connection.metadata)}
                 </span>
               </div>
@@ -511,7 +744,7 @@ function LeaseCard({
                   const url = `${connectionInfo.connection.protocol}://${connectionInfo.connection.host}:${connectionInfo.connection.port}`;
                   copyToClipboard(url);
                 }}
-                className="text-xs text-blue-400 hover:text-blue-300"
+                className="text-xs text-primary-400 hover:text-primary-300"
               >
                 Copy URL
               </button>
@@ -522,8 +755,8 @@ function LeaseCard({
 
       {/* Close Form */}
       {showCloseForm && (
-        <div className="mb-4 rounded border border-orange-600/30 bg-orange-900/10 p-3">
-          <label className="mb-1 block text-sm text-gray-400">Closure Reason (optional)</label>
+        <div className="mb-4 rounded-lg border border-warning-500/30 bg-warning-500/10 p-3">
+          <label className="mb-1 block text-sm text-muted">Closure Reason (optional)</label>
           <div className="flex gap-2">
             <input
               type="text"
@@ -531,7 +764,7 @@ function LeaseCard({
               onChange={(e) => setCloseReason(e.target.value)}
               placeholder="e.g., No longer needed"
               maxLength={256}
-              className="flex-1 rounded border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-orange-500 focus:outline-none"
+              className="input flex-1 text-sm"
               disabled={txLoading}
             />
             <button
@@ -541,7 +774,7 @@ function LeaseCard({
                 setCloseReason('');
               }}
               disabled={txLoading}
-              className="rounded bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn btn-secondary btn-sm"
             >
               Confirm Close
             </button>
@@ -551,7 +784,7 @@ function LeaseCard({
                 setCloseReason('');
               }}
               disabled={txLoading}
-              className="rounded border border-gray-600 px-3 py-2 text-sm text-gray-400 hover:bg-gray-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn btn-ghost btn-sm"
             >
               Cancel
             </button>
@@ -560,8 +793,8 @@ function LeaseCard({
       )}
 
       {/* Lease Items */}
-      <div className="mb-4 rounded bg-gray-700/30 p-3">
-        <div className="mb-2 text-xs font-medium uppercase text-gray-500">Items</div>
+      <div className="mb-4 rounded-lg bg-surface-800/50 p-3">
+        <div className="mb-2 text-xs font-medium uppercase text-dim">Items</div>
         <div className="space-y-2">
           {lease.items.map((item, idx) => {
             const sku = getSKU(item.sku_uuid);
@@ -572,35 +805,51 @@ function LeaseCard({
 
             return (
               <div key={idx} className="flex items-center justify-between text-sm">
-                <span className="text-white">
+                <span className="text-primary">
                   {sku?.name || item.sku_uuid} × {item.quantity}
                 </span>
-                <span className="text-gray-400">
+                <span className="text-muted">
                   {pricePerHour.toFixed(4)} {symbol}/hr each
                 </span>
               </div>
             );
           })}
         </div>
-        <div className="mt-3 border-t border-gray-600 pt-2 text-right">
-          <span className="text-sm text-gray-400">Total: </span>
-          <span className="font-medium text-green-400">{calculateTotalPerHour()}</span>
+        <div className="mt-3 border-t border-surface-600 pt-2 text-right">
+          <span className="text-sm text-muted">Total: </span>
+          <span className="font-medium text-success">{calculateTotalPerHour()}</span>
         </div>
       </div>
 
+      {/* Meta Hash (Payload Reference) */}
+      {lease.meta_hash && (
+        <div className="mb-4 rounded-lg bg-surface-800/50 p-3">
+          <div className="mb-1 text-xs font-medium uppercase text-dim">Payload Hash</div>
+          <div className="flex items-center gap-2">
+            <span className="break-all font-mono text-xs text-muted">{lease.meta_hash}</span>
+            <button
+              onClick={() => copyToClipboard(lease.meta_hash!)}
+              className="shrink-0 text-xs text-primary-400 hover:text-primary-300"
+            >
+              Copy
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Timestamps */}
-      <div className="grid gap-2 text-xs text-gray-500 sm:grid-cols-2">
+      <div className="grid gap-2 text-xs text-dim sm:grid-cols-2">
         <div>Created: {formatDate(lease.created_at)}</div>
         <div>Last Settled: {formatDate(lease.last_settled_at)}</div>
         {lease.acknowledged_at && <div>Acknowledged: {formatDate(lease.acknowledged_at)}</div>}
         {lease.closed_at && (
           <div>
             Closed: {formatDate(lease.closed_at)}
-            {lease.closure_reason && <span className="text-gray-400"> - {lease.closure_reason}</span>}
+            {lease.closure_reason && <span className="text-muted"> - {lease.closure_reason}</span>}
           </div>
         )}
         {lease.rejected_at && (
-          <div className="text-red-400">
+          <div className="text-error">
             Rejected: {formatDate(lease.rejected_at)}
             {lease.rejection_reason && ` - ${lease.rejection_reason}`}
           </div>
@@ -621,17 +870,73 @@ function CreateLeaseModal({
   providers: Provider[];
   skus: SKU[];
   onClose: () => void;
-  onSubmit: (items: { skuUuid: string; quantity: number }[]) => void;
+  onSubmit: (
+    items: { skuUuid: string; quantity: number }[],
+    payload?: Uint8Array,
+    metaHash?: Uint8Array,
+    providerUuid?: string
+  ) => void;
   loading: boolean;
 }) {
   const [selectedProvider, setSelectedProvider] = useState<string>('');
   const [items, setItems] = useState<{ skuUuid: string; quantity: number }[]>([
     { skuUuid: '', quantity: 1 },
   ]);
+  const [payloadText, setPayloadText] = useState('');
+  const [payloadHash, setPayloadHash] = useState<string | null>(null);
+  const [payloadError, setPayloadError] = useState<string | null>(null);
 
   const providerSKUs = selectedProvider
     ? skus.filter((s) => s.provider_uuid === selectedProvider)
     : [];
+
+  // Compute hash when payload changes
+  useEffect(() => {
+    const computeHash = async () => {
+      if (!payloadText) {
+        setPayloadHash(null);
+        setPayloadError(null);
+        return;
+      }
+
+      if (!validatePayloadSize(payloadText)) {
+        setPayloadHash(null);
+        setPayloadError(`Payload exceeds maximum size of ${MAX_PAYLOAD_SIZE / 1024}KB`);
+        return;
+      }
+
+      try {
+        const hash = await sha256(payloadText);
+        setPayloadHash(toHex(hash));
+        setPayloadError(null);
+      } catch {
+        setPayloadHash(null);
+        setPayloadError('Failed to compute hash');
+      }
+    };
+
+    computeHash();
+  }, [payloadText]);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > MAX_PAYLOAD_SIZE) {
+      setPayloadError(`File exceeds maximum size of ${MAX_PAYLOAD_SIZE / 1024}KB`);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      setPayloadText(content);
+    };
+    reader.onerror = () => {
+      setPayloadError('Failed to read file');
+    };
+    reader.readAsText(file);
+  };
 
   const addItem = () => setItems([...items, { skuUuid: '', quantity: 1 }]);
   const removeItem = (idx: number) => setItems(items.filter((_, i) => i !== idx));
@@ -639,11 +944,17 @@ function CreateLeaseModal({
     setItems(items.map((item, i) => (i === idx ? { ...item, [field]: value } : item)));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const validItems = items.filter((item) => item.skuUuid && item.quantity > 0);
     if (validItems.length > 0) {
-      onSubmit(validItems);
+      if (payloadText && payloadHash) {
+        const payloadBytes = new TextEncoder().encode(payloadText);
+        const hashBytes = await sha256(payloadText);
+        onSubmit(validItems, payloadBytes, hashBytes, selectedProvider);
+      } else {
+        onSubmit(validItems);
+      }
     }
   };
 
@@ -675,11 +986,11 @@ function CreateLeaseModal({
   const estimatedCost = calculateEstimatedCost();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-full max-w-lg rounded-lg border border-gray-700 bg-gray-800 p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="card-static w-full max-w-lg p-6">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-white">Create Lease</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-white" disabled={loading}>
+          <h3 className="text-lg font-heading font-semibold">Create Lease</h3>
+          <button onClick={onClose} className="text-muted hover:text-primary" disabled={loading}>
             ✕
           </button>
         </div>
@@ -687,14 +998,14 @@ function CreateLeaseModal({
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Provider Selection */}
           <div>
-            <label className="mb-1 block text-sm text-gray-400">Provider</label>
+            <label className="mb-1 block text-sm text-muted">Provider</label>
             <select
               value={selectedProvider}
               onChange={(e) => {
                 setSelectedProvider(e.target.value);
                 setItems([{ skuUuid: '', quantity: 1 }]);
               }}
-              className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+              className="input select w-full"
               required
               disabled={loading}
             >
@@ -711,18 +1022,18 @@ function CreateLeaseModal({
           {selectedProvider && (
             <div>
               <div className="mb-2 flex items-center justify-between">
-                <label className="text-sm text-gray-400">SKU Items</label>
+                <label className="text-sm text-muted">SKU Items</label>
                 <button
                   type="button"
                   onClick={addItem}
-                  className="text-sm text-blue-400 hover:text-blue-300"
+                  className="text-sm text-primary-400 hover:text-primary-300"
                   disabled={loading}
                 >
                   + Add Item
                 </button>
               </div>
               {providerSKUs.length === 0 ? (
-                <p className="text-sm text-gray-500">No active SKUs for this provider</p>
+                <p className="text-sm text-dim">No active SKUs for this provider</p>
               ) : (
                 <div className="space-y-3">
                   {items.map((item, idx) => {
@@ -731,7 +1042,7 @@ function CreateLeaseModal({
                         <select
                           value={item.skuUuid}
                           onChange={(e) => updateItem(idx, 'skuUuid', e.target.value)}
-                          className="flex-1 rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+                          className="input select flex-1"
                           required
                           disabled={loading}
                         >
@@ -749,14 +1060,14 @@ function CreateLeaseModal({
                           onChange={(e) =>
                             updateItem(idx, 'quantity', parseInt(e.target.value, 10) || 1)
                           }
-                          className="w-20 rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+                          className="input w-20"
                           disabled={loading}
                         />
                         {items.length > 1 && (
                           <button
                             type="button"
                             onClick={() => removeItem(idx)}
-                            className="px-2 text-red-400 hover:text-red-300"
+                            className="px-2 text-error hover:text-error/80"
                             disabled={loading}
                           >
                             ✕
@@ -770,11 +1081,48 @@ function CreateLeaseModal({
             </div>
           )}
 
+          {/* Deployment Payload (optional) */}
+          {selectedProvider && (
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <label className="text-sm text-muted">Deployment Payload (optional)</label>
+                <label className="cursor-pointer text-sm text-primary-400 hover:text-primary-300">
+                  <input
+                    type="file"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                    accept=".yaml,.yml,.json,.txt"
+                    disabled={loading}
+                  />
+                  Upload File
+                </label>
+              </div>
+              <textarea
+                value={payloadText}
+                onChange={(e) => setPayloadText(e.target.value)}
+                placeholder="Paste your deployment manifest here (YAML, JSON, etc.)..."
+                rows={5}
+                className="input w-full font-mono text-sm"
+                disabled={loading}
+              />
+              <div className="mt-2 flex items-center justify-between text-xs">
+                <span className={payloadError ? 'text-error' : 'text-dim'}>
+                  {payloadError || `${getPayloadSize(payloadText).toLocaleString()} / ${(MAX_PAYLOAD_SIZE / 1024).toFixed(0)}KB`}
+                </span>
+                {payloadHash && (
+                  <span className="font-mono text-dim" title={payloadHash}>
+                    SHA-256: {payloadHash.slice(0, 16)}...
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Estimated Cost */}
           {estimatedCost && (
-            <div className="rounded bg-gray-700/50 p-3">
-              <div className="text-sm text-gray-400">Estimated Cost</div>
-              <div className="text-lg font-medium text-green-400">{estimatedCost}</div>
+            <div className="rounded-lg bg-surface-800/50 p-3">
+              <div className="text-sm text-muted">Estimated Cost</div>
+              <div className="text-lg font-medium text-success">{estimatedCost}</div>
             </div>
           )}
 
@@ -782,15 +1130,15 @@ function CreateLeaseModal({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-gray-400 hover:text-white"
+              className="btn btn-ghost"
               disabled={loading}
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={loading || !selectedProvider || items.some((i) => !i.skuUuid)}
-              className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={loading || !selectedProvider || items.some((i) => !i.skuUuid) || !!payloadError}
+              className="btn btn-primary"
             >
               {loading ? 'Creating...' : 'Create Lease'}
             </button>

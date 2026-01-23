@@ -16,6 +16,10 @@ import {
   formatPrice,
 } from '../../api';
 import type { Provider, SKU, SKUParams } from '../../api/sku';
+import { getProviderHealth } from '../../api/provider-api';
+import { getLeasesBySKU } from '../../api/billing';
+
+type HealthStatus = 'healthy' | 'unhealthy' | 'loading' | 'unknown';
 
 // Format address as manifest1[4chars]...[4chars]
 function formatAddress(address: string): string {
@@ -58,6 +62,8 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [txResult, setTxResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [providerHealth, setProviderHealth] = useState<Map<string, HealthStatus>>(new Map());
+  const [skuUsage, setSkuUsage] = useState<Map<string, { active: number; total: number }>>(new Map());
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -85,6 +91,73 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Fetch SKU usage stats (non-blocking)
+  useEffect(() => {
+    const fetchSkuUsage = async () => {
+      if (skus.length === 0) return;
+
+      const usageMap = new Map<string, { active: number; total: number }>();
+
+      await Promise.all(
+        skus.map(async (sku) => {
+          try {
+            const [activeLeases, allLeases] = await Promise.all([
+              getLeasesBySKU(sku.uuid, 'LEASE_STATE_ACTIVE'),
+              getLeasesBySKU(sku.uuid),
+            ]);
+            usageMap.set(sku.uuid, {
+              active: activeLeases.length,
+              total: allLeases.length,
+            });
+          } catch {
+            // Ignore errors for individual SKU queries
+          }
+        })
+      );
+
+      setSkuUsage(usageMap);
+    };
+
+    fetchSkuUsage();
+  }, [skus]);
+
+  // Fetch health status for providers with api_url (non-blocking)
+  useEffect(() => {
+    const checkHealth = async () => {
+      const providersWithApi = providers.filter((p) => p.api_url && p.active);
+      if (providersWithApi.length === 0) return;
+
+      // Set loading state for all providers with API
+      setProviderHealth((prev) => {
+        const next = new Map(prev);
+        for (const p of providersWithApi) {
+          if (!next.has(p.uuid)) {
+            next.set(p.uuid, 'loading');
+          }
+        }
+        return next;
+      });
+
+      // Check health in parallel
+      const results = await Promise.all(
+        providersWithApi.map(async (p) => {
+          const health = await getProviderHealth(p.api_url);
+          return { uuid: p.uuid, status: health?.status === 'healthy' ? 'healthy' : 'unhealthy' } as const;
+        })
+      );
+
+      setProviderHealth((prev) => {
+        const next = new Map(prev);
+        for (const r of results) {
+          next.set(r.uuid, r.status);
+        }
+        return next;
+      });
+    };
+
+    checkHealth();
+  }, [providers]);
 
   const getProviderName = (uuid: string) => {
     const provider = providers.find((p) => p.uuid === uuid);
@@ -219,13 +292,26 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     }
   };
 
+  if (!isConnected) {
+    return (
+      <div className="card-static p-12 text-center">
+        <div className="mb-6 text-6xl">🔗</div>
+        <h2 className="mb-4 text-2xl font-heading font-semibold">Connect Your Wallet</h2>
+        <p className="mb-8 text-muted">Connect your wallet to manage providers and SKUs</p>
+        <button onClick={onConnect} className="btn btn-primary btn-lg btn-pill">
+          Connect Wallet
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Error Banner */}
       {error && (
-        <div className="rounded-lg border border-red-700 bg-red-900/20 p-4 text-red-400">
-          {error}
-          <button onClick={fetchData} className="ml-4 underline hover:no-underline">
+        <div className="card-static p-4 border-error-500/50 bg-error-500/10">
+          <span className="text-error">{error}</span>
+          <button onClick={fetchData} className="ml-4 text-primary-400 hover:underline">
             Retry
           </button>
         </div>
@@ -234,16 +320,16 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
       {/* Transaction Result Banner */}
       {txResult && (
         <div
-          className={`rounded-lg border p-4 ${
+          className={`card-static p-4 ${
             txResult.success
-              ? 'border-green-700 bg-green-900/20 text-green-400'
-              : 'border-red-700 bg-red-900/20 text-red-400'
+              ? 'border-success-500/50 bg-success-500/10'
+              : 'border-error-500/50 bg-error-500/10'
           }`}
         >
-          {txResult.message}
+          <span className={txResult.success ? 'text-success' : 'text-error'}>{txResult.message}</span>
           <button
             onClick={() => setTxResult(null)}
-            className="ml-4 text-gray-400 hover:text-white"
+            className="ml-4 text-muted hover:text-primary"
           >
             ✕
           </button>
@@ -253,10 +339,10 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
       {/* SKU Module Access Banner */}
       {isConnected && (
         <div
-          className={`rounded-lg border p-4 ${
+          className={`card-static p-4 ${
             isInSKUAllowedList
               ? 'border-purple-700 bg-purple-900/20'
-              : 'border-gray-700 bg-gray-800'
+              : ''
           }`}
         >
           <div className="flex items-center gap-3">
@@ -267,19 +353,19 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
                 </span>
                 <div>
                   <div className="font-medium text-purple-300">SKU Module Admin</div>
-                  <div className="text-sm text-gray-400">
+                  <div className="text-sm text-muted">
                     Your wallet is in the SKU module allowed list. You can create and manage providers and SKUs.
                   </div>
                 </div>
               </>
             ) : (
               <>
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-gray-600 text-xs text-gray-400">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-gray-600 text-xs text-muted">
                   ○
                 </span>
                 <div>
                   <div className="font-medium text-gray-300">Read-Only Access</div>
-                  <div className="text-sm text-gray-500">
+                  <div className="text-sm text-dim">
                     Your wallet is not in the SKU module allowed list. You can view providers and SKUs but cannot create or modify them.
                   </div>
                 </div>
@@ -292,7 +378,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
       {/* Controls */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-4">
-          <label className="flex items-center gap-2 text-sm text-gray-400">
+          <label className="flex items-center gap-2 text-sm text-muted">
             <input
               type="checkbox"
               checked={showInactive}
@@ -304,7 +390,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
           <button
             onClick={fetchData}
             disabled={loading}
-            className="rounded border border-gray-600 px-3 py-1 text-sm text-gray-400 hover:bg-gray-700 disabled:opacity-50"
+            className="btn btn-secondary btn-sm disabled:opacity-50"
           >
             {loading ? 'Loading...' : 'Refresh'}
           </button>
@@ -314,35 +400,27 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
             <>
               <button
                 onClick={() => setShowCreateProvider(true)}
-                className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                className="btn btn-primary"
               >
                 + Create Provider
               </button>
               <button
                 onClick={() => setShowCreateSKU(true)}
                 disabled={providers.filter((p) => p.active).length === 0}
-                className="rounded bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="btn btn-success disabled:cursor-not-allowed disabled:opacity-50"
               >
                 + Create SKU
               </button>
             </>
           )}
-          {!isConnected && (
-            <button
-              onClick={onConnect}
-              className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-            >
-              Connect Wallet
-            </button>
-          )}
         </div>
       </div>
 
       {/* Providers Section */}
-      <div className="rounded-lg border border-gray-700 bg-gray-800 p-6">
-        <h2 className="mb-4 text-lg font-semibold text-white">Providers</h2>
+      <div className="card-static p-6">
+        <h2 className="mb-4 text-lg font-heading font-semibold">Providers</h2>
         {loading && providers.length === 0 ? (
-          <div className="text-gray-400">Loading providers...</div>
+          <div className="text-muted">Loading providers...</div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <button
@@ -354,7 +432,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
               }`}
             >
               <div className="font-medium text-white">All Providers</div>
-              <div className="text-sm text-gray-400">{providers.length} providers</div>
+              <div className="text-sm text-muted">{providers.length} providers</div>
             </button>
             {providers.map((provider) => (
               <ProviderCard
@@ -364,6 +442,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
                 onSelect={() => setSelectedProvider(provider.uuid)}
                 onEdit={isInSKUAllowedList ? () => setEditingProvider(provider) : undefined}
                 onDeactivate={isInSKUAllowedList ? () => handleDeactivateProvider(provider.uuid) : undefined}
+                healthStatus={providerHealth.get(provider.uuid)}
               />
             ))}
           </div>
@@ -371,22 +450,23 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
       </div>
 
       {/* SKUs Section */}
-      <div className="rounded-lg border border-gray-700 bg-gray-800 p-6">
-        <h2 className="mb-4 text-lg font-semibold text-white">
+      <div className="card-static p-6">
+        <h2 className="mb-4 text-lg font-heading font-semibold">
           SKUs {selectedProvider && `(${getProviderName(selectedProvider)})`}
         </h2>
         {loading && skus.length === 0 ? (
-          <div className="text-gray-400">Loading SKUs...</div>
+          <div className="text-muted">Loading SKUs...</div>
         ) : skus.length === 0 ? (
-          <p className="text-gray-400">No SKUs found</p>
+          <p className="text-muted">No SKUs found</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-gray-700 text-left text-sm text-gray-400">
+                <tr className="border-b border-gray-700 text-left text-sm text-muted">
                   <th className="pb-3 pr-4">Name</th>
                   <th className="pb-3 pr-4">Provider</th>
                   <th className="pb-3 pr-4">Price</th>
+                  <th className="pb-3 pr-4">Usage</th>
                   <th className="pb-3 pr-4">Status</th>
                   <th className="pb-3">Actions</th>
                 </tr>
@@ -398,6 +478,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
                     sku={sku}
                     providerName={getProviderName(sku.provider_uuid)}
                     formatPrice={formatPrice}
+                    usage={skuUsage.get(sku.uuid)}
                     onEdit={isInSKUAllowedList ? () => setEditingSKU(sku) : undefined}
                     onDeactivate={isInSKUAllowedList ? () => handleDeactivateSKU(sku.uuid) : undefined}
                   />
@@ -462,12 +543,14 @@ function ProviderCard({
   onSelect,
   onEdit,
   onDeactivate,
+  healthStatus,
 }: {
   provider: Provider;
   isSelected: boolean;
   onSelect: () => void;
   onEdit?: () => void;
   onDeactivate?: () => void;
+  healthStatus?: HealthStatus;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -490,24 +573,44 @@ function ProviderCard({
     >
       <button onClick={onSelect} className="w-full text-left">
         <div className="flex items-start justify-between">
-          <div className="font-medium text-white" title={provider.address}>
-            {formatAddress(provider.address)}
+          <div className="flex items-center gap-2">
+            <div className="font-medium text-white" title={provider.address}>
+              {formatAddress(provider.address)}
+            </div>
+            {provider.api_url && healthStatus && (
+              <span
+                className={`inline-block h-2 w-2 rounded-full ${
+                  healthStatus === 'healthy'
+                    ? 'bg-green-500'
+                    : healthStatus === 'loading'
+                    ? 'bg-yellow-500 animate-pulse'
+                    : 'bg-red-500'
+                }`}
+                title={
+                  healthStatus === 'healthy'
+                    ? 'Provider API is healthy'
+                    : healthStatus === 'loading'
+                    ? 'Checking provider health...'
+                    : 'Provider API is unreachable'
+                }
+              />
+            )}
           </div>
           {!provider.active && (
-            <span className="rounded bg-gray-600 px-2 py-0.5 text-xs text-gray-300">Inactive</span>
+            <span className="badge badge-secondary">Inactive</span>
           )}
         </div>
         <div className="mt-1 flex items-center gap-1">
           <button
             onClick={handleCopyUuid}
-            className="font-mono text-xs text-gray-500 hover:text-gray-300"
+            className="font-mono text-xs text-dim hover:text-gray-300"
             title={`Click to copy: ${provider.uuid}`}
           >
             {provider.uuid}
             <span className="ml-1 text-gray-600">{copied ? '(copied!)' : '(copy)'}</span>
           </button>
         </div>
-        <div className="mt-2 truncate text-xs text-gray-500">{provider.api_url || 'No API URL'}</div>
+        <div className="mt-2 truncate text-xs text-dim">{provider.api_url || 'No API URL'}</div>
       </button>
       {(onEdit || onDeactivate) && (
         <div className="mt-2 flex gap-3">
@@ -543,12 +646,14 @@ function SKURow({
   sku,
   providerName,
   formatPrice,
+  usage,
   onEdit,
   onDeactivate,
 }: {
   sku: SKU;
   providerName: string;
   formatPrice: (amount: string, denom: string, unit: string) => string;
+  usage?: { active: number; total: number };
   onEdit?: () => void;
   onDeactivate?: () => void;
 }) {
@@ -568,7 +673,7 @@ function SKURow({
         <div className="font-medium text-white">{sku.name}</div>
         <button
           onClick={handleCopyUuid}
-          className="font-mono text-xs text-gray-500 hover:text-gray-300"
+          className="font-mono text-xs text-dim hover:text-gray-300"
           title={`Click to copy: ${sku.uuid}`}
         >
           {sku.uuid}
@@ -582,10 +687,21 @@ function SKURow({
         </span>
       </td>
       <td className="py-3 pr-4">
-        {sku.active ? (
-          <span className="rounded bg-green-900/50 px-2 py-1 text-xs text-green-400">Active</span>
+        {usage ? (
+          <div className="text-sm">
+            <span className="text-green-400">{usage.active}</span>
+            <span className="text-dim"> / {usage.total}</span>
+            <span className="ml-1 text-xs text-gray-600">leases</span>
+          </div>
         ) : (
-          <span className="rounded bg-gray-700 px-2 py-1 text-xs text-gray-400">Inactive</span>
+          <span className="text-gray-600">-</span>
+        )}
+      </td>
+      <td className="py-3 pr-4">
+        {sku.active ? (
+          <span className="badge badge-success">Active</span>
+        ) : (
+          <span className="badge badge-secondary">Inactive</span>
         )}
       </td>
       <td className="py-3">
@@ -618,10 +734,10 @@ function SKURow({
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-full max-w-md rounded-lg border border-gray-700 bg-gray-800 p-6">
+      <div className="card-static w-full max-w-md p-6">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-white">{title}</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-white">
+          <h3 className="text-lg font-heading font-semibold">{title}</h3>
+          <button onClick={onClose} className="text-muted hover:text-white">
             ✕
           </button>
         </div>
@@ -655,45 +771,45 @@ function CreateProviderForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="mb-1 block text-sm text-gray-400">Management Address</label>
+        <label className="mb-1 block text-sm text-muted">Management Address</label>
         <input
           type="text"
           value={address}
           onChange={(e) => setAddress(e.target.value)}
           placeholder="manifest1..."
           required
-          className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+          className="input"
         />
       </div>
       <div>
-        <label className="mb-1 block text-sm text-gray-400">Payout Address</label>
+        <label className="mb-1 block text-sm text-muted">Payout Address</label>
         <input
           type="text"
           value={payoutAddress}
           onChange={(e) => setPayoutAddress(e.target.value)}
           placeholder="manifest1..."
           required
-          className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+          className="input"
         />
       </div>
       <div>
-        <label className="mb-1 block text-sm text-gray-400">API URL</label>
+        <label className="mb-1 block text-sm text-muted">API URL</label>
         <input
           type="url"
           value={apiUrl}
           onChange={(e) => setApiUrl(e.target.value)}
           placeholder="https://..."
-          className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+          className="input"
         />
       </div>
       <div className="flex justify-end gap-3 pt-2">
-        <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">
+        <button type="button" onClick={onClose} className="px-4 py-2 text-muted hover:text-white">
           Cancel
         </button>
         <button
           type="submit"
           disabled={submitting || !address || !payoutAddress}
-          className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn btn-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? 'Creating...' : 'Create Provider'}
         </button>
@@ -734,12 +850,12 @@ function CreateSKUForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="mb-1 block text-sm text-gray-400">Provider</label>
+        <label className="mb-1 block text-sm text-muted">Provider</label>
         <select
           value={providerUuid}
           onChange={(e) => setProviderUuid(e.target.value)}
           required
-          className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+          className="input select"
         >
           {activeProviders.map((p) => (
             <option key={p.uuid} value={p.uuid}>
@@ -749,34 +865,34 @@ function CreateSKUForm({
         </select>
       </div>
       <div>
-        <label className="mb-1 block text-sm text-gray-400">Name</label>
+        <label className="mb-1 block text-sm text-muted">Name</label>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="e.g., Small VM"
           required
-          className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+          className="input"
         />
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="mb-1 block text-sm text-gray-400">Price (uPWR)</label>
+          <label className="mb-1 block text-sm text-muted">Price (uPWR)</label>
           <input
             type="number"
             value={priceAmount}
             onChange={(e) => setPriceAmount(e.target.value)}
             placeholder="1000000"
             required
-            className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+            className="input"
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm text-gray-400">Unit</label>
+          <label className="mb-1 block text-sm text-muted">Unit</label>
           <select
             value={unit}
             onChange={(e) => setUnit(Number(e.target.value))}
-            className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+            className="input select"
           >
             <option value={Unit.UNIT_PER_HOUR}>Per Hour</option>
             <option value={Unit.UNIT_PER_DAY}>Per Day</option>
@@ -784,13 +900,13 @@ function CreateSKUForm({
         </div>
       </div>
       <div className="flex justify-end gap-3 pt-2">
-        <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">
+        <button type="button" onClick={onClose} className="px-4 py-2 text-muted hover:text-white">
           Cancel
         </button>
         <button
           type="submit"
           disabled={submitting || !providerUuid || !name || !priceAmount}
-          className="rounded bg-green-600 px-4 py-2 font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn btn-success disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? 'Creating...' : 'Create SKU'}
         </button>
@@ -823,44 +939,44 @@ function EditProviderForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="rounded bg-gray-700/50 p-3 text-xs text-gray-400">
-        <span className="text-gray-500">UUID: </span>
+      <div className="rounded bg-gray-700/50 p-3 text-xs text-muted">
+        <span className="text-dim">UUID: </span>
         <span className="font-mono">{provider.uuid}</span>
       </div>
       <div>
-        <label className="mb-1 block text-sm text-gray-400">Management Address</label>
+        <label className="mb-1 block text-sm text-muted">Management Address</label>
         <input
           type="text"
           value={address}
           onChange={(e) => setAddress(e.target.value)}
           placeholder="manifest1..."
           required
-          className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+          className="input"
         />
       </div>
       <div>
-        <label className="mb-1 block text-sm text-gray-400">Payout Address</label>
+        <label className="mb-1 block text-sm text-muted">Payout Address</label>
         <input
           type="text"
           value={payoutAddress}
           onChange={(e) => setPayoutAddress(e.target.value)}
           placeholder="manifest1..."
           required
-          className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+          className="input"
         />
       </div>
       <div>
-        <label className="mb-1 block text-sm text-gray-400">API URL</label>
+        <label className="mb-1 block text-sm text-muted">API URL</label>
         <input
           type="url"
           value={apiUrl}
           onChange={(e) => setApiUrl(e.target.value)}
           placeholder="https://..."
-          className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+          className="input"
         />
       </div>
       <div>
-        <label className="flex items-center gap-2 text-sm text-gray-400">
+        <label className="flex items-center gap-2 text-sm text-muted">
           <input
             type="checkbox"
             checked={active}
@@ -871,13 +987,13 @@ function EditProviderForm({
         </label>
       </div>
       <div className="flex justify-end gap-3 pt-2">
-        <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">
+        <button type="button" onClick={onClose} className="px-4 py-2 text-muted hover:text-white">
           Cancel
         </button>
         <button
           type="submit"
           disabled={submitting || !address || !payoutAddress}
-          className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn btn-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? 'Updating...' : 'Update Provider'}
         </button>
@@ -921,17 +1037,17 @@ function EditSKUForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="rounded bg-gray-700/50 p-3 text-xs text-gray-400">
-        <span className="text-gray-500">UUID: </span>
+      <div className="rounded bg-gray-700/50 p-3 text-xs text-muted">
+        <span className="text-dim">UUID: </span>
         <span className="font-mono">{sku.uuid}</span>
       </div>
       <div>
-        <label className="mb-1 block text-sm text-gray-400">Provider</label>
+        <label className="mb-1 block text-sm text-muted">Provider</label>
         <select
           value={providerUuid}
           onChange={(e) => setProviderUuid(e.target.value)}
           required
-          className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+          className="input select"
         >
           {providers.map((p) => (
             <option key={p.uuid} value={p.uuid}>
@@ -941,34 +1057,34 @@ function EditSKUForm({
         </select>
       </div>
       <div>
-        <label className="mb-1 block text-sm text-gray-400">Name</label>
+        <label className="mb-1 block text-sm text-muted">Name</label>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="e.g., Small VM"
           required
-          className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+          className="input"
         />
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="mb-1 block text-sm text-gray-400">Price (uPWR)</label>
+          <label className="mb-1 block text-sm text-muted">Price (uPWR)</label>
           <input
             type="number"
             value={priceAmount}
             onChange={(e) => setPriceAmount(e.target.value)}
             placeholder="1000000"
             required
-            className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+            className="input"
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm text-gray-400">Unit</label>
+          <label className="mb-1 block text-sm text-muted">Unit</label>
           <select
             value={unit}
             onChange={(e) => setUnit(Number(e.target.value))}
-            className="w-full rounded border border-gray-600 bg-gray-700 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+            className="input select"
           >
             <option value={Unit.UNIT_PER_HOUR}>Per Hour</option>
             <option value={Unit.UNIT_PER_DAY}>Per Day</option>
@@ -976,7 +1092,7 @@ function EditSKUForm({
         </div>
       </div>
       <div>
-        <label className="flex items-center gap-2 text-sm text-gray-400">
+        <label className="flex items-center gap-2 text-sm text-muted">
           <input
             type="checkbox"
             checked={active}
@@ -987,13 +1103,13 @@ function EditSKUForm({
         </label>
       </div>
       <div className="flex justify-end gap-3 pt-2">
-        <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">
+        <button type="button" onClick={onClose} className="px-4 py-2 text-muted hover:text-white">
           Cancel
         </button>
         <button
           type="submit"
           disabled={submitting || !providerUuid || !name || !priceAmount}
-          className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn btn-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? 'Updating...' : 'Update SKU'}
         </button>

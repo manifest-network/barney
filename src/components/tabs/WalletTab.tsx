@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import {
   getBalance,
@@ -10,6 +10,8 @@ import {
 } from '../../api';
 import type { Coin } from '../../api/bank';
 import type { CreditAccountResponse, CreditEstimateResponse } from '../../api/billing';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh';
+import { AutoRefreshIndicator } from '../AutoRefreshIndicator';
 
 const CHAIN_NAME = 'manifestlocal';
 
@@ -45,7 +47,9 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const fetchData = useCallback(async () => {
     if (!address) return;
 
-    setData((prev) => ({ ...prev, loading: true, error: null }));
+    if (!data.mfxBalance) {
+      setData((prev) => ({ ...prev, loading: true, error: null }));
+    }
 
     try {
       const [mfxBalance, pwrBalance, creditAccount, creditEstimate] = await Promise.all([
@@ -70,13 +74,13 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
         error: err instanceof Error ? err.message : 'Failed to fetch data',
       }));
     }
-  }, [address]);
+  }, [address, data.mfxBalance]);
 
-  useEffect(() => {
-    if (isConnected && address) {
-      fetchData();
-    }
-  }, [isConnected, address, fetchData]);
+  const autoRefresh = useAutoRefresh(fetchData, {
+    interval: 10000,
+    enabled: isConnected && !!address,
+    immediate: true,
+  });
 
   const handleFundCredit = async () => {
     if (!address || !fundAmount) return;
@@ -90,7 +94,6 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
         throw new Error('Failed to get signer');
       }
 
-      // Convert display amount to base amount (multiply by 10^6)
       const baseAmount = (parseFloat(fundAmount) * 1_000_000).toFixed(0);
 
       const result = await fundCredit(signer, address, address, {
@@ -104,8 +107,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
           message: `Successfully funded ${fundAmount} PWR! Tx: ${result.transactionHash?.slice(0, 16)}...`,
         });
         setFundAmount('');
-        // Refresh data after successful tx
-        setTimeout(fetchData, 1000);
+        autoRefresh.refresh();
       } else {
         setTxResult({
           success: false,
@@ -142,14 +144,11 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
 
   if (!isConnected) {
     return (
-      <div className="flex flex-col items-center justify-center py-20">
+      <div className="card-static p-12 text-center">
         <div className="mb-6 text-6xl">🔗</div>
-        <h2 className="mb-4 text-2xl font-semibold text-white">Connect Your Wallet</h2>
-        <p className="mb-8 text-gray-400">Connect your wallet to manage credit and create leases</p>
-        <button
-          onClick={onConnect}
-          className="rounded-lg bg-blue-600 px-6 py-3 text-lg font-medium text-white hover:bg-blue-700"
-        >
+        <h2 className="mb-4 text-2xl font-heading font-semibold">Connect Your Wallet</h2>
+        <p className="mb-8 text-muted">Connect your wallet to manage credit and create leases</p>
+        <button onClick={onConnect} className="btn btn-primary btn-lg btn-pill">
           Connect Wallet
         </button>
       </div>
@@ -157,25 +156,19 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   }
 
   const { mfxBalance, pwrBalance, creditAccount, creditEstimate, loading, error } = data;
-
-  // Find PWR balance in credit account
   const creditPwrBalance = creditAccount?.balances?.find((b) => b.denom === DENOMS.PWR);
-
-  // Find burn rate for PWR (total_rate_per_second is an array of Coins)
   const pwrRatePerSecond = creditEstimate?.total_rate_per_second?.find(
     (c) => c.denom === DENOMS.PWR || c.denom === 'upwr'
   );
-  const burnRatePerHour = pwrRatePerSecond
-    ? parseInt(pwrRatePerSecond.amount, 10) * 3600
-    : 0;
+  const burnRatePerHour = pwrRatePerSecond ? parseInt(pwrRatePerSecond.amount, 10) * 3600 : 0;
 
   return (
     <div className="space-y-6">
       {/* Error Banner */}
       {error && (
-        <div className="rounded-lg border border-red-700 bg-red-900/20 p-4 text-red-400">
-          {error}
-          <button onClick={fetchData} className="ml-4 underline hover:no-underline">
+        <div className="card-static p-4 border-error-500/50 bg-error-500/10">
+          <span className="text-error">{error}</span>
+          <button onClick={autoRefresh.refresh} className="ml-4 text-primary-400 hover:underline">
             Retry
           </button>
         </div>
@@ -183,18 +176,9 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
 
       {/* Transaction Result Banner */}
       {txResult && (
-        <div
-          className={`rounded-lg border p-4 ${
-            txResult.success
-              ? 'border-green-700 bg-green-900/20 text-green-400'
-              : 'border-red-700 bg-red-900/20 text-red-400'
-          }`}
-        >
-          {txResult.message}
-          <button
-            onClick={() => setTxResult(null)}
-            className="ml-4 text-gray-400 hover:text-white"
-          >
+        <div className={`card-static p-4 ${txResult.success ? 'border-success-500/50 bg-success-500/10' : 'border-error-500/50 bg-error-500/10'}`}>
+          <span className={txResult.success ? 'text-success' : 'text-error'}>{txResult.message}</span>
+          <button onClick={() => setTxResult(null)} className="ml-4 text-muted hover:text-primary">
             ✕
           </button>
         </div>
@@ -202,37 +186,31 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
 
       {/* Connected Address */}
       {address && (
-        <div className="rounded-lg border border-gray-700 bg-gray-800 p-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-white">Connected Address</h2>
-            <button
-              onClick={fetchData}
-              disabled={loading}
-              className="rounded border border-gray-600 px-3 py-1 text-sm text-gray-400 hover:bg-gray-700 disabled:opacity-50"
-            >
-              {loading ? 'Loading...' : 'Refresh'}
-            </button>
+        <div className="card-static p-6">
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-3">
+            <h2 className="text-lg font-heading font-semibold">Connected Address</h2>
+            <AutoRefreshIndicator autoRefresh={autoRefresh} intervalSeconds={10} />
           </div>
-          <div className="mt-2 font-mono text-sm text-gray-300 break-all">{address}</div>
+          <div className="font-mono text-sm text-secondary break-all">{address}</div>
         </div>
       )}
 
       {/* Wallet Balances Card */}
-      <div className="rounded-lg border border-gray-700 bg-gray-800 p-6">
-        <h2 className="mb-4 text-lg font-semibold text-white">Wallet Balances</h2>
+      <div className="card-static p-6">
+        <h2 className="mb-4 text-lg font-heading font-semibold">Wallet Balances</h2>
         {loading && !mfxBalance ? (
-          <div className="text-gray-400">Loading...</div>
+          <div className="text-muted animate-pulse">Loading...</div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="rounded-lg bg-gray-700/50 p-4">
-              <div className="text-sm text-gray-400">MFX Balance</div>
-              <div className="text-2xl font-bold text-white">
+            <div className="stat-card">
+              <div className="stat-label">MFX Balance</div>
+              <div className="stat-value text-primary">
                 {mfxBalance ? formatAmount(mfxBalance.amount, mfxBalance.denom) : '0 MFX'}
               </div>
             </div>
-            <div className="rounded-lg bg-gray-700/50 p-4">
-              <div className="text-sm text-gray-400">PWR Balance</div>
-              <div className="text-2xl font-bold text-purple-400">
+            <div className="stat-card">
+              <div className="stat-label">PWR Balance</div>
+              <div className="stat-value text-secondary-400">
                 {pwrBalance ? formatAmount(pwrBalance.amount, pwrBalance.denom) : '0 PWR'}
               </div>
             </div>
@@ -241,33 +219,33 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
       </div>
 
       {/* Credit Account Card */}
-      <div className="rounded-lg border border-gray-700 bg-gray-800 p-6">
-        <h2 className="mb-4 text-lg font-semibold text-white">Credit Account</h2>
+      <div className="card-static p-6">
+        <h2 className="mb-4 text-lg font-heading font-semibold">Credit Account</h2>
 
         {loading && !creditAccount ? (
-          <div className="text-gray-400">Loading...</div>
+          <div className="text-muted animate-pulse">Loading...</div>
         ) : (
           <>
             <div className="mb-6 grid gap-4 sm:grid-cols-3">
-              <div className="rounded-lg bg-gray-700/50 p-4">
-                <div className="text-sm text-gray-400">Credit Balance (PWR)</div>
-                <div className="text-2xl font-bold text-green-400">
+              <div className="stat-card">
+                <div className="stat-label">Credit Balance (PWR)</div>
+                <div className="stat-value text-success">
                   {creditPwrBalance
                     ? formatAmount(creditPwrBalance.amount, creditPwrBalance.denom)
                     : '0 PWR'}
                 </div>
               </div>
-              <div className="rounded-lg bg-gray-700/50 p-4">
-                <div className="text-sm text-gray-400">Burn Rate</div>
-                <div className="text-2xl font-bold text-orange-400">
+              <div className="stat-card">
+                <div className="stat-label">Burn Rate</div>
+                <div className="stat-value text-warning">
                   {burnRatePerHour > 0
                     ? `${formatAmount(String(burnRatePerHour), DENOMS.PWR)}/hr`
                     : '0 PWR/hr'}
                 </div>
               </div>
-              <div className="rounded-lg bg-gray-700/50 p-4">
-                <div className="text-sm text-gray-400">Time Remaining</div>
-                <div className="text-2xl font-bold text-blue-400">
+              <div className="stat-card">
+                <div className="stat-label">Time Remaining</div>
+                <div className="stat-value text-accent">
                   {creditEstimate?.estimated_duration_seconds
                     ? formatDuration(parseInt(creditEstimate.estimated_duration_seconds, 10))
                     : '-'}
@@ -276,21 +254,21 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
             </div>
 
             <div className="mb-4 grid gap-4 sm:grid-cols-2">
-              <div className="rounded bg-gray-700/30 p-3">
-                <span className="text-gray-400">Active Leases: </span>
-                <span className="font-medium text-white">
+              <div className="p-3 rounded-lg bg-surface-800/50">
+                <span className="text-muted">Active Leases: </span>
+                <span className="font-semibold text-success">
                   {creditAccount?.credit_account?.active_lease_count ?? 0}
                 </span>
               </div>
-              <div className="rounded bg-gray-700/30 p-3">
-                <span className="text-gray-400">Pending Leases: </span>
-                <span className="font-medium text-white">
+              <div className="p-3 rounded-lg bg-surface-800/50">
+                <span className="text-muted">Pending Leases: </span>
+                <span className="font-semibold text-warning">
                   {creditAccount?.credit_account?.pending_lease_count ?? 0}
                 </span>
               </div>
             </div>
 
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-dim">
               <span>Credit Address: </span>
               <span className="font-mono break-all">
                 {creditAccount?.credit_account?.credit_address ?? '-'}
@@ -301,25 +279,25 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
       </div>
 
       {/* Fund Credit Card */}
-      <div className="rounded-lg border border-gray-700 bg-gray-800 p-6">
-        <h2 className="mb-4 text-lg font-semibold text-white">Fund Credit Account</h2>
+      <div className="card-static p-6">
+        <h2 className="mb-4 text-lg font-heading font-semibold">Fund Credit Account</h2>
         <div className="flex gap-4">
           <div className="flex-1">
-            <label className="mb-2 block text-sm text-gray-400">Amount (PWR)</label>
+            <label className="mb-2 block text-sm text-muted">Amount (PWR)</label>
             <input
               type="number"
               value={fundAmount}
               onChange={(e) => setFundAmount(e.target.value)}
               placeholder="Enter amount"
               disabled={txLoading}
-              className="w-full rounded-lg border border-gray-600 bg-gray-700 px-4 py-2 text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none disabled:opacity-50"
+              className="input"
             />
           </div>
           <div className="flex items-end">
             <button
               onClick={handleFundCredit}
               disabled={!fundAmount || txLoading}
-              className="rounded-lg bg-green-600 px-6 py-2 font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn btn-success"
             >
               {txLoading ? 'Signing...' : 'Fund Credit'}
             </button>
@@ -331,7 +309,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
               key={amount}
               onClick={() => setFundAmount(String(amount))}
               disabled={txLoading}
-              className="rounded border border-gray-600 px-3 py-1 text-sm text-gray-300 hover:bg-gray-700 disabled:opacity-50"
+              className="btn btn-secondary btn-sm"
             >
               {amount} PWR
             </button>

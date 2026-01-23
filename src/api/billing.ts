@@ -29,6 +29,8 @@ export interface Lease {
   expired_at?: string;
   rejection_reason?: string;
   closure_reason?: string;
+  min_lease_duration_at_creation?: string;
+  meta_hash?: string;
 }
 
 export interface LeasesResponse {
@@ -193,4 +195,129 @@ export async function getWithdrawableAmount(leaseUuid: string): Promise<Coin[]> 
 
   const data: WithdrawableAmountResponse = await response.json();
   return data.amounts || [];
+}
+
+export interface ProviderWithdrawableResponse {
+  amounts: Coin[];
+  lease_count: string;
+  has_more: boolean;
+}
+
+export async function getProviderWithdrawable(providerUuid: string): Promise<ProviderWithdrawableResponse> {
+  const response = await fetch(`${REST_URL}/liftedinit/billing/v1/provider/${providerUuid}/withdrawable`);
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      return { amounts: [], lease_count: '0', has_more: false };
+    }
+    throw new Error(`Failed to fetch provider withdrawable: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+export async function getLeasesBySKU(skuUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
+  let url = `${REST_URL}/liftedinit/billing/v1/leases/sku/${skuUuid}`;
+  if (stateFilter && stateFilter !== 'LEASE_STATE_UNSPECIFIED') {
+    url += `?state_filter=${stateFilter}`;
+  }
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    if (response.status === 404) return [];
+    throw new Error(`Failed to fetch leases by SKU: ${response.statusText}`);
+  }
+
+  const data: LeasesResponse = await response.json();
+  return data.leases || [];
+}
+
+export interface PaginatedLeasesResponse {
+  leases: Lease[];
+  pagination?: {
+    next_key?: string;
+    total?: string;
+  };
+}
+
+export interface GetAllLeasesParams {
+  stateFilter?: LeaseState;
+  limit?: number;
+  offset?: number;
+  paginationKey?: string;
+}
+
+export async function getAllLeases(params?: GetAllLeasesParams): Promise<PaginatedLeasesResponse> {
+  const searchParams = new URLSearchParams();
+
+  if (params?.stateFilter && params.stateFilter !== 'LEASE_STATE_UNSPECIFIED') {
+    searchParams.set('state_filter', params.stateFilter);
+  }
+  if (params?.limit) {
+    searchParams.set('pagination.limit', String(params.limit));
+  }
+  if (params?.offset) {
+    searchParams.set('pagination.offset', String(params.offset));
+  }
+  if (params?.paginationKey) {
+    searchParams.set('pagination.key', params.paginationKey);
+  }
+
+  const queryString = searchParams.toString();
+  const url = `${REST_URL}/liftedinit/billing/v1/leases${queryString ? `?${queryString}` : ''}`;
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      return { leases: [] };
+    }
+    throw new Error(`Failed to fetch all leases: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+export interface PaginatedCreditsResponse {
+  credit_accounts: CreditAccount[];
+  balances: Record<string, Coin[]>;
+  pagination?: {
+    next_key?: string;
+    total?: string;
+  };
+}
+
+export interface GetAllCreditsParams {
+  limit?: number;
+  offset?: number;
+  paginationKey?: string;
+}
+
+export async function getAllCredits(params?: GetAllCreditsParams): Promise<PaginatedCreditsResponse> {
+  const searchParams = new URLSearchParams();
+
+  if (params?.limit) {
+    searchParams.set('pagination.limit', String(params.limit));
+  }
+  if (params?.offset) {
+    searchParams.set('pagination.offset', String(params.offset));
+  }
+  if (params?.paginationKey) {
+    searchParams.set('pagination.key', params.paginationKey);
+  }
+
+  const queryString = searchParams.toString();
+  const url = `${REST_URL}/liftedinit/billing/v1/credits${queryString ? `?${queryString}` : ''}`;
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      return { credit_accounts: [], balances: {} };
+    }
+    throw new Error(`Failed to fetch all credits: ${response.statusText}`);
+  }
+
+  return response.json();
 }

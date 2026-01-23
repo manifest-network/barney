@@ -1,7 +1,17 @@
 /**
- * Provider API client for fetching lease connection info.
+ * Provider API client for fetching lease connection info and health status.
  * Uses ADR-036 off-chain signatures for authentication.
  */
+
+export interface ProviderHealthResponse {
+  status: 'healthy' | 'unhealthy';
+  provider_uuid: string;
+  checks?: {
+    chain?: {
+      status: string;
+    };
+  };
+}
 
 export interface ConnectionInfo {
   lease_uuid: string;
@@ -23,11 +33,23 @@ export interface AuthToken {
   signature: string;
 }
 
+export interface AuthTokenWithMetaHash extends AuthToken {
+  meta_hash: string;
+}
+
 /**
- * Creates the message to sign for ADR-036 authentication.
+ * Creates the message to sign for ADR-036 authentication (connection info).
  */
 export function createSignMessage(tenant: string, leaseUuid: string, timestamp: number): string {
   return `${tenant}:${leaseUuid}:${timestamp}`;
+}
+
+/**
+ * Creates the message to sign for lease data upload (ADR-036).
+ * Format: "manifest lease data {lease_uuid} {meta_hash_hex} {unix_timestamp}"
+ */
+export function createLeaseDataSignMessage(leaseUuid: string, metaHashHex: string, timestamp: number): string {
+  return `manifest lease data ${leaseUuid} ${metaHashHex} ${timestamp}`;
 }
 
 /**
@@ -91,6 +113,53 @@ export async function getLeaseConnectionInfo(
 }
 
 /**
+ * Checks the health status of a provider's API.
+ * Returns null if the provider is unreachable.
+ */
+export async function getProviderHealth(
+  providerApiUrl: string,
+  timeoutMs: number = 5000
+): Promise<ProviderHealthResponse | null> {
+  if (!providerApiUrl) {
+    return null;
+  }
+
+  const baseUrl = providerApiUrl.replace(/\/$/, '');
+
+  let url: string;
+  const headers: Record<string, string> = {};
+
+  if (import.meta.env.DEV) {
+    url = `/proxy-provider/health`;
+    headers['X-Proxy-Target'] = baseUrl;
+  } else {
+    url = `${baseUrl}/health`;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return response.json();
+  } catch {
+    clearTimeout(timeoutId);
+    return null;
+  }
+}
+
+/**
  * Helper to convert Uint8Array to base64 string.
  */
 export function uint8ArrayToBase64(bytes: Uint8Array): string {
@@ -111,4 +180,70 @@ export function base64ToUint8Array(base64: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+}
+
+/**
+ * Creates a base64-encoded auth token for lease data upload.
+ * Includes meta_hash for payload verification.
+ */
+export function createLeaseDataAuthToken(
+  tenant: string,
+  leaseUuid: string,
+  metaHashHex: string,
+  timestamp: number,
+  pubKeyBase64: string,
+  signatureBase64: string
+): string {
+  const token: AuthTokenWithMetaHash = {
+    tenant,
+    lease_uuid: leaseUuid,
+    meta_hash: metaHashHex,
+    timestamp,
+    pub_key: pubKeyBase64,
+    signature: signatureBase64,
+  };
+
+  return btoa(JSON.stringify(token));
+}
+
+/**
+ * Uploads lease payload data to the provider's API.
+ * This should be called after creating a lease with a meta_hash.
+ *
+ * @param providerApiUrl - The provider's API URL
+ * @param leaseUuid - The lease UUID
+ * @param payload - The raw payload bytes
+ * @param authToken - The base64-encoded auth token (with meta_hash)
+ */
+export async function uploadLeaseData(
+  providerApiUrl: string,
+  leaseUuid: string,
+  payload: Uint8Array,
+  authToken: string
+): Promise<void> {
+  const baseUrl = providerApiUrl.replace(/\/$/, '');
+
+  let url: string;
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${authToken}`,
+    'Content-Type': 'application/octet-stream',
+  };
+
+  if (import.meta.env.DEV) {
+    url = `/proxy-provider/v1/leases/${leaseUuid}/data`;
+    headers['X-Proxy-Target'] = baseUrl;
+  } else {
+    url = `${baseUrl}/v1/leases/${leaseUuid}/data`;
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: new Blob([payload.buffer as ArrayBuffer]),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to upload lease data (${response.status}): ${errorText}`);
+  }
 }

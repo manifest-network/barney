@@ -233,7 +233,8 @@ export interface LeaseItemInput {
 export async function createLease(
   signer: OfflineSigner,
   tenant: string,
-  items: LeaseItemInput[]
+  items: LeaseItemInput[],
+  metaHash?: Uint8Array
 ): Promise<TxResult> {
   const msg = {
     typeUrl: MsgCreateLease.typeUrl,
@@ -243,6 +244,8 @@ export async function createLease(
         skuUuid: item.skuUuid,
         quantity: BigInt(item.quantity),
       })),
+      // @ts-expect-error manifestjs uses meta_hash field
+      meta_hash: metaHash ?? new Uint8Array(),
     }),
   };
 
