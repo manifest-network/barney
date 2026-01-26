@@ -149,12 +149,37 @@ export async function* streamChat(
         // Handle tool calls
         if (message.tool_calls && Array.isArray(message.tool_calls)) {
           for (const tc of message.tool_calls) {
+            // Guard: ensure tc is a non-null object
+            if (!tc || typeof tc !== 'object') {
+              continue;
+            }
+
+            // Guard: ensure tc.function is a valid object
+            const tcFunc = (tc as Record<string, unknown>).function;
+            if (!tcFunc || typeof tcFunc !== 'object') {
+              continue;
+            }
+
+            const funcObj = tcFunc as Record<string, unknown>;
+
             // Preserve Ollama's tool call ID if present, otherwise generate synthetic
-            const id = tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+            const tcId = (tc as Record<string, unknown>).id;
+            const id = (typeof tcId === 'string' && tcId)
+              ? tcId
+              : `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+            // Get function name with guard
+            const funcName = funcObj.name;
+            const name = typeof funcName === 'string' ? funcName : '';
+
+            // Skip if no function name (invalid tool call)
+            if (!name) {
+              continue;
+            }
 
             // Normalize arguments: parse JSON string if needed, default to {} on failure
             let args: Record<string, unknown> = {};
-            const rawArgs = tc.function?.arguments;
+            const rawArgs = funcObj.arguments;
             if (rawArgs) {
               if (typeof rawArgs === 'string') {
                 try {
@@ -162,7 +187,7 @@ export async function* streamChat(
                 } catch {
                   // If JSON parse fails, keep empty object
                 }
-              } else if (typeof rawArgs === 'object') {
+              } else if (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)) {
                 args = rawArgs as Record<string, unknown>;
               }
             }
@@ -171,7 +196,7 @@ export async function* streamChat(
               id,
               type: 'function',
               function: {
-                name: tc.function?.name || '',
+                name,
                 arguments: args,
               },
             };

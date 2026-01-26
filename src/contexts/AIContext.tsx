@@ -588,7 +588,26 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
   // Confirm a pending action
   const confirmAction = useCallback(async () => {
-    if (!pendingConfirmation || !clientManagerRef.current) return;
+    if (!pendingConfirmation) return;
+
+    // Check if wallet is connected - if not, show error and clear pending state
+    if (!clientManagerRef.current) {
+      const { messageId } = pendingConfirmation;
+      setPendingConfirmation(null);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                content: 'Wallet disconnected. Please reconnect your wallet and try again.',
+                error: 'wallet_disconnected',
+                isStreaming: false,
+              }
+            : m
+        )
+      );
+      return;
+    }
 
     // Capture refs at the start to prevent race conditions if wallet disconnects mid-execution
     const clientManager = clientManagerRef.current;
@@ -650,11 +669,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
         });
       });
 
+      // Don't pass tools - we just want the assistant to summarize the result, not make more tool calls
       const stream = streamChat({
         endpoint: settings.ollamaEndpoint,
         model: settings.model,
         messages: toOllamaMessages(updatedMessages),
-        tools: AI_TOOLS,
         think: settings.enableThinking,
         signal: abortControllerRef.current?.signal,
       });
@@ -676,8 +695,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
           streamError = chunk.error;
           break;
         }
-        // Note: tool_calls are intentionally not processed here since we just want
-        // the assistant to summarize the transaction result, not make more tool calls
       }
 
       // Flush any pending throttled updates before finalizing

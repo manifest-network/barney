@@ -36,6 +36,93 @@ export interface PendingAction {
 }
 
 /**
+ * Validate required arguments for confirmation-required tools.
+ * Returns an error message if validation fails, or null if valid.
+ */
+function validateConfirmationToolArgs(
+  toolName: string,
+  args: Record<string, unknown>,
+  address: string | undefined
+): string | null {
+  switch (toolName) {
+    case 'fund_credit': {
+      if (!address) {
+        return 'Wallet not connected. Please connect your wallet first.';
+      }
+      const amount = args.amount as string | undefined;
+      if (!amount || typeof amount !== 'string' || amount.trim() === '') {
+        return 'Missing required argument: amount. Please specify an amount (e.g., "1000000umfx").';
+      }
+      // Basic format check - should be digits followed by denomination
+      if (!/^\d+[a-zA-Z]/.test(amount)) {
+        return `Invalid amount format: "${amount}". Use format like "1000000umfx" or "10000000factory/...".`;
+      }
+      return null;
+    }
+
+    case 'create_lease': {
+      const itemsRaw = args.items;
+      if (!itemsRaw) {
+        return 'Missing required argument: items. Please specify items as a JSON array.';
+      }
+
+      let items: unknown[];
+      try {
+        items = typeof itemsRaw === 'string' ? JSON.parse(itemsRaw) : itemsRaw as unknown[];
+      } catch {
+        return `Invalid items format: could not parse JSON. Use format: [{"sku_uuid": "...", "quantity": 1}]`;
+      }
+
+      if (!Array.isArray(items) || items.length === 0) {
+        return 'Items must be a non-empty array.';
+      }
+
+      // Validate each item has required fields
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i] as Record<string, unknown>;
+        if (!item || typeof item !== 'object') {
+          return `Invalid item at index ${i}: must be an object.`;
+        }
+        if (!item.sku_uuid || typeof item.sku_uuid !== 'string') {
+          return `Missing sku_uuid in item at index ${i}.`;
+        }
+        if (!uuidRegex.test(item.sku_uuid)) {
+          return `Invalid SKU UUID format in item at index ${i}: "${item.sku_uuid}". You must call get_providers and get_skus first to obtain valid UUIDs.`;
+        }
+        if (typeof item.quantity !== 'number' || item.quantity < 1) {
+          return `Invalid quantity in item at index ${i}: must be a positive number.`;
+        }
+      }
+      return null;
+    }
+
+    case 'close_lease': {
+      const leaseUuid = args.lease_uuid as string | undefined;
+      if (!leaseUuid || typeof leaseUuid !== 'string' || leaseUuid.trim() === '') {
+        return 'Missing required argument: lease_uuid.';
+      }
+      return null;
+    }
+
+    case 'cosmos_tx': {
+      const module = args.module as string | undefined;
+      const subcommand = args.subcommand as string | undefined;
+      if (!module || typeof module !== 'string' || module.trim() === '') {
+        return 'Missing required argument: module.';
+      }
+      if (!subcommand || typeof subcommand !== 'string' || subcommand.trim() === '') {
+        return 'Missing required argument: subcommand.';
+      }
+      return null;
+    }
+
+    default:
+      return null;
+  }
+}
+
+/**
  * Execute a tool call
  */
 export async function executeTool(
@@ -47,6 +134,15 @@ export async function executeTool(
 
   // Check if confirmation is required
   if (requiresConfirmation(toolName)) {
+    // Validate required args BEFORE requesting confirmation
+    const validationError = validateConfirmationToolArgs(toolName, args, address);
+    if (validationError) {
+      return {
+        success: false,
+        error: validationError,
+      };
+    }
+
     return {
       success: true,
       requiresConfirmation: true,
