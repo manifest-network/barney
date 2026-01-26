@@ -13,18 +13,22 @@ import { streamChat, checkOllamaHealth, listModels, type OllamaModel } from '../
 import { AI_TOOLS, getToolCallDescription } from '../ai/tools';
 import { executeTool, executeConfirmedTool, type ToolResult, type PendingAction } from '../ai/toolExecutor';
 import { getSystemPrompt } from '../ai/systemPrompt';
+import {
+  validateSettings,
+  validateChatHistory,
+  validateEndpointUrl,
+  validateUserInput,
+  isValidToolName,
+  sanitizeToolArgs,
+  type AISettings,
+} from '../ai/validation';
 import type { CosmosClientManager } from 'manifest-mcp-browser';
 
 // Storage keys
 const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const STORAGE_KEY_HISTORY = 'barney-ai-history';
 
-export interface AISettings {
-  ollamaEndpoint: string;
-  model: string;
-  saveHistory: boolean;
-  enableThinking: boolean;
-}
+export type { AISettings };
 
 export interface ChatMessage {
   id: string;
@@ -60,15 +64,17 @@ interface AIContextType {
   sendMessage: (content: string) => Promise<void>;
   updateSettings: (settings: Partial<AISettings>) => void;
   clearHistory: () => void;
-  refreshModels: () => Promise<void>;
+  refreshModels: (endpoint?: string) => Promise<void>;
   confirmAction: () => Promise<void>;
   cancelAction: () => void;
   setClientManager: (manager: CosmosClientManager | null) => void;
   setAddress: (address: string | undefined) => void;
 }
 
+// Validate environment-provided defaults
+const envEndpoint = validateEndpointUrl(import.meta.env.PUBLIC_OLLAMA_URL || '');
 const defaultSettings: AISettings = {
-  ollamaEndpoint: import.meta.env.PUBLIC_OLLAMA_URL || 'http://localhost:11434',
+  ollamaEndpoint: envEndpoint || 'http://localhost:11434',
   model: import.meta.env.PUBLIC_OLLAMA_MODEL || 'llama3.2',
   saveHistory: true,
   enableThinking: false,
@@ -89,25 +95,32 @@ export function AIProvider({ children }: { children: ReactNode }) {
   const clientManagerRef = useRef<CosmosClientManager | null>(null);
   const addressRef = useRef<string | undefined>(undefined);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Ref to track streaming state synchronously (prevents race conditions with rapid messages)
+  const isStreamingRef = useRef(false);
 
-  // Load settings and history from localStorage
+  // Load settings and history from localStorage with validation
   useEffect(() => {
     try {
       const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
-        setSettings({ ...defaultSettings, ...parsed });
+        // Validate and sanitize settings from localStorage
+        const validated = validateSettings(parsed);
+        setSettings({ ...defaultSettings, ...validated });
       }
 
       const savedHistory = localStorage.getItem(STORAGE_KEY_HISTORY);
       if (savedHistory) {
         const parsed = JSON.parse(savedHistory);
-        if (Array.isArray(parsed)) {
-          setMessages(parsed);
-        }
+        // Validate and sanitize chat history from localStorage
+        const validated = validateChatHistory(parsed) as ChatMessage[];
+        setMessages(validated);
       }
     } catch (error) {
       console.error('Failed to load AI settings:', error);
+      // On parse error, clear potentially corrupted data
+      localStorage.removeItem(STORAGE_KEY_SETTINGS);
+      localStorage.removeItem(STORAGE_KEY_HISTORY);
     }
   }, []);
 
@@ -145,9 +158,19 @@ export function AIProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(interval);
   }, [settings.ollamaEndpoint]);
 
+  // Cleanup abort controller on unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+    };
+  }, []);
+
   // Fetch available models
-  const refreshModels = useCallback(async () => {
-    const models = await listModels(settings.ollamaEndpoint);
+  const refreshModels = useCallback(async (endpoint?: string) => {
+    const models = await listModels(endpoint || settings.ollamaEndpoint);
     setAvailableModels(models);
   }, [settings.ollamaEndpoint]);
 
@@ -164,7 +187,31 @@ export function AIProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const updateSettings = useCallback((newSettings: Partial<AISettings>) => {
-    setSettings((prev) => ({ ...prev, ...newSettings }));
+    setSettings((prev) => {
+      const updated = { ...prev };
+
+      // Validate endpoint URL if provided
+      if (newSettings.ollamaEndpoint !== undefined) {
+        const validatedUrl = validateEndpointUrl(newSettings.ollamaEndpoint);
+        if (validatedUrl) {
+          updated.ollamaEndpoint = validatedUrl;
+        }
+        // If invalid, keep the previous value
+      }
+
+      // Validate and copy other settings
+      if (typeof newSettings.model === 'string' && newSettings.model.length > 0) {
+        updated.model = newSettings.model;
+      }
+      if (typeof newSettings.saveHistory === 'boolean') {
+        updated.saveHistory = newSettings.saveHistory;
+      }
+      if (typeof newSettings.enableThinking === 'boolean') {
+        updated.enableThinking = newSettings.enableThinking;
+      }
+
+      return updated;
+    });
   }, []);
 
   const clearHistory = useCallback(() => {
@@ -202,10 +249,21 @@ export function AIProvider({ children }: { children: ReactNode }) {
     return [systemMessage, ...conversationMessages];
   }, []);
 
-  // Handle tool execution
+  // Handle tool execution with validation
   const handleToolCall = useCallback(
     async (toolCall: OllamaToolCall): Promise<ToolResult> => {
-      const result = await executeTool(toolCall.function.name, toolCall.function.arguments, {
+      // Validate tool name
+      if (!isValidToolName(toolCall.function.name)) {
+        return {
+          success: false,
+          error: `Unknown tool: ${toolCall.function.name}`,
+        };
+      }
+
+      // Sanitize arguments
+      const sanitizedArgs = sanitizeToolArgs(toolCall.function.arguments);
+
+      const result = await executeTool(toolCall.function.name, sanitizedArgs, {
         clientManager: clientManagerRef.current,
         address: addressRef.current,
       });
@@ -218,7 +276,15 @@ export function AIProvider({ children }: { children: ReactNode }) {
   // Send a message
   const sendMessage = useCallback(
     async (content: string) => {
-      if (!content.trim() || isStreaming) return;
+      // Validate user input
+      const validatedInput = validateUserInput(content);
+      if (!validatedInput) return;
+
+      // Use ref for synchronous check to prevent race conditions with rapid messages
+      if (isStreamingRef.current) return;
+
+      // Mark as streaming synchronously before any async operations
+      isStreamingRef.current = true;
 
       // Cancel any ongoing stream
       if (abortControllerRef.current) {
@@ -228,7 +294,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       const userMessage: ChatMessage = {
         id: generateMessageId(),
         role: 'user',
-        content: content.trim(),
+        content: validatedInput,
         timestamp: Date.now(),
       };
 
@@ -306,6 +372,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
                     : m
                 )
               );
+              isStreamingRef.current = false;
               setIsStreaming(false);
               return;
             }
@@ -382,6 +449,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
                 )
               );
 
+              isStreamingRef.current = false;
               setIsStreaming(false);
               return;
             }
@@ -394,7 +462,12 @@ export function AIProvider({ children }: { children: ReactNode }) {
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === toolMessageId
-                  ? { ...m, content: resultContent, isStreaming: false }
+                  ? {
+                      ...m,
+                      content: resultContent,
+                      error: result.success ? undefined : result.error,
+                      isStreaming: false,
+                    }
                   : m
               )
             );
@@ -414,12 +487,17 @@ export function AIProvider({ children }: { children: ReactNode }) {
           ]);
         }
 
-        // If we hit max iterations, finalize the message
+        // If we hit max iterations, finalize the message with error indicator
         if (iteration >= MAX_TOOL_ITERATIONS) {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === currentAssistantMessageId
-                ? { ...m, content: 'I reached the maximum number of tool calls. Please try a simpler request.', isStreaming: false }
+                ? {
+                    ...m,
+                    content: 'I reached the maximum number of tool calls for this request. This usually happens when a task requires more steps than expected. Please try breaking your request into smaller parts.',
+                    error: 'max_tool_iterations_reached',
+                    isStreaming: false,
+                  }
                 : m
             )
           );
@@ -439,36 +517,55 @@ export function AIProvider({ children }: { children: ReactNode }) {
           )
         );
       } finally {
+        isStreamingRef.current = false;
         setIsStreaming(false);
         abortControllerRef.current = null;
       }
     },
-    [messages, settings, isStreaming, toOllamaMessages, handleToolCall]
+    [messages, settings, toOllamaMessages, handleToolCall]
   );
 
   // Confirm a pending action
   const confirmAction = useCallback(async () => {
     if (!pendingConfirmation || !clientManagerRef.current) return;
 
+    // Capture refs at the start to prevent race conditions if wallet disconnects mid-execution
+    const clientManager = clientManagerRef.current;
+    const address = addressRef.current;
+
     const { action, messageId } = pendingConfirmation;
     setPendingConfirmation(null);
+    isStreamingRef.current = true;
     setIsStreaming(true);
+
+    // Set up abort controller for the follow-up stream
+    abortControllerRef.current = new AbortController();
 
     try {
       const result = await executeConfirmedTool(
         action.toolName,
         action.args,
-        clientManagerRef.current,
-        addressRef.current
+        clientManager,
+        address
       );
 
-      const resultContent = result.success
-        ? `Transaction successful!\n${JSON.stringify(result.data, null, 2)}`
-        : `Transaction failed: ${result.error}`;
+      // Keep tool message as structured JSON for the assistant to interpret
+      const resultContent = JSON.stringify({
+        success: result.success,
+        data: result.data,
+        error: result.error,
+      }, null, 2);
 
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === messageId ? { ...m, content: resultContent, isStreaming: false } : m
+          m.id === messageId
+            ? {
+                ...m,
+                content: resultContent,
+                error: result.success ? undefined : result.error,
+                isStreaming: false,
+              }
+            : m
         )
       );
 
@@ -498,10 +595,13 @@ export function AIProvider({ children }: { children: ReactNode }) {
         messages: toOllamaMessages(updatedMessages),
         tools: AI_TOOLS,
         think: settings.enableThinking,
+        signal: abortControllerRef.current?.signal,
       });
 
       let content = '';
       let thinking = '';
+      let streamError: string | undefined;
+
       for await (const chunk of stream) {
         if (chunk.type === 'thinking' && chunk.content) {
           thinking += chunk.content;
@@ -517,12 +617,25 @@ export function AIProvider({ children }: { children: ReactNode }) {
               m.id === newAssistantMessageId ? { ...m, content } : m
             )
           );
+        } else if (chunk.type === 'error') {
+          streamError = chunk.error;
+          break;
         }
+        // Note: tool_calls are intentionally not processed here since we just want
+        // the assistant to summarize the transaction result, not make more tool calls
       }
 
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === newAssistantMessageId ? { ...m, thinking: thinking || undefined, isStreaming: false } : m
+          m.id === newAssistantMessageId
+            ? {
+                ...m,
+                content: streamError ? `Error: ${streamError}` : content,
+                thinking: thinking || undefined,
+                error: streamError,
+                isStreaming: false,
+              }
+            : m
         )
       );
     } catch (error) {
@@ -532,13 +645,16 @@ export function AIProvider({ children }: { children: ReactNode }) {
             ? {
                 ...m,
                 content: `Error executing transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                error: error instanceof Error ? error.message : 'Unknown error',
                 isStreaming: false,
               }
             : m
         )
       );
     } finally {
+      isStreamingRef.current = false;
       setIsStreaming(false);
+      abortControllerRef.current = null;
     }
   }, [pendingConfirmation, settings, toOllamaMessages]);
 

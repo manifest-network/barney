@@ -149,12 +149,30 @@ export async function* streamChat(
         // Handle tool calls
         if (message.tool_calls && Array.isArray(message.tool_calls)) {
           for (const tc of message.tool_calls) {
+            // Preserve Ollama's tool call ID if present, otherwise generate synthetic
+            const id = tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+            // Normalize arguments: parse JSON string if needed, default to {} on failure
+            let args: Record<string, unknown> = {};
+            const rawArgs = tc.function?.arguments;
+            if (rawArgs) {
+              if (typeof rawArgs === 'string') {
+                try {
+                  args = JSON.parse(rawArgs);
+                } catch {
+                  // If JSON parse fails, keep empty object
+                }
+              } else if (typeof rawArgs === 'object') {
+                args = rawArgs as Record<string, unknown>;
+              }
+            }
+
             const toolCall: OllamaToolCall = {
-              id: `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+              id,
               type: 'function',
               function: {
                 name: tc.function?.name || '',
-                arguments: tc.function?.arguments || {},
+                arguments: args,
               },
             };
             yield { type: 'tool_call', toolCall };

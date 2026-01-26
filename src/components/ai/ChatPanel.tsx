@@ -4,6 +4,7 @@ import { useAI } from '../../contexts/AIContext';
 import { MessageBubble } from './MessageBubble';
 import { ConfirmationCard } from './ConfirmationCard';
 import { AISettings } from './AISettings';
+import { MAX_INPUT_LENGTH } from '../../ai/validation';
 
 export function ChatPanel() {
   const {
@@ -33,8 +34,7 @@ export function ChatPanel() {
     inputRef.current?.focus();
   }, []);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const doSubmit = async () => {
     if (!input.trim() || isStreaming) return;
 
     const message = input.trim();
@@ -42,22 +42,35 @@ export function ChatPanel() {
     await sendMessage(message);
   };
 
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    doSubmit();
+  };
+
   // Handle Enter to submit (Shift+Enter for new line)
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit(e);
+      doSubmit();
     }
   };
 
-  // Auto-resize textarea
+  // Auto-resize textarea with length limit
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
+    const value = e.target.value;
+    // Enforce max length
+    if (value.length <= MAX_INPUT_LENGTH) {
+      setInput(value);
+    }
     // Reset height to auto to get the correct scrollHeight
     e.target.style.height = 'auto';
     // Set height to scrollHeight (max 150px)
     e.target.style.height = `${Math.min(e.target.scrollHeight, 150)}px`;
   };
+
+  // Show character count when approaching limit
+  const showCharCount = input.length > MAX_INPUT_LENGTH * 0.8;
+  const isNearLimit = input.length > MAX_INPUT_LENGTH * 0.95;
 
   return (
     <div className={`chat-panel ${isExpanded ? 'chat-panel-expanded' : ''}`}>
@@ -171,6 +184,7 @@ export function ChatPanel() {
             disabled={!isConnected || isStreaming}
             className="chat-input"
             rows={1}
+            maxLength={MAX_INPUT_LENGTH}
           />
           <button
             type="submit"
@@ -186,7 +200,13 @@ export function ChatPanel() {
           </button>
         </div>
         <p className="chat-input-hint">
-          Press Enter to send, Shift+Enter for new line
+          {showCharCount ? (
+            <span className={isNearLimit ? 'text-warning' : ''}>
+              {input.length.toLocaleString()} / {MAX_INPUT_LENGTH.toLocaleString()} characters
+            </span>
+          ) : (
+            'Press Enter to send, Shift+Enter for new line'
+          )}
         </p>
       </form>
     </div>

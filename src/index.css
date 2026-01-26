@@ -1419,6 +1419,80 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--color-error-400);
 }
 
+/* AI Error Boundary */
+.ai-error-boundary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 2rem;
+}
+
+.ai-error-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.75rem;
+  max-width: 280px;
+}
+
+.ai-error-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.ai-error-message {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.ai-error-details {
+  width: 100%;
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  text-align: left;
+}
+
+.ai-error-details summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.ai-error-details pre {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: oklch(0.12 0.02 260 / 0.6);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-error-reset-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--color-primary-600);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.ai-error-reset-btn:hover {
+  background: var(--color-primary-500);
+}
+
 /* Streaming Cursor */
 .streaming-text {
   display: inline;

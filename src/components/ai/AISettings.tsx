@@ -20,14 +20,17 @@ export function AISettings({ onClose }: AISettingsProps) {
   const [localEndpoint, setLocalEndpoint] = useState(settings.ollamaEndpoint);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const handleEndpointChange = () => {
+  const handleEndpointChange = async () => {
     updateSettings({ ollamaEndpoint: localEndpoint });
-    handleRefresh();
+    // Pass the new endpoint directly since state update is async
+    setIsRefreshing(true);
+    await refreshModels(localEndpoint);
+    setIsRefreshing(false);
   };
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await refreshModels();
+    await refreshModels(localEndpoint);
     setIsRefreshing(false);
   };
 

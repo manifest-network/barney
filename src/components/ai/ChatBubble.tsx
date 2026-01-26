@@ -1,10 +1,16 @@
-import { useEffect } from 'react';
+import { useEffect, useCallback } from 'react';
 import { MessageCircle, X } from 'lucide-react';
 import { useAI } from '../../contexts/AIContext';
 import { ChatPanel } from './ChatPanel';
+import { AIErrorBoundary } from './AIErrorBoundary';
 
 export function ChatBubble() {
-  const { isOpen, setIsOpen, isConnected, messages, isStreaming } = useAI();
+  const { isOpen, setIsOpen, isConnected, messages, isStreaming, clearHistory } = useAI();
+
+  // Handler for error boundary reset - clears history to recover from bad state
+  const handleErrorReset = useCallback(() => {
+    clearHistory();
+  }, [clearHistory]);
 
   // Keyboard shortcut: Ctrl+/ or Cmd+/
   useEffect(() => {
@@ -28,8 +34,12 @@ export function ChatBubble() {
 
   return (
     <>
-      {/* Chat Panel */}
-      {isOpen && <ChatPanel />}
+      {/* Chat Panel with Error Boundary */}
+      {isOpen && (
+        <AIErrorBoundary onReset={handleErrorReset}>
+          <ChatPanel />
+        </AIErrorBoundary>
+      )}
 
       {/* Floating Bubble Button */}
       <button

@@ -5,9 +5,19 @@
 import { getAvailableModules, getModuleSubcommands } from 'manifest-mcp-browser';
 
 /**
+ * Cached cosmos operations documentation (generated once at module load)
+ */
+let cachedCosmosOpsDoc: string | null = null;
+
+/**
  * Generate documentation for available cosmos_query and cosmos_tx operations
+ * Results are cached since module definitions are static
  */
 function getCosmosOperationsDoc(): string {
+  if (cachedCosmosOpsDoc) {
+    return cachedCosmosOpsDoc;
+  }
+
   const modules = getAvailableModules();
 
   let doc = '## Available Cosmos Operations\n\n';
@@ -52,6 +62,7 @@ function getCosmosOperationsDoc(): string {
     }
   }
 
+  cachedCosmosOpsDoc = doc;
   return doc;
 }
 
