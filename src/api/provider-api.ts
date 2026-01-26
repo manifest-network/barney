@@ -173,8 +173,10 @@ export async function getProviderHealth(
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   // Link external abort signal if provided
+  let abortHandler: (() => void) | null = null;
   if (abortSignal) {
-    abortSignal.addEventListener('abort', () => controller.abort());
+    abortHandler = () => controller.abort();
+    abortSignal.addEventListener('abort', abortHandler);
   }
 
   try {
@@ -192,8 +194,13 @@ export async function getProviderHealth(
 
     return response.json();
   } catch {
-    clearTimeout(timeoutId);
     return null;
+  } finally {
+    clearTimeout(timeoutId);
+    // Clean up abort listener to prevent memory leak
+    if (abortSignal && abortHandler) {
+      abortSignal.removeEventListener('abort', abortHandler);
+    }
   }
 }
 

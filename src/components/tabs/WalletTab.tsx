@@ -94,6 +94,13 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const handleFundCredit = async () => {
     if (!address || !fundAmount) return;
 
+    // Validate the amount is a valid positive number
+    const parsedAmount = parseFloat(fundAmount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0 || !isFinite(parsedAmount)) {
+      toast.error('Please enter a valid positive amount');
+      return;
+    }
+
     setTxLoading(true);
 
     try {
@@ -102,7 +109,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
         throw new Error('Failed to get signer');
       }
 
-      const baseAmount = (parseFloat(fundAmount) * 1_000_000).toFixed(0);
+      const baseAmount = (parsedAmount * 1_000_000).toFixed(0);
 
       const result = await fundCredit(signer, address, address, {
         denom: DENOMS.PWR,

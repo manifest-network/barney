@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { Link, Shield, Plus } from 'lucide-react';
 import type { Lease, LeaseState } from '../../api/billing';
+import { SECONDS_PER_HOUR } from '../../config/constants';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { getLeasesByTenant, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
 import { createLease, cancelLease, closeLease, type TxResult } from '../../api/tx';
@@ -31,14 +33,27 @@ const ALLOWED_FILE_TYPES = [
   'text/x-yaml',
   'application/x-yaml',
   'application/json',
-  'application/octet-stream', // Allow for files without recognized MIME type
 ];
+
+// Allowed file extensions (validated when MIME type is empty)
+const ALLOWED_FILE_EXTENSIONS = ['.yaml', '.yml', '.json', '.txt'];
 
 // Maximum file name length to prevent path traversal
 const MAX_FILENAME_LENGTH = 255;
 
 /**
- * Validates a file before upload
+ * Validates a file before upload to prevent malicious file uploads.
+ *
+ * **Security:** Prevents various upload attacks by checking:
+ * - File size limits (prevents DoS via large uploads)
+ * - Filename length (prevents path traversal and buffer overflow)
+ * - MIME type validation (prevents executable uploads)
+ * - File extension validation (fallback when MIME is unavailable)
+ *
+ * Note: This is client-side validation. Always validate server-side as well.
+ *
+ * @param file - The File object from an input element
+ * @returns Object with valid: boolean and optional error message
  */
 function validateFile(file: File): { valid: boolean; error?: string } {
   // Check file size
@@ -51,17 +66,43 @@ function validateFile(file: File): { valid: boolean; error?: string } {
     return { valid: false, error: 'Filename is too long' };
   }
 
-  // Check MIME type (with fallback for unrecognized types)
-  if (file.type && !ALLOWED_FILE_TYPES.includes(file.type)) {
-    return { valid: false, error: `File type "${file.type}" is not allowed. Use .yaml, .yml, .json, or .txt files.` };
+  // Get file extension
+  const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
+
+  // Check MIME type if present
+  if (file.type) {
+    if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+      return { valid: false, error: `File type "${file.type}" is not allowed. Use .yaml, .yml, .json, or .txt files.` };
+    }
+  } else {
+    // If no MIME type, validate by extension
+    if (!ALLOWED_FILE_EXTENSIONS.includes(fileExtension)) {
+      return { valid: false, error: `File extension "${fileExtension}" is not allowed. Use .yaml, .yml, .json, or .txt files.` };
+    }
   }
 
   return { valid: true };
 }
 
 /**
- * Validates a signature message before signing
- * Ensures the message follows expected format and contains only safe characters
+ * Validates a signature message before signing with the user's wallet.
+ *
+ * **Security:** Prevents signature injection attacks by ensuring:
+ * - Message is non-empty and is a string
+ * - Message starts with expected prefix (context validation)
+ * - Message contains only safe characters (no special chars that could
+ *   be interpreted differently by different signing implementations)
+ *
+ * This validation ensures users only sign messages they expect, preventing
+ * attackers from crafting malicious messages that look legitimate but
+ * contain hidden commands or unexpected data.
+ *
+ * @param message - The message to be signed
+ * @param expectedPrefix - The expected prefix the message should start with
+ * @returns true if message is safe to sign, false otherwise
+ * @example
+ * validateSignMessage('manifest1abc:lease-123:1234567890', 'manifest1abc') // true
+ * validateSignMessage('evil<script>', 'manifest1abc') // false (unsafe chars)
  */
 function validateSignMessage(message: string, expectedPrefix: string): boolean {
   if (!message || typeof message !== 'string') return false;
@@ -99,9 +140,6 @@ function formatAddress(addr: string): string {
   return `${prefix}${start}...${end}`;
 }
 
-function copyToClipboard(text: string) {
-  navigator.clipboard.writeText(text);
-}
 
 export function LeasesTab() {
   const { address, isWalletConnected, openView, getOfflineSigner, signArbitrary } = useChain(CHAIN_NAME);
@@ -118,6 +156,9 @@ export function LeasesTab() {
   const [txLoading, setTxLoading] = useState(false);
   const [selectedLeases, setSelectedLeases] = useState<Set<string>>(new Set());
 
+  // Track if initial load has completed
+  const initialLoadRef = useRef(false);
+
   const fetchData = useCallback(async () => {
     if (!address) {
       setLeases([]);
@@ -126,7 +167,8 @@ export function LeasesTab() {
     }
 
     try {
-      if (leases.length === 0) {
+      // Only show loading on initial fetch, not on refreshes
+      if (!initialLoadRef.current) {
         setLoading(true);
       }
       setError(null);
@@ -142,12 +184,13 @@ export function LeasesTab() {
       setProviders(providersData);
       setSKUs(skusData);
       setIsInAllowedList(billingParams.allowed_list.includes(address));
+      initialLoadRef.current = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch data');
     } finally {
       setLoading(false);
     }
-  }, [address, leases.length]);
+  }, [address]);
 
   const autoRefresh = useAutoRefresh(fetchData, {
     interval: 5000, // 5 seconds
@@ -610,6 +653,7 @@ function LeaseCard({
   onToggleSelect?: () => void;
 }) {
   const { signArbitrary } = useChain(CHAIN_NAME);
+  const { copyToClipboard } = useCopyToClipboard();
 
   const [connectionInfo, setConnectionInfo] = useState<ConnectionInfo | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(false);
@@ -629,7 +673,7 @@ function LeaseCard({
     let total = 0;
     for (const item of lease.items) {
       const perSecond = parseInt(item.locked_price.amount, 10);
-      total += perSecond * parseInt(item.quantity, 10) * 3600;
+      total += perSecond * parseInt(item.quantity, 10) * SECONDS_PER_HOUR;
     }
     const meta = lease.items[0]?.locked_price.denom
       ? DENOM_METADATA[lease.items[0].locked_price.denom] || { symbol: 'tokens', exponent: 6 }
@@ -845,15 +889,15 @@ function LeaseCard({
       <div className="mb-4 rounded-lg bg-surface-800/50 p-3">
         <div className="mb-2 text-xs font-medium uppercase text-dim">Items</div>
         <div className="space-y-2">
-          {lease.items.map((item, idx) => {
+          {lease.items.map((item) => {
             const sku = getSKU(item.sku_uuid);
             const pricePerHour =
-              (parseInt(item.locked_price.amount, 10) * 3600) /
+              (parseInt(item.locked_price.amount, 10) * SECONDS_PER_HOUR) /
               Math.pow(10, DENOM_METADATA[item.locked_price.denom]?.exponent || 6);
             const symbol = DENOM_METADATA[item.locked_price.denom]?.symbol || item.locked_price.denom;
 
             return (
-              <div key={idx} className="flex items-center justify-between text-sm">
+              <div key={`${lease.uuid}-item-${item.sku_uuid}`} className="flex items-center justify-between text-sm">
                 <span className="text-primary">
                   {sku?.name || item.sku_uuid} × {item.quantity}
                 </span>
@@ -936,32 +980,48 @@ function CreateLeaseModal({
   const [payloadHash, setPayloadHash] = useState<string | null>(null);
   const [payloadError, setPayloadError] = useState<string | null>(null);
 
+  // Store the computed hash bytes to prevent race condition between
+  // hash display and submission. This ensures the hash sent matches what's shown.
+  const payloadHashBytesRef = useRef<Uint8Array | null>(null);
+  // Store the payload text that was used to compute the hash
+  const hashedPayloadTextRef = useRef<string | null>(null);
+
   const providerSKUs = selectedProvider
     ? skus.filter((s) => s.provider_uuid === selectedProvider)
     : [];
 
   // Compute hash when payload changes
+  // Stores both hex string (for display) and bytes (for submission) to prevent race conditions
   useEffect(() => {
     const computeHash = async () => {
       if (!payloadText) {
         setPayloadHash(null);
         setPayloadError(null);
+        payloadHashBytesRef.current = null;
+        hashedPayloadTextRef.current = null;
         return;
       }
 
       if (!validatePayloadSize(payloadText)) {
         setPayloadHash(null);
         setPayloadError(`Payload exceeds maximum size of ${MAX_PAYLOAD_SIZE / 1024}KB`);
+        payloadHashBytesRef.current = null;
+        hashedPayloadTextRef.current = null;
         return;
       }
 
       try {
         const hash = await sha256(payloadText);
+        // Store both the hex string for display and bytes for submission
         setPayloadHash(toHex(hash));
+        payloadHashBytesRef.current = hash;
+        hashedPayloadTextRef.current = payloadText;
         setPayloadError(null);
       } catch {
         setPayloadHash(null);
         setPayloadError('Failed to compute hash');
+        payloadHashBytesRef.current = null;
+        hashedPayloadTextRef.current = null;
       }
     };
 
@@ -1002,10 +1062,18 @@ function CreateLeaseModal({
     e.preventDefault();
     const validItems = items.filter((item) => item.skuUuid && item.quantity > 0);
     if (validItems.length > 0) {
-      if (payloadText && payloadHash) {
-        const payloadBytes = new TextEncoder().encode(payloadText);
-        const hashBytes = await sha256(payloadText);
-        onSubmit(validItems, payloadBytes, hashBytes, selectedProvider);
+      if (payloadText && payloadHash && payloadHashBytesRef.current) {
+        // Verify payload hasn't changed since hash was computed to prevent race condition
+        if (hashedPayloadTextRef.current !== payloadText) {
+          // Payload changed - recompute hash to ensure consistency
+          const hash = await sha256(payloadText);
+          payloadHashBytesRef.current = hash;
+          hashedPayloadTextRef.current = payloadText;
+        }
+
+        // Use the stored payload text that matches the hash
+        const payloadBytes = new TextEncoder().encode(hashedPayloadTextRef.current!);
+        onSubmit(validItems, payloadBytes, payloadHashBytesRef.current, selectedProvider);
       } else {
         onSubmit(validItems);
       }
@@ -1092,7 +1160,7 @@ function CreateLeaseModal({
                 <div className="space-y-3">
                   {items.map((item, idx) => {
                     return (
-                      <div key={idx} className="flex gap-2">
+                      <div key={`create-item-${idx}`} className="flex gap-2">
                         <select
                           value={item.skuUuid}
                           onChange={(e) => updateItem(idx, 'skuUuid', e.target.value)}

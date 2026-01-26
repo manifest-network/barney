@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Content Security Policy - restricts resource loading for security -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://*.web3auth.io;
+      style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+      font-src 'self' https://fonts.gstatic.com;
+      img-src 'self' data: https: blob:;
+      connect-src 'self' https: wss: ws: http://localhost:* http://127.0.0.1:*;
+      frame-src 'self' https://*.web3auth.io;
+      worker-src 'self' blob:;
+    ">
     <title>Barney</title>
     <!-- Fonts: Poppins for headings, Source Sans Pro for body -->
     <link rel="preconnect" href="https://fonts.googleapis.com">

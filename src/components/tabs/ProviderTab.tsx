@@ -1,7 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { Link, Building2, Shield } from 'lucide-react';
 import type { Lease, ProviderWithdrawableResponse } from '../../api/billing';
+import { SECONDS_PER_HOUR } from '../../config/constants';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../api/sku';
 import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, type TxResult } from '../../api/tx';
@@ -24,13 +26,11 @@ function formatAddress(addr: string): string {
   return `${prefix}${start}...${end}`;
 }
 
-function copyToClipboard(text: string) {
-  navigator.clipboard.writeText(text);
-}
 
 export function ProviderTab() {
   const { address, isWalletConnected, openView, getOfflineSigner } = useChain(CHAIN_NAME);
   const toast = useToast();
+  const { copyToClipboard } = useCopyToClipboard();
 
   const [myProvider, setMyProvider] = useState<Provider | null>(null);
   const [providerLeases, setProviderLeases] = useState<Lease[]>([]);
@@ -44,6 +44,9 @@ export function ProviderTab() {
   const [selectedPendingLeases, setSelectedPendingLeases] = useState<Set<string>>(new Set());
   const [selectedActiveLeases, setSelectedActiveLeases] = useState<Set<string>>(new Set());
 
+  // Track if initial load has completed
+  const initialLoadRef = useRef(false);
+
   const fetchData = useCallback(async () => {
     if (!address) {
       setMyProvider(null);
@@ -55,7 +58,7 @@ export function ProviderTab() {
 
     try {
       // Only show loading on initial load
-      if (!myProvider) {
+      if (!initialLoadRef.current) {
         setLoading(true);
       }
       setError(null);
@@ -99,12 +102,14 @@ export function ProviderTab() {
 
         setWithdrawableAmounts(withdrawableMap);
       }
+
+      initialLoadRef.current = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch data');
     } finally {
       setLoading(false);
     }
-  }, [address, myProvider]);
+  }, [address]);
 
   const autoRefresh = useAutoRefresh(fetchData, {
     interval: 5000, // 5 seconds
@@ -131,7 +136,7 @@ export function ProviderTab() {
         toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      toast.error(`Failed to acknowledge lease: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setTxLoading(false);
     }
@@ -153,7 +158,7 @@ export function ProviderTab() {
         toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      toast.error(`Failed to reject lease: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setTxLoading(false);
     }
@@ -175,7 +180,7 @@ export function ProviderTab() {
         toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      toast.error(`Failed to withdraw earnings: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setTxLoading(false);
     }
@@ -197,7 +202,7 @@ export function ProviderTab() {
         toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      toast.error(`Failed to close lease: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setTxLoading(false);
     }
@@ -224,7 +229,7 @@ export function ProviderTab() {
         toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      toast.error(`Failed to acknowledge leases: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setTxLoading(false);
     }
@@ -248,7 +253,7 @@ export function ProviderTab() {
         toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      toast.error(`Failed to reject leases: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setTxLoading(false);
     }
@@ -272,7 +277,7 @@ export function ProviderTab() {
         toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      toast.error(`Failed to close leases: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setTxLoading(false);
     }
@@ -296,7 +301,7 @@ export function ProviderTab() {
         toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      toast.error(`Failed to withdraw from leases: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setTxLoading(false);
     }
@@ -439,8 +444,8 @@ export function ProviderTab() {
             {totalWithdrawable.length === 0 ? (
               <div className="text-2xl font-bold text-dim">0</div>
             ) : (
-              totalWithdrawable.map((coin, idx) => (
-                <div key={idx} className="text-2xl font-bold text-success">
+              totalWithdrawable.map((coin) => (
+                <div key={coin.denom} className="text-2xl font-bold text-success">
                   {formatPrice(coin.amount, coin.denom)}
                 </div>
               ))
@@ -643,6 +648,7 @@ function PendingLeaseCard({
   isSelected?: boolean;
   onToggleSelect?: () => void;
 }) {
+  const { copyToClipboard } = useCopyToClipboard();
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
 
@@ -697,10 +703,10 @@ function PendingLeaseCard({
       {/* Items */}
       <div className="mb-3 rounded-lg bg-surface-800/50 p-2">
         <div className="text-xs font-medium uppercase text-dim">Requested Items</div>
-        {lease.items.map((item, idx) => {
+        {lease.items.map((item) => {
           const sku = getSKU(item.sku_uuid);
           return (
-            <div key={idx} className="mt-1 flex justify-between text-sm">
+            <div key={`${lease.uuid}-item-${item.sku_uuid}`} className="mt-1 flex justify-between text-sm">
               <span className="text-primary">
                 {sku?.name || item.sku_uuid} × {item.quantity}
               </span>
@@ -763,6 +769,7 @@ function ActiveLeaseCard({
   isSelected?: boolean;
   onToggleSelect?: () => void;
 }) {
+  const { copyToClipboard } = useCopyToClipboard();
   const [showCloseForm, setShowCloseForm] = useState(false);
   const [closeReason, setCloseReason] = useState('');
 
@@ -771,7 +778,7 @@ function ActiveLeaseCard({
     let denom = '';
     for (const item of lease.items) {
       const perSecond = parseInt(item.locked_price.amount, 10);
-      total += perSecond * parseInt(item.quantity, 10) * 3600;
+      total += perSecond * parseInt(item.quantity, 10) * SECONDS_PER_HOUR;
       denom = item.locked_price.denom;
     }
     const meta = DENOM_METADATA[denom];
@@ -815,8 +822,8 @@ function ActiveLeaseCard({
           {withdrawable.length === 0 ? (
             <div className="font-bold text-dim">0</div>
           ) : (
-            withdrawable.map((coin, idx) => (
-              <div key={idx} className="font-bold text-success">
+            withdrawable.map((coin) => (
+              <div key={coin.denom} className="font-bold text-success">
                 {formatPrice(coin.amount, coin.denom)}
               </div>
             ))
@@ -827,10 +834,10 @@ function ActiveLeaseCard({
 
       {/* Items */}
       <div className="mt-3 rounded-lg bg-surface-800/50 p-2">
-        {lease.items.map((item, idx) => {
+        {lease.items.map((item) => {
           const sku = getSKU(item.sku_uuid);
           return (
-            <div key={idx} className="flex justify-between text-sm">
+            <div key={`${lease.uuid}-item-${item.sku_uuid}`} className="flex justify-between text-sm">
               <span className="text-primary">
                 {sku?.name || item.sku_uuid} × {item.quantity}
               </span>

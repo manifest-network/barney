@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link, ShieldX, Globe } from 'lucide-react';
 import type { Lease, LeaseState, CreditAccount } from '../../api/billing';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { logError } from '../../utils/errors';
 import {
   getAllLeases,
   getAllCredits,
@@ -52,9 +54,6 @@ function formatAmount(amount: string, denom: string): string {
   return `${num.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${symbol}`;
 }
 
-function copyToClipboard(text: string) {
-  navigator.clipboard.writeText(text);
-}
 
 interface NetworkTabProps {
   isConnected: boolean;
@@ -143,13 +142,13 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
         totalSKUs: skusData.length,
       });
     } catch (err) {
-      console.error('Failed to fetch reference data:', err);
+      logError('NetworkTab.fetchReferenceData', err);
     }
   }, []);
 
   // Fetch leases
   const fetchLeases = useCallback(async (showLoading = true) => {
-    if (showLoading && !leasesResponse) {
+    if (showLoading) {
       setLoading(true);
     }
     setError(null);
@@ -167,11 +166,11 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
     } finally {
       setLoading(false);
     }
-  }, [leaseStateFilter, leaseOffset, leasesResponse]);
+  }, [leaseStateFilter, leaseOffset]);
 
   // Fetch credits
   const fetchCredits = useCallback(async (showLoading = true) => {
-    if (showLoading && !creditsResponse) {
+    if (showLoading) {
       setLoading(true);
     }
     setError(null);
@@ -188,7 +187,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
     } finally {
       setLoading(false);
     }
-  }, [creditOffset, creditsResponse]);
+  }, [creditOffset]);
 
   // Combined fetch for auto-refresh
   const fetchCurrentView = useCallback(async () => {
@@ -351,11 +350,13 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
           {/* Filters */}
           <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
-              <span className="text-sm text-muted">Filter:</span>
+              <label htmlFor="lease-state-filter" className="text-sm text-muted">Filter:</label>
               <select
+                id="lease-state-filter"
                 value={leaseStateFilter}
                 onChange={(e) => setLeaseStateFilter(e.target.value as LeaseState | 'all')}
                 className="input select"
+                aria-label="Filter leases by state"
               >
                 <option value="all">All States</option>
                 <option value="LEASE_STATE_PENDING">Pending</option>
@@ -504,14 +505,12 @@ function LeaseRow({
   getProvider: (uuid: string) => Provider | undefined;
   getSKU: (uuid: string) => SKU | undefined;
 }) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copyToClipboard } = useCopyToClipboard();
   const provider = getProvider(lease.provider_uuid);
   const badgeClass = stateBadgeClasses[lease.state];
 
   const handleCopy = () => {
     copyToClipboard(lease.uuid);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   };
 
   const formatDate = (dateStr?: string) => {
@@ -551,7 +550,7 @@ function LeaseRow({
           {lease.items.map((item, idx) => {
             const sku = getSKU(item.sku_uuid);
             return (
-              <span key={idx}>
+              <span key={`${lease.uuid}-${item.sku_uuid}-${idx}`}>
                 {sku?.name || item.sku_uuid.slice(0, 8)} x{item.quantity}
                 {idx < lease.items.length - 1 ? ', ' : ''}
               </span>
@@ -571,12 +570,10 @@ function CreditRow({
   account: CreditAccount;
   balances: Coin[];
 }) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copyToClipboard } = useCopyToClipboard();
 
   const handleCopy = () => {
     copyToClipboard(account.tenant);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -596,8 +593,8 @@ function CreditRow({
           <span className="text-dim">0</span>
         ) : (
           <div className="text-sm">
-            {balances.map((coin, idx) => (
-              <div key={idx} className="text-green-400">
+            {balances.map((coin) => (
+              <div key={coin.denom} className="text-green-400">
                 {formatAmount(coin.amount, coin.denom)}
               </div>
             ))}

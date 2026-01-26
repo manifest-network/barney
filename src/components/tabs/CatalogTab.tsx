@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { Link, Package, Shield, Loader2, RefreshCw, Plus } from 'lucide-react';
+import { HEALTH_CHECK_TIMEOUT_MS, POST_TX_REFETCH_DELAY_MS } from '../../config/constants';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import {
   getProviders,
   getSKUs,
@@ -33,15 +35,6 @@ function formatAddress(address: string): string {
   return `${prefix}...${suffix}`;
 }
 
-// Copy text to clipboard
-async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 const CHAIN_NAME = 'manifestlocal';
 
@@ -66,8 +59,10 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
   const [skuParams, setSkuParams] = useState<SKUParams | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [providerHealth, setProviderHealth] = useState<Map<string, HealthStatus>>(new Map());
-  const [skuUsage, setSkuUsage] = useState<Map<string, { active: number; total: number }>>(new Map());
+  // Using objects instead of Maps for better React performance (referential equality)
+  const [providerHealth, setProviderHealth] = useState<Record<string, HealthStatus>>({});
+  const [skuUsage, setSkuUsage] = useState<Record<string, { active: number; total: number }>>({});
+  const [skuUsageLoading, setSkuUsageLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -96,12 +91,13 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     fetchData();
   }, [fetchData]);
 
-  // Fetch SKU usage stats (non-blocking)
+  // Fetch SKU usage stats (non-blocking, with loading state)
   useEffect(() => {
     const fetchSkuUsage = async () => {
       if (skus.length === 0) return;
 
-      const usageMap = new Map<string, { active: number; total: number }>();
+      setSkuUsageLoading(true);
+      const usageRecord: Record<string, { active: number; total: number }> = {};
 
       await Promise.all(
         skus.map(async (sku) => {
@@ -110,17 +106,18 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
               getLeasesBySKU(sku.uuid, 'LEASE_STATE_ACTIVE'),
               getLeasesBySKU(sku.uuid),
             ]);
-            usageMap.set(sku.uuid, {
+            usageRecord[sku.uuid] = {
               active: activeLeases.length,
               total: allLeases.length,
-            });
+            };
           } catch {
             // Ignore errors for individual SKU queries
           }
         })
       );
 
-      setSkuUsage(usageMap);
+      setSkuUsage(usageRecord);
+      setSkuUsageLoading(false);
     };
 
     fetchSkuUsage();
@@ -136,10 +133,10 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
       // Set loading state for all providers with API
       setProviderHealth((prev) => {
-        const next = new Map(prev);
+        const next = { ...prev };
         for (const p of providersWithApi) {
-          if (!next.has(p.uuid)) {
-            next.set(p.uuid, 'loading');
+          if (!(p.uuid in next)) {
+            next[p.uuid] = 'loading';
           }
         }
         return next;
@@ -148,7 +145,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
       // Check health in parallel with abort support
       const results = await Promise.all(
         providersWithApi.map(async (p) => {
-          const health = await getProviderHealth(p.api_url, 5000, abortController.signal);
+          const health = await getProviderHealth(p.api_url, HEALTH_CHECK_TIMEOUT_MS, abortController.signal);
           return { uuid: p.uuid, status: health?.status === 'healthy' ? 'healthy' : 'unhealthy' } as const;
         })
       );
@@ -156,9 +153,9 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
       // Only update state if not aborted
       if (!abortController.signal.aborted) {
         setProviderHealth((prev) => {
-          const next = new Map(prev);
+          const next = { ...prev };
           for (const r of results) {
-            next.set(r.uuid, r.status);
+            next[r.uuid] = r.status;
           }
           return next;
         });
@@ -192,7 +189,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     const result = await deactivateProvider(signer, address, uuid);
     if (result.success) {
       toast.success(`Provider deactivated! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-      setTimeout(fetchData, 1000);
+      setTimeout(fetchData, POST_TX_REFETCH_DELAY_MS);
     } else {
       toast.error(result.error || 'Failed to deactivate provider');
     }
@@ -210,7 +207,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     const result = await deactivateSKU(signer, address, uuid);
     if (result.success) {
       toast.success(`SKU deactivated! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-      setTimeout(fetchData, 1000);
+      setTimeout(fetchData, POST_TX_REFETCH_DELAY_MS);
     } else {
       toast.error(result.error || 'Failed to deactivate SKU');
     }
@@ -229,7 +226,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     if (result.success) {
       toast.success(`Provider created! Tx: ${result.transactionHash?.slice(0, 16)}...`);
       setShowCreateProvider(false);
-      setTimeout(fetchData, 1000);
+      setTimeout(fetchData, POST_TX_REFETCH_DELAY_MS);
     } else {
       toast.error(result.error || 'Failed to create provider');
     }
@@ -248,7 +245,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     if (result.success) {
       toast.success(`Provider updated! Tx: ${result.transactionHash?.slice(0, 16)}...`);
       setEditingProvider(null);
-      setTimeout(fetchData, 1000);
+      setTimeout(fetchData, POST_TX_REFETCH_DELAY_MS);
     } else {
       toast.error(result.error || 'Failed to update provider');
     }
@@ -273,7 +270,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     if (result.success) {
       toast.success(`SKU created! Tx: ${result.transactionHash?.slice(0, 16)}...`);
       setShowCreateSKU(false);
-      setTimeout(fetchData, 1000);
+      setTimeout(fetchData, POST_TX_REFETCH_DELAY_MS);
     } else {
       toast.error(result.error || 'Failed to create SKU');
     }
@@ -300,7 +297,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     if (result.success) {
       toast.success(`SKU updated! Tx: ${result.transactionHash?.slice(0, 16)}...`);
       setEditingSKU(null);
-      setTimeout(fetchData, 1000);
+      setTimeout(fetchData, POST_TX_REFETCH_DELAY_MS);
     } else {
       toast.error(result.error || 'Failed to update SKU');
     }
@@ -372,15 +369,22 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
       {/* Controls */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-4">
-          <label className="flex items-center gap-2 text-sm text-muted">
+          <div className="flex items-center gap-2">
             <input
               type="checkbox"
+              id="show-inactive-checkbox"
               checked={showInactive}
               onChange={(e) => setShowInactive(e.target.checked)}
               className="rounded border-gray-600 bg-gray-700"
+              aria-describedby="show-inactive-description"
             />
-            Show inactive
-          </label>
+            <label htmlFor="show-inactive-checkbox" className="text-sm text-muted">
+              Show inactive
+            </label>
+            <span id="show-inactive-description" className="sr-only">
+              Toggle to show or hide inactive providers and SKUs
+            </span>
+          </div>
           <button
             onClick={fetchData}
             disabled={loading}
@@ -448,7 +452,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
                 onSelect={() => setSelectedProvider(provider.uuid)}
                 onEdit={isInSKUAllowedList ? () => setEditingProvider(provider) : undefined}
                 onDeactivate={isInSKUAllowedList ? () => handleDeactivateProvider(provider.uuid) : undefined}
-                healthStatus={providerHealth.get(provider.uuid)}
+                healthStatus={providerHealth[provider.uuid]}
               />
             ))}
           </div>
@@ -484,7 +488,8 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
                     sku={sku}
                     providerName={getProviderName(sku.provider_uuid)}
                     formatPrice={formatPrice}
-                    usage={skuUsage.get(sku.uuid)}
+                    usage={skuUsage[sku.uuid]}
+                    usageLoading={skuUsageLoading && !(sku.uuid in skuUsage)}
                     onEdit={isInSKUAllowedList ? () => setEditingSKU(sku) : undefined}
                     onDeactivate={isInSKUAllowedList ? () => handleDeactivateSKU(sku.uuid) : undefined}
                   />
@@ -570,15 +575,11 @@ function ProviderCard({
   onDeactivate?: () => void;
   healthStatus?: HealthStatus;
 }) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copyToClipboard } = useCopyToClipboard();
 
   const handleCopyUuid = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const success = await copyToClipboard(provider.uuid);
-    if (success) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+    await copyToClipboard(provider.uuid);
   };
 
   return (
@@ -665,6 +666,7 @@ function SKURow({
   providerName,
   formatPrice,
   usage,
+  usageLoading,
   onEdit,
   onDeactivate,
 }: {
@@ -672,17 +674,14 @@ function SKURow({
   providerName: string;
   formatPrice: (amount: string, denom: string, unit: string) => string;
   usage?: { active: number; total: number };
+  usageLoading?: boolean;
   onEdit?: () => void;
   onDeactivate?: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copyToClipboard } = useCopyToClipboard();
 
   const handleCopyUuid = async () => {
-    const success = await copyToClipboard(sku.uuid);
-    if (success) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+    await copyToClipboard(sku.uuid);
   };
 
   return (
@@ -705,7 +704,9 @@ function SKURow({
         </span>
       </td>
       <td className="py-3 pr-4">
-        {usage ? (
+        {usageLoading ? (
+          <span className="text-gray-600 animate-pulse">Loading...</span>
+        ) : usage ? (
           <div className="text-sm">
             <span className="text-green-400">{usage.active}</span>
             <span className="text-dim"> / {usage.total}</span>
