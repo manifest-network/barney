@@ -28,6 +28,9 @@ import type { CosmosClientManager } from 'manifest-mcp-browser';
 const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const STORAGE_KEY_HISTORY = 'barney-ai-history';
 
+// Maximum messages to keep in memory (prevents unbounded growth)
+const MAX_MESSAGES = 200;
+
 export type { AISettings };
 
 export interface ChatMessage {
@@ -97,6 +100,13 @@ export function AIProvider({ children }: { children: ReactNode }) {
   const abortControllerRef = useRef<AbortController | null>(null);
   // Ref to track streaming state synchronously (prevents race conditions with rapid messages)
   const isStreamingRef = useRef(false);
+  // Ref for throttling streaming updates (reduces re-renders during streaming)
+  const pendingUpdateRef = useRef<{
+    messageId: string;
+    content: string;
+    thinking: string;
+  } | null>(null);
+  const rafIdRef = useRef<number | null>(null);
 
   // Load settings and history from localStorage with validation
   useEffect(() => {
@@ -158,12 +168,16 @@ export function AIProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(interval);
   }, [settings.ollamaEndpoint]);
 
-  // Cleanup abort controller on unmount
+  // Cleanup abort controller and RAF on unmount
   useEffect(() => {
     return () => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
         abortControllerRef.current = null;
+      }
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
       }
     };
   }, []);
@@ -221,6 +235,54 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
   // Generate a unique message ID
   const generateMessageId = () => `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+  // Trim messages to MAX_MESSAGES limit (keeps most recent)
+  const trimMessages = useCallback((msgs: ChatMessage[]): ChatMessage[] => {
+    if (msgs.length <= MAX_MESSAGES) return msgs;
+    // Keep the most recent messages
+    return msgs.slice(-MAX_MESSAGES);
+  }, []);
+
+  // Flush any pending streaming update immediately
+  const flushPendingUpdate = useCallback(() => {
+    if (rafIdRef.current) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    const pending = pendingUpdateRef.current;
+    if (pending) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === pending.messageId
+            ? { ...m, content: pending.content, thinking: pending.thinking || undefined }
+            : m
+        )
+      );
+      pendingUpdateRef.current = null;
+    }
+  }, []);
+
+  // Schedule a throttled update for streaming content (once per animation frame)
+  const scheduleStreamingUpdate = useCallback((messageId: string, content: string, thinking: string) => {
+    pendingUpdateRef.current = { messageId, content, thinking };
+
+    if (!rafIdRef.current) {
+      rafIdRef.current = requestAnimationFrame(() => {
+        rafIdRef.current = null;
+        const pending = pendingUpdateRef.current;
+        if (pending) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === pending.messageId
+                ? { ...m, content: pending.content, thinking: pending.thinking || undefined }
+                : m
+            )
+          );
+          pendingUpdateRef.current = null;
+        }
+      });
+    }
+  }, []);
 
   // Convert chat messages to Ollama format
   const toOllamaMessages = useCallback((msgs: ChatMessage[]): OllamaMessage[] => {
@@ -298,7 +360,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         timestamp: Date.now(),
       };
 
-      setMessages((prev) => [...prev, userMessage]);
+      setMessages((prev) => trimMessages([...prev, userMessage]));
       setIsStreaming(true);
 
       abortControllerRef.current = new AbortController();
@@ -310,7 +372,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
       try {
         // Add initial assistant message
-        setMessages((prev) => [
+        setMessages((prev) => trimMessages([
           ...prev,
           {
             id: currentAssistantMessageId,
@@ -319,7 +381,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
             timestamp: Date.now(),
             isStreaming: true,
           },
-        ]);
+        ]));
 
         // Tool call loop - continues until no more tool calls or max iterations
         while (iteration < MAX_TOOL_ITERATIONS) {
@@ -350,21 +412,17 @@ export function AIProvider({ children }: { children: ReactNode }) {
           for await (const chunk of stream) {
             if (chunk.type === 'thinking' && chunk.content) {
               accumulatedThinking += chunk.content;
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === currentAssistantMessageId ? { ...m, thinking: accumulatedThinking } : m
-                )
-              );
+              // Use throttled update for streaming content
+              scheduleStreamingUpdate(currentAssistantMessageId, accumulatedContent, accumulatedThinking);
             } else if (chunk.type === 'content' && chunk.content) {
               accumulatedContent += chunk.content;
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === currentAssistantMessageId ? { ...m, content: accumulatedContent } : m
-                )
-              );
+              // Use throttled update for streaming content
+              scheduleStreamingUpdate(currentAssistantMessageId, accumulatedContent, accumulatedThinking);
             } else if (chunk.type === 'tool_call' && chunk.toolCall) {
               toolCalls.push(chunk.toolCall);
             } else if (chunk.type === 'error') {
+              // Flush any pending updates before handling error
+              flushPendingUpdate();
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === currentAssistantMessageId
@@ -377,6 +435,9 @@ export function AIProvider({ children }: { children: ReactNode }) {
               return;
             }
           }
+
+          // Flush any pending throttled updates before finalizing
+          flushPendingUpdate();
 
           // If no tool calls, we're done
           if (toolCalls.length === 0) {
@@ -408,7 +469,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
             // Add a message showing tool execution
             const toolMessageId = generateMessageId();
-            setMessages((prev) => [
+            setMessages((prev) => trimMessages([
               ...prev,
               {
                 id: toolMessageId,
@@ -419,7 +480,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
                 toolName: toolCall.function.name,
                 isStreaming: true,
               },
-            ]);
+            ]));
 
             // Execute the tool
             const result = await handleToolCall(toolCall);
@@ -475,7 +536,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
           // Create new assistant message for next iteration
           currentAssistantMessageId = generateMessageId();
-          setMessages((prev) => [
+          setMessages((prev) => trimMessages([
             ...prev,
             {
               id: currentAssistantMessageId,
@@ -484,7 +545,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
               timestamp: Date.now(),
               isStreaming: true,
             },
-          ]);
+          ]));
         }
 
         // If we hit max iterations, finalize the message with error indicator
@@ -522,7 +583,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         abortControllerRef.current = null;
       }
     },
-    [messages, settings, toOllamaMessages, handleToolCall]
+    [settings, toOllamaMessages, handleToolCall, trimMessages, scheduleStreamingUpdate, flushPendingUpdate]
   );
 
   // Confirm a pending action
@@ -571,7 +632,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
       // Continue conversation to summarize result
       const newAssistantMessageId = generateMessageId();
-      setMessages((prev) => [
+      setMessages((prev) => trimMessages([
         ...prev,
         {
           id: newAssistantMessageId,
@@ -580,7 +641,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
           timestamp: Date.now(),
           isStreaming: true,
         },
-      ]);
+      ]));
 
       const updatedMessages = await new Promise<ChatMessage[]>((resolve) => {
         setMessages((prev) => {
@@ -605,18 +666,12 @@ export function AIProvider({ children }: { children: ReactNode }) {
       for await (const chunk of stream) {
         if (chunk.type === 'thinking' && chunk.content) {
           thinking += chunk.content;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === newAssistantMessageId ? { ...m, thinking } : m
-            )
-          );
+          // Use throttled update for streaming content
+          scheduleStreamingUpdate(newAssistantMessageId, content, thinking);
         } else if (chunk.type === 'content' && chunk.content) {
           content += chunk.content;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === newAssistantMessageId ? { ...m, content } : m
-            )
-          );
+          // Use throttled update for streaming content
+          scheduleStreamingUpdate(newAssistantMessageId, content, thinking);
         } else if (chunk.type === 'error') {
           streamError = chunk.error;
           break;
@@ -624,6 +679,9 @@ export function AIProvider({ children }: { children: ReactNode }) {
         // Note: tool_calls are intentionally not processed here since we just want
         // the assistant to summarize the transaction result, not make more tool calls
       }
+
+      // Flush any pending throttled updates before finalizing
+      flushPendingUpdate();
 
       setMessages((prev) =>
         prev.map((m) =>
@@ -656,7 +714,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
-  }, [pendingConfirmation, settings, toOllamaMessages]);
+  }, [pendingConfirmation, settings, toOllamaMessages, trimMessages, scheduleStreamingUpdate, flushPendingUpdate]);
 
   // Cancel a pending action
   const cancelAction = useCallback(() => {
