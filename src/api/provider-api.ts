@@ -3,6 +3,29 @@
  * Uses ADR-036 off-chain signatures for authentication.
  */
 
+/**
+ * Validates that a provider API URL is safe to use.
+ * Prevents SSRF attacks by ensuring URL is well-formed http(s).
+ */
+function validateProviderUrl(url: string): URL {
+  if (!url || typeof url !== 'string') {
+    throw new Error('Invalid provider API URL: URL is required');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid provider API URL: ${url}`);
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Invalid provider API URL protocol: ${parsed.protocol}`);
+  }
+
+  return parsed;
+}
+
 export interface ProviderHealthResponse {
   status: 'healthy' | 'unhealthy';
   provider_uuid: string;
@@ -81,8 +104,9 @@ export async function getLeaseConnectionInfo(
   leaseUuid: string,
   authToken: string
 ): Promise<ConnectionInfo> {
-  // Normalize the API URL (remove trailing slash)
-  const baseUrl = providerApiUrl.replace(/\/$/, '');
+  // Validate and normalize the API URL
+  const validatedUrl = validateProviderUrl(providerApiUrl);
+  const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
 
   // In development, use the proxy to bypass CORS
   // The proxy dynamically routes to the target specified in X-Proxy-Target header
@@ -118,13 +142,22 @@ export async function getLeaseConnectionInfo(
  */
 export async function getProviderHealth(
   providerApiUrl: string,
-  timeoutMs: number = 5000
+  timeoutMs: number = 5000,
+  abortSignal?: AbortSignal
 ): Promise<ProviderHealthResponse | null> {
   if (!providerApiUrl) {
     return null;
   }
 
-  const baseUrl = providerApiUrl.replace(/\/$/, '');
+  // Validate the URL before using it
+  let validatedUrl: URL;
+  try {
+    validatedUrl = validateProviderUrl(providerApiUrl);
+  } catch {
+    return null;
+  }
+
+  const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
 
   let url: string;
   const headers: Record<string, string> = {};
@@ -138,6 +171,11 @@ export async function getProviderHealth(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  // Link external abort signal if provided
+  if (abortSignal) {
+    abortSignal.addEventListener('abort', () => controller.abort());
+  }
 
   try {
     const response = await fetch(url, {
@@ -221,7 +259,9 @@ export async function uploadLeaseData(
   payload: Uint8Array,
   authToken: string
 ): Promise<void> {
-  const baseUrl = providerApiUrl.replace(/\/$/, '');
+  // Validate and normalize the API URL
+  const validatedUrl = validateProviderUrl(providerApiUrl);
+  const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
 
   let url: string;
   const headers: Record<string, string> = {

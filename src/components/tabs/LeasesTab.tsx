@@ -16,12 +16,60 @@ import {
   type ConnectionInfo,
 } from '../../api/provider-api';
 import { sha256, toHex, validatePayloadSize, getPayloadSize, MAX_PAYLOAD_SIZE } from '../../utils/hash';
+import { safeJsonStringify } from '../../utils/url';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh';
 import { AutoRefreshIndicator } from '../AutoRefreshIndicator';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { SkeletonStatGrid } from '../ui/SkeletonStat';
 import { SkeletonCard } from '../ui/SkeletonCard';
+
+// Allowed MIME types for file uploads
+const ALLOWED_FILE_TYPES = [
+  'text/plain',
+  'text/yaml',
+  'text/x-yaml',
+  'application/x-yaml',
+  'application/json',
+  'application/octet-stream', // Allow for files without recognized MIME type
+];
+
+// Maximum file name length to prevent path traversal
+const MAX_FILENAME_LENGTH = 255;
+
+/**
+ * Validates a file before upload
+ */
+function validateFile(file: File): { valid: boolean; error?: string } {
+  // Check file size
+  if (file.size > MAX_PAYLOAD_SIZE) {
+    return { valid: false, error: `File exceeds maximum size of ${MAX_PAYLOAD_SIZE / 1024}KB` };
+  }
+
+  // Check filename length
+  if (file.name.length > MAX_FILENAME_LENGTH) {
+    return { valid: false, error: 'Filename is too long' };
+  }
+
+  // Check MIME type (with fallback for unrecognized types)
+  if (file.type && !ALLOWED_FILE_TYPES.includes(file.type)) {
+    return { valid: false, error: `File type "${file.type}" is not allowed. Use .yaml, .yml, .json, or .txt files.` };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Validates a signature message before signing
+ * Ensures the message follows expected format and contains only safe characters
+ */
+function validateSignMessage(message: string, expectedPrefix: string): boolean {
+  if (!message || typeof message !== 'string') return false;
+  if (!message.startsWith(expectedPrefix)) return false;
+  // Only allow alphanumeric, spaces, colons, and hyphens in the message
+  const safePattern = /^[a-zA-Z0-9\s:\-]+$/;
+  return safePattern.test(message);
+}
 
 const CHAIN_NAME = 'manifestlocal';
 
@@ -205,6 +253,12 @@ export function LeasesTab() {
             // Create auth token for payload upload
             const timestamp = Math.floor(Date.now() / 1000);
             const signMessage = createLeaseDataSignMessage(newLease.uuid, metaHashHex, timestamp);
+
+            // Validate message format before signing
+            if (!validateSignMessage(signMessage, 'manifest lease data')) {
+              throw new Error('Invalid signature message format');
+            }
+
             const signResult = await signArbitrary(address, signMessage);
 
             const authToken = createLeaseDataAuthToken(
@@ -597,6 +651,11 @@ function LeaseCard({
       const timestamp = Math.floor(Date.now() / 1000);
       const message = createSignMessage(tenantAddress, lease.uuid, timestamp);
 
+      // Validate message format before signing
+      if (!validateSignMessage(message, tenantAddress)) {
+        throw new Error('Invalid signature message format');
+      }
+
       // Sign the message using ADR-036
       const signResult = await signArbitrary(tenantAddress, message);
 
@@ -724,7 +783,7 @@ function LeaseCard({
               <div>
                 <span className="text-muted">Metadata: </span>
                 <span className="font-mono text-primary">
-                  {JSON.stringify(connectionInfo.connection.metadata)}
+                  {safeJsonStringify(connectionInfo.connection.metadata)}
                 </span>
               </div>
             )}
@@ -818,7 +877,8 @@ function LeaseCard({
           <div className="flex items-center gap-2">
             <span className="break-all font-mono text-xs text-muted">{lease.meta_hash}</span>
             <button
-              onClick={() => copyToClipboard(lease.meta_hash!)}
+              type="button"
+              onClick={() => lease.meta_hash && copyToClipboard(lease.meta_hash)}
               className="shrink-0 text-xs text-primary-400 hover:text-primary-300"
             >
               Copy
@@ -912,8 +972,12 @@ function CreateLeaseModal({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > MAX_PAYLOAD_SIZE) {
-      setPayloadError(`File exceeds maximum size of ${MAX_PAYLOAD_SIZE / 1024}KB`);
+    // Validate file before reading
+    const validation = validateFile(file);
+    if (!validation.valid) {
+      setPayloadError(validation.error || 'Invalid file');
+      // Reset input
+      e.target.value = '';
       return;
     }
 

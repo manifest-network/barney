@@ -128,6 +128,8 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
   // Fetch health status for providers with api_url (non-blocking)
   useEffect(() => {
+    const abortController = new AbortController();
+
     const checkHealth = async () => {
       const providersWithApi = providers.filter((p) => p.api_url && p.active);
       if (providersWithApi.length === 0) return;
@@ -143,24 +145,32 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
         return next;
       });
 
-      // Check health in parallel
+      // Check health in parallel with abort support
       const results = await Promise.all(
         providersWithApi.map(async (p) => {
-          const health = await getProviderHealth(p.api_url);
+          const health = await getProviderHealth(p.api_url, 5000, abortController.signal);
           return { uuid: p.uuid, status: health?.status === 'healthy' ? 'healthy' : 'unhealthy' } as const;
         })
       );
 
-      setProviderHealth((prev) => {
-        const next = new Map(prev);
-        for (const r of results) {
-          next.set(r.uuid, r.status);
-        }
-        return next;
-      });
+      // Only update state if not aborted
+      if (!abortController.signal.aborted) {
+        setProviderHealth((prev) => {
+          const next = new Map(prev);
+          for (const r of results) {
+            next.set(r.uuid, r.status);
+          }
+          return next;
+        });
+      }
     };
 
     checkHealth();
+
+    // Cleanup: abort in-flight requests when dependencies change or unmount
+    return () => {
+      abortController.abort();
+    };
   }, [providers]);
 
   const getProviderName = (uuid: string) => {
@@ -870,22 +880,28 @@ function CreateSKUForm({
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="mb-1 block text-sm text-muted">Price (uPWR)</label>
+          <label htmlFor="create-sku-price" className="mb-1 block text-sm text-muted">Price (uPWR)</label>
           <input
+            id="create-sku-price"
             type="number"
             value={priceAmount}
             onChange={(e) => setPriceAmount(e.target.value)}
             placeholder="1000000"
             required
+            min="1"
+            max="999999999999999"
+            aria-label="Price in micro PWR units"
             className="input"
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm text-muted">Unit</label>
+          <label htmlFor="create-sku-unit" className="mb-1 block text-sm text-muted">Unit</label>
           <select
+            id="create-sku-unit"
             value={unit}
             onChange={(e) => setUnit(Number(e.target.value))}
             className="input select"
+            aria-label="Billing unit"
           >
             <option value={Unit.UNIT_PER_HOUR}>Per Hour</option>
             <option value={Unit.UNIT_PER_DAY}>Per Day</option>
@@ -1062,22 +1078,28 @@ function EditSKUForm({
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="mb-1 block text-sm text-muted">Price (uPWR)</label>
+          <label htmlFor="edit-sku-price" className="mb-1 block text-sm text-muted">Price (uPWR)</label>
           <input
+            id="edit-sku-price"
             type="number"
             value={priceAmount}
             onChange={(e) => setPriceAmount(e.target.value)}
             placeholder="1000000"
             required
+            min="1"
+            max="999999999999999"
+            aria-label="Price in micro PWR units"
             className="input"
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm text-muted">Unit</label>
+          <label htmlFor="edit-sku-unit" className="mb-1 block text-sm text-muted">Unit</label>
           <select
+            id="edit-sku-unit"
             value={unit}
             onChange={(e) => setUnit(Number(e.target.value))}
             className="input select"
+            aria-label="Billing unit"
           >
             <option value={Unit.UNIT_PER_HOUR}>Per Hour</option>
             <option value={Unit.UNIT_PER_DAY}>Per Day</option>
@@ -1091,6 +1113,7 @@ function EditSKUForm({
             checked={active}
             onChange={(e) => setActive(e.target.checked)}
             className="rounded border-gray-600 bg-gray-700"
+            aria-label="SKU active status"
           />
           Active
         </label>

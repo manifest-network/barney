@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
 
@@ -21,27 +21,51 @@ interface ToastContextType {
 
 const ToastContext = createContext<ToastContextType | null>(null);
 
+/** Default auto-dismiss duration for toasts in milliseconds */
+const TOAST_DEFAULT_DURATION_MS = 5000;
+
 let toastIdCounter = 0;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // Track active timeouts for cleanup
+  const timeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
+
+  // Cleanup all timeouts on unmount
+  useEffect(() => {
+    const timeouts = timeoutsRef.current;
+    return () => {
+      timeouts.forEach((timeout) => clearTimeout(timeout));
+      timeouts.clear();
+    };
+  }, []);
 
   const removeToast = useCallback((id: string) => {
+    // Clear the timeout if it exists
+    const timeout = timeoutsRef.current.get(id);
+    if (timeout) {
+      clearTimeout(timeout);
+      timeoutsRef.current.delete(id);
+    }
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
   }, []);
 
-  const addToast = useCallback((type: ToastType, message: string, duration = 5000) => {
-    const id = `toast-${++toastIdCounter}`;
+  const addToast = useCallback((type: ToastType, message: string, duration = TOAST_DEFAULT_DURATION_MS) => {
+    const id = `toast-${++toastIdCounter}-${Date.now()}`;
     const toast: Toast = { id, type, message, duration };
 
     setToasts((prev) => [...prev, toast]);
 
     if (duration > 0) {
-      setTimeout(() => removeToast(id), duration);
+      const timeout = setTimeout(() => {
+        timeoutsRef.current.delete(id);
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, duration);
+      timeoutsRef.current.set(id, timeout);
     }
 
     return id;
-  }, [removeToast]);
+  }, []);
 
   const success = useCallback((message: string, duration?: number) => {
     addToast('success', message, duration);
@@ -59,8 +83,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     addToast('info', message, duration);
   }, [addToast]);
 
+  // Memoize context value to prevent unnecessary re-renders
+  const value = useMemo(
+    () => ({ toasts, addToast, removeToast, success, error, warning, info }),
+    [toasts, addToast, removeToast, success, error, warning, info]
+  );
+
   return (
-    <ToastContext.Provider value={{ toasts, addToast, removeToast, success, error, warning, info }}>
+    <ToastContext.Provider value={value}>
       {children}
     </ToastContext.Provider>
   );

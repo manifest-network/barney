@@ -8,7 +8,6 @@ import { wallets as ledgerWallets } from '@cosmos-kit/ledger';
 import { wallets as leapSnapWallets } from '@cosmos-kit/leap-metamask-cosmos-snap';
 import { makeWeb3AuthWallets } from '@cosmos-kit/web3auth';
 
-// @ts-expect-error - CSS import from package exports
 import '@interchain-ui/react/styles';
 import './index.css';
 import App from './App.tsx';
@@ -18,7 +17,15 @@ import { ToastContainer } from './components/ui/Toast';
 
 // Web3Auth configuration
 const WEB3AUTH_CLIENT_ID = import.meta.env.PUBLIC_WEB3AUTH_CLIENT_ID || 'YOUR_WEB3AUTH_CLIENT_ID';
-const WEB3AUTH_NETWORK = (import.meta.env.PUBLIC_WEB3AUTH_NETWORK || 'sapphire_devnet') as 'sapphire_devnet' | 'sapphire_mainnet';
+
+const validNetworks = ['sapphire_devnet', 'sapphire_mainnet'] as const;
+type Web3AuthNetwork = (typeof validNetworks)[number];
+
+const networkEnvValue = import.meta.env.PUBLIC_WEB3AUTH_NETWORK;
+const WEB3AUTH_NETWORK: Web3AuthNetwork =
+  networkEnvValue && validNetworks.includes(networkEnvValue as Web3AuthNetwork)
+    ? (networkEnvValue as Web3AuthNetwork)
+    : 'sapphire_devnet';
 
 const web3AuthWallets = makeWeb3AuthWallets({
   client: {
@@ -44,7 +51,12 @@ const wallets = [
   ...web3AuthWallets,
 ];
 
-createRoot(document.getElementById('root')!).render(
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+  throw new Error('Root element not found. Ensure #root exists in index.html');
+}
+
+createRoot(rootElement).render(
   <StrictMode>
     <ChainProvider
       chains={[manifestLocalChain]}

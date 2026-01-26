@@ -52,9 +52,13 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const fetchData = useCallback(async () => {
     if (!address) return;
 
-    if (!data.mfxBalance) {
-      setData((prev) => ({ ...prev, loading: true, error: null }));
-    }
+    // Only show loading on initial fetch, not on refreshes
+    setData((prev) => {
+      if (!prev.mfxBalance) {
+        return { ...prev, loading: true, error: null };
+      }
+      return prev;
+    });
 
     try {
       const [mfxBalance, pwrBalance, creditAccount, creditEstimate] = await Promise.all([
@@ -79,7 +83,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
         error: err instanceof Error ? err.message : 'Failed to fetch data',
       }));
     }
-  }, [address, data.mfxBalance]);
+  }, [address]);
 
   const autoRefresh = useAutoRefresh(fetchData, {
     interval: 10000,
@@ -272,15 +276,21 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
         <SectionHeader title="Fund Credit Account" description="Add PWR tokens to your credit account" />
         <div className="flex gap-4">
           <div className="flex-1">
-            <label className="mb-2 block text-sm text-muted">Amount (PWR)</label>
+            <label htmlFor="fund-amount" className="mb-2 block text-sm text-muted">Amount (PWR)</label>
             <input
+              id="fund-amount"
               type="number"
               value={fundAmount}
               onChange={(e) => setFundAmount(e.target.value)}
               placeholder="Enter amount"
               disabled={txLoading}
+              min="0.000001"
+              max="999999999"
+              step="0.000001"
+              aria-describedby="fund-amount-help"
               className="input"
             />
+            <span id="fund-amount-help" className="sr-only">Enter the amount of PWR tokens to fund your credit account</span>
           </div>
           <div className="flex items-end">
             <button

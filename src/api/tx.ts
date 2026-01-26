@@ -1,8 +1,7 @@
 import { getSigningLiftedinitClient, liftedinit } from '@manifest-network/manifestjs';
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import type { Coin } from './bank';
-
-const RPC_ENDPOINT = 'http://localhost:26657';
+import { RPC_ENDPOINT } from './config';
 
 const { MsgFundCredit, MsgCreateLease, MsgCancelLease, MsgCloseLease, MsgAcknowledgeLease, MsgRejectLease, MsgWithdraw } = liftedinit.billing.v1;
 const { MsgCreateProvider, MsgUpdateProvider, MsgCreateSKU, MsgUpdateSKU, MsgDeactivateProvider, MsgDeactivateSKU } = liftedinit.sku.v1;

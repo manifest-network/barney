@@ -1,6 +1,7 @@
 import { Wallet, Package, FileText, Building2, Globe } from 'lucide-react';
 import { SidebarItem } from './SidebarItem';
 import { SidebarSection } from './SidebarSection';
+import { truncateAddress } from '../../utils/address';
 
 export type TabId = 'wallet' | 'catalog' | 'leases' | 'provider' | 'network';
 
@@ -13,10 +14,6 @@ interface SidebarProps {
 }
 
 export function Sidebar({ activeTab, onTabChange, address, isProvider, isAdmin }: SidebarProps) {
-  const truncateAddress = (addr: string) => {
-    if (addr.length <= 16) return addr;
-    return `${addr.slice(0, 8)}...${addr.slice(-4)}`;
-  };
 
   return (
     <aside className="sidebar">
