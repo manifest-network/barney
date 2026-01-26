@@ -36,6 +36,7 @@
     "@manifest-network/manifestjs": "2.2.0-billing-v2.0",
     "axios": "1.13.2",
     "chain-registry": "2.0.140",
+    "lucide-react": "^0.563.0",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },

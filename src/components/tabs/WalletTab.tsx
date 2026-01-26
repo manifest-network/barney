@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
+import { Link, Wallet, Clock, Flame, Loader2 } from 'lucide-react';
 import {
   getBalance,
   getCreditAccount,
@@ -12,6 +13,10 @@ import type { Coin } from '../../api/bank';
 import type { CreditAccountResponse, CreditEstimateResponse } from '../../api/billing';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh';
 import { AutoRefreshIndicator } from '../AutoRefreshIndicator';
+import { useToast } from '../../hooks/useToast';
+import { EmptyState } from '../ui/EmptyState';
+import { SkeletonStat, SkeletonStatGrid } from '../ui/SkeletonStat';
+import { SectionHeader } from '../ui/SectionHeader';
 
 const CHAIN_NAME = 'manifestlocal';
 
@@ -32,9 +37,9 @@ interface WalletData {
 
 export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const { getOfflineSignerDirect } = useChain(CHAIN_NAME);
+  const toast = useToast();
   const [fundAmount, setFundAmount] = useState('');
   const [txLoading, setTxLoading] = useState(false);
-  const [txResult, setTxResult] = useState<{ success: boolean; message: string } | null>(null);
   const [data, setData] = useState<WalletData>({
     mfxBalance: null,
     pwrBalance: null,
@@ -86,7 +91,6 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
     if (!address || !fundAmount) return;
 
     setTxLoading(true);
-    setTxResult(null);
 
     try {
       const signer = getOfflineSignerDirect();
@@ -102,23 +106,14 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
       });
 
       if (result.success) {
-        setTxResult({
-          success: true,
-          message: `Successfully funded ${fundAmount} PWR! Tx: ${result.transactionHash?.slice(0, 16)}...`,
-        });
+        toast.success(`Successfully funded ${fundAmount} PWR! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         setFundAmount('');
         autoRefresh.refresh();
       } else {
-        setTxResult({
-          success: false,
-          message: result.error || 'Transaction failed',
-        });
+        toast.error(result.error || 'Transaction failed');
       }
     } catch (err) {
-      setTxResult({
-        success: false,
-        message: err instanceof Error ? err.message : 'Transaction failed',
-      });
+      toast.error(err instanceof Error ? err.message : 'Transaction failed');
     } finally {
       setTxLoading(false);
     }
@@ -144,14 +139,12 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
 
   if (!isConnected) {
     return (
-      <div className="card-static p-12 text-center">
-        <div className="mb-6 text-6xl">🔗</div>
-        <h2 className="mb-4 text-2xl font-heading font-semibold">Connect Your Wallet</h2>
-        <p className="mb-8 text-muted">Connect your wallet to manage credit and create leases</p>
-        <button onClick={onConnect} className="btn btn-primary btn-lg btn-pill">
-          Connect Wallet
-        </button>
-      </div>
+      <EmptyState
+        icon={Link}
+        title="Connect Your Wallet"
+        description="Connect your wallet to manage credit and create leases"
+        action={{ label: 'Connect Wallet', onClick: onConnect }}
+      />
     );
   }
 
@@ -174,16 +167,6 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
         </div>
       )}
 
-      {/* Transaction Result Banner */}
-      {txResult && (
-        <div className={`card-static p-4 ${txResult.success ? 'border-success-500/50 bg-success-500/10' : 'border-error-500/50 bg-error-500/10'}`}>
-          <span className={txResult.success ? 'text-success' : 'text-error'}>{txResult.message}</span>
-          <button onClick={() => setTxResult(null)} className="ml-4 text-muted hover:text-primary">
-            ✕
-          </button>
-        </div>
-      )}
-
       {/* Connected Address */}
       {address && (
         <div className="card-static p-6">
@@ -197,9 +180,12 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
 
       {/* Wallet Balances Card */}
       <div className="card-static p-6">
-        <h2 className="mb-4 text-lg font-heading font-semibold">Wallet Balances</h2>
+        <SectionHeader icon={Wallet} title="Wallet Balances" />
         {loading && !mfxBalance ? (
-          <div className="text-muted animate-pulse">Loading...</div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SkeletonStat />
+            <SkeletonStat />
+          </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="stat-card">
@@ -220,10 +206,10 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
 
       {/* Credit Account Card */}
       <div className="card-static p-6">
-        <h2 className="mb-4 text-lg font-heading font-semibold">Credit Account</h2>
+        <SectionHeader icon={Flame} title="Credit Account" />
 
         {loading && !creditAccount ? (
-          <div className="text-muted animate-pulse">Loading...</div>
+          <SkeletonStatGrid count={3} />
         ) : (
           <>
             <div className="mb-6 grid gap-4 sm:grid-cols-3">
@@ -244,7 +230,10 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
                 </div>
               </div>
               <div className="stat-card">
-                <div className="stat-label">Time Remaining</div>
+                <div className="flex items-center gap-2 stat-label">
+                  <Clock size={14} />
+                  Time Remaining
+                </div>
                 <div className="stat-value text-accent">
                   {creditEstimate?.estimated_duration_seconds
                     ? formatDuration(parseInt(creditEstimate.estimated_duration_seconds, 10))
@@ -280,7 +269,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
 
       {/* Fund Credit Card */}
       <div className="card-static p-6">
-        <h2 className="mb-4 text-lg font-heading font-semibold">Fund Credit Account</h2>
+        <SectionHeader title="Fund Credit Account" description="Add PWR tokens to your credit account" />
         <div className="flex gap-4">
           <div className="flex-1">
             <label className="mb-2 block text-sm text-muted">Amount (PWR)</label>
@@ -299,7 +288,14 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
               disabled={!fundAmount || txLoading}
               className="btn btn-success"
             >
-              {txLoading ? 'Signing...' : 'Fund Credit'}
+              {txLoading ? (
+                <>
+                  <Loader2 className="animate-spin" size={16} />
+                  Signing...
+                </>
+              ) : (
+                'Fund Credit'
+              )}
             </button>
           </div>
         </div>

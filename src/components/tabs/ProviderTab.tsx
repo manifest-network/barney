@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
+import { Link, Building2, Shield } from 'lucide-react';
 import type { Lease, ProviderWithdrawableResponse } from '../../api/billing';
 import { getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../api/sku';
@@ -8,6 +9,10 @@ import { DENOM_METADATA, formatPrice } from '../../api/config';
 import type { Coin } from '../../api/bank';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh';
 import { AutoRefreshIndicator } from '../AutoRefreshIndicator';
+import { useToast } from '../../hooks/useToast';
+import { EmptyState } from '../ui/EmptyState';
+import { SkeletonStatGrid } from '../ui/SkeletonStat';
+import { SkeletonCard } from '../ui/SkeletonCard';
 
 const CHAIN_NAME = 'manifestlocal';
 
@@ -25,6 +30,7 @@ function copyToClipboard(text: string) {
 
 export function ProviderTab() {
   const { address, isWalletConnected, openView, getOfflineSigner } = useChain(CHAIN_NAME);
+  const toast = useToast();
 
   const [myProvider, setMyProvider] = useState<Provider | null>(null);
   const [providerLeases, setProviderLeases] = useState<Lease[]>([]);
@@ -34,7 +40,7 @@ export function ProviderTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isInBillingAllowedList, setIsInBillingAllowedList] = useState(false);
-  const [txStatus, setTxStatus] = useState<{ loading: boolean; message: string } | null>(null);
+  const [txLoading, setTxLoading] = useState(false);
   const [selectedPendingLeases, setSelectedPendingLeases] = useState<Set<string>>(new Set());
   const [selectedActiveLeases, setSelectedActiveLeases] = useState<Set<string>>(new Set());
 
@@ -114,18 +120,20 @@ export function ProviderTab() {
 
     try {
       const signer = getOfflineSigner();
-      setTxStatus({ loading: true, message: 'Acknowledging lease...' });
+      setTxLoading(true);
 
       const result: TxResult = await acknowledgeLease(signer, address, [leaseUuid]);
 
       if (result.success) {
-        setTxStatus({ loading: false, message: `Lease acknowledged! Tx: ${result.transactionHash}` });
+        toast.success(`Lease acknowledged! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         await fetchData();
       } else {
-        setTxStatus({ loading: false, message: `Failed: ${result.error}` });
+        toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      setTxStatus({ loading: false, message: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` });
+      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setTxLoading(false);
     }
   };
 
@@ -134,18 +142,20 @@ export function ProviderTab() {
 
     try {
       const signer = getOfflineSigner();
-      setTxStatus({ loading: true, message: 'Rejecting lease...' });
+      setTxLoading(true);
 
       const result: TxResult = await rejectLease(signer, address, [leaseUuid], reason);
 
       if (result.success) {
-        setTxStatus({ loading: false, message: `Lease rejected! Tx: ${result.transactionHash}` });
+        toast.success(`Lease rejected! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         await fetchData();
       } else {
-        setTxStatus({ loading: false, message: `Failed: ${result.error}` });
+        toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      setTxStatus({ loading: false, message: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` });
+      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setTxLoading(false);
     }
   };
 
@@ -154,18 +164,20 @@ export function ProviderTab() {
 
     try {
       const signer = getOfflineSigner();
-      setTxStatus({ loading: true, message: 'Withdrawing funds...' });
+      setTxLoading(true);
 
       const result: TxResult = await withdrawFromLeases(signer, address, leaseUuids);
 
       if (result.success) {
-        setTxStatus({ loading: false, message: `Withdrawal successful! Tx: ${result.transactionHash}` });
+        toast.success(`Withdrawal successful! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         await fetchData();
       } else {
-        setTxStatus({ loading: false, message: `Failed: ${result.error}` });
+        toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      setTxStatus({ loading: false, message: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` });
+      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setTxLoading(false);
     }
   };
 
@@ -174,18 +186,20 @@ export function ProviderTab() {
 
     try {
       const signer = getOfflineSigner();
-      setTxStatus({ loading: true, message: 'Closing lease...' });
+      setTxLoading(true);
 
       const result: TxResult = await closeLease(signer, address, [leaseUuid], reason);
 
       if (result.success) {
-        setTxStatus({ loading: false, message: `Lease closed! Tx: ${result.transactionHash}` });
+        toast.success(`Lease closed! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         await fetchData();
       } else {
-        setTxStatus({ loading: false, message: `Failed: ${result.error}` });
+        toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      setTxStatus({ loading: false, message: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` });
+      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setTxLoading(false);
     }
   };
 
@@ -198,19 +212,21 @@ export function ProviderTab() {
     try {
       const signer = getOfflineSigner();
       const leaseUuids = Array.from(selectedPendingLeases);
-      setTxStatus({ loading: true, message: `Acknowledging ${leaseUuids.length} lease(s)...` });
+      setTxLoading(true);
 
       const result: TxResult = await acknowledgeLease(signer, address, leaseUuids);
 
       if (result.success) {
-        setTxStatus({ loading: false, message: `${leaseUuids.length} lease(s) acknowledged! Tx: ${result.transactionHash}` });
+        toast.success(`${leaseUuids.length} lease(s) acknowledged! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         setSelectedPendingLeases(new Set());
         await fetchData();
       } else {
-        setTxStatus({ loading: false, message: `Failed: ${result.error}` });
+        toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      setTxStatus({ loading: false, message: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` });
+      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setTxLoading(false);
     }
   };
 
@@ -220,19 +236,21 @@ export function ProviderTab() {
     try {
       const signer = getOfflineSigner();
       const leaseUuids = Array.from(selectedPendingLeases);
-      setTxStatus({ loading: true, message: `Rejecting ${leaseUuids.length} lease(s)...` });
+      setTxLoading(true);
 
       const result: TxResult = await rejectLease(signer, address, leaseUuids, reason);
 
       if (result.success) {
-        setTxStatus({ loading: false, message: `${leaseUuids.length} lease(s) rejected! Tx: ${result.transactionHash}` });
+        toast.success(`${leaseUuids.length} lease(s) rejected! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         setSelectedPendingLeases(new Set());
         await fetchData();
       } else {
-        setTxStatus({ loading: false, message: `Failed: ${result.error}` });
+        toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      setTxStatus({ loading: false, message: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` });
+      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setTxLoading(false);
     }
   };
 
@@ -242,19 +260,21 @@ export function ProviderTab() {
     try {
       const signer = getOfflineSigner();
       const leaseUuids = Array.from(selectedActiveLeases);
-      setTxStatus({ loading: true, message: `Closing ${leaseUuids.length} lease(s)...` });
+      setTxLoading(true);
 
       const result: TxResult = await closeLease(signer, address, leaseUuids, reason);
 
       if (result.success) {
-        setTxStatus({ loading: false, message: `${leaseUuids.length} lease(s) closed! Tx: ${result.transactionHash}` });
+        toast.success(`${leaseUuids.length} lease(s) closed! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         setSelectedActiveLeases(new Set());
         await fetchData();
       } else {
-        setTxStatus({ loading: false, message: `Failed: ${result.error}` });
+        toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      setTxStatus({ loading: false, message: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` });
+      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setTxLoading(false);
     }
   };
 
@@ -264,19 +284,21 @@ export function ProviderTab() {
     try {
       const signer = getOfflineSigner();
       const leaseUuids = Array.from(selectedActiveLeases);
-      setTxStatus({ loading: true, message: `Withdrawing from ${leaseUuids.length} lease(s)...` });
+      setTxLoading(true);
 
       const result: TxResult = await withdrawFromLeases(signer, address, leaseUuids);
 
       if (result.success) {
-        setTxStatus({ loading: false, message: `Withdrawal from ${leaseUuids.length} lease(s) successful! Tx: ${result.transactionHash}` });
+        toast.success(`Withdrawal from ${leaseUuids.length} lease(s) successful! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         setSelectedActiveLeases(new Set());
         await fetchData();
       } else {
-        setTxStatus({ loading: false, message: `Failed: ${result.error}` });
+        toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      setTxStatus({ loading: false, message: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` });
+      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setTxLoading(false);
     }
   };
 
@@ -312,21 +334,21 @@ export function ProviderTab() {
 
   if (!isWalletConnected) {
     return (
-      <div className="card-static p-12 text-center">
-        <div className="mb-6 text-6xl">🏢</div>
-        <h2 className="mb-4 text-2xl font-heading font-semibold">Connect Your Wallet</h2>
-        <p className="mb-8 text-muted">Connect your wallet to view your provider dashboard</p>
-        <button onClick={() => openView()} className="btn btn-primary btn-lg btn-pill">
-          Connect Wallet
-        </button>
-      </div>
+      <EmptyState
+        icon={Link}
+        title="Connect Your Wallet"
+        description="Connect your wallet to view your provider dashboard"
+        action={{ label: 'Connect Wallet', onClick: () => openView() }}
+      />
     );
   }
 
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="text-muted animate-pulse">Loading provider data...</div>
+      <div className="space-y-6">
+        <SkeletonCard />
+        <SkeletonStatGrid count={3} />
+        <SkeletonCard />
       </div>
     );
   }
@@ -345,12 +367,14 @@ export function ProviderTab() {
   if (!myProvider) {
     return (
       <div className="card-static p-12 text-center">
-        <div className="mb-6 text-6xl">🏢</div>
-        <h2 className="mb-4 text-2xl font-heading font-semibold">No Provider Found</h2>
-        <p className="text-muted">
+        <div className="empty-state-icon-wrapper">
+          <Building2 size={48} className="empty-state-icon" />
+        </div>
+        <h2 className="empty-state-title">No Provider Found</h2>
+        <p className="empty-state-description">
           Your connected address is not associated with any provider.
         </p>
-        <p className="mt-2 text-sm text-dim">
+        <p className="mt-4 text-sm text-dim">
           Connected as: <span className="font-mono">{formatAddress(address || '')}</span>
         </p>
       </div>
@@ -365,36 +389,12 @@ export function ProviderTab() {
       {isInBillingAllowedList && (
         <div className="card-static p-4 border-primary-500/50 bg-primary-500/10">
           <div className="flex items-center gap-2">
-            <span className="text-primary-400">★</span>
+            <Shield size={16} className="text-primary-400" />
             <span className="font-medium text-primary-300">Billing Module Admin</span>
           </div>
           <p className="mt-1 text-sm text-primary-400/80">
             Your wallet is in the billing module allowed list.
           </p>
-        </div>
-      )}
-
-      {/* Transaction Status */}
-      {txStatus && (
-        <div
-          className={`card-static p-4 ${
-            txStatus.loading
-              ? 'border-primary-500/50 bg-primary-500/10 text-primary-300'
-              : txStatus.message.includes('Failed') || txStatus.message.includes('Error')
-              ? 'border-error-500/50 bg-error-500/10 text-error'
-              : 'border-success-500/50 bg-success-500/10 text-success'
-          }`}
-        >
-          {txStatus.loading && <span className="mr-2">⏳</span>}
-          {txStatus.message}
-          {!txStatus.loading && (
-            <button
-              onClick={() => setTxStatus(null)}
-              className="ml-4 text-muted hover:text-primary"
-            >
-              Dismiss
-            </button>
-          )}
         </div>
       )}
 
@@ -448,7 +448,7 @@ export function ProviderTab() {
             {activeLeases.length > 0 && totalWithdrawable.length > 0 && (
               <button
                 onClick={() => handleWithdraw(activeLeases.map((l) => l.uuid))}
-                disabled={txStatus?.loading}
+                disabled={txLoading}
                 className="btn btn-success mt-2"
               >
                 Withdraw All
@@ -517,14 +517,14 @@ export function ProviderTab() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleBatchAcknowledge}
-                  disabled={txStatus?.loading}
+                  disabled={txLoading}
                   className="btn btn-success btn-sm"
                 >
                   Acknowledge {selectedPendingLeases.size}
                 </button>
                 <button
                   onClick={() => handleBatchReject('')}
-                  disabled={txStatus?.loading}
+                  disabled={txLoading}
                   className="btn btn-danger btn-sm"
                 >
                   Reject {selectedPendingLeases.size}
@@ -545,7 +545,7 @@ export function ProviderTab() {
                 getSKU={getSKU}
                 onAcknowledge={handleAcknowledge}
                 onReject={handleReject}
-                txLoading={txStatus?.loading || false}
+                txLoading={txLoading || false}
                 isSelected={selectedPendingLeases.has(lease.uuid)}
                 onToggleSelect={() => togglePendingSelection(lease.uuid)}
               />
@@ -585,14 +585,14 @@ export function ProviderTab() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleBatchWithdraw}
-                  disabled={txStatus?.loading}
+                  disabled={txLoading}
                   className="btn btn-success btn-sm"
                 >
                   Withdraw {selectedActiveLeases.size}
                 </button>
                 <button
                   onClick={() => handleBatchClose()}
-                  disabled={txStatus?.loading}
+                  disabled={txLoading}
                   className="btn btn-secondary btn-sm"
                 >
                   Close {selectedActiveLeases.size}
@@ -614,7 +614,7 @@ export function ProviderTab() {
                 withdrawable={withdrawableAmounts.get(lease.uuid) || []}
                 onWithdraw={() => handleWithdraw([lease.uuid])}
                 onClose={(reason) => handleCloseLease(lease.uuid, reason)}
-                txLoading={txStatus?.loading || false}
+                txLoading={txLoading || false}
                 isSelected={selectedActiveLeases.has(lease.uuid)}
                 onToggleSelect={() => toggleActiveSelection(lease.uuid)}
               />

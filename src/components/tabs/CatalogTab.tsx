@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
+import { Link, Package, Shield, Loader2, RefreshCw, Plus } from 'lucide-react';
 import {
   getProviders,
   getSKUs,
@@ -18,6 +19,9 @@ import {
 import type { Provider, SKU, SKUParams } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeasesBySKU } from '../../api/billing';
+import { useToast } from '../../hooks/useToast';
+import { EmptyState } from '../ui/EmptyState';
+import { Modal } from '../ui/Modal';
 
 type HealthStatus = 'healthy' | 'unhealthy' | 'loading' | 'unknown';
 
@@ -49,6 +53,7 @@ interface CatalogTabProps {
 
 export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps) {
   const { getOfflineSignerDirect } = useChain(CHAIN_NAME);
+  const toast = useToast();
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
   const [showCreateProvider, setShowCreateProvider] = useState(false);
@@ -61,7 +66,6 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
   const [skuParams, setSkuParams] = useState<SKUParams | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [txResult, setTxResult] = useState<{ success: boolean; message: string } | null>(null);
   const [providerHealth, setProviderHealth] = useState<Map<string, HealthStatus>>(new Map());
   const [skuUsage, setSkuUsage] = useState<Map<string, { active: number; total: number }>>(new Map());
 
@@ -171,16 +175,16 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
     const signer = getOfflineSignerDirect();
     if (!signer) {
-      setTxResult({ success: false, message: 'Failed to get signer' });
+      toast.error('Failed to get signer');
       return;
     }
 
     const result = await deactivateProvider(signer, address, uuid);
     if (result.success) {
-      setTxResult({ success: true, message: `Provider deactivated! Tx: ${result.transactionHash?.slice(0, 16)}...` });
+      toast.success(`Provider deactivated! Tx: ${result.transactionHash?.slice(0, 16)}...`);
       setTimeout(fetchData, 1000);
     } else {
-      setTxResult({ success: false, message: result.error || 'Failed to deactivate provider' });
+      toast.error(result.error || 'Failed to deactivate provider');
     }
   };
 
@@ -189,16 +193,16 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
     const signer = getOfflineSignerDirect();
     if (!signer) {
-      setTxResult({ success: false, message: 'Failed to get signer' });
+      toast.error('Failed to get signer');
       return;
     }
 
     const result = await deactivateSKU(signer, address, uuid);
     if (result.success) {
-      setTxResult({ success: true, message: `SKU deactivated! Tx: ${result.transactionHash?.slice(0, 16)}...` });
+      toast.success(`SKU deactivated! Tx: ${result.transactionHash?.slice(0, 16)}...`);
       setTimeout(fetchData, 1000);
     } else {
-      setTxResult({ success: false, message: result.error || 'Failed to deactivate SKU' });
+      toast.error(result.error || 'Failed to deactivate SKU');
     }
   };
 
@@ -207,17 +211,17 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
     const signer = getOfflineSignerDirect();
     if (!signer) {
-      setTxResult({ success: false, message: 'Failed to get signer' });
+      toast.error('Failed to get signer');
       return;
     }
 
     const result = await createProvider(signer, address, params);
     if (result.success) {
-      setTxResult({ success: true, message: `Provider created! Tx: ${result.transactionHash?.slice(0, 16)}...` });
+      toast.success(`Provider created! Tx: ${result.transactionHash?.slice(0, 16)}...`);
       setShowCreateProvider(false);
       setTimeout(fetchData, 1000);
     } else {
-      setTxResult({ success: false, message: result.error || 'Failed to create provider' });
+      toast.error(result.error || 'Failed to create provider');
     }
   };
 
@@ -226,17 +230,17 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
     const signer = getOfflineSignerDirect();
     if (!signer) {
-      setTxResult({ success: false, message: 'Failed to get signer' });
+      toast.error('Failed to get signer');
       return;
     }
 
     const result = await updateProvider(signer, address, params);
     if (result.success) {
-      setTxResult({ success: true, message: `Provider updated! Tx: ${result.transactionHash?.slice(0, 16)}...` });
+      toast.success(`Provider updated! Tx: ${result.transactionHash?.slice(0, 16)}...`);
       setEditingProvider(null);
       setTimeout(fetchData, 1000);
     } else {
-      setTxResult({ success: false, message: result.error || 'Failed to update provider' });
+      toast.error(result.error || 'Failed to update provider');
     }
   };
 
@@ -245,7 +249,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
     const signer = getOfflineSignerDirect();
     if (!signer) {
-      setTxResult({ success: false, message: 'Failed to get signer' });
+      toast.error('Failed to get signer');
       return;
     }
 
@@ -257,11 +261,11 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     });
 
     if (result.success) {
-      setTxResult({ success: true, message: `SKU created! Tx: ${result.transactionHash?.slice(0, 16)}...` });
+      toast.success(`SKU created! Tx: ${result.transactionHash?.slice(0, 16)}...`);
       setShowCreateSKU(false);
       setTimeout(fetchData, 1000);
     } else {
-      setTxResult({ success: false, message: result.error || 'Failed to create SKU' });
+      toast.error(result.error || 'Failed to create SKU');
     }
   };
 
@@ -270,7 +274,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
     const signer = getOfflineSignerDirect();
     if (!signer) {
-      setTxResult({ success: false, message: 'Failed to get signer' });
+      toast.error('Failed to get signer');
       return;
     }
 
@@ -284,24 +288,22 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     });
 
     if (result.success) {
-      setTxResult({ success: true, message: `SKU updated! Tx: ${result.transactionHash?.slice(0, 16)}...` });
+      toast.success(`SKU updated! Tx: ${result.transactionHash?.slice(0, 16)}...`);
       setEditingSKU(null);
       setTimeout(fetchData, 1000);
     } else {
-      setTxResult({ success: false, message: result.error || 'Failed to update SKU' });
+      toast.error(result.error || 'Failed to update SKU');
     }
   };
 
   if (!isConnected) {
     return (
-      <div className="card-static p-12 text-center">
-        <div className="mb-6 text-6xl">🔗</div>
-        <h2 className="mb-4 text-2xl font-heading font-semibold">Connect Your Wallet</h2>
-        <p className="mb-8 text-muted">Connect your wallet to manage providers and SKUs</p>
-        <button onClick={onConnect} className="btn btn-primary btn-lg btn-pill">
-          Connect Wallet
-        </button>
-      </div>
+      <EmptyState
+        icon={Link}
+        title="Connect Your Wallet"
+        description="Connect your wallet to manage providers and SKUs"
+        action={{ label: 'Connect Wallet', onClick: onConnect }}
+      />
     );
   }
 
@@ -317,24 +319,6 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
         </div>
       )}
 
-      {/* Transaction Result Banner */}
-      {txResult && (
-        <div
-          className={`card-static p-4 ${
-            txResult.success
-              ? 'border-success-500/50 bg-success-500/10'
-              : 'border-error-500/50 bg-error-500/10'
-          }`}
-        >
-          <span className={txResult.success ? 'text-success' : 'text-error'}>{txResult.message}</span>
-          <button
-            onClick={() => setTxResult(null)}
-            className="ml-4 text-muted hover:text-primary"
-          >
-            ✕
-          </button>
-        </div>
-      )}
 
       {/* SKU Module Access Banner */}
       {isConnected && (
@@ -348,9 +332,9 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
           <div className="flex items-center gap-3">
             {isInSKUAllowedList ? (
               <>
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-purple-600 text-xs text-white">
-                  ✓
-                </span>
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-purple-600">
+                  <Shield size={16} className="text-white" />
+                </div>
                 <div>
                   <div className="font-medium text-purple-300">SKU Module Admin</div>
                   <div className="text-sm text-muted">
@@ -360,9 +344,9 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
               </>
             ) : (
               <>
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-gray-600 text-xs text-muted">
-                  ○
-                </span>
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-600">
+                  <Package size={16} className="text-muted" />
+                </div>
                 <div>
                   <div className="font-medium text-gray-300">Read-Only Access</div>
                   <div className="text-sm text-dim">
@@ -392,7 +376,17 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
             disabled={loading}
             className="btn btn-secondary btn-sm disabled:opacity-50"
           >
-            {loading ? 'Loading...' : 'Refresh'}
+            {loading ? (
+              <>
+                <Loader2 className="animate-spin" size={14} />
+                Loading...
+              </>
+            ) : (
+              <>
+                <RefreshCw size={14} />
+                Refresh
+              </>
+            )}
           </button>
         </div>
         <div className="flex gap-2">
@@ -402,14 +396,16 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
                 onClick={() => setShowCreateProvider(true)}
                 className="btn btn-primary"
               >
-                + Create Provider
+                <Plus size={16} />
+                Create Provider
               </button>
               <button
                 onClick={() => setShowCreateSKU(true)}
                 disabled={providers.filter((p) => p.active).length === 0}
                 className="btn btn-success disabled:cursor-not-allowed disabled:opacity-50"
               >
-                + Create SKU
+                <Plus size={16} />
+                Create SKU
               </button>
             </>
           )}
@@ -490,49 +486,61 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
       </div>
 
       {/* Create Provider Modal */}
-      {showCreateProvider && (
-        <Modal title="Create Provider" onClose={() => setShowCreateProvider(false)}>
-          <CreateProviderForm
-            defaultAddress={address}
-            onSubmit={handleCreateProvider}
-            onClose={() => setShowCreateProvider(false)}
-          />
-        </Modal>
-      )}
+      <Modal
+        isOpen={showCreateProvider}
+        onClose={() => setShowCreateProvider(false)}
+        title="Create Provider"
+      >
+        <CreateProviderForm
+          defaultAddress={address}
+          onSubmit={handleCreateProvider}
+          onClose={() => setShowCreateProvider(false)}
+        />
+      </Modal>
 
       {/* Create SKU Modal */}
-      {showCreateSKU && (
-        <Modal title="Create SKU" onClose={() => setShowCreateSKU(false)}>
-          <CreateSKUForm
-            providers={providers}
-            onSubmit={handleCreateSKU}
-            onClose={() => setShowCreateSKU(false)}
-          />
-        </Modal>
-      )}
+      <Modal
+        isOpen={showCreateSKU}
+        onClose={() => setShowCreateSKU(false)}
+        title="Create SKU"
+      >
+        <CreateSKUForm
+          providers={providers}
+          onSubmit={handleCreateSKU}
+          onClose={() => setShowCreateSKU(false)}
+        />
+      </Modal>
 
       {/* Edit Provider Modal */}
-      {editingProvider && (
-        <Modal title="Edit Provider" onClose={() => setEditingProvider(null)}>
+      <Modal
+        isOpen={!!editingProvider}
+        onClose={() => setEditingProvider(null)}
+        title="Edit Provider"
+      >
+        {editingProvider && (
           <EditProviderForm
             provider={editingProvider}
             onSubmit={handleUpdateProvider}
             onClose={() => setEditingProvider(null)}
           />
-        </Modal>
-      )}
+        )}
+      </Modal>
 
       {/* Edit SKU Modal */}
-      {editingSKU && (
-        <Modal title="Edit SKU" onClose={() => setEditingSKU(null)}>
+      <Modal
+        isOpen={!!editingSKU}
+        onClose={() => setEditingSKU(null)}
+        title="Edit SKU"
+      >
+        {editingSKU && (
           <EditSKUForm
             sku={editingSKU}
             providers={providers}
             onSubmit={handleUpdateSKU}
             onClose={() => setEditingSKU(null)}
           />
-        </Modal>
-      )}
+        )}
+      </Modal>
     </div>
   );
 }
@@ -731,21 +739,6 @@ function SKURow({
   );
 }
 
-function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="card-static w-full max-w-md p-6">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-heading font-semibold">{title}</h3>
-          <button onClick={onClose} className="text-muted hover:text-white">
-            ✕
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
 
 function CreateProviderForm({
   defaultAddress,

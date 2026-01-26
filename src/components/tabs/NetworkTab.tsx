@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Link, ShieldX, Globe } from 'lucide-react';
 import type { Lease, LeaseState, CreditAccount } from '../../api/billing';
 import {
   getAllLeases,
@@ -12,6 +13,8 @@ import { DENOM_METADATA } from '../../api/config';
 import type { Coin } from '../../api/bank';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh';
 import { AutoRefreshIndicator } from '../AutoRefreshIndicator';
+import { EmptyState } from '../ui/EmptyState';
+import { SkeletonTable } from '../ui/SkeletonCard';
 
 const PAGE_SIZE = 20;
 
@@ -231,29 +234,26 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
 
   if (!isConnected) {
     return (
-      <div className="card-static p-12 text-center">
-        <div className="mb-6 text-6xl">🔐</div>
-        <h2 className="mb-4 text-2xl font-heading font-semibold">Admin Access Required</h2>
-        <p className="mb-8 text-muted">Connect your wallet to access the network dashboard</p>
-        <button
-          onClick={onConnect}
-          className="btn btn-primary"
-        >
-          Connect Wallet
-        </button>
-      </div>
+      <EmptyState
+        icon={Link}
+        title="Admin Access Required"
+        description="Connect your wallet to access the network dashboard"
+        action={{ label: 'Connect Wallet', onClick: onConnect }}
+      />
     );
   }
 
   if (!isAdmin) {
     return (
       <div className="card-static p-12 text-center">
-        <div className="mb-6 text-6xl">⛔</div>
-        <h2 className="mb-4 text-2xl font-heading font-semibold">Access Denied</h2>
-        <p className="text-muted">
+        <div className="empty-state-icon-wrapper">
+          <ShieldX size={48} className="empty-state-icon" />
+        </div>
+        <h2 className="empty-state-title">Access Denied</h2>
+        <p className="empty-state-description">
           Your wallet is not in the billing module allowed list.
         </p>
-        <p className="mt-2 text-sm text-dim">
+        <p className="mt-4 text-sm text-dim">
           Connected as: <span className="font-mono">{formatAddress(address || '')}</span>
         </p>
       </div>
@@ -275,7 +275,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
       {/* Admin Badge */}
       <div className="card-static p-4 border-purple-700 bg-purple-900/20">
         <div className="flex items-center gap-2">
-          <span className="text-purple-400">★</span>
+          <Globe size={16} className="text-purple-400" />
           <span className="font-medium text-purple-300">Network Admin Dashboard</span>
         </div>
         <p className="mt-1 text-sm text-purple-400/80">
@@ -372,7 +372,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
 
           {/* Leases Table */}
           {loading ? (
-            <div className="py-8 text-center text-muted">Loading leases...</div>
+            <SkeletonTable />
           ) : leasesResponse?.leases?.length === 0 ? (
             <div className="py-8 text-center text-muted">No leases found</div>
           ) : (
@@ -439,7 +439,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
 
           {/* Credits Table */}
           {loading ? (
-            <div className="py-8 text-center text-muted">Loading credit accounts...</div>
+            <SkeletonTable />
           ) : creditsResponse?.credit_accounts?.length === 0 ? (
             <div className="py-8 text-center text-muted">No credit accounts found</div>
           ) : (
