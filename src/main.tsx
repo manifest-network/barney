@@ -18,7 +18,7 @@ import { ToastContainer } from './components/ui/Toast';
 // Web3Auth configuration
 const WEB3AUTH_CLIENT_ID = import.meta.env.PUBLIC_WEB3AUTH_CLIENT_ID || 'YOUR_WEB3AUTH_CLIENT_ID';
 
-const validNetworks = ['sapphire_devnet', 'sapphire_mainnet'] as const;
+const validNetworks = ['sapphire_devnet', 'sapphire_mainnet', 'testnet', 'mainnet'] as const;
 type Web3AuthNetwork = (typeof validNetworks)[number];
 
 const networkEnvValue = import.meta.env.PUBLIC_WEB3AUTH_NETWORK;

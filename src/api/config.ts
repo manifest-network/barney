@@ -1,6 +1,6 @@
 // API endpoints - use environment variables with localhost defaults for development
-export const REST_URL = import.meta.env.VITE_REST_URL || 'http://localhost:1317';
-export const RPC_ENDPOINT = import.meta.env.VITE_RPC_URL || 'http://localhost:26657';
+export const REST_URL = import.meta.env.PUBLIC_REST_URL || 'http://localhost:1317';
+export const RPC_ENDPOINT = import.meta.env.PUBLIC_RPC_URL || 'http://localhost:26657';
 
 export const DENOMS = {
   MFX: 'umfx',
