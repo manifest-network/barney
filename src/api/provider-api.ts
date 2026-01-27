@@ -311,14 +311,11 @@ export async function uploadLeaseData(
     url = `${baseUrl}/v1/leases/${leaseUuid}/data`;
   }
 
-  // Create a copy of the payload to ensure correct TypeScript typing
-  // and handle cases where payload might be a view into a larger buffer
-  const payloadCopy = new Uint8Array(payload);
-
   const response = await fetch(url, {
     method: 'POST',
     headers,
-    body: new Blob([payloadCopy]),
+    // Type assertion needed for TS 5.9 - Blob constructor handles Uint8Array correctly at runtime
+    body: new Blob([payload as BlobPart]),
   });
 
   if (!response.ok) {
