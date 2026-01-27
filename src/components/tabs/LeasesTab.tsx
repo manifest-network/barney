@@ -7,7 +7,7 @@ import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { formatAddress } from '../../utils/format';
 import { getLeasesByTenant, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
-import { createLease, cancelLease, closeLease, type TxResult } from '../../api/tx';
+import { createLease, cancelLease, closeLease, type TxResult, type CreateLeaseResult } from '../../api/tx';
 import { DENOM_METADATA, formatPrice } from '../../api/config';
 import {
   createSignMessage,
@@ -252,7 +252,7 @@ export function LeasesTab() {
       const signer = getOfflineSigner();
       setTxLoading(true);
 
-      const result: TxResult = await createLease(signer, address, items, metaHash);
+      const result: CreateLeaseResult = await createLease(signer, address, items, metaHash);
 
       if (result.success) {
         // If we have payload, we need to upload it to the provider
@@ -268,26 +268,21 @@ export function LeasesTab() {
             return;
           }
 
-          // Refresh leases to find the newly created one
-          const updatedLeases = await getLeasesByTenant(address);
-          const metaHashHex = toHex(metaHash);
-
-          // Find the new pending lease with matching meta_hash
-          const newLease = updatedLeases.find(
-            (l) => l.state === 'LEASE_STATE_PENDING' && l.meta_hash === metaHashHex
-          );
-
-          if (!newLease) {
-            toast.warning(`Lease created but couldn't find it to upload payload. Tx: ${result.transactionHash?.slice(0, 16)}...`);
+          // Use the lease UUID from the transaction events
+          const leaseUuid = result.leaseUuid;
+          if (!leaseUuid) {
+            toast.warning(`Lease created but couldn't extract UUID from transaction. Tx: ${result.transactionHash?.slice(0, 16)}...`);
             setShowCreateLease(false);
             await fetchData();
             return;
           }
 
+          const metaHashHex = toHex(metaHash);
+
           try {
             // Create auth token for payload upload
             const timestamp = Math.floor(Date.now() / 1000);
-            const signMessage = createLeaseDataSignMessage(newLease.uuid, metaHashHex, timestamp);
+            const signMessage = createLeaseDataSignMessage(leaseUuid, metaHashHex, timestamp);
 
             // Validate message format before signing
             if (!validateSignMessage(signMessage, 'manifest lease data')) {
@@ -298,14 +293,14 @@ export function LeasesTab() {
 
             const authToken = createLeaseDataAuthToken(
               address,
-              newLease.uuid,
+              leaseUuid,
               metaHashHex,
               timestamp,
               signResult.pub_key.value,
               signResult.signature
             );
 
-            await uploadLeaseData(provider.api_url, newLease.uuid, payload, authToken);
+            await uploadLeaseData(provider.api_url, leaseUuid, payload, authToken);
             toast.success(`Lease created and payload uploaded! Tx: ${result.transactionHash?.slice(0, 16)}...`);
           } catch (uploadErr) {
             toast.error(`Lease created but payload upload failed: ${uploadErr instanceof Error ? uploadErr.message : 'Unknown error'}`);

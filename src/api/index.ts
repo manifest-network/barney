@@ -21,4 +21,4 @@ export type {
   PaginatedCreditsResponse,
 } from './billing';
 export type { Provider, SKU, SKUParams } from './sku';
-export type { TxResult } from './tx';
+export type { TxResult, CreateLeaseResult } from './tx';

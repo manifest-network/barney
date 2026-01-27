@@ -701,6 +701,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
       } finally {
         isStreamingRef.current = false;
         setIsStreaming(false);
+        // Abort any ongoing fetch to prevent connection leaks
+        abortControllerRef.current?.abort();
         abortControllerRef.current = null;
       }
     },
@@ -804,6 +806,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
     } finally {
       isStreamingRef.current = false;
       setIsStreaming(false);
+      // Abort any ongoing fetch to prevent connection leaks
+      abortControllerRef.current?.abort();
       abortControllerRef.current = null;
     }
   }, [pendingConfirmation, settings, toOllamaMessages, updateMessageById, createAssistantMessage, addMessage, getCurrentMessages, scheduleStreamingUpdate, flushPendingUpdate]);

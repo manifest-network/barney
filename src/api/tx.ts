@@ -15,6 +15,30 @@ export interface TxResult {
   error?: string;
 }
 
+export interface CreateLeaseResult extends TxResult {
+  leaseUuid?: string;
+}
+
+/**
+ * Extract an attribute value from transaction events.
+ */
+function getEventAttribute(
+  events: readonly { type: string; attributes: readonly { key: string; value: string }[] }[],
+  eventType: string,
+  attributeKey: string
+): string | undefined {
+  for (const event of events) {
+    if (event.type === eventType) {
+      for (const attr of event.attributes) {
+        if (attr.key === attributeKey) {
+          return attr.value;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
 export async function getSigningClient(signer: OfflineSigner) {
   return getSigningLiftedinitClient({
     rpcEndpoint: RPC_ENDPOINT,
@@ -234,7 +258,7 @@ export async function createLease(
   tenant: string,
   items: LeaseItemInput[],
   metaHash?: Uint8Array
-): Promise<TxResult> {
+): Promise<CreateLeaseResult> {
   const msg = {
     typeUrl: MsgCreateLease.typeUrl,
     value: MsgCreateLease.fromPartial({
@@ -243,12 +267,36 @@ export async function createLease(
         skuUuid: item.skuUuid,
         quantity: BigInt(item.quantity),
       })),
-      // @ts-expect-error manifestjs uses meta_hash field
-      meta_hash: metaHash ?? new Uint8Array(),
+      metaHash: metaHash ?? new Uint8Array(),
     }),
   };
 
-  return signAndBroadcast(signer, tenant, [msg]);
+  try {
+    const client = await getSigningClient(signer);
+    const result = await client.signAndBroadcast(tenant, [msg], DEFAULT_FEE);
+
+    if (result.code !== 0) {
+      return {
+        success: false,
+        transactionHash: result.transactionHash,
+        error: `Transaction failed with code ${result.code}: ${result.rawLog}`,
+      };
+    }
+
+    // Extract lease UUID from events
+    const leaseUuid = getEventAttribute(result.events, 'lease_created', 'lease_uuid');
+
+    return {
+      success: true,
+      transactionHash: result.transactionHash,
+      leaseUuid,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Unknown error',
+    };
+  }
 }
 
 export async function cancelLease(
