@@ -179,10 +179,8 @@ function validateMessage(msg: unknown): ChatMessage | null {
   // Don't restore isStreaming state (should always start as false)
   validated.isStreaming = false;
 
-  // Validate toolCalls if present (complex validation, just check it's an array)
-  if (Array.isArray(obj.toolCalls)) {
-    validated.toolCalls = obj.toolCalls;
-  }
+  // Don't restore toolCalls from localStorage - they're user-controlled and could be
+  // malformed/oversized. Historical tool calls aren't needed for conversation continuity.
 
   return validated;
 }

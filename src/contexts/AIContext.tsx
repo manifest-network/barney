@@ -580,6 +580,9 @@ export function AIProvider({ children }: { children: ReactNode }) {
       const validatedInput = validateUserInput(content);
       if (!validatedInput) return;
 
+      // Don't send if not connected to Ollama
+      if (!isConnected) return;
+
       // Use ref for synchronous check to prevent race conditions with rapid messages
       if (isStreamingRef.current) return;
 
@@ -706,7 +709,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         abortControllerRef.current = null;
       }
     },
-    [settings, toOllamaMessages, addMessage, createAssistantMessage, getCurrentMessages, updateMessageById, processToolCalls, scheduleStreamingUpdate, flushPendingUpdate]
+    [isConnected, settings, toOllamaMessages, addMessage, createAssistantMessage, getCurrentMessages, updateMessageById, processToolCalls, scheduleStreamingUpdate, flushPendingUpdate]
   );
 
   // Confirm a pending action

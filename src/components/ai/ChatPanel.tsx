@@ -186,6 +186,7 @@ export function ChatPanel() {
                 type="button"
                 onClick={() => sendMessage("What's my balance?")}
                 className="chat-suggestion"
+                disabled={!isConnected || isStreaming}
               >
                 What's my balance?
               </button>
@@ -193,6 +194,7 @@ export function ChatPanel() {
                 type="button"
                 onClick={() => sendMessage("Show my active leases")}
                 className="chat-suggestion"
+                disabled={!isConnected || isStreaming}
               >
                 Show my active leases
               </button>
@@ -200,6 +202,7 @@ export function ChatPanel() {
                 type="button"
                 onClick={() => sendMessage("List available providers")}
                 className="chat-suggestion"
+                disabled={!isConnected || isStreaming}
               >
                 List available providers
               </button>
