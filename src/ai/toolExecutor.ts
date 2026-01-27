@@ -115,6 +115,9 @@ function validateConfirmationToolArgs(
       if (!leaseUuid || typeof leaseUuid !== 'string' || leaseUuid.trim() === '') {
         return 'Missing required argument: lease_uuid.';
       }
+      if (!isValidUUID(leaseUuid)) {
+        return `Invalid lease UUID format: "${leaseUuid}". Use format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.`;
+      }
       return null;
     }
 
@@ -294,6 +297,9 @@ export async function executeTool(
         if (!providerUuid) {
           return { success: false, error: 'provider_uuid is required' };
         }
+        if (!isValidUUID(providerUuid)) {
+          return { success: false, error: `Invalid provider_uuid format: "${providerUuid}". Must be a valid UUID.` };
+        }
 
         const skus = await getSKUsByProvider(providerUuid);
         return {
@@ -335,6 +341,9 @@ export async function executeTool(
         const leaseUuid = args.lease_uuid as string;
         if (!leaseUuid) {
           return { success: false, error: 'lease_uuid is required' };
+        }
+        if (!isValidUUID(leaseUuid)) {
+          return { success: false, error: `Invalid lease_uuid format: "${leaseUuid}". Must be a valid UUID.` };
         }
 
         const amounts = await getWithdrawableAmount(leaseUuid);

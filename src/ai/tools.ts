@@ -254,6 +254,20 @@ export function requiresConfirmation(toolName: string): boolean {
 }
 
 /**
+ * Set of valid tool names derived from AI_TOOLS to ensure consistency
+ */
+export const VALID_TOOL_NAMES: ReadonlySet<string> = new Set(
+  AI_TOOLS.map((tool) => tool.function.name)
+);
+
+/**
+ * Check if a tool name is valid
+ */
+export function isValidToolName(name: unknown): name is string {
+  return typeof name === 'string' && VALID_TOOL_NAMES.has(name);
+}
+
+/**
  * Get a human-readable description for a tool call
  */
 export function getToolCallDescription(toolName: string, args: Record<string, unknown>): string {

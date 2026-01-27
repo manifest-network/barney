@@ -215,30 +215,9 @@ export function validateChatHistory(data: unknown): ChatMessage[] {
 // Tool Argument Validation
 // ============================================================================
 
-/**
- * Set of valid tool names
- */
-export const VALID_TOOL_NAMES = new Set([
-  'get_balance',
-  'get_leases',
-  'get_providers',
-  'get_skus',
-  'get_credit_estimate',
-  'create_lease',
-  'close_lease',
-  'fund_credit',
-  'get_withdrawable',
-  'cosmos_query',
-  'cosmos_tx',
-  'upload_payload',
-]);
-
-/**
- * Validate that a tool name is in the allowed list
- */
-export function isValidToolName(name: unknown): name is string {
-  return typeof name === 'string' && VALID_TOOL_NAMES.has(name);
-}
+// Re-export VALID_TOOL_NAMES and isValidToolName from tools.ts for backwards compatibility
+// This ensures a single source of truth for valid tool names
+export { VALID_TOOL_NAMES, isValidToolName } from './tools';
 
 /**
  * Sanitize tool arguments - ensure they're a valid object
