@@ -47,7 +47,7 @@ export function ChatBubble() {
         onClick={() => setIsOpen(!isOpen)}
         className="chat-bubble"
         aria-label={isOpen ? 'Close AI Assistant' : 'Open AI Assistant'}
-        title={`AI Assistant (${navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'}+/)`}
+        title="AI Assistant (Ctrl+/ or Cmd+/)"
       >
         {isOpen ? (
           <X className="w-6 h-6" />

@@ -487,12 +487,13 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
             if (result.requiresConfirmation) {
               // Set pending confirmation and stop the loop
+              // Use sanitized args from pendingAction (already sanitized in handleToolCall -> executeTool)
               setPendingConfirmation({
                 id: generateMessageId(),
                 action: {
                   id: toolCall.id,
-                  toolName: toolCall.function.name,
-                  args: toolCall.function.arguments,
+                  toolName: result.pendingAction?.toolName || toolCall.function.name,
+                  args: result.pendingAction?.args || {},
                   description: result.confirmationMessage || 'Confirm action?',
                 },
                 messageId: toolMessageId,

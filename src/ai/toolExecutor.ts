@@ -114,6 +114,31 @@ function validateConfirmationToolArgs(
       if (!subcommand || typeof subcommand !== 'string' || subcommand.trim() === '') {
         return 'Missing required argument: subcommand.';
       }
+
+      // Validate args is present and is a JSON array of strings
+      const txArgs = args.args;
+      if (!txArgs) {
+        return 'Missing required argument: args. Please provide a JSON array of string arguments.';
+      }
+
+      let parsedArgs: unknown[];
+      try {
+        parsedArgs = typeof txArgs === 'string' ? JSON.parse(txArgs) : txArgs as unknown[];
+      } catch {
+        return `Invalid args format: could not parse JSON. Use format: ["arg1", "arg2"]`;
+      }
+
+      if (!Array.isArray(parsedArgs)) {
+        return 'Invalid args format: must be a JSON array of strings.';
+      }
+
+      // Validate each element is a string
+      for (let i = 0; i < parsedArgs.length; i++) {
+        if (typeof parsedArgs[i] !== 'string') {
+          return `Invalid args format: element at index ${i} must be a string.`;
+        }
+      }
+
       return null;
     }
 
@@ -376,13 +401,27 @@ export async function executeConfirmedTool(
       case 'cosmos_tx': {
         const module = args.module as string;
         const subcommand = args.subcommand as string;
-        let txArgs: string[] = [];
 
-        if (args.args) {
-          try {
-            txArgs = typeof args.args === 'string' ? JSON.parse(args.args) : args.args as string[];
-          } catch {
-            txArgs = [];
+        // Validate args.args is present and valid
+        if (!args.args) {
+          return { success: false, error: 'Missing required argument: args' };
+        }
+
+        let txArgs: string[];
+        try {
+          txArgs = typeof args.args === 'string' ? JSON.parse(args.args) : args.args as string[];
+        } catch {
+          return { success: false, error: 'Invalid args format: could not parse JSON array' };
+        }
+
+        if (!Array.isArray(txArgs)) {
+          return { success: false, error: 'Invalid args format: must be a JSON array of strings' };
+        }
+
+        // Validate each element is a string
+        for (let i = 0; i < txArgs.length; i++) {
+          if (typeof txArgs[i] !== 'string') {
+            return { success: false, error: `Invalid args format: element at index ${i} must be a string` };
           }
         }
 
