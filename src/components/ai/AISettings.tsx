@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Settings, RefreshCw, Trash2, X, Check, Wifi, WifiOff, Brain } from 'lucide-react';
 import { useAI } from '../../contexts/AIContext';
 import { validateEndpointUrl } from '../../ai/validation';
@@ -20,6 +20,11 @@ export function AISettings({ onClose }: AISettingsProps) {
 
   const [localEndpoint, setLocalEndpoint] = useState(settings.ollamaEndpoint);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Sync local endpoint state when settings change (e.g., loaded from localStorage)
+  useEffect(() => {
+    setLocalEndpoint(settings.ollamaEndpoint);
+  }, [settings.ollamaEndpoint]);
 
   const handleEndpointChange = async () => {
     // Validate and normalize the endpoint before using it

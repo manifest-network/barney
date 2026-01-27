@@ -47,8 +47,14 @@ export function isValidUUID(uuid: string): boolean {
 export function parseJsonStringArray(
   rawArgs: unknown
 ): { data: string[]; error?: never } | { data?: never; error: string } {
-  if (!rawArgs) {
+  // Only treat null/undefined as "no args"
+  if (rawArgs == null) {
     return { data: [] };
+  }
+
+  // Reject other invalid types (number, boolean, etc.)
+  if (typeof rawArgs !== 'string' && !Array.isArray(rawArgs)) {
+    return { error: `Invalid args format: expected a JSON string or array, got ${typeof rawArgs}.` };
   }
 
   let parsedArgs: unknown;

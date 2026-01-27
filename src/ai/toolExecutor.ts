@@ -5,7 +5,7 @@
 
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import { cosmosQuery, cosmosTx } from '@manifest-network/manifest-mcp-browser';
-import { getCreditAccount, getCreditEstimate, getLeasesByTenant, getWithdrawableAmount, getLease, LEASE_STATE_MAP } from '../api/billing';
+import { getCreditAccount, getCreditEstimate, getLeasesByTenant, getWithdrawableAmount, getLease, LEASE_STATE_MAP, LEASE_STATE_FILTERS } from '../api/billing';
 import { getProviders, getSKUsByProvider } from '../api/sku';
 import { getAllBalances } from '../api/bank';
 import {
@@ -262,11 +262,24 @@ export async function executeTool(
           return { success: false, error: 'Wallet not connected' };
         }
 
-        const stateFilter = args.state as string | undefined;
+        const stateFilterRaw = args.state as string | undefined;
         let state: Parameters<typeof getLeasesByTenant>[1] = undefined;
 
-        if (stateFilter && stateFilter !== 'all') {
-          state = LEASE_STATE_MAP[stateFilter];
+        if (stateFilterRaw) {
+          // Normalize to lowercase for case-insensitive matching
+          const stateFilter = stateFilterRaw.toLowerCase();
+
+          // Validate against known state filters
+          if (!LEASE_STATE_FILTERS.includes(stateFilter as typeof LEASE_STATE_FILTERS[number])) {
+            return {
+              success: false,
+              error: `Invalid state filter: "${stateFilterRaw}". Valid values are: ${LEASE_STATE_FILTERS.join(', ')}`,
+            };
+          }
+
+          if (stateFilter !== 'all') {
+            state = LEASE_STATE_MAP[stateFilter];
+          }
         }
 
         const leases = await getLeasesByTenant(address, state);

@@ -328,6 +328,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const clearHistory = useCallback(() => {
+    messagesRef.current = [];
     setMessages([]);
     localStorage.removeItem(STORAGE_KEY_HISTORY);
   }, []);
@@ -345,9 +346,12 @@ export function AIProvider({ children }: { children: ReactNode }) {
   // Helper to update a message by ID
   const updateMessageById = useCallback(
     (messageId: string, updates: Partial<ChatMessage>) => {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === messageId ? { ...m, ...updates } : m))
-      );
+      setMessages((prev) => {
+        const updated = prev.map((m) => (m.id === messageId ? { ...m, ...updates } : m));
+        // Sync ref synchronously to avoid stale reads in async operations
+        messagesRef.current = updated;
+        return updated;
+      });
     },
     []
   );
@@ -355,7 +359,12 @@ export function AIProvider({ children }: { children: ReactNode }) {
   // Helper to add a new message
   const addMessage = useCallback(
     (message: ChatMessage) => {
-      setMessages((prev) => trimMessages([...prev, message]));
+      setMessages((prev) => {
+        const updated = trimMessages([...prev, message]);
+        // Sync ref synchronously to avoid stale reads in async operations
+        messagesRef.current = updated;
+        return updated;
+      });
     },
     [trimMessages]
   );
@@ -389,13 +398,15 @@ export function AIProvider({ children }: { children: ReactNode }) {
     }
     const pending = pendingUpdateRef.current;
     if (pending) {
-      setMessages((prev) =>
-        prev.map((m) =>
+      setMessages((prev) => {
+        const updated = prev.map((m) =>
           m.id === pending.messageId
             ? { ...m, content: pending.content, thinking: pending.thinking || undefined }
             : m
-        )
-      );
+        );
+        messagesRef.current = updated;
+        return updated;
+      });
       pendingUpdateRef.current = null;
     }
   }, []);
@@ -409,13 +420,15 @@ export function AIProvider({ children }: { children: ReactNode }) {
         rafIdRef.current = null;
         const pending = pendingUpdateRef.current;
         if (pending) {
-          setMessages((prev) =>
-            prev.map((m) =>
+          setMessages((prev) => {
+            const updated = prev.map((m) =>
               m.id === pending.messageId
                 ? { ...m, content: pending.content, thinking: pending.thinking || undefined }
                 : m
-            )
-          );
+            );
+            messagesRef.current = updated;
+            return updated;
+          });
           pendingUpdateRef.current = null;
         }
       });
@@ -802,13 +815,15 @@ export function AIProvider({ children }: { children: ReactNode }) {
     const { messageId } = pendingConfirmation;
     setPendingConfirmation(null);
 
-    setMessages((prev) =>
-      prev.map((m) =>
+    setMessages((prev) => {
+      const updated = prev.map((m) =>
         m.id === messageId
           ? { ...m, content: 'Action cancelled by user.', isStreaming: false }
           : m
-      )
-    );
+      );
+      messagesRef.current = updated;
+      return updated;
+    });
   }, [pendingConfirmation]);
 
   const value = useMemo(
