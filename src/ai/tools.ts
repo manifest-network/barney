@@ -86,7 +86,7 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'create_lease',
-      description: 'Create a new lease for compute resources. IMPORTANT: Requires user confirmation. CRITICAL: You MUST call get_providers then get_skus FIRST to obtain valid SKU UUIDs. SKU UUIDs are formatted like "019beb87-09de-7000-beef-ae733e73ff23". Never use user-provided names like "001" or "SKU-001" as the UUID - always query for the real UUID first.',
+      description: 'Create a new lease for compute resources. IMPORTANT: Requires user confirmation. CRITICAL: You MUST call get_providers then get_skus FIRST to obtain valid SKU UUIDs. SKU UUIDs are formatted like "019beb87-09de-7000-beef-ae733e73ff23". Never use user-provided names like "001" or "SKU-001" as the UUID - always query for the real UUID first. If deployment_data is provided, the meta_hash will be automatically computed from it.',
       parameters: {
         type: 'object',
         properties: {
@@ -94,8 +94,37 @@ export const AI_TOOLS: OllamaTool[] = [
             type: 'string',
             description: 'JSON array of items to lease. IMPORTANT: sku_uuid must be a valid UUID obtained from get_skus (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx). Example: [{"sku_uuid": "019beb87-09de-7000-beef-ae733e73ff23", "quantity": 1}]',
           },
+          deployment_data: {
+            type: 'string',
+            description: 'Optional deployment configuration data (YAML/JSON). If provided, its SHA-256 hash will be stored as meta_hash on-chain, and the data will be uploaded to the provider after lease creation.',
+          },
         },
         required: ['items'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'upload_payload',
+      description: 'Upload deployment payload data to a provider for an existing PENDING lease. This requires a lease that was created with a meta_hash. The payload hash must match the meta_hash stored on-chain. IMPORTANT: Requires user confirmation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          lease_uuid: {
+            type: 'string',
+            description: 'The UUID of the PENDING lease to upload data for',
+          },
+          payload: {
+            type: 'string',
+            description: 'The deployment payload data (YAML/JSON) to upload to the provider',
+          },
+          provider_api_url: {
+            type: 'string',
+            description: 'The provider API URL to upload to. Can be obtained from get_providers.',
+          },
+        },
+        required: ['lease_uuid', 'payload', 'provider_api_url'],
       },
     },
   },
@@ -214,6 +243,7 @@ export const CONFIRMATION_REQUIRED_TOOLS = new Set([
   'close_lease',
   'fund_credit',
   'cosmos_tx',
+  'upload_payload',
 ]);
 
 /**
@@ -239,7 +269,11 @@ export function getToolCallDescription(toolName: string, args: Record<string, un
     case 'get_credit_estimate':
       return 'Calculating credit estimate...';
     case 'create_lease':
-      return 'Creating a new lease (requires confirmation)';
+      return args.deployment_data
+        ? 'Creating a new lease with deployment data (requires confirmation)'
+        : 'Creating a new lease (requires confirmation)';
+    case 'upload_payload':
+      return `Uploading deployment payload to lease ${args.lease_uuid} (requires confirmation)`;
     case 'close_lease':
       return `Closing lease ${args.lease_uuid} (requires confirmation)`;
     case 'fund_credit':

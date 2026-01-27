@@ -228,6 +228,31 @@ export function base64ToUint8Array(base64: string): Uint8Array {
 }
 
 /**
+ * Computes SHA-256 hash of the payload and returns it as a hex string.
+ * Used to generate meta_hash for lease creation and payload verification.
+ */
+export async function computePayloadHash(payload: Uint8Array | string): Promise<string> {
+  const data: ArrayBuffer = typeof payload === 'string'
+    ? new TextEncoder().encode(payload).buffer as ArrayBuffer
+    : payload.buffer as ArrayBuffer;
+
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = new Uint8Array(hashBuffer);
+
+  // Convert to hex string (64 characters)
+  return Array.from(hashArray)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Validates that a string is a valid SHA-256 hex hash (64 hex characters).
+ */
+export function isValidMetaHash(hash: string): boolean {
+  return /^[0-9a-f]{64}$/i.test(hash);
+}
+
+/**
  * Creates a base64-encoded auth token for lease data upload.
  * Includes meta_hash for payload verification.
  */

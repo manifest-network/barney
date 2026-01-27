@@ -11,7 +11,7 @@ import {
 import type { OllamaMessage, OllamaToolCall } from '../api/ollama';
 import { streamChat, checkOllamaHealth, listModels, type OllamaModel } from '../api/ollama';
 import { AI_TOOLS, getToolCallDescription } from '../ai/tools';
-import { executeTool, executeConfirmedTool, type ToolResult, type PendingAction } from '../ai/toolExecutor';
+import { executeTool, executeConfirmedTool, type ToolResult, type PendingAction, type SignResult } from '../ai/toolExecutor';
 import { getSystemPrompt } from '../ai/systemPrompt';
 import {
   validateSettings,
@@ -52,6 +52,8 @@ export interface PendingConfirmation {
   messageId: string;
 }
 
+type SignArbitraryFn = (address: string, data: string) => Promise<SignResult>;
+
 interface AIContextType {
   // State
   isOpen: boolean;
@@ -72,6 +74,7 @@ interface AIContextType {
   cancelAction: () => void;
   setClientManager: (manager: CosmosClientManager | null) => void;
   setAddress: (address: string | undefined) => void;
+  setSignArbitrary: (fn: SignArbitraryFn | undefined) => void;
 }
 
 // Validate environment-provided defaults
@@ -94,9 +97,10 @@ export function AIProvider({ children }: { children: ReactNode }) {
   const [availableModels, setAvailableModels] = useState<OllamaModel[]>([]);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
 
-  // Refs for client and address (to avoid re-renders)
+  // Refs for client, address, and signing (to avoid re-renders)
   const clientManagerRef = useRef<CosmosClientManager | null>(null);
   const addressRef = useRef<string | undefined>(undefined);
+  const signArbitraryRef = useRef<SignArbitraryFn | undefined>(undefined);
   const abortControllerRef = useRef<AbortController | null>(null);
   // Ref to track streaming state synchronously (prevents race conditions with rapid messages)
   const isStreamingRef = useRef(false);
@@ -198,6 +202,10 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
   const setAddress = useCallback((address: string | undefined) => {
     addressRef.current = address;
+  }, []);
+
+  const setSignArbitrary = useCallback((fn: SignArbitraryFn | undefined) => {
+    signArbitraryRef.current = fn;
   }, []);
 
   const updateSettings = useCallback((newSettings: Partial<AISettings>) => {
@@ -613,6 +621,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
     // Capture refs at the start to prevent race conditions if wallet disconnects mid-execution
     const clientManager = clientManagerRef.current;
     const address = addressRef.current;
+    const signArbitrary = signArbitraryRef.current;
 
     const { action, messageId } = pendingConfirmation;
     setPendingConfirmation(null);
@@ -627,7 +636,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
         action.toolName,
         action.args,
         clientManager,
-        address
+        address,
+        signArbitrary
       );
 
       // Keep tool message as structured JSON for the assistant to interpret
@@ -768,6 +778,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       cancelAction,
       setClientManager,
       setAddress,
+      setSignArbitrary,
     }),
     [
       isOpen,
@@ -785,6 +796,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       cancelAction,
       setClientManager,
       setAddress,
+      setSignArbitrary,
     ]
   );
 

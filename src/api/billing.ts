@@ -149,7 +149,7 @@ export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState
   }
 
   const data: LeasesResponse = await response.json();
-  return data.leases || [];
+  return data.leases ?? [];
 }
 
 export async function getLeasesByProvider(providerUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
@@ -166,7 +166,7 @@ export async function getLeasesByProvider(providerUuid: string, stateFilter?: Le
   }
 
   const data: LeasesResponse = await response.json();
-  return data.leases || [];
+  return data.leases ?? [];
 }
 
 export async function getLease(leaseUuid: string): Promise<Lease | null> {
@@ -194,7 +194,7 @@ export async function getWithdrawableAmount(leaseUuid: string): Promise<Coin[]> 
   }
 
   const data: WithdrawableAmountResponse = await response.json();
-  return data.amounts || [];
+  return data.amounts ?? [];
 }
 
 export interface ProviderWithdrawableResponse {
@@ -230,7 +230,7 @@ export async function getLeasesBySKU(skuUuid: string, stateFilter?: LeaseState):
   }
 
   const data: LeasesResponse = await response.json();
-  return data.leases || [];
+  return data.leases ?? [];
 }
 
 export interface PaginatedLeasesResponse {

@@ -198,8 +198,8 @@ export function validateChatHistory(data: unknown): ChatMessage[] {
 
   const validated: ChatMessage[] = [];
 
-  // Limit the number of messages we process
-  const messagesToProcess = data.slice(0, MAX_HISTORY_MESSAGES);
+  // Limit the number of messages we process - keep the most recent ones
+  const messagesToProcess = data.slice(-MAX_HISTORY_MESSAGES);
 
   for (const msg of messagesToProcess) {
     const validatedMsg = validateMessage(msg);
@@ -230,6 +230,7 @@ export const VALID_TOOL_NAMES = new Set([
   'get_withdrawable',
   'cosmos_query',
   'cosmos_tx',
+  'upload_payload',
 ]);
 
 /**

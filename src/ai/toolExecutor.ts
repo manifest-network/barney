@@ -5,10 +5,23 @@
 
 import type { CosmosClientManager } from 'manifest-mcp-browser';
 import { cosmosQuery, cosmosTx } from 'manifest-mcp-browser';
-import { getCreditAccount, getCreditEstimate, getLeasesByTenant, getWithdrawableAmount } from '../api/billing';
+import { getCreditAccount, getCreditEstimate, getLeasesByTenant, getWithdrawableAmount, getLease } from '../api/billing';
 import { getProviders, getSKUsByProvider } from '../api/sku';
 import { getAllBalances } from '../api/bank';
+import {
+  computePayloadHash,
+  isValidMetaHash,
+  createLeaseDataSignMessage,
+  createLeaseDataAuthToken,
+  uploadLeaseData,
+} from '../api/provider-api';
 import { requiresConfirmation } from './tools';
+import { isValidUUID, parseJsonStringArray } from '../utils/format';
+
+export interface SignResult {
+  pub_key: { type: string; value: string };
+  signature: string;
+}
 
 export interface ToolResult {
   success: boolean;
@@ -25,6 +38,7 @@ export interface ToolResult {
 export interface ToolExecutorOptions {
   clientManager: CosmosClientManager | null;
   address: string | undefined;
+  signArbitrary?: (address: string, data: string) => Promise<SignResult>;
   onConfirmationRequired?: (action: PendingAction) => void;
 }
 
@@ -78,7 +92,6 @@ function validateConfirmationToolArgs(
       }
 
       // Validate each item has required fields
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       for (let i = 0; i < items.length; i++) {
         const item = items[i] as Record<string, unknown>;
         if (!item || typeof item !== 'object') {
@@ -87,7 +100,7 @@ function validateConfirmationToolArgs(
         if (!item.sku_uuid || typeof item.sku_uuid !== 'string') {
           return `Missing sku_uuid in item at index ${i}.`;
         }
-        if (!uuidRegex.test(item.sku_uuid)) {
+        if (!isValidUUID(item.sku_uuid)) {
           return `Invalid SKU UUID format in item at index ${i}: "${item.sku_uuid}". You must call get_providers and get_skus first to obtain valid UUIDs.`;
         }
         if (typeof item.quantity !== 'number' || item.quantity < 1) {
@@ -137,6 +150,36 @@ function validateConfirmationToolArgs(
         if (typeof parsedArgs[i] !== 'string') {
           return `Invalid args format: element at index ${i} must be a string.`;
         }
+      }
+
+      return null;
+    }
+
+    case 'upload_payload': {
+      const leaseUuid = args.lease_uuid as string | undefined;
+      if (!leaseUuid || typeof leaseUuid !== 'string' || leaseUuid.trim() === '') {
+        return 'Missing required argument: lease_uuid.';
+      }
+
+      if (!isValidUUID(leaseUuid)) {
+        return `Invalid lease UUID format: "${leaseUuid}". Use format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.`;
+      }
+
+      const payload = args.payload as string | undefined;
+      if (!payload || typeof payload !== 'string' || payload.trim() === '') {
+        return 'Missing required argument: payload. Please provide the deployment data to upload.';
+      }
+
+      const providerApiUrl = args.provider_api_url as string | undefined;
+      if (!providerApiUrl || typeof providerApiUrl !== 'string' || providerApiUrl.trim() === '') {
+        return 'Missing required argument: provider_api_url. Please provide the provider API URL.';
+      }
+
+      // Basic URL validation
+      try {
+        new URL(providerApiUrl);
+      } catch {
+        return `Invalid provider_api_url format: "${providerApiUrl}". Must be a valid URL.`;
       }
 
       return null;
@@ -299,17 +342,13 @@ export async function executeTool(
 
         const module = args.module as string;
         const subcommand = args.subcommand as string;
-        let queryArgs: string[] = [];
 
-        if (args.args) {
-          try {
-            queryArgs = typeof args.args === 'string' ? JSON.parse(args.args) : args.args as string[];
-          } catch {
-            queryArgs = [];
-          }
+        const parseResult = parseJsonStringArray(args.args);
+        if (parseResult.error) {
+          return { success: false, error: parseResult.error };
         }
 
-        const result = await cosmosQuery(clientManager, module, subcommand, queryArgs);
+        const result = await cosmosQuery(clientManager, module, subcommand, parseResult.data);
         return { success: true, data: result };
       }
 
@@ -324,6 +363,12 @@ export async function executeTool(
   }
 }
 
+export interface ExecuteConfirmedToolOptions {
+  clientManager: CosmosClientManager;
+  address?: string;
+  signArbitrary?: (address: string, data: string) => Promise<SignResult>;
+}
+
 /**
  * Execute a confirmed transaction
  */
@@ -331,7 +376,8 @@ export async function executeConfirmedTool(
   toolName: string,
   args: Record<string, unknown>,
   clientManager: CosmosClientManager,
-  address?: string
+  address?: string,
+  signArbitrary?: (address: string, data: string) => Promise<SignResult>
 ): Promise<ToolResult> {
   try {
     switch (toolName) {
@@ -354,6 +400,10 @@ export async function executeConfirmedTool(
       }
 
       case 'create_lease': {
+        if (!address) {
+          return { success: false, error: 'Wallet not connected' };
+        }
+
         let items: Array<{ sku_uuid: string; quantity: number }>;
 
         try {
@@ -363,9 +413,8 @@ export async function executeConfirmedTool(
         }
 
         // Validate UUID format - must be proper UUID like "019beb87-09de-7000-beef-ae733e73ff23"
-        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         for (const item of items) {
-          if (!uuidRegex.test(item.sku_uuid)) {
+          if (!isValidUUID(item.sku_uuid)) {
             return {
               success: false,
               error: `Invalid SKU UUID format: "${item.sku_uuid}". SKU UUIDs must be valid UUIDs (e.g., "019beb87-09de-7000-beef-ae733e73ff23"). You must call get_providers and then get_skus to obtain the correct UUID for the SKU the user wants.`,
@@ -373,14 +422,185 @@ export async function executeConfirmedTool(
           }
         }
 
+        const deploymentData = args.deployment_data as string | undefined;
+        let metaHashHex: string | undefined;
+        let payloadBytes: Uint8Array | undefined;
+
+        // If deployment_data is provided, compute the meta_hash
+        if (deploymentData && deploymentData.trim()) {
+          payloadBytes = new TextEncoder().encode(deploymentData);
+          metaHashHex = await computePayloadHash(payloadBytes);
+        }
+
         // Format items for the MCP: sku-uuid:quantity format
         const itemArgs = items.map(item => `${item.sku_uuid}:${item.quantity}`);
-        const result = await cosmosTx(clientManager, 'billing', 'create-lease', itemArgs, true);
+
+        // If meta_hash is set, include it in the create-lease command
+        // The MCP supports: create-lease [--meta-hash <hash>] <item1> <item2> ...
+        const cmdArgs = metaHashHex
+          ? ['--meta-hash', metaHashHex, ...itemArgs]
+          : itemArgs;
+
+        const result = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
+
+        if (result.code !== 0) {
+          return {
+            success: false,
+            data: result,
+            error: result.rawLog,
+          };
+        }
+
+        // If we have deployment data and lease creation succeeded, upload the payload
+        if (deploymentData && metaHashHex && payloadBytes && signArbitrary) {
+          try {
+            // Extract lease UUID from the transaction result
+            // The lease UUID is typically in the events
+            const leaseUuid = extractLeaseUuidFromTxResult(result as unknown as Record<string, unknown>);
+
+            if (!leaseUuid) {
+              return {
+                success: true,
+                data: {
+                  ...result,
+                  warning: 'Lease created but could not extract UUID for payload upload. You may need to upload payload manually.',
+                },
+              };
+            }
+
+            // Get the provider API URL from the lease
+            const leaseData = await getLease(leaseUuid);
+            if (!leaseData) {
+              return {
+                success: true,
+                data: {
+                  ...result,
+                  leaseUuid,
+                  warning: 'Lease created but could not fetch lease data for payload upload.',
+                },
+              };
+            }
+            const provider = await getProviders(false).then(providers =>
+              providers.find(p => p.uuid === leaseData.provider_uuid)
+            );
+
+            if (!provider || !provider.api_url) {
+              return {
+                success: true,
+                data: {
+                  ...result,
+                  leaseUuid,
+                  warning: 'Lease created but provider API URL not found. You may need to upload payload manually using upload_payload tool.',
+                },
+              };
+            }
+
+            // Upload the payload
+            const uploadResult = await uploadPayloadToProvider(
+              provider.api_url,
+              leaseUuid,
+              metaHashHex,
+              payloadBytes,
+              address,
+              signArbitrary
+            );
+
+            if (!uploadResult.success) {
+              return {
+                success: true,
+                data: {
+                  ...result,
+                  leaseUuid,
+                  payloadUploadError: uploadResult.error,
+                  warning: 'Lease created but payload upload failed. You may need to upload payload manually.',
+                },
+              };
+            }
+
+            return {
+              success: true,
+              data: {
+                ...result,
+                leaseUuid,
+                payloadUploaded: true,
+                message: 'Lease created and deployment data uploaded successfully.',
+              },
+            };
+          } catch (uploadErr) {
+            return {
+              success: true,
+              data: {
+                ...result,
+                payloadUploadError: uploadErr instanceof Error ? uploadErr.message : 'Unknown error',
+                warning: 'Lease created but payload upload failed. You may need to upload payload manually.',
+              },
+            };
+          }
+        }
+
         return {
-          success: result.code === 0,
+          success: true,
           data: result,
-          error: result.code !== 0 ? result.rawLog : undefined,
         };
+      }
+
+      case 'upload_payload': {
+        if (!address) {
+          return { success: false, error: 'Wallet not connected' };
+        }
+        if (!signArbitrary) {
+          return { success: false, error: 'Signing not available. Please reconnect your wallet.' };
+        }
+
+        const leaseUuid = args.lease_uuid as string;
+        const payload = args.payload as string;
+        const providerApiUrl = args.provider_api_url as string;
+
+        if (!leaseUuid || !payload || !providerApiUrl) {
+          return { success: false, error: 'Missing required arguments: lease_uuid, payload, and provider_api_url are required.' };
+        }
+
+        // Get the lease to verify meta_hash
+        const lease = await getLease(leaseUuid);
+
+        if (!lease) {
+          return {
+            success: false,
+            error: `Lease not found: ${leaseUuid}`,
+          };
+        }
+
+        if (!lease.meta_hash || lease.meta_hash === '') {
+          return {
+            success: false,
+            error: 'Lease does not have a meta_hash. Payload upload requires a lease created with meta_hash.',
+          };
+        }
+
+        // Compute payload hash and verify it matches the lease meta_hash
+        const payloadBytes = new TextEncoder().encode(payload);
+        const computedHash = await computePayloadHash(payloadBytes);
+
+        // The lease.meta_hash is stored as a string
+        const leaseMetaHashHex = lease.meta_hash;
+
+        if (computedHash.toLowerCase() !== leaseMetaHashHex.toLowerCase()) {
+          return {
+            success: false,
+            error: `Payload hash mismatch. Expected: ${leaseMetaHashHex}, Computed: ${computedHash}. The payload must match the hash stored when the lease was created.`,
+          };
+        }
+
+        const uploadResult = await uploadPayloadToProvider(
+          providerApiUrl,
+          leaseUuid,
+          computedHash,
+          payloadBytes,
+          address,
+          signArbitrary
+        );
+
+        return uploadResult;
       }
 
       case 'close_lease': {
@@ -459,13 +679,171 @@ function getConfirmationMessage(toolName: string, args: Record<string, unknown>)
       } catch {
         itemCount = 0;
       }
-      return `Create a new lease with ${itemCount} item(s)?`;
+      const hasDeploymentData = !!args.deployment_data;
+      return hasDeploymentData
+        ? `Create a new lease with ${itemCount} item(s) and upload deployment data?`
+        : `Create a new lease with ${itemCount} item(s)?`;
     }
     case 'close_lease':
       return `Close lease ${args.lease_uuid}${args.reason ? ` (reason: ${args.reason})` : ''}?`;
+    case 'upload_payload':
+      return `Upload deployment payload to lease ${args.lease_uuid}?`;
     case 'cosmos_tx':
       return `Execute transaction: ${args.module} ${args.subcommand}?`;
     default:
       return `Execute ${toolName}?`;
+  }
+}
+
+/**
+ * Extract lease UUID from a create-lease transaction result.
+ * Looks for the UUID in transaction events.
+ */
+function extractLeaseUuidFromTxResult(result: Record<string, unknown>): string | null {
+  try {
+    // Try to find the lease UUID in the transaction events
+    const events = result.events as Array<{
+      type: string;
+      attributes: Array<{ key: string; value: string }>;
+    }> | undefined;
+
+    if (events) {
+      for (const event of events) {
+        if (event.type === 'create_lease' || event.type === 'liftedinit.billing.v1.EventCreateLease') {
+          const uuidAttr = event.attributes.find(
+            (attr) => attr.key === 'lease_uuid' || attr.key === 'uuid'
+          );
+          if (uuidAttr) {
+            return uuidAttr.value;
+          }
+        }
+      }
+    }
+
+    // Also check the response data directly
+    const data = result.data as Record<string, unknown> | undefined;
+    if (data && typeof data.lease_uuid === 'string') {
+      return data.lease_uuid;
+    }
+
+    // Check parsed logs
+    const logs = result.logs as Array<{
+      events: Array<{
+        type: string;
+        attributes: Array<{ key: string; value: string }>;
+      }>;
+    }> | undefined;
+
+    if (logs) {
+      for (const log of logs) {
+        for (const event of log.events || []) {
+          if (event.type === 'create_lease' || event.type === 'liftedinit.billing.v1.EventCreateLease') {
+            const uuidAttr = event.attributes.find(
+              (attr) => attr.key === 'lease_uuid' || attr.key === 'uuid'
+            );
+            if (uuidAttr) {
+              return uuidAttr.value;
+            }
+          }
+        }
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Upload payload to provider with ADR-036 authentication.
+ */
+async function uploadPayloadToProvider(
+  providerApiUrl: string,
+  leaseUuid: string,
+  metaHashHex: string,
+  payload: Uint8Array,
+  address: string,
+  signArbitrary: (address: string, data: string) => Promise<SignResult>
+): Promise<ToolResult> {
+  try {
+    // Validate meta_hash format
+    if (!isValidMetaHash(metaHashHex)) {
+      return {
+        success: false,
+        error: `Invalid meta_hash format: ${metaHashHex}. Must be 64 hex characters.`,
+      };
+    }
+
+    // Create the sign message
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signMessage = createLeaseDataSignMessage(leaseUuid, metaHashHex, timestamp);
+
+    // Sign the message using ADR-036
+    const signResult = await signArbitrary(address, signMessage);
+
+    // Create the auth token
+    const authToken = createLeaseDataAuthToken(
+      address,
+      leaseUuid,
+      metaHashHex,
+      timestamp,
+      signResult.pub_key.value,
+      signResult.signature
+    );
+
+    // Upload the payload
+    await uploadLeaseData(providerApiUrl, leaseUuid, payload, authToken);
+
+    return {
+      success: true,
+      data: {
+        message: 'Payload uploaded successfully',
+        leaseUuid,
+        metaHash: metaHashHex,
+      },
+    };
+  } catch (error) {
+    // Handle specific error codes
+    if (error instanceof Error) {
+      const errorMsg = error.message.toLowerCase();
+
+      if (errorMsg.includes('409') || errorMsg.includes('conflict')) {
+        return {
+          success: true,
+          data: {
+            message: 'Payload already uploaded (idempotent success)',
+            leaseUuid,
+            metaHash: metaHashHex,
+          },
+        };
+      }
+
+      if (errorMsg.includes('401') || errorMsg.includes('unauthorized')) {
+        return {
+          success: false,
+          error: 'Authentication failed. The signature may have expired. Please try again.',
+        };
+      }
+
+      if (errorMsg.includes('404') || errorMsg.includes('not found')) {
+        return {
+          success: false,
+          error: 'Lease not found or not in PENDING state. Payload upload is only allowed for pending leases.',
+        };
+      }
+
+      if (errorMsg.includes('400') || errorMsg.includes('bad request')) {
+        return {
+          success: false,
+          error: 'Payload hash does not match the lease meta_hash, or payload is invalid.',
+        };
+      }
+    }
+
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error during payload upload',
+    };
   }
 }

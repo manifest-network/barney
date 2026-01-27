@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type FormEvent } from 'react';
+import { useState, useRef, useEffect, useCallback, type FormEvent } from 'react';
 import { Send, Settings, X, Sparkles, Loader, WifiOff, Maximize2, Minimize2 } from 'lucide-react';
 import { useAI } from '../../contexts/AIContext';
 import { MessageBubble } from './MessageBubble';
@@ -22,11 +22,43 @@ export function ChatPanel() {
   const [showSettings, setShowSettings] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const prevMessageCountRef = useRef(messages.length);
+  const userScrolledUpRef = useRef(false);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Check if user is near the bottom of the messages container
+  const isNearBottom = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return true;
+    const threshold = 100; // pixels from bottom
+    return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+  }, []);
+
+  // Handle user scroll - track if they've scrolled up
+  const handleScroll = useCallback(() => {
+    userScrolledUpRef.current = !isNearBottom();
+  }, [isNearBottom]);
+
+  // Auto-scroll to bottom only when appropriate
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const messageCount = messages.length;
+    const prevCount = prevMessageCountRef.current;
+    const isNewMessage = messageCount > prevCount;
+
+    // Update previous count
+    prevMessageCountRef.current = messageCount;
+
+    // Auto-scroll if:
+    // 1. A new message was added (not just content update), OR
+    // 2. User hasn't scrolled up (is near bottom)
+    if (isNewMessage || !userScrolledUpRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      // Reset scroll tracking when we auto-scroll due to new message
+      if (isNewMessage) {
+        userScrolledUpRef.current = false;
+      }
+    }
   }, [messages]);
 
   // Focus input when panel opens
@@ -121,7 +153,7 @@ export function ChatPanel() {
       {showSettings && <AISettings onClose={() => setShowSettings(false)} />}
 
       {/* Messages Area */}
-      <div className="chat-messages">
+      <div className="chat-messages" ref={messagesContainerRef} onScroll={handleScroll}>
         {messages.length === 0 ? (
           <div className="chat-empty">
             <Sparkles className="w-8 h-8 text-primary-400 mb-2" />

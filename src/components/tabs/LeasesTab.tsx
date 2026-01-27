@@ -1043,8 +1043,12 @@ function CreateLeaseModal({
 
     const reader = new FileReader();
     reader.onload = (event) => {
-      const content = event.target?.result as string;
-      setPayloadText(content);
+      const result = event.target?.result;
+      if (typeof result === 'string') {
+        setPayloadText(result);
+      } else {
+        setPayloadError('Failed to read file as text');
+      }
     };
     reader.onerror = () => {
       setPayloadError('Failed to read file');

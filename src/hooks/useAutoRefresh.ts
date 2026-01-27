@@ -48,6 +48,8 @@ export function useAutoRefresh(
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetchFnRef = useRef(fetchFn);
   const isMountedRef = useRef(true);
+  const prevEnabledRef = useRef(enabled);
+  const hasInitialFetchRef = useRef(false);
 
   // Keep fetchFn ref updated
   useEffect(() => {
@@ -117,16 +119,31 @@ export function useAutoRefresh(
     return stopPolling;
   }, [isEnabled, startPolling, stopPolling]);
 
-  // Initial fetch
+  // Sync isEnabled with enabled prop and fetch when enabled becomes true
   useEffect(() => {
-    if (immediate) {
+    const wasEnabled = prevEnabledRef.current;
+    prevEnabledRef.current = enabled;
+
+    // Sync internal state with prop
+    setIsEnabled(enabled);
+
+    // Fetch when enabled transitions from false to true (e.g., wallet connected)
+    if (enabled && !wasEnabled && !document.hidden) {
       doFetch();
+      hasInitialFetchRef.current = true;
     }
-  }, [immediate, doFetch]);
+  }, [enabled, doFetch]);
+
+  // Initial fetch (only if enabled from the start)
+  useEffect(() => {
+    if (immediate && enabled && !hasInitialFetchRef.current) {
+      doFetch();
+      hasInitialFetchRef.current = true;
+    }
+  }, [immediate, enabled, doFetch]);
 
   // Cleanup on unmount
   useEffect(() => {
-    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       stopPolling();

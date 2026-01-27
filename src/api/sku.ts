@@ -52,7 +52,7 @@ export async function getProviders(activeOnly = false): Promise<Provider[]> {
   }
 
   const data: ProvidersResponse = await response.json();
-  return data.providers || [];
+  return data.providers ?? [];
 }
 
 export async function getProvider(uuid: string): Promise<Provider | null> {
@@ -76,7 +76,7 @@ export async function getSKUs(activeOnly = false): Promise<SKU[]> {
   }
 
   const data: SKUsResponse = await response.json();
-  return data.skus || [];
+  return data.skus ?? [];
 }
 
 export async function getSKU(uuid: string): Promise<SKU | null> {
@@ -100,7 +100,7 @@ export async function getSKUsByProvider(providerUuid: string, activeOnly = false
   }
 
   const data: SKUsResponse = await response.json();
-  return data.skus || [];
+  return data.skus ?? [];
 }
 
 export async function getSKUParams(): Promise<SKUParams> {

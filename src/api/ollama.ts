@@ -80,8 +80,12 @@ async function* parseNDJSON(
       if (line.trim()) {
         try {
           yield JSON.parse(line);
-        } catch {
-          // Skip invalid JSON lines
+        } catch (error) {
+          // Log but don't crash - allows stream to continue
+          console.warn('Failed to parse NDJSON line:', {
+            line: line.slice(0, 100),
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
         }
       }
     }
@@ -90,8 +94,12 @@ async function* parseNDJSON(
   if (buffer.trim()) {
     try {
       yield JSON.parse(buffer);
-    } catch {
-      // Skip invalid JSON
+    } catch (error) {
+      // Log but don't crash
+      console.warn('Failed to parse final NDJSON buffer:', {
+        buffer: buffer.slice(0, 100),
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
     }
   }
 }
@@ -103,6 +111,20 @@ export async function* streamChat(
   options: OllamaStreamOptions
 ): AsyncGenerator<OllamaStreamChunk> {
   const { endpoint, model, messages, tools, think, signal } = options;
+
+  // Validate endpoint URL
+  let apiUrl: string;
+  try {
+    const url = new URL('/api/chat', endpoint);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      yield { type: 'error', error: 'Invalid Ollama endpoint: must use http or https protocol' };
+      return;
+    }
+    apiUrl = url.href;
+  } catch {
+    yield { type: 'error', error: 'Invalid Ollama endpoint URL' };
+    return;
+  }
 
   const body: Record<string, unknown> = {
     model,
@@ -119,7 +141,7 @@ export async function* streamChat(
   }
 
   try {
-    const response = await fetch(`${endpoint}/api/chat`, {
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
