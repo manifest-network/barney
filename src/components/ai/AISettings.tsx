@@ -147,11 +147,11 @@ export function AISettings({ onClose }: AISettingsProps) {
         <div className="ai-settings-section">
           <div className="ai-settings-row">
             <div>
-              <label className="ai-settings-label">
+              <label id="thinking-mode-label" className="ai-settings-label">
                 <Brain className="w-3 h-3 inline mr-1" />
                 Enable Thinking Mode
               </label>
-              <p className="ai-settings-hint">
+              <p id="thinking-mode-hint" className="ai-settings-hint">
                 {settings.enableThinking
                   ? 'Model will show reasoning process (requires Qwen3, Cogito, or similar)'
                   : 'Standard response mode'}
@@ -163,6 +163,8 @@ export function AISettings({ onClose }: AISettingsProps) {
               className={`toggle ${settings.enableThinking ? 'active' : ''}`}
               role="switch"
               aria-checked={settings.enableThinking}
+              aria-labelledby="thinking-mode-label"
+              aria-describedby="thinking-mode-hint"
             >
               <span className="toggle-knob" />
             </button>
@@ -173,10 +175,10 @@ export function AISettings({ onClose }: AISettingsProps) {
         <div className="ai-settings-section">
           <div className="ai-settings-row">
             <div>
-              <label className="ai-settings-label">
+              <label id="save-history-label" className="ai-settings-label">
                 Save Chat History
               </label>
-              <p className="ai-settings-hint">
+              <p id="save-history-hint" className="ai-settings-hint">
                 {settings.saveHistory
                   ? 'Chat history will be saved across sessions'
                   : 'Chat history will not be saved'}
@@ -188,6 +190,8 @@ export function AISettings({ onClose }: AISettingsProps) {
               className={`toggle ${settings.saveHistory ? 'active' : ''}`}
               role="switch"
               aria-checked={settings.saveHistory}
+              aria-labelledby="save-history-label"
+              aria-describedby="save-history-hint"
             >
               <span className="toggle-knob" />
             </button>

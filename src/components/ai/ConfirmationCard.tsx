@@ -11,13 +11,18 @@ interface ConfirmationCardProps {
 
 export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfirm, onCancel, isExecuting }: ConfirmationCardProps) {
   return (
-    <div className="confirmation-card">
+    <div
+      className="confirmation-card"
+      role="alertdialog"
+      aria-labelledby="confirmation-title"
+      aria-describedby="confirmation-description"
+    >
       <div className="confirmation-header">
         <AlertTriangle className="w-5 h-5 text-warning" />
-        <span>Transaction Confirmation Required</span>
+        <span id="confirmation-title">Transaction Confirmation Required</span>
       </div>
       <div className="confirmation-body">
-        <p className="confirmation-description">{action.description}</p>
+        <p id="confirmation-description" className="confirmation-description">{action.description}</p>
         {Object.keys(action.args).length > 0 && (
           <div className="confirmation-details">
             <p className="confirmation-details-title">Parameters:</p>

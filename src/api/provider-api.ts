@@ -116,11 +116,12 @@ export async function getLeaseConnectionInfo(
     'Content-Type': 'application/json',
   };
 
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
   if (import.meta.env.DEV) {
-    url = `/proxy-provider/v1/leases/${leaseUuid}/connection`;
+    url = `/proxy-provider/v1/leases/${encodedLeaseUuid}/connection`;
     headers['X-Proxy-Target'] = baseUrl;
   } else {
-    url = `${baseUrl}/v1/leases/${leaseUuid}/connection`;
+    url = `${baseUrl}/v1/leases/${encodedLeaseUuid}/connection`;
   }
 
   const response = await fetch(url, {
@@ -304,11 +305,12 @@ export async function uploadLeaseData(
     'Content-Type': 'application/octet-stream',
   };
 
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
   if (import.meta.env.DEV) {
-    url = `/proxy-provider/v1/leases/${leaseUuid}/data`;
+    url = `/proxy-provider/v1/leases/${encodedLeaseUuid}/data`;
     headers['X-Proxy-Target'] = baseUrl;
   } else {
-    url = `${baseUrl}/v1/leases/${leaseUuid}/data`;
+    url = `${baseUrl}/v1/leases/${encodedLeaseUuid}/data`;
   }
 
   const response = await fetch(url, {

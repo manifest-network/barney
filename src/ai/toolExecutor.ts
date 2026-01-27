@@ -286,8 +286,8 @@ export async function executeTool(
       }
 
       case 'get_skus': {
-        const providerUuid = args.provider_uuid as string;
-        if (!providerUuid) {
+        const providerUuid = args.provider_uuid;
+        if (typeof providerUuid !== 'string' || !providerUuid) {
           return { success: false, error: 'provider_uuid is required' };
         }
         if (!isValidUUID(providerUuid)) {
@@ -331,8 +331,8 @@ export async function executeTool(
       }
 
       case 'get_withdrawable': {
-        const leaseUuid = args.lease_uuid as string;
-        if (!leaseUuid) {
+        const leaseUuid = args.lease_uuid;
+        if (typeof leaseUuid !== 'string' || !leaseUuid) {
           return { success: false, error: 'lease_uuid is required' };
         }
         if (!isValidUUID(leaseUuid)) {
@@ -351,8 +351,14 @@ export async function executeTool(
           return { success: false, error: 'Not connected to blockchain' };
         }
 
-        const module = args.module as string;
-        const subcommand = args.subcommand as string;
+        const module = args.module;
+        const subcommand = args.subcommand;
+        if (typeof module !== 'string' || !module) {
+          return { success: false, error: 'module is required' };
+        }
+        if (typeof subcommand !== 'string' || !subcommand) {
+          return { success: false, error: 'subcommand is required' };
+        }
 
         const parseResult = parseJsonStringArray(args.args);
         if (parseResult.error) {

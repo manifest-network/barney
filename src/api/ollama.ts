@@ -140,10 +140,7 @@ async function* parseNDJSON(
           yield JSON.parse(line);
         } catch (error) {
           // Log but don't crash - allows stream to continue
-          console.warn('Failed to parse NDJSON line:', {
-            line: line.slice(0, 100),
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
+          logError('ollama.parseNDJSON', error);
         }
       }
     }
@@ -154,10 +151,7 @@ async function* parseNDJSON(
       yield JSON.parse(buffer);
     } catch (error) {
       // Log but don't crash
-      console.warn('Failed to parse final NDJSON buffer:', {
-        buffer: buffer.slice(0, 100),
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
+      logError('ollama.parseNDJSON', error);
     }
   }
 }
