@@ -344,27 +344,23 @@ export function AIProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Helper to update a message by ID
+  // Updates ref synchronously BEFORE setMessages to avoid race conditions
   const updateMessageById = useCallback(
     (messageId: string, updates: Partial<ChatMessage>) => {
-      setMessages((prev) => {
-        const updated = prev.map((m) => (m.id === messageId ? { ...m, ...updates } : m));
-        // Sync ref synchronously to avoid stale reads in async operations
-        messagesRef.current = updated;
-        return updated;
-      });
+      const updated = messagesRef.current.map((m) => (m.id === messageId ? { ...m, ...updates } : m));
+      messagesRef.current = updated;
+      setMessages(updated);
     },
     []
   );
 
   // Helper to add a new message
+  // Updates ref synchronously BEFORE setMessages to avoid race conditions
   const addMessage = useCallback(
     (message: ChatMessage) => {
-      setMessages((prev) => {
-        const updated = trimMessages([...prev, message]);
-        // Sync ref synchronously to avoid stale reads in async operations
-        messagesRef.current = updated;
-        return updated;
-      });
+      const updated = trimMessages([...messagesRef.current, message]);
+      messagesRef.current = updated;
+      setMessages(updated);
     },
     [trimMessages]
   );

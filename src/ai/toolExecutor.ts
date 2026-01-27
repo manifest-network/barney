@@ -468,6 +468,13 @@ export async function executeConfirmedTool(
 
         // If deployment_data is provided, compute the meta_hash
         if (deploymentData && deploymentData.trim()) {
+          // Fail early if signArbitrary is not available - we need it for payload upload
+          if (!signArbitrary) {
+            return {
+              success: false,
+              error: 'Cannot create lease with deployment data: wallet does not support message signing (ADR-036). Please use a wallet that supports signArbitrary, or create the lease without deployment_data.',
+            };
+          }
           payloadBytes = new TextEncoder().encode(deploymentData);
           metaHashHex = await computePayloadHash(payloadBytes);
         }
@@ -749,7 +756,7 @@ function extractLeaseUuidFromTxResult(result: Record<string, unknown>): string |
 
     if (events) {
       for (const event of events) {
-        if (event.type === 'create_lease' || event.type === 'liftedinit.billing.v1.EventCreateLease') {
+        if (event.type === 'lease_created') {
           const uuidAttr = event.attributes.find(
             (attr) => attr.key === 'lease_uuid' || attr.key === 'uuid'
           );
@@ -777,7 +784,7 @@ function extractLeaseUuidFromTxResult(result: Record<string, unknown>): string |
     if (logs) {
       for (const log of logs) {
         for (const event of log.events || []) {
-          if (event.type === 'create_lease' || event.type === 'liftedinit.billing.v1.EventCreateLease') {
+          if (event.type === 'lease_created') {
             const uuidAttr = event.attributes.find(
               (attr) => attr.key === 'lease_uuid' || attr.key === 'uuid'
             );
