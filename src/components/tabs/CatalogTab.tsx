@@ -3,6 +3,7 @@ import { useChain } from '@cosmos-kit/react';
 import { Link, Package, Shield, Loader2, RefreshCw, Plus } from 'lucide-react';
 import { HEALTH_CHECK_TIMEOUT_MS, POST_TX_REFETCH_DELAY_MS } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { formatAddress } from '../../utils/format';
 import {
   getProviders,
   getSKUs,
@@ -26,14 +27,6 @@ import { EmptyState } from '../ui/EmptyState';
 import { Modal } from '../ui/Modal';
 
 type HealthStatus = 'healthy' | 'unhealthy' | 'loading' | 'unknown';
-
-// Format address as manifest1[4chars]...[4chars]
-function formatAddress(address: string): string {
-  if (!address || address.length < 20) return address;
-  const prefix = address.slice(0, 13); // manifest1 + 4 chars
-  const suffix = address.slice(-4);
-  return `${prefix}...${suffix}`;
-}
 
 
 const CHAIN_NAME = 'manifestlocal';

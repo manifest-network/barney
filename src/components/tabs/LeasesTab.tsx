@@ -4,6 +4,7 @@ import { Link, Shield, Plus } from 'lucide-react';
 import type { Lease, LeaseState } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { formatAddress } from '../../utils/format';
 import { getLeasesByTenant, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
 import { createLease, cancelLease, closeLease, type TxResult } from '../../api/tx';
@@ -131,15 +132,6 @@ const stateLabels: Record<LeaseState, string> = {
   LEASE_STATE_REJECTED: 'Rejected',
   LEASE_STATE_EXPIRED: 'Expired',
 };
-
-function formatAddress(addr: string): string {
-  if (!addr || addr.length < 20) return addr;
-  const prefix = addr.slice(0, 9); // manifest1
-  const start = addr.slice(9, 13);
-  const end = addr.slice(-4);
-  return `${prefix}${start}...${end}`;
-}
-
 
 export function LeasesTab() {
   const { address, isWalletConnected, openView, getOfflineSigner, signArbitrary } = useChain(CHAIN_NAME);

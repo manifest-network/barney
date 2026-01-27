@@ -8,7 +8,7 @@ import {
   useMemo,
   type ReactNode,
 } from 'react';
-import type { OllamaMessage, OllamaToolCall } from '../api/ollama';
+import type { OllamaMessage, OllamaToolCall, OllamaStreamChunk } from '../api/ollama';
 import { streamChat, checkOllamaHealth, listModels, type OllamaModel } from '../api/ollama';
 import { AI_TOOLS, getToolCallDescription } from '../ai/tools';
 import { executeTool, executeConfirmedTool, type ToolResult, type PendingAction, type SignResult } from '../ai/toolExecutor';
@@ -23,6 +23,74 @@ import {
   type AISettings,
 } from '../ai/validation';
 import type { CosmosClientManager } from 'manifest-mcp-browser';
+
+// Stream processing timeout (30 seconds without any chunk)
+const STREAM_CHUNK_TIMEOUT_MS = 30000;
+
+/**
+ * Result of processing a stream to completion
+ */
+interface StreamResult {
+  content: string;
+  thinking: string;
+  toolCalls: OllamaToolCall[];
+  error?: string;
+}
+
+/**
+ * Process stream chunks with timeout protection
+ * Throws TimeoutError if no chunk received within timeout period
+ */
+async function processStreamWithTimeout(
+  stream: AsyncGenerator<OllamaStreamChunk>,
+  onChunk: (content: string, thinking: string) => void,
+  timeoutMs: number = STREAM_CHUNK_TIMEOUT_MS
+): Promise<StreamResult> {
+  let accumulatedContent = '';
+  let accumulatedThinking = '';
+  const toolCalls: OllamaToolCall[] = [];
+
+  for await (const chunk of withTimeout(stream, timeoutMs)) {
+    if (chunk.type === 'thinking' && chunk.content) {
+      accumulatedThinking += chunk.content;
+      onChunk(accumulatedContent, accumulatedThinking);
+    } else if (chunk.type === 'content' && chunk.content) {
+      accumulatedContent += chunk.content;
+      onChunk(accumulatedContent, accumulatedThinking);
+    } else if (chunk.type === 'tool_call' && chunk.toolCall) {
+      toolCalls.push(chunk.toolCall);
+    } else if (chunk.type === 'error') {
+      return {
+        content: accumulatedContent,
+        thinking: accumulatedThinking,
+        toolCalls,
+        error: chunk.error,
+      };
+    }
+  }
+
+  return { content: accumulatedContent, thinking: accumulatedThinking, toolCalls };
+}
+
+/**
+ * Wrap an async generator with timeout protection per iteration
+ */
+async function* withTimeout<T>(
+  generator: AsyncGenerator<T>,
+  timeoutMs: number
+): AsyncGenerator<T> {
+  while (true) {
+    const result = await Promise.race([
+      generator.next(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Stream timeout: no response received')), timeoutMs)
+      ),
+    ]);
+
+    if (result.done) break;
+    yield result.value;
+  }
+}
 
 // Storage keys
 const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
@@ -251,6 +319,48 @@ export function AIProvider({ children }: { children: ReactNode }) {
     return msgs.slice(-MAX_MESSAGES);
   }, []);
 
+  // Helper to update a message by ID
+  const updateMessageById = useCallback(
+    (messageId: string, updates: Partial<ChatMessage>) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, ...updates } : m))
+      );
+    },
+    []
+  );
+
+  // Helper to add a new message
+  const addMessage = useCallback(
+    (message: ChatMessage) => {
+      setMessages((prev) => trimMessages([...prev, message]));
+    },
+    [trimMessages]
+  );
+
+  // Helper to create an assistant message
+  const createAssistantMessage = useCallback((): ChatMessage => {
+    return {
+      id: generateMessageId(),
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      isStreaming: true,
+    };
+  }, []);
+
+  // Helper to get current messages (excluding a specific message ID)
+  const getCurrentMessages = useCallback(
+    (excludeId?: string): Promise<ChatMessage[]> => {
+      return new Promise((resolve) => {
+        setMessages((prev) => {
+          resolve(excludeId ? prev.filter((m) => m.id !== excludeId) : prev);
+          return prev;
+        });
+      });
+    },
+    []
+  );
+
   // Flush any pending streaming update immediately
   const flushPendingUpdate = useCallback(() => {
     if (rafIdRef.current) {
@@ -343,6 +453,93 @@ export function AIProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  // Execute a single tool call and update UI
+  const executeAndDisplayToolCall = useCallback(
+    async (toolCall: OllamaToolCall): Promise<{ result: ToolResult; messageId: string }> => {
+      const toolDescription = getToolCallDescription(
+        toolCall.function.name,
+        toolCall.function.arguments
+      );
+
+      // Add a message showing tool execution
+      const toolMessageId = generateMessageId();
+      addMessage({
+        id: toolMessageId,
+        role: 'tool',
+        content: toolDescription,
+        timestamp: Date.now(),
+        toolCallId: toolCall.id,
+        toolName: toolCall.function.name,
+        isStreaming: true,
+      });
+
+      // Execute the tool
+      const result = await handleToolCall(toolCall);
+      return { result, messageId: toolMessageId };
+    },
+    [handleToolCall, addMessage]
+  );
+
+  // Process tool calls and return whether to continue the loop
+  const processToolCalls = useCallback(
+    async (
+      toolCalls: OllamaToolCall[],
+      currentAssistantMessageId: string,
+      streamResult: StreamResult
+    ): Promise<{ shouldContinue: boolean; nextAssistantMessageId?: string }> => {
+      // Update assistant message with tool calls
+      updateMessageById(currentAssistantMessageId, {
+        content: streamResult.content,
+        thinking: streamResult.thinking || undefined,
+        toolCalls,
+        isStreaming: false,
+      });
+
+      // Execute each tool call
+      for (const toolCall of toolCalls) {
+        const { result, messageId: toolMessageId } = await executeAndDisplayToolCall(toolCall);
+
+        if (result.requiresConfirmation) {
+          // Set pending confirmation and stop the loop
+          setPendingConfirmation({
+            id: generateMessageId(),
+            action: {
+              id: toolCall.id,
+              toolName: result.pendingAction?.toolName || toolCall.function.name,
+              args: result.pendingAction?.args || {},
+              description: result.confirmationMessage || 'Confirm action?',
+            },
+            messageId: toolMessageId,
+          });
+
+          updateMessageById(toolMessageId, {
+            content: result.confirmationMessage || 'Awaiting confirmation...',
+            isStreaming: false,
+          });
+
+          return { shouldContinue: false };
+        }
+
+        // Update tool message with result
+        const resultContent = result.success
+          ? JSON.stringify(result.data, null, 2)
+          : `Error: ${result.error}`;
+
+        updateMessageById(toolMessageId, {
+          content: resultContent,
+          error: result.success ? undefined : result.error,
+          isStreaming: false,
+        });
+      }
+
+      // Create new assistant message for next iteration
+      const newMessage = createAssistantMessage();
+      addMessage(newMessage);
+      return { shouldContinue: true, nextAssistantMessageId: newMessage.id };
+    },
+    [updateMessageById, executeAndDisplayToolCall, createAssistantMessage, addMessage]
+  );
+
   // Send a message
   const sendMessage = useCallback(
     async (content: string) => {
@@ -368,7 +565,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         timestamp: Date.now(),
       };
 
-      setMessages((prev) => trimMessages([...prev, userMessage]));
+      addMessage(userMessage);
       setIsStreaming(true);
 
       abortControllerRef.current = new AbortController();
@@ -376,37 +573,20 @@ export function AIProvider({ children }: { children: ReactNode }) {
       // Maximum tool call iterations to prevent infinite loops
       const MAX_TOOL_ITERATIONS = 10;
       let iteration = 0;
-      let currentAssistantMessageId = generateMessageId();
+      const initialAssistantMessage = createAssistantMessage();
+      let currentAssistantMessageId = initialAssistantMessage.id;
 
       try {
         // Add initial assistant message
-        setMessages((prev) => trimMessages([
-          ...prev,
-          {
-            id: currentAssistantMessageId,
-            role: 'assistant',
-            content: '',
-            timestamp: Date.now(),
-            isStreaming: true,
-          },
-        ]));
+        addMessage(initialAssistantMessage);
 
         // Tool call loop - continues until no more tool calls or max iterations
         while (iteration < MAX_TOOL_ITERATIONS) {
           iteration++;
 
           // Get current messages for the API call
-          const currentMessages = await new Promise<ChatMessage[]>((resolve) => {
-            setMessages((prev) => {
-              resolve(prev.filter((m) => m.id !== currentAssistantMessageId));
-              return prev;
-            });
-          });
-
+          const currentMessages = await getCurrentMessages(currentAssistantMessageId);
           const ollamaMessages = toOllamaMessages(currentMessages);
-          let accumulatedContent = '';
-          let accumulatedThinking = '';
-          let toolCalls: OllamaToolCall[] = [];
 
           const stream = streamChat({
             endpoint: settings.ollamaEndpoint,
@@ -417,182 +597,76 @@ export function AIProvider({ children }: { children: ReactNode }) {
             signal: abortControllerRef.current?.signal,
           });
 
-          for await (const chunk of stream) {
-            if (chunk.type === 'thinking' && chunk.content) {
-              accumulatedThinking += chunk.content;
-              // Use throttled update for streaming content
-              scheduleStreamingUpdate(currentAssistantMessageId, accumulatedContent, accumulatedThinking);
-            } else if (chunk.type === 'content' && chunk.content) {
-              accumulatedContent += chunk.content;
-              // Use throttled update for streaming content
-              scheduleStreamingUpdate(currentAssistantMessageId, accumulatedContent, accumulatedThinking);
-            } else if (chunk.type === 'tool_call' && chunk.toolCall) {
-              toolCalls.push(chunk.toolCall);
-            } else if (chunk.type === 'error') {
-              // Flush any pending updates before handling error
-              flushPendingUpdate();
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === currentAssistantMessageId
-                    ? { ...m, content: accumulatedContent, thinking: accumulatedThinking, error: chunk.error, isStreaming: false }
-                    : m
-                )
-              );
-              isStreamingRef.current = false;
-              setIsStreaming(false);
-              return;
+          // Process stream with timeout protection
+          const streamResult = await processStreamWithTimeout(
+            stream,
+            (content, thinking) => {
+              scheduleStreamingUpdate(currentAssistantMessageId, content, thinking);
             }
-          }
+          );
 
           // Flush any pending throttled updates before finalizing
           flushPendingUpdate();
 
+          // Handle stream error
+          if (streamResult.error) {
+            updateMessageById(currentAssistantMessageId, {
+              content: streamResult.content,
+              thinking: streamResult.thinking || undefined,
+              error: streamResult.error,
+              isStreaming: false,
+            });
+            return;
+          }
+
           // If no tool calls, we're done
-          if (toolCalls.length === 0) {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === currentAssistantMessageId
-                  ? { ...m, content: accumulatedContent, thinking: accumulatedThinking || undefined, isStreaming: false }
-                  : m
-              )
-            );
+          if (streamResult.toolCalls.length === 0) {
+            updateMessageById(currentAssistantMessageId, {
+              content: streamResult.content,
+              thinking: streamResult.thinking || undefined,
+              isStreaming: false,
+            });
             break;
           }
 
-          // Update assistant message with tool calls
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === currentAssistantMessageId
-                ? { ...m, content: accumulatedContent, thinking: accumulatedThinking || undefined, toolCalls, isStreaming: false }
-                : m
-            )
+          // Process tool calls
+          const { shouldContinue, nextAssistantMessageId } = await processToolCalls(
+            streamResult.toolCalls,
+            currentAssistantMessageId,
+            streamResult
           );
 
-          // Execute each tool call
-          for (const toolCall of toolCalls) {
-            const toolDescription = getToolCallDescription(
-              toolCall.function.name,
-              toolCall.function.arguments
-            );
-
-            // Add a message showing tool execution
-            const toolMessageId = generateMessageId();
-            setMessages((prev) => trimMessages([
-              ...prev,
-              {
-                id: toolMessageId,
-                role: 'tool',
-                content: toolDescription,
-                timestamp: Date.now(),
-                toolCallId: toolCall.id,
-                toolName: toolCall.function.name,
-                isStreaming: true,
-              },
-            ]));
-
-            // Execute the tool
-            const result = await handleToolCall(toolCall);
-
-            if (result.requiresConfirmation) {
-              // Set pending confirmation and stop the loop
-              // Use sanitized args from pendingAction (already sanitized in handleToolCall -> executeTool)
-              setPendingConfirmation({
-                id: generateMessageId(),
-                action: {
-                  id: toolCall.id,
-                  toolName: result.pendingAction?.toolName || toolCall.function.name,
-                  args: result.pendingAction?.args || {},
-                  description: result.confirmationMessage || 'Confirm action?',
-                },
-                messageId: toolMessageId,
-              });
-
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === toolMessageId
-                    ? {
-                        ...m,
-                        content: result.confirmationMessage || 'Awaiting confirmation...',
-                        isStreaming: false,
-                      }
-                    : m
-                )
-              );
-
-              isStreamingRef.current = false;
-              setIsStreaming(false);
-              return;
-            }
-
-            // Update tool message with result
-            const resultContent = result.success
-              ? JSON.stringify(result.data, null, 2)
-              : `Error: ${result.error}`;
-
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === toolMessageId
-                  ? {
-                      ...m,
-                      content: resultContent,
-                      error: result.success ? undefined : result.error,
-                      isStreaming: false,
-                    }
-                  : m
-              )
-            );
+          if (!shouldContinue) {
+            return; // Pending confirmation or error
           }
 
-          // Create new assistant message for next iteration
-          currentAssistantMessageId = generateMessageId();
-          setMessages((prev) => trimMessages([
-            ...prev,
-            {
-              id: currentAssistantMessageId,
-              role: 'assistant',
-              content: '',
-              timestamp: Date.now(),
-              isStreaming: true,
-            },
-          ]));
+          currentAssistantMessageId = nextAssistantMessageId!;
         }
 
         // If we hit max iterations, finalize the message with error indicator
         if (iteration >= MAX_TOOL_ITERATIONS) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === currentAssistantMessageId
-                ? {
-                    ...m,
-                    content: 'I reached the maximum number of tool calls for this request. This usually happens when a task requires more steps than expected. Please try breaking your request into smaller parts.',
-                    error: 'max_tool_iterations_reached',
-                    isStreaming: false,
-                  }
-                : m
-            )
-          );
+          updateMessageById(currentAssistantMessageId, {
+            content: 'I reached the maximum number of tool calls for this request. This usually happens when a task requires more steps than expected. Please try breaking your request into smaller parts.',
+            error: 'max_tool_iterations_reached',
+            isStreaming: false,
+          });
         }
       } catch (error) {
         console.error('Error in sendMessage:', error);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === currentAssistantMessageId
-              ? {
-                  ...m,
-                  content: 'Sorry, I encountered an error. Please try again.',
-                  error: error instanceof Error ? error.message : 'Unknown error',
-                  isStreaming: false,
-                }
-              : m
-          )
-        );
+        updateMessageById(currentAssistantMessageId, {
+          content: error instanceof Error && error.message.includes('timeout')
+            ? 'The AI server took too long to respond. Please check that Ollama is running and try again.'
+            : 'Sorry, I encountered an error. Please try again.',
+          error: error instanceof Error ? error.message : 'Unknown error',
+          isStreaming: false,
+        });
       } finally {
         isStreamingRef.current = false;
         setIsStreaming(false);
         abortControllerRef.current = null;
       }
     },
-    [settings, toOllamaMessages, handleToolCall, trimMessages, scheduleStreamingUpdate, flushPendingUpdate]
+    [settings, toOllamaMessages, addMessage, createAssistantMessage, getCurrentMessages, updateMessageById, processToolCalls, scheduleStreamingUpdate, flushPendingUpdate]
   );
 
   // Confirm a pending action
@@ -603,18 +677,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
     if (!clientManagerRef.current) {
       const { messageId } = pendingConfirmation;
       setPendingConfirmation(null);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId
-            ? {
-                ...m,
-                content: 'Wallet disconnected. Please reconnect your wallet and try again.',
-                error: 'wallet_disconnected',
-                isStreaming: false,
-              }
-            : m
-        )
-      );
+      updateMessageById(messageId, {
+        content: 'Wallet disconnected. Please reconnect your wallet and try again.',
+        error: 'wallet_disconnected',
+        isStreaming: false,
+      });
       return;
     }
 
@@ -647,38 +714,17 @@ export function AIProvider({ children }: { children: ReactNode }) {
         error: result.error,
       }, null, 2);
 
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId
-            ? {
-                ...m,
-                content: resultContent,
-                error: result.success ? undefined : result.error,
-                isStreaming: false,
-              }
-            : m
-        )
-      );
+      updateMessageById(messageId, {
+        content: resultContent,
+        error: result.success ? undefined : result.error,
+        isStreaming: false,
+      });
 
       // Continue conversation to summarize result
-      const newAssistantMessageId = generateMessageId();
-      setMessages((prev) => trimMessages([
-        ...prev,
-        {
-          id: newAssistantMessageId,
-          role: 'assistant',
-          content: '',
-          timestamp: Date.now(),
-          isStreaming: true,
-        },
-      ]));
+      const newAssistantMessage = createAssistantMessage();
+      addMessage(newAssistantMessage);
 
-      const updatedMessages = await new Promise<ChatMessage[]>((resolve) => {
-        setMessages((prev) => {
-          resolve(prev.filter((m) => m.id !== newAssistantMessageId));
-          return prev;
-        });
-      });
+      const updatedMessages = await getCurrentMessages(newAssistantMessage.id);
 
       // Don't pass tools - we just want the assistant to summarize the result, not make more tool calls
       const stream = streamChat({
@@ -689,60 +735,39 @@ export function AIProvider({ children }: { children: ReactNode }) {
         signal: abortControllerRef.current?.signal,
       });
 
-      let content = '';
-      let thinking = '';
-      let streamError: string | undefined;
-
-      for await (const chunk of stream) {
-        if (chunk.type === 'thinking' && chunk.content) {
-          thinking += chunk.content;
-          // Use throttled update for streaming content
-          scheduleStreamingUpdate(newAssistantMessageId, content, thinking);
-        } else if (chunk.type === 'content' && chunk.content) {
-          content += chunk.content;
-          // Use throttled update for streaming content
-          scheduleStreamingUpdate(newAssistantMessageId, content, thinking);
-        } else if (chunk.type === 'error') {
-          streamError = chunk.error;
-          break;
+      // Process stream with timeout protection
+      const streamResult = await processStreamWithTimeout(
+        stream,
+        (content, thinking) => {
+          scheduleStreamingUpdate(newAssistantMessage.id, content, thinking);
         }
-      }
+      );
 
       // Flush any pending throttled updates before finalizing
       flushPendingUpdate();
 
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === newAssistantMessageId
-            ? {
-                ...m,
-                content: streamError ? `Error: ${streamError}` : content,
-                thinking: thinking || undefined,
-                error: streamError,
-                isStreaming: false,
-              }
-            : m
-        )
-      );
+      updateMessageById(newAssistantMessage.id, {
+        content: streamResult.error ? `Error: ${streamResult.error}` : streamResult.content,
+        thinking: streamResult.thinking || undefined,
+        error: streamResult.error,
+        isStreaming: false,
+      });
     } catch (error) {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId
-            ? {
-                ...m,
-                content: `Error executing transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
-                error: error instanceof Error ? error.message : 'Unknown error',
-                isStreaming: false,
-              }
-            : m
-        )
-      );
+      const errorMessage = error instanceof Error && error.message.includes('timeout')
+        ? 'The AI server took too long to respond. The transaction may have completed - please check your wallet.'
+        : `Error executing transaction: ${error instanceof Error ? error.message : 'Unknown error'}`;
+
+      updateMessageById(messageId, {
+        content: errorMessage,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        isStreaming: false,
+      });
     } finally {
       isStreamingRef.current = false;
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
-  }, [pendingConfirmation, settings, toOllamaMessages, trimMessages, scheduleStreamingUpdate, flushPendingUpdate]);
+  }, [pendingConfirmation, settings, toOllamaMessages, updateMessageById, createAssistantMessage, addMessage, getCurrentMessages, scheduleStreamingUpdate, flushPendingUpdate]);
 
   // Cancel a pending action
   const cancelAction = useCallback(() => {

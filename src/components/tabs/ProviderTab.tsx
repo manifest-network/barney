@@ -4,6 +4,7 @@ import { Link, Building2, Shield } from 'lucide-react';
 import type { Lease, ProviderWithdrawableResponse } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { formatAddress } from '../../utils/format';
 import { getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../api/sku';
 import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, type TxResult } from '../../api/tx';
@@ -17,14 +18,6 @@ import { SkeletonStatGrid } from '../ui/SkeletonStat';
 import { SkeletonCard } from '../ui/SkeletonCard';
 
 const CHAIN_NAME = 'manifestlocal';
-
-function formatAddress(addr: string): string {
-  if (!addr || addr.length < 20) return addr;
-  const prefix = addr.slice(0, 9);
-  const start = addr.slice(9, 13);
-  const end = addr.slice(-4);
-  return `${prefix}${start}...${end}`;
-}
 
 
 export function ProviderTab() {

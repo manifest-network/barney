@@ -3,6 +3,7 @@ import { Link, ShieldX, Globe } from 'lucide-react';
 import type { Lease, LeaseState, CreditAccount } from '../../api/billing';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { logError } from '../../utils/errors';
+import { formatAddress } from '../../utils/format';
 import {
   getAllLeases,
   getAllCredits,
@@ -37,14 +38,6 @@ const stateLabels: Record<LeaseState, string> = {
   LEASE_STATE_REJECTED: 'Rejected',
   LEASE_STATE_EXPIRED: 'Expired',
 };
-
-function formatAddress(addr: string): string {
-  if (!addr || addr.length < 20) return addr;
-  const prefix = addr.slice(0, 9);
-  const start = addr.slice(9, 13);
-  const end = addr.slice(-4);
-  return `${prefix}${start}...${end}`;
-}
 
 function formatAmount(amount: string, denom: string): string {
   const metadata = DENOM_METADATA[denom as keyof typeof DENOM_METADATA];
@@ -223,7 +216,13 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
     }
   }, [isAdmin, viewMode, fetchLeases, fetchCredits]);
 
-  // Reset offset when filter changes
+  // Reset offsets when view mode changes
+  useEffect(() => {
+    setLeaseOffset(0);
+    setCreditOffset(0);
+  }, [viewMode]);
+
+  // Reset lease offset when filter changes
   useEffect(() => {
     setLeaseOffset(0);
   }, [leaseStateFilter]);
