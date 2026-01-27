@@ -9,6 +9,23 @@ export type LeaseState =
   | 'LEASE_STATE_REJECTED'
   | 'LEASE_STATE_EXPIRED';
 
+/**
+ * Mapping from user-friendly lease state names to API enum values.
+ * Used by AI tools to convert user input to API format.
+ */
+export const LEASE_STATE_MAP: Record<string, LeaseState> = {
+  pending: 'LEASE_STATE_PENDING',
+  active: 'LEASE_STATE_ACTIVE',
+  closed: 'LEASE_STATE_CLOSED',
+  rejected: 'LEASE_STATE_REJECTED',
+  expired: 'LEASE_STATE_EXPIRED',
+} as const;
+
+/**
+ * Valid user-friendly lease state filter values (includes 'all' for no filter)
+ */
+export const LEASE_STATE_FILTERS = ['all', ...Object.keys(LEASE_STATE_MAP)] as const;
+
 export interface LeaseItem {
   sku_uuid: string;
   quantity: string;

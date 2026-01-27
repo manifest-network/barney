@@ -195,6 +195,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
   const rafIdRef = useRef<number | null>(null);
   // Ref to track last message timestamp for debouncing rapid sends
   const lastMessageTimeRef = useRef<number>(0);
+  // Ref to track current messages for synchronous access in async operations
+  const messagesRef = useRef<ChatMessage[]>([]);
 
   // Load settings and history from localStorage with validation
   useEffect(() => {
@@ -243,6 +245,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
       }
     }
   }, [messages, settings.saveHistory]);
+
+  // Keep messagesRef in sync with messages state for synchronous access
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // Check Ollama connection
   useEffect(() => {
@@ -365,14 +372,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Helper to get current messages (excluding a specific message ID)
+  // Uses ref for synchronous access without setState anti-pattern
   const getCurrentMessages = useCallback(
-    (excludeId?: string): Promise<ChatMessage[]> => {
-      return new Promise((resolve) => {
-        setMessages((prev) => {
-          resolve(excludeId ? prev.filter((m) => m.id !== excludeId) : prev);
-          return prev;
-        });
-      });
+    (excludeId?: string): ChatMessage[] => {
+      const current = messagesRef.current;
+      return excludeId ? current.filter((m) => m.id !== excludeId) : current;
     },
     []
   );
@@ -606,7 +610,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
           iteration++;
 
           // Get current messages for the API call
-          const currentMessages = await getCurrentMessages(currentAssistantMessageId);
+          const currentMessages = getCurrentMessages(currentAssistantMessageId);
           const ollamaMessages = toOllamaMessages(currentMessages);
 
           const stream = streamChat({
@@ -692,7 +696,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
   // Confirm a pending action
   const confirmAction = useCallback(async () => {
-    if (!pendingConfirmation) return;
+    // Guard against concurrent executions (UI also disables buttons, but this is defensive)
+    if (!pendingConfirmation || isStreamingRef.current) return;
 
     // Check if wallet is connected - if not, show error and clear pending state
     if (!clientManagerRef.current) {
@@ -745,7 +750,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       const newAssistantMessage = createAssistantMessage();
       addMessage(newAssistantMessage);
 
-      const updatedMessages = await getCurrentMessages(newAssistantMessage.id);
+      const updatedMessages = getCurrentMessages(newAssistantMessage.id);
 
       // Don't pass tools - we just want the assistant to summarize the result, not make more tool calls
       const stream = streamChat({

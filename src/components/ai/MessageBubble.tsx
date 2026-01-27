@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import { User, Bot, Wrench, AlertCircle, Brain, ChevronDown, ChevronRight } from 'lucide-react';
 import type { ChatMessage } from '../../contexts/AIContext';
 import { StreamingText } from './StreamingText';
@@ -7,7 +7,7 @@ interface MessageBubbleProps {
   message: ChatMessage;
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message }: MessageBubbleProps) {
   const { role, content, thinking, isStreaming, error, toolName } = message;
   const [isThinkingExpanded, setIsThinkingExpanded] = useState(false);
   const [isToolExpanded, setIsToolExpanded] = useState(false);
@@ -118,4 +118,4 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       </div>
     </div>
   );
-}
+});

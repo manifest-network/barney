@@ -5,7 +5,7 @@
 
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import { cosmosQuery, cosmosTx } from '@manifest-network/manifest-mcp-browser';
-import { getCreditAccount, getCreditEstimate, getLeasesByTenant, getWithdrawableAmount, getLease } from '../api/billing';
+import { getCreditAccount, getCreditEstimate, getLeasesByTenant, getWithdrawableAmount, getLease, LEASE_STATE_MAP } from '../api/billing';
 import { getProviders, getSKUsByProvider } from '../api/sku';
 import { getAllBalances } from '../api/bank';
 import {
@@ -266,14 +266,7 @@ export async function executeTool(
         let state: Parameters<typeof getLeasesByTenant>[1] = undefined;
 
         if (stateFilter && stateFilter !== 'all') {
-          const stateMap: Record<string, Parameters<typeof getLeasesByTenant>[1]> = {
-            pending: 'LEASE_STATE_PENDING',
-            active: 'LEASE_STATE_ACTIVE',
-            closed: 'LEASE_STATE_CLOSED',
-            rejected: 'LEASE_STATE_REJECTED',
-            expired: 'LEASE_STATE_EXPIRED',
-          };
-          state = stateMap[stateFilter];
+          state = LEASE_STATE_MAP[stateFilter];
         }
 
         const leases = await getLeasesByTenant(address, state);

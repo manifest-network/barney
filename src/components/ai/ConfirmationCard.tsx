@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { AlertTriangle, Check, X } from 'lucide-react';
 import type { PendingAction } from '../../ai/toolExecutor';
 
@@ -8,7 +9,7 @@ interface ConfirmationCardProps {
   isExecuting?: boolean;
 }
 
-export function ConfirmationCard({ action, onConfirm, onCancel, isExecuting }: ConfirmationCardProps) {
+export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfirm, onCancel, isExecuting }: ConfirmationCardProps) {
   return (
     <div className="confirmation-card">
       <div className="confirmation-header">
@@ -48,4 +49,4 @@ export function ConfirmationCard({ action, onConfirm, onCancel, isExecuting }: C
       </div>
     </div>
   );
-}
+});
