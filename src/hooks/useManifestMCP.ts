@@ -1,5 +1,5 @@
 /**
- * Hook to integrate cosmos-kit with manifest-mcp-browser
+ * Hook to integrate cosmos-kit with @manifest-network/manifest-mcp-browser
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -8,7 +8,7 @@ import {
   CosmosClientManager,
   type ManifestMCPConfig,
   type WalletProvider,
-} from 'manifest-mcp-browser';
+} from '@manifest-network/manifest-mcp-browser';
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import { RPC_ENDPOINT } from '../api/config';
 

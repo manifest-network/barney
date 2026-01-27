@@ -2,7 +2,7 @@
  * System prompt for the AI assistant
  */
 
-import { getAvailableModules, getModuleSubcommands } from 'manifest-mcp-browser';
+import { getAvailableModules, getModuleSubcommands } from '@manifest-network/manifest-mcp-browser';
 
 /**
  * Cached cosmos operations documentation (generated once at module load)

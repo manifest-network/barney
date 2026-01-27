@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Settings, RefreshCw, Trash2, X, Check, Wifi, WifiOff, Brain } from 'lucide-react';
 import { useAI } from '../../contexts/AIContext';
+import { validateEndpointUrl } from '../../ai/validation';
 
 interface AISettingsProps {
   onClose: () => void;
@@ -21,16 +22,26 @@ export function AISettings({ onClose }: AISettingsProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleEndpointChange = async () => {
-    updateSettings({ ollamaEndpoint: localEndpoint });
-    // Pass the new endpoint directly since state update is async
+    // Validate and normalize the endpoint before using it
+    const normalizedEndpoint = validateEndpointUrl(localEndpoint);
+    if (!normalizedEndpoint) {
+      // Invalid URL - don't update
+      return;
+    }
+
+    // Update local state to show normalized value
+    setLocalEndpoint(normalizedEndpoint);
+    updateSettings({ ollamaEndpoint: normalizedEndpoint });
+
     setIsRefreshing(true);
-    await refreshModels(localEndpoint);
+    await refreshModels(normalizedEndpoint);
     setIsRefreshing(false);
   };
 
   const handleRefresh = async () => {
+    // Use the validated endpoint from settings, not the potentially un-normalized local state
     setIsRefreshing(true);
-    await refreshModels(localEndpoint);
+    await refreshModels(settings.ollamaEndpoint);
     setIsRefreshing(false);
   };
 

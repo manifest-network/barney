@@ -3,8 +3,8 @@
  * Bridges AI tool calls to actual blockchain operations
  */
 
-import type { CosmosClientManager } from 'manifest-mcp-browser';
-import { cosmosQuery, cosmosTx } from 'manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
+import { cosmosQuery, cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getCreditAccount, getCreditEstimate, getLeasesByTenant, getWithdrawableAmount, getLease } from '../api/billing';
 import { getProviders, getSKUsByProvider } from '../api/sku';
 import { getAllBalances } from '../api/bank';

@@ -30,7 +30,7 @@ import {
   AI_MESSAGE_DEBOUNCE_MS,
   AI_HEALTH_CHECK_INTERVAL_MS,
 } from '../config/constants';
-import type { CosmosClientManager } from 'manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 
 /**
  * Result of processing a stream to completion
@@ -85,15 +85,27 @@ async function* withTimeout<T>(
   timeoutMs: number
 ): AsyncGenerator<T> {
   while (true) {
-    const result = await Promise.race([
-      generator.next(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Stream timeout: no response received')), timeoutMs)
-      ),
-    ]);
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-    if (result.done) break;
-    yield result.value;
+    try {
+      const result = await Promise.race([
+        generator.next(),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error('Stream timeout: no response received')),
+            timeoutMs
+          );
+        }),
+      ]);
+
+      if (result.done) break;
+      yield result.value;
+    } finally {
+      // Clear the timeout to avoid accumulating orphan timers
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+    }
   }
 }
 

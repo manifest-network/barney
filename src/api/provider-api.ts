@@ -232,11 +232,14 @@ export function base64ToUint8Array(base64: string): Uint8Array {
  * Used to generate meta_hash for lease creation and payload verification.
  */
 export async function computePayloadHash(payload: Uint8Array | string): Promise<string> {
-  const data: ArrayBuffer = typeof payload === 'string'
-    ? new TextEncoder().encode(payload).buffer as ArrayBuffer
-    : payload.buffer as ArrayBuffer;
+  // Convert to Uint8Array if string, then ensure we have a copy of just the
+  // relevant bytes. This handles the case where the input Uint8Array is a view
+  // into a larger ArrayBuffer (non-zero byteOffset or smaller byteLength).
+  const bytes = typeof payload === 'string'
+    ? new TextEncoder().encode(payload)
+    : new Uint8Array(payload);
 
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
   const hashArray = new Uint8Array(hashBuffer);
 
   // Convert to hex string (64 characters)
