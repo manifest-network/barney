@@ -22,10 +22,15 @@ import {
   sanitizeToolArgs,
   type AISettings,
 } from '../ai/validation';
+import { logError } from '../utils/errors';
+import {
+  AI_MAX_MESSAGES,
+  AI_MAX_TOOL_ITERATIONS,
+  AI_STREAM_TIMEOUT_MS,
+  AI_MESSAGE_DEBOUNCE_MS,
+  AI_HEALTH_CHECK_INTERVAL_MS,
+} from '../config/constants';
 import type { CosmosClientManager } from 'manifest-mcp-browser';
-
-// Stream processing timeout (30 seconds without any chunk)
-const STREAM_CHUNK_TIMEOUT_MS = 30000;
 
 /**
  * Result of processing a stream to completion
@@ -44,7 +49,7 @@ interface StreamResult {
 async function processStreamWithTimeout(
   stream: AsyncGenerator<OllamaStreamChunk>,
   onChunk: (content: string, thinking: string) => void,
-  timeoutMs: number = STREAM_CHUNK_TIMEOUT_MS
+  timeoutMs: number = AI_STREAM_TIMEOUT_MS
 ): Promise<StreamResult> {
   let accumulatedContent = '';
   let accumulatedThinking = '';
@@ -95,9 +100,6 @@ async function* withTimeout<T>(
 // Storage keys
 const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const STORAGE_KEY_HISTORY = 'barney-ai-history';
-
-// Maximum messages to keep in memory (prevents unbounded growth)
-const MAX_MESSAGES = 200;
 
 export type { AISettings };
 
@@ -179,6 +181,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
     thinking: string;
   } | null>(null);
   const rafIdRef = useRef<number | null>(null);
+  // Ref to track last message timestamp for debouncing rapid sends
+  const lastMessageTimeRef = useRef<number>(0);
 
   // Load settings and history from localStorage with validation
   useEffect(() => {
@@ -199,7 +203,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         setMessages(validated);
       }
     } catch (error) {
-      console.error('Failed to load AI settings:', error);
+      logError('AIContext.loadSettings', error);
       // On parse error, clear potentially corrupted data
       localStorage.removeItem(STORAGE_KEY_SETTINGS);
       localStorage.removeItem(STORAGE_KEY_HISTORY);
@@ -211,7 +215,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
     try {
       localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
     } catch (error) {
-      console.error('Failed to save AI settings:', error);
+      logError('AIContext.saveSettings', error);
     }
   }, [settings]);
 
@@ -223,7 +227,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         const toSave = messages.filter((m) => !m.isStreaming);
         localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(toSave));
       } catch (error) {
-        console.error('Failed to save AI history:', error);
+        logError('AIContext.saveHistory', error);
       }
     }
   }, [messages, settings.saveHistory]);
@@ -236,7 +240,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
     };
 
     checkConnection();
-    const interval = setInterval(checkConnection, 30000);
+    const interval = setInterval(checkConnection, AI_HEALTH_CHECK_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [settings.ollamaEndpoint]);
 
@@ -312,11 +316,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
   // Generate a unique message ID
   const generateMessageId = () => `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
-  // Trim messages to MAX_MESSAGES limit (keeps most recent)
+  // Trim messages to AI_MAX_MESSAGES limit (keeps most recent)
   const trimMessages = useCallback((msgs: ChatMessage[]): ChatMessage[] => {
-    if (msgs.length <= MAX_MESSAGES) return msgs;
+    if (msgs.length <= AI_MAX_MESSAGES) return msgs;
     // Keep the most recent messages
-    return msgs.slice(-MAX_MESSAGES);
+    return msgs.slice(-AI_MAX_MESSAGES);
   }, []);
 
   // Helper to update a message by ID
@@ -550,6 +554,13 @@ export function AIProvider({ children }: { children: ReactNode }) {
       // Use ref for synchronous check to prevent race conditions with rapid messages
       if (isStreamingRef.current) return;
 
+      // Debounce rapid message sends
+      const now = Date.now();
+      if (now - lastMessageTimeRef.current < AI_MESSAGE_DEBOUNCE_MS) {
+        return;
+      }
+      lastMessageTimeRef.current = now;
+
       // Mark as streaming synchronously before any async operations
       isStreamingRef.current = true;
 
@@ -570,8 +581,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
       abortControllerRef.current = new AbortController();
 
-      // Maximum tool call iterations to prevent infinite loops
-      const MAX_TOOL_ITERATIONS = 10;
       let iteration = 0;
       const initialAssistantMessage = createAssistantMessage();
       let currentAssistantMessageId = initialAssistantMessage.id;
@@ -581,7 +590,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         addMessage(initialAssistantMessage);
 
         // Tool call loop - continues until no more tool calls or max iterations
-        while (iteration < MAX_TOOL_ITERATIONS) {
+        while (iteration < AI_MAX_TOOL_ITERATIONS) {
           iteration++;
 
           // Get current messages for the API call
@@ -644,7 +653,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         }
 
         // If we hit max iterations, finalize the message with error indicator
-        if (iteration >= MAX_TOOL_ITERATIONS) {
+        if (iteration >= AI_MAX_TOOL_ITERATIONS) {
           updateMessageById(currentAssistantMessageId, {
             content: 'I reached the maximum number of tool calls for this request. This usually happens when a task requires more steps than expected. Please try breaking your request into smaller parts.',
             error: 'max_tool_iterations_reached',
@@ -652,7 +661,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
           });
         }
       } catch (error) {
-        console.error('Error in sendMessage:', error);
+        logError('AIContext.sendMessage', error);
         updateMessageById(currentAssistantMessageId, {
           content: error instanceof Error && error.message.includes('timeout')
             ? 'The AI server took too long to respond. Please check that Ollama is running and try again.'

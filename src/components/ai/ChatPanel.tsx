@@ -105,15 +105,25 @@ export function ChatPanel() {
   const isNearLimit = input.length > MAX_INPUT_LENGTH * 0.95;
 
   return (
-    <div className={`chat-panel ${isExpanded ? 'chat-panel-expanded' : ''}`}>
+    <div
+      className={`chat-panel ${isExpanded ? 'chat-panel-expanded' : ''}`}
+      role="dialog"
+      aria-label="AI Assistant chat panel"
+      aria-modal="false"
+    >
       {/* Header */}
       <div className="chat-panel-header">
         <div className="chat-panel-title">
-          <Sparkles className="w-4 h-4" />
-          <span>AI Assistant</span>
+          <Sparkles className="w-4 h-4" aria-hidden="true" />
+          <span id="chat-panel-title">AI Assistant</span>
           {!isConnected && (
-            <span className="chat-panel-offline" title="Disconnected from Ollama">
-              <WifiOff className="w-3 h-3" />
+            <span
+              className="chat-panel-offline"
+              title="Disconnected from Ollama"
+              role="status"
+              aria-label="Disconnected from Ollama"
+            >
+              <WifiOff className="w-3 h-3" aria-hidden="true" />
             </span>
           )}
         </div>
@@ -122,29 +132,31 @@ export function ChatPanel() {
             type="button"
             onClick={() => setIsExpanded(!isExpanded)}
             className="chat-panel-btn"
-            title={isExpanded ? "Collapse" : "Expand"}
+            aria-label={isExpanded ? "Collapse chat panel" : "Expand chat panel"}
+            aria-expanded={isExpanded}
           >
             {isExpanded ? (
-              <Minimize2 className="w-4 h-4" />
+              <Minimize2 className="w-4 h-4" aria-hidden="true" />
             ) : (
-              <Maximize2 className="w-4 h-4" />
+              <Maximize2 className="w-4 h-4" aria-hidden="true" />
             )}
           </button>
           <button
             type="button"
             onClick={() => setShowSettings(!showSettings)}
             className="chat-panel-btn"
-            title="Settings"
+            aria-label="Open settings"
+            aria-expanded={showSettings}
           >
-            <Settings className="w-4 h-4" />
+            <Settings className="w-4 h-4" aria-hidden="true" />
           </button>
           <button
             type="button"
             onClick={() => setIsOpen(false)}
             className="chat-panel-btn"
-            title="Close"
+            aria-label="Close chat panel"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -153,15 +165,23 @@ export function ChatPanel() {
       {showSettings && <AISettings onClose={() => setShowSettings(false)} />}
 
       {/* Messages Area */}
-      <div className="chat-messages" ref={messagesContainerRef} onScroll={handleScroll}>
+      <div
+        className="chat-messages"
+        ref={messagesContainerRef}
+        onScroll={handleScroll}
+        role="log"
+        aria-label="Chat messages"
+        aria-live="polite"
+        aria-relevant="additions"
+      >
         {messages.length === 0 ? (
           <div className="chat-empty">
-            <Sparkles className="w-8 h-8 text-primary-400 mb-2" />
+            <Sparkles className="w-8 h-8 text-primary-400 mb-2" aria-hidden="true" />
             <p className="chat-empty-title">How can I help you today?</p>
             <p className="chat-empty-hint">
               Ask me about your balances, leases, or available providers.
             </p>
-            <div className="chat-suggestions">
+            <div className="chat-suggestions" role="group" aria-label="Suggested questions">
               <button
                 type="button"
                 onClick={() => sendMessage("What's my balance?")}
@@ -205,7 +225,7 @@ export function ChatPanel() {
       </div>
 
       {/* Input Area */}
-      <form onSubmit={handleSubmit} className="chat-input-form">
+      <form onSubmit={handleSubmit} className="chat-input-form" aria-label="Chat input">
         <div className="chat-input-wrapper">
           <textarea
             ref={inputRef}
@@ -217,23 +237,25 @@ export function ChatPanel() {
             className="chat-input"
             rows={1}
             maxLength={MAX_INPUT_LENGTH}
+            aria-label="Message input"
+            aria-describedby="chat-input-hint"
           />
           <button
             type="submit"
             disabled={!input.trim() || !isConnected || isStreaming}
             className="chat-send-btn"
-            title="Send message"
+            aria-label={isStreaming ? "Sending message..." : "Send message"}
           >
             {isStreaming ? (
-              <Loader className="w-4 h-4 animate-spin" />
+              <Loader className="w-4 h-4 animate-spin" aria-hidden="true" />
             ) : (
-              <Send className="w-4 h-4" />
+              <Send className="w-4 h-4" aria-hidden="true" />
             )}
           </button>
         </div>
-        <p className="chat-input-hint">
+        <p id="chat-input-hint" className="chat-input-hint">
           {showCharCount ? (
-            <span className={isNearLimit ? 'text-warning' : ''}>
+            <span className={isNearLimit ? 'text-warning' : ''} role="status">
               {input.length.toLocaleString()} / {MAX_INPUT_LENGTH.toLocaleString()} characters
             </span>
           ) : (

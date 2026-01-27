@@ -1,5 +1,6 @@
 import { Component, type ReactNode } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { logError } from '../../utils/errors';
 
 interface Props {
   children: ReactNode;
@@ -26,22 +27,21 @@ export class AIErrorBoundary extends Component<Props, State> {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // Log error for debugging
-    console.error('AI Chat Error:', error, errorInfo);
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+    logError('AIErrorBoundary', { error, componentStack: errorInfo.componentStack });
   }
 
-  handleReset = () => {
+  handleReset = (): void => {
     this.setState({ hasError: false, error: null });
     this.props.onReset?.();
   };
 
-  render() {
+  render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <div className="ai-error-boundary">
+        <div className="ai-error-boundary" role="alert" aria-live="assertive">
           <div className="ai-error-content">
-            <AlertTriangle className="w-8 h-8 text-warning" />
+            <AlertTriangle className="w-8 h-8 text-warning" aria-hidden="true" />
             <h3 className="ai-error-title">Something went wrong</h3>
             <p className="ai-error-message">
               The AI assistant encountered an error. This won't affect the rest of the application.
@@ -56,8 +56,9 @@ export class AIErrorBoundary extends Component<Props, State> {
               type="button"
               onClick={this.handleReset}
               className="ai-error-reset-btn"
+              aria-label="Try again to reload the chat panel"
             >
-              <RefreshCw className="w-4 h-4" />
+              <RefreshCw className="w-4 h-4" aria-hidden="true" />
               Try again
             </button>
           </div>

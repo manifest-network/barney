@@ -191,7 +191,16 @@ function validateConfirmationToolArgs(
 }
 
 /**
- * Execute a tool call
+ * Execute a tool call from the AI assistant.
+ *
+ * For read-only operations (queries), executes immediately and returns results.
+ * For state-changing operations (transactions), returns a pending confirmation
+ * that requires user approval before execution.
+ *
+ * @param toolName - Name of the tool to execute (must be in VALID_TOOL_NAMES)
+ * @param args - Tool-specific arguments
+ * @param options - Executor options including client manager and wallet address
+ * @returns ToolResult with success status, data or error, and confirmation info if needed
  */
 export async function executeTool(
   toolName: string,
@@ -370,7 +379,17 @@ export interface ExecuteConfirmedToolOptions {
 }
 
 /**
- * Execute a confirmed transaction
+ * Execute a transaction that has been confirmed by the user.
+ *
+ * This function handles the actual blockchain transaction execution
+ * after the user has approved the pending action.
+ *
+ * @param toolName - Name of the confirmed tool to execute
+ * @param args - Tool-specific arguments (validated during confirmation)
+ * @param clientManager - CosmosClientManager for signing and broadcasting
+ * @param address - User's wallet address (optional for some operations)
+ * @param signArbitrary - Function to sign arbitrary data with ADR-036 (for payload uploads)
+ * @returns ToolResult with transaction result or error
  */
 export async function executeConfirmedTool(
   toolName: string,
