@@ -35,7 +35,7 @@ export const LEASE_STATE_MAP: Record<string, LeaseState> = {
   closed: LeaseState.LEASE_STATE_CLOSED,
   rejected: LeaseState.LEASE_STATE_REJECTED,
   expired: LeaseState.LEASE_STATE_EXPIRED,
-} as const;
+};
 
 /**
  * Valid user-friendly lease state filter values (includes 'all' for no filter)
@@ -64,14 +64,6 @@ export interface Lease {
   closure_reason?: string;
   min_lease_duration_at_creation?: string;
   meta_hash?: string;
-}
-
-export interface LeasesResponse {
-  leases: Lease[];
-}
-
-export interface LeaseResponse {
-  lease: Lease;
 }
 
 /**

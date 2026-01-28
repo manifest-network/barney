@@ -126,6 +126,7 @@ export interface ChatMessage {
   toolCalls?: OllamaToolCall[];
   toolCallId?: string;
   toolName?: string;
+  toolDescription?: string;
   isStreaming?: boolean;
   error?: string;
 }
@@ -535,6 +536,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         id: toolMessageId,
         role: 'tool',
         content: toolDescription,
+        toolDescription,
         timestamp: Date.now(),
         toolCallId: toolCall.id,
         toolName: toolCall.function.name,

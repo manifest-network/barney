@@ -45,8 +45,8 @@ export const AI_TOOLS: OllamaTool[] = [
         type: 'object',
         properties: {
           active_only: {
-            type: 'string',
-            description: 'If "true", only return active providers',
+            type: 'boolean',
+            description: 'If true, only return active providers',
           },
         },
         required: [],
@@ -66,8 +66,8 @@ export const AI_TOOLS: OllamaTool[] = [
             description: 'Optional: filter SKUs by provider UUID. If omitted, returns all SKUs from all providers.',
           },
           active_only: {
-            type: 'string',
-            description: 'If "true", only return active SKUs',
+            type: 'boolean',
+            description: 'If true, only return active SKUs',
           },
         },
         required: [],

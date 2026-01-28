@@ -8,7 +8,7 @@ interface MessageBubbleProps {
 }
 
 export const MessageBubble = memo(function MessageBubble({ message }: MessageBubbleProps) {
-  const { role, content, thinking, isStreaming, error, toolName } = message;
+  const { role, content, thinking, isStreaming, error, toolName, toolDescription } = message;
   const [isThinkingExpanded, setIsThinkingExpanded] = useState(false);
   const [isToolExpanded, setIsToolExpanded] = useState(false);
 
@@ -69,7 +69,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
                 <ChevronRight className="w-3 h-3" aria-hidden="true" />
               )}
               <Wrench className="w-3 h-3" aria-hidden="true" />
-              <span>{toolName || 'Tool result'}</span>
+              <span>{toolDescription || toolName || 'Tool result'}</span>
             </button>
             {isToolExpanded && content && (
               <div className="message-tool-content">

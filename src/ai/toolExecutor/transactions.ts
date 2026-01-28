@@ -149,7 +149,10 @@ async function executeCreateLease(
     let uuid = item.sku_uuid;
 
     if (!uuid && item.sku_name) {
-      const matches = allSKUs!.filter(
+      if (!allSKUs) {
+        return { success: false, error: 'Failed to fetch SKU list for name resolution.' };
+      }
+      const matches = allSKUs.filter(
         (s) => s.name.toLowerCase() === item.sku_name!.toLowerCase()
       );
       if (matches.length === 0) {

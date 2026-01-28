@@ -4,6 +4,7 @@
  */
 
 import { MAX_PAYLOAD_SIZE } from './hash';
+import { MAX_FILENAME_LENGTH } from '../config/constants';
 
 /** Allowed MIME types for file uploads */
 export const ALLOWED_FILE_TYPES = [
@@ -16,9 +17,6 @@ export const ALLOWED_FILE_TYPES = [
 
 /** Allowed file extensions */
 export const ALLOWED_FILE_EXTENSIONS = ['.yaml', '.yml', '.json', '.txt'];
-
-/** Maximum file name length to prevent path traversal */
-const MAX_FILENAME_LENGTH = 255;
 
 /**
  * Validates a file before upload to prevent malicious file uploads.

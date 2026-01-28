@@ -88,7 +88,7 @@ export async function executeQuery(
     }
 
     case 'get_providers': {
-      const activeOnly = args.active_only === 'true';
+      const activeOnly = args.active_only === true || args.active_only === 'true';
       const providers = await getProviders(activeOnly);
       return {
         success: true,
@@ -98,7 +98,7 @@ export async function executeQuery(
 
     case 'get_skus': {
       const providerUuid = args.provider_uuid as string | undefined;
-      const activeOnly = args.active_only === 'true';
+      const activeOnly = args.active_only === true || args.active_only === 'true';
 
       if (providerUuid) {
         if (!isValidUUID(providerUuid)) {
