@@ -58,11 +58,13 @@ function validateConfirmationToolArgs(
   args: Record<string, unknown>,
   address: string | undefined
 ): string | null {
+  // All confirmation-required tools need a connected wallet
+  if (!address) {
+    return 'Wallet not connected. Please connect your wallet first.';
+  }
+
   switch (toolName) {
     case 'fund_credit': {
-      if (!address) {
-        return 'Wallet not connected. Please connect your wallet first.';
-      }
       const amount = args.amount as string | undefined;
       if (!amount || typeof amount !== 'string' || amount.trim() === '') {
         return 'Missing required argument: amount. Please specify an amount (e.g., "1000000umfx").';
@@ -652,8 +654,10 @@ export async function executeConfirmedTool(
           return { success: false, error: 'lease_uuid is required' };
         }
 
-        // close-lease expects lease UUIDs as arguments (reason is handled internally by MCP)
-        const result = await cosmosTx(clientManager, 'billing', 'close-lease', [leaseUuid], true);
+        const reason = args.reason as string | undefined;
+        const txArgs = reason ? ['--reason', reason, leaseUuid] : [leaseUuid];
+
+        const result = await cosmosTx(clientManager, 'billing', 'close-lease', txArgs, true);
         return {
           success: result.code === 0,
           data: result,
