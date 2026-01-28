@@ -1,5 +1,6 @@
 import { X, CheckCircle, XCircle, AlertTriangle, Info } from 'lucide-react';
-import { useToast, type ToastType } from '../../contexts/ToastContext';
+import { useToast } from '../../hooks/useToast';
+import type { ToastType } from '../../contexts/ToastContext';
 import { cn } from '../../utils/cn';
 
 const iconMap: Record<ToastType, React.ElementType> = {

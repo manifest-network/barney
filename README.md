@@ -7,6 +7,7 @@ A single-page app for testing the SKU and Billing modules from [manifest-ledger]
 - [Bun](https://bun.sh/) runtime
 - A local manifest-ledger chain running on `localhost:26657` (RPC) and `localhost:1317` (REST)
 - [Web3Auth](https://web3auth.io/) client ID (for social login)
+- [Ollama](https://ollama.com/) (optional, for AI assistant)
 
 ## Setup
 
@@ -27,14 +28,18 @@ A single-page app for testing the SKU and Billing modules from [manifest-ledger]
 
 ## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `PUBLIC_WEB3AUTH_CLIENT_ID` | Your Web3Auth client ID from [dashboard.web3auth.io](https://dashboard.web3auth.io) |
-| `PUBLIC_WEB3AUTH_NETWORK` | Web3Auth network (`sapphire_devnet` or `sapphire_mainnet`) |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PUBLIC_REST_URL` | REST API endpoint | `http://localhost:1317` |
+| `PUBLIC_RPC_URL` | RPC endpoint | `http://localhost:26657` |
+| `PUBLIC_WEB3AUTH_CLIENT_ID` | Your Web3Auth client ID from [dashboard.web3auth.io](https://dashboard.web3auth.io) | — |
+| `PUBLIC_WEB3AUTH_NETWORK` | Web3Auth network (`sapphire_devnet` or `sapphire_mainnet`) | `sapphire_devnet` |
+| `PUBLIC_OLLAMA_URL` | Ollama endpoint URL | `http://localhost:11434` |
+| `PUBLIC_OLLAMA_MODEL` | Default Ollama model for the AI assistant | `llama3.2` |
 
 ## Features
 
-The app has 4 tabs covering the full billing flow:
+The app has 5 tabs covering the full billing flow:
 
 | Tab | Purpose |
 |-----|---------|
@@ -42,6 +47,11 @@ The app has 4 tabs covering the full billing flow:
 | **Catalog** | Browse providers & SKUs, create new ones (authority) |
 | **Leases** | Create/view/cancel leases (tenant view) |
 | **Provider Dashboard** | Acknowledge/reject leases, withdraw funds (provider view) |
+| **Network Overview** | Network-wide billing statistics and lease activity (admin) |
+
+### AI Assistant
+
+An optional AI chat assistant (Ctrl+/) powered by [Ollama](https://ollama.com/) can execute blockchain queries and transactions through natural language. Requires a running Ollama instance with a compatible model.
 
 ## Supported Wallets
 
@@ -68,3 +78,4 @@ The app has 4 tabs covering the full billing flow:
 - Tailwind CSS 4
 - cosmos-kit (wallet connections)
 - manifestjs (chain interactions)
+- Ollama (AI assistant)

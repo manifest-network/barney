@@ -1,6 +1,6 @@
 import { useEffect, useCallback } from 'react';
 import { MessageCircle, X } from 'lucide-react';
-import { useAI } from '../../contexts/AIContext';
+import { useAI } from '../../hooks/useAI';
 import { ChatPanel } from './ChatPanel';
 import { AIErrorBoundary } from './AIErrorBoundary';
 

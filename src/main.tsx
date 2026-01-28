@@ -20,6 +20,14 @@ import { AIAssistant } from './components/ai';
 // Web3Auth configuration
 const WEB3AUTH_CLIENT_ID = import.meta.env.PUBLIC_WEB3AUTH_CLIENT_ID || 'YOUR_WEB3AUTH_CLIENT_ID';
 
+if (WEB3AUTH_CLIENT_ID === 'YOUR_WEB3AUTH_CLIENT_ID') {
+  console.warn(
+    'Web3Auth client ID is not configured. Social login (Google) will not work.\n' +
+    'Set PUBLIC_WEB3AUTH_CLIENT_ID in your .env.local file.\n' +
+    'Get a client ID at https://dashboard.web3auth.io'
+  );
+}
+
 const validNetworks = ['sapphire_devnet', 'sapphire_mainnet', 'testnet', 'mainnet'] as const;
 type Web3AuthNetwork = (typeof validNetworks)[number];
 

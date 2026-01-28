@@ -1,6 +1,4 @@
 import {
-  createContext,
-  useContext,
   useState,
   useCallback,
   useEffect,
@@ -8,6 +6,7 @@ import {
   useMemo,
   type ReactNode,
 } from 'react';
+import { AIContext } from './aiContextValue';
 import type { OllamaMessage, OllamaToolCall, OllamaStreamChunk } from '../api/ollama';
 import { streamChat, checkOllamaHealth, listModels, type OllamaModel } from '../api/ollama';
 import { AI_TOOLS, getToolCallDescription } from '../ai/tools';
@@ -139,7 +138,7 @@ export interface PendingConfirmation {
 
 type SignArbitraryFn = (address: string, data: string) => Promise<SignResult>;
 
-interface AIContextType {
+export interface AIContextType {
   // State
   isOpen: boolean;
   messages: ChatMessage[];
@@ -174,7 +173,6 @@ const defaultSettings: AISettings = {
   enableThinking: false,
 };
 
-const AIContext = createContext<AIContextType | null>(null);
 
 export function AIProvider({ children }: { children: ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -931,10 +929,3 @@ export function AIProvider({ children }: { children: ReactNode }) {
   return <AIContext.Provider value={value}>{children}</AIContext.Provider>;
 }
 
-export function useAI(): AIContextType {
-  const context = useContext(AIContext);
-  if (!context) {
-    throw new Error('useAI must be used within an AIProvider');
-  }
-  return context;
-}

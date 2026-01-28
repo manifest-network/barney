@@ -26,11 +26,13 @@ import { sha256, toHex, validatePayloadSize, getPayloadSize, MAX_PAYLOAD_SIZE } 
 import { validateFile } from '../../utils/fileValidation';
 import { safeJsonStringify } from '../../utils/url';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh';
-import { AutoRefreshIndicator } from '../AutoRefreshIndicator';
+import { AutoRefreshIndicator } from '../ui/AutoRefreshIndicator';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { SkeletonStatGrid } from '../ui/SkeletonStat';
 import { SkeletonCard } from '../ui/SkeletonCard';
+import { ErrorBanner } from '../ui/ErrorBanner';
+import { useBatchSelection } from '../../hooks/useBatchSelection';
 
 /**
  * Validates a signature message before signing with the user's wallet.
@@ -56,7 +58,7 @@ function validateSignMessage(message: string, expectedPrefix: string): boolean {
   if (!message || typeof message !== 'string') return false;
   if (!message.startsWith(expectedPrefix)) return false;
   // Only allow alphanumeric, spaces, colons, and hyphens in the message
-  const safePattern = /^[a-zA-Z0-9\s:\-]+$/;
+  const safePattern = /^[a-zA-Z0-9\s:-]+$/;
   return safePattern.test(message);
 }
 
@@ -75,7 +77,7 @@ export function LeasesTab() {
   const [error, setError] = useState<string | null>(null);
   const [isInAllowedList, setIsInAllowedList] = useState(false);
   const [txLoading, setTxLoading] = useState(false);
-  const [selectedLeases, setSelectedLeases] = useState<Set<string>>(new Set());
+  const { selected: selectedLeases, toggle: toggleLeaseSelection, selectAll: selectLeases, clear: deselectAll } = useBatchSelection();
 
   // Track if initial load has completed
   const initialLoadRef = useRef(false);
@@ -271,7 +273,7 @@ export function LeasesTab() {
 
       if (result.success) {
         toast.success(`${pendingSelected.length} lease(s) cancelled! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        setSelectedLeases(new Set());
+        deselectAll();
         await fetchData();
       } else {
         toast.error(`Failed: ${result.error}`);
@@ -304,7 +306,7 @@ export function LeasesTab() {
 
       if (result.success) {
         toast.success(`${activeSelected.length} lease(s) closed! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        setSelectedLeases(new Set());
+        deselectAll();
         await fetchData();
       } else {
         toast.error(`Failed: ${result.error}`);
@@ -316,27 +318,11 @@ export function LeasesTab() {
     }
   };
 
-  const toggleLeaseSelection = (uuid: string) => {
-    setSelectedLeases((prev) => {
-      const next = new Set(prev);
-      if (next.has(uuid)) {
-        next.delete(uuid);
-      } else {
-        next.add(uuid);
-      }
-      return next;
-    });
-  };
-
   const selectAllFiltered = () => {
     const actionableLeases = filteredLeases.filter(
       (l) => l.state === LeaseState.LEASE_STATE_PENDING || l.state === LeaseState.LEASE_STATE_ACTIVE
     );
-    setSelectedLeases(new Set(actionableLeases.map((l) => l.uuid)));
-  };
-
-  const deselectAll = () => {
-    setSelectedLeases(new Set());
+    selectLeases(actionableLeases.map((l) => l.uuid));
   };
 
   // Count selected by state
@@ -372,14 +358,7 @@ export function LeasesTab() {
   }
 
   if (error) {
-    return (
-      <div className="card-static p-4 border-error-500/50 bg-error-500/10">
-        <span className="text-error">Error: {error}</span>
-        <button onClick={autoRefresh.refresh} className="ml-4 text-primary-400 hover:underline">
-          Retry
-        </button>
-      </div>
-    );
+    return <ErrorBanner error={error} onRetry={autoRefresh.refresh} />;
   }
 
   return (

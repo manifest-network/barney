@@ -20,10 +20,11 @@ import { LEASE_STATE_BADGE_CLASSES, LEASE_STATE_LABELS, LEASE_STATE_COLORS } fro
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
 import type { Coin } from '../../api/bank';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh';
-import { AutoRefreshIndicator } from '../AutoRefreshIndicator';
+import { AutoRefreshIndicator } from '../ui/AutoRefreshIndicator';
 import { EmptyState } from '../ui/EmptyState';
 import { SkeletonTable } from '../ui/SkeletonCard';
 import { StatCard } from '../ui/StatCard';
+import { ErrorBanner } from '../ui/ErrorBanner';
 
 const PAGE_SIZE = 20;
 
@@ -292,17 +293,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
       </div>
 
       {/* Error */}
-      {error && (
-        <div className="card-static p-4 border-error-500/50 bg-error-500/10">
-          <span className="text-error">{error}</span>
-          <button
-            onClick={autoRefresh.refresh}
-            className="ml-4 text-blue-400 hover:text-blue-300"
-          >
-            Retry
-          </button>
-        </div>
-      )}
+      {error && <ErrorBanner error={error} onRetry={autoRefresh.refresh} />}
 
       {/* Leases View */}
       {viewMode === 'leases' && (
