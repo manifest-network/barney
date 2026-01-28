@@ -1,4 +1,4 @@
-import type { UseAutoRefreshReturn } from '../hooks/useAutoRefresh';
+import type { UseAutoRefreshReturn } from '../../hooks/useAutoRefresh';
 
 interface AutoRefreshIndicatorProps {
   autoRefresh: UseAutoRefreshReturn;

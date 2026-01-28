@@ -8,13 +8,16 @@ import { truncateAddress } from '../../utils/address';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../api/sku';
 import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, type TxResult } from '../../api/tx';
 import { DENOM_METADATA, formatPrice } from '../../api/config';
+import { formatDate } from '../../utils/format';
 import type { Coin } from '../../api/bank';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh';
-import { AutoRefreshIndicator } from '../AutoRefreshIndicator';
+import { AutoRefreshIndicator } from '../ui/AutoRefreshIndicator';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { SkeletonStatGrid } from '../ui/SkeletonStat';
 import { SkeletonCard } from '../ui/SkeletonCard';
+import { ErrorBanner } from '../ui/ErrorBanner';
+import { useBatchSelection } from '../../hooks/useBatchSelection';
 
 const CHAIN_NAME = 'manifestlocal';
 
@@ -33,8 +36,8 @@ export function ProviderTab() {
   const [error, setError] = useState<string | null>(null);
   const [isInBillingAllowedList, setIsInBillingAllowedList] = useState(false);
   const [txLoading, setTxLoading] = useState(false);
-  const [selectedPendingLeases, setSelectedPendingLeases] = useState<Set<string>>(new Set());
-  const [selectedActiveLeases, setSelectedActiveLeases] = useState<Set<string>>(new Set());
+  const { selected: selectedPendingLeases, toggle: togglePendingSelection, selectAll: selectAllPendingIds, clear: deselectAllPending } = useBatchSelection();
+  const { selected: selectedActiveLeases, toggle: toggleActiveSelection, selectAll: selectAllActiveIds, clear: deselectAllActive } = useBatchSelection();
 
   // Track if initial load has completed
   const initialLoadRef = useRef(false);
@@ -215,7 +218,7 @@ export function ProviderTab() {
 
       if (result.success) {
         toast.success(`${leaseUuids.length} lease(s) acknowledged! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        setSelectedPendingLeases(new Set());
+        deselectAllPending();
         await fetchData();
       } else {
         toast.error(`Failed: ${result.error}`);
@@ -239,7 +242,7 @@ export function ProviderTab() {
 
       if (result.success) {
         toast.success(`${leaseUuids.length} lease(s) rejected! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        setSelectedPendingLeases(new Set());
+        deselectAllPending();
         await fetchData();
       } else {
         toast.error(`Failed: ${result.error}`);
@@ -263,7 +266,7 @@ export function ProviderTab() {
 
       if (result.success) {
         toast.success(`${leaseUuids.length} lease(s) closed! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        setSelectedActiveLeases(new Set());
+        deselectAllActive();
         await fetchData();
       } else {
         toast.error(`Failed: ${result.error}`);
@@ -287,7 +290,7 @@ export function ProviderTab() {
 
       if (result.success) {
         toast.success(`Withdrawal from ${leaseUuids.length} lease(s) successful! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        setSelectedActiveLeases(new Set());
+        deselectAllActive();
         await fetchData();
       } else {
         toast.error(`Failed: ${result.error}`);
@@ -299,35 +302,8 @@ export function ProviderTab() {
     }
   };
 
-  // Selection helpers
-  const togglePendingSelection = (uuid: string) => {
-    setSelectedPendingLeases((prev) => {
-      const next = new Set(prev);
-      if (next.has(uuid)) {
-        next.delete(uuid);
-      } else {
-        next.add(uuid);
-      }
-      return next;
-    });
-  };
-
-  const toggleActiveSelection = (uuid: string) => {
-    setSelectedActiveLeases((prev) => {
-      const next = new Set(prev);
-      if (next.has(uuid)) {
-        next.delete(uuid);
-      } else {
-        next.add(uuid);
-      }
-      return next;
-    });
-  };
-
-  const selectAllPending = () => setSelectedPendingLeases(new Set(pendingLeases.map((l) => l.uuid)));
-  const deselectAllPending = () => setSelectedPendingLeases(new Set());
-  const selectAllActive = () => setSelectedActiveLeases(new Set(activeLeases.map((l) => l.uuid)));
-  const deselectAllActive = () => setSelectedActiveLeases(new Set());
+  const selectAllPending = () => selectAllPendingIds(pendingLeases.map((l) => l.uuid));
+  const selectAllActive = () => selectAllActiveIds(activeLeases.map((l) => l.uuid));
 
   if (!isWalletConnected) {
     return (
@@ -351,14 +327,7 @@ export function ProviderTab() {
   }
 
   if (error) {
-    return (
-      <div className="card-static p-4 border-error-500/50 bg-error-500/10">
-        <span className="text-error">Error: {error}</span>
-        <button onClick={autoRefresh.refresh} className="ml-4 text-primary-400 hover:underline">
-          Retry
-        </button>
-      </div>
-    );
+    return <ErrorBanner error={error} onRetry={autoRefresh.refresh} />;
   }
 
   if (!myProvider) {
@@ -670,7 +639,7 @@ function PendingLeaseCard({
               Tenant: <span className="font-mono">{truncateAddress(lease.tenant)}</span>
             </div>
             <div className="text-xs text-dim">
-              Created: {new Date(lease.created_at).toLocaleString()}
+              Created: {formatDate(lease.created_at)}
             </div>
           </div>
         </div>
@@ -805,7 +774,7 @@ function ActiveLeaseCard({
               Tenant: <span className="font-mono">{truncateAddress(lease.tenant)}</span>
             </div>
             <div className="text-xs text-dim">
-              Active since: {lease.acknowledged_at ? new Date(lease.acknowledged_at).toLocaleString() : '-'}
+              Active since: {formatDate(lease.acknowledged_at)}
             </div>
           </div>
         </div>

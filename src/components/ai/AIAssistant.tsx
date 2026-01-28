@@ -5,7 +5,7 @@
 
 import { useEffect, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { useAI } from '../../contexts/AIContext';
+import { useAI } from '../../hooks/useAI';
 import { useManifestMCP } from '../../hooks/useManifestMCP';
 import { ChatBubble } from './ChatBubble';
 

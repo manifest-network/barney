@@ -25,6 +25,7 @@ import { getLeasesBySKU, LeaseState } from '../../api/billing';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { Modal } from '../ui/Modal';
+import { ErrorBanner } from '../ui/ErrorBanner';
 
 type HealthStatus = 'healthy' | 'unhealthy' | 'loading' | 'unknown';
 
@@ -310,14 +311,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
   return (
     <div className="space-y-6">
       {/* Error Banner */}
-      {error && (
-        <div className="card-static p-4 border-error-500/50 bg-error-500/10">
-          <span className="text-error">{error}</span>
-          <button onClick={fetchData} className="ml-4 text-primary-400 hover:underline">
-            Retry
-          </button>
-        </div>
-      )}
+      {error && <ErrorBanner error={error} onRetry={fetchData} />}
 
 
       {/* SKU Module Access Banner */}

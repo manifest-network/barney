@@ -12,11 +12,12 @@ import { formatAmount } from '../../utils/format';
 import type { Coin } from '../../api/bank';
 import type { CreditAccountResponse, CreditEstimateResponse } from '../../api/billing';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh';
-import { AutoRefreshIndicator } from '../AutoRefreshIndicator';
+import { AutoRefreshIndicator } from '../ui/AutoRefreshIndicator';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { SkeletonStat, SkeletonStatGrid } from '../ui/SkeletonStat';
 import { SectionHeader } from '../ui/SectionHeader';
+import { ErrorBanner } from '../ui/ErrorBanner';
 
 const CHAIN_NAME = 'manifestlocal';
 
@@ -161,14 +162,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   return (
     <div className="space-y-6">
       {/* Error Banner */}
-      {error && (
-        <div className="card-static p-4 border-error-500/50 bg-error-500/10">
-          <span className="text-error">{error}</span>
-          <button onClick={autoRefresh.refresh} className="ml-4 text-primary-400 hover:underline">
-            Retry
-          </button>
-        </div>
-      )}
+      {error && <ErrorBanner error={error} onRetry={autoRefresh.refresh} />}
 
       {/* Connected Address */}
       {address && (

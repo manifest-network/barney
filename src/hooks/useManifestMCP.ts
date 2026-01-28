@@ -51,6 +51,11 @@ export function useManifestMCP(): UseManifestMCPResult {
   const [clientManager, setClientManager] = useState<CosmosClientManager | null>(null);
   const [error, setError] = useState<string | null>(null);
   const clientManagerRef = useRef<CosmosClientManager | null>(null);
+  const getOfflineSignerRef = useRef(getOfflineSigner);
+
+  useEffect(() => {
+    getOfflineSignerRef.current = getOfflineSigner;
+  }, [getOfflineSigner]);
 
   useEffect(() => {
     let isMounted = true;
@@ -69,7 +74,7 @@ export function useManifestMCP(): UseManifestMCPResult {
       }
 
       try {
-        const signer = getOfflineSigner();
+        const signer = getOfflineSignerRef.current();
         const walletProvider = new CosmosKitWalletProvider(signer, address);
 
         const config: ManifestMCPConfig = {
@@ -106,7 +111,7 @@ export function useManifestMCP(): UseManifestMCPResult {
     return () => {
       isMounted = false;
     };
-  }, [isWalletConnected, address, getOfflineSigner]);
+  }, [isWalletConnected, address]);
 
   // Cleanup on unmount
   useEffect(() => {

@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { ToastContext } from './toastContextValue';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
 
@@ -9,7 +10,7 @@ export interface Toast {
   duration?: number;
 }
 
-interface ToastContextType {
+export interface ToastContextType {
   toasts: Toast[];
   addToast: (type: ToastType, message: string, duration?: number) => void;
   removeToast: (id: string) => void;
@@ -19,7 +20,6 @@ interface ToastContextType {
   info: (message: string, duration?: number) => void;
 }
 
-const ToastContext = createContext<ToastContextType | null>(null);
 
 /** Default auto-dismiss duration for toasts in milliseconds */
 const TOAST_DEFAULT_DURATION_MS = 5000;
@@ -96,10 +96,3 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function useToast(): ToastContextType {
-  const context = useContext(ToastContext);
-  if (!context) {
-    throw new Error('useToast must be used within a ToastProvider');
-  }
-  return context;
-}
