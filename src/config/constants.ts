@@ -54,3 +54,28 @@ export const MAX_REASON_LENGTH = 256;
 
 /** Maximum file name length for uploads */
 export const MAX_FILENAME_LENGTH = 255;
+
+// ============================================
+// AI Assistant Constants
+// ============================================
+
+/** Maximum messages to keep in chat history memory */
+export const AI_MAX_MESSAGES = 200;
+
+/** Maximum tool call iterations per message (prevents infinite loops) */
+export const AI_MAX_TOOL_ITERATIONS = 10;
+
+/** Stream chunk timeout in milliseconds (no response received) */
+export const AI_STREAM_TIMEOUT_MS = 30000;
+
+/** Maximum retry attempts for stream operations */
+export const AI_MAX_RETRIES = 3;
+
+/** Base delay for exponential backoff (milliseconds) */
+export const AI_RETRY_BASE_DELAY_MS = 1000;
+
+/** Debounce delay for rapid message sends (milliseconds) */
+export const AI_MESSAGE_DEBOUNCE_MS = 300;
+
+/** Ollama connection health check interval (milliseconds) */
+export const AI_HEALTH_CHECK_INTERVAL_MS = 30000;

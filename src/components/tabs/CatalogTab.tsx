@@ -3,6 +3,7 @@ import { useChain } from '@cosmos-kit/react';
 import { Link, Package, Shield, Loader2, RefreshCw, Plus } from 'lucide-react';
 import { HEALTH_CHECK_TIMEOUT_MS, POST_TX_REFETCH_DELAY_MS } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { truncateAddress } from '../../utils/address';
 import {
   getProviders,
   getSKUs,
@@ -20,20 +21,12 @@ import {
 } from '../../api';
 import type { Provider, SKU, SKUParams } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
-import { getLeasesBySKU } from '../../api/billing';
+import { getLeasesBySKU, LeaseState } from '../../api/billing';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { Modal } from '../ui/Modal';
 
 type HealthStatus = 'healthy' | 'unhealthy' | 'loading' | 'unknown';
-
-// Format address as manifest1[4chars]...[4chars]
-function formatAddress(address: string): string {
-  if (!address || address.length < 20) return address;
-  const prefix = address.slice(0, 13); // manifest1 + 4 chars
-  const suffix = address.slice(-4);
-  return `${prefix}...${suffix}`;
-}
 
 
 const CHAIN_NAME = 'manifestlocal';
@@ -103,7 +96,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
         skus.map(async (sku) => {
           try {
             const [activeLeases, allLeases] = await Promise.all([
-              getLeasesBySKU(sku.uuid, 'LEASE_STATE_ACTIVE'),
+              getLeasesBySKU(sku.uuid, LeaseState.LEASE_STATE_ACTIVE),
               getLeasesBySKU(sku.uuid),
             ]);
             usageRecord[sku.uuid] = {
@@ -172,7 +165,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
   const getProviderName = (uuid: string) => {
     const provider = providers.find((p) => p.uuid === uuid);
-    return provider ? formatAddress(provider.address) : 'Unknown';
+    return provider ? truncateAddress(provider.address) : 'Unknown';
   };
 
   const isInSKUAllowedList = address && skuParams?.allowed_list?.includes(address);
@@ -594,7 +587,7 @@ function ProviderCard({
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
             <div className="font-medium text-white" title={provider.address}>
-              {formatAddress(provider.address)}
+              {truncateAddress(provider.address)}
             </div>
             {provider.api_url && healthStatus && (
               <span
@@ -672,7 +665,7 @@ function SKURow({
 }: {
   sku: SKU;
   providerName: string;
-  formatPrice: (amount: string, denom: string, unit: string) => string;
+  formatPrice: (amount: string, denom: string, unit?: Unit) => string;
   usage?: { active: number; total: number };
   usageLoading?: boolean;
   onEdit?: () => void;
@@ -863,7 +856,7 @@ function CreateSKUForm({
         >
           {activeProviders.map((p) => (
             <option key={p.uuid} value={p.uuid}>
-              {formatAddress(p.address)}
+              {truncateAddress(p.address)}
             </option>
           ))}
         </select>
@@ -1025,7 +1018,7 @@ function EditSKUForm({
 }) {
   const [providerUuid, setProviderUuid] = useState(sku.provider_uuid);
   const [name, setName] = useState(sku.name);
-  const [unit, setUnit] = useState<number>(sku.unit === 'UNIT_PER_HOUR' ? Unit.UNIT_PER_HOUR : sku.unit === 'UNIT_PER_DAY' ? Unit.UNIT_PER_DAY : Unit.UNIT_UNSPECIFIED);
+  const [unit, setUnit] = useState<number>(sku.unit);
   const [priceAmount, setPriceAmount] = useState(sku.base_price.amount);
   const [active, setActive] = useState(sku.active);
   const [submitting, setSubmitting] = useState(false);
@@ -1061,7 +1054,7 @@ function EditSKUForm({
         >
           {providers.map((p) => (
             <option key={p.uuid} value={p.uuid}>
-              {formatAddress(p.address)}
+              {truncateAddress(p.address)}
             </option>
           ))}
         </select>

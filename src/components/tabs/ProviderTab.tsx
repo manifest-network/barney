@@ -1,10 +1,10 @@
 import { useState, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { Link, Building2, Shield } from 'lucide-react';
-import type { Lease, ProviderWithdrawableResponse } from '../../api/billing';
+import { LeaseState, getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams, type Lease, type ProviderWithdrawableResponse } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams } from '../../api/billing';
+import { truncateAddress } from '../../utils/address';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../api/sku';
 import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, type TxResult } from '../../api/tx';
 import { DENOM_METADATA, formatPrice } from '../../api/config';
@@ -17,14 +17,6 @@ import { SkeletonStatGrid } from '../ui/SkeletonStat';
 import { SkeletonCard } from '../ui/SkeletonCard';
 
 const CHAIN_NAME = 'manifestlocal';
-
-function formatAddress(addr: string): string {
-  if (!addr || addr.length < 20) return addr;
-  const prefix = addr.slice(0, 9);
-  const start = addr.slice(9, 13);
-  const end = addr.slice(-4);
-  return `${prefix}${start}...${end}`;
-}
 
 
 export function ProviderTab() {
@@ -86,7 +78,7 @@ export function ProviderTab() {
         setProviderWithdrawable(withdrawableSummary);
 
         // Fetch withdrawable amounts for active leases (for individual card display)
-        const activeLeases = leases.filter((l) => l.state === 'LEASE_STATE_ACTIVE');
+        const activeLeases = leases.filter((l) => l.state === LeaseState.LEASE_STATE_ACTIVE);
         const withdrawableMap = new Map<string, Coin[]>();
 
         await Promise.all(
@@ -117,8 +109,8 @@ export function ProviderTab() {
     immediate: true,
   });
 
-  const pendingLeases = providerLeases.filter((l) => l.state === 'LEASE_STATE_PENDING');
-  const activeLeases = providerLeases.filter((l) => l.state === 'LEASE_STATE_ACTIVE');
+  const pendingLeases = providerLeases.filter((l) => l.state === LeaseState.LEASE_STATE_PENDING);
+  const activeLeases = providerLeases.filter((l) => l.state === LeaseState.LEASE_STATE_ACTIVE);
 
   const handleAcknowledge = async (leaseUuid: string) => {
     if (!address) return;
@@ -380,7 +372,7 @@ export function ProviderTab() {
           Your connected address is not associated with any provider.
         </p>
         <p className="mt-4 text-sm text-dim">
-          Connected as: <span className="font-mono">{formatAddress(address || '')}</span>
+          Connected as: <span className="font-mono">{truncateAddress(address || '')}</span>
         </p>
       </div>
     );
@@ -421,11 +413,11 @@ export function ProviderTab() {
               </div>
               <div>
                 <span className="text-muted">Address: </span>
-                <span className="font-mono text-secondary">{formatAddress(myProvider.address)}</span>
+                <span className="font-mono text-secondary">{truncateAddress(myProvider.address)}</span>
               </div>
               <div>
                 <span className="text-muted">Payout: </span>
-                <span className="font-mono text-secondary">{formatAddress(myProvider.payout_address)}</span>
+                <span className="font-mono text-secondary">{truncateAddress(myProvider.payout_address)}</span>
               </div>
               <div>
                 <span className="text-muted">API: </span>
@@ -675,7 +667,7 @@ function PendingLeaseCard({
               </button>
             </div>
             <div className="mt-1 text-sm text-muted">
-              Tenant: <span className="font-mono">{formatAddress(lease.tenant)}</span>
+              Tenant: <span className="font-mono">{truncateAddress(lease.tenant)}</span>
             </div>
             <div className="text-xs text-dim">
               Created: {new Date(lease.created_at).toLocaleString()}
@@ -810,7 +802,7 @@ function ActiveLeaseCard({
               </button>
             </div>
             <div className="mt-1 text-sm text-muted">
-              Tenant: <span className="font-mono">{formatAddress(lease.tenant)}</span>
+              Tenant: <span className="font-mono">{truncateAddress(lease.tenant)}</span>
             </div>
             <div className="text-xs text-dim">
               Active since: {lease.acknowledged_at ? new Date(lease.acknowledged_at).toLocaleString() : '-'}

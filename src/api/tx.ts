@@ -3,16 +3,42 @@ import type { OfflineSigner } from '@cosmjs/proto-signing';
 import type { Coin } from './bank';
 import { RPC_ENDPOINT } from './config';
 
+// Re-export Unit from sku.ts (single source of truth)
+import { Unit } from './sku';
+export { Unit };
+
 const { MsgFundCredit, MsgCreateLease, MsgCancelLease, MsgCloseLease, MsgAcknowledgeLease, MsgRejectLease, MsgWithdraw } = liftedinit.billing.v1;
 const { MsgCreateProvider, MsgUpdateProvider, MsgCreateSKU, MsgUpdateSKU, MsgDeactivateProvider, MsgDeactivateSKU } = liftedinit.sku.v1;
-
-// Re-export Unit enum as a value (not type-only)
-export const Unit = liftedinit.sku.v1.Unit;
 
 export interface TxResult {
   success: boolean;
   transactionHash?: string;
   error?: string;
+  events?: readonly { type: string; attributes: readonly { key: string; value: string }[] }[];
+}
+
+export interface CreateLeaseResult extends TxResult {
+  leaseUuid?: string;
+}
+
+/**
+ * Extract an attribute value from transaction events.
+ */
+function getEventAttribute(
+  events: readonly { type: string; attributes: readonly { key: string; value: string }[] }[],
+  eventType: string,
+  attributeKey: string
+): string | undefined {
+  for (const event of events) {
+    if (event.type === eventType) {
+      for (const attr of event.attributes) {
+        if (attr.key === attributeKey) {
+          return attr.value;
+        }
+      }
+    }
+  }
+  return undefined;
 }
 
 export async function getSigningClient(signer: OfflineSigner) {
@@ -47,6 +73,7 @@ async function signAndBroadcast(
     return {
       success: true,
       transactionHash: result.transactionHash,
+      events: result.events,
     };
   } catch (err) {
     return {
@@ -133,7 +160,7 @@ export async function updateProvider(
 export interface CreateSKUParams {
   providerUuid: string;
   name: string;
-  unit: typeof Unit[keyof typeof Unit];
+  unit: Unit;
   basePrice: Coin;
   metaHash?: Uint8Array;
 }
@@ -162,7 +189,7 @@ export interface UpdateSKUParams {
   uuid: string;
   providerUuid: string;
   name: string;
-  unit: typeof Unit[keyof typeof Unit];
+  unit: Unit;
   basePrice: Coin;
   active: boolean;
   metaHash?: Uint8Array;
@@ -234,7 +261,7 @@ export async function createLease(
   tenant: string,
   items: LeaseItemInput[],
   metaHash?: Uint8Array
-): Promise<TxResult> {
+): Promise<CreateLeaseResult> {
   const msg = {
     typeUrl: MsgCreateLease.typeUrl,
     value: MsgCreateLease.fromPartial({
@@ -243,12 +270,23 @@ export async function createLease(
         skuUuid: item.skuUuid,
         quantity: BigInt(item.quantity),
       })),
-      // @ts-expect-error manifestjs uses meta_hash field
-      meta_hash: metaHash ?? new Uint8Array(),
+      metaHash: metaHash ?? new Uint8Array(),
     }),
   };
 
-  return signAndBroadcast(signer, tenant, [msg]);
+  const result = await signAndBroadcast(signer, tenant, [msg]);
+
+  if (!result.success || !result.events) {
+    return result;
+  }
+
+  // Extract lease UUID from events
+  const leaseUuid = getEventAttribute(result.events, 'lease_created', 'lease_uuid');
+
+  return {
+    ...result,
+    leaseUuid,
+  };
 }
 
 export async function cancelLease(

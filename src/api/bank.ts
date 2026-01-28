@@ -24,7 +24,7 @@ export async function getBalance(address: string, denom: string): Promise<Coin> 
   }
 
   const data: BalanceResponse = await response.json();
-  return data.balance || { denom, amount: '0' };
+  return data.balance ?? { denom, amount: '0' };
 }
 
 export async function getAllBalances(address: string): Promise<Coin[]> {
@@ -35,5 +35,5 @@ export async function getAllBalances(address: string): Promise<Coin[]> {
   }
 
   const data: AllBalancesResponse = await response.json();
-  return data.balances || [];
+  return data.balances ?? [];
 }

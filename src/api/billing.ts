@@ -1,13 +1,46 @@
+import { liftedinit } from '@manifest-network/manifestjs';
 import { REST_URL } from './config';
 import type { Coin } from './bank';
 
-export type LeaseState =
-  | 'LEASE_STATE_UNSPECIFIED'
-  | 'LEASE_STATE_PENDING'
-  | 'LEASE_STATE_ACTIVE'
-  | 'LEASE_STATE_CLOSED'
-  | 'LEASE_STATE_REJECTED'
-  | 'LEASE_STATE_EXPIRED';
+// Re-export LeaseState enum from manifestjs for type safety
+export const LeaseState = liftedinit.billing.v1.LeaseState;
+export type LeaseState = (typeof LeaseState)[keyof typeof LeaseState];
+
+// Conversion functions from manifestjs
+const { leaseStateFromJSON: fromJSON, leaseStateToJSON: toJSON } = liftedinit.billing.v1;
+
+/**
+ * Convert a lease state enum to its string representation.
+ * Used for API URLs and HTML select option values.
+ */
+export function leaseStateToString(state: LeaseState): string {
+  return toJSON(state);
+}
+
+/**
+ * Convert a lease state string to enum value.
+ * Used for parsing API responses and HTML select values.
+ */
+export function leaseStateFromString(state: string): LeaseState {
+  return fromJSON(state);
+}
+
+/**
+ * Mapping from user-friendly lease state names to enum values.
+ * Used by AI tools to convert user input to API format.
+ */
+export const LEASE_STATE_MAP: Record<string, LeaseState> = {
+  pending: LeaseState.LEASE_STATE_PENDING,
+  active: LeaseState.LEASE_STATE_ACTIVE,
+  closed: LeaseState.LEASE_STATE_CLOSED,
+  rejected: LeaseState.LEASE_STATE_REJECTED,
+  expired: LeaseState.LEASE_STATE_EXPIRED,
+};
+
+/**
+ * Valid user-friendly lease state filter values (includes 'all' for no filter)
+ */
+export const LEASE_STATE_FILTERS = ['all', ...Object.keys(LEASE_STATE_MAP)] as const;
 
 export interface LeaseItem {
   sku_uuid: string;
@@ -33,12 +66,28 @@ export interface Lease {
   meta_hash?: string;
 }
 
-export interface LeasesResponse {
-  leases: Lease[];
+/**
+ * Raw lease response from API (state is a string)
+ */
+interface RawLease extends Omit<Lease, 'state'> {
+  state: string;
 }
 
-export interface LeaseResponse {
-  lease: Lease;
+/**
+ * Convert a raw API lease response to a typed Lease with enum state.
+ */
+function parseLease(raw: RawLease): Lease {
+  return {
+    ...raw,
+    state: fromJSON(raw.state),
+  };
+}
+
+/**
+ * Convert an array of raw API leases to typed Leases.
+ */
+function parseLeases(raw: RawLease[]): Lease[] {
+  return raw.map(parseLease);
 }
 
 export interface BillingParams {
@@ -137,8 +186,8 @@ export async function getBillingParams(): Promise<BillingParams> {
 
 export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState): Promise<Lease[]> {
   let url = `${REST_URL}/liftedinit/billing/v1/leases/tenant/${tenant}`;
-  if (stateFilter && stateFilter !== 'LEASE_STATE_UNSPECIFIED') {
-    url += `?state_filter=${stateFilter}`;
+  if (stateFilter != null && stateFilter !== LeaseState.LEASE_STATE_UNSPECIFIED) {
+    url += `?state_filter=${leaseStateToString(stateFilter)}`;
   }
 
   const response = await fetch(url);
@@ -148,14 +197,14 @@ export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState
     throw new Error(`Failed to fetch leases: ${response.statusText}`);
   }
 
-  const data: LeasesResponse = await response.json();
-  return data.leases || [];
+  const data = await response.json();
+  return parseLeases(data.leases ?? []);
 }
 
 export async function getLeasesByProvider(providerUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
   let url = `${REST_URL}/liftedinit/billing/v1/leases/provider/${providerUuid}`;
-  if (stateFilter && stateFilter !== 'LEASE_STATE_UNSPECIFIED') {
-    url += `?state_filter=${stateFilter}`;
+  if (stateFilter != null && stateFilter !== LeaseState.LEASE_STATE_UNSPECIFIED) {
+    url += `?state_filter=${leaseStateToString(stateFilter)}`;
   }
 
   const response = await fetch(url);
@@ -165,8 +214,8 @@ export async function getLeasesByProvider(providerUuid: string, stateFilter?: Le
     throw new Error(`Failed to fetch leases: ${response.statusText}`);
   }
 
-  const data: LeasesResponse = await response.json();
-  return data.leases || [];
+  const data = await response.json();
+  return parseLeases(data.leases ?? []);
 }
 
 export async function getLease(leaseUuid: string): Promise<Lease | null> {
@@ -177,8 +226,8 @@ export async function getLease(leaseUuid: string): Promise<Lease | null> {
     throw new Error(`Failed to fetch lease: ${response.statusText}`);
   }
 
-  const data: LeaseResponse = await response.json();
-  return data.lease;
+  const data = await response.json();
+  return data.lease ? parseLease(data.lease) : null;
 }
 
 export interface WithdrawableAmountResponse {
@@ -194,7 +243,7 @@ export async function getWithdrawableAmount(leaseUuid: string): Promise<Coin[]> 
   }
 
   const data: WithdrawableAmountResponse = await response.json();
-  return data.amounts || [];
+  return data.amounts ?? [];
 }
 
 export interface ProviderWithdrawableResponse {
@@ -218,8 +267,8 @@ export async function getProviderWithdrawable(providerUuid: string): Promise<Pro
 
 export async function getLeasesBySKU(skuUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
   let url = `${REST_URL}/liftedinit/billing/v1/leases/sku/${skuUuid}`;
-  if (stateFilter && stateFilter !== 'LEASE_STATE_UNSPECIFIED') {
-    url += `?state_filter=${stateFilter}`;
+  if (stateFilter != null && stateFilter !== LeaseState.LEASE_STATE_UNSPECIFIED) {
+    url += `?state_filter=${leaseStateToString(stateFilter)}`;
   }
 
   const response = await fetch(url);
@@ -229,8 +278,8 @@ export async function getLeasesBySKU(skuUuid: string, stateFilter?: LeaseState):
     throw new Error(`Failed to fetch leases by SKU: ${response.statusText}`);
   }
 
-  const data: LeasesResponse = await response.json();
-  return data.leases || [];
+  const data = await response.json();
+  return parseLeases(data.leases ?? []);
 }
 
 export interface PaginatedLeasesResponse {
@@ -251,8 +300,8 @@ export interface GetAllLeasesParams {
 export async function getAllLeases(params?: GetAllLeasesParams): Promise<PaginatedLeasesResponse> {
   const searchParams = new URLSearchParams();
 
-  if (params?.stateFilter && params.stateFilter !== 'LEASE_STATE_UNSPECIFIED') {
-    searchParams.set('state_filter', params.stateFilter);
+  if (params?.stateFilter != null && params.stateFilter !== LeaseState.LEASE_STATE_UNSPECIFIED) {
+    searchParams.set('state_filter', leaseStateToString(params.stateFilter));
   }
   if (params?.limit) {
     searchParams.set('pagination.limit', String(params.limit));
@@ -276,7 +325,11 @@ export async function getAllLeases(params?: GetAllLeasesParams): Promise<Paginat
     throw new Error(`Failed to fetch all leases: ${response.statusText}`);
   }
 
-  return response.json();
+  const data = await response.json();
+  return {
+    ...data,
+    leases: parseLeases(data.leases ?? []),
+  };
 }
 
 export interface PaginatedCreditsResponse {

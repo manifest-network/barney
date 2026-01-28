@@ -1,59 +1,31 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link, ShieldX, Globe } from 'lucide-react';
-import type { Lease, LeaseState, CreditAccount } from '../../api/billing';
-import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { logError } from '../../utils/errors';
 import {
+  LeaseState,
+  leaseStateToString,
+  leaseStateFromString,
   getAllLeases,
   getAllCredits,
   getBillingParams,
+  type Lease,
+  type CreditAccount,
   type PaginatedLeasesResponse,
   type PaginatedCreditsResponse,
 } from '../../api/billing';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { logError } from '../../utils/errors';
+import { truncateAddress } from '../../utils/address';
+import { formatAmount, formatDate } from '../../utils/format';
+import { LEASE_STATE_BADGE_CLASSES, LEASE_STATE_LABELS, LEASE_STATE_COLORS } from '../../utils/leaseState';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
-import { DENOM_METADATA } from '../../api/config';
 import type { Coin } from '../../api/bank';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh';
 import { AutoRefreshIndicator } from '../AutoRefreshIndicator';
 import { EmptyState } from '../ui/EmptyState';
 import { SkeletonTable } from '../ui/SkeletonCard';
+import { StatCard } from '../ui/StatCard';
 
 const PAGE_SIZE = 20;
-
-const stateBadgeClasses: Record<LeaseState, string> = {
-  LEASE_STATE_UNSPECIFIED: 'badge badge-neutral',
-  LEASE_STATE_PENDING: 'badge badge-warning',
-  LEASE_STATE_ACTIVE: 'badge badge-success',
-  LEASE_STATE_CLOSED: 'badge badge-neutral',
-  LEASE_STATE_REJECTED: 'badge badge-error',
-  LEASE_STATE_EXPIRED: 'badge badge-neutral',
-};
-
-const stateLabels: Record<LeaseState, string> = {
-  LEASE_STATE_UNSPECIFIED: 'Unspecified',
-  LEASE_STATE_PENDING: 'Pending',
-  LEASE_STATE_ACTIVE: 'Active',
-  LEASE_STATE_CLOSED: 'Closed',
-  LEASE_STATE_REJECTED: 'Rejected',
-  LEASE_STATE_EXPIRED: 'Expired',
-};
-
-function formatAddress(addr: string): string {
-  if (!addr || addr.length < 20) return addr;
-  const prefix = addr.slice(0, 9);
-  const start = addr.slice(9, 13);
-  const end = addr.slice(-4);
-  return `${prefix}${start}...${end}`;
-}
-
-function formatAmount(amount: string, denom: string): string {
-  const metadata = DENOM_METADATA[denom as keyof typeof DENOM_METADATA];
-  const exponent = metadata?.exponent ?? 6;
-  const symbol = metadata?.symbol ?? denom;
-  const num = parseInt(amount, 10) / Math.pow(10, exponent);
-  return `${num.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${symbol}`;
-}
-
 
 interface NetworkTabProps {
   isConnected: boolean;
@@ -126,9 +98,9 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
 
       // Fetch stats by getting all leases (just for counts)
       const [pending, active, closed] = await Promise.all([
-        getAllLeases({ stateFilter: 'LEASE_STATE_PENDING', limit: 1 }),
-        getAllLeases({ stateFilter: 'LEASE_STATE_ACTIVE', limit: 1 }),
-        getAllLeases({ stateFilter: 'LEASE_STATE_CLOSED', limit: 1 }),
+        getAllLeases({ stateFilter: LeaseState.LEASE_STATE_PENDING, limit: 1 }),
+        getAllLeases({ stateFilter: LeaseState.LEASE_STATE_ACTIVE, limit: 1 }),
+        getAllLeases({ stateFilter: LeaseState.LEASE_STATE_CLOSED, limit: 1 }),
       ]);
 
       setStats({
@@ -223,7 +195,13 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
     }
   }, [isAdmin, viewMode, fetchLeases, fetchCredits]);
 
-  // Reset offset when filter changes
+  // Reset offsets when view mode changes
+  useEffect(() => {
+    setLeaseOffset(0);
+    setCreditOffset(0);
+  }, [viewMode]);
+
+  // Reset lease offset when filter changes
   useEffect(() => {
     setLeaseOffset(0);
   }, [leaseStateFilter]);
@@ -253,7 +231,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
           Your wallet is not in the billing module allowed list.
         </p>
         <p className="mt-4 text-sm text-dim">
-          Connected as: <span className="font-mono">{formatAddress(address || '')}</span>
+          Connected as: <span className="font-mono">{truncateAddress(address || '')}</span>
         </p>
       </div>
     );
@@ -285,30 +263,12 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
       {/* Network Stats */}
       {stats && (
         <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
-          <div className="stat-card">
-            <div className="stat-value">{stats.totalLeases}</div>
-            <div className="stat-label">Total Leases</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-value text-yellow-400">{stats.pendingLeases}</div>
-            <div className="stat-label">Pending</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-value text-green-400">{stats.activeLeases}</div>
-            <div className="stat-label">Active</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-value text-muted">{stats.closedLeases}</div>
-            <div className="stat-label">Closed</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-value text-blue-400">{stats.totalProviders}</div>
-            <div className="stat-label">Providers</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-value text-purple-400">{stats.totalSKUs}</div>
-            <div className="stat-label">SKUs</div>
-          </div>
+          <StatCard value={stats.totalLeases} label="Total Leases" />
+          <StatCard value={stats.pendingLeases} label="Pending" colorClass={LEASE_STATE_COLORS[LeaseState.LEASE_STATE_PENDING]} />
+          <StatCard value={stats.activeLeases} label="Active" colorClass={LEASE_STATE_COLORS[LeaseState.LEASE_STATE_ACTIVE]} />
+          <StatCard value={stats.closedLeases} label="Closed" colorClass={LEASE_STATE_COLORS[LeaseState.LEASE_STATE_CLOSED]} />
+          <StatCard value={stats.totalProviders} label="Providers" colorClass="text-blue-400" />
+          <StatCard value={stats.totalSKUs} label="SKUs" colorClass="text-purple-400" />
         </div>
       )}
 
@@ -353,17 +313,20 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
               <label htmlFor="lease-state-filter" className="text-sm text-muted">Filter:</label>
               <select
                 id="lease-state-filter"
-                value={leaseStateFilter}
-                onChange={(e) => setLeaseStateFilter(e.target.value as LeaseState | 'all')}
+                value={leaseStateFilter === 'all' ? 'all' : leaseStateToString(leaseStateFilter)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setLeaseStateFilter(val === 'all' ? 'all' : leaseStateFromString(val));
+                }}
                 className="input select"
                 aria-label="Filter leases by state"
               >
                 <option value="all">All States</option>
-                <option value="LEASE_STATE_PENDING">Pending</option>
-                <option value="LEASE_STATE_ACTIVE">Active</option>
-                <option value="LEASE_STATE_CLOSED">Closed</option>
-                <option value="LEASE_STATE_REJECTED">Rejected</option>
-                <option value="LEASE_STATE_EXPIRED">Expired</option>
+                <option value={leaseStateToString(LeaseState.LEASE_STATE_PENDING)}>Pending</option>
+                <option value={leaseStateToString(LeaseState.LEASE_STATE_ACTIVE)}>Active</option>
+                <option value={leaseStateToString(LeaseState.LEASE_STATE_CLOSED)}>Closed</option>
+                <option value={leaseStateToString(LeaseState.LEASE_STATE_REJECTED)}>Rejected</option>
+                <option value={leaseStateToString(LeaseState.LEASE_STATE_EXPIRED)}>Expired</option>
               </select>
             </div>
             <div className="text-sm text-muted">
@@ -507,15 +470,9 @@ function LeaseRow({
 }) {
   const { copied, copyToClipboard } = useCopyToClipboard();
   const provider = getProvider(lease.provider_uuid);
-  const badgeClass = stateBadgeClasses[lease.state];
 
   const handleCopy = () => {
     copyToClipboard(lease.uuid);
-  };
-
-  const formatDate = (dateStr?: string) => {
-    if (!dateStr || dateStr === '0001-01-01T00:00:00Z') return '-';
-    return new Date(dateStr).toLocaleDateString();
   };
 
   return (
@@ -532,17 +489,17 @@ function LeaseRow({
       </td>
       <td>
         <span className="font-mono text-sm text-gray-300" title={lease.tenant}>
-          {formatAddress(lease.tenant)}
+          {truncateAddress(lease.tenant)}
         </span>
       </td>
       <td>
         <span className="text-sm text-gray-300" title={provider?.address}>
-          {provider ? formatAddress(provider.address) : lease.provider_uuid.slice(0, 8)}
+          {provider ? truncateAddress(provider.address) : lease.provider_uuid.slice(0, 8)}
         </span>
       </td>
       <td>
-        <span className={badgeClass}>
-          {stateLabels[lease.state]}
+        <span className={LEASE_STATE_BADGE_CLASSES[lease.state]}>
+          {LEASE_STATE_LABELS[lease.state]}
         </span>
       </td>
       <td>
@@ -558,7 +515,7 @@ function LeaseRow({
           })}
         </div>
       </td>
-      <td className="text-sm text-dim">{formatDate(lease.created_at)}</td>
+      <td className="text-sm text-dim">{formatDate(lease.created_at, 'date')}</td>
     </tr>
   );
 }
@@ -584,7 +541,7 @@ function CreditRow({
           className="font-mono text-sm text-gray-300 hover:text-white"
           title={account.tenant}
         >
-          {formatAddress(account.tenant)}
+          {truncateAddress(account.tenant)}
           <span className="ml-1 text-gray-600">{copied ? '(copied!)' : ''}</span>
         </button>
       </td>
@@ -613,7 +570,7 @@ function CreditRow({
       </td>
       <td>
         <span className="font-mono text-xs text-dim" title={account.credit_address}>
-          {formatAddress(account.credit_address)}
+          {truncateAddress(account.credit_address)}
         </span>
       </td>
     </tr>

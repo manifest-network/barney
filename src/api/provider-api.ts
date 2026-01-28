@@ -116,11 +116,12 @@ export async function getLeaseConnectionInfo(
     'Content-Type': 'application/json',
   };
 
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
   if (import.meta.env.DEV) {
-    url = `/proxy-provider/v1/leases/${leaseUuid}/connection`;
+    url = `/proxy-provider/v1/leases/${encodedLeaseUuid}/connection`;
     headers['X-Proxy-Target'] = baseUrl;
   } else {
-    url = `${baseUrl}/v1/leases/${leaseUuid}/connection`;
+    url = `${baseUrl}/v1/leases/${encodedLeaseUuid}/connection`;
   }
 
   const response = await fetch(url, {
@@ -228,6 +229,34 @@ export function base64ToUint8Array(base64: string): Uint8Array {
 }
 
 /**
+ * Computes SHA-256 hash of the payload and returns it as a hex string.
+ * Used to generate meta_hash for lease creation and payload verification.
+ */
+export async function computePayloadHash(payload: Uint8Array | string): Promise<string> {
+  // Convert to Uint8Array if string, then ensure we have a copy of just the
+  // relevant bytes. This handles the case where the input Uint8Array is a view
+  // into a larger ArrayBuffer (non-zero byteOffset or smaller byteLength).
+  const bytes = typeof payload === 'string'
+    ? new TextEncoder().encode(payload)
+    : new Uint8Array(payload);
+
+  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
+  const hashArray = new Uint8Array(hashBuffer);
+
+  // Convert to hex string (64 characters)
+  return Array.from(hashArray)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Validates that a string is a valid SHA-256 hex hash (64 hex characters).
+ */
+export function isValidMetaHash(hash: string): boolean {
+  return /^[0-9a-f]{64}$/i.test(hash);
+}
+
+/**
  * Creates a base64-encoded auth token for lease data upload.
  * Includes meta_hash for payload verification.
  */
@@ -276,17 +305,19 @@ export async function uploadLeaseData(
     'Content-Type': 'application/octet-stream',
   };
 
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
   if (import.meta.env.DEV) {
-    url = `/proxy-provider/v1/leases/${leaseUuid}/data`;
+    url = `/proxy-provider/v1/leases/${encodedLeaseUuid}/data`;
     headers['X-Proxy-Target'] = baseUrl;
   } else {
-    url = `${baseUrl}/v1/leases/${leaseUuid}/data`;
+    url = `${baseUrl}/v1/leases/${encodedLeaseUuid}/data`;
   }
 
   const response = await fetch(url, {
     method: 'POST',
     headers,
-    body: new Blob([payload.buffer as ArrayBuffer]),
+    // Type assertion needed for TS 5.9 - Blob constructor handles Uint8Array correctly at runtime
+    body: new Blob([payload as BlobPart]),
   });
 
   if (!response.ok) {
