@@ -13,6 +13,7 @@ export interface TxResult {
   success: boolean;
   transactionHash?: string;
   error?: string;
+  events?: readonly { type: string; attributes: readonly { key: string; value: string }[] }[];
 }
 
 export interface CreateLeaseResult extends TxResult {
@@ -71,6 +72,7 @@ async function signAndBroadcast(
     return {
       success: true,
       transactionHash: result.transactionHash,
+      events: result.events,
     };
   } catch (err) {
     return {
@@ -271,32 +273,19 @@ export async function createLease(
     }),
   };
 
-  try {
-    const client = await getSigningClient(signer);
-    const result = await client.signAndBroadcast(tenant, [msg], DEFAULT_FEE);
+  const result = await signAndBroadcast(signer, tenant, [msg]);
 
-    if (result.code !== 0) {
-      return {
-        success: false,
-        transactionHash: result.transactionHash,
-        error: `Transaction failed with code ${result.code}: ${result.rawLog}`,
-      };
-    }
-
-    // Extract lease UUID from events
-    const leaseUuid = getEventAttribute(result.events, 'lease_created', 'lease_uuid');
-
-    return {
-      success: true,
-      transactionHash: result.transactionHash,
-      leaseUuid,
-    };
-  } catch (err) {
-    return {
-      success: false,
-      error: err instanceof Error ? err.message : 'Unknown error',
-    };
+  if (!result.success || !result.events) {
+    return result;
   }
+
+  // Extract lease UUID from events
+  const leaseUuid = getEventAttribute(result.events, 'lease_created', 'lease_uuid');
+
+  return {
+    ...result,
+    leaseUuid,
+  };
 }
 
 export async function cancelLease(

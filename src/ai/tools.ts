@@ -96,7 +96,7 @@ export const AI_TOOLS: OllamaTool[] = [
           },
           deployment_data: {
             type: 'string',
-            description: 'Optional deployment configuration data (YAML/JSON). If provided, its SHA-256 hash will be stored as meta_hash on-chain, and the data will be uploaded to the provider after lease creation.',
+            description: 'CRITICAL: Use the EXACT payload the user provided - do NOT invent or modify it. If user says "with payload {\"hello\": \"mom\"}", then deployment_data must be exactly "{\"hello\": \"mom\"}". Never make up deployment data.',
           },
         },
         required: ['items'],
@@ -107,7 +107,7 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'upload_payload',
-      description: 'Upload deployment payload data to a provider for an existing PENDING lease. This requires a lease that was created with a meta_hash. The payload hash must match the meta_hash stored on-chain. IMPORTANT: Requires user confirmation.',
+      description: 'Upload deployment payload data to a provider for an existing PENDING lease. This requires a lease that was created with a meta_hash. The payload hash must match the meta_hash stored on-chain. The provider API URL is automatically derived from the lease for security. IMPORTANT: Requires user confirmation.',
       parameters: {
         type: 'object',
         properties: {
@@ -119,12 +119,8 @@ export const AI_TOOLS: OllamaTool[] = [
             type: 'string',
             description: 'The deployment payload data (YAML/JSON) to upload to the provider',
           },
-          provider_api_url: {
-            type: 'string',
-            description: 'The provider API URL to upload to. Can be obtained from get_providers.',
-          },
         },
-        required: ['lease_uuid', 'payload', 'provider_api_url'],
+        required: ['lease_uuid', 'payload'],
       },
     },
   },

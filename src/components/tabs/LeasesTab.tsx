@@ -4,7 +4,7 @@ import { Link, Shield, Plus } from 'lucide-react';
 import type { Lease, LeaseState } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { formatAddress } from '../../utils/format';
+import { truncateAddress } from '../../utils/address';
 import { getLeasesByTenant, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
 import { createLease, cancelLease, closeLease, type TxResult, type CreateLeaseResult } from '../../api/tx';
@@ -737,7 +737,7 @@ function LeaseCard({
             </span>
           </div>
           <div className="mt-1 text-sm text-dim">
-            Provider: {provider ? formatAddress(provider.address) : lease.provider_uuid}
+            Provider: {provider ? truncateAddress(provider.address) : lease.provider_uuid}
           </div>
         </div>
         </div>
@@ -1125,7 +1125,7 @@ function CreateLeaseModal({
               <option value="">Select a provider...</option>
               {providers.map((p) => (
                 <option key={p.uuid} value={p.uuid}>
-                  {formatAddress(p.address)}
+                  {truncateAddress(p.address)}
                 </option>
               ))}
             </select>

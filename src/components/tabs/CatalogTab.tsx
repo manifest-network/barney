@@ -3,7 +3,7 @@ import { useChain } from '@cosmos-kit/react';
 import { Link, Package, Shield, Loader2, RefreshCw, Plus } from 'lucide-react';
 import { HEALTH_CHECK_TIMEOUT_MS, POST_TX_REFETCH_DELAY_MS } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { formatAddress } from '../../utils/format';
+import { truncateAddress } from '../../utils/address';
 import {
   getProviders,
   getSKUs,
@@ -165,7 +165,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
   const getProviderName = (uuid: string) => {
     const provider = providers.find((p) => p.uuid === uuid);
-    return provider ? formatAddress(provider.address) : 'Unknown';
+    return provider ? truncateAddress(provider.address) : 'Unknown';
   };
 
   const isInSKUAllowedList = address && skuParams?.allowed_list?.includes(address);
@@ -587,7 +587,7 @@ function ProviderCard({
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
             <div className="font-medium text-white" title={provider.address}>
-              {formatAddress(provider.address)}
+              {truncateAddress(provider.address)}
             </div>
             {provider.api_url && healthStatus && (
               <span
@@ -856,7 +856,7 @@ function CreateSKUForm({
         >
           {activeProviders.map((p) => (
             <option key={p.uuid} value={p.uuid}>
-              {formatAddress(p.address)}
+              {truncateAddress(p.address)}
             </option>
           ))}
         </select>
@@ -1054,7 +1054,7 @@ function EditSKUForm({
         >
           {providers.map((p) => (
             <option key={p.uuid} value={p.uuid}>
-              {formatAddress(p.address)}
+              {truncateAddress(p.address)}
             </option>
           ))}
         </select>

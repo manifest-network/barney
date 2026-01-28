@@ -3,28 +3,6 @@
  */
 
 /**
- * Truncates a blockchain address for display.
- * Shows prefix + first few chars + ... + last few chars
- *
- * @param address - Full blockchain address
- * @param prefixLength - Length of prefix to show (default: 13 for "manifest1" + 4 chars)
- * @param suffixLength - Length of suffix to show (default: 4)
- * @returns Truncated address string
- */
-export function formatAddress(
-  address: string,
-  prefixLength = 13,
-  suffixLength = 4
-): string {
-  if (!address || address.length < prefixLength + suffixLength + 3) {
-    return address;
-  }
-  const prefix = address.slice(0, prefixLength);
-  const suffix = address.slice(-suffixLength);
-  return `${prefix}...${suffix}`;
-}
-
-/**
  * UUID validation regex pattern
  * Matches standard UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
  */

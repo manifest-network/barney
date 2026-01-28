@@ -3,7 +3,7 @@ import { Link, ShieldX, Globe } from 'lucide-react';
 import type { Lease, LeaseState, CreditAccount } from '../../api/billing';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { logError } from '../../utils/errors';
-import { formatAddress } from '../../utils/format';
+import { truncateAddress } from '../../utils/address';
 import {
   getAllLeases,
   getAllCredits,
@@ -252,7 +252,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
           Your wallet is not in the billing module allowed list.
         </p>
         <p className="mt-4 text-sm text-dim">
-          Connected as: <span className="font-mono">{formatAddress(address || '')}</span>
+          Connected as: <span className="font-mono">{truncateAddress(address || '')}</span>
         </p>
       </div>
     );
@@ -531,12 +531,12 @@ function LeaseRow({
       </td>
       <td>
         <span className="font-mono text-sm text-gray-300" title={lease.tenant}>
-          {formatAddress(lease.tenant)}
+          {truncateAddress(lease.tenant)}
         </span>
       </td>
       <td>
         <span className="text-sm text-gray-300" title={provider?.address}>
-          {provider ? formatAddress(provider.address) : lease.provider_uuid.slice(0, 8)}
+          {provider ? truncateAddress(provider.address) : lease.provider_uuid.slice(0, 8)}
         </span>
       </td>
       <td>
@@ -583,7 +583,7 @@ function CreditRow({
           className="font-mono text-sm text-gray-300 hover:text-white"
           title={account.tenant}
         >
-          {formatAddress(account.tenant)}
+          {truncateAddress(account.tenant)}
           <span className="ml-1 text-gray-600">{copied ? '(copied!)' : ''}</span>
         </button>
       </td>
@@ -612,7 +612,7 @@ function CreditRow({
       </td>
       <td>
         <span className="font-mono text-xs text-dim" title={account.credit_address}>
-          {formatAddress(account.credit_address)}
+          {truncateAddress(account.credit_address)}
         </span>
       </td>
     </tr>

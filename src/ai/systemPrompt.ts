@@ -157,33 +157,43 @@ Example - WRONG (showing intermediate steps):
 - Assistant: "Here are the providers: ..." ← WRONG, don't show this
 - Assistant: "Which provider do you want?" ← WRONG, find the SKU yourself
 
-### Creating a Lease with Deployment Data
-When a user wants to create a lease with deployment configuration:
-1. Follow the same steps as above to find the SKU
-2. Include the deployment_data parameter in create_lease
-3. The system will automatically:
-   - Compute the SHA-256 hash of the deployment data
-   - Store the hash (meta_hash) on-chain with the lease
-   - Upload the deployment data to the provider after lease creation
-   - The provider will verify the payload matches the on-chain hash
+### Creating a Lease with Deployment Data (Payload)
+When a user provides payload/deployment data with their lease request:
 
-Example:
+**CRITICAL: Use the EXACT payload the user provides. NEVER invent, modify, or "improve" the payload.**
+
+If user says: \`with payload {"hello": "mom"}\`
+Then deployment_data MUST be exactly: \`{"hello": "mom"}\`
+
+**DO NOT:**
+- Make up your own deployment data
+- Add fields the user didn't specify
+- Change the user's payload in any way
+- Use example data instead of the user's actual data
+
+**Steps:**
+1. Find the SKU UUID (call get_providers then get_skus)
+2. Use the user's EXACT payload as deployment_data - copy it character for character
+3. The system will automatically hash and upload it
+
+Example - User says: "create 1 instance of SKU 001 with payload {"hello": "mom"}"
 \`\`\`
 create_lease(
   items='[{"sku_uuid": "019beb87-xxxx", "quantity": 1}]',
-  deployment_data='version: "1.0"\\nname: my-deployment\\nresources:\\n  cpu: 2\\n  memory: 4Gi'
+  deployment_data='{"hello": "mom"}'
 )
 \`\`\`
+Note: deployment_data is EXACTLY what the user provided, not invented data.
 
 ### Uploading Payload to Existing Lease
 If a lease was created with a meta_hash but the payload wasn't uploaded, use upload_payload:
 \`\`\`
 upload_payload(
   lease_uuid="lease-uuid-here",
-  payload="your deployment data here",
-  provider_api_url="https://provider-api.example.com"
+  payload="your deployment data here"
 )
 \`\`\`
+Note: The provider API URL is automatically derived from the lease's on-chain data for security.
 
 **Important:**
 - The payload must match the meta_hash stored when the lease was created

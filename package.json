@@ -37,7 +37,7 @@
     "axios": "1.13.2",
     "chain-registry": "2.0.140",
     "lucide-react": "^0.563.0",
-    "@manifest-network/manifest-mcp-browser": "0.1.1",
+    "@manifest-network/manifest-mcp-browser": "file:../manifest-mcp-browser",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },

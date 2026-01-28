@@ -4,7 +4,7 @@ import { Link, Building2, Shield } from 'lucide-react';
 import type { Lease, ProviderWithdrawableResponse } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { formatAddress } from '../../utils/format';
+import { truncateAddress } from '../../utils/address';
 import { getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../api/sku';
 import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, type TxResult } from '../../api/tx';
@@ -373,7 +373,7 @@ export function ProviderTab() {
           Your connected address is not associated with any provider.
         </p>
         <p className="mt-4 text-sm text-dim">
-          Connected as: <span className="font-mono">{formatAddress(address || '')}</span>
+          Connected as: <span className="font-mono">{truncateAddress(address || '')}</span>
         </p>
       </div>
     );
@@ -414,11 +414,11 @@ export function ProviderTab() {
               </div>
               <div>
                 <span className="text-muted">Address: </span>
-                <span className="font-mono text-secondary">{formatAddress(myProvider.address)}</span>
+                <span className="font-mono text-secondary">{truncateAddress(myProvider.address)}</span>
               </div>
               <div>
                 <span className="text-muted">Payout: </span>
-                <span className="font-mono text-secondary">{formatAddress(myProvider.payout_address)}</span>
+                <span className="font-mono text-secondary">{truncateAddress(myProvider.payout_address)}</span>
               </div>
               <div>
                 <span className="text-muted">API: </span>
@@ -668,7 +668,7 @@ function PendingLeaseCard({
               </button>
             </div>
             <div className="mt-1 text-sm text-muted">
-              Tenant: <span className="font-mono">{formatAddress(lease.tenant)}</span>
+              Tenant: <span className="font-mono">{truncateAddress(lease.tenant)}</span>
             </div>
             <div className="text-xs text-dim">
               Created: {new Date(lease.created_at).toLocaleString()}
@@ -803,7 +803,7 @@ function ActiveLeaseCard({
               </button>
             </div>
             <div className="mt-1 text-sm text-muted">
-              Tenant: <span className="font-mono">{formatAddress(lease.tenant)}</span>
+              Tenant: <span className="font-mono">{truncateAddress(lease.tenant)}</span>
             </div>
             <div className="text-xs text-dim">
               Active since: {lease.acknowledged_at ? new Date(lease.acknowledged_at).toLocaleString() : '-'}

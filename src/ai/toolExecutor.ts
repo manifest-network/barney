@@ -137,22 +137,9 @@ function validateConfirmationToolArgs(
         return 'Missing required argument: args. Please provide a JSON array of string arguments.';
       }
 
-      let parsedArgs: unknown[];
-      try {
-        parsedArgs = typeof txArgs === 'string' ? JSON.parse(txArgs) : txArgs as unknown[];
-      } catch {
-        return `Invalid args format: could not parse JSON. Use format: ["arg1", "arg2"]`;
-      }
-
-      if (!Array.isArray(parsedArgs)) {
-        return 'Invalid args format: must be a JSON array of strings.';
-      }
-
-      // Validate each element is a string
-      for (let i = 0; i < parsedArgs.length; i++) {
-        if (typeof parsedArgs[i] !== 'string') {
-          return `Invalid args format: element at index ${i} must be a string.`;
-        }
+      const parseResult = parseJsonStringArray(txArgs);
+      if (parseResult.error) {
+        return parseResult.error;
       }
 
       return null;
@@ -173,18 +160,7 @@ function validateConfirmationToolArgs(
         return 'Missing required argument: payload. Please provide the deployment data to upload.';
       }
 
-      const providerApiUrl = args.provider_api_url as string | undefined;
-      if (!providerApiUrl || typeof providerApiUrl !== 'string' || providerApiUrl.trim() === '') {
-        return 'Missing required argument: provider_api_url. Please provide the provider API URL.';
-      }
-
-      // Basic URL validation
-      try {
-        new URL(providerApiUrl);
-      } catch {
-        return `Invalid provider_api_url format: "${providerApiUrl}". Must be a valid URL.`;
-      }
-
+      // Note: provider_api_url is no longer accepted - it's derived from on-chain lease data for security
       return null;
     }
 
@@ -601,13 +577,12 @@ export async function executeConfirmedTool(
 
         const leaseUuid = args.lease_uuid as string;
         const payload = args.payload as string;
-        const providerApiUrl = args.provider_api_url as string;
 
-        if (!leaseUuid || !payload || !providerApiUrl) {
-          return { success: false, error: 'Missing required arguments: lease_uuid, payload, and provider_api_url are required.' };
+        if (!leaseUuid || !payload) {
+          return { success: false, error: 'Missing required arguments: lease_uuid and payload are required.' };
         }
 
-        // Get the lease to verify meta_hash
+        // Get the lease to verify meta_hash and get provider_uuid
         const lease = await getLease(leaseUuid);
 
         if (!lease) {
@@ -623,6 +598,27 @@ export async function executeConfirmedTool(
             error: 'Lease does not have a meta_hash. Payload upload requires a lease created with meta_hash.',
           };
         }
+
+        // SECURITY: Derive provider API URL from on-chain lease data, not from tool args
+        // This prevents prompt injection attacks that could redirect auth tokens to attacker endpoints
+        const providers = await getProviders(false);
+        const provider = providers.find(p => p.uuid === lease.provider_uuid);
+
+        if (!provider) {
+          return {
+            success: false,
+            error: `Provider not found for lease. Provider UUID: ${lease.provider_uuid}`,
+          };
+        }
+
+        if (!provider.api_url) {
+          return {
+            success: false,
+            error: `Provider ${provider.uuid} does not have an API URL configured.`,
+          };
+        }
+
+        const providerApiUrl = provider.api_url;
 
         // Compute payload hash and verify it matches the lease meta_hash
         const payloadBytes = new TextEncoder().encode(payload);
@@ -674,23 +670,11 @@ export async function executeConfirmedTool(
           return { success: false, error: 'Missing required argument: args' };
         }
 
-        let txArgs: string[];
-        try {
-          txArgs = typeof args.args === 'string' ? JSON.parse(args.args) : args.args as string[];
-        } catch {
-          return { success: false, error: 'Invalid args format: could not parse JSON array' };
+        const parseResult = parseJsonStringArray(args.args);
+        if (parseResult.error) {
+          return { success: false, error: parseResult.error };
         }
-
-        if (!Array.isArray(txArgs)) {
-          return { success: false, error: 'Invalid args format: must be a JSON array of strings' };
-        }
-
-        // Validate each element is a string
-        for (let i = 0; i < txArgs.length; i++) {
-          if (typeof txArgs[i] !== 'string') {
-            return { success: false, error: `Invalid args format: element at index ${i} must be a string` };
-          }
-        }
+        const txArgs = parseResult.data;
 
         const result = await cosmosTx(clientManager, module, subcommand, txArgs, true);
         return {
