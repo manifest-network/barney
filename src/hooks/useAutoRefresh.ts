@@ -41,19 +41,25 @@ export function useAutoRefresh(
 ): UseAutoRefreshReturn {
   const { interval, enabled = true, immediate = true, onError } = options;
 
-  const [isEnabled, setIsEnabled] = useState(enabled);
+  const [userEnabled, setUserEnabled] = useState(true);
+  const isEnabled = enabled && userEnabled;
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetchFnRef = useRef(fetchFn);
+  const onErrorRef = useRef(onError);
   const isMountedRef = useRef(true);
   const prevEnabledRef = useRef<boolean | null>(null);
 
-  // Keep fetchFn ref updated
+  // Keep refs updated
   useEffect(() => {
     fetchFnRef.current = fetchFn;
   }, [fetchFn]);
+
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
 
   const doFetch = useCallback(async () => {
     if (!isMountedRef.current) return;
@@ -65,15 +71,15 @@ export function useAutoRefresh(
         setLastRefresh(new Date());
       }
     } catch (err) {
-      if (isMountedRef.current && onError) {
-        onError(err instanceof Error ? err : new Error(String(err)));
+      if (isMountedRef.current && onErrorRef.current) {
+        onErrorRef.current(err instanceof Error ? err : new Error(String(err)));
       }
     } finally {
       if (isMountedRef.current) {
         setIsRefreshing(false);
       }
     }
-  }, [onError]);
+  }, []);
 
   const startPolling = useCallback(() => {
     if (intervalRef.current) {
@@ -118,16 +124,12 @@ export function useAutoRefresh(
     return stopPolling;
   }, [isEnabled, startPolling, stopPolling]);
 
-  // Sync isEnabled with enabled prop and fetch when appropriate
+  // Sync with enabled prop and fetch when appropriate
   useEffect(() => {
     const wasEnabled = prevEnabledRef.current;
     const isFirstRun = wasEnabled === null;
     prevEnabledRef.current = enabled;
 
-    // Sync internal state with prop
-    setIsEnabled(enabled);
-
-    // Skip if document is hidden
     if (document.hidden) return;
 
     // Fetch on first run if immediate and enabled
@@ -136,8 +138,9 @@ export function useAutoRefresh(
       return;
     }
 
-    // Fetch when enabled transitions from false to true
+    // Reset user toggle and fetch when enabled transitions false → true
     if (enabled && wasEnabled === false) {
+      setUserEnabled(true);
       doFetch();
     }
   }, [enabled, immediate, doFetch]);
@@ -151,9 +154,9 @@ export function useAutoRefresh(
     };
   }, [stopPolling]);
 
-  const toggle = useCallback(() => setIsEnabled((prev) => !prev), []);
-  const enable = useCallback(() => setIsEnabled(true), []);
-  const disable = useCallback(() => setIsEnabled(false), []);
+  const toggle = useCallback(() => setUserEnabled((prev) => !prev), []);
+  const enable = useCallback(() => setUserEnabled(true), []);
+  const disable = useCallback(() => setUserEnabled(false), []);
 
   return {
     isEnabled,
