@@ -9,6 +9,13 @@ export interface SignResult {
   signature: string;
 }
 
+export interface PayloadAttachment {
+  bytes: Uint8Array;
+  filename?: string;
+  size: number;
+  hash: string; // Pre-computed SHA-256 hex
+}
+
 export interface ToolResult {
   success: boolean;
   data?: unknown;
@@ -33,4 +40,5 @@ export interface PendingAction {
   toolName: string;
   args: Record<string, unknown>;
   description: string;
+  payload?: PayloadAttachment;
 }

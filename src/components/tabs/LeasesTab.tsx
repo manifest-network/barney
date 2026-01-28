@@ -1,14 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { Link, Shield, Plus } from 'lucide-react';
-import type { Lease, LeaseState } from '../../api/billing';
+import { LeaseState, leaseStateToString, leaseStateFromString, type Lease } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { truncateAddress } from '../../utils/address';
+import { formatDate } from '../../utils/format';
+import { LEASE_STATE_BADGE_CLASSES, LEASE_STATE_LABELS, LEASE_STATE_COLORS } from '../../utils/leaseState';
+import { StatCard } from '../ui/StatCard';
 import { getLeasesByTenant, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
 import { createLease, cancelLease, closeLease, type TxResult, type CreateLeaseResult } from '../../api/tx';
-import { DENOM_METADATA, formatPrice } from '../../api/config';
+import { DENOM_METADATA, formatPrice, UNIT_LABELS } from '../../api/config';
+import { Unit } from '../../api/sku';
 import {
   createSignMessage,
   createAuthToken,
@@ -19,6 +23,7 @@ import {
   type ConnectionInfo,
 } from '../../api/provider-api';
 import { sha256, toHex, validatePayloadSize, getPayloadSize, MAX_PAYLOAD_SIZE } from '../../utils/hash';
+import { validateFile } from '../../utils/fileValidation';
 import { safeJsonStringify } from '../../utils/url';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh';
 import { AutoRefreshIndicator } from '../AutoRefreshIndicator';
@@ -26,64 +31,6 @@ import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { SkeletonStatGrid } from '../ui/SkeletonStat';
 import { SkeletonCard } from '../ui/SkeletonCard';
-
-// Allowed MIME types for file uploads
-const ALLOWED_FILE_TYPES = [
-  'text/plain',
-  'text/yaml',
-  'text/x-yaml',
-  'application/x-yaml',
-  'application/json',
-];
-
-// Allowed file extensions (validated when MIME type is empty)
-const ALLOWED_FILE_EXTENSIONS = ['.yaml', '.yml', '.json', '.txt'];
-
-// Maximum file name length to prevent path traversal
-const MAX_FILENAME_LENGTH = 255;
-
-/**
- * Validates a file before upload to prevent malicious file uploads.
- *
- * **Security:** Prevents various upload attacks by checking:
- * - File size limits (prevents DoS via large uploads)
- * - Filename length (prevents path traversal and buffer overflow)
- * - MIME type validation (prevents executable uploads)
- * - File extension validation (fallback when MIME is unavailable)
- *
- * Note: This is client-side validation. Always validate server-side as well.
- *
- * @param file - The File object from an input element
- * @returns Object with valid: boolean and optional error message
- */
-function validateFile(file: File): { valid: boolean; error?: string } {
-  // Check file size
-  if (file.size > MAX_PAYLOAD_SIZE) {
-    return { valid: false, error: `File exceeds maximum size of ${MAX_PAYLOAD_SIZE / 1024}KB` };
-  }
-
-  // Check filename length
-  if (file.name.length > MAX_FILENAME_LENGTH) {
-    return { valid: false, error: 'Filename is too long' };
-  }
-
-  // Get file extension
-  const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
-
-  // Check MIME type if present
-  if (file.type) {
-    if (!ALLOWED_FILE_TYPES.includes(file.type)) {
-      return { valid: false, error: `File type "${file.type}" is not allowed. Use .yaml, .yml, .json, or .txt files.` };
-    }
-  } else {
-    // If no MIME type, validate by extension
-    if (!ALLOWED_FILE_EXTENSIONS.includes(fileExtension)) {
-      return { valid: false, error: `File extension "${fileExtension}" is not allowed. Use .yaml, .yml, .json, or .txt files.` };
-    }
-  }
-
-  return { valid: true };
-}
 
 /**
  * Validates a signature message before signing with the user's wallet.
@@ -114,24 +61,6 @@ function validateSignMessage(message: string, expectedPrefix: string): boolean {
 }
 
 const CHAIN_NAME = 'manifestlocal';
-
-const stateBadgeClasses: Record<LeaseState, string> = {
-  LEASE_STATE_UNSPECIFIED: 'badge badge-neutral',
-  LEASE_STATE_PENDING: 'badge badge-warning',
-  LEASE_STATE_ACTIVE: 'badge badge-success',
-  LEASE_STATE_CLOSED: 'badge badge-neutral',
-  LEASE_STATE_REJECTED: 'badge badge-error',
-  LEASE_STATE_EXPIRED: 'badge badge-neutral',
-};
-
-const stateLabels: Record<LeaseState, string> = {
-  LEASE_STATE_UNSPECIFIED: 'Unspecified',
-  LEASE_STATE_PENDING: 'Pending',
-  LEASE_STATE_ACTIVE: 'Active',
-  LEASE_STATE_CLOSED: 'Closed',
-  LEASE_STATE_REJECTED: 'Rejected',
-  LEASE_STATE_EXPIRED: 'Expired',
-};
 
 export function LeasesTab() {
   const { address, isWalletConnected, openView, getOfflineSigner, signArbitrary } = useChain(CHAIN_NAME);
@@ -326,7 +255,7 @@ export function LeasesTab() {
 
     const pendingSelected = Array.from(selectedLeases).filter((uuid) => {
       const lease = leases.find((l) => l.uuid === uuid);
-      return lease?.state === 'LEASE_STATE_PENDING';
+      return lease?.state === LeaseState.LEASE_STATE_PENDING;
     });
 
     if (pendingSelected.length === 0) {
@@ -359,7 +288,7 @@ export function LeasesTab() {
 
     const activeSelected = Array.from(selectedLeases).filter((uuid) => {
       const lease = leases.find((l) => l.uuid === uuid);
-      return lease?.state === 'LEASE_STATE_ACTIVE';
+      return lease?.state === LeaseState.LEASE_STATE_ACTIVE;
     });
 
     if (activeSelected.length === 0) {
@@ -401,7 +330,7 @@ export function LeasesTab() {
 
   const selectAllFiltered = () => {
     const actionableLeases = filteredLeases.filter(
-      (l) => l.state === 'LEASE_STATE_PENDING' || l.state === 'LEASE_STATE_ACTIVE'
+      (l) => l.state === LeaseState.LEASE_STATE_PENDING || l.state === LeaseState.LEASE_STATE_ACTIVE
     );
     setSelectedLeases(new Set(actionableLeases.map((l) => l.uuid)));
   };
@@ -413,12 +342,12 @@ export function LeasesTab() {
   // Count selected by state
   const selectedPendingCount = Array.from(selectedLeases).filter((uuid) => {
     const lease = leases.find((l) => l.uuid === uuid);
-    return lease?.state === 'LEASE_STATE_PENDING';
+    return lease?.state === LeaseState.LEASE_STATE_PENDING;
   }).length;
 
   const selectedActiveCount = Array.from(selectedLeases).filter((uuid) => {
     const lease = leases.find((l) => l.uuid === uuid);
-    return lease?.state === 'LEASE_STATE_ACTIVE';
+    return lease?.state === LeaseState.LEASE_STATE_ACTIVE;
   }).length;
 
   if (!isWalletConnected) {
@@ -474,16 +403,19 @@ export function LeasesTab() {
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted">Filter:</span>
             <select
-              value={stateFilter}
-              onChange={(e) => setStateFilter(e.target.value as LeaseState | 'all')}
+              value={stateFilter === 'all' ? 'all' : leaseStateToString(stateFilter)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setStateFilter(val === 'all' ? 'all' : leaseStateFromString(val));
+              }}
               className="input select text-sm py-1.5"
             >
               <option value="all">All States</option>
-              <option value="LEASE_STATE_PENDING">Pending</option>
-              <option value="LEASE_STATE_ACTIVE">Active</option>
-              <option value="LEASE_STATE_CLOSED">Closed</option>
-              <option value="LEASE_STATE_REJECTED">Rejected</option>
-              <option value="LEASE_STATE_EXPIRED">Expired</option>
+              <option value={leaseStateToString(LeaseState.LEASE_STATE_PENDING)}>Pending</option>
+              <option value={leaseStateToString(LeaseState.LEASE_STATE_ACTIVE)}>Active</option>
+              <option value={leaseStateToString(LeaseState.LEASE_STATE_CLOSED)}>Closed</option>
+              <option value={leaseStateToString(LeaseState.LEASE_STATE_REJECTED)}>Rejected</option>
+              <option value={leaseStateToString(LeaseState.LEASE_STATE_EXPIRED)}>Expired</option>
             </select>
           </div>
           <AutoRefreshIndicator autoRefresh={autoRefresh} intervalSeconds={5} />
@@ -499,7 +431,7 @@ export function LeasesTab() {
       </div>
 
       {/* Batch Selection Controls */}
-      {filteredLeases.some((l) => l.state === 'LEASE_STATE_PENDING' || l.state === 'LEASE_STATE_ACTIVE') && (
+      {filteredLeases.some((l) => l.state === LeaseState.LEASE_STATE_PENDING || l.state === LeaseState.LEASE_STATE_ACTIVE) && (
         <div className="flex flex-wrap items-center gap-4 card-static p-3">
           <div className="flex items-center gap-2">
             <button
@@ -548,24 +480,20 @@ export function LeasesTab() {
 
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-4">
-        {(
-          [
-            'LEASE_STATE_PENDING',
-            'LEASE_STATE_ACTIVE',
-            'LEASE_STATE_CLOSED',
-            'LEASE_STATE_REJECTED',
-          ] as LeaseState[]
-        ).map((state) => {
+        {([
+          LeaseState.LEASE_STATE_PENDING,
+          LeaseState.LEASE_STATE_ACTIVE,
+          LeaseState.LEASE_STATE_CLOSED,
+          LeaseState.LEASE_STATE_REJECTED,
+        ] as const).map((state) => {
           const count = leases.filter((l) => l.state === state).length;
-          const colorClass = state === 'LEASE_STATE_PENDING' ? 'text-warning'
-            : state === 'LEASE_STATE_ACTIVE' ? 'text-success'
-            : state === 'LEASE_STATE_REJECTED' ? 'text-error'
-            : 'text-muted';
           return (
-            <div key={state} className="stat-card">
-              <div className={`stat-value ${colorClass}`}>{count}</div>
-              <div className="stat-label">{stateLabels[state]}</div>
-            </div>
+            <StatCard
+              key={state}
+              value={count}
+              label={LEASE_STATE_LABELS[state]}
+              colorClass={LEASE_STATE_COLORS[state]}
+            />
           );
         })}
       </div>
@@ -649,12 +577,7 @@ function LeaseCard({
   const [closeReason, setCloseReason] = useState('');
 
   const provider = getProvider(lease.provider_uuid);
-  const badgeClass = stateBadgeClasses[lease.state];
-
-  const formatDate = (dateStr?: string) => {
-    if (!dateStr || dateStr === '0001-01-01T00:00:00Z') return '-';
-    return new Date(dateStr).toLocaleString();
-  };
+  const badgeClass = LEASE_STATE_BADGE_CLASSES[lease.state];
 
   const calculateTotalPerHour = () => {
     let total = 0;
@@ -709,7 +632,7 @@ function LeaseCard({
     }
   };
 
-  const canSelect = lease.state === 'LEASE_STATE_PENDING' || lease.state === 'LEASE_STATE_ACTIVE';
+  const canSelect = lease.state === LeaseState.LEASE_STATE_PENDING || lease.state === LeaseState.LEASE_STATE_ACTIVE;
 
   return (
     <div className={`card-static p-6 ${isSelected ? 'border-primary-500' : ''}`}>
@@ -733,7 +656,7 @@ function LeaseCard({
               Copy
             </button>
             <span className={badgeClass}>
-              {stateLabels[lease.state]}
+              {LEASE_STATE_LABELS[lease.state]}
             </span>
           </div>
           <div className="mt-1 text-sm text-dim">
@@ -742,7 +665,7 @@ function LeaseCard({
         </div>
         </div>
         <div className="flex gap-2">
-          {lease.state === 'LEASE_STATE_PENDING' && (
+          {lease.state === LeaseState.LEASE_STATE_PENDING && (
             <button
               onClick={() => onCancel(lease.uuid)}
               disabled={txLoading}
@@ -751,7 +674,7 @@ function LeaseCard({
               Cancel
             </button>
           )}
-          {lease.state === 'LEASE_STATE_ACTIVE' && (
+          {lease.state === LeaseState.LEASE_STATE_ACTIVE && (
             <>
               <button
                 onClick={handleGetConnectionInfo}
@@ -1074,7 +997,7 @@ function CreateLeaseModal({
   const calculateEstimatedCost = () => {
     let total = 0;
     let denom = '';
-    let unit = '';
+    let unit: Unit = Unit.UNIT_UNSPECIFIED;
 
     for (const item of items) {
       if (item.skuUuid) {
@@ -1092,7 +1015,7 @@ function CreateLeaseModal({
 
     const meta = DENOM_METADATA[denom] || { symbol: denom, exponent: 6 };
     const value = total / Math.pow(10, meta.exponent);
-    const unitLabel = unit === 'UNIT_PER_HOUR' ? '/hr' : '/day';
+    const unitLabel = UNIT_LABELS[unit] ?? '';
     return `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${meta.symbol}${unitLabel}`;
   };
 

@@ -1,4 +1,28 @@
+import { liftedinit } from '@manifest-network/manifestjs';
 import { REST_URL } from './config';
+
+// Re-export Unit enum from manifestjs for type safety
+export const Unit = liftedinit.sku.v1.Unit;
+export type Unit = (typeof Unit)[keyof typeof Unit];
+
+// Conversion functions from manifestjs
+const { unitFromJSON: fromJSON, unitToJSON: toJSON } = liftedinit.sku.v1;
+
+/**
+ * Convert a unit enum to its string representation.
+ * Used for display and API compatibility.
+ */
+export function unitToString(unit: Unit): string {
+  return toJSON(unit);
+}
+
+/**
+ * Convert a unit string to enum value.
+ * Used for parsing API responses.
+ */
+export function unitFromString(unit: string): Unit {
+  return fromJSON(unit);
+}
 
 export interface SKUParams {
   allowed_list: string[];
@@ -21,10 +45,34 @@ export interface SKU {
   uuid: string;
   provider_uuid: string;
   name: string;
-  unit: string;
+  unit: Unit;
   base_price: { denom: string; amount: string };
   meta_hash: string;
   active: boolean;
+}
+
+/**
+ * Raw SKU response from API (unit is a string)
+ */
+interface RawSKU extends Omit<SKU, 'unit'> {
+  unit: string;
+}
+
+/**
+ * Convert a raw API SKU response to a typed SKU with enum unit.
+ */
+function parseSKU(raw: RawSKU): SKU {
+  return {
+    ...raw,
+    unit: unitFromString(raw.unit),
+  };
+}
+
+/**
+ * Convert an array of raw API SKUs to typed SKUs.
+ */
+function parseSKUs(raw: RawSKU[]): SKU[] {
+  return raw.map(parseSKU);
 }
 
 export interface ProvidersResponse {
@@ -75,8 +123,8 @@ export async function getSKUs(activeOnly = false): Promise<SKU[]> {
     throw new Error(`Failed to fetch SKUs: ${response.statusText}`);
   }
 
-  const data: SKUsResponse = await response.json();
-  return data.skus ?? [];
+  const data = await response.json();
+  return parseSKUs(data.skus ?? []);
 }
 
 export async function getSKU(uuid: string): Promise<SKU | null> {
@@ -87,8 +135,8 @@ export async function getSKU(uuid: string): Promise<SKU | null> {
     throw new Error(`Failed to fetch SKU: ${response.statusText}`);
   }
 
-  const data: SKUResponse = await response.json();
-  return data.sku;
+  const data = await response.json();
+  return data.sku ? parseSKU(data.sku) : null;
 }
 
 export async function getSKUsByProvider(providerUuid: string, activeOnly = false): Promise<SKU[]> {
@@ -99,8 +147,8 @@ export async function getSKUsByProvider(providerUuid: string, activeOnly = false
     throw new Error(`Failed to fetch SKUs by provider: ${response.statusText}`);
   }
 
-  const data: SKUsResponse = await response.json();
-  return data.skus ?? [];
+  const data = await response.json();
+  return parseSKUs(data.skus ?? []);
 }
 
 export async function getSKUParams(): Promise<SKUParams> {

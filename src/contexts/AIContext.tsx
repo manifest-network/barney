@@ -11,7 +11,7 @@ import {
 import type { OllamaMessage, OllamaToolCall, OllamaStreamChunk } from '../api/ollama';
 import { streamChat, checkOllamaHealth, listModels, type OllamaModel } from '../api/ollama';
 import { AI_TOOLS, getToolCallDescription } from '../ai/tools';
-import { executeTool, executeConfirmedTool, type ToolResult, type PendingAction, type SignResult } from '../ai/toolExecutor';
+import { executeTool, executeConfirmedTool, type ToolResult, type PendingAction, type SignResult, type PayloadAttachment } from '../ai/toolExecutor';
 import { getSystemPrompt } from '../ai/systemPrompt';
 import {
   validateSettings,
@@ -23,6 +23,8 @@ import {
   type AISettings,
 } from '../ai/validation';
 import { logError } from '../utils/errors';
+import { validateFile } from '../utils/fileValidation';
+import { sha256, toHex } from '../utils/hash';
 import {
   AI_MAX_MESSAGES,
   AI_MAX_TOOL_ITERATIONS,
@@ -145,6 +147,7 @@ interface AIContextType {
   settings: AISettings;
   availableModels: OllamaModel[];
   pendingConfirmation: PendingConfirmation | null;
+  pendingPayload: PayloadAttachment | null;
 
   // Actions
   setIsOpen: (open: boolean) => void;
@@ -157,6 +160,8 @@ interface AIContextType {
   setClientManager: (manager: CosmosClientManager | null) => void;
   setAddress: (address: string | undefined) => void;
   setSignArbitrary: (fn: SignArbitraryFn | undefined) => void;
+  attachPayload: (file: File) => Promise<{ error?: string }>;
+  clearPayload: () => void;
 }
 
 // Validate environment-provided defaults
@@ -178,6 +183,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<AISettings>(defaultSettings);
   const [availableModels, setAvailableModels] = useState<OllamaModel[]>([]);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
+  const [pendingPayload, setPendingPayload] = useState<PayloadAttachment | null>(null);
+  const pendingPayloadRef = useRef<PayloadAttachment | null>(null);
 
   // Refs for client, address, and signing (to avoid re-renders)
   const clientManagerRef = useRef<CosmosClientManager | null>(null);
@@ -297,6 +304,38 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
   const setSignArbitrary = useCallback((fn: SignArbitraryFn | undefined) => {
     signArbitraryRef.current = fn;
+  }, []);
+
+  const attachPayload = useCallback(async (file: File): Promise<{ error?: string }> => {
+    const validation = validateFile(file);
+    if (!validation.valid) {
+      return { error: validation.error };
+    }
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      const hashBytes = await sha256(bytes);
+      const hash = toHex(hashBytes);
+
+      const attachment: PayloadAttachment = {
+        bytes,
+        filename: file.name,
+        size: file.size,
+        hash,
+      };
+
+      pendingPayloadRef.current = attachment;
+      setPendingPayload(attachment);
+      return {};
+    } catch {
+      return { error: 'Failed to read file' };
+    }
+  }, []);
+
+  const clearPayload = useCallback(() => {
+    pendingPayloadRef.current = null;
+    setPendingPayload(null);
   }, []);
 
   const updateSettings = useCallback((newSettings: Partial<AISettings>) => {
@@ -529,14 +568,19 @@ export function AIProvider({ children }: { children: ReactNode }) {
         const { result, messageId: toolMessageId } = await executeAndDisplayToolCall(toolCall);
 
         if (result.requiresConfirmation) {
+          // Capture pending payload at confirmation time for create_lease
+          const toolName = result.pendingAction?.toolName || toolCall.function.name;
+          const actionPayload = toolName === 'create_lease' ? pendingPayloadRef.current ?? undefined : undefined;
+
           // Set pending confirmation and stop the loop
           setPendingConfirmation({
             id: generateMessageId(),
             action: {
               id: toolCall.id,
-              toolName: result.pendingAction?.toolName || toolCall.function.name,
+              toolName,
               args: result.pendingAction?.args || {},
               description: result.confirmationMessage || 'Confirm action?',
+              payload: actionPayload,
             },
             messageId: toolMessageId,
           });
@@ -744,7 +788,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
         action.args,
         clientManager,
         address,
-        signArbitrary
+        signArbitrary,
+        action.payload
       );
 
       // Keep tool message as structured JSON for the assistant to interpret
@@ -808,6 +853,9 @@ export function AIProvider({ children }: { children: ReactNode }) {
       // Abort any ongoing fetch to prevent connection leaks
       abortControllerRef.current?.abort();
       abortControllerRef.current = null;
+      // Clear payload attachment after execution
+      pendingPayloadRef.current = null;
+      setPendingPayload(null);
     }
   }, [pendingConfirmation, settings, toOllamaMessages, updateMessageById, createAssistantMessage, addMessage, getCurrentMessages, scheduleStreamingUpdate, flushPendingUpdate]);
 
@@ -817,6 +865,9 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
     const { messageId } = pendingConfirmation;
     setPendingConfirmation(null);
+    // Clear payload attachment on cancel
+    pendingPayloadRef.current = null;
+    setPendingPayload(null);
 
     setMessages((prev) => {
       const updated = prev.map((m) =>
@@ -838,6 +889,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       settings,
       availableModels,
       pendingConfirmation,
+      pendingPayload,
       setIsOpen,
       sendMessage,
       updateSettings,
@@ -848,6 +900,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
       setClientManager,
       setAddress,
       setSignArbitrary,
+      attachPayload,
+      clearPayload,
     }),
     [
       isOpen,
@@ -857,6 +911,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       settings,
       availableModels,
       pendingConfirmation,
+      pendingPayload,
       sendMessage,
       updateSettings,
       clearHistory,
@@ -866,6 +921,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
       setClientManager,
       setAddress,
       setSignArbitrary,
+      attachPayload,
+      clearPayload,
     ]
   );
 

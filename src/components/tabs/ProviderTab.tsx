@@ -1,11 +1,10 @@
 import { useState, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { Link, Building2, Shield } from 'lucide-react';
-import type { Lease, ProviderWithdrawableResponse } from '../../api/billing';
+import { LeaseState, getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams, type Lease, type ProviderWithdrawableResponse } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { truncateAddress } from '../../utils/address';
-import { getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../api/sku';
 import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, type TxResult } from '../../api/tx';
 import { DENOM_METADATA, formatPrice } from '../../api/config';
@@ -79,7 +78,7 @@ export function ProviderTab() {
         setProviderWithdrawable(withdrawableSummary);
 
         // Fetch withdrawable amounts for active leases (for individual card display)
-        const activeLeases = leases.filter((l) => l.state === 'LEASE_STATE_ACTIVE');
+        const activeLeases = leases.filter((l) => l.state === LeaseState.LEASE_STATE_ACTIVE);
         const withdrawableMap = new Map<string, Coin[]>();
 
         await Promise.all(
@@ -110,8 +109,8 @@ export function ProviderTab() {
     immediate: true,
   });
 
-  const pendingLeases = providerLeases.filter((l) => l.state === 'LEASE_STATE_PENDING');
-  const activeLeases = providerLeases.filter((l) => l.state === 'LEASE_STATE_ACTIVE');
+  const pendingLeases = providerLeases.filter((l) => l.state === LeaseState.LEASE_STATE_PENDING);
+  const activeLeases = providerLeases.filter((l) => l.state === LeaseState.LEASE_STATE_ACTIVE);
 
   const handleAcknowledge = async (leaseUuid: string) => {
     if (!address) return;

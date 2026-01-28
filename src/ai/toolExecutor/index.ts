@@ -6,12 +6,12 @@
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import { requiresConfirmation } from '../tools';
 import { validateConfirmationToolArgs, getConfirmationMessage } from './validation';
-import { executeQuery, QUERY_TOOLS } from './queries';
+import { executeQuery } from './queries';
 import { executeTransaction } from './transactions';
-import type { ToolResult, ToolExecutorOptions, SignResult } from './types';
+import type { ToolResult, ToolExecutorOptions, SignResult, PayloadAttachment } from './types';
 
 // Re-export types
-export type { ToolResult, ToolExecutorOptions, PendingAction, SignResult } from './types';
+export type { ToolResult, ToolExecutorOptions, PendingAction, SignResult, PayloadAttachment } from './types';
 
 /**
  * Execute a tool call from the AI assistant.
@@ -53,8 +53,9 @@ export async function executeTool(
 
   // Execute read-only tools immediately
   try {
-    if (QUERY_TOOLS.includes(toolName)) {
-      return await executeQuery(toolName, args, clientManager, address);
+    const queryResult = await executeQuery(toolName, args, clientManager, address);
+    if (queryResult !== null) {
+      return queryResult;
     }
     return { success: false, error: `Unknown tool: ${toolName}` };
   } catch (error) {
@@ -76,6 +77,7 @@ export async function executeTool(
  * @param clientManager - CosmosClientManager for signing and broadcasting
  * @param address - User's wallet address (optional for some operations)
  * @param signArbitrary - Function to sign arbitrary data with ADR-036 (for payload uploads)
+ * @param payload - Optional payload attachment for create_lease
  * @returns ToolResult with transaction result or error
  */
 export async function executeConfirmedTool(
@@ -83,10 +85,11 @@ export async function executeConfirmedTool(
   args: Record<string, unknown>,
   clientManager: CosmosClientManager,
   address?: string,
-  signArbitrary?: (address: string, data: string) => Promise<SignResult>
+  signArbitrary?: (address: string, data: string) => Promise<SignResult>,
+  payload?: PayloadAttachment
 ): Promise<ToolResult> {
   try {
-    return await executeTransaction(toolName, args, clientManager, address, signArbitrary);
+    return await executeTransaction(toolName, args, clientManager, address, signArbitrary, payload);
   } catch (error) {
     return {
       success: false,

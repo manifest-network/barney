@@ -2,6 +2,56 @@
  * Shared formatting utilities
  */
 
+import { DENOM_METADATA } from '../api/config';
+
+/**
+ * Format a token amount with proper decimals and symbol.
+ *
+ * @param amount - The raw amount as a string (in base units)
+ * @param denom - The token denomination
+ * @param maxDecimals - Maximum fraction digits to display (default: 6)
+ * @returns Formatted string like "1,234.56 MFX" or "0 DENOM" for invalid amounts
+ */
+export function formatAmount(amount: string, denom: string, maxDecimals = 6): string {
+  const metadata = DENOM_METADATA[denom as keyof typeof DENOM_METADATA];
+  const exponent = metadata?.exponent ?? 6;
+  const symbol = metadata?.symbol ?? denom;
+  const parsed = parseInt(amount, 10);
+  if (Number.isNaN(parsed)) {
+    return `0 ${symbol}`;
+  }
+  const num = parsed / Math.pow(10, exponent);
+  return `${num.toLocaleString(undefined, { maximumFractionDigits: maxDecimals })} ${symbol}`;
+}
+
+/**
+ * Format a date string for display.
+ * Handles null/empty dates, invalid dates, and the Go zero time.
+ *
+ * @param dateStr - ISO date string or undefined
+ * @param options - 'datetime' for full datetime, 'date' for date only (default: 'datetime')
+ * @returns Formatted date string or '-' for invalid/empty dates
+ */
+export function formatDate(dateStr: string | undefined, options: 'datetime' | 'date' = 'datetime'): string {
+  if (!dateStr || dateStr === '0001-01-01T00:00:00Z') {
+    return '-';
+  }
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
+  return options === 'date' ? date.toLocaleDateString() : date.toLocaleString();
+}
+
+/**
+ * Format a byte count for display (e.g., "1.2 KB" or "512 B").
+ */
+export function formatFileSize(bytes: number): string {
+  return bytes >= 1024
+    ? `${(bytes / 1024).toFixed(1)} KB`
+    : `${bytes} B`;
+}
+
 /**
  * UUID validation regex pattern
  * Matches standard UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx

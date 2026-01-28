@@ -21,7 +21,7 @@ import {
 } from '../../api';
 import type { Provider, SKU, SKUParams } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
-import { getLeasesBySKU } from '../../api/billing';
+import { getLeasesBySKU, LeaseState } from '../../api/billing';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { Modal } from '../ui/Modal';
@@ -96,7 +96,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
         skus.map(async (sku) => {
           try {
             const [activeLeases, allLeases] = await Promise.all([
-              getLeasesBySKU(sku.uuid, 'LEASE_STATE_ACTIVE'),
+              getLeasesBySKU(sku.uuid, LeaseState.LEASE_STATE_ACTIVE),
               getLeasesBySKU(sku.uuid),
             ]);
             usageRecord[sku.uuid] = {
@@ -665,7 +665,7 @@ function SKURow({
 }: {
   sku: SKU;
   providerName: string;
-  formatPrice: (amount: string, denom: string, unit: string) => string;
+  formatPrice: (amount: string, denom: string, unit?: Unit) => string;
   usage?: { active: number; total: number };
   usageLoading?: boolean;
   onEdit?: () => void;
@@ -1018,7 +1018,7 @@ function EditSKUForm({
 }) {
   const [providerUuid, setProviderUuid] = useState(sku.provider_uuid);
   const [name, setName] = useState(sku.name);
-  const [unit, setUnit] = useState<number>(sku.unit === 'UNIT_PER_HOUR' ? Unit.UNIT_PER_HOUR : sku.unit === 'UNIT_PER_DAY' ? Unit.UNIT_PER_DAY : Unit.UNIT_UNSPECIFIED);
+  const [unit, setUnit] = useState<number>(sku.unit);
   const [priceAmount, setPriceAmount] = useState(sku.base_price.amount);
   const [active, setActive] = useState(sku.active);
   const [submitting, setSubmitting] = useState(false);

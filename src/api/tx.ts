@@ -3,11 +3,12 @@ import type { OfflineSigner } from '@cosmjs/proto-signing';
 import type { Coin } from './bank';
 import { RPC_ENDPOINT } from './config';
 
+// Re-export Unit from sku.ts (single source of truth)
+import { Unit } from './sku';
+export { Unit };
+
 const { MsgFundCredit, MsgCreateLease, MsgCancelLease, MsgCloseLease, MsgAcknowledgeLease, MsgRejectLease, MsgWithdraw } = liftedinit.billing.v1;
 const { MsgCreateProvider, MsgUpdateProvider, MsgCreateSKU, MsgUpdateSKU, MsgDeactivateProvider, MsgDeactivateSKU } = liftedinit.sku.v1;
-
-// Re-export Unit enum as a value (not type-only)
-export const Unit = liftedinit.sku.v1.Unit;
 
 export interface TxResult {
   success: boolean;
@@ -159,7 +160,7 @@ export async function updateProvider(
 export interface CreateSKUParams {
   providerUuid: string;
   name: string;
-  unit: typeof Unit[keyof typeof Unit];
+  unit: Unit;
   basePrice: Coin;
   metaHash?: Uint8Array;
 }
@@ -188,7 +189,7 @@ export interface UpdateSKUParams {
   uuid: string;
   providerUuid: string;
   name: string;
-  unit: typeof Unit[keyof typeof Unit];
+  unit: Unit;
   basePrice: Coin;
   active: boolean;
   metaHash?: Uint8Array;

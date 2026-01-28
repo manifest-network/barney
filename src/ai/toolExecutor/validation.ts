@@ -41,7 +41,7 @@ export function validateConfirmationToolArgs(
       try {
         items = typeof itemsRaw === 'string' ? JSON.parse(itemsRaw) : itemsRaw as unknown[];
       } catch {
-        return `Invalid items format: could not parse JSON. Use format: [{"sku_uuid": "...", "quantity": 1}]`;
+        return `Invalid items format: could not parse JSON. Use format: [{"sku_name": "001", "quantity": 1}]`;
       }
 
       if (!Array.isArray(items) || items.length === 0) {
@@ -54,11 +54,15 @@ export function validateConfirmationToolArgs(
         if (!item || typeof item !== 'object') {
           return `Invalid item at index ${i}: must be an object.`;
         }
-        if (!item.sku_uuid || typeof item.sku_uuid !== 'string') {
-          return `Missing sku_uuid in item at index ${i}.`;
+
+        const hasName = typeof item.sku_name === 'string' && item.sku_name.length > 0;
+        const hasUuid = typeof item.sku_uuid === 'string' && item.sku_uuid.length > 0;
+
+        if (!hasName && !hasUuid) {
+          return `Item at index ${i} must have either sku_name or sku_uuid.`;
         }
-        if (!isValidUUID(item.sku_uuid)) {
-          return `Invalid SKU UUID format in item at index ${i}: "${item.sku_uuid}". You must call get_providers and get_skus first to obtain valid UUIDs.`;
+        if (hasUuid && !isValidUUID(item.sku_uuid as string)) {
+          return `Invalid SKU UUID format in item at index ${i}: "${item.sku_uuid}".`;
         }
         if (typeof item.quantity !== 'number' || item.quantity < 1) {
           return `Invalid quantity in item at index ${i}: must be a positive number.`;
@@ -134,17 +138,22 @@ export function getConfirmationMessage(toolName: string, args: Record<string, un
     case 'fund_credit':
       return `Fund your credit account with ${args.amount}?`;
     case 'create_lease': {
-      let itemCount = 0;
+      let summary = '';
       try {
         const items = typeof args.items === 'string' ? JSON.parse(args.items) : args.items;
-        itemCount = Array.isArray(items) ? items.length : 0;
+        if (Array.isArray(items) && items.length > 0) {
+          const parts = items.map((item: Record<string, unknown>) => {
+            const label = item.sku_name || item.sku_uuid || 'unknown';
+            return `${item.quantity}x ${label}`;
+          });
+          summary = parts.join(', ');
+        }
       } catch {
-        itemCount = 0;
+        // Fall through to generic message
       }
-      const hasDeploymentData = !!args.deployment_data;
-      return hasDeploymentData
-        ? `Create a new lease with ${itemCount} item(s) and upload deployment data?`
-        : `Create a new lease with ${itemCount} item(s)?`;
+      return summary
+        ? `Create a new lease with ${summary}?`
+        : 'Create a new lease?';
     }
     case 'close_lease':
       return `Close lease ${args.lease_uuid}${args.reason ? ` (reason: ${args.reason})` : ''}?`;

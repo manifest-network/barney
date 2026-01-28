@@ -13,33 +13,21 @@ import {
   LEASE_STATE_MAP,
   LEASE_STATE_FILTERS,
 } from '../../api/billing';
-import { getProviders, getSKUsByProvider } from '../../api/sku';
+import { getProviders, getSKUs, getSKUsByProvider } from '../../api/sku';
 import { getAllBalances } from '../../api/bank';
 import { isValidUUID, parseJsonStringArray } from '../../utils/format';
 import type { ToolResult } from './types';
 
 /**
- * List of read-only query tools
- */
-export const QUERY_TOOLS: readonly string[] = [
-  'get_balance',
-  'get_leases',
-  'get_providers',
-  'get_skus',
-  'get_credit_estimate',
-  'get_withdrawable',
-  'cosmos_query',
-];
-
-/**
- * Execute a read-only tool (query)
+ * Execute a read-only tool (query).
+ * Returns null if the tool is not a query tool.
  */
 export async function executeQuery(
   toolName: string,
   args: Record<string, unknown>,
   clientManager: CosmosClientManager | null,
   address: string | undefined
-): Promise<ToolResult> {
+): Promise<ToolResult | null> {
   switch (toolName) {
     case 'get_balance': {
       if (!address) {
@@ -109,18 +97,24 @@ export async function executeQuery(
     }
 
     case 'get_skus': {
-      const providerUuid = args.provider_uuid;
-      if (typeof providerUuid !== 'string' || !providerUuid) {
-        return { success: false, error: 'provider_uuid is required' };
-      }
-      if (!isValidUUID(providerUuid)) {
+      const providerUuid = args.provider_uuid as string | undefined;
+      const activeOnly = args.active_only === 'true';
+
+      if (providerUuid) {
+        if (!isValidUUID(providerUuid)) {
+          return {
+            success: false,
+            error: `Invalid provider_uuid format: "${providerUuid}". Must be a valid UUID.`,
+          };
+        }
+        const skus = await getSKUsByProvider(providerUuid, activeOnly);
         return {
-          success: false,
-          error: `Invalid provider_uuid format: "${providerUuid}". Must be a valid UUID.`,
+          success: true,
+          data: { skus, count: skus.length },
         };
       }
 
-      const skus = await getSKUsByProvider(providerUuid);
+      const skus = await getSKUs(activeOnly);
       return {
         success: true,
         data: { skus, count: skus.length },
@@ -199,7 +193,7 @@ export async function executeQuery(
     }
 
     default:
-      return { success: false, error: `Unknown query tool: ${toolName}` };
+      return null; // Not a query tool
   }
 }
 

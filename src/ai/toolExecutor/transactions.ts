@@ -5,9 +5,9 @@
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getLease } from '../../api/billing';
-import { getProviders } from '../../api/sku';
+import { getProviders, getSKUs } from '../../api/sku';
 import { isValidUUID, parseJsonStringArray } from '../../utils/format';
-import type { ToolResult, SignResult } from './types';
+import type { ToolResult, SignResult, PayloadAttachment } from './types';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, computePayloadHash } from './utils';
 
 /**
@@ -18,7 +18,8 @@ export async function executeTransaction(
   args: Record<string, unknown>,
   clientManager: CosmosClientManager,
   address?: string,
-  signArbitrary?: (address: string, data: string) => Promise<SignResult>
+  signArbitrary?: (address: string, data: string) => Promise<SignResult>,
+  payload?: PayloadAttachment
 ): Promise<ToolResult> {
   switch (toolName) {
     case 'fund_credit': {
@@ -32,15 +33,20 @@ export async function executeTransaction(
 
       // fund-credit requires: <tenant-address> <amount>
       const result = await cosmosTx(clientManager, 'billing', 'fund-credit', [address, amount], true);
+      if (result.code !== 0) {
+        return { success: false, error: result.rawLog };
+      }
       return {
-        success: result.code === 0,
-        data: result,
-        error: result.code !== 0 ? result.rawLog : undefined,
+        success: true,
+        data: {
+          message: `Successfully funded credit account with ${amount}.`,
+          transactionHash: result.transactionHash,
+        },
       };
     }
 
     case 'create_lease':
-      return executeCreateLease(args, clientManager, address, signArbitrary);
+      return executeCreateLease(args, clientManager, address, signArbitrary, payload);
 
     case 'upload_payload':
       return executeUploadPayload(args, address, signArbitrary);
@@ -55,10 +61,16 @@ export async function executeTransaction(
       const txArgs = reason ? ['--reason', reason, leaseUuid] : [leaseUuid];
 
       const result = await cosmosTx(clientManager, 'billing', 'close-lease', txArgs, true);
+      if (result.code !== 0) {
+        return { success: false, error: result.rawLog };
+      }
       return {
-        success: result.code === 0,
-        data: result,
-        error: result.code !== 0 ? result.rawLog : undefined,
+        success: true,
+        data: {
+          message: `Successfully closed lease ${leaseUuid}.`,
+          leaseUuid,
+          transactionHash: result.transactionHash,
+        },
       };
     }
 
@@ -78,10 +90,15 @@ export async function executeTransaction(
       const txArgs = parseResult.data;
 
       const result = await cosmosTx(clientManager, module, subcommand, txArgs, true);
+      if (result.code !== 0) {
+        return { success: false, error: result.rawLog };
+      }
       return {
-        success: result.code === 0,
-        data: result,
-        error: result.code !== 0 ? result.rawLog : undefined,
+        success: true,
+        data: {
+          message: `Successfully executed ${module} ${subcommand}.`,
+          transactionHash: result.transactionHash,
+        },
       };
     }
 
@@ -91,55 +108,93 @@ export async function executeTransaction(
 }
 
 /**
- * Execute create_lease with optional deployment data upload
+ * Execute create_lease with optional payload attachment upload
  */
 async function executeCreateLease(
   args: Record<string, unknown>,
   clientManager: CosmosClientManager,
   address?: string,
-  signArbitrary?: (address: string, data: string) => Promise<SignResult>
+  signArbitrary?: (address: string, data: string) => Promise<SignResult>,
+  payload?: PayloadAttachment
 ): Promise<ToolResult> {
   if (!address) {
     return { success: false, error: 'Wallet not connected' };
   }
 
-  let items: Array<{ sku_uuid: string; quantity: number }>;
+  let rawItems: Array<{ sku_uuid?: string; sku_name?: string; quantity: number }>;
 
   try {
-    items =
+    rawItems =
       typeof args.items === 'string'
         ? JSON.parse(args.items)
-        : (args.items as Array<{ sku_uuid: string; quantity: number }>);
+        : (args.items as Array<{ sku_uuid?: string; sku_name?: string; quantity: number }>);
   } catch {
     return { success: false, error: 'Invalid items format' };
   }
 
-  // Validate UUID format - must be proper UUID like "019beb87-09de-7000-beef-ae733e73ff23"
-  for (const item of items) {
-    if (!isValidUUID(item.sku_uuid)) {
-      return {
-        success: false,
-        error: `Invalid SKU UUID format: "${item.sku_uuid}". SKU UUIDs must be valid UUIDs (e.g., "019beb87-09de-7000-beef-ae733e73ff23"). You must call get_providers and then get_skus to obtain the correct UUID for the SKU the user wants.`,
-      };
+  // Resolve sku_name → sku_uuid where needed
+  const needsNameResolution = rawItems.some((item) => item.sku_name && !item.sku_uuid);
+  let allSKUs: Awaited<ReturnType<typeof getSKUs>> | undefined;
+
+  if (needsNameResolution) {
+    try {
+      allSKUs = await getSKUs();
+    } catch {
+      return { success: false, error: 'Failed to fetch SKU list for name resolution.' };
     }
   }
 
-  const deploymentData = args.deployment_data as string | undefined;
+  const items: Array<{ sku_uuid: string; quantity: number }> = [];
+  for (const item of rawItems) {
+    let uuid = item.sku_uuid;
+
+    if (!uuid && item.sku_name) {
+      const matches = allSKUs!.filter(
+        (s) => s.name.toLowerCase() === item.sku_name!.toLowerCase()
+      );
+      if (matches.length === 0) {
+        return {
+          success: false,
+          error: `No SKU found with name "${item.sku_name}". Use get_skus to list available SKUs.`,
+        };
+      }
+      if (matches.length > 1) {
+        const details = matches
+          .map((s) => `${s.uuid} (provider ${s.provider_uuid})`)
+          .join(', ');
+        return {
+          success: false,
+          error: `Multiple SKUs found with name "${item.sku_name}": ${details}. Please specify the sku_uuid directly.`,
+        };
+      }
+      uuid = matches[0].uuid;
+    }
+
+    if (!uuid || !isValidUUID(uuid)) {
+      return {
+        success: false,
+        error: `Invalid SKU UUID format: "${uuid}". SKU UUIDs must be valid UUIDs (e.g., "019beb87-09de-7000-beef-ae733e73ff23").`,
+      };
+    }
+
+    items.push({ sku_uuid: uuid, quantity: item.quantity });
+  }
+
   let metaHashHex: string | undefined;
   let payloadBytes: Uint8Array | undefined;
 
-  // If deployment_data is provided, compute the meta_hash
-  if (deploymentData && deploymentData.trim()) {
+  // If a payload attachment is provided, use its pre-computed hash
+  if (payload) {
     // Fail early if signArbitrary is not available - we need it for payload upload
     if (!signArbitrary) {
       return {
         success: false,
         error:
-          'Cannot create lease with deployment data: wallet does not support message signing (ADR-036). Please use a wallet that supports signArbitrary, or create the lease without deployment_data.',
+          'Cannot create lease with payload: wallet does not support message signing (ADR-036). Please use a wallet that supports signArbitrary, or create the lease without a payload attachment.',
       };
     }
-    payloadBytes = new TextEncoder().encode(deploymentData);
-    metaHashHex = await computePayloadHash(payloadBytes);
+    payloadBytes = payload.bytes;
+    metaHashHex = payload.hash;
   }
 
   // Format items for the MCP: sku-uuid:quantity format
@@ -154,15 +209,22 @@ async function executeCreateLease(
   if (result.code !== 0) {
     return {
       success: false,
-      data: result,
       error: result.rawLog,
     };
   }
 
-  // If we have deployment data and lease creation succeeded, upload the payload
-  if (deploymentData && metaHashHex && payloadBytes && signArbitrary) {
+  const leaseUuid = extractLeaseUuidFromTxResult(result as unknown as Record<string, unknown>);
+  const itemsSummary = items.map((item, i) => {
+    const name = rawItems[i]?.sku_name;
+    return `${item.quantity}x ${name || item.sku_uuid}`;
+  }).join(', ');
+
+  // If we have a payload attachment and lease creation succeeded, upload the payload
+  if (payload && metaHashHex && payloadBytes && signArbitrary) {
     return handlePayloadUploadAfterLeaseCreation(
-      result as unknown as Record<string, unknown>,
+      result.transactionHash,
+      leaseUuid,
+      itemsSummary,
       address,
       metaHashHex,
       payloadBytes,
@@ -172,7 +234,12 @@ async function executeCreateLease(
 
   return {
     success: true,
-    data: result,
+    data: {
+      message: `Successfully created lease${leaseUuid ? ` ${leaseUuid}` : ''} with ${itemsSummary}.`,
+      leaseUuid,
+      items: itemsSummary,
+      transactionHash: result.transactionHash,
+    },
   };
 }
 
@@ -180,36 +247,34 @@ async function executeCreateLease(
  * Handle payload upload after successful lease creation
  */
 async function handlePayloadUploadAfterLeaseCreation(
-  result: Record<string, unknown>,
+  transactionHash: string,
+  leaseUuid: string | null,
+  itemsSummary: string,
   address: string,
   metaHashHex: string,
   payloadBytes: Uint8Array,
   signArbitrary: (address: string, data: string) => Promise<SignResult>
 ): Promise<ToolResult> {
+  if (!leaseUuid) {
+    return {
+      success: true,
+      data: {
+        message: `Lease created with ${itemsSummary}, but could not extract lease UUID for payload upload. You may need to upload the payload manually using upload_payload.`,
+        transactionHash,
+      },
+    };
+  }
+
   try {
-    // Extract lease UUID from the transaction result
-    const leaseUuid = extractLeaseUuidFromTxResult(result);
-
-    if (!leaseUuid) {
-      return {
-        success: true,
-        data: {
-          ...result,
-          warning:
-            'Lease created but could not extract UUID for payload upload. You may need to upload payload manually.',
-        },
-      };
-    }
-
     // Get the provider API URL from the lease
     const leaseData = await getLease(leaseUuid);
     if (!leaseData) {
       return {
         success: true,
         data: {
-          ...result,
+          message: `Lease ${leaseUuid} created with ${itemsSummary}, but could not fetch lease data for payload upload.`,
           leaseUuid,
-          warning: 'Lease created but could not fetch lease data for payload upload.',
+          transactionHash,
         },
       };
     }
@@ -222,10 +287,9 @@ async function handlePayloadUploadAfterLeaseCreation(
       return {
         success: true,
         data: {
-          ...result,
+          message: `Lease ${leaseUuid} created with ${itemsSummary}, but provider API URL not found. You may need to upload the payload manually using upload_payload.`,
           leaseUuid,
-          warning:
-            'Lease created but provider API URL not found. You may need to upload payload manually using upload_payload tool.',
+          transactionHash,
         },
       };
     }
@@ -244,10 +308,9 @@ async function handlePayloadUploadAfterLeaseCreation(
       return {
         success: true,
         data: {
-          ...result,
+          message: `Lease ${leaseUuid} created with ${itemsSummary}, but payload upload failed: ${uploadResult.error}. You may need to upload the payload manually using upload_payload.`,
           leaseUuid,
-          payloadUploadError: uploadResult.error,
-          warning: 'Lease created but payload upload failed. You may need to upload payload manually.',
+          transactionHash,
         },
       };
     }
@@ -255,19 +318,18 @@ async function handlePayloadUploadAfterLeaseCreation(
     return {
       success: true,
       data: {
-        ...result,
+        message: `Successfully created lease ${leaseUuid} with ${itemsSummary} and uploaded deployment payload.`,
         leaseUuid,
-        payloadUploaded: true,
-        message: 'Lease created and deployment data uploaded successfully.',
+        transactionHash,
       },
     };
   } catch (uploadErr) {
     return {
       success: true,
       data: {
-        ...result,
-        payloadUploadError: uploadErr instanceof Error ? uploadErr.message : 'Unknown error',
-        warning: 'Lease created but payload upload failed. You may need to upload payload manually.',
+        message: `Lease ${leaseUuid} created with ${itemsSummary}, but payload upload failed: ${uploadErr instanceof Error ? uploadErr.message : 'Unknown error'}. You may need to upload the payload manually using upload_payload.`,
+        leaseUuid,
+        transactionHash,
       },
     };
   }

@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect, useCallback, type FormEvent } from 'react';
-import { Send, Settings, X, Sparkles, Loader, WifiOff, Maximize2, Minimize2 } from 'lucide-react';
+import { Send, Settings, X, Sparkles, Loader, WifiOff, Maximize2, Minimize2, Paperclip } from 'lucide-react';
 import { useAI } from '../../contexts/AIContext';
 import { MessageBubble } from './MessageBubble';
 import { ConfirmationCard } from './ConfirmationCard';
 import { AISettings } from './AISettings';
 import { MAX_INPUT_LENGTH } from '../../ai/validation';
+import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
+import { formatFileSize } from '../../utils/format';
 
 export function ChatPanel() {
   const {
@@ -12,18 +14,23 @@ export function ChatPanel() {
     isStreaming,
     isConnected,
     pendingConfirmation,
+    pendingPayload,
     sendMessage,
     setIsOpen,
     confirmAction,
     cancelAction,
+    attachPayload,
+    clearPayload,
   } = useAI();
 
   const [input, setInput] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const prevMessageCountRef = useRef(messages.length);
   const userScrolledUpRef = useRef(false);
 
@@ -98,6 +105,20 @@ export function ChatPanel() {
     e.target.style.height = 'auto';
     // Set height to scrollHeight (max 150px)
     e.target.style.height = `${Math.min(e.target.scrollHeight, 150)}px`;
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAttachError(null);
+
+    const result = await attachPayload(file);
+    if (result.error) {
+      setAttachError(result.error);
+    }
+
+    // Reset input so the same file can be re-selected
+    e.target.value = '';
   };
 
   // Show character count when approaching limit
@@ -229,7 +250,26 @@ export function ChatPanel() {
 
       {/* Input Area */}
       <form onSubmit={handleSubmit} className="chat-input-form" aria-label="Chat input">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={ALLOWED_FILE_EXTENSIONS.join(',')}
+          onChange={handleFileChange}
+          className="hidden"
+          aria-hidden="true"
+          tabIndex={-1}
+        />
         <div className="chat-input-wrapper">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!isConnected || isStreaming}
+            className="chat-attach-btn"
+            aria-label="Attach payload file"
+            title="Attach deployment payload"
+          >
+            <Paperclip className="w-4 h-4" aria-hidden="true" />
+          </button>
           <textarea
             ref={inputRef}
             value={input}
@@ -256,6 +296,25 @@ export function ChatPanel() {
             )}
           </button>
         </div>
+        {pendingPayload && (
+          <div className="chat-attachment-chip" role="status">
+            <Paperclip className="w-3 h-3" aria-hidden="true" />
+            <span className="chat-attachment-name">
+              {pendingPayload.filename || 'payload'} ({formatFileSize(pendingPayload.size)})
+            </span>
+            <button
+              type="button"
+              onClick={clearPayload}
+              className="chat-attachment-remove"
+              aria-label="Remove attachment"
+            >
+              <X className="w-3 h-3" aria-hidden="true" />
+            </button>
+          </div>
+        )}
+        {attachError && (
+          <p className="chat-input-hint text-error" role="alert">{attachError}</p>
+        )}
         <p id="chat-input-hint" className="chat-input-hint">
           {showCharCount ? (
             <span className={isNearLimit ? 'text-warning' : ''} role="status">

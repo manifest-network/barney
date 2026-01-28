@@ -7,8 +7,8 @@ import {
   getCreditEstimate,
   fundCredit,
   DENOMS,
-  DENOM_METADATA,
 } from '../../api';
+import { formatAmount } from '../../utils/format';
 import type { Coin } from '../../api/bank';
 import type { CreditAccountResponse, CreditEstimateResponse } from '../../api/billing';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh';
@@ -130,14 +130,6 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
     }
   };
 
-  const formatAmount = (amount: string, denom: string) => {
-    const metadata = DENOM_METADATA[denom as keyof typeof DENOM_METADATA];
-    const exponent = metadata?.exponent ?? 6;
-    const symbol = metadata?.symbol ?? denom;
-    const num = parseInt(amount, 10) / Math.pow(10, exponent);
-    return `${num.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${symbol}`;
-  };
-
   const formatDuration = (seconds: number) => {
     if (seconds <= 0) return '0h';
     const days = Math.floor(seconds / 86400);
@@ -200,16 +192,16 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
         ) : (
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="stat-card">
-              <div className="stat-label">MFX Balance</div>
               <div className="stat-value text-primary">
                 {mfxBalance ? formatAmount(mfxBalance.amount, mfxBalance.denom) : '0 MFX'}
               </div>
+              <div className="stat-label">MFX Balance</div>
             </div>
             <div className="stat-card">
-              <div className="stat-label">PWR Balance</div>
               <div className="stat-value text-secondary-400">
                 {pwrBalance ? formatAmount(pwrBalance.amount, pwrBalance.denom) : '0 PWR'}
               </div>
+              <div className="stat-label">PWR Balance</div>
             </div>
           </div>
         )}
@@ -225,30 +217,30 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
           <>
             <div className="mb-6 grid gap-4 sm:grid-cols-3">
               <div className="stat-card">
-                <div className="stat-label">Credit Balance (PWR)</div>
                 <div className="stat-value text-success">
                   {creditPwrBalance
                     ? formatAmount(creditPwrBalance.amount, creditPwrBalance.denom)
                     : '0 PWR'}
                 </div>
+                <div className="stat-label">Credit Balance (PWR)</div>
               </div>
               <div className="stat-card">
-                <div className="stat-label">Burn Rate</div>
                 <div className="stat-value text-warning">
                   {burnRatePerHour > 0
                     ? `${formatAmount(String(burnRatePerHour), DENOMS.PWR)}/hr`
                     : '0 PWR/hr'}
                 </div>
+                <div className="stat-label">Burn Rate</div>
               </div>
               <div className="stat-card">
-                <div className="flex items-center gap-2 stat-label">
-                  <Clock size={14} />
-                  Time Remaining
-                </div>
                 <div className="stat-value text-accent">
                   {creditEstimate?.estimated_duration_seconds
                     ? formatDuration(parseInt(creditEstimate.estimated_duration_seconds, 10))
                     : '-'}
+                </div>
+                <div className="flex items-center gap-2 stat-label">
+                  <Clock size={14} />
+                  Time Remaining
                 </div>
               </div>
             </div>

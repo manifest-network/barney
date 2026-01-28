@@ -57,16 +57,20 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'get_skus',
-      description: 'List SKUs (compute resources) offered by a specific provider',
+      description: 'List available SKUs (compute resources). Can list all SKUs across all providers, or filter by provider_uuid. Only use when the user explicitly asks to see available SKUs.',
       parameters: {
         type: 'object',
         properties: {
           provider_uuid: {
             type: 'string',
-            description: 'The UUID of the provider to get SKUs for',
+            description: 'Optional: filter SKUs by provider UUID. If omitted, returns all SKUs from all providers.',
+          },
+          active_only: {
+            type: 'string',
+            description: 'If "true", only return active SKUs',
           },
         },
-        required: ['provider_uuid'],
+        required: [],
       },
     },
   },
@@ -86,17 +90,13 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'create_lease',
-      description: 'Create a new lease for compute resources. IMPORTANT: Requires user confirmation. CRITICAL: You MUST call get_providers then get_skus FIRST to obtain valid SKU UUIDs. SKU UUIDs are formatted like "019beb87-09de-7000-beef-ae733e73ff23". Never use user-provided names like "001" or "SKU-001" as the UUID - always query for the real UUID first. If deployment_data is provided, the meta_hash will be automatically computed from it.',
+      description: 'Create a new lease for compute resources. IMPORTANT: Requires user confirmation. Use sku_name to specify SKUs by name (the system resolves UUIDs automatically). Users can attach payload files via the chat input.',
       parameters: {
         type: 'object',
         properties: {
           items: {
             type: 'string',
-            description: 'JSON array of items to lease. IMPORTANT: sku_uuid must be a valid UUID obtained from get_skus (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx). Example: [{"sku_uuid": "019beb87-09de-7000-beef-ae733e73ff23", "quantity": 1}]',
-          },
-          deployment_data: {
-            type: 'string',
-            description: 'CRITICAL: Use the EXACT payload the user provided - do NOT invent or modify it. If user says "with payload {\"hello\": \"mom\"}", then deployment_data must be exactly "{\"hello\": \"mom\"}". Never make up deployment data.',
+            description: 'JSON array of items to lease. Use sku_name (preferred) or sku_uuid. Examples: [{"sku_name": "001", "quantity": 1}] or [{"sku_uuid": "019beb87-09de-7000-beef-ae733e73ff23", "quantity": 1}]',
           },
         },
         required: ['items'],
@@ -189,7 +189,7 @@ export const AI_TOOLS: OllamaTool[] = [
         properties: {
           module: {
             type: 'string',
-            description: 'The module name (bank, staking, distribution, gov, auth, billing)',
+            description: 'The module name (bank, staking, distribution, gov, auth, billing, sku)',
           },
           subcommand: {
             type: 'string',
@@ -214,7 +214,7 @@ export const AI_TOOLS: OllamaTool[] = [
         properties: {
           module: {
             type: 'string',
-            description: 'The module name (bank, staking, distribution, gov, billing)',
+            description: 'The module name (bank, staking, distribution, gov, billing, sku, manifest)',
           },
           subcommand: {
             type: 'string',
@@ -275,13 +275,13 @@ export function getToolCallDescription(toolName: string, args: Record<string, un
     case 'get_providers':
       return 'Listing available providers...';
     case 'get_skus':
-      return `Getting SKUs for provider ${args.provider_uuid}...`;
+      return args.provider_uuid
+        ? `Getting SKUs for provider ${args.provider_uuid}...`
+        : 'Listing all available SKUs...';
     case 'get_credit_estimate':
       return 'Calculating credit estimate...';
     case 'create_lease':
-      return args.deployment_data
-        ? 'Creating a new lease with deployment data (requires confirmation)'
-        : 'Creating a new lease (requires confirmation)';
+      return 'Creating a new lease (requires confirmation)';
     case 'upload_payload':
       return `Uploading deployment payload to lease ${args.lease_uuid} (requires confirmation)`;
     case 'close_lease':
