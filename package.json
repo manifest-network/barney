@@ -17,7 +17,11 @@
     "**/@cosmjs/encoding": "0.32.4",
     "**/@cosmjs/math": "0.32.4",
     "**/@cosmjs/crypto": "0.32.4",
-    "**/@cosmjs/utils": "0.32.4"
+    "**/@cosmjs/utils": "0.32.4",
+    "**/axios": "1.13.2"
+  },
+  "overrides": {
+    "axios": "1.13.2"
   },
   "dependencies": {
     "@cosmjs/proto-signing": "0.32.4",
@@ -33,11 +37,11 @@
     "@cosmos-kit/react": "2.22.3",
     "@cosmos-kit/web3auth": "npm:@manifest-network/web3auth@2.16.6-ll.1",
     "@interchain-ui/react": "1.26.2",
-    "@manifest-network/manifestjs": "2.2.0-billing-v2.1",
+    "@manifest-network/manifestjs": "2.2.0-billing-v2.2",
     "axios": "1.13.2",
     "chain-registry": "2.0.140",
     "lucide-react": "^0.563.0",
-    "@manifest-network/manifest-mcp-browser": "0.1.7",
+    "@manifest-network/manifest-mcp-browser": "0.1.13",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },
