@@ -309,7 +309,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Error Banner */}
       {error && <ErrorBanner error={error} onRetry={fetchData} />}
 
@@ -414,7 +414,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
       </div>
 
       {/* Providers Section */}
-      <div className="card-static p-6">
+      <div className="card-static p-4">
         <h2 className="mb-4 text-lg font-heading font-semibold">Providers</h2>
         {loading && providers.length === 0 ? (
           <div className="text-muted">Loading providers...</div>
@@ -447,7 +447,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
       </div>
 
       {/* SKUs Section */}
-      <div className="card-static p-6">
+      <div className="card-static p-4">
         <h2 className="mb-4 text-lg font-heading font-semibold">
           SKUs {selectedProvider && `(${getProviderName(selectedProvider)})`}
         </h2>

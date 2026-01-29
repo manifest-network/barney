@@ -160,31 +160,24 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const burnRatePerHour = pwrRatePerSecond ? parseInt(pwrRatePerSecond.amount, 10) * 3600 : 0;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Error Banner */}
       {error && <ErrorBanner error={error} onRetry={autoRefresh.refresh} />}
 
-      {/* Connected Address */}
-      {address && (
-        <div className="card-static p-6">
-          <div className="flex flex-wrap items-center justify-between gap-4 mb-3">
-            <h2 className="text-lg font-heading font-semibold">Connected Address</h2>
-            <AutoRefreshIndicator autoRefresh={autoRefresh} intervalSeconds={10} />
-          </div>
-          <div className="font-mono text-sm text-secondary break-all">{address}</div>
-        </div>
-      )}
-
-      {/* Wallet Balances Card */}
-      <div className="card-static p-6">
-        <SectionHeader icon={Wallet} title="Wallet Balances" />
+      {/* Wallet Balances Section */}
+      <div>
+        <SectionHeader
+          icon={Wallet}
+          title="Wallet Balances"
+          action={<AutoRefreshIndicator autoRefresh={autoRefresh} intervalSeconds={10} />}
+        />
         {loading && !mfxBalance ? (
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2">
             <SkeletonStat />
             <SkeletonStat />
           </div>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2">
             <div className="stat-card">
               <div className="stat-value text-primary">
                 {mfxBalance ? formatAmount(mfxBalance.amount, mfxBalance.denom) : '0 MFX'}
@@ -201,15 +194,15 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
         )}
       </div>
 
-      {/* Credit Account Card */}
-      <div className="card-static p-6">
+      {/* Credit Account Section */}
+      <div>
         <SectionHeader icon={Flame} title="Credit Account" />
 
         {loading && !creditAccount ? (
           <SkeletonStatGrid count={3} />
         ) : (
           <>
-            <div className="mb-6 grid gap-4 sm:grid-cols-3">
+            <div className="mb-4 grid gap-3 sm:grid-cols-3">
               <div className="stat-card">
                 <div className="stat-value text-success">
                   {creditPwrBalance
@@ -239,7 +232,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
               </div>
             </div>
 
-            <div className="mb-4 grid gap-4 sm:grid-cols-2">
+            <div className="mb-3 grid gap-3 sm:grid-cols-2">
               <div className="p-3 rounded-lg bg-surface-800/50">
                 <span className="text-muted">Active Leases: </span>
                 <span className="font-semibold text-success">
@@ -265,9 +258,9 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
       </div>
 
       {/* Fund Credit Card */}
-      <div className="card-static p-6">
+      <div className="card-static p-4">
         <SectionHeader title="Fund Credit Account" description="Add PWR tokens to your credit account" />
-        <div className="flex gap-4">
+        <div className="flex gap-3">
           <div className="flex-1">
             <label htmlFor="fund-amount" className="mb-2 block text-sm text-muted">Amount (PWR)</label>
             <input

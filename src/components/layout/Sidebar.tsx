@@ -1,19 +1,17 @@
 import { Wallet, Package, FileText, Building2, Globe } from 'lucide-react';
 import { SidebarItem } from './SidebarItem';
 import { SidebarSection } from './SidebarSection';
-import { truncateAddress } from '../../utils/address';
 
 export type TabId = 'wallet' | 'catalog' | 'leases' | 'provider' | 'network';
 
 interface SidebarProps {
   activeTab: TabId;
   onTabChange: (tab: TabId) => void;
-  address?: string;
   isProvider: boolean;
   isAdmin: boolean;
 }
 
-export function Sidebar({ activeTab, onTabChange, address, isProvider, isAdmin }: SidebarProps) {
+export function Sidebar({ activeTab, onTabChange, isProvider, isAdmin }: SidebarProps) {
 
   return (
     <aside className="sidebar">
@@ -78,12 +76,6 @@ export function Sidebar({ activeTab, onTabChange, address, isProvider, isAdmin }
       </nav>
 
       <div className="sidebar-footer">
-        {address && (
-          <div className="sidebar-address">
-            <span className="sidebar-address-label">Connected</span>
-            <span className="sidebar-address-value">{truncateAddress(address)}</span>
-          </div>
-        )}
         <div className="sidebar-version">v0.1.0</div>
       </div>
     </aside>
