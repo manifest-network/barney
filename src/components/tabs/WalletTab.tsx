@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { Link, Wallet, Clock, Flame, Loader2 } from 'lucide-react';
+import { Link, Wallet, Clock, Flame, Loader2, Copy, Check, ChevronUp, Zap, TrendingDown } from 'lucide-react';
 import {
   getBalance,
   getCreditAccount,
@@ -15,9 +15,7 @@ import { useAutoRefresh } from '../../hooks/useAutoRefresh';
 import { AutoRefreshIndicator } from '../ui/AutoRefreshIndicator';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
-import { SkeletonStat, SkeletonStatGrid } from '../ui/SkeletonStat';
-import { SectionHeader } from '../ui/SectionHeader';
-import { ErrorBanner } from '../ui/ErrorBanner';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 
 const CHAIN_NAME = 'manifestlocal';
 
@@ -39,8 +37,10 @@ interface WalletData {
 export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const { getOfflineSignerDirect } = useChain(CHAIN_NAME);
   const toast = useToast();
+  const { copied, copyToClipboard } = useCopyToClipboard();
   const [fundAmount, setFundAmount] = useState('');
   const [txLoading, setTxLoading] = useState(false);
+  const [showFundPanel, setShowFundPanel] = useState(false);
   const [data, setData] = useState<WalletData>({
     mfxBalance: null,
     pwrBalance: null,
@@ -53,7 +53,6 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const fetchData = useCallback(async () => {
     if (!address) return;
 
-    // Only show loading on initial fetch, not on refreshes
     setData((prev) => {
       if (!prev.mfxBalance) {
         return { ...prev, loading: true, error: null };
@@ -95,7 +94,6 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const handleFundCredit = async () => {
     if (!address || !fundAmount) return;
 
-    // Validate the amount is a valid positive number
     const parsedAmount = parseFloat(fundAmount);
     if (isNaN(parsedAmount) || parsedAmount <= 0 || !isFinite(parsedAmount)) {
       toast.error('Please enter a valid positive amount');
@@ -118,8 +116,9 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
       });
 
       if (result.success) {
-        toast.success(`Successfully funded ${fundAmount} PWR! Tx: ${result.transactionHash?.slice(0, 16)}...`);
+        toast.success(`Funded ${fundAmount} PWR! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         setFundAmount('');
+        setShowFundPanel(false);
         autoRefresh.refresh();
       } else {
         toast.error(result.error || 'Transaction failed');
@@ -158,162 +157,231 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
     (c) => c.denom === DENOMS.PWR || c.denom === 'upwr'
   );
   const burnRatePerHour = pwrRatePerSecond ? parseInt(pwrRatePerSecond.amount, 10) * 3600 : 0;
+  const timeRemaining = creditEstimate?.estimated_duration_seconds
+    ? parseInt(creditEstimate.estimated_duration_seconds, 10)
+    : 0;
+
+  // Determine credit health status
+  const getCreditStatus = () => {
+    if (!creditPwrBalance || parseInt(creditPwrBalance.amount, 10) === 0) return 'empty';
+    if (timeRemaining > 0 && timeRemaining < 3600) return 'critical'; // < 1 hour
+    if (timeRemaining > 0 && timeRemaining < 86400) return 'low'; // < 24 hours
+    return 'healthy';
+  };
+  const creditStatus = getCreditStatus();
+
+  if (loading && !mfxBalance) {
+    return (
+      <div className="space-y-3">
+        <div className="wallet-card">
+          <div className="wallet-card-row">
+            <div className="skeleton h-4 w-32" />
+            <div className="skeleton h-6 w-48" />
+          </div>
+        </div>
+        <div className="wallet-card">
+          <div className="wallet-card-row">
+            <div className="skeleton h-4 w-32" />
+            <div className="skeleton h-6 w-48" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       {/* Error Banner */}
-      {error && <ErrorBanner error={error} onRetry={autoRefresh.refresh} />}
-
-      {/* Connected Address */}
-      {address && (
-        <div className="card-static p-6">
-          <div className="flex flex-wrap items-center justify-between gap-4 mb-3">
-            <h2 className="text-lg font-heading font-semibold">Connected Address</h2>
-            <AutoRefreshIndicator autoRefresh={autoRefresh} intervalSeconds={10} />
-          </div>
-          <div className="font-mono text-sm text-secondary break-all">{address}</div>
+      {error && (
+        <div className="wallet-error">
+          <span>{error}</span>
+          <button onClick={autoRefresh.refresh} className="btn btn-ghost btn-xs">
+            Retry
+          </button>
         </div>
       )}
 
       {/* Wallet Balances Card */}
-      <div className="card-static p-6">
-        <SectionHeader icon={Wallet} title="Wallet Balances" />
-        {loading && !mfxBalance ? (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <SkeletonStat />
-            <SkeletonStat />
+      <div className="wallet-card">
+        <div className="wallet-card-header">
+          <div className="wallet-card-title">
+            <Wallet size={14} />
+            Wallet Balances
           </div>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="stat-card">
-              <div className="stat-value text-primary">
-                {mfxBalance ? formatAmount(mfxBalance.amount, mfxBalance.denom) : '0 MFX'}
-              </div>
-              <div className="stat-label">MFX Balance</div>
+          <AutoRefreshIndicator autoRefresh={autoRefresh} intervalSeconds={10} />
+        </div>
+
+        <div className="wallet-card-body">
+          <div className="wallet-balance-row">
+            <div className="wallet-balance" data-token="mfx">
+              <span className="wallet-balance-value">
+                {mfxBalance ? formatAmount(mfxBalance.amount, mfxBalance.denom, 2) : '0 MFX'}
+              </span>
+              <span className="wallet-balance-label">MFX</span>
             </div>
-            <div className="stat-card">
-              <div className="stat-value text-secondary-400">
-                {pwrBalance ? formatAmount(pwrBalance.amount, pwrBalance.denom) : '0 PWR'}
-              </div>
-              <div className="stat-label">PWR Balance</div>
+
+            <div className="wallet-balance-divider" />
+
+            <div className="wallet-balance" data-token="pwr">
+              <span className="wallet-balance-value">
+                {pwrBalance ? formatAmount(pwrBalance.amount, pwrBalance.denom, 2) : '0 PWR'}
+              </span>
+              <span className="wallet-balance-label">PWR (Available)</span>
             </div>
           </div>
-        )}
+        </div>
       </div>
 
       {/* Credit Account Card */}
-      <div className="card-static p-6">
-        <SectionHeader icon={Flame} title="Credit Account" />
+      <div className="wallet-card" data-status={creditStatus}>
+        <div className="wallet-card-header">
+          <div className="wallet-card-title">
+            <Flame size={14} />
+            Credit Account
+          </div>
+          <div className="wallet-card-actions">
+            <button
+              onClick={() => setShowFundPanel(!showFundPanel)}
+              className="btn btn-primary btn-sm"
+            >
+              {showFundPanel ? 'Cancel' : 'Fund'}
+            </button>
+          </div>
+        </div>
 
-        {loading && !creditAccount ? (
-          <SkeletonStatGrid count={3} />
-        ) : (
-          <>
-            <div className="mb-6 grid gap-4 sm:grid-cols-3">
-              <div className="stat-card">
-                <div className="stat-value text-success">
-                  {creditPwrBalance
-                    ? formatAmount(creditPwrBalance.amount, creditPwrBalance.denom)
-                    : '0 PWR'}
-                </div>
-                <div className="stat-label">Credit Balance (PWR)</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-value text-warning">
-                  {burnRatePerHour > 0
-                    ? `${formatAmount(String(burnRatePerHour), DENOMS.PWR)}/hr`
-                    : '0 PWR/hr'}
-                </div>
-                <div className="stat-label">Burn Rate</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-value text-accent">
-                  {creditEstimate?.estimated_duration_seconds
-                    ? formatDuration(parseInt(creditEstimate.estimated_duration_seconds, 10))
-                    : '-'}
-                </div>
-                <div className="flex items-center gap-2 stat-label">
-                  <Clock size={14} />
-                  Time Remaining
-                </div>
-              </div>
+        <div className="wallet-card-body">
+          {/* Main metrics row */}
+          <div className="wallet-metrics-row">
+            <div className="wallet-metric" data-type="balance">
+              <span className="wallet-metric-icon">
+                <Zap size={12} />
+              </span>
+              <span className="wallet-metric-value">
+                {creditPwrBalance
+                  ? formatAmount(creditPwrBalance.amount, creditPwrBalance.denom, 2)
+                  : '0 PWR'}
+              </span>
+              <span className="wallet-metric-label">Credit Balance</span>
             </div>
 
-            <div className="mb-4 grid gap-4 sm:grid-cols-2">
-              <div className="p-3 rounded-lg bg-surface-800/50">
-                <span className="text-muted">Active Leases: </span>
-                <span className="font-semibold text-success">
-                  {creditAccount?.credit_account?.active_lease_count ?? 0}
-                </span>
-              </div>
-              <div className="p-3 rounded-lg bg-surface-800/50">
-                <span className="text-muted">Pending Leases: </span>
-                <span className="font-semibold text-warning">
-                  {creditAccount?.credit_account?.pending_lease_count ?? 0}
-                </span>
-              </div>
+            <div className="wallet-metric" data-type="burn">
+              <span className="wallet-metric-icon">
+                <TrendingDown size={12} />
+              </span>
+              <span className="wallet-metric-value">
+                {burnRatePerHour > 0
+                  ? `${formatAmount(String(burnRatePerHour), DENOMS.PWR, 4)}/hr`
+                  : '0/hr'}
+              </span>
+              <span className="wallet-metric-label">Burn Rate</span>
             </div>
 
-            <div className="text-sm text-dim">
-              <span>Credit Address: </span>
-              <span className="font-mono break-all">
-                {creditAccount?.credit_account?.credit_address ?? '-'}
+            <div className="wallet-metric" data-type="time">
+              <span className="wallet-metric-icon">
+                <Clock size={12} />
+              </span>
+              <span className="wallet-metric-value">
+                {timeRemaining > 0 ? formatDuration(timeRemaining) : '-'}
+              </span>
+              <span className="wallet-metric-label">Time Left</span>
+            </div>
+          </div>
+
+          {/* Lease counts row */}
+          <div className="wallet-stats-row">
+            <div className="wallet-stat">
+              <span className="wallet-stat-label">Active</span>
+              <span className="wallet-stat-value" data-type="active">
+                {creditAccount?.credit_account?.active_lease_count ?? 0}
               </span>
             </div>
-          </>
-        )}
-      </div>
+            <div className="wallet-stat">
+              <span className="wallet-stat-label">Pending</span>
+              <span className="wallet-stat-value" data-type="pending">
+                {creditAccount?.credit_account?.pending_lease_count ?? 0}
+              </span>
+            </div>
+          </div>
 
-      {/* Fund Credit Card */}
-      <div className="card-static p-6">
-        <SectionHeader title="Fund Credit Account" description="Add PWR tokens to your credit account" />
-        <div className="flex gap-4">
-          <div className="flex-1">
-            <label htmlFor="fund-amount" className="mb-2 block text-sm text-muted">Amount (PWR)</label>
-            <input
-              id="fund-amount"
-              type="number"
-              value={fundAmount}
-              onChange={(e) => setFundAmount(e.target.value)}
-              placeholder="Enter amount"
-              disabled={txLoading}
-              min="0.000001"
-              max="999999999"
-              step="0.000001"
-              aria-describedby="fund-amount-help"
-              className="input"
-            />
-            <span id="fund-amount-help" className="sr-only">Enter the amount of PWR tokens to fund your credit account</span>
-          </div>
-          <div className="flex items-end">
-            <button
-              onClick={handleFundCredit}
-              disabled={!fundAmount || txLoading}
-              className="btn btn-success"
-            >
-              {txLoading ? (
-                <>
-                  <Loader2 className="animate-spin" size={16} />
-                  Signing...
-                </>
-              ) : (
-                'Fund Credit'
+          {/* Credit address */}
+          {creditAccount?.credit_account?.credit_address && (
+            <div className="wallet-address-row">
+              <span className="wallet-address-label">Credit Address</span>
+              <code className="wallet-address-value">
+                {creditAccount.credit_account.credit_address}
+              </code>
+              <button
+                onClick={() => copyToClipboard(creditAccount.credit_account?.credit_address || '')}
+                className="wallet-copy-btn"
+                title="Copy address"
+              >
+                {copied ? <Check size={10} /> : <Copy size={10} />}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Fund Panel (inline) */}
+        {showFundPanel && (
+          <div className="wallet-fund-panel">
+            <div className="wallet-fund-header">
+              <span className="wallet-fund-title">Fund Credit Account</span>
+              <button
+                onClick={() => setShowFundPanel(false)}
+                className="wallet-fund-close"
+              >
+                <ChevronUp size={14} />
+              </button>
+            </div>
+
+            <div className="wallet-fund-body">
+              <div className="wallet-fund-input-row">
+                <input
+                  type="number"
+                  value={fundAmount}
+                  onChange={(e) => setFundAmount(e.target.value)}
+                  placeholder="Amount"
+                  disabled={txLoading}
+                  min="0.000001"
+                  max="999999999"
+                  step="0.000001"
+                  className="wallet-fund-input"
+                />
+                <span className="wallet-fund-denom">PWR</span>
+                <button
+                  onClick={handleFundCredit}
+                  disabled={!fundAmount || txLoading}
+                  className="btn btn-success btn-sm"
+                >
+                  {txLoading ? (
+                    <Loader2 className="animate-spin" size={14} />
+                  ) : (
+                    'Fund'
+                  )}
+                </button>
+              </div>
+
+              <div className="wallet-fund-presets">
+                {[10, 50, 100, 500].map((amount) => (
+                  <button
+                    key={amount}
+                    onClick={() => setFundAmount(String(amount))}
+                    disabled={txLoading}
+                    className="wallet-fund-preset"
+                  >
+                    {amount}
+                  </button>
+                ))}
+              </div>
+
+              {pwrBalance && (
+                <div className="wallet-fund-available">
+                  Available: {formatAmount(pwrBalance.amount, pwrBalance.denom, 2)}
+                </div>
               )}
-            </button>
+            </div>
           </div>
-        </div>
-        <div className="mt-3 flex gap-2">
-          {[10, 50, 100, 500].map((amount) => (
-            <button
-              key={amount}
-              onClick={() => setFundAmount(String(amount))}
-              disabled={txLoading}
-              className="btn btn-secondary btn-sm"
-            >
-              {amount} PWR
-            </button>
-          ))}
-        </div>
+        )}
       </div>
     </div>
   );

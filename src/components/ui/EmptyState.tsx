@@ -12,16 +12,22 @@ interface EmptyStateProps {
 
 export function EmptyState({ icon: Icon, title, description, action }: EmptyStateProps) {
   return (
-    <div className="card-static p-12 text-center">
-      <div className="empty-state-icon-wrapper">
-        <Icon className="empty-state-icon" size={48} />
+    <div className="card-static empty-state">
+      <div className="empty-state-illustration">
+        <div className="empty-state-icon-wrapper">
+          <Icon className="empty-state-icon" size={28} />
+        </div>
       </div>
-      <h2 className="empty-state-title">{title}</h2>
-      <p className="empty-state-description">{description}</p>
+      <div className="empty-state-content">
+        <h2 className="empty-state-title">{title}</h2>
+        <p className="empty-state-description">{description}</p>
+      </div>
       {action && (
-        <button onClick={action.onClick} className="btn btn-primary btn-lg btn-pill mt-6">
-          {action.label}
-        </button>
+        <div className="empty-state-action">
+          <button onClick={action.onClick} className="btn btn-primary btn-lg btn-pill">
+            {action.label}
+          </button>
+        </div>
       )}
     </div>
   );

@@ -44,12 +44,87 @@ export function formatDate(dateStr: string | undefined, options: 'datetime' | 'd
 }
 
 /**
+ * Format a date as relative time (e.g., "2h ago", "3d ago").
+ * Falls back to absolute date for older dates.
+ *
+ * @param dateStr - ISO date string or undefined
+ * @returns Relative time string or '-' for invalid dates
+ */
+export function formatRelativeTime(dateStr: string | undefined): string {
+  if (!dateStr || dateStr === '0001-01-01T00:00:00Z') {
+    return '-';
+  }
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
+
+  const now = Date.now();
+  const diffMs = now - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  if (diffSec < 60) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHour < 24) return `${diffHour}h ago`;
+  if (diffDay < 7) return `${diffDay}d ago`;
+  if (diffDay < 30) return `${Math.floor(diffDay / 7)}w ago`;
+
+  // Fall back to short date for older items
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/**
  * Format a byte count for display (e.g., "1.2 KB" or "512 B").
  */
 export function formatFileSize(bytes: number): string {
   return bytes >= 1024
     ? `${(bytes / 1024).toFixed(1)} KB`
     : `${bytes} B`;
+}
+
+/**
+ * Format a duration string into human-readable format.
+ * Handles Go-style durations like "3600s", "7200000000000" (nanoseconds), or plain seconds.
+ *
+ * @param duration - Duration string (e.g., "3600s", "7200000000000", "3600")
+ * @returns Human-readable string like "1h", "2h 30m", "45m", "30s"
+ */
+export function formatDuration(duration: string | undefined): string {
+  if (!duration) return '-';
+
+  let totalSeconds: number;
+
+  // Handle Go duration format with 's' suffix
+  if (duration.endsWith('s')) {
+    totalSeconds = parseInt(duration.slice(0, -1), 10);
+  } else {
+    const num = parseInt(duration, 10);
+    // If number is very large (> 1 billion), assume nanoseconds
+    if (num > 1_000_000_000) {
+      totalSeconds = Math.floor(num / 1_000_000_000);
+    } else {
+      totalSeconds = num;
+    }
+  }
+
+  if (Number.isNaN(totalSeconds) || totalSeconds < 0) return '-';
+  if (totalSeconds === 0) return '0s';
+
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (seconds > 0 && days === 0 && hours === 0) parts.push(`${seconds}s`);
+
+  return parts.length > 0 ? parts.join(' ') : '0s';
 }
 
 /**

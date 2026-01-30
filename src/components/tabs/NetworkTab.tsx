@@ -223,7 +223,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
 
   if (!isAdmin) {
     return (
-      <div className="card-static p-12 text-center">
+      <div className="card-static p-8 text-center">
         <div className="empty-state-icon-wrapper">
           <ShieldX size={48} className="empty-state-icon" />
         </div>
@@ -249,9 +249,9 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
   const currentCreditPage = Math.floor(creditOffset / PAGE_SIZE) + 1;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Admin Badge */}
-      <div className="card-static p-4 border-purple-700 bg-purple-900/20">
+      <div className="card-static p-3 border-purple-700 bg-purple-900/20">
         <div className="flex items-center gap-2">
           <Globe size={16} className="text-purple-400" />
           <span className="font-medium text-purple-300">Network Admin Dashboard</span>
@@ -263,7 +263,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
 
       {/* Network Stats */}
       {stats && (
-        <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <StatCard value={stats.totalLeases} label="Total Leases" />
           <StatCard value={stats.pendingLeases} label="Pending" colorClass={LEASE_STATE_COLORS[LeaseState.LEASE_STATE_PENDING]} />
           <StatCard value={stats.activeLeases} label="Active" colorClass={LEASE_STATE_COLORS[LeaseState.LEASE_STATE_ACTIVE]} />
@@ -297,7 +297,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
 
       {/* Leases View */}
       {viewMode === 'leases' && (
-        <div className="card-static p-6">
+        <div className="card-static p-4">
           {/* Filters */}
           <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
@@ -384,7 +384,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
 
       {/* Credits View */}
       {viewMode === 'credits' && (
-        <div className="card-static p-6">
+        <div className="card-static p-4">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="text-lg font-heading font-semibold">Credit Accounts</h3>
             <div className="text-sm text-muted">

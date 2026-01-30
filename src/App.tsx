@@ -73,29 +73,19 @@ function App() {
     <Layout
       activeTab={activeTab}
       onTabChange={setActiveTab}
-      address={address}
       isProvider={isProvider}
       isAdmin={isAdmin}
     >
       {/* Header with wallet controls */}
-      <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-heading font-semibold gradient-text">
-            {activeTab === 'wallet' && 'Wallet & Credit'}
-            {activeTab === 'catalog' && 'Catalog'}
-            {activeTab === 'leases' && 'My Leases'}
-            {activeTab === 'provider' && 'Provider Dashboard'}
-            {activeTab === 'network' && 'Network Overview'}
-          </h1>
-          <p className="text-sm text-muted mt-1">
-            {activeTab === 'wallet' && 'Manage your balances and credit account'}
-            {activeTab === 'catalog' && 'Browse providers and SKUs'}
-            {activeTab === 'leases' && 'View and manage your active leases'}
-            {activeTab === 'provider' && 'Manage your provider operations'}
-            {activeTab === 'network' && 'Network-wide billing statistics'}
-          </p>
-        </div>
-        <div className="flex items-center gap-4">
+      <header className="mb-4 flex items-center justify-between gap-3">
+        <h1 className="text-lg font-heading font-semibold gradient-text">
+          {activeTab === 'wallet' && 'Wallet & Credit'}
+          {activeTab === 'catalog' && 'Catalog'}
+          {activeTab === 'leases' && 'My Leases'}
+          {activeTab === 'provider' && 'Provider Dashboard'}
+          {activeTab === 'network' && 'Network Overview'}
+        </h1>
+        <div className="flex items-center gap-3">
           {isWalletConnected && address ? (
             <>
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-800/50 border border-surface-700/50">

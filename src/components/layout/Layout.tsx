@@ -4,18 +4,16 @@ interface LayoutProps {
   children: React.ReactNode;
   activeTab: TabId;
   onTabChange: (tab: TabId) => void;
-  address?: string;
   isProvider: boolean;
   isAdmin: boolean;
 }
 
-export function Layout({ children, activeTab, onTabChange, address, isProvider, isAdmin }: LayoutProps) {
+export function Layout({ children, activeTab, onTabChange, isProvider, isAdmin }: LayoutProps) {
   return (
     <div className="layout">
       <Sidebar
         activeTab={activeTab}
         onTabChange={onTabChange}
-        address={address}
         isProvider={isProvider}
         isAdmin={isAdmin}
       />

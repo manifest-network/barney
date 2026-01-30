@@ -318,7 +318,7 @@ export function ProviderTab() {
 
   if (loading) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-4">
         <SkeletonCard />
         <SkeletonStatGrid count={3} />
         <SkeletonCard />
@@ -332,7 +332,7 @@ export function ProviderTab() {
 
   if (!myProvider) {
     return (
-      <div className="card-static p-12 text-center">
+      <div className="card-static p-8 text-center">
         <div className="empty-state-icon-wrapper">
           <Building2 size={48} className="empty-state-icon" />
         </div>
@@ -350,10 +350,10 @@ export function ProviderTab() {
   const totalWithdrawable = providerWithdrawable?.amounts || [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Billing Module Status */}
       {isInBillingAllowedList && (
-        <div className="card-static p-4 border-primary-500/50 bg-primary-500/10">
+        <div className="card-static p-3 border-primary-500/50 bg-primary-500/10">
           <div className="flex items-center gap-2">
             <Shield size={16} className="text-primary-400" />
             <span className="font-medium text-primary-300">Billing Module Admin</span>
@@ -365,7 +365,7 @@ export function ProviderTab() {
       )}
 
       {/* Provider Info Card */}
-      <div className="card-static p-6">
+      <div className="card-static p-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="mb-2 text-lg font-heading font-semibold">Your Provider</h2>
@@ -425,7 +425,7 @@ export function ProviderTab() {
       </div>
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-3">
         <div className="stat-card">
           <div className="stat-value text-warning">{pendingLeases.length}</div>
           <div className="stat-label">Pending Approval</div>
@@ -443,7 +443,7 @@ export function ProviderTab() {
       </div>
 
       {/* Pending Leases */}
-      <div className="card-static p-6">
+      <div className="card-static p-4">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
           <h2 className="text-lg font-heading font-semibold">
             Pending Leases
@@ -503,7 +503,7 @@ export function ProviderTab() {
         {pendingLeases.length === 0 ? (
           <p className="text-muted">No pending leases to review</p>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {pendingLeases.map((lease) => (
               <PendingLeaseCard
                 key={lease.uuid}
@@ -521,7 +521,7 @@ export function ProviderTab() {
       </div>
 
       {/* Active Leases */}
-      <div className="card-static p-6">
+      <div className="card-static p-4">
         <h2 className="mb-4 text-lg font-heading font-semibold">Active Leases</h2>
 
         {/* Batch Selection Controls */}
@@ -571,7 +571,7 @@ export function ProviderTab() {
         {activeLeases.length === 0 ? (
           <p className="text-muted">No active leases</p>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {activeLeases.map((lease) => (
               <ActiveLeaseCard
                 key={lease.uuid}
