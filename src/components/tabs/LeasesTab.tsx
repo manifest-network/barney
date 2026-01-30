@@ -23,8 +23,7 @@ import {
 } from '../../api/provider-api';
 import { sha256, toHex, validatePayloadSize, getPayloadSize, MAX_PAYLOAD_SIZE } from '../../utils/hash';
 import { validateFile } from '../../utils/fileValidation';
-import { useAutoRefresh } from '../../hooks/useAutoRefresh';
-import { AutoRefreshIndicator } from '../ui/AutoRefreshIndicator';
+import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { SkeletonCard } from '../ui/SkeletonCard';
@@ -107,11 +106,12 @@ export function LeasesTab() {
     }
   }, [address]);
 
-  const autoRefresh = useAutoRefresh(fetchData, {
-    interval: 5000,
-    enabled: true,
-    immediate: true,
-  });
+  const { registerFetchFn, unregisterFetchFn, refresh } = useAutoRefreshContext();
+
+  useEffect(() => {
+    registerFetchFn(fetchData);
+    return () => unregisterFetchFn();
+  }, [fetchData, registerFetchFn, unregisterFetchFn]);
 
   const getSKU = (uuid: string) => skus.find((s) => s.uuid === uuid);
   const getProvider = (uuid: string) => providers.find((p) => p.uuid === uuid);
@@ -387,7 +387,7 @@ export function LeasesTab() {
   }
 
   if (error) {
-    return <ErrorBanner error={error} onRetry={autoRefresh.refresh} />;
+    return <ErrorBanner error={error} onRetry={refresh} />;
   }
 
   return (
@@ -407,17 +407,14 @@ export function LeasesTab() {
           onChange={setActiveFilter}
           counts={counts}
         />
-        <div className="flex items-center gap-2">
-          <AutoRefreshIndicator autoRefresh={autoRefresh} intervalSeconds={5} />
-          <button
-            onClick={() => setShowCreateLease(true)}
-            disabled={providers.length === 0}
-            className="btn btn-primary btn-sm"
-          >
-            <Plus size={14} />
-            New Lease
-          </button>
-        </div>
+        <button
+          onClick={() => setShowCreateLease(true)}
+          disabled={providers.length === 0}
+          className="btn btn-primary btn-sm"
+        >
+          <Plus size={14} />
+          New Lease
+        </button>
       </div>
 
       {/* Selection hint for actionable leases */}
@@ -788,16 +785,18 @@ function LeaseCard({
   return (
     <div className={`lease-card ${isSelected ? 'selected' : ''}`} data-state={stateKey}>
       {/* === COLLAPSED VIEW === */}
-      <div className="lease-card-row">
-        {/* Checkbox for batch selection */}
-        {canSelect && onToggleSelect && (
-          <input
-            type="checkbox"
-            checked={isSelected || false}
-            onChange={onToggleSelect}
-            className="lease-card-checkbox"
-          />
-        )}
+      <div className="lease-card-row" onClick={() => setIsExpanded(!isExpanded)}>
+        {/* Checkbox for batch selection - always reserve space */}
+        <div className="lease-card-checkbox-cell" onClick={(e) => e.stopPropagation()}>
+          {canSelect && onToggleSelect ? (
+            <input
+              type="checkbox"
+              checked={isSelected || false}
+              onChange={onToggleSelect}
+              className="lease-card-checkbox"
+            />
+          ) : null}
+        </div>
 
         {/* State badge - fixed width */}
         <span className="lease-card-state" data-state={stateKey}>
@@ -848,7 +847,7 @@ function LeaseCard({
         </div>
 
         {/* Actions (contextual) */}
-        <div className="lease-card-actions">
+        <div className="lease-card-actions" onClick={(e) => e.stopPropagation()}>
           {isPending && (
             <button
               onClick={() => onCancel(lease.uuid)}
@@ -881,7 +880,7 @@ function LeaseCard({
 
         {/* Expand toggle */}
         <button
-          onClick={() => setIsExpanded(!isExpanded)}
+          onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
           className={`lease-card-expand ${isExpanded ? 'expanded' : ''}`}
           title={isExpanded ? 'Collapse' : 'Expand'}
         >

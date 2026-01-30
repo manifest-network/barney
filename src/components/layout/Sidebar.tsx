@@ -1,6 +1,9 @@
-import { Wallet, Package, FileText, Building2, Globe } from 'lucide-react';
+import { Wallet, Package, FileText, Building2, Globe, RefreshCw } from 'lucide-react';
 import { SidebarItem } from './SidebarItem';
 import { SidebarSection } from './SidebarSection';
+import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
+
+const REFRESH_INTERVAL_SECONDS = 10;
 
 export type TabId = 'wallet' | 'catalog' | 'leases' | 'provider' | 'network';
 
@@ -12,6 +15,14 @@ interface SidebarProps {
 }
 
 export function Sidebar({ activeTab, onTabChange, isProvider, isAdmin }: SidebarProps) {
+  const { isEnabled, toggle, isRefreshing, lastRefresh, refresh } = useAutoRefreshContext();
+
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
 
   return (
     <aside className="sidebar">
@@ -76,6 +87,34 @@ export function Sidebar({ activeTab, onTabChange, isProvider, isAdmin }: Sidebar
       </nav>
 
       <div className="sidebar-footer">
+        {/* Auto-refresh controls */}
+        <div className="sidebar-refresh">
+          <button
+            onClick={refresh}
+            disabled={isRefreshing}
+            className="sidebar-refresh-btn"
+            title="Refresh now"
+          >
+            <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+          </button>
+          <div className="sidebar-refresh-info">
+            <button
+              onClick={toggle}
+              className={`sidebar-refresh-toggle ${isEnabled ? 'active' : ''}`}
+              title={isEnabled ? 'Disable auto-refresh' : 'Enable auto-refresh'}
+            >
+              <span className="sidebar-refresh-toggle-knob" />
+            </button>
+            <span className="sidebar-refresh-label">
+              {isEnabled ? `${REFRESH_INTERVAL_SECONDS}s` : 'Off'}
+            </span>
+          </div>
+          {lastRefresh && (
+            <span className="sidebar-refresh-time" title={`Last: ${formatTime(lastRefresh)}`}>
+              {formatTime(lastRefresh)}
+            </span>
+          )}
+        </div>
         <div className="sidebar-version">v0.1.0</div>
       </div>
     </aside>

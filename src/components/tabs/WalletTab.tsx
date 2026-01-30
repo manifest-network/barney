@@ -1,6 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { Link, Wallet, Clock, Flame, Loader2, Copy, Check, ChevronUp, Zap, TrendingDown } from 'lucide-react';
+import { Link, Wallet, Clock, Flame, Loader2, Copy, Check, Zap, TrendingDown, Plus, ArrowRight, GitBranch } from 'lucide-react';
 import {
   getBalance,
   getCreditAccount,
@@ -11,11 +11,11 @@ import {
 import { formatAmount } from '../../utils/format';
 import type { Coin } from '../../api/bank';
 import type { CreditAccountResponse, CreditEstimateResponse } from '../../api/billing';
-import { useAutoRefresh } from '../../hooks/useAutoRefresh';
-import { AutoRefreshIndicator } from '../ui/AutoRefreshIndicator';
+import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { truncateAddress } from '../../utils/address';
 
 const CHAIN_NAME = 'manifestlocal';
 
@@ -40,7 +40,6 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const { copied, copyToClipboard } = useCopyToClipboard();
   const [fundAmount, setFundAmount] = useState('');
   const [txLoading, setTxLoading] = useState(false);
-  const [showFundPanel, setShowFundPanel] = useState(false);
   const [data, setData] = useState<WalletData>({
     mfxBalance: null,
     pwrBalance: null,
@@ -85,11 +84,14 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
     }
   }, [address]);
 
-  const autoRefresh = useAutoRefresh(fetchData, {
-    interval: 10000,
-    enabled: isConnected && !!address,
-    immediate: true,
-  });
+  const { registerFetchFn, unregisterFetchFn, refresh } = useAutoRefreshContext();
+
+  useEffect(() => {
+    if (isConnected && address) {
+      registerFetchFn(fetchData);
+    }
+    return () => unregisterFetchFn();
+  }, [isConnected, address, fetchData, registerFetchFn, unregisterFetchFn]);
 
   const handleFundCredit = async () => {
     if (!address || !fundAmount) return;
@@ -118,8 +120,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
       if (result.success) {
         toast.success(`Funded ${fundAmount} PWR! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         setFundAmount('');
-        setShowFundPanel(false);
-        autoRefresh.refresh();
+        refresh();
       } else {
         toast.error(result.error || 'Transaction failed');
       }
@@ -153,6 +154,8 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
 
   const { mfxBalance, pwrBalance, creditAccount, creditEstimate, loading, error } = data;
   const creditPwrBalance = creditAccount?.balances?.find((b) => b.denom === DENOMS.PWR);
+  const creditBalanceNum = creditPwrBalance ? parseInt(creditPwrBalance.amount, 10) / 1_000_000 : 0;
+  const pwrBalanceNum = pwrBalance ? parseInt(pwrBalance.amount, 10) / 1_000_000 : 0;
   const pwrRatePerSecond = creditEstimate?.total_rate_per_second?.find(
     (c) => c.denom === DENOMS.PWR || c.denom === 'upwr'
   );
@@ -170,218 +173,257 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   };
   const creditStatus = getCreditStatus();
 
+  // Calculate gauge percentage (capped at 100%, 7 days = full)
+  const maxGaugeSeconds = 7 * 24 * 3600; // 7 days
+  const gaugePercent = Math.min((timeRemaining / maxGaugeSeconds) * 100, 100);
+
   if (loading && !mfxBalance) {
     return (
-      <div className="space-y-3">
-        <div className="wallet-card">
-          <div className="wallet-card-row">
-            <div className="skeleton h-4 w-32" />
-            <div className="skeleton h-6 w-48" />
-          </div>
-        </div>
-        <div className="wallet-card">
-          <div className="wallet-card-row">
-            <div className="skeleton h-4 w-32" />
-            <div className="skeleton h-6 w-48" />
-          </div>
+      <div className="wallet-dashboard">
+        <div className="wallet-skeleton-grid">
+          <div className="skeleton wallet-skeleton-balance" />
+          <div className="skeleton wallet-skeleton-fund" />
+          <div className="skeleton wallet-skeleton-credit" />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-3">
+    <div className="wallet-dashboard">
       {/* Error Banner */}
       {error && (
         <div className="wallet-error">
           <span>{error}</span>
-          <button onClick={autoRefresh.refresh} className="btn btn-ghost btn-xs">
+          <button onClick={refresh} className="btn btn-ghost btn-xs">
             Retry
           </button>
         </div>
       )}
 
-      {/* Wallet Balances Card */}
-      <div className="wallet-card">
-        <div className="wallet-card-header">
-          <div className="wallet-card-title">
-            <Wallet size={14} />
-            Wallet Balances
+      {/* Top Row: Balances + Fund Action */}
+      <div className="wallet-top-row">
+        {/* Wallet Balances */}
+        <div className="wallet-balances-card">
+          <div className="wallet-balances-header">
+            <div className="wallet-balances-title">
+              <Wallet size={14} />
+              Wallet
+            </div>
           </div>
-          <AutoRefreshIndicator autoRefresh={autoRefresh} intervalSeconds={10} />
-        </div>
-
-        <div className="wallet-card-body">
-          <div className="wallet-balance-row">
-            <div className="wallet-balance" data-token="mfx">
-              <span className="wallet-balance-value">
+          <div className="wallet-balances-grid">
+            <div className="wallet-token" data-token="mfx">
+              <span className="wallet-token-value">
                 {mfxBalance ? formatAmount(mfxBalance.amount, mfxBalance.denom, 2) : '0 MFX'}
               </span>
-              <span className="wallet-balance-label">MFX</span>
+              <span className="wallet-token-label">MFX Balance</span>
             </div>
-
-            <div className="wallet-balance-divider" />
-
-            <div className="wallet-balance" data-token="pwr">
-              <span className="wallet-balance-value">
+            <div className="wallet-token" data-token="pwr">
+              <span className="wallet-token-value">
                 {pwrBalance ? formatAmount(pwrBalance.amount, pwrBalance.denom, 2) : '0 PWR'}
               </span>
-              <span className="wallet-balance-label">PWR (Available)</span>
+              <span className="wallet-token-label">PWR Available</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Fund Action Card - Always Visible */}
+        <div className="wallet-fund-card">
+          <div className="wallet-fund-card-header">
+            <span className="wallet-fund-card-title">
+              <Plus size={14} />
+              Fund Credit
+            </span>
+          </div>
+          <div className="wallet-fund-card-body">
+            <div className="wallet-fund-input-group">
+              <input
+                type="number"
+                value={fundAmount}
+                onChange={(e) => setFundAmount(e.target.value)}
+                placeholder="0"
+                disabled={txLoading}
+                min="0.000001"
+                max="999999999"
+                step="0.000001"
+                className="wallet-fund-amount-input"
+              />
+              <span className="wallet-fund-amount-denom">PWR</span>
+            </div>
+            <div className="wallet-fund-presets">
+              {[10, 50, 100].map((amount) => (
+                <button
+                  key={amount}
+                  onClick={() => setFundAmount(String(amount))}
+                  disabled={txLoading}
+                  className="wallet-fund-preset-btn"
+                >
+                  {amount}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleFundCredit}
+              disabled={!fundAmount || txLoading || pwrBalanceNum < parseFloat(fundAmount || '0')}
+              className="wallet-fund-submit-btn"
+            >
+              {txLoading ? (
+                <Loader2 className="animate-spin" size={16} />
+              ) : (
+                <>
+                  Fund Account
+                  <ArrowRight size={14} />
+                </>
+              )}
+            </button>
+            <div className="wallet-fund-available">
+              {pwrBalanceNum.toLocaleString(undefined, { maximumFractionDigits: 2 })} PWR available
             </div>
           </div>
         </div>
       </div>
 
-      {/* Credit Account Card */}
-      <div className="wallet-card" data-status={creditStatus}>
-        <div className="wallet-card-header">
-          <div className="wallet-card-title">
+      {/* Credit Account Section */}
+      <div className="wallet-credit-card" data-status={creditStatus}>
+        <div className="wallet-credit-header">
+          <div className="wallet-credit-title">
             <Flame size={14} />
             Credit Account
           </div>
-          <div className="wallet-card-actions">
-            <button
-              onClick={() => setShowFundPanel(!showFundPanel)}
-              className="btn btn-primary btn-sm"
-            >
-              {showFundPanel ? 'Cancel' : 'Fund'}
-            </button>
-          </div>
-        </div>
-
-        <div className="wallet-card-body">
-          {/* Main metrics row */}
-          <div className="wallet-metrics-row">
-            <div className="wallet-metric" data-type="balance">
-              <span className="wallet-metric-icon">
-                <Zap size={12} />
-              </span>
-              <span className="wallet-metric-value">
-                {creditPwrBalance
-                  ? formatAmount(creditPwrBalance.amount, creditPwrBalance.denom, 2)
-                  : '0 PWR'}
-              </span>
-              <span className="wallet-metric-label">Credit Balance</span>
-            </div>
-
-            <div className="wallet-metric" data-type="burn">
-              <span className="wallet-metric-icon">
-                <TrendingDown size={12} />
-              </span>
-              <span className="wallet-metric-value">
-                {burnRatePerHour > 0
-                  ? `${formatAmount(String(burnRatePerHour), DENOMS.PWR, 4)}/hr`
-                  : '0/hr'}
-              </span>
-              <span className="wallet-metric-label">Burn Rate</span>
-            </div>
-
-            <div className="wallet-metric" data-type="time">
-              <span className="wallet-metric-icon">
-                <Clock size={12} />
-              </span>
-              <span className="wallet-metric-value">
-                {timeRemaining > 0 ? formatDuration(timeRemaining) : '-'}
-              </span>
-              <span className="wallet-metric-label">Time Left</span>
-            </div>
-          </div>
-
-          {/* Lease counts row */}
-          <div className="wallet-stats-row">
-            <div className="wallet-stat">
-              <span className="wallet-stat-label">Active</span>
-              <span className="wallet-stat-value" data-type="active">
-                {creditAccount?.credit_account?.active_lease_count ?? 0}
-              </span>
-            </div>
-            <div className="wallet-stat">
-              <span className="wallet-stat-label">Pending</span>
-              <span className="wallet-stat-value" data-type="pending">
-                {creditAccount?.credit_account?.pending_lease_count ?? 0}
-              </span>
-            </div>
-          </div>
-
-          {/* Credit address */}
-          {creditAccount?.credit_account?.credit_address && (
-            <div className="wallet-address-row">
-              <span className="wallet-address-label">Credit Address</span>
-              <code className="wallet-address-value">
-                {creditAccount.credit_account.credit_address}
-              </code>
-              <button
-                onClick={() => copyToClipboard(creditAccount.credit_account?.credit_address || '')}
-                className="wallet-copy-btn"
-                title="Copy address"
-              >
-                {copied ? <Check size={10} /> : <Copy size={10} />}
-              </button>
-            </div>
+          {creditStatus === 'critical' && (
+            <span className="wallet-credit-alert">Low Balance</span>
+          )}
+          {creditStatus === 'low' && (
+            <span className="wallet-credit-warning">Running Low</span>
           )}
         </div>
 
-        {/* Fund Panel (inline) */}
-        {showFundPanel && (
-          <div className="wallet-fund-panel">
-            <div className="wallet-fund-header">
-              <span className="wallet-fund-title">Fund Credit Account</span>
-              <button
-                onClick={() => setShowFundPanel(false)}
-                className="wallet-fund-close"
-              >
-                <ChevronUp size={14} />
-              </button>
-            </div>
-
-            <div className="wallet-fund-body">
-              <div className="wallet-fund-input-row">
-                <input
-                  type="number"
-                  value={fundAmount}
-                  onChange={(e) => setFundAmount(e.target.value)}
-                  placeholder="Amount"
-                  disabled={txLoading}
-                  min="0.000001"
-                  max="999999999"
-                  step="0.000001"
-                  className="wallet-fund-input"
-                />
-                <span className="wallet-fund-denom">PWR</span>
-                <button
-                  onClick={handleFundCredit}
-                  disabled={!fundAmount || txLoading}
-                  className="btn btn-success btn-sm"
-                >
-                  {txLoading ? (
-                    <Loader2 className="animate-spin" size={14} />
-                  ) : (
-                    'Fund'
-                  )}
-                </button>
+        <div className="wallet-credit-body">
+          {/* Fuel Gauge */}
+          <div className="fuel-gauge" data-status={creditStatus}>
+            <div className="fuel-gauge-display">
+              <div className="fuel-gauge-readout">
+                <span className="fuel-gauge-value">
+                  {timeRemaining > 0 ? formatDuration(timeRemaining) : '—'}
+                </span>
+                <span className="fuel-gauge-label">remaining</span>
               </div>
-
-              <div className="wallet-fund-presets">
-                {[10, 50, 100, 500].map((amount) => (
-                  <button
-                    key={amount}
-                    onClick={() => setFundAmount(String(amount))}
-                    disabled={txLoading}
-                    className="wallet-fund-preset"
-                  >
-                    {amount}
-                  </button>
-                ))}
-              </div>
-
-              {pwrBalance && (
-                <div className="wallet-fund-available">
-                  Available: {formatAmount(pwrBalance.amount, pwrBalance.denom, 2)}
+              <div className="fuel-gauge-meter">
+                <div className="fuel-gauge-track">
+                  <div
+                    className="fuel-gauge-fill"
+                    style={{ width: `${gaugePercent}%` }}
+                  />
+                  <div className="fuel-gauge-glow" style={{ width: `${gaugePercent}%` }} />
+                  {/* Tick marks */}
+                  <div className="fuel-gauge-ticks">
+                    {[0, 1, 2, 3, 4, 5, 6, 7].map((day) => (
+                      <div
+                        key={day}
+                        className="fuel-gauge-tick"
+                        style={{ left: `${(day / 7) * 100}%` }}
+                        data-major={day % 7 === 0 || day === 7 ? 'true' : 'false'}
+                      />
+                    ))}
+                  </div>
                 </div>
-              )}
+                <div className="fuel-gauge-scale">
+                  <span>0</span>
+                  <span>1d</span>
+                  <span>2d</span>
+                  <span>3d</span>
+                  <span>4d</span>
+                  <span>5d</span>
+                  <span>6d</span>
+                  <span>7d</span>
+                </div>
+              </div>
             </div>
           </div>
-        )}
+
+          {/* Metrics Grid */}
+          <div className="wallet-credit-metrics">
+            <div className="wallet-credit-metric" data-type="balance">
+              <div className="wallet-credit-metric-icon">
+                <Zap size={14} />
+              </div>
+              <div className="wallet-credit-metric-content">
+                <span className="wallet-credit-metric-value">
+                  {creditBalanceNum.toLocaleString(undefined, { maximumFractionDigits: 2 })} PWR
+                </span>
+                <span className="wallet-credit-metric-label">Credit Balance</span>
+              </div>
+            </div>
+
+            <div className="wallet-credit-metric" data-type="burn">
+              <div className="wallet-credit-metric-icon">
+                <TrendingDown size={14} />
+              </div>
+              <div className="wallet-credit-metric-content">
+                <span className="wallet-credit-metric-value">
+                  {burnRatePerHour > 0
+                    ? `${formatAmount(String(burnRatePerHour), DENOMS.PWR, 4)}/hr`
+                    : '0/hr'}
+                </span>
+                <span className="wallet-credit-metric-label">Burn Rate</span>
+              </div>
+            </div>
+
+            <div className="wallet-credit-metric" data-type="active">
+              <div className="wallet-credit-metric-icon">
+                <Flame size={14} />
+              </div>
+              <div className="wallet-credit-metric-content">
+                <span className="wallet-credit-metric-value">
+                  {creditAccount?.credit_account?.active_lease_count ?? 0}
+                </span>
+                <span className="wallet-credit-metric-label">Active Leases</span>
+              </div>
+            </div>
+
+            <div className="wallet-credit-metric" data-type="pending">
+              <div className="wallet-credit-metric-icon">
+                <Clock size={14} />
+              </div>
+              <div className="wallet-credit-metric-content">
+                <span className="wallet-credit-metric-value">
+                  {creditAccount?.credit_account?.pending_lease_count ?? 0}
+                </span>
+                <span className="wallet-credit-metric-label">Pending Leases</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Address Derivation Flow */}
+          {creditAccount?.credit_account?.credit_address && address && (
+            <div className="address-derivation">
+              <div className="address-derivation-node" data-type="source">
+                <span className="address-derivation-label">Your Wallet</span>
+                <code className="address-derivation-value">{truncateAddress(address, 11, 6)}</code>
+              </div>
+              <div className="address-derivation-connector">
+                <div className="address-derivation-line" />
+                <div className="address-derivation-transform">
+                  <GitBranch size={12} />
+                </div>
+                <div className="address-derivation-line" />
+              </div>
+              <div className="address-derivation-node" data-type="derived">
+                <span className="address-derivation-label">Credit Account</span>
+                <div className="address-derivation-value-row">
+                  <code className="address-derivation-value">{truncateAddress(creditAccount.credit_account.credit_address, 11, 6)}</code>
+                  <button
+                    onClick={() => copyToClipboard(creditAccount.credit_account?.credit_address || '')}
+                    className="address-derivation-copy"
+                    title="Copy credit address"
+                  >
+                    {copied ? <Check size={10} /> : <Copy size={10} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

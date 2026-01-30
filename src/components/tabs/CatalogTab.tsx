@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { Link, Package, Shield, Loader2, RefreshCw, Plus, Copy, Check, Search, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { Link, Package, Shield, Loader2, Plus, Copy, Check, Search, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { HEALTH_CHECK_TIMEOUT_MS, POST_TX_REFETCH_DELAY_MS } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { truncateAddress } from '../../utils/address';
@@ -23,6 +23,7 @@ import type { Provider, SKU, SKUParams } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeasesBySKU, LeaseState } from '../../api/billing';
 import { useToast } from '../../hooks/useToast';
+import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { EmptyState } from '../ui/EmptyState';
 import { Modal } from '../ui/Modal';
 import { ErrorBanner } from '../ui/ErrorBanner';
@@ -89,9 +90,12 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     }
   }, [showInactive, selectedProvider]);
 
+  const { registerFetchFn, unregisterFetchFn } = useAutoRefreshContext();
+
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    registerFetchFn(fetchData);
+    return () => unregisterFetchFn();
+  }, [fetchData, registerFetchFn, unregisterFetchFn]);
 
   // Filter and paginate providers
   const filteredProviders = useMemo(() => {
@@ -365,10 +369,6 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
             />
             Show inactive
           </label>
-          <button onClick={fetchData} disabled={loading} className="btn btn-ghost btn-sm">
-            {loading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
-            Refresh
-          </button>
         </div>
         {isInSKUAllowedList && (
           <div className="catalog-controls-right">

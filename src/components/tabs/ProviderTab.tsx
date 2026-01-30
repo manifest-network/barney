@@ -1,22 +1,17 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { Link, Building2, Shield } from 'lucide-react';
+import { Link, Building2, Shield, Copy, Check, Clock, Zap, Package, ChevronDown, ChevronUp } from 'lucide-react';
 import { LeaseState, getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams, type Lease, type ProviderWithdrawableResponse } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { truncateAddress } from '../../utils/address';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../api/sku';
 import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, type TxResult } from '../../api/tx';
 import { DENOM_METADATA, formatPrice } from '../../api/config';
 import { formatDate } from '../../utils/format';
 import type { Coin } from '../../api/bank';
-import { useAutoRefresh } from '../../hooks/useAutoRefresh';
-import { AutoRefreshIndicator } from '../ui/AutoRefreshIndicator';
+import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
-import { SkeletonStatGrid } from '../ui/SkeletonStat';
-import { SkeletonCard } from '../ui/SkeletonCard';
-import { ErrorBanner } from '../ui/ErrorBanner';
 import { useBatchSelection } from '../../hooks/useBatchSelection';
 
 const CHAIN_NAME = 'manifestlocal';
@@ -25,7 +20,7 @@ const CHAIN_NAME = 'manifestlocal';
 export function ProviderTab() {
   const { address, isWalletConnected, openView, getOfflineSigner } = useChain(CHAIN_NAME);
   const toast = useToast();
-  const { copyToClipboard } = useCopyToClipboard();
+  const { copied, copyToClipboard } = useCopyToClipboard();
 
   const [myProvider, setMyProvider] = useState<Provider | null>(null);
   const [providerLeases, setProviderLeases] = useState<Lease[]>([]);
@@ -106,11 +101,12 @@ export function ProviderTab() {
     }
   }, [address]);
 
-  const autoRefresh = useAutoRefresh(fetchData, {
-    interval: 5000, // 5 seconds
-    enabled: true,
-    immediate: true,
-  });
+  const { registerFetchFn, unregisterFetchFn, refresh } = useAutoRefreshContext();
+
+  useEffect(() => {
+    registerFetchFn(fetchData);
+    return () => unregisterFetchFn();
+  }, [fetchData, registerFetchFn, unregisterFetchFn]);
 
   const pendingLeases = providerLeases.filter((l) => l.state === LeaseState.LEASE_STATE_PENDING);
   const activeLeases = providerLeases.filter((l) => l.state === LeaseState.LEASE_STATE_ACTIVE);
@@ -318,420 +314,352 @@ export function ProviderTab() {
 
   if (loading) {
     return (
-      <div className="space-y-4">
-        <SkeletonCard />
-        <SkeletonStatGrid count={3} />
-        <SkeletonCard />
+      <div className="provider-dashboard">
+        <div className="provider-skeleton-grid">
+          <div className="skeleton provider-skeleton-info" />
+          <div className="skeleton provider-skeleton-earnings" />
+        </div>
+        <div className="provider-skeleton-stats">
+          <div className="skeleton provider-skeleton-stat" />
+          <div className="skeleton provider-skeleton-stat" />
+          <div className="skeleton provider-skeleton-stat" />
+        </div>
+        <div className="skeleton provider-skeleton-leases" />
       </div>
     );
   }
 
   if (error) {
-    return <ErrorBanner error={error} onRetry={autoRefresh.refresh} />;
+    return (
+      <div className="provider-error">
+        <span>{error}</span>
+        <button onClick={refresh} className="btn btn-ghost btn-xs">
+          Retry
+        </button>
+      </div>
+    );
   }
 
   if (!myProvider) {
     return (
-      <div className="card-static p-8 text-center">
-        <div className="empty-state-icon-wrapper">
-          <Building2 size={48} className="empty-state-icon" />
-        </div>
-        <h2 className="empty-state-title">No Provider Found</h2>
-        <p className="empty-state-description">
-          Your connected address is not associated with any provider.
-        </p>
-        <p className="mt-4 text-sm text-dim">
-          Connected as: <span className="font-mono">{truncateAddress(address || '')}</span>
-        </p>
-      </div>
+      <EmptyState
+        icon={Building2}
+        title="No Provider Found"
+        description="Your connected address is not associated with any provider."
+      />
     );
   }
 
   const totalWithdrawable = providerWithdrawable?.amounts || [];
 
   return (
-    <div className="space-y-4">
-      {/* Billing Module Status */}
+    <div className="provider-dashboard">
+      {/* Billing Module Admin Badge */}
       {isInBillingAllowedList && (
-        <div className="card-static p-3 border-primary-500/50 bg-primary-500/10">
-          <div className="flex items-center gap-2">
-            <Shield size={16} className="text-primary-400" />
-            <span className="font-medium text-primary-300">Billing Module Admin</span>
-          </div>
-          <p className="mt-1 text-sm text-primary-400/80">
-            Your wallet is in the billing module allowed list.
-          </p>
+        <div className="provider-admin-badge">
+          <Shield size={14} />
+          <span>Billing Module Admin</span>
         </div>
       )}
 
-      {/* Provider Info Card */}
-      <div className="card-static p-4">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="mb-2 text-lg font-heading font-semibold">Your Provider</h2>
-            <div className="space-y-1 text-sm">
-              <div className="flex items-center gap-2">
-                <span className="text-muted">UUID:</span>
-                <span className="font-mono text-secondary">{myProvider.uuid}</span>
+      {/* Top Row: Provider Info + Earnings */}
+      <div className="provider-top-row">
+        {/* Provider Info Card */}
+        <div className="provider-info-card">
+          <div className="provider-info-header">
+            <div className="provider-info-title">
+              <Building2 size={14} />
+              Your Provider
+            </div>
+            <span className={`provider-status-badge ${myProvider.active ? 'active' : 'inactive'}`}>
+              {myProvider.active ? 'Active' : 'Inactive'}
+            </span>
+          </div>
+          <div className="provider-info-body">
+            <div className="provider-info-field">
+              <span className="provider-info-label">UUID</span>
+              <div className="provider-info-value-row">
+                <code className="provider-info-value">{myProvider.uuid}</code>
                 <button
                   onClick={() => copyToClipboard(myProvider.uuid)}
-                  className="text-xs text-primary-400 hover:text-primary-300"
+                  className="provider-info-copy"
+                  title="Copy UUID"
                 >
-                  Copy
+                  {copied ? <Check size={10} /> : <Copy size={10} />}
                 </button>
               </div>
-              <div>
-                <span className="text-muted">Address: </span>
-                <span className="font-mono text-secondary">{truncateAddress(myProvider.address)}</span>
+            </div>
+            <div className="provider-info-field">
+              <span className="provider-info-label">Management Address</span>
+              <div className="provider-info-value-row">
+                <code className="provider-info-value">{myProvider.address}</code>
+                <button
+                  onClick={() => copyToClipboard(myProvider.address)}
+                  className="provider-info-copy"
+                  title="Copy Address"
+                >
+                  {copied ? <Check size={10} /> : <Copy size={10} />}
+                </button>
               </div>
-              <div>
-                <span className="text-muted">Payout: </span>
-                <span className="font-mono text-secondary">{truncateAddress(myProvider.payout_address)}</span>
+            </div>
+            <div className="provider-info-field">
+              <span className="provider-info-label">Payout Address</span>
+              <div className="provider-info-value-row">
+                <code className="provider-info-value">{myProvider.payout_address}</code>
+                <button
+                  onClick={() => copyToClipboard(myProvider.payout_address)}
+                  className="provider-info-copy"
+                  title="Copy Payout Address"
+                >
+                  {copied ? <Check size={10} /> : <Copy size={10} />}
+                </button>
               </div>
-              <div>
-                <span className="text-muted">API: </span>
-                <span className="text-primary-400">{myProvider.api_url}</span>
-              </div>
-              <div>
-                <span className="text-muted">Status: </span>
-                <span className={myProvider.active ? 'text-success' : 'text-error'}>
-                  {myProvider.active ? 'Active' : 'Inactive'}
-                </span>
+            </div>
+            <div className="provider-info-field">
+              <span className="provider-info-label">API URL</span>
+              <div className="provider-info-value-row">
+                <code className="provider-info-value provider-info-api">{myProvider.api_url}</code>
+                <button
+                  onClick={() => copyToClipboard(myProvider.api_url)}
+                  className="provider-info-copy"
+                  title="Copy API URL"
+                >
+                  {copied ? <Check size={10} /> : <Copy size={10} />}
+                </button>
               </div>
             </div>
           </div>
-          <div className="text-right">
-            <div className="text-sm text-muted">Total Withdrawable</div>
-            {totalWithdrawable.length === 0 ? (
-              <div className="text-2xl font-bold text-dim">0</div>
-            ) : (
-              totalWithdrawable.map((coin) => (
-                <div key={coin.denom} className="text-2xl font-bold text-success">
-                  {formatPrice(coin.amount, coin.denom)}
-                </div>
-              ))
-            )}
+        </div>
+
+        {/* Earnings Card */}
+        <div className="provider-earnings-card">
+          <div className="provider-earnings-header">
+            <span className="provider-earnings-title">
+              <Zap size={14} />
+              Total Withdrawable
+            </span>
+          </div>
+          <div className="provider-earnings-body">
+            <div className="provider-earnings-amount">
+              {totalWithdrawable.length === 0 ? (
+                <span className="provider-earnings-value empty">0 PWR</span>
+              ) : (
+                totalWithdrawable.map((coin) => (
+                  <span key={coin.denom} className="provider-earnings-value">
+                    {formatPrice(coin.amount, coin.denom)}
+                  </span>
+                ))
+              )}
+            </div>
             {activeLeases.length > 0 && totalWithdrawable.length > 0 && (
               <button
                 onClick={() => handleWithdraw(activeLeases.map((l) => l.uuid))}
                 disabled={txLoading}
-                className="btn btn-success mt-2"
+                className="provider-withdraw-all-btn"
               >
                 Withdraw All
               </button>
             )}
+            <div className="provider-earnings-hint">
+              From {activeLeases.length} active lease{activeLeases.length !== 1 ? 's' : ''}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div className="stat-card">
-          <div className="stat-value text-warning">{pendingLeases.length}</div>
-          <div className="stat-label">Pending Approval</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value text-success">{activeLeases.length}</div>
-          <div className="stat-label">Active Leases</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value text-primary">
-            {providerSKUs.filter((s) => s.active).length}
+      {/* Stats Row */}
+      <div className="provider-stats-row">
+        <div className="provider-stat" data-type="pending">
+          <div className="provider-stat-icon">
+            <Clock size={16} />
           </div>
-          <div className="stat-label">Active SKUs</div>
+          <div className="provider-stat-content">
+            <span className="provider-stat-value">{pendingLeases.length}</span>
+            <span className="provider-stat-label">Pending</span>
+          </div>
+        </div>
+        <div className="provider-stat" data-type="active">
+          <div className="provider-stat-icon">
+            <Zap size={16} />
+          </div>
+          <div className="provider-stat-content">
+            <span className="provider-stat-value">{activeLeases.length}</span>
+            <span className="provider-stat-label">Active</span>
+          </div>
+        </div>
+        <div className="provider-stat" data-type="skus">
+          <div className="provider-stat-icon">
+            <Package size={16} />
+          </div>
+          <div className="provider-stat-content">
+            <span className="provider-stat-value">{providerSKUs.filter((s) => s.active).length}</span>
+            <span className="provider-stat-label">SKUs</span>
+          </div>
         </div>
       </div>
 
-      {/* Pending Leases */}
-      <div className="card-static p-4">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
-          <h2 className="text-lg font-heading font-semibold">
+      {/* Pending Leases Section */}
+      <div className="provider-section">
+        <div className="provider-section-header">
+          <div className="provider-section-title">
+            <Clock size={14} />
             Pending Leases
             {pendingLeases.length > 0 && (
-              <span className="ml-2 badge badge-warning">
-                {pendingLeases.length}
-              </span>
-            )}
-          </h2>
-          <AutoRefreshIndicator autoRefresh={autoRefresh} intervalSeconds={5} />
-        </div>
-
-        {/* Batch Selection Controls */}
-        {pendingLeases.length > 0 && (
-          <div className="mb-4 flex flex-wrap items-center gap-4 rounded-lg border border-surface-700 bg-surface-800/50 p-3">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={selectAllPending}
-                className="text-sm text-primary-400 hover:text-primary-300"
-              >
-                Select All
-              </button>
-              <span className="text-surface-600">|</span>
-              <button
-                onClick={deselectAllPending}
-                className="text-sm text-muted hover:text-primary"
-              >
-                Deselect All
-              </button>
-              {selectedPendingLeases.size > 0 && (
-                <span className="ml-2 text-sm text-muted">
-                  ({selectedPendingLeases.size} selected)
-                </span>
-              )}
-            </div>
-            {selectedPendingLeases.size > 0 && (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleBatchAcknowledge}
-                  disabled={txLoading}
-                  className="btn btn-success btn-sm"
-                >
-                  Acknowledge {selectedPendingLeases.size}
-                </button>
-                <button
-                  onClick={() => handleBatchReject('')}
-                  disabled={txLoading}
-                  className="btn btn-danger btn-sm"
-                >
-                  Reject {selectedPendingLeases.size}
-                </button>
-              </div>
+              <span className="provider-section-count" data-type="pending">{pendingLeases.length}</span>
             )}
           </div>
-        )}
+          {pendingLeases.length > 0 && (
+            <div className="provider-batch-controls">
+              <button onClick={selectAllPending} className="provider-select-btn">
+                Select all {pendingLeases.length}
+              </button>
+              {selectedPendingLeases.size > 0 && (
+                <>
+                  <button onClick={deselectAllPending} className="provider-select-btn">
+                    Clear
+                  </button>
+                  <div className="provider-batch-actions">
+                    <button
+                      onClick={handleBatchAcknowledge}
+                      disabled={txLoading}
+                      className="btn btn-success btn-sm"
+                    >
+                      Acknowledge {selectedPendingLeases.size}
+                    </button>
+                    <button
+                      onClick={() => handleBatchReject('')}
+                      disabled={txLoading}
+                      className="btn btn-danger btn-sm"
+                    >
+                      Reject {selectedPendingLeases.size}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
 
-        {pendingLeases.length === 0 ? (
-          <p className="text-muted">No pending leases to review</p>
-        ) : (
-          <div className="space-y-2">
-            {pendingLeases.map((lease) => (
-              <PendingLeaseCard
+        <div className="provider-leases-list">
+          {pendingLeases.length === 0 ? (
+            <div className="provider-empty-message">No pending leases to review</div>
+          ) : (
+            pendingLeases.map((lease) => (
+              <ProviderLeaseCard
                 key={lease.uuid}
                 lease={lease}
+                type="pending"
                 getSKU={getSKU}
-                onAcknowledge={handleAcknowledge}
-                onReject={handleReject}
-                txLoading={txLoading || false}
+                onAcknowledge={() => handleAcknowledge(lease.uuid)}
+                onReject={(reason) => handleReject(lease.uuid, reason)}
+                txLoading={txLoading}
                 isSelected={selectedPendingLeases.has(lease.uuid)}
                 onToggleSelect={() => togglePendingSelection(lease.uuid)}
               />
-            ))}
-          </div>
-        )}
+            ))
+          )}
+        </div>
       </div>
 
-      {/* Active Leases */}
-      <div className="card-static p-4">
-        <h2 className="mb-4 text-lg font-heading font-semibold">Active Leases</h2>
-
-        {/* Batch Selection Controls */}
-        {activeLeases.length > 0 && (
-          <div className="mb-4 flex flex-wrap items-center gap-4 rounded-lg border border-surface-700 bg-surface-800/50 p-3">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={selectAllActive}
-                className="text-sm text-primary-400 hover:text-primary-300"
-              >
-                Select All
-              </button>
-              <span className="text-surface-600">|</span>
-              <button
-                onClick={deselectAllActive}
-                className="text-sm text-muted hover:text-primary"
-              >
-                Deselect All
-              </button>
-              {selectedActiveLeases.size > 0 && (
-                <span className="ml-2 text-sm text-muted">
-                  ({selectedActiveLeases.size} selected)
-                </span>
-              )}
-            </div>
-            {selectedActiveLeases.size > 0 && (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleBatchWithdraw}
-                  disabled={txLoading}
-                  className="btn btn-success btn-sm"
-                >
-                  Withdraw {selectedActiveLeases.size}
-                </button>
-                <button
-                  onClick={() => handleBatchClose()}
-                  disabled={txLoading}
-                  className="btn btn-secondary btn-sm"
-                >
-                  Close {selectedActiveLeases.size}
-                </button>
-              </div>
+      {/* Active Leases Section */}
+      <div className="provider-section">
+        <div className="provider-section-header">
+          <div className="provider-section-title">
+            <Zap size={14} />
+            Active Leases
+            {activeLeases.length > 0 && (
+              <span className="provider-section-count" data-type="active">{activeLeases.length}</span>
             )}
           </div>
-        )}
+          {activeLeases.length > 0 && (
+            <div className="provider-batch-controls">
+              <button onClick={selectAllActive} className="provider-select-btn">
+                Select all {activeLeases.length}
+              </button>
+              {selectedActiveLeases.size > 0 && (
+                <>
+                  <button onClick={deselectAllActive} className="provider-select-btn">
+                    Clear
+                  </button>
+                  <div className="provider-batch-actions">
+                    <button
+                      onClick={handleBatchWithdraw}
+                      disabled={txLoading}
+                      className="btn btn-success btn-sm"
+                    >
+                      Withdraw {selectedActiveLeases.size}
+                    </button>
+                    <button
+                      onClick={() => handleBatchClose()}
+                      disabled={txLoading}
+                      className="btn btn-ghost btn-sm"
+                    >
+                      Close {selectedActiveLeases.size}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
 
-        {activeLeases.length === 0 ? (
-          <p className="text-muted">No active leases</p>
-        ) : (
-          <div className="space-y-2">
-            {activeLeases.map((lease) => (
-              <ActiveLeaseCard
+        <div className="provider-leases-list">
+          {activeLeases.length === 0 ? (
+            <div className="provider-empty-message">No active leases</div>
+          ) : (
+            activeLeases.map((lease) => (
+              <ProviderLeaseCard
                 key={lease.uuid}
                 lease={lease}
+                type="active"
                 getSKU={getSKU}
                 withdrawable={withdrawableAmounts.get(lease.uuid) || []}
                 onWithdraw={() => handleWithdraw([lease.uuid])}
                 onClose={(reason) => handleCloseLease(lease.uuid, reason)}
-                txLoading={txLoading || false}
+                txLoading={txLoading}
                 isSelected={selectedActiveLeases.has(lease.uuid)}
                 onToggleSelect={() => toggleActiveSelection(lease.uuid)}
               />
-            ))}
-          </div>
-        )}
+            ))
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function PendingLeaseCard({
-  lease,
-  getSKU,
-  onAcknowledge,
-  onReject,
-  txLoading,
-  isSelected,
-  onToggleSelect,
-}: {
+interface ProviderLeaseCardProps {
   lease: Lease;
+  type: 'pending' | 'active';
   getSKU: (uuid: string) => SKU | undefined;
-  onAcknowledge: (uuid: string) => void;
-  onReject: (uuid: string, reason: string) => void;
+  onAcknowledge?: () => void;
+  onReject?: (reason: string) => void;
+  withdrawable?: Coin[];
+  onWithdraw?: () => void;
+  onClose?: (reason?: string) => void;
   txLoading: boolean;
   isSelected?: boolean;
   onToggleSelect?: () => void;
-}) {
-  const { copyToClipboard } = useCopyToClipboard();
-  const [rejectReason, setRejectReason] = useState('');
-  const [showRejectForm, setShowRejectForm] = useState(false);
-
-  return (
-    <div className={`rounded-lg border bg-warning-500/10 p-4 ${isSelected ? 'border-primary-500' : 'border-warning-500/30'}`}>
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
-          {onToggleSelect && (
-            <input
-              type="checkbox"
-              checked={isSelected || false}
-              onChange={onToggleSelect}
-              className="mt-1 h-4 w-4 rounded border-surface-600 bg-surface-700 text-primary-600 focus:ring-primary-500 focus:ring-offset-surface-800"
-            />
-          )}
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-sm text-secondary">{lease.uuid}</span>
-              <button
-                onClick={() => copyToClipboard(lease.uuid)}
-                className="text-xs text-primary-400 hover:text-primary-300"
-              >
-                Copy
-              </button>
-            </div>
-            <div className="mt-1 text-sm text-muted">
-              Tenant: <span className="font-mono">{truncateAddress(lease.tenant)}</span>
-            </div>
-            <div className="text-xs text-dim">
-              Created: {formatDate(lease.created_at)}
-            </div>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => onAcknowledge(lease.uuid)}
-            disabled={txLoading}
-            className="btn btn-success btn-sm"
-          >
-            Acknowledge
-          </button>
-          <button
-            onClick={() => setShowRejectForm(!showRejectForm)}
-            disabled={txLoading}
-            className="btn btn-danger btn-sm"
-          >
-            Reject
-          </button>
-        </div>
-      </div>
-
-      {/* Items */}
-      <div className="mb-3 rounded-lg bg-surface-800/50 p-2">
-        <div className="text-xs font-medium uppercase text-dim">Requested Items</div>
-        {lease.items.map((item) => {
-          const sku = getSKU(item.sku_uuid);
-          return (
-            <div key={`${lease.uuid}-item-${item.sku_uuid}`} className="mt-1 flex justify-between text-sm">
-              <span className="text-primary">
-                {sku?.name || item.sku_uuid} × {item.quantity}
-              </span>
-              <span className="text-muted">
-                {formatPrice(item.locked_price.amount, item.locked_price.denom)}/sec
-              </span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Reject Form */}
-      {showRejectForm && (
-        <div className="mt-3 border-t border-surface-700 pt-3">
-          <label className="mb-1 block text-sm text-muted">Rejection Reason (optional)</label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={rejectReason}
-              onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="e.g., Insufficient capacity"
-              maxLength={256}
-              className="input flex-1 text-sm"
-              disabled={txLoading}
-            />
-            <button
-              onClick={() => {
-                onReject(lease.uuid, rejectReason);
-                setShowRejectForm(false);
-                setRejectReason('');
-              }}
-              disabled={txLoading}
-              className="btn btn-danger btn-sm"
-            >
-              Confirm Reject
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
 }
 
-function ActiveLeaseCard({
+function ProviderLeaseCard({
   lease,
+  type,
   getSKU,
-  withdrawable,
+  onAcknowledge,
+  onReject,
+  withdrawable = [],
   onWithdraw,
   onClose,
   txLoading,
   isSelected,
   onToggleSelect,
-}: {
-  lease: Lease;
-  getSKU: (uuid: string) => SKU | undefined;
-  withdrawable: Coin[];
-  onWithdraw: () => void;
-  onClose: (reason?: string) => void;
-  txLoading: boolean;
-  isSelected?: boolean;
-  onToggleSelect?: () => void;
-}) {
-  const { copyToClipboard } = useCopyToClipboard();
+}: ProviderLeaseCardProps) {
+  const { copied, copyToClipboard } = useCopyToClipboard();
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [showRejectForm, setShowRejectForm] = useState(false);
   const [showCloseForm, setShowCloseForm] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
   const [closeReason, setCloseReason] = useState('');
 
   const hourlyRate = () => {
@@ -749,106 +677,226 @@ function ActiveLeaseCard({
   };
 
   return (
-    <div className={`rounded-lg border bg-success-500/10 p-4 ${isSelected ? 'border-primary-500' : 'border-success-500/30'}`}>
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
+    <div
+      className={`provider-lease-card ${isSelected ? 'selected' : ''}`}
+      data-type={type}
+    >
+      {/* Collapsed Row */}
+      <div className="provider-lease-row" onClick={() => setIsExpanded(!isExpanded)}>
+        {/* Checkbox cell */}
+        <div className="provider-lease-checkbox-cell" onClick={(e) => e.stopPropagation()}>
           {onToggleSelect && (
             <input
               type="checkbox"
               checked={isSelected || false}
               onChange={onToggleSelect}
-              className="mt-1 h-4 w-4 rounded border-surface-600 bg-surface-700 text-primary-600 focus:ring-primary-500 focus:ring-offset-surface-800"
+              className="provider-lease-checkbox"
             />
           )}
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-sm text-secondary">{lease.uuid}</span>
+        </div>
+
+        {/* Type badge */}
+        <span className="provider-lease-type" data-type={type}>
+          {type === 'pending' ? 'PENDING' : 'ACTIVE'}
+        </span>
+
+        {/* Content */}
+        <div className="provider-lease-content">
+          <div className="provider-lease-identifiers">
+            <span className="provider-lease-field">
+              <span className="provider-lease-label">Lease</span>
+              <code className="provider-lease-mono">{lease.uuid}</code>
               <button
-                onClick={() => copyToClipboard(lease.uuid)}
-                className="text-xs text-primary-400 hover:text-primary-300"
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.uuid); }}
+                className="provider-lease-copy"
+                title="Copy Lease UUID"
               >
-                Copy
+                {copied ? <Check size={10} /> : <Copy size={10} />}
               </button>
-            </div>
-            <div className="mt-1 text-sm text-muted">
-              Tenant: <span className="font-mono">{truncateAddress(lease.tenant)}</span>
-            </div>
-            <div className="text-xs text-dim">
-              Active since: {formatDate(lease.acknowledged_at)}
-            </div>
+            </span>
+            <span className="provider-lease-field">
+              <span className="provider-lease-label">Tenant</span>
+              <code className="provider-lease-mono">{lease.tenant}</code>
+              <button
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.tenant); }}
+                className="provider-lease-copy"
+                title="Copy Tenant"
+              >
+                {copied ? <Check size={10} /> : <Copy size={10} />}
+              </button>
+            </span>
+          </div>
+
+          <div className="provider-lease-separator" />
+
+          <div className="provider-lease-metrics">
+            {type === 'active' && (
+              <span className="provider-lease-metric" data-type="withdrawable">
+                <span className="provider-lease-metric-value">
+                  {withdrawable.length > 0
+                    ? withdrawable.map((c) => formatPrice(c.amount, c.denom)).join(', ')
+                    : '0'}
+                </span>
+                <span className="provider-lease-metric-label">Withdrawable</span>
+              </span>
+            )}
+            <span className="provider-lease-metric" data-type="rate">
+              <span className="provider-lease-metric-value">{hourlyRate()}</span>
+              <span className="provider-lease-metric-label">Rate</span>
+            </span>
           </div>
         </div>
-        <div className="text-right">
-          <div className="text-sm text-muted">Withdrawable</div>
-          {withdrawable.length === 0 ? (
-            <div className="font-bold text-dim">0</div>
-          ) : (
-            withdrawable.map((coin) => (
-              <div key={coin.denom} className="font-bold text-success">
-                {formatPrice(coin.amount, coin.denom)}
-              </div>
-            ))
+
+        {/* Actions */}
+        <div className="provider-lease-actions" onClick={(e) => e.stopPropagation()}>
+          {type === 'pending' && (
+            <>
+              <button
+                onClick={() => onAcknowledge?.()}
+                disabled={txLoading}
+                className="btn btn-success btn-sm"
+              >
+                Acknowledge
+              </button>
+              <button
+                onClick={() => setShowRejectForm(!showRejectForm)}
+                disabled={txLoading}
+                className="btn btn-danger btn-sm"
+              >
+                Reject
+              </button>
+            </>
           )}
-          <div className="text-xs text-dim">@ {hourlyRate()}</div>
+          {type === 'active' && (
+            <>
+              <button
+                onClick={() => onWithdraw?.()}
+                disabled={txLoading || withdrawable.length === 0}
+                className="btn btn-success btn-sm"
+              >
+                Withdraw
+              </button>
+              <button
+                onClick={() => setShowCloseForm(!showCloseForm)}
+                disabled={txLoading}
+                className="btn btn-ghost btn-sm"
+              >
+                Close
+              </button>
+            </>
+          )}
         </div>
-      </div>
 
-      {/* Items */}
-      <div className="mt-3 rounded-lg bg-surface-800/50 p-2">
-        {lease.items.map((item) => {
-          const sku = getSKU(item.sku_uuid);
-          return (
-            <div key={`${lease.uuid}-item-${item.sku_uuid}`} className="flex justify-between text-sm">
-              <span className="text-primary">
-                {sku?.name || item.sku_uuid} × {item.quantity}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="mt-3 flex gap-2">
+        {/* Expand toggle */}
         <button
-          onClick={onWithdraw}
-          disabled={txLoading || withdrawable.length === 0}
-          className="btn btn-success btn-sm"
+          onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+          className={`provider-lease-expand ${isExpanded ? 'expanded' : ''}`}
         >
-          Withdraw
-        </button>
-        <button
-          onClick={() => setShowCloseForm(!showCloseForm)}
-          disabled={txLoading}
-          className="btn btn-secondary btn-sm"
-        >
-          Close Lease
+          {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
       </div>
 
-      {/* Close Form */}
-      {showCloseForm && (
-        <div className="mt-3 border-t border-surface-700 pt-3">
-          <label className="mb-1 block text-sm text-muted">Closure Reason (optional)</label>
-          <div className="flex gap-2">
+      {/* Reject Form (inline) */}
+      {showRejectForm && type === 'pending' && (
+        <div className="provider-lease-form">
+          <label className="provider-lease-form-label">Rejection Reason (optional)</label>
+          <div className="provider-lease-form-row">
+            <input
+              type="text"
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="e.g., Insufficient capacity"
+              maxLength={256}
+              className="provider-lease-form-input"
+              disabled={txLoading}
+            />
+            <button
+              onClick={() => {
+                onReject?.(rejectReason);
+                setShowRejectForm(false);
+                setRejectReason('');
+              }}
+              disabled={txLoading}
+              className="btn btn-danger btn-sm"
+            >
+              Confirm
+            </button>
+            <button
+              onClick={() => { setShowRejectForm(false); setRejectReason(''); }}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Close Form (inline) */}
+      {showCloseForm && type === 'active' && (
+        <div className="provider-lease-form">
+          <label className="provider-lease-form-label">Closure Reason (optional)</label>
+          <div className="provider-lease-form-row">
             <input
               type="text"
               value={closeReason}
               onChange={(e) => setCloseReason(e.target.value)}
               placeholder="e.g., Resource decommissioned"
               maxLength={256}
-              className="input flex-1 text-sm"
+              className="provider-lease-form-input"
               disabled={txLoading}
             />
             <button
               onClick={() => {
-                onClose(closeReason || undefined);
+                onClose?.(closeReason || undefined);
                 setShowCloseForm(false);
                 setCloseReason('');
               }}
               disabled={txLoading}
-              className="btn btn-secondary btn-sm"
+              className="btn btn-ghost btn-sm"
             >
-              Confirm Close
+              Confirm
             </button>
+            <button
+              onClick={() => { setShowCloseForm(false); setCloseReason(''); }}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Expanded Details */}
+      {isExpanded && (
+        <div className="provider-lease-expanded">
+          <div className="provider-lease-details">
+            <div className="provider-lease-detail">
+              <span className="provider-lease-detail-label">Created</span>
+              <span className="provider-lease-detail-value">{formatDate(lease.created_at)}</span>
+            </div>
+            {type === 'active' && lease.acknowledged_at && (
+              <div className="provider-lease-detail">
+                <span className="provider-lease-detail-label">Active Since</span>
+                <span className="provider-lease-detail-value">{formatDate(lease.acknowledged_at)}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="provider-lease-items">
+            <div className="provider-lease-items-title">Requested Items</div>
+            {lease.items.map((item) => {
+              const sku = getSKU(item.sku_uuid);
+              return (
+                <div key={`${lease.uuid}-${item.sku_uuid}`} className="provider-lease-item">
+                  <span className="provider-lease-item-name">
+                    {sku?.name || item.sku_uuid} × {item.quantity}
+                  </span>
+                  <span className="provider-lease-item-price">
+                    {formatPrice(item.locked_price.amount, item.locked_price.denom)}/sec
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
