@@ -86,6 +86,48 @@ export function formatFileSize(bytes: number): string {
 }
 
 /**
+ * Format a duration string into human-readable format.
+ * Handles Go-style durations like "3600s", "7200000000000" (nanoseconds), or plain seconds.
+ *
+ * @param duration - Duration string (e.g., "3600s", "7200000000000", "3600")
+ * @returns Human-readable string like "1h", "2h 30m", "45m", "30s"
+ */
+export function formatDuration(duration: string | undefined): string {
+  if (!duration) return '-';
+
+  let totalSeconds: number;
+
+  // Handle Go duration format with 's' suffix
+  if (duration.endsWith('s')) {
+    totalSeconds = parseInt(duration.slice(0, -1), 10);
+  } else {
+    const num = parseInt(duration, 10);
+    // If number is very large (> 1 billion), assume nanoseconds
+    if (num > 1_000_000_000) {
+      totalSeconds = Math.floor(num / 1_000_000_000);
+    } else {
+      totalSeconds = num;
+    }
+  }
+
+  if (Number.isNaN(totalSeconds) || totalSeconds < 0) return '-';
+  if (totalSeconds === 0) return '0s';
+
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (seconds > 0 && days === 0 && hours === 0) parts.push(`${seconds}s`);
+
+  return parts.length > 0 ? parts.join(' ') : '0s';
+}
+
+/**
  * UUID validation regex pattern
  * Matches standard UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
  */

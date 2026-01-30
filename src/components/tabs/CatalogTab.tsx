@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { Link, Package, Shield, Loader2, RefreshCw, Plus } from 'lucide-react';
+import { Link, Package, Shield, Loader2, RefreshCw, Plus, Copy, Check, Search, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { HEALTH_CHECK_TIMEOUT_MS, POST_TX_REFETCH_DELAY_MS } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { truncateAddress } from '../../utils/address';
@@ -29,8 +29,8 @@ import { ErrorBanner } from '../ui/ErrorBanner';
 
 type HealthStatus = 'healthy' | 'unhealthy' | 'loading' | 'unknown';
 
-
 const CHAIN_NAME = 'manifestlocal';
+const ITEMS_PER_PAGE = 10;
 
 interface CatalogTabProps {
   isConnected: boolean;
@@ -41,19 +41,27 @@ interface CatalogTabProps {
 export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps) {
   const { getOfflineSignerDirect } = useChain(CHAIN_NAME);
   const toast = useToast();
+
+  // Filters and pagination
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const [providerSearch, setProviderSearch] = useState('');
+  const [skuSearch, setSkuSearch] = useState('');
+  const [providerPage, setProviderPage] = useState(1);
+  const [skuPage, setSkuPage] = useState(1);
   const [showInactive, setShowInactive] = useState(false);
+
+  // Modals
   const [showCreateProvider, setShowCreateProvider] = useState(false);
   const [showCreateSKU, setShowCreateSKU] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [editingSKU, setEditingSKU] = useState<SKU | null>(null);
 
+  // Data
   const [providers, setProviders] = useState<Provider[]>([]);
   const [skus, setSkus] = useState<SKU[]>([]);
   const [skuParams, setSkuParams] = useState<SKUParams | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // Using objects instead of Maps for better React performance (referential equality)
   const [providerHealth, setProviderHealth] = useState<Record<string, HealthStatus>>({});
   const [skuUsage, setSkuUsage] = useState<Record<string, { active: number; total: number }>>({});
   const [skuUsageLoading, setSkuUsageLoading] = useState(false);
@@ -85,7 +93,46 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     fetchData();
   }, [fetchData]);
 
-  // Fetch SKU usage stats (non-blocking, with loading state)
+  // Filter and paginate providers
+  const filteredProviders = useMemo(() => {
+    if (!providerSearch.trim()) return providers;
+    const search = providerSearch.toLowerCase();
+    return providers.filter(p =>
+      p.address.toLowerCase().includes(search) ||
+      p.uuid.toLowerCase().includes(search) ||
+      (p.api_url && p.api_url.toLowerCase().includes(search))
+    );
+  }, [providers, providerSearch]);
+
+  const paginatedProviders = useMemo(() => {
+    const start = (providerPage - 1) * ITEMS_PER_PAGE;
+    return filteredProviders.slice(start, start + ITEMS_PER_PAGE);
+  }, [filteredProviders, providerPage]);
+
+  const providerTotalPages = Math.ceil(filteredProviders.length / ITEMS_PER_PAGE);
+
+  // Filter and paginate SKUs
+  const filteredSkus = useMemo(() => {
+    if (!skuSearch.trim()) return skus;
+    const search = skuSearch.toLowerCase();
+    return skus.filter(s =>
+      s.name.toLowerCase().includes(search) ||
+      s.uuid.toLowerCase().includes(search)
+    );
+  }, [skus, skuSearch]);
+
+  const paginatedSkus = useMemo(() => {
+    const start = (skuPage - 1) * ITEMS_PER_PAGE;
+    return filteredSkus.slice(start, start + ITEMS_PER_PAGE);
+  }, [filteredSkus, skuPage]);
+
+  const skuTotalPages = Math.ceil(filteredSkus.length / ITEMS_PER_PAGE);
+
+  // Reset pagination when search changes
+  useEffect(() => { setProviderPage(1); }, [providerSearch]);
+  useEffect(() => { setSkuPage(1); }, [skuSearch, selectedProvider]);
+
+  // Fetch SKU usage stats (non-blocking)
   useEffect(() => {
     const fetchSkuUsage = async () => {
       if (skus.length === 0) return;
@@ -125,7 +172,6 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
       const providersWithApi = providers.filter((p) => p.api_url && p.active);
       if (providersWithApi.length === 0) return;
 
-      // Set loading state for all providers with API
       setProviderHealth((prev) => {
         const next = { ...prev };
         for (const p of providersWithApi) {
@@ -136,7 +182,6 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
         return next;
       });
 
-      // Check health in parallel with abort support
       const results = await Promise.all(
         providersWithApi.map(async (p) => {
           const health = await getProviderHealth(p.api_url, HEALTH_CHECK_TIMEOUT_MS, abortController.signal);
@@ -144,7 +189,6 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
         })
       );
 
-      // Only update state if not aborted
       if (!abortController.signal.aborted) {
         setProviderHealth((prev) => {
           const next = { ...prev };
@@ -158,27 +202,23 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
     checkHealth();
 
-    // Cleanup: abort in-flight requests when dependencies change or unmount
     return () => {
       abortController.abort();
     };
   }, [providers]);
 
-  const getProviderName = (uuid: string) => {
+  const getProviderAddress = (uuid: string) => {
     const provider = providers.find((p) => p.uuid === uuid);
-    return provider ? truncateAddress(provider.address) : 'Unknown';
+    return provider?.address || 'Unknown';
   };
 
   const isInSKUAllowedList = address && skuParams?.allowed_list?.includes(address);
 
+  // Handlers
   const handleDeactivateProvider = async (uuid: string) => {
     if (!address) return;
-
     const signer = getOfflineSignerDirect();
-    if (!signer) {
-      toast.error('Failed to get signer');
-      return;
-    }
+    if (!signer) { toast.error('Failed to get signer'); return; }
 
     const result = await deactivateProvider(signer, address, uuid);
     if (result.success) {
@@ -191,12 +231,8 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
   const handleDeactivateSKU = async (uuid: string) => {
     if (!address) return;
-
     const signer = getOfflineSignerDirect();
-    if (!signer) {
-      toast.error('Failed to get signer');
-      return;
-    }
+    if (!signer) { toast.error('Failed to get signer'); return; }
 
     const result = await deactivateSKU(signer, address, uuid);
     if (result.success) {
@@ -209,12 +245,8 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
   const handleCreateProvider = async (params: { address: string; payoutAddress: string; apiUrl: string }) => {
     if (!address) return;
-
     const signer = getOfflineSignerDirect();
-    if (!signer) {
-      toast.error('Failed to get signer');
-      return;
-    }
+    if (!signer) { toast.error('Failed to get signer'); return; }
 
     const result = await createProvider(signer, address, params);
     if (result.success) {
@@ -228,12 +260,8 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
   const handleUpdateProvider = async (params: { uuid: string; address: string; payoutAddress: string; apiUrl: string; active: boolean }) => {
     if (!address) return;
-
     const signer = getOfflineSignerDirect();
-    if (!signer) {
-      toast.error('Failed to get signer');
-      return;
-    }
+    if (!signer) { toast.error('Failed to get signer'); return; }
 
     const result = await updateProvider(signer, address, params);
     if (result.success) {
@@ -247,12 +275,8 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
   const handleCreateSKU = async (params: { providerUuid: string; name: string; unit: number; priceAmount: string; priceDenom: string }) => {
     if (!address) return;
-
     const signer = getOfflineSignerDirect();
-    if (!signer) {
-      toast.error('Failed to get signer');
-      return;
-    }
+    if (!signer) { toast.error('Failed to get signer'); return; }
 
     const result = await createSKU(signer, address, {
       providerUuid: params.providerUuid,
@@ -272,12 +296,8 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
   const handleUpdateSKU = async (params: { uuid: string; providerUuid: string; name: string; unit: number; priceAmount: string; priceDenom: string; active: boolean }) => {
     if (!address) return;
-
     const signer = getOfflineSignerDirect();
-    if (!signer) {
-      toast.error('Failed to get signer');
-      return;
-    }
+    if (!signer) { toast.error('Failed to get signer'); return; }
 
     const result = await updateSKU(signer, address, {
       uuid: params.uuid,
@@ -297,6 +317,11 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
     }
   };
 
+  const handleSelectProvider = (uuid: string | null) => {
+    setSelectedProvider(uuid);
+    setSkuSearch('');
+  };
+
   if (!isConnected) {
     return (
       <EmptyState
@@ -310,356 +335,369 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
 
   return (
     <div className="space-y-4">
-      {/* Error Banner */}
       {error && <ErrorBanner error={error} onRetry={fetchData} />}
 
-
-      {/* SKU Module Access Banner */}
-      {isConnected && (
-        <div
-          className={`card-static p-4 ${
-            isInSKUAllowedList
-              ? 'border-purple-700 bg-purple-900/20'
-              : ''
-          }`}
-        >
-          <div className="flex items-center gap-3">
-            {isInSKUAllowedList ? (
-              <>
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-purple-600">
-                  <Shield size={16} className="text-white" />
-                </div>
-                <div>
-                  <div className="font-medium text-purple-300">SKU Module Admin</div>
-                  <div className="text-sm text-muted">
-                    Your wallet is in the SKU module allowed list. You can create and manage providers and SKUs.
-                  </div>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-600">
-                  <Package size={16} className="text-muted" />
-                </div>
-                <div>
-                  <div className="font-medium text-gray-300">Read-Only Access</div>
-                  <div className="text-sm text-dim">
-                    Your wallet is not in the SKU module allowed list. You can view providers and SKUs but cannot create or modify them.
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
+      {/* Admin Banner */}
+      <div className="catalog-admin-banner" data-role={isInSKUAllowedList ? 'admin' : 'viewer'}>
+        <div className="catalog-admin-icon">
+          {isInSKUAllowedList ? <Shield size={16} /> : <Package size={16} />}
         </div>
-      )}
-
-      {/* Controls */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="show-inactive-checkbox"
-              checked={showInactive}
-              onChange={(e) => setShowInactive(e.target.checked)}
-              className="rounded border-gray-600 bg-gray-700"
-              aria-describedby="show-inactive-description"
-            />
-            <label htmlFor="show-inactive-checkbox" className="text-sm text-muted">
-              Show inactive
-            </label>
-            <span id="show-inactive-description" className="sr-only">
-              Toggle to show or hide inactive providers and SKUs
-            </span>
+        <div className="catalog-admin-info">
+          <div className="catalog-admin-title">
+            {isInSKUAllowedList ? 'SKU Module Admin' : 'Read-Only Access'}
           </div>
-          <button
-            onClick={fetchData}
-            disabled={loading}
-            className="btn btn-secondary btn-sm disabled:opacity-50"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="animate-spin" size={14} />
-                Loading...
-              </>
-            ) : (
-              <>
-                <RefreshCw size={14} />
-                Refresh
-              </>
-            )}
-          </button>
-        </div>
-        <div className="flex gap-2">
-          {isConnected && isInSKUAllowedList && (
-            <>
-              <button
-                onClick={() => setShowCreateProvider(true)}
-                className="btn btn-primary"
-              >
-                <Plus size={16} />
-                Create Provider
-              </button>
-              <button
-                onClick={() => setShowCreateSKU(true)}
-                disabled={providers.filter((p) => p.active).length === 0}
-                className="btn btn-success disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Plus size={16} />
-                Create SKU
-              </button>
-            </>
-          )}
+          <div className="catalog-admin-desc">
+            {isInSKUAllowedList
+              ? 'You can create and manage providers and SKUs'
+              : 'You can view providers and SKUs but cannot modify them'}
+          </div>
         </div>
       </div>
 
-      {/* Providers Section */}
-      <div className="card-static p-4">
-        <h2 className="mb-4 text-lg font-heading font-semibold">Providers</h2>
-        {loading && providers.length === 0 ? (
-          <div className="text-muted">Loading providers...</div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <button
-              onClick={() => setSelectedProvider(null)}
-              className={`rounded-lg border p-4 text-left transition-colors ${
-                selectedProvider === null
-                  ? 'border-blue-500 bg-blue-500/10'
-                  : 'border-gray-600 hover:border-gray-500'
-              }`}
-            >
-              <div className="font-medium text-white">All Providers</div>
-              <div className="text-sm text-muted">{providers.length} providers</div>
+      {/* Global Controls */}
+      <div className="catalog-controls">
+        <div className="catalog-controls-left">
+          <label className="catalog-checkbox-label">
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(e) => setShowInactive(e.target.checked)}
+            />
+            Show inactive
+          </label>
+          <button onClick={fetchData} disabled={loading} className="btn btn-ghost btn-sm">
+            {loading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+            Refresh
+          </button>
+        </div>
+        {isInSKUAllowedList && (
+          <div className="catalog-controls-right">
+            <button onClick={() => setShowCreateProvider(true)} className="btn btn-primary btn-sm">
+              <Plus size={14} /> Provider
             </button>
-            {providers.map((provider) => (
-              <ProviderCard
-                key={provider.uuid}
-                provider={provider}
-                isSelected={selectedProvider === provider.uuid}
-                onSelect={() => setSelectedProvider(provider.uuid)}
-                onEdit={isInSKUAllowedList ? () => setEditingProvider(provider) : undefined}
-                onDeactivate={isInSKUAllowedList ? () => handleDeactivateProvider(provider.uuid) : undefined}
-                healthStatus={providerHealth[provider.uuid]}
-              />
-            ))}
+            <button
+              onClick={() => setShowCreateSKU(true)}
+              disabled={providers.filter((p) => p.active).length === 0}
+              className="btn btn-success btn-sm"
+            >
+              <Plus size={14} /> SKU
+            </button>
           </div>
+        )}
+      </div>
+
+      {/* Providers Section */}
+      <div className="catalog-section">
+        <div className="catalog-section-header">
+          <div className="catalog-section-title">
+            Providers
+            <span className="catalog-section-count">({filteredProviders.length})</span>
+          </div>
+          <SearchInput
+            value={providerSearch}
+            onChange={setProviderSearch}
+            placeholder="Search providers..."
+          />
+        </div>
+
+        {loading && providers.length === 0 ? (
+          <div className="catalog-loading">
+            <Loader2 className="animate-spin" size={16} />
+            Loading providers...
+          </div>
+        ) : filteredProviders.length === 0 ? (
+          <div className="catalog-empty">
+            <span className="catalog-empty-text">
+              {providerSearch ? 'No providers match your search' : 'No providers found'}
+            </span>
+          </div>
+        ) : (
+          <>
+            <div className="space-y-2">
+              {paginatedProviders.map((provider) => (
+                <ProviderCard
+                  key={provider.uuid}
+                  provider={provider}
+                  isSelected={selectedProvider === provider.uuid}
+                  onSelect={() => handleSelectProvider(selectedProvider === provider.uuid ? null : provider.uuid)}
+                  healthStatus={providerHealth[provider.uuid]}
+                  onEdit={isInSKUAllowedList ? () => setEditingProvider(provider) : undefined}
+                  onDeactivate={isInSKUAllowedList ? () => handleDeactivateProvider(provider.uuid) : undefined}
+                />
+              ))}
+            </div>
+            {providerTotalPages > 1 && (
+              <Pagination
+                currentPage={providerPage}
+                totalPages={providerTotalPages}
+                totalItems={filteredProviders.length}
+                onPageChange={setProviderPage}
+              />
+            )}
+          </>
         )}
       </div>
 
       {/* SKUs Section */}
-      <div className="card-static p-4">
-        <h2 className="mb-4 text-lg font-heading font-semibold">
-          SKUs {selectedProvider && `(${getProviderName(selectedProvider)})`}
-        </h2>
-        {loading && skus.length === 0 ? (
-          <div className="text-muted">Loading SKUs...</div>
-        ) : skus.length === 0 ? (
-          <p className="text-muted">No SKUs found</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-700 text-left text-sm text-muted">
-                  <th className="pb-3 pr-4">Name</th>
-                  <th className="pb-3 pr-4">Provider</th>
-                  <th className="pb-3 pr-4">Price</th>
-                  <th className="pb-3 pr-4">Usage</th>
-                  <th className="pb-3 pr-4">Status</th>
-                  <th className="pb-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {skus.map((sku) => (
-                  <SKURow
-                    key={sku.uuid}
-                    sku={sku}
-                    providerName={getProviderName(sku.provider_uuid)}
-                    formatPrice={formatPrice}
-                    usage={skuUsage[sku.uuid]}
-                    usageLoading={skuUsageLoading && !(sku.uuid in skuUsage)}
-                    onEdit={isInSKUAllowedList ? () => setEditingSKU(sku) : undefined}
-                    onDeactivate={isInSKUAllowedList ? () => handleDeactivateSKU(sku.uuid) : undefined}
-                  />
-                ))}
-              </tbody>
-            </table>
+      <div className="catalog-section">
+        <div className="catalog-section-header">
+          <div className="catalog-section-title">
+            SKUs
+            {selectedProvider && (
+              <button
+                onClick={() => handleSelectProvider(null)}
+                className="catalog-filter-badge"
+                title="Clear filter"
+              >
+                {truncateAddress(getProviderAddress(selectedProvider))}
+                <X size={12} />
+              </button>
+            )}
+            <span className="catalog-section-count">({filteredSkus.length})</span>
           </div>
+          <SearchInput
+            value={skuSearch}
+            onChange={setSkuSearch}
+            placeholder="Search SKUs..."
+          />
+        </div>
+
+        {loading && skus.length === 0 ? (
+          <div className="catalog-loading">
+            <Loader2 className="animate-spin" size={16} />
+            Loading SKUs...
+          </div>
+        ) : filteredSkus.length === 0 ? (
+          <div className="catalog-empty">
+            <span className="catalog-empty-text">
+              {skuSearch ? 'No SKUs match your search' : 'No SKUs found'}
+            </span>
+          </div>
+        ) : (
+          <>
+            <div className="space-y-2">
+              {paginatedSkus.map((sku) => (
+                <SKUCard
+                  key={sku.uuid}
+                  sku={sku}
+                  providerAddress={getProviderAddress(sku.provider_uuid)}
+                  usage={skuUsage[sku.uuid]}
+                  usageLoading={skuUsageLoading && !(sku.uuid in skuUsage)}
+                  onEdit={isInSKUAllowedList ? () => setEditingSKU(sku) : undefined}
+                  onDeactivate={isInSKUAllowedList ? () => handleDeactivateSKU(sku.uuid) : undefined}
+                />
+              ))}
+            </div>
+            {skuTotalPages > 1 && (
+              <Pagination
+                currentPage={skuPage}
+                totalPages={skuTotalPages}
+                totalItems={filteredSkus.length}
+                onPageChange={setSkuPage}
+              />
+            )}
+          </>
         )}
       </div>
 
-      {/* Create Provider Modal */}
-      <Modal
-        isOpen={showCreateProvider}
-        onClose={() => setShowCreateProvider(false)}
-        title="Create Provider"
-      >
-        <CreateProviderForm
-          defaultAddress={address}
-          onSubmit={handleCreateProvider}
-          onClose={() => setShowCreateProvider(false)}
-        />
+      {/* Modals */}
+      <Modal isOpen={showCreateProvider} onClose={() => setShowCreateProvider(false)} title="Create Provider">
+        <CreateProviderForm defaultAddress={address} onSubmit={handleCreateProvider} onClose={() => setShowCreateProvider(false)} />
       </Modal>
 
-      {/* Create SKU Modal */}
-      <Modal
-        isOpen={showCreateSKU}
-        onClose={() => setShowCreateSKU(false)}
-        title="Create SKU"
-      >
-        <CreateSKUForm
-          providers={providers}
-          onSubmit={handleCreateSKU}
-          onClose={() => setShowCreateSKU(false)}
-        />
+      <Modal isOpen={showCreateSKU} onClose={() => setShowCreateSKU(false)} title="Create SKU">
+        <CreateSKUForm providers={providers} onSubmit={handleCreateSKU} onClose={() => setShowCreateSKU(false)} />
       </Modal>
 
-      {/* Edit Provider Modal */}
-      <Modal
-        isOpen={!!editingProvider}
-        onClose={() => setEditingProvider(null)}
-        title="Edit Provider"
-      >
+      <Modal isOpen={!!editingProvider} onClose={() => setEditingProvider(null)} title="Edit Provider">
         {editingProvider && (
-          <EditProviderForm
-            provider={editingProvider}
-            onSubmit={handleUpdateProvider}
-            onClose={() => setEditingProvider(null)}
-          />
+          <EditProviderForm provider={editingProvider} onSubmit={handleUpdateProvider} onClose={() => setEditingProvider(null)} />
         )}
       </Modal>
 
-      {/* Edit SKU Modal */}
-      <Modal
-        isOpen={!!editingSKU}
-        onClose={() => setEditingSKU(null)}
-        title="Edit SKU"
-      >
+      <Modal isOpen={!!editingSKU} onClose={() => setEditingSKU(null)} title="Edit SKU">
         {editingSKU && (
-          <EditSKUForm
-            sku={editingSKU}
-            providers={providers}
-            onSubmit={handleUpdateSKU}
-            onClose={() => setEditingSKU(null)}
-          />
+          <EditSKUForm sku={editingSKU} providers={providers} onSubmit={handleUpdateSKU} onClose={() => setEditingSKU(null)} />
         )}
       </Modal>
     </div>
   );
 }
 
-function ProviderCard({
-  provider,
-  isSelected,
-  onSelect,
-  onEdit,
-  onDeactivate,
-  healthStatus,
+/* ============================================
+   SEARCH INPUT
+   ============================================ */
+function SearchInput({
+  value,
+  onChange,
+  placeholder,
 }: {
-  provider: Provider;
-  isSelected: boolean;
-  onSelect: () => void;
-  onEdit?: () => void;
-  onDeactivate?: () => void;
-  healthStatus?: HealthStatus;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
 }) {
-  const { copied, copyToClipboard } = useCopyToClipboard();
-
-  const handleCopyUuid = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    await copyToClipboard(provider.uuid);
-  };
-
   return (
-    <div
-      className={`rounded-lg border p-4 transition-colors ${
-        isSelected
-          ? 'border-blue-500 bg-blue-500/10'
-          : 'border-gray-600 hover:border-gray-500'
-      }`}
-    >
-      <button onClick={onSelect} className="w-full text-left">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-2">
-            <div className="font-medium text-white" title={provider.address}>
-              {truncateAddress(provider.address)}
-            </div>
-            {provider.api_url && healthStatus && (
-              <span
-                className={`inline-block h-2 w-2 rounded-full ${
-                  healthStatus === 'healthy'
-                    ? 'bg-green-500'
-                    : healthStatus === 'loading'
-                    ? 'bg-yellow-500 animate-pulse'
-                    : 'bg-red-500'
-                }`}
-                title={
-                  healthStatus === 'healthy'
-                    ? 'Provider API is healthy'
-                    : healthStatus === 'loading'
-                    ? 'Checking provider health...'
-                    : 'Provider API is unreachable'
-                }
-              />
-            )}
-          </div>
-          {!provider.active && (
-            <span className="badge badge-secondary">Inactive</span>
-          )}
-        </div>
-        <div className="mt-1 flex items-center gap-1">
-          <button
-            onClick={handleCopyUuid}
-            className="font-mono text-xs text-dim hover:text-gray-300"
-            title={`Click to copy: ${provider.uuid}`}
-          >
-            {provider.uuid}
-            <span className="ml-1 text-gray-600">{copied ? '(copied!)' : '(copy)'}</span>
-          </button>
-        </div>
-        <div className="mt-2 truncate text-xs text-dim">{provider.api_url || 'No API URL'}</div>
-      </button>
-      {(onEdit || onDeactivate) && (
-        <div className="mt-2 flex gap-3">
-          {onEdit && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onEdit();
-              }}
-              className="text-xs text-blue-400 hover:text-blue-300"
-            >
-              Edit
-            </button>
-          )}
-          {onDeactivate && provider.active && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDeactivate();
-              }}
-              className="text-xs text-red-400 hover:text-red-300"
-            >
-              Deactivate
-            </button>
-          )}
-        </div>
+    <div className="catalog-search">
+      <Search size={14} className="catalog-search-icon" />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="catalog-search-input"
+      />
+      {value && (
+        <button onClick={() => onChange('')} className="catalog-search-clear" title="Clear">
+          <X size={14} />
+        </button>
       )}
     </div>
   );
 }
 
-function SKURow({
+/* ============================================
+   PAGINATION
+   ============================================ */
+function Pagination({
+  currentPage,
+  totalPages,
+  totalItems,
+  onPageChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  totalItems: number;
+  onPageChange: (page: number) => void;
+}) {
+  const startItem = (currentPage - 1) * ITEMS_PER_PAGE + 1;
+  const endItem = Math.min(currentPage * ITEMS_PER_PAGE, totalItems);
+
+  return (
+    <div className="catalog-pagination">
+      <span className="catalog-pagination-info">
+        {startItem}–{endItem} of {totalItems}
+      </span>
+      <div className="catalog-pagination-controls">
+        <button
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage === 1}
+          className="catalog-pagination-btn"
+        >
+          <ChevronLeft size={14} />
+        </button>
+        <span className="catalog-pagination-page">{currentPage} / {totalPages}</span>
+        <button
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage === totalPages}
+          className="catalog-pagination-btn"
+        >
+          <ChevronRight size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================
+   PROVIDER CARD
+   ============================================ */
+function ProviderCard({
+  provider,
+  isSelected,
+  onSelect,
+  healthStatus,
+  onEdit,
+  onDeactivate,
+}: {
+  provider: Provider;
+  isSelected: boolean;
+  onSelect: () => void;
+  healthStatus?: HealthStatus;
+  onEdit?: () => void;
+  onDeactivate?: () => void;
+}) {
+  const { copied, copyToClipboard } = useCopyToClipboard();
+
+  return (
+    <div
+      className={`catalog-provider-card ${isSelected ? 'selected' : ''}`}
+      data-status={provider.active ? 'active' : 'inactive'}
+    >
+      <div className="catalog-provider-row">
+        {/* Status indicator */}
+        <span className="catalog-provider-status" data-status={provider.active ? 'active' : 'inactive'}>
+          {provider.active ? 'Active' : 'Inactive'}
+        </span>
+
+        {/* Content */}
+        <div className="catalog-provider-content">
+          {/* Identity group */}
+          <div className="catalog-provider-identifiers">
+            <span className="catalog-provider-labeled-field" data-field="address">
+              <span className="catalog-provider-label">Address</span>
+              <code className="catalog-provider-mono">{provider.address}</code>
+              <button onClick={() => copyToClipboard(provider.address)} className="catalog-copy-btn" title="Copy">
+                {copied ? <Check size={10} /> : <Copy size={10} />}
+              </button>
+            </span>
+
+            <span className="catalog-provider-labeled-field" data-field="uuid">
+              <span className="catalog-provider-label">UUID</span>
+              <code className="catalog-provider-mono">{provider.uuid}</code>
+              <button onClick={() => copyToClipboard(provider.uuid)} className="catalog-copy-btn" title="Copy">
+                <Copy size={10} />
+              </button>
+            </span>
+
+            <span className="catalog-provider-labeled-field" data-field="api">
+              <span className="catalog-provider-label">API</span>
+              {provider.api_url ? (
+                <>
+                  <code className="catalog-provider-mono">{provider.api_url}</code>
+                  <button onClick={() => copyToClipboard(provider.api_url)} className="catalog-copy-btn" title="Copy">
+                    <Copy size={10} />
+                  </button>
+                  {healthStatus && (
+                    <span className="catalog-provider-health" data-status={healthStatus} title={healthStatus} />
+                  )}
+                </>
+              ) : (
+                <span className="catalog-provider-no-api">Not configured</span>
+              )}
+            </span>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="catalog-provider-actions">
+          <button onClick={onSelect} className={`btn btn-sm ${isSelected ? 'btn-primary' : 'btn-ghost'}`}>
+            {isSelected ? 'Selected' : 'Filter SKUs'}
+          </button>
+          {onEdit && (
+            <button onClick={onEdit} className="btn btn-ghost btn-sm">Edit</button>
+          )}
+          {onDeactivate && provider.active && (
+            <button onClick={onDeactivate} className="btn btn-danger btn-sm">Deactivate</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================
+   SKU CARD
+   ============================================ */
+function SKUCard({
   sku,
-  providerName,
-  formatPrice,
+  providerAddress,
   usage,
   usageLoading,
   onEdit,
   onDeactivate,
 }: {
   sku: SKU;
-  providerName: string;
-  formatPrice: (amount: string, denom: string, unit?: Unit) => string;
+  providerAddress: string;
   usage?: { active: number; total: number };
   usageLoading?: boolean;
   onEdit?: () => void;
@@ -667,77 +705,82 @@ function SKURow({
 }) {
   const { copied, copyToClipboard } = useCopyToClipboard();
 
-  const handleCopyUuid = async () => {
-    await copyToClipboard(sku.uuid);
-  };
-
   return (
-    <tr className="border-b border-gray-700/50">
-      <td className="py-3 pr-4">
-        <div className="font-medium text-white">{sku.name}</div>
-        <button
-          onClick={handleCopyUuid}
-          className="font-mono text-xs text-dim hover:text-gray-300"
-          title={`Click to copy: ${sku.uuid}`}
-        >
-          {sku.uuid}
-          <span className="ml-1 text-gray-600">{copied ? '(copied!)' : '(copy)'}</span>
-        </button>
-      </td>
-      <td className="py-3 pr-4 text-sm text-gray-300">{providerName}</td>
-      <td className="py-3 pr-4">
-        <span className="font-medium text-green-400">
-          {formatPrice(sku.base_price.amount, sku.base_price.denom, sku.unit)}
+    <div className="catalog-sku-card" data-status={sku.active ? 'active' : 'inactive'}>
+      <div className="catalog-sku-row">
+        {/* Status Badge - fixed width */}
+        <span className="catalog-sku-status" data-status={sku.active ? 'active' : 'inactive'}>
+          {sku.active ? 'Active' : 'Inactive'}
         </span>
-      </td>
-      <td className="py-3 pr-4">
-        {usageLoading ? (
-          <span className="text-gray-600 animate-pulse">Loading...</span>
-        ) : usage ? (
-          <div className="text-sm">
-            <span className="text-green-400">{usage.active}</span>
-            <span className="text-dim"> / {usage.total}</span>
-            <span className="ml-1 text-xs text-gray-600">leases</span>
+
+        {/* Content wrapper */}
+        <div className="catalog-sku-content">
+          {/* Identifiers group */}
+          <div className="catalog-sku-identifiers">
+            <span className="catalog-sku-labeled-field" data-field="name">
+              <span className="catalog-sku-label">Name</span>
+              <span className="catalog-sku-value">{sku.name}</span>
+            </span>
+
+            <span className="catalog-sku-labeled-field" data-field="address">
+              <span className="catalog-sku-label">Address</span>
+              <code className="catalog-sku-mono">{providerAddress}</code>
+              <button onClick={() => copyToClipboard(providerAddress)} className="catalog-copy-btn" title="Copy Address">
+                <Copy size={10} />
+              </button>
+            </span>
+
+            <span className="catalog-sku-labeled-field" data-field="uuid">
+              <span className="catalog-sku-label">UUID</span>
+              <code className="catalog-sku-mono">{sku.uuid}</code>
+              <button onClick={() => copyToClipboard(sku.uuid)} className="catalog-copy-btn" title="Copy UUID">
+                {copied ? <Check size={10} /> : <Copy size={10} />}
+              </button>
+            </span>
           </div>
-        ) : (
-          <span className="text-gray-600">-</span>
-        )}
-      </td>
-      <td className="py-3 pr-4">
-        {sku.active ? (
-          <span className="badge badge-success">Active</span>
-        ) : (
-          <span className="badge badge-secondary">Inactive</span>
-        )}
-      </td>
-      <td className="py-3">
-        <div className="flex gap-3">
+
+          {/* Separator */}
+          <div className="catalog-sku-separator" />
+
+          {/* Metrics group */}
+          <div className="catalog-sku-metrics">
+            <span className="catalog-sku-price">
+              {formatPrice(sku.base_price.amount, sku.base_price.denom, sku.unit)}
+            </span>
+
+            <span className="catalog-sku-usage">
+              {usageLoading ? (
+                <Loader2 className="animate-spin" size={12} />
+              ) : usage ? (
+                <>
+                  <span className="catalog-sku-usage-active">{usage.active}</span>
+                  <span className="catalog-sku-usage-total">/ {usage.total}</span>
+                  <span className="catalog-sku-usage-label">leases</span>
+                </>
+              ) : (
+                <span className="catalog-sku-usage-total">-</span>
+              )}
+            </span>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="catalog-sku-actions">
           {onEdit && (
-            <button
-              onClick={onEdit}
-              className="text-sm text-blue-400 hover:text-blue-300"
-            >
-              Edit
-            </button>
+            <button onClick={onEdit} className="btn btn-ghost btn-sm">Edit</button>
           )}
           {onDeactivate && sku.active && (
-            <button
-              onClick={onDeactivate}
-              className="text-sm text-red-400 hover:text-red-300"
-            >
-              Deactivate
-            </button>
-          )}
-          {!onEdit && !onDeactivate && (
-            <span className="text-sm text-gray-600">-</span>
+            <button onClick={onDeactivate} className="btn btn-danger btn-sm">Deactivate</button>
           )}
         </div>
-      </td>
-    </tr>
+      </div>
+    </div>
   );
 }
 
-
+/* ============================================
+   FORMS
+   ============================================ */
 function CreateProviderForm({
   defaultAddress,
   onSubmit,
@@ -763,45 +806,19 @@ function CreateProviderForm({
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
         <label className="mb-1 block text-sm text-muted">Management Address</label>
-        <input
-          type="text"
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          placeholder="manifest1..."
-          required
-          className="input"
-        />
+        <input type="text" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="manifest1..." required className="input" />
       </div>
       <div>
         <label className="mb-1 block text-sm text-muted">Payout Address</label>
-        <input
-          type="text"
-          value={payoutAddress}
-          onChange={(e) => setPayoutAddress(e.target.value)}
-          placeholder="manifest1..."
-          required
-          className="input"
-        />
+        <input type="text" value={payoutAddress} onChange={(e) => setPayoutAddress(e.target.value)} placeholder="manifest1..." required className="input" />
       </div>
       <div>
         <label className="mb-1 block text-sm text-muted">API URL</label>
-        <input
-          type="url"
-          value={apiUrl}
-          onChange={(e) => setApiUrl(e.target.value)}
-          placeholder="https://..."
-          className="input"
-        />
+        <input type="url" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://..." className="input" />
       </div>
       <div className="flex justify-end gap-3 pt-2">
-        <button type="button" onClick={onClose} className="px-4 py-2 text-muted hover:text-white">
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={submitting || !address || !payoutAddress}
-          className="btn btn-primary disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <button type="button" onClick={onClose} className="btn btn-ghost">Cancel</button>
+        <button type="submit" disabled={submitting || !address || !payoutAddress} className="btn btn-primary">
           {submitting ? 'Creating...' : 'Create Provider'}
         </button>
       </div>
@@ -828,13 +845,7 @@ function CreateSKUForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
-    await onSubmit({
-      providerUuid,
-      name,
-      unit,
-      priceAmount,
-      priceDenom: DENOMS.PWR,
-    });
+    await onSubmit({ providerUuid, name, unit, priceAmount, priceDenom: DENOMS.PWR });
     setSubmitting(false);
   };
 
@@ -842,69 +853,32 @@ function CreateSKUForm({
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
         <label className="mb-1 block text-sm text-muted">Provider</label>
-        <select
-          value={providerUuid}
-          onChange={(e) => setProviderUuid(e.target.value)}
-          required
-          className="input select"
-        >
+        <select value={providerUuid} onChange={(e) => setProviderUuid(e.target.value)} required className="input select">
           {activeProviders.map((p) => (
-            <option key={p.uuid} value={p.uuid}>
-              {truncateAddress(p.address)}
-            </option>
+            <option key={p.uuid} value={p.uuid}>{truncateAddress(p.address)}</option>
           ))}
         </select>
       </div>
       <div>
         <label className="mb-1 block text-sm text-muted">Name</label>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g., Small VM"
-          required
-          className="input"
-        />
+        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g., Small VM" required className="input" />
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label htmlFor="create-sku-price" className="mb-1 block text-sm text-muted">Price (uPWR)</label>
-          <input
-            id="create-sku-price"
-            type="number"
-            value={priceAmount}
-            onChange={(e) => setPriceAmount(e.target.value)}
-            placeholder="1000000"
-            required
-            min="1"
-            max="999999999999999"
-            aria-label="Price in micro PWR units"
-            className="input"
-          />
+          <label className="mb-1 block text-sm text-muted">Price (uPWR)</label>
+          <input type="number" value={priceAmount} onChange={(e) => setPriceAmount(e.target.value)} placeholder="1000000" required min="1" className="input" />
         </div>
         <div>
-          <label htmlFor="create-sku-unit" className="mb-1 block text-sm text-muted">Unit</label>
-          <select
-            id="create-sku-unit"
-            value={unit}
-            onChange={(e) => setUnit(Number(e.target.value))}
-            className="input select"
-            aria-label="Billing unit"
-          >
+          <label className="mb-1 block text-sm text-muted">Unit</label>
+          <select value={unit} onChange={(e) => setUnit(Number(e.target.value))} className="input select">
             <option value={Unit.UNIT_PER_HOUR}>Per Hour</option>
             <option value={Unit.UNIT_PER_DAY}>Per Day</option>
           </select>
         </div>
       </div>
       <div className="flex justify-end gap-3 pt-2">
-        <button type="button" onClick={onClose} className="px-4 py-2 text-muted hover:text-white">
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={submitting || !providerUuid || !name || !priceAmount}
-          className="btn btn-success disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <button type="button" onClick={onClose} className="btn btn-ghost">Cancel</button>
+        <button type="submit" disabled={submitting || !providerUuid || !name || !priceAmount} className="btn btn-success">
           {submitting ? 'Creating...' : 'Create SKU'}
         </button>
       </div>
@@ -936,62 +910,26 @@ function EditProviderForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="rounded bg-gray-700/50 p-3 text-xs text-muted">
-        <span className="text-dim">UUID: </span>
-        <span className="font-mono">{provider.uuid}</span>
-      </div>
+      <div className="rounded bg-surface-800/50 p-3 text-xs text-muted font-mono">{provider.uuid}</div>
       <div>
         <label className="mb-1 block text-sm text-muted">Management Address</label>
-        <input
-          type="text"
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          placeholder="manifest1..."
-          required
-          className="input"
-        />
+        <input type="text" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="manifest1..." required className="input" />
       </div>
       <div>
         <label className="mb-1 block text-sm text-muted">Payout Address</label>
-        <input
-          type="text"
-          value={payoutAddress}
-          onChange={(e) => setPayoutAddress(e.target.value)}
-          placeholder="manifest1..."
-          required
-          className="input"
-        />
+        <input type="text" value={payoutAddress} onChange={(e) => setPayoutAddress(e.target.value)} placeholder="manifest1..." required className="input" />
       </div>
       <div>
         <label className="mb-1 block text-sm text-muted">API URL</label>
-        <input
-          type="url"
-          value={apiUrl}
-          onChange={(e) => setApiUrl(e.target.value)}
-          placeholder="https://..."
-          className="input"
-        />
+        <input type="url" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://..." className="input" />
       </div>
-      <div>
-        <label className="flex items-center gap-2 text-sm text-muted">
-          <input
-            type="checkbox"
-            checked={active}
-            onChange={(e) => setActive(e.target.checked)}
-            className="rounded border-gray-600 bg-gray-700"
-          />
-          Active
-        </label>
-      </div>
+      <label className="flex items-center gap-2 text-sm text-muted cursor-pointer">
+        <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} className="w-4 h-4 rounded border-surface-500 bg-surface-700" />
+        Active
+      </label>
       <div className="flex justify-end gap-3 pt-2">
-        <button type="button" onClick={onClose} className="px-4 py-2 text-muted hover:text-white">
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={submitting || !address || !payoutAddress}
-          className="btn btn-primary disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <button type="button" onClick={onClose} className="btn btn-ghost">Cancel</button>
+        <button type="submit" disabled={submitting || !address || !payoutAddress} className="btn btn-primary">
           {submitting ? 'Updating...' : 'Update Provider'}
         </button>
       </div>
@@ -1020,101 +958,45 @@ function EditSKUForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
-    await onSubmit({
-      uuid: sku.uuid,
-      providerUuid,
-      name,
-      unit,
-      priceAmount,
-      priceDenom: sku.base_price.denom,
-      active,
-    });
+    await onSubmit({ uuid: sku.uuid, providerUuid, name, unit, priceAmount, priceDenom: sku.base_price.denom, active });
     setSubmitting(false);
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="rounded bg-gray-700/50 p-3 text-xs text-muted">
-        <span className="text-dim">UUID: </span>
-        <span className="font-mono">{sku.uuid}</span>
-      </div>
+      <div className="rounded bg-surface-800/50 p-3 text-xs text-muted font-mono">{sku.uuid}</div>
       <div>
         <label className="mb-1 block text-sm text-muted">Provider</label>
-        <select
-          value={providerUuid}
-          onChange={(e) => setProviderUuid(e.target.value)}
-          required
-          className="input select"
-        >
+        <select value={providerUuid} onChange={(e) => setProviderUuid(e.target.value)} required className="input select">
           {providers.map((p) => (
-            <option key={p.uuid} value={p.uuid}>
-              {truncateAddress(p.address)}
-            </option>
+            <option key={p.uuid} value={p.uuid}>{truncateAddress(p.address)}</option>
           ))}
         </select>
       </div>
       <div>
         <label className="mb-1 block text-sm text-muted">Name</label>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g., Small VM"
-          required
-          className="input"
-        />
+        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g., Small VM" required className="input" />
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label htmlFor="edit-sku-price" className="mb-1 block text-sm text-muted">Price (uPWR)</label>
-          <input
-            id="edit-sku-price"
-            type="number"
-            value={priceAmount}
-            onChange={(e) => setPriceAmount(e.target.value)}
-            placeholder="1000000"
-            required
-            min="1"
-            max="999999999999999"
-            aria-label="Price in micro PWR units"
-            className="input"
-          />
+          <label className="mb-1 block text-sm text-muted">Price (uPWR)</label>
+          <input type="number" value={priceAmount} onChange={(e) => setPriceAmount(e.target.value)} placeholder="1000000" required min="1" className="input" />
         </div>
         <div>
-          <label htmlFor="edit-sku-unit" className="mb-1 block text-sm text-muted">Unit</label>
-          <select
-            id="edit-sku-unit"
-            value={unit}
-            onChange={(e) => setUnit(Number(e.target.value))}
-            className="input select"
-            aria-label="Billing unit"
-          >
+          <label className="mb-1 block text-sm text-muted">Unit</label>
+          <select value={unit} onChange={(e) => setUnit(Number(e.target.value))} className="input select">
             <option value={Unit.UNIT_PER_HOUR}>Per Hour</option>
             <option value={Unit.UNIT_PER_DAY}>Per Day</option>
           </select>
         </div>
       </div>
-      <div>
-        <label className="flex items-center gap-2 text-sm text-muted">
-          <input
-            type="checkbox"
-            checked={active}
-            onChange={(e) => setActive(e.target.checked)}
-            className="rounded border-gray-600 bg-gray-700"
-            aria-label="SKU active status"
-          />
-          Active
-        </label>
-      </div>
+      <label className="flex items-center gap-2 text-sm text-muted cursor-pointer">
+        <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} className="w-4 h-4 rounded border-surface-500 bg-surface-700" />
+        Active
+      </label>
       <div className="flex justify-end gap-3 pt-2">
-        <button type="button" onClick={onClose} className="px-4 py-2 text-muted hover:text-white">
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={submitting || !providerUuid || !name || !priceAmount}
-          className="btn btn-primary disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <button type="button" onClick={onClose} className="btn btn-ghost">Cancel</button>
+        <button type="submit" disabled={submitting || !providerUuid || !name || !priceAmount} className="btn btn-primary">
           {submitting ? 'Updating...' : 'Update SKU'}
         </button>
       </div>

@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { Link, Shield, Plus, ChevronDown, ChevronUp, Clock, Copy, Check, X, ExternalLink, Zap, CheckCircle, XCircle, Package, Calendar, Hash, Wifi } from 'lucide-react';
+import { Link, Shield, Plus, ChevronDown, ChevronUp, Clock, Copy, Check, X, ExternalLink, Zap, MinusCircle, XCircle, Wifi, ChevronLeft, ChevronRight } from 'lucide-react';
 import { LeaseState, type Lease } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { truncateAddress } from '../../utils/address';
-import { formatDate, formatRelativeTime } from '../../utils/format';
+import { formatDate, formatRelativeTime, formatDuration } from '../../utils/format';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { getLeasesByTenant, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
@@ -19,7 +19,7 @@ import {
   createLeaseDataAuthToken,
   getLeaseConnectionInfo,
   uploadLeaseData,
-  type ConnectionInfo,
+  type LeaseInfo,
 } from '../../api/provider-api';
 import { sha256, toHex, validatePayloadSize, getPayloadSize, MAX_PAYLOAD_SIZE } from '../../utils/hash';
 import { validateFile } from '../../utils/fileValidation';
@@ -45,6 +45,8 @@ const CHAIN_NAME = 'manifestlocal';
 
 type FilterState = 'all' | 'pending' | 'active' | 'closed' | 'rejected';
 
+const LEASES_PER_PAGE = 10;
+
 const LEASE_STATE_TO_FILTER: Record<LeaseState, FilterState> = {
   [LeaseState.LEASE_STATE_PENDING]: 'pending',
   [LeaseState.LEASE_STATE_ACTIVE]: 'active',
@@ -60,6 +62,7 @@ export function LeasesTab() {
   const toast = useToast();
 
   const [activeFilter, setActiveFilter] = useState<FilterState>('all');
+  const [currentPage, setCurrentPage] = useState(1);
   const [showCreateLease, setShowCreateLease] = useState(false);
   const [leases, setLeases] = useState<Lease[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -122,9 +125,39 @@ export function LeasesTab() {
     rejected: leases.filter((l) => l.state === LeaseState.LEASE_STATE_REJECTED).length,
   };
 
-  const filteredLeases = activeFilter === 'all'
+  // Priority order: pending first (new/needs attention), then active, then terminal states
+  const STATE_PRIORITY: Record<LeaseState, number> = {
+    [LeaseState.LEASE_STATE_PENDING]: 0,
+    [LeaseState.LEASE_STATE_ACTIVE]: 1,
+    [LeaseState.LEASE_STATE_REJECTED]: 2,
+    [LeaseState.LEASE_STATE_CLOSED]: 3,
+    [LeaseState.LEASE_STATE_EXPIRED]: 4,
+    [LeaseState.LEASE_STATE_UNSPECIFIED]: 5,
+    [LeaseState.UNRECOGNIZED]: 5,
+  };
+
+  const filteredLeases = (activeFilter === 'all'
     ? leases
-    : leases.filter((l) => LEASE_STATE_TO_FILTER[l.state] === activeFilter);
+    : leases.filter((l) => LEASE_STATE_TO_FILTER[l.state] === activeFilter)
+  ).sort((a, b) => {
+    // Sort by state priority first
+    const priorityDiff = STATE_PRIORITY[a.state] - STATE_PRIORITY[b.state];
+    if (priorityDiff !== 0) return priorityDiff;
+    // Within same state, sort by created_at descending (newest first)
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
+
+  // Pagination
+  const totalPages = Math.ceil(filteredLeases.length / LEASES_PER_PAGE);
+  const paginatedLeases = filteredLeases.slice(
+    (currentPage - 1) * LEASES_PER_PAGE,
+    currentPage * LEASES_PER_PAGE
+  );
+
+  // Reset to page 1 when filter changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeFilter]);
 
   const handleCancelLease = async (leaseUuid: string) => {
     if (!address) return;
@@ -312,8 +345,8 @@ export function LeasesTab() {
     }
   };
 
-  // Count actionable (selectable) leases
-  const actionableLeases = filteredLeases.filter(
+  // Count actionable (selectable) leases - from current page only
+  const actionableLeases = paginatedLeases.filter(
     (l) => l.state === LeaseState.LEASE_STATE_PENDING || l.state === LeaseState.LEASE_STATE_ACTIVE
   );
 
@@ -416,7 +449,7 @@ export function LeasesTab() {
             )}
           </div>
         ) : (
-          filteredLeases.map((lease) => (
+          paginatedLeases.map((lease) => (
             <LeaseCard
               key={lease.uuid}
               lease={lease}
@@ -432,6 +465,17 @@ export function LeasesTab() {
           ))
         )}
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredLeases.length}
+          itemsPerPage={LEASES_PER_PAGE}
+          onPageChange={setCurrentPage}
+        />
+      )}
 
       {/* Floating Batch Action Bar */}
       {selectedLeases.size > 0 && (
@@ -527,15 +571,125 @@ function FilterTabs({
 }
 
 /* ============================================
+   JSON RENDERER (for arbitrary lease info)
+   ============================================ */
+
+/**
+ * Recursively renders JSON data in a compact, readable format.
+ * Handles primitives, arrays, and nested objects.
+ */
+function JsonRenderer({
+  data,
+  copyToClipboard,
+  depth = 0,
+}: {
+  data: unknown;
+  copyToClipboard: (text: string) => void;
+  depth?: number;
+}) {
+  // Primitives: string, number, boolean, null
+  if (data === null || data === undefined) {
+    return <span className="lease-info-null">null</span>;
+  }
+
+  if (typeof data === 'boolean') {
+    return <span className={`lease-info-bool lease-info-bool-${data}`}>{data ? 'true' : 'false'}</span>;
+  }
+
+  if (typeof data === 'number') {
+    return <span className="lease-info-number">{data}</span>;
+  }
+
+  if (typeof data === 'string') {
+    // Check if it looks like a URL
+    const isUrl = /^https?:\/\//.test(data);
+    return (
+      <span className="lease-info-string-container">
+        <code className="lease-info-value">{data}</code>
+        <button
+          onClick={() => copyToClipboard(data)}
+          className="lease-card-copy-btn"
+          title="Copy"
+        >
+          <Copy size={10} />
+        </button>
+        {isUrl && (
+          <a
+            href={data}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-ghost btn-xs"
+            title="Open in new tab"
+          >
+            <ExternalLink size={12} />
+          </a>
+        )}
+      </span>
+    );
+  }
+
+  // Arrays
+  if (Array.isArray(data)) {
+    if (data.length === 0) {
+      return <span className="lease-info-empty">[]</span>;
+    }
+    return (
+      <div className="lease-info-array">
+        {data.map((item, idx) => (
+          <div key={idx} className="lease-info-array-item">
+            <span className="lease-info-array-index">[{idx}]</span>
+            <JsonRenderer data={item} copyToClipboard={copyToClipboard} depth={depth + 1} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Objects
+  if (typeof data === 'object') {
+    const entries = Object.entries(data);
+    if (entries.length === 0) {
+      return <span className="lease-info-empty">{'{}'}</span>;
+    }
+    return (
+      <div className={`lease-info-object ${depth > 0 ? 'lease-info-nested' : ''}`}>
+        {entries.map(([key, value]) => {
+          const isSimpleValue = value === null || typeof value !== 'object';
+          return (
+            <div key={key} className={`lease-info-row ${!isSimpleValue ? 'lease-info-row-complex' : ''}`}>
+              <span className="lease-info-label">{formatKey(key)}</span>
+              <JsonRenderer data={value} copyToClipboard={copyToClipboard} depth={depth + 1} />
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // Fallback for unknown types
+  return <span className="lease-info-unknown">{String(data)}</span>;
+}
+
+/**
+ * Formats a camelCase or snake_case key into a readable label.
+ */
+function formatKey(key: string): string {
+  return key
+    .replace(/_/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/* ============================================
    LEASE CARD COMPONENT
    ============================================ */
 
-// State icons for visual recognition
+// State icons
 const STATE_ICONS: Record<FilterState, React.ReactNode> = {
   all: null,
   pending: <Clock size={12} />,
   active: <Zap size={12} />,
-  closed: <CheckCircle size={12} />,
+  closed: <MinusCircle size={12} />,
   rejected: <XCircle size={12} />,
 };
 
@@ -564,7 +718,7 @@ function LeaseCard({
   const { copied, copyToClipboard } = useCopyToClipboard();
 
   const [isExpanded, setIsExpanded] = useState(false);
-  const [connectionInfo, setConnectionInfo] = useState<ConnectionInfo | null>(null);
+  const [leaseInfo, setLeaseInfo] = useState<LeaseInfo | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [showCloseForm, setShowCloseForm] = useState(false);
@@ -573,10 +727,11 @@ function LeaseCard({
   const provider = getProvider(lease.provider_uuid);
   const stateKey = LEASE_STATE_TO_FILTER[lease.state];
   const canSelect = lease.state === LeaseState.LEASE_STATE_PENDING || lease.state === LeaseState.LEASE_STATE_ACTIVE;
+  const isPending = lease.state === LeaseState.LEASE_STATE_PENDING;
+  const isActive = lease.state === LeaseState.LEASE_STATE_ACTIVE;
 
-  // Calculate summary
-  const itemCount = lease.items.reduce((sum, item) => sum + parseInt(item.quantity, 10), 0);
-  const totalPerHour = (() => {
+  // Calculate cost per hour
+  const costPerHour = (() => {
     let total = 0;
     for (const item of lease.items) {
       const perSecond = parseInt(item.locked_price.amount, 10);
@@ -589,6 +744,12 @@ function LeaseCard({
   })();
 
   const handleGetConnectionInfo = async () => {
+    // Toggle: if already showing, close it
+    if (leaseInfo) {
+      setLeaseInfo(null);
+      return;
+    }
+
     if (!tenantAddress || !provider?.api_url) {
       setConnectionError('Missing tenant address or provider API URL');
       return;
@@ -616,7 +777,7 @@ function LeaseCard({
       );
 
       const info = await getLeaseConnectionInfo(provider.api_url, lease.uuid, authToken);
-      setConnectionInfo(info);
+      setLeaseInfo(info);
     } catch (err) {
       setConnectionError(err instanceof Error ? err.message : 'Failed to get connection info');
     } finally {
@@ -624,17 +785,11 @@ function LeaseCard({
     }
   };
 
-  const connectionUrl = connectionInfo
-    ? `${connectionInfo.connection.protocol}://${connectionInfo.connection.host}:${connectionInfo.connection.port}`
-    : null;
-
   return (
-    <div
-      className={`lease-card ${isSelected ? 'selected' : ''}`}
-      data-state={stateKey}
-    >
-      {/* Main row - single horizontal line */}
-      <div className="lease-card-body">
+    <div className={`lease-card ${isSelected ? 'selected' : ''}`} data-state={stateKey}>
+      {/* === COLLAPSED VIEW === */}
+      <div className="lease-card-row">
+        {/* Checkbox for batch selection */}
         {canSelect && onToggleSelect && (
           <input
             type="checkbox"
@@ -644,54 +799,57 @@ function LeaseCard({
           />
         )}
 
-        <div className="lease-card-info">
-          {/* State badge */}
-          <span className="lease-card-state" data-state={stateKey}>
-            <span className="lease-card-state-icon">{STATE_ICONS[stateKey]}</span>
-            {LEASE_STATE_LABELS[lease.state]}
-          </span>
+        {/* State badge - fixed width */}
+        <span className="lease-card-state" data-state={stateKey}>
+          <span className="lease-card-state-icon">{STATE_ICONS[stateKey]}</span>
+          {LEASE_STATE_LABELS[lease.state]}
+        </span>
 
-          {/* Provider */}
-          <span className="lease-card-provider">
-            <span className="lease-card-provider-name">
-              {provider ? truncateAddress(provider.address) : lease.provider_uuid.slice(0, 8)}
+        {/* Middle content (identifiers + separator + metrics) */}
+        <div className="lease-card-content">
+          {/* Identifiers group */}
+          <div className="lease-card-identifiers">
+            <span className="lease-card-labeled-field">
+              <span className="lease-card-label">Lease</span>
+              <code className="lease-card-mono">{lease.uuid}</code>
+              <button
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.uuid); }}
+                className="lease-card-copy-btn"
+                title="Copy Lease UUID"
+              >
+                {copied ? <Check size={10} /> : <Copy size={10} />}
+              </button>
             </span>
-          </span>
 
-          {/* Metrics inline */}
+            <span className="lease-card-labeled-field">
+              <span className="lease-card-label">Provider</span>
+              <code className="lease-card-mono">{provider?.address || lease.provider_uuid}</code>
+              <button
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(provider?.address || lease.provider_uuid); }}
+                className="lease-card-copy-btn"
+                title="Copy Provider Address"
+              >
+                <Copy size={10} />
+              </button>
+            </span>
+          </div>
+
+          {/* Separator */}
+          <div className="lease-card-separator" />
+
+          {/* Metrics group */}
           <div className="lease-card-metrics">
-            <span className="lease-card-metric">
-              <Package size={11} className="lease-card-metric-icon" />
-              {itemCount}
-            </span>
-            <span className="lease-card-metric">
-              <span className="lease-card-cost">{totalPerHour}</span>
-            </span>
-            <span className="lease-card-metric">
-              <Clock size={11} className="lease-card-metric-icon" />
+            <span className="lease-card-cost">{costPerHour}</span>
+            <span className="lease-card-time">
+              <Clock size={11} />
               {formatRelativeTime(lease.created_at)}
             </span>
           </div>
-
-          {/* UUID on hover */}
-          <div className="lease-card-uuid">
-            <span>{lease.uuid.slice(0, 8)}…{lease.uuid.slice(-4)}</span>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                copyToClipboard(lease.uuid);
-              }}
-              className="lease-card-uuid-btn"
-              title="Copy UUID"
-            >
-              {copied ? <Check size={10} /> : <Copy size={10} />}
-            </button>
-          </div>
         </div>
 
-        {/* Actions */}
+        {/* Actions (contextual) */}
         <div className="lease-card-actions">
-          {lease.state === LeaseState.LEASE_STATE_PENDING && (
+          {isPending && (
             <button
               onClick={() => onCancel(lease.uuid)}
               disabled={txLoading}
@@ -700,7 +858,7 @@ function LeaseCard({
               Cancel
             </button>
           )}
-          {lease.state === LeaseState.LEASE_STATE_ACTIVE && (
+          {isActive && (
             <>
               <button
                 onClick={handleGetConnectionInfo}
@@ -708,84 +866,49 @@ function LeaseCard({
                 className="btn btn-primary btn-sm"
                 title={!provider?.api_url ? 'Provider has no API URL' : undefined}
               >
-                {connectionLoading ? '...' : 'Connect'}
+                {connectionLoading ? '...' : 'Get Info'}
               </button>
               <button
                 onClick={() => setShowCloseForm(!showCloseForm)}
                 disabled={txLoading}
-                className="btn btn-ghost btn-sm"
+                className="btn btn-danger btn-sm"
               >
                 Close
               </button>
             </>
           )}
-          <span className="lease-card-actions-divider" />
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className={`lease-card-expand ${isExpanded ? 'expanded' : ''}`}
-            title={isExpanded ? 'Collapse' : 'Expand'}
-          >
-            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
         </div>
+
+        {/* Expand toggle */}
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className={`lease-card-expand ${isExpanded ? 'expanded' : ''}`}
+          title={isExpanded ? 'Collapse' : 'Expand'}
+        >
+          {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
       </div>
 
-      {/* Connection panel - inline */}
-      {connectionInfo && connectionUrl && (
-        <div className="connection-panel">
-          <span className="connection-panel-label">
-            <Wifi size={10} className="connection-panel-label-icon" />
-            Live
-          </span>
-          <span className="connection-panel-url">{connectionUrl}</span>
-          <div className="connection-panel-actions">
-            <button
-              onClick={() => copyToClipboard(connectionUrl)}
-              className={`connection-panel-btn ${copied ? 'success' : ''}`}
-              title="Copy"
-            >
-              {copied ? <Check size={12} /> : <Copy size={12} />}
-            </button>
-            <a
-              href={connectionUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="connection-panel-btn"
-              title="Open"
-            >
-              <ExternalLink size={12} />
-            </a>
-            <button
-              onClick={() => setConnectionInfo(null)}
-              className="connection-panel-btn"
-              title="Dismiss"
-            >
-              <X size={12} />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Connection error */}
+      {/* Connection error (inline) */}
       {connectionError && (
-        <div className="inline-form" style={{ background: 'oklch(0.55 0.15 25 / 0.1)', borderColor: 'oklch(0.55 0.15 25 / 0.3)' }}>
-          <span className="text-error text-xs flex-1">{connectionError}</span>
-          <button onClick={() => setConnectionError(null)} className="btn btn-ghost btn-sm">
+        <div className="lease-card-error">
+          <span>{connectionError}</span>
+          <button onClick={() => setConnectionError(null)} className="btn btn-ghost btn-xs">
             <X size={12} />
           </button>
         </div>
       )}
 
-      {/* Close form */}
+      {/* Close form (inline) */}
       {showCloseForm && (
-        <div className="inline-form">
+        <div className="lease-card-inline-form">
           <input
             type="text"
             value={closeReason}
             onChange={(e) => setCloseReason(e.target.value)}
             placeholder="Reason (optional)"
             maxLength={256}
-            className="input"
+            className="input input-sm"
             disabled={txLoading}
           />
           <button
@@ -800,10 +923,7 @@ function LeaseCard({
             Confirm
           </button>
           <button
-            onClick={() => {
-              setShowCloseForm(false);
-              setCloseReason('');
-            }}
+            onClick={() => { setShowCloseForm(false); setCloseReason(''); }}
             className="btn btn-ghost btn-sm"
           >
             ×
@@ -811,110 +931,236 @@ function LeaseCard({
         </div>
       )}
 
-      {/* Expandable Details - horizontal grid */}
+      {/* Lease Info Panel (inline) */}
+      {leaseInfo && (
+        <div className="lease-info-panel">
+          <div className="lease-info-header">
+            <span className="lease-info-title">
+              <Wifi size={12} />
+              Lease Info
+            </span>
+            <button
+              onClick={() => setLeaseInfo(null)}
+              className="lease-info-close"
+              title="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <div className="lease-info-content">
+            <JsonRenderer data={leaseInfo} copyToClipboard={copyToClipboard} />
+          </div>
+        </div>
+      )}
+
+      {/* === EXPANDED VIEW === */}
       {isExpanded && (
-        <div className="lease-card-details">
-          <div className="lease-card-details-grid">
-            {/* Lease Info */}
-            <div className="lease-card-detail-group">
-              <div className="lease-card-detail-group-title">
-                <Hash size={10} className="lease-card-detail-group-icon" />
-                Lease
+        <div className="lease-card-expanded">
+          {/* Identifiers */}
+          <div className="lease-card-section">
+            <div className="lease-card-section-title">Identifiers</div>
+            <div className="lease-card-kv-list">
+              <div className="lease-card-kv">
+                <span className="lease-card-kv-label">Lease UUID</span>
+                <code className="lease-card-kv-value">{lease.uuid}</code>
+                <button onClick={() => copyToClipboard(lease.uuid)} className="lease-card-copy-btn" title="Copy">
+                  <Copy size={10} />
+                </button>
               </div>
-              <div className="lease-card-detail-row">
-                <span className="lease-card-detail-label">UUID</span>
-                <span className="lease-card-detail-value mono">{lease.uuid.slice(0, 12)}…</span>
+              <div className="lease-card-kv">
+                <span className="lease-card-kv-label">Provider UUID</span>
+                <code className="lease-card-kv-value">{lease.provider_uuid}</code>
+                <button onClick={() => copyToClipboard(lease.provider_uuid)} className="lease-card-copy-btn" title="Copy">
+                  <Copy size={10} />
+                </button>
               </div>
               {lease.meta_hash && (
-                <div className="lease-card-detail-row">
-                  <span className="lease-card-detail-label">Hash</span>
-                  <span className="lease-card-detail-value mono">{lease.meta_hash.slice(0, 12)}…</span>
+                <div className="lease-card-kv">
+                  <span className="lease-card-kv-label">Meta Hash</span>
+                  <code className="lease-card-kv-value">{lease.meta_hash}</code>
+                  <button onClick={() => copyToClipboard(lease.meta_hash!)} className="lease-card-copy-btn" title="Copy">
+                    <Copy size={10} />
+                  </button>
+                </div>
+              )}
+              {lease.min_lease_duration_at_creation && (
+                <div className="lease-card-kv">
+                  <span className="lease-card-kv-label">Min Duration</span>
+                  <span className="lease-card-kv-value">{formatDuration(lease.min_lease_duration_at_creation)}</span>
                 </div>
               )}
             </div>
+          </div>
 
-            {/* Items */}
-            <div className="lease-card-detail-group">
-              <div className="lease-card-detail-group-title">
-                <Package size={10} className="lease-card-detail-group-icon" />
-                Items
-              </div>
-              <div className="lease-card-items">
+          {/* Items */}
+          <div className="lease-card-section">
+            <div className="lease-card-section-title">Items ({lease.items.length})</div>
+            <table className="lease-card-table">
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                </tr>
+              </thead>
+              <tbody>
                 {lease.items.map((item) => {
                   const sku = getSKU(item.sku_uuid);
                   const pricePerHour =
                     (parseInt(item.locked_price.amount, 10) * SECONDS_PER_HOUR) /
                     Math.pow(10, DENOM_METADATA[item.locked_price.denom]?.exponent || 6);
                   const symbol = DENOM_METADATA[item.locked_price.denom]?.symbol || item.locked_price.denom;
-
                   return (
-                    <div key={`${lease.uuid}-item-${item.sku_uuid}`} className="lease-card-item">
-                      <span className="lease-card-item-name">
-                        {sku?.name || item.sku_uuid.slice(0, 8)} ×{item.quantity}
-                      </span>
-                      <span className="lease-card-item-price">
-                        {pricePerHour.toFixed(4)} {symbol}/hr
-                      </span>
-                    </div>
+                    <tr key={`${lease.uuid}-item-${item.sku_uuid}`}>
+                      <td>{sku?.name || item.sku_uuid.slice(0, 12)}</td>
+                      <td>{item.quantity}</td>
+                      <td>{pricePerHour.toFixed(4)} {symbol}/hr</td>
+                    </tr>
                   );
                 })}
-              </div>
-            </div>
+              </tbody>
+            </table>
+          </div>
 
-            {/* Timeline */}
-            <div className="lease-card-detail-group">
-              <div className="lease-card-detail-group-title">
-                <Calendar size={10} className="lease-card-detail-group-icon" />
-                Timeline
+          {/* Timeline */}
+          <div className="lease-card-section">
+            <div className="lease-card-section-title">Timeline</div>
+            <div className="lease-card-timeline">
+              <div className="lease-card-timeline-event">
+                <span className="lease-card-timeline-dot" data-type="created" />
+                <span className="lease-card-timeline-label">Created</span>
+                <span className="lease-card-timeline-date">{formatDate(lease.created_at)}</span>
               </div>
-              <div className="lease-card-timeline">
-                <div className="lease-card-timeline-item active">
-                  <span className="lease-card-timeline-label">Created</span>
-                  <span className="lease-card-timeline-date">{formatDate(lease.created_at, 'date')}</span>
+              {lease.acknowledged_at && (
+                <div className="lease-card-timeline-event">
+                  <span className="lease-card-timeline-dot" data-type="ack" />
+                  <span className="lease-card-timeline-label">Acknowledged</span>
+                  <span className="lease-card-timeline-date">{formatDate(lease.acknowledged_at)}</span>
                 </div>
-                {lease.acknowledged_at && (
-                  <div className="lease-card-timeline-item success">
-                    <span className="lease-card-timeline-label">Ack</span>
-                    <span className="lease-card-timeline-date">{formatDate(lease.acknowledged_at, 'date')}</span>
-                  </div>
-                )}
-                {lease.closed_at && (
-                  <div className="lease-card-timeline-item">
-                    <span className="lease-card-timeline-label">Closed</span>
-                    <span className="lease-card-timeline-date">{formatDate(lease.closed_at, 'date')}</span>
-                    {lease.closure_reason && <span className="lease-card-timeline-reason">— {lease.closure_reason}</span>}
-                  </div>
-                )}
-                {lease.rejected_at && (
-                  <div className="lease-card-timeline-item error">
-                    <span className="lease-card-timeline-label">Rejected</span>
-                    <span className="lease-card-timeline-date">{formatDate(lease.rejected_at, 'date')}</span>
-                    {lease.rejection_reason && <span className="lease-card-timeline-reason">— {lease.rejection_reason}</span>}
-                  </div>
-                )}
-              </div>
+              )}
+              {lease.closed_at && (
+                <div className="lease-card-timeline-event">
+                  <span className="lease-card-timeline-dot" data-type="closed" />
+                  <span className="lease-card-timeline-label">Closed</span>
+                  <span className="lease-card-timeline-date">{formatDate(lease.closed_at)}</span>
+                  {lease.closure_reason && (
+                    <span className="lease-card-timeline-reason">{lease.closure_reason}</span>
+                  )}
+                </div>
+              )}
+              {lease.rejected_at && (
+                <div className="lease-card-timeline-event">
+                  <span className="lease-card-timeline-dot" data-type="rejected" />
+                  <span className="lease-card-timeline-label">Rejected</span>
+                  <span className="lease-card-timeline-date">{formatDate(lease.rejected_at)}</span>
+                  {lease.rejection_reason && (
+                    <span className="lease-card-timeline-reason">{lease.rejection_reason}</span>
+                  )}
+                </div>
+              )}
+              {lease.expired_at && (
+                <div className="lease-card-timeline-event">
+                  <span className="lease-card-timeline-dot" data-type="expired" />
+                  <span className="lease-card-timeline-label">Expired</span>
+                  <span className="lease-card-timeline-date">{formatDate(lease.expired_at)}</span>
+                </div>
+              )}
             </div>
-
-            {/* Connection (if active) */}
-            {connectionInfo && (
-              <div className="lease-card-detail-group">
-                <div className="lease-card-detail-group-title">
-                  <Wifi size={10} className="lease-card-detail-group-icon" />
-                  Connection
-                </div>
-                <div className="lease-card-detail-row">
-                  <span className="lease-card-detail-label">Host</span>
-                  <span className="lease-card-detail-value highlight">{connectionInfo.connection.host}</span>
-                </div>
-                <div className="lease-card-detail-row">
-                  <span className="lease-card-detail-label">Port</span>
-                  <span className="lease-card-detail-value">{connectionInfo.connection.port}</span>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ============================================
+   PAGINATION COMPONENT
+   ============================================ */
+function Pagination({
+  currentPage,
+  totalPages,
+  totalItems,
+  itemsPerPage,
+  onPageChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  totalItems: number;
+  itemsPerPage: number;
+  onPageChange: (page: number) => void;
+}) {
+  const startItem = (currentPage - 1) * itemsPerPage + 1;
+  const endItem = Math.min(currentPage * itemsPerPage, totalItems);
+
+  // Generate page numbers to display
+  const getPageNumbers = () => {
+    const pages: (number | 'ellipsis')[] = [];
+
+    if (totalPages <= 7) {
+      // Show all pages if 7 or fewer
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      // Always show first page
+      pages.push(1);
+
+      if (currentPage > 3) {
+        pages.push('ellipsis');
+      }
+
+      // Show pages around current
+      const start = Math.max(2, currentPage - 1);
+      const end = Math.min(totalPages - 1, currentPage + 1);
+      for (let i = start; i <= end; i++) pages.push(i);
+
+      if (currentPage < totalPages - 2) {
+        pages.push('ellipsis');
+      }
+
+      // Always show last page
+      pages.push(totalPages);
+    }
+
+    return pages;
+  };
+
+  return (
+    <div className="pagination">
+      <span className="pagination-info">
+        {startItem}–{endItem} of {totalItems}
+      </span>
+      <div className="pagination-controls">
+        <button
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage === 1}
+          className="pagination-btn"
+          title="Previous page"
+        >
+          <ChevronLeft size={14} />
+        </button>
+
+        {getPageNumbers().map((page, idx) =>
+          page === 'ellipsis' ? (
+            <span key={`ellipsis-${idx}`} className="pagination-ellipsis">…</span>
+          ) : (
+            <button
+              key={page}
+              onClick={() => onPageChange(page)}
+              className={`pagination-btn ${currentPage === page ? 'active' : ''}`}
+            >
+              {page}
+            </button>
+          )
+        )}
+
+        <button
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage === totalPages}
+          className="pagination-btn"
+          title="Next page"
+        >
+          <ChevronRight size={14} />
+        </button>
+      </div>
     </div>
   );
 }

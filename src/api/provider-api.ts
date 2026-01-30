@@ -36,6 +36,7 @@ export interface ProviderHealthResponse {
   };
 }
 
+/** @deprecated Use LeaseInfo instead */
 export interface ConnectionInfo {
   lease_uuid: string;
   tenant: string;
@@ -47,6 +48,12 @@ export interface ConnectionInfo {
     metadata?: Record<string, string>;
   };
 }
+
+/**
+ * Flexible lease info from provider API.
+ * Can contain any JSON-serializable data.
+ */
+export type LeaseInfo = Record<string, unknown>;
 
 export interface AuthToken {
   tenant: string;
@@ -97,13 +104,14 @@ export function createAuthToken(
 }
 
 /**
- * Fetches lease connection info from the provider's API.
+ * Fetches lease info from the provider's API.
+ * Returns arbitrary JSON data from the provider.
  */
 export async function getLeaseConnectionInfo(
   providerApiUrl: string,
   leaseUuid: string,
   authToken: string
-): Promise<ConnectionInfo> {
+): Promise<LeaseInfo> {
   // Validate and normalize the API URL
   const validatedUrl = validateProviderUrl(providerApiUrl);
   const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
