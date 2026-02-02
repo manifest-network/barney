@@ -348,6 +348,26 @@ export interface GetAllCreditsParams {
   paginationKey?: string;
 }
 
+/**
+ * Fetches all credit accounts with their balances.
+ *
+ * **N+1 Query Pattern:** The billing bulk API (`/credits`) doesn't include balance data,
+ * so we make additional requests to the bank module for each credit account's balance.
+ * With pagination (default PAGE_SIZE=10), this results in up to 10 parallel HTTP requests
+ * per page load.
+ *
+ * **Tradeoffs:**
+ * - Balances are fetched in parallel via Promise.all for performance
+ * - Individual balance fetch errors are logged (dev mode) but don't fail the entire request
+ * - This is acceptable for current pagination sizes but could become a bottleneck if:
+ *   - Page size increases significantly (>20-30 accounts)
+ *   - This pattern is replicated elsewhere without consideration
+ *
+ * **Future improvements if needed:**
+ * - Request throttling/batching for larger page sizes
+ * - Backend API enhancement to include balances in bulk response
+ * - Caching layer for balance data
+ */
 export async function getAllCredits(params?: GetAllCreditsParams): Promise<PaginatedCreditsResponse> {
   const searchParams = new URLSearchParams();
 
@@ -377,7 +397,7 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
   const data = await response.json();
   const creditAccounts: CreditAccount[] = data.credit_accounts ?? [];
 
-  // The bulk API doesn't return balances, fetch them from the bank module
+  // N+1 query: fetch balances from bank module (see function docs for rationale)
   const balances: Record<string, Coin[]> = {};
 
   if (creditAccounts.length > 0) {

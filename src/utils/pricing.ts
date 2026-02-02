@@ -33,9 +33,13 @@ export function calculateEstimatedCost(
     if (item.skuUuid) {
       const sku = skus.find((s) => s.uuid === item.skuUuid);
       if (sku) {
+        const price = parseInt(sku.base_price.amount, 10);
+        if (Number.isNaN(price)) {
+          // Skip items with invalid price data
+          continue;
+        }
         denom = sku.base_price.denom;
         unit = sku.unit;
-        const price = parseInt(sku.base_price.amount, 10);
         total += price * item.quantity;
       }
     }

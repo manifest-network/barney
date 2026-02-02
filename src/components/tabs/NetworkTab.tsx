@@ -189,19 +189,16 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
     }
   }, [isAdmin, fetchReferenceData]);
 
-  // Fetch leases when admin or lease filters/pagination change
+  // Fetch data for the active view when dependencies change
   useEffect(() => {
-    if (isAdmin) {
-      fetchLeases(viewMode === 'leases');
-    }
-  }, [isAdmin, fetchLeases, viewMode]);
+    if (!isAdmin) return;
 
-  // Fetch credits when admin or credit pagination changes
-  useEffect(() => {
-    if (isAdmin) {
-      fetchCredits(viewMode === 'credits');
+    if (viewMode === 'leases') {
+      fetchLeases(true);
+    } else {
+      fetchCredits(true);
     }
-  }, [isAdmin, fetchCredits, viewMode]);
+  }, [isAdmin, viewMode, fetchLeases, fetchCredits]);
 
   // Reset offsets when view mode changes
   useEffect(() => {
