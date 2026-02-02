@@ -2,6 +2,7 @@ import { getSigningLiftedinitClient, liftedinit } from '@manifest-network/manife
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import type { Coin } from './bank';
 import { RPC_ENDPOINT } from './config';
+import { getEventAttribute } from '../utils/tx';
 
 // Re-export Unit from sku.ts (single source of truth)
 import { Unit } from './sku';
@@ -19,26 +20,6 @@ export interface TxResult {
 
 export interface CreateLeaseResult extends TxResult {
   leaseUuid?: string;
-}
-
-/**
- * Extract an attribute value from transaction events.
- */
-function getEventAttribute(
-  events: readonly { type: string; attributes: readonly { key: string; value: string }[] }[],
-  eventType: string,
-  attributeKey: string
-): string | undefined {
-  for (const event of events) {
-    if (event.type === eventType) {
-      for (const attr of event.attributes) {
-        if (attr.key === attributeKey) {
-          return attr.value;
-        }
-      }
-    }
-  }
-  return undefined;
 }
 
 export async function getSigningClient(signer: OfflineSigner) {

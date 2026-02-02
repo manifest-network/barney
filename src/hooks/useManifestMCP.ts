@@ -11,8 +11,7 @@ import {
 } from '@manifest-network/manifest-mcp-browser';
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import { RPC_ENDPOINT } from '../api/config';
-
-const CHAIN_NAME = 'manifestlocal';
+import { CHAIN_NAME } from '../config/chain';
 
 /**
  * Custom WalletProvider that wraps cosmos-kit's signer

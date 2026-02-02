@@ -11,69 +11,8 @@ import {
 } from '../../api/provider-api';
 import type { ToolResult, SignResult } from './types';
 
-/**
- * Extract lease UUID from a create-lease transaction result.
- * Looks for the UUID in transaction events.
- */
-export function extractLeaseUuidFromTxResult(result: Record<string, unknown>): string | null {
-  try {
-    // Try to find the lease UUID in the transaction events
-    const events = result.events as
-      | Array<{
-          type: string;
-          attributes: Array<{ key: string; value: string }>;
-        }>
-      | undefined;
-
-    if (events) {
-      for (const event of events) {
-        if (event.type === 'lease_created') {
-          const uuidAttr = event.attributes.find(
-            (attr) => attr.key === 'lease_uuid' || attr.key === 'uuid'
-          );
-          if (uuidAttr) {
-            return uuidAttr.value;
-          }
-        }
-      }
-    }
-
-    // Also check the response data directly
-    const data = result.data as Record<string, unknown> | undefined;
-    if (data && typeof data.lease_uuid === 'string') {
-      return data.lease_uuid;
-    }
-
-    // Check parsed logs
-    const logs = result.logs as
-      | Array<{
-          events: Array<{
-            type: string;
-            attributes: Array<{ key: string; value: string }>;
-          }>;
-        }>
-      | undefined;
-
-    if (logs) {
-      for (const log of logs) {
-        for (const event of log.events || []) {
-          if (event.type === 'lease_created') {
-            const uuidAttr = event.attributes.find(
-              (attr) => attr.key === 'lease_uuid' || attr.key === 'uuid'
-            );
-            if (uuidAttr) {
-              return uuidAttr.value;
-            }
-          }
-        }
-      }
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
+// Re-export for backward compatibility
+export { extractLeaseUuid as extractLeaseUuidFromTxResult } from '../../utils/tx';
 
 /**
  * Upload payload to provider with ADR-036 authentication.

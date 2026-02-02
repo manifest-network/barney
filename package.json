@@ -8,6 +8,9 @@
     "build": "tsc -b && rsbuild build",
     "lint": "eslint .",
     "preview": "rsbuild preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "postinstall": "patch-package"
   },
   "resolutions": {
@@ -54,14 +57,17 @@
     "@types/node": "22.19.7",
     "@types/react": "19.2.8",
     "@types/react-dom": "19.2.3",
+    "@vitest/coverage-v8": "^4.0.18",
     "eslint": "9.39.2",
     "eslint-plugin-react-hooks": "7.0.1",
     "eslint-plugin-react-refresh": "0.4.26",
     "globals": "17.0.0",
+    "happy-dom": "^20.4.0",
     "patch-package": "8.0.1",
     "postcss": "8.5.6",
     "tailwindcss": "4.1.18",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.53.1"
+    "typescript-eslint": "8.53.1",
+    "vitest": "^4.0.18"
   }
 }

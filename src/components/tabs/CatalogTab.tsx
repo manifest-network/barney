@@ -28,10 +28,10 @@ import { EmptyState } from '../ui/EmptyState';
 import { Modal } from '../ui/Modal';
 import { ErrorBanner } from '../ui/ErrorBanner';
 import { Pagination } from '../ui/Pagination';
+import { CHAIN_NAME } from '../../config/chain';
 
 type HealthStatus = 'healthy' | 'unhealthy' | 'loading' | 'unknown';
 
-const CHAIN_NAME = 'manifestlocal';
 const ITEMS_PER_PAGE = 10;
 
 interface CatalogTabProps {

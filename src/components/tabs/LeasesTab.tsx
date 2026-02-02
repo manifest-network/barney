@@ -21,7 +21,6 @@ import {
   getLeaseConnectionInfo,
   uploadLeaseData,
   type LeaseConnectionResponse,
-  type PortMapping,
 } from '../../api/provider-api';
 import { sha256, toHex, validatePayloadSize, getPayloadSize, MAX_PAYLOAD_SIZE } from '../../utils/hash';
 import { validateFile } from '../../utils/fileValidation';
@@ -32,6 +31,7 @@ import { SkeletonCard } from '../ui/SkeletonCard';
 import { ErrorBanner } from '../ui/ErrorBanner';
 import { Pagination } from '../ui/Pagination';
 import { useBatchSelection } from '../../hooks/useBatchSelection';
+import { CHAIN_NAME } from '../../config/chain';
 
 /**
  * Validates a signature message before signing with the user's wallet.
@@ -42,8 +42,6 @@ function validateSignMessage(message: string, expectedPrefix: string): boolean {
   const safePattern = /^[a-zA-Z0-9\s:-]+$/;
   return safePattern.test(message);
 }
-
-const CHAIN_NAME = 'manifestlocal';
 
 const LEASES_PER_PAGE = 10;
 

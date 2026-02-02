@@ -16,8 +16,7 @@ import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { truncateAddress } from '../../utils/address';
-
-const CHAIN_NAME = 'manifestlocal';
+import { CHAIN_NAME } from '../../config/chain';
 
 interface WalletTabProps {
   isConnected: boolean;

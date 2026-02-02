@@ -16,8 +16,7 @@ import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { useBatchSelection } from '../../hooks/useBatchSelection';
-
-const CHAIN_NAME = 'manifestlocal';
+import { CHAIN_NAME } from '../../config/chain';
 
 
 export function ProviderTab() {
