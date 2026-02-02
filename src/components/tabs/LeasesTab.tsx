@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { Link, Shield, Plus, ChevronDown, ChevronUp, Clock, Copy, Check, X, ExternalLink, Zap, MinusCircle, XCircle, Wifi } from 'lucide-react';
+import { Link, Shield, Plus, ChevronDown, ChevronUp, Clock, Copy, Check, X, Zap, MinusCircle, XCircle, Wifi } from 'lucide-react';
 import { LeaseState, type Lease } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
@@ -10,8 +10,9 @@ import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER, type LeaseFilterState } from
 import { getLeasesByTenant, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
 import { createLease, cancelLease, closeLease, type TxResult, type CreateLeaseResult } from '../../api/tx';
-import { DENOM_METADATA, formatPrice, UNIT_LABELS } from '../../api/config';
-import { Unit } from '../../api/sku';
+import { DENOM_METADATA, formatPrice } from '../../api/config';
+import { useLeaseItems } from '../../hooks/useLeaseItems';
+import { calculateEstimatedCost, isValidLeaseItem } from '../../utils/pricing';
 import {
   createSignMessage,
   createAuthToken,
@@ -19,7 +20,8 @@ import {
   createLeaseDataAuthToken,
   getLeaseConnectionInfo,
   uploadLeaseData,
-  type LeaseInfo,
+  type LeaseConnectionResponse,
+  type PortMapping,
 } from '../../api/provider-api';
 import { sha256, toHex, validatePayloadSize, getPayloadSize, MAX_PAYLOAD_SIZE } from '../../utils/hash';
 import { validateFile } from '../../utils/fileValidation';
@@ -557,104 +559,8 @@ function FilterTabs({
 }
 
 /* ============================================
-   JSON RENDERER (for arbitrary lease info)
+   UTILITY FUNCTIONS
    ============================================ */
-
-/**
- * Recursively renders JSON data in a compact, readable format.
- * Handles primitives, arrays, and nested objects.
- */
-function JsonRenderer({
-  data,
-  copyToClipboard,
-  depth = 0,
-}: {
-  data: unknown;
-  copyToClipboard: (text: string) => void;
-  depth?: number;
-}) {
-  // Primitives: string, number, boolean, null
-  if (data === null || data === undefined) {
-    return <span className="lease-info-null">null</span>;
-  }
-
-  if (typeof data === 'boolean') {
-    return <span className={`lease-info-bool lease-info-bool-${data}`}>{data ? 'true' : 'false'}</span>;
-  }
-
-  if (typeof data === 'number') {
-    return <span className="lease-info-number">{data}</span>;
-  }
-
-  if (typeof data === 'string') {
-    // Check if it looks like a URL
-    const isUrl = /^https?:\/\//.test(data);
-    return (
-      <span className="lease-info-string-container">
-        <code className="lease-info-value">{data}</code>
-        <button
-          onClick={() => copyToClipboard(data)}
-          className="lease-card-copy-btn"
-          title="Copy"
-        >
-          <Copy size={10} />
-        </button>
-        {isUrl && (
-          <a
-            href={data}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn btn-ghost btn-xs"
-            title="Open in new tab"
-          >
-            <ExternalLink size={12} />
-          </a>
-        )}
-      </span>
-    );
-  }
-
-  // Arrays
-  if (Array.isArray(data)) {
-    if (data.length === 0) {
-      return <span className="lease-info-empty">[]</span>;
-    }
-    return (
-      <div className="lease-info-array">
-        {data.map((item, idx) => (
-          <div key={idx} className="lease-info-array-item">
-            <span className="lease-info-array-index">[{idx}]</span>
-            <JsonRenderer data={item} copyToClipboard={copyToClipboard} depth={depth + 1} />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // Objects
-  if (typeof data === 'object') {
-    const entries = Object.entries(data);
-    if (entries.length === 0) {
-      return <span className="lease-info-empty">{'{}'}</span>;
-    }
-    return (
-      <div className={`lease-info-object ${depth > 0 ? 'lease-info-nested' : ''}`}>
-        {entries.map(([key, value]) => {
-          const isSimpleValue = value === null || typeof value !== 'object';
-          return (
-            <div key={key} className={`lease-info-row ${!isSimpleValue ? 'lease-info-row-complex' : ''}`}>
-              <span className="lease-info-label">{formatKey(key)}</span>
-              <JsonRenderer data={value} copyToClipboard={copyToClipboard} depth={depth + 1} />
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
-
-  // Fallback for unknown types
-  return <span className="lease-info-unknown">{String(data)}</span>;
-}
 
 /**
  * Formats a camelCase or snake_case key into a readable label.
@@ -664,6 +570,164 @@ function formatKey(key: string): string {
     .replace(/_/g, ' ')
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/* ============================================
+   COPY BUTTON COMPONENT
+   ============================================ */
+
+/**
+ * Reusable copy button with visual feedback.
+ * Shows a check icon when the value has been copied.
+ */
+function CopyButton({
+  value,
+  copyToClipboard,
+  isCopied,
+  title = 'Copy',
+  stopPropagation = false,
+}: {
+  value: string;
+  copyToClipboard: (text: string) => void;
+  isCopied: (text: string) => boolean;
+  title?: string;
+  stopPropagation?: boolean;
+}) {
+  const copied = isCopied(value);
+  return (
+    <button
+      onClick={(e) => {
+        if (stopPropagation) e.stopPropagation();
+        copyToClipboard(value);
+      }}
+      className={`lease-card-copy-btn ${copied ? 'copied' : ''}`}
+      title={copied ? 'Copied!' : title}
+    >
+      {copied ? <Check size={10} /> : <Copy size={10} />}
+    </button>
+  );
+}
+
+/* ============================================
+   CONNECTION INFO PANEL
+   ============================================ */
+
+/**
+ * Renders connection info in a structured, user-friendly format.
+ * Displays host, ports, protocol, and metadata from the provider API response.
+ */
+function ConnectionInfoPanel({
+  info,
+  copyToClipboard,
+  isCopied,
+  onClose,
+}: {
+  info: LeaseConnectionResponse;
+  copyToClipboard: (text: string) => void;
+  isCopied: (text: string) => boolean;
+  onClose: () => void;
+}) {
+  const { connection } = info;
+  const hasPort = connection.ports && Object.keys(connection.ports).length > 0;
+  const hasMetadata = connection.metadata && Object.keys(connection.metadata).length > 0;
+
+  // Build a connection string for easy copying (host:first_port)
+  const firstPort = hasPort ? Object.values(connection.ports!)[0] : null;
+  const connectionString = firstPort
+    ? `${connection.host}:${firstPort.host_port}`
+    : connection.host;
+
+  return (
+    <div className="lease-info-panel">
+      <div className="lease-info-header">
+        <span className="lease-info-title">
+          <Wifi size={12} />
+          Connection Info
+        </span>
+        <button
+          onClick={onClose}
+          className="lease-info-close"
+          title="Dismiss"
+        >
+          <X size={14} />
+        </button>
+      </div>
+      <div className="lease-info-content">
+        {/* Host */}
+        <div className="lease-info-row">
+          <span className="lease-info-label">Host</span>
+          <span className="lease-info-string-container">
+            <code className="lease-info-value">{connection.host}</code>
+            <CopyButton value={connection.host} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy host" />
+          </span>
+        </div>
+
+        {/* Protocol */}
+        {connection.protocol && (
+          <div className="lease-info-row">
+            <span className="lease-info-label">Protocol</span>
+            <code className="lease-info-value">{connection.protocol}</code>
+          </div>
+        )}
+
+        {/* Ports */}
+        {hasPort ? (
+          <div className="lease-info-row lease-info-row-complex">
+            <span className="lease-info-section-label">Ports</span>
+            <div className="lease-info-ports">
+              {Object.entries(connection.ports!).map(([containerPort, mapping]) => {
+                const hostPort = `${connection.host}:${mapping.host_port}`;
+                return (
+                  <div key={containerPort} className="lease-info-port-row">
+                    <span className="lease-info-port-container">{containerPort}</span>
+                    <span className="lease-info-port-arrow">→</span>
+                    <span className="lease-info-string-container">
+                      <code className="lease-info-value">{hostPort}</code>
+                      <CopyButton value={hostPort} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy host:port" />
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="lease-info-row">
+            <span className="lease-info-label">Ports</span>
+            <span className="lease-info-empty">No port mappings</span>
+          </div>
+        )}
+
+        {/* Quick Connect */}
+        {connectionString && (
+          <div className="lease-info-row lease-info-connect">
+            <span className="lease-info-label">Connect</span>
+            <span className="lease-info-string-container">
+              <code className="lease-info-value lease-info-value-highlight">{connectionString}</code>
+              <CopyButton value={connectionString} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy connection string" />
+            </span>
+          </div>
+        )}
+
+        {/* Metadata */}
+        {hasMetadata && (
+          <div className="lease-info-row lease-info-row-complex">
+            <span className="lease-info-section-label">Metadata</span>
+            <div className="lease-info-metadata">
+              {Object.entries(connection.metadata!).map(([key, value]) => (
+                <div key={key} className="lease-info-metadata-row">
+                  <span className="lease-info-metadata-key">{formatKey(key)}</span>
+                  <span className="lease-info-string-container">
+                    <code className="lease-info-value">{value}</code>
+                    <CopyButton value={value} copyToClipboard={copyToClipboard} isCopied={isCopied} />
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /* ============================================
@@ -701,10 +765,10 @@ function LeaseCard({
   onToggleSelect?: () => void;
 }) {
   const { signArbitrary } = useChain(CHAIN_NAME);
-  const { copied, copyToClipboard } = useCopyToClipboard();
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
 
   const [isExpanded, setIsExpanded] = useState(false);
-  const [leaseInfo, setLeaseInfo] = useState<LeaseInfo | null>(null);
+  const [leaseInfo, setLeaseInfo] = useState<LeaseConnectionResponse | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [showCloseForm, setShowCloseForm] = useState(false);
@@ -800,25 +864,13 @@ function LeaseCard({
             <span className="lease-card-labeled-field">
               <span className="lease-card-label">Lease</span>
               <code className="lease-card-mono">{lease.uuid}</code>
-              <button
-                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.uuid); }}
-                className="lease-card-copy-btn"
-                title="Copy Lease UUID"
-              >
-                {copied ? <Check size={10} /> : <Copy size={10} />}
-              </button>
+              <CopyButton value={lease.uuid} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy Lease UUID" stopPropagation />
             </span>
 
             <span className="lease-card-labeled-field">
               <span className="lease-card-label">Provider</span>
               <code className="lease-card-mono">{provider?.address || lease.provider_uuid}</code>
-              <button
-                onClick={(e) => { e.stopPropagation(); copyToClipboard(provider?.address || lease.provider_uuid); }}
-                className="lease-card-copy-btn"
-                title="Copy Provider Address"
-              >
-                <Copy size={10} />
-              </button>
+              <CopyButton value={provider?.address || lease.provider_uuid} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy Provider Address" stopPropagation />
             </span>
           </div>
 
@@ -919,26 +971,14 @@ function LeaseCard({
         </div>
       )}
 
-      {/* Lease Info Panel (inline) */}
+      {/* Connection Info Panel (inline) */}
       {leaseInfo && (
-        <div className="lease-info-panel">
-          <div className="lease-info-header">
-            <span className="lease-info-title">
-              <Wifi size={12} />
-              Lease Info
-            </span>
-            <button
-              onClick={() => setLeaseInfo(null)}
-              className="lease-info-close"
-              title="Dismiss"
-            >
-              <X size={14} />
-            </button>
-          </div>
-          <div className="lease-info-content">
-            <JsonRenderer data={leaseInfo} copyToClipboard={copyToClipboard} />
-          </div>
-        </div>
+        <ConnectionInfoPanel
+          info={leaseInfo}
+          copyToClipboard={copyToClipboard}
+          isCopied={isCopied}
+          onClose={() => setLeaseInfo(null)}
+        />
       )}
 
       {/* === EXPANDED VIEW === */}
@@ -951,24 +991,18 @@ function LeaseCard({
               <div className="lease-card-kv">
                 <span className="lease-card-kv-label">Lease UUID</span>
                 <code className="lease-card-kv-value">{lease.uuid}</code>
-                <button onClick={() => copyToClipboard(lease.uuid)} className="lease-card-copy-btn" title="Copy">
-                  <Copy size={10} />
-                </button>
+                <CopyButton value={lease.uuid} copyToClipboard={copyToClipboard} isCopied={isCopied} />
               </div>
               <div className="lease-card-kv">
                 <span className="lease-card-kv-label">Provider UUID</span>
                 <code className="lease-card-kv-value">{lease.provider_uuid}</code>
-                <button onClick={() => copyToClipboard(lease.provider_uuid)} className="lease-card-copy-btn" title="Copy">
-                  <Copy size={10} />
-                </button>
+                <CopyButton value={lease.provider_uuid} copyToClipboard={copyToClipboard} isCopied={isCopied} />
               </div>
               {lease.meta_hash && (
                 <div className="lease-card-kv">
                   <span className="lease-card-kv-label">Meta Hash</span>
                   <code className="lease-card-kv-value">{lease.meta_hash}</code>
-                  <button onClick={() => copyToClipboard(lease.meta_hash!)} className="lease-card-copy-btn" title="Copy">
-                    <Copy size={10} />
-                  </button>
+                  <CopyButton value={lease.meta_hash} copyToClipboard={copyToClipboard} isCopied={isCopied} />
                 </div>
               )}
               {lease.min_lease_duration_at_creation && (
@@ -1083,9 +1117,7 @@ function CreateLeaseModal({
   loading: boolean;
 }) {
   const [selectedProvider, setSelectedProvider] = useState<string>('');
-  const [items, setItems] = useState<{ skuUuid: string; quantity: number }[]>([
-    { skuUuid: '', quantity: 1 },
-  ]);
+  const { items, addItem, removeItem, updateItem, resetItems, getItemsForSubmit } = useLeaseItems();
   const [payloadText, setPayloadText] = useState('');
   const [payloadHash, setPayloadHash] = useState<string | null>(null);
   const [payloadError, setPayloadError] = useState<string | null>(null);
@@ -1158,64 +1190,37 @@ function CreateLeaseModal({
     reader.readAsText(file);
   };
 
-  const addItem = () => setItems([...items, { skuUuid: '', quantity: 1 }]);
-  const removeItem = (idx: number) => setItems(items.filter((_, i) => i !== idx));
-  const updateItem = (idx: number, field: 'skuUuid' | 'quantity', value: string | number) => {
-    setItems(items.map((item, i) => (i === idx ? { ...item, [field]: value } : item)));
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const validItems = items.filter((item) => item.skuUuid && item.quantity > 0);
-    if (validItems.length > 0) {
-      if (payloadText && payloadHash && payloadHashBytesRef.current) {
-        if (hashedPayloadTextRef.current !== payloadText) {
-          const hash = await sha256(payloadText);
-          payloadHashBytesRef.current = hash;
-          hashedPayloadTextRef.current = payloadText;
-        }
-
-        const payloadBytes = new TextEncoder().encode(hashedPayloadTextRef.current!);
-        onSubmit(validItems, payloadBytes, payloadHashBytesRef.current, selectedProvider);
-      } else {
-        onSubmit(validItems);
+    // Button is disabled until all items are valid, so no filtering needed
+    const submitItems = getItemsForSubmit();
+    if (payloadText && payloadHash && payloadHashBytesRef.current) {
+      if (hashedPayloadTextRef.current !== payloadText) {
+        const hash = await sha256(payloadText);
+        payloadHashBytesRef.current = hash;
+        hashedPayloadTextRef.current = payloadText;
       }
+
+      const payloadBytes = new TextEncoder().encode(hashedPayloadTextRef.current!);
+      onSubmit(submitItems, payloadBytes, payloadHashBytesRef.current, selectedProvider);
+    } else {
+      onSubmit(submitItems);
     }
   };
 
-  const calculateEstimatedCost = () => {
-    let total = 0;
-    let denom = '';
-    let unit: Unit = Unit.UNIT_UNSPECIFIED;
-
-    for (const item of items) {
-      if (item.skuUuid) {
-        const sku = skus.find((s) => s.uuid === item.skuUuid);
-        if (sku) {
-          denom = sku.base_price.denom;
-          unit = sku.unit;
-          const price = parseInt(sku.base_price.amount, 10);
-          total += price * item.quantity;
-        }
-      }
-    }
-
-    if (total === 0) return null;
-
-    const meta = DENOM_METADATA[denom] || { symbol: denom, exponent: 6 };
-    const value = total / Math.pow(10, meta.exponent);
-    const unitLabel = UNIT_LABELS[unit] ?? '';
-    return `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${meta.symbol}${unitLabel}`;
-  };
-
-  const estimatedCost = calculateEstimatedCost();
+  const estimatedCost = calculateEstimatedCost(items, skus);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="card-static w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="sticky top-0 z-10 flex items-center justify-between p-4 border-b border-surface-700 bg-surface-900/95 backdrop-blur">
           <h3 className="text-lg font-heading font-semibold">Create Lease</h3>
-          <button onClick={onClose} className="text-muted hover:text-primary p-1" disabled={loading}>
+          <button
+            onClick={onClose}
+            className="text-muted hover:text-primary p-1"
+            disabled={loading}
+            aria-label="Close modal"
+          >
             <X size={18} />
           </button>
         </div>
@@ -1228,7 +1233,7 @@ function CreateLeaseModal({
               value={selectedProvider}
               onChange={(e) => {
                 setSelectedProvider(e.target.value);
-                setItems([{ skuUuid: '', quantity: 1 }]);
+                resetItems();
               }}
               className="input select w-full"
               required
@@ -1261,11 +1266,11 @@ function CreateLeaseModal({
                 <p className="text-sm text-dim">No active SKUs for this provider</p>
               ) : (
                 <div className="space-y-2">
-                  {items.map((item, idx) => (
-                    <div key={`create-item-${idx}`} className="flex gap-2">
+                  {items.map((item) => (
+                    <div key={item.id} className="flex gap-2">
                       <select
                         value={item.skuUuid}
-                        onChange={(e) => updateItem(idx, 'skuUuid', e.target.value)}
+                        onChange={(e) => updateItem(item.id, 'skuUuid', e.target.value)}
                         className="input select flex-1"
                         required
                         disabled={loading}
@@ -1282,7 +1287,7 @@ function CreateLeaseModal({
                         min="1"
                         value={item.quantity}
                         onChange={(e) =>
-                          updateItem(idx, 'quantity', parseInt(e.target.value, 10) || 1)
+                          updateItem(item.id, 'quantity', Math.max(1, parseInt(e.target.value, 10) || 1))
                         }
                         className="input w-20"
                         disabled={loading}
@@ -1290,7 +1295,7 @@ function CreateLeaseModal({
                       {items.length > 1 && (
                         <button
                           type="button"
-                          onClick={() => removeItem(idx)}
+                          onClick={() => removeItem(item.id)}
                           className="px-2 text-error hover:text-error/80"
                           disabled={loading}
                         >
@@ -1360,7 +1365,7 @@ function CreateLeaseModal({
             </button>
             <button
               type="submit"
-              disabled={loading || !selectedProvider || items.some((i) => !i.skuUuid) || !!payloadError}
+              disabled={loading || !selectedProvider || !items.every(isValidLeaseItem) || !!payloadError}
               className="btn btn-primary"
             >
               {loading ? 'Creating...' : 'Create Lease'}

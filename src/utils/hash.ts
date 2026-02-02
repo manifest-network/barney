@@ -34,9 +34,9 @@ export function fromHex(hex: string): Uint8Array {
 }
 
 /**
- * Maximum payload size in bytes (2KB).
+ * Maximum payload size in bytes (5KB).
  */
-export const MAX_PAYLOAD_SIZE = 2 * 1024;
+export const MAX_PAYLOAD_SIZE = 5 * 1024;
 
 /**
  * Validates payload size.
