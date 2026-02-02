@@ -39,7 +39,23 @@ export async function uploadPayloadToProvider(
     const signMessage = createLeaseDataSignMessage(leaseUuid, metaHashHex, timestamp);
 
     // Sign the message using ADR-036
-    const signResult = await signArbitrary(address, signMessage);
+    let signResult: SignResult;
+    try {
+      signResult = await signArbitrary(address, signMessage);
+    } catch (signError) {
+      return {
+        success: false,
+        error: `Failed to sign message: ${signError instanceof Error ? signError.message : 'Signing rejected or failed'}`,
+      };
+    }
+
+    // Validate sign result has required fields
+    if (!signResult?.pub_key?.value || !signResult?.signature) {
+      return {
+        success: false,
+        error: 'Invalid signature result: missing public key or signature. Please try again.',
+      };
+    }
 
     // Create the auth token
     const authToken = createLeaseDataAuthToken(
