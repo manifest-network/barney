@@ -3,13 +3,14 @@ import { COPY_FEEDBACK_DURATION_MS } from '../config/constants';
 
 /**
  * Custom hook for copying text to clipboard with feedback state.
- * Properly cleans up timeouts on unmount to prevent memory leaks.
+ * Tracks which specific value was copied so multiple copy buttons
+ * can independently show their copied state.
  *
  * @param feedbackDuration - Duration in ms to show "copied" feedback (default: 2000ms)
- * @returns Object with `copied` state and `copyToClipboard` function
+ * @returns Object with `copied` state, `copiedValue`, `copyToClipboard` function, and `isCopied` helper
  */
 export function useCopyToClipboard(feedbackDuration = COPY_FEEDBACK_DURATION_MS) {
-  const [copied, setCopied] = useState(false);
+  const [copiedValue, setCopiedValue] = useState<string | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Cleanup timeout on unmount
@@ -31,11 +32,11 @@ export function useCopyToClipboard(feedbackDuration = COPY_FEEDBACK_DURATION_MS)
 
       try {
         await navigator.clipboard.writeText(text);
-        setCopied(true);
+        setCopiedValue(text);
 
         // Set new timeout with cleanup reference
         timeoutRef.current = setTimeout(() => {
-          setCopied(false);
+          setCopiedValue(null);
           timeoutRef.current = null;
         }, feedbackDuration);
 
@@ -47,5 +48,11 @@ export function useCopyToClipboard(feedbackDuration = COPY_FEEDBACK_DURATION_MS)
     [feedbackDuration]
   );
 
-  return { copied, copyToClipboard };
+  /** Check if a specific value was just copied */
+  const isCopied = useCallback((text: string) => copiedValue === text, [copiedValue]);
+
+  // Backward compatibility: `copied` is true if anything was copied
+  const copied = copiedValue !== null;
+
+  return { copied, copiedValue, copyToClipboard, isCopied };
 }

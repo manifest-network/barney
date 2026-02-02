@@ -36,22 +36,39 @@ export interface ProviderHealthResponse {
   };
 }
 
-/** @deprecated Use LeaseInfo instead */
-export interface ConnectionInfo {
+/**
+ * Port mapping from container port to host binding.
+ */
+export interface PortMapping {
+  host_ip: string;
+  host_port: number;
+}
+
+/**
+ * Connection details returned by the provider API.
+ */
+export interface ConnectionDetails {
+  host: string;
+  ports?: Record<string, PortMapping>;
+  protocol?: string;
+  metadata?: Record<string, string>;
+}
+
+/**
+ * Lease connection response from the provider API.
+ * Matches fred's ConnectionResponse structure.
+ */
+export interface LeaseConnectionResponse {
   lease_uuid: string;
   tenant: string;
   provider_uuid: string;
-  connection: {
-    host: string;
-    port: number;
-    protocol: string;
-    metadata?: Record<string, string>;
-  };
+  connection: ConnectionDetails;
 }
 
 /**
  * Flexible lease info from provider API.
  * Can contain any JSON-serializable data.
+ * @deprecated Use LeaseConnectionResponse for typed access
  */
 export type LeaseInfo = Record<string, unknown>;
 
@@ -104,14 +121,14 @@ export function createAuthToken(
 }
 
 /**
- * Fetches lease info from the provider's API.
- * Returns arbitrary JSON data from the provider.
+ * Fetches lease connection info from the provider's API.
+ * Returns structured connection response from the provider.
  */
 export async function getLeaseConnectionInfo(
   providerApiUrl: string,
   leaseUuid: string,
   authToken: string
-): Promise<LeaseInfo> {
+): Promise<LeaseConnectionResponse> {
   // Validate and normalize the API URL
   const validatedUrl = validateProviderUrl(providerApiUrl);
   const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');

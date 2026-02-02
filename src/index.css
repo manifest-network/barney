@@ -3390,7 +3390,8 @@ code.lease-card-mono {
   text-transform: uppercase;
   letter-spacing: 0.02em;
   color: var(--text-dim);
-  min-width: 4rem;
+  min-width: 5rem;
+  flex-shrink: 0;
 }
 
 .lease-info-label::after {
@@ -3492,7 +3493,87 @@ code.lease-card-mono {
 .lease-info-row-complex {
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.25rem;
+  gap: 0.5rem;
+}
+
+/* Section label for lists (Ports, Metadata) */
+.lease-info-section-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid oklch(0.45 0.08 260 / 0.3);
+  width: 100%;
+}
+
+/* Port mappings */
+.lease-info-ports {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.lease-info-port-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.lease-info-port-container {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  min-width: 6rem;
+  flex-shrink: 0;
+}
+
+.lease-info-port-arrow {
+  color: var(--text-dim);
+  font-size: 0.875rem;
+  flex-shrink: 0;
+}
+
+/* Metadata section */
+.lease-info-metadata {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.lease-info-metadata-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.lease-info-metadata-key {
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  min-width: 6rem;
+  flex-shrink: 0;
+}
+
+.lease-info-metadata-key::after {
+  content: ':';
+}
+
+/* Quick connect highlight */
+.lease-info-connect {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid oklch(0.45 0.08 260 / 0.2);
+}
+
+.lease-info-value-highlight {
+  color: oklch(0.88 0.14 145);
+  font-weight: 500;
 }
 
 /* === EXPANDED VIEW === */
