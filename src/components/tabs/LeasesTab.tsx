@@ -1319,7 +1319,7 @@ function CreateLeaseModal({
                         min="1"
                         value={item.quantity}
                         onChange={(e) =>
-                          updateItem(item.id, 'quantity', parseInt(e.target.value, 10) || 1)
+                          updateItem(item.id, 'quantity', Math.max(1, parseInt(e.target.value, 10) || 1))
                         }
                         className="input w-20"
                         disabled={loading}
