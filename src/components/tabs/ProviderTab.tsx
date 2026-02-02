@@ -11,6 +11,7 @@ import { isValidManifestAddress } from '../../utils/address';
 import { useLeaseItems } from '../../hooks/useLeaseItems';
 import { calculateEstimatedCost, isValidLeaseItem } from '../../utils/pricing';
 import { formatDate } from '../../utils/format';
+import { logError } from '../../utils/errors';
 import type { Coin } from '../../api/bank';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { useToast } from '../../hooks/useToast';
@@ -335,17 +336,13 @@ export function ProviderTab() {
         try {
           await fetchData();
         } catch (refreshErr) {
-          if (import.meta.env.DEV) {
-            console.error('[handleCreateLeaseForTenant] Failed to refresh data:', refreshErr);
-          }
+          logError('ProviderTab.handleCreateLeaseForTenant.refresh', refreshErr);
         }
       } else {
         toast.error(`Failed: ${result.error}`);
       }
     } catch (err) {
-      if (import.meta.env.DEV) {
-        console.error('[handleCreateLeaseForTenant]', err);
-      }
+      logError('ProviderTab.handleCreateLeaseForTenant', err);
       toast.error(`Failed to create lease: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setTxLoading(false);

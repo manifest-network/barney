@@ -12,6 +12,7 @@ import {
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import { RPC_ENDPOINT } from '../api/config';
 import { CHAIN_NAME } from '../config/chain';
+import { logError } from '../utils/errors';
 
 /**
  * Custom WalletProvider that wraps cosmos-kit's signer
@@ -97,7 +98,7 @@ export function useManifestMCP(): UseManifestMCPResult {
           setError(null);
         }
       } catch (err) {
-        console.error('Failed to initialize CosmosClientManager:', err);
+        logError('useManifestMCP.initClientManager', err);
         if (isMounted) {
           setError(err instanceof Error ? err.message : 'Failed to connect');
           setClientManager(null);
