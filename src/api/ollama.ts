@@ -104,12 +104,16 @@ export interface OllamaStreamOptions {
   signal?: AbortSignal;
 }
 
-export interface OllamaStreamChunk {
-  type: 'content' | 'thinking' | 'tool_call' | 'done' | 'error';
-  content?: string;
-  toolCall?: OllamaToolCall;
-  error?: string;
-}
+/**
+ * Discriminated union for Ollama stream chunks.
+ * Each variant has a specific type and the corresponding payload fields.
+ */
+export type OllamaStreamChunk =
+  | { type: 'content'; content: string }
+  | { type: 'thinking'; content: string }
+  | { type: 'tool_call'; toolCall: OllamaToolCall }
+  | { type: 'done' }
+  | { type: 'error'; error: string };
 
 export interface OllamaModel {
   name: string;
@@ -258,8 +262,9 @@ export async function* streamChat(
               if (typeof rawArgs === 'string') {
                 try {
                   args = JSON.parse(rawArgs);
-                } catch {
-                  // If JSON parse fails, keep empty object
+                } catch (error) {
+                  // If JSON parse fails, keep empty object but log the issue
+                  logError('ollama.parseToolArgs', error);
                 }
               } else if (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)) {
                 args = rawArgs as Record<string, unknown>;
@@ -346,7 +351,8 @@ export async function checkOllamaHealth(endpoint: string): Promise<boolean> {
       signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
     });
     return response.ok;
-  } catch {
+  } catch (error) {
+    logError('ollama.checkOllamaHealth', error);
     return false;
   }
 }

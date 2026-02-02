@@ -4,6 +4,58 @@
 
 import { DENOM_METADATA } from '../api/config';
 
+// ============================================
+// Amount Conversion Utilities
+// ============================================
+
+/**
+ * Convert a display amount to base units (smallest denomination).
+ * E.g., 1.5 MFX -> "1500000" umfx
+ *
+ * @param amount - Display amount (e.g., 1.5)
+ * @param denom - Token denomination (e.g., "umfx" or DENOMS.MFX)
+ * @returns Base unit amount as string, suitable for blockchain transactions
+ */
+export function toBaseUnits(amount: number, denom: string): string {
+  const metadata = DENOM_METADATA[denom];
+  const exponent = metadata?.exponent ?? 6;
+  return (amount * Math.pow(10, exponent)).toFixed(0);
+}
+
+/**
+ * Convert base units to display amount.
+ * E.g., "1500000" umfx -> 1.5 MFX
+ *
+ * @param amount - Base unit amount as string (e.g., "1500000")
+ * @param denom - Token denomination (e.g., "umfx" or DENOMS.MFX)
+ * @returns Display amount as number
+ */
+export function fromBaseUnits(amount: string, denom: string): number {
+  const metadata = DENOM_METADATA[denom];
+  const exponent = metadata?.exponent ?? 6;
+  const parsed = parseInt(amount, 10);
+  if (Number.isNaN(parsed)) {
+    return 0;
+  }
+  return parsed / Math.pow(10, exponent);
+}
+
+/**
+ * Parse a base unit amount string to number (without denomination conversion).
+ * Useful for calculations that need the raw base unit value.
+ *
+ * @param amount - Base unit amount as string
+ * @returns Parsed integer, or 0 if invalid
+ */
+export function parseBaseUnits(amount: string): number {
+  const parsed = parseInt(amount, 10);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+// ============================================
+// Formatting Utilities
+// ============================================
+
 /**
  * Format a token amount with proper decimals and symbol.
  *

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
+  toBaseUnits,
+  fromBaseUnits,
+  parseBaseUnits,
   formatAmount,
   formatDate,
   formatRelativeTime,
@@ -8,6 +11,63 @@ import {
   isValidUUID,
   parseJsonStringArray,
 } from './format';
+
+describe('toBaseUnits', () => {
+  it('converts display amounts to base units', () => {
+    expect(toBaseUnits(1, 'umfx')).toBe('1000000');
+    expect(toBaseUnits(1.5, 'umfx')).toBe('1500000');
+    expect(toBaseUnits(0.000001, 'umfx')).toBe('1');
+  });
+
+  it('handles zero', () => {
+    expect(toBaseUnits(0, 'umfx')).toBe('0');
+  });
+
+  it('handles PWR denomination', () => {
+    expect(toBaseUnits(1, 'upwr')).toBe('1000000');
+  });
+
+  it('defaults to 6 decimals for unknown denoms', () => {
+    expect(toBaseUnits(1, 'unknown')).toBe('1000000');
+  });
+});
+
+describe('fromBaseUnits', () => {
+  it('converts base units to display amounts', () => {
+    expect(fromBaseUnits('1000000', 'umfx')).toBe(1);
+    expect(fromBaseUnits('1500000', 'umfx')).toBe(1.5);
+    expect(fromBaseUnits('1', 'umfx')).toBe(0.000001);
+  });
+
+  it('handles zero', () => {
+    expect(fromBaseUnits('0', 'umfx')).toBe(0);
+  });
+
+  it('handles invalid amounts', () => {
+    expect(fromBaseUnits('invalid', 'umfx')).toBe(0);
+    expect(fromBaseUnits('', 'umfx')).toBe(0);
+  });
+
+  it('handles PWR denomination', () => {
+    expect(fromBaseUnits('1000000', 'upwr')).toBe(1);
+  });
+
+  it('defaults to 6 decimals for unknown denoms', () => {
+    expect(fromBaseUnits('1000000', 'unknown')).toBe(1);
+  });
+});
+
+describe('parseBaseUnits', () => {
+  it('parses valid amounts', () => {
+    expect(parseBaseUnits('1000000')).toBe(1000000);
+    expect(parseBaseUnits('0')).toBe(0);
+  });
+
+  it('returns 0 for invalid amounts', () => {
+    expect(parseBaseUnits('invalid')).toBe(0);
+    expect(parseBaseUnits('')).toBe(0);
+  });
+});
 
 describe('formatAmount', () => {
   it('formats MFX amounts correctly', () => {

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { Link, Wallet, Clock, Flame, Loader2, Copy, Check, Zap, TrendingDown, Plus, ArrowRight, GitBranch } from 'lucide-react';
 import {
@@ -8,10 +8,11 @@ import {
   fundCredit,
   DENOMS,
 } from '../../api';
-import { formatAmount } from '../../utils/format';
+import { formatAmount, toBaseUnits, fromBaseUnits, parseBaseUnits } from '../../utils/format';
 import type { Coin } from '../../api/bank';
 import type { CreditAccountResponse, CreditEstimateResponse } from '../../api/billing';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
+import { useAutoRefreshTab } from '../../hooks/useAutoRefreshTab';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
@@ -83,14 +84,8 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
     }
   }, [address]);
 
-  const { registerFetchFn, unregisterFetchFn, refresh } = useAutoRefreshContext();
-
-  useEffect(() => {
-    if (isConnected && address) {
-      registerFetchFn(fetchData);
-    }
-    return () => unregisterFetchFn();
-  }, [isConnected, address, fetchData, registerFetchFn, unregisterFetchFn]);
+  const { refresh } = useAutoRefreshContext();
+  useAutoRefreshTab(fetchData, isConnected && !!address);
 
   const handleFundCredit = async () => {
     if (!address || !fundAmount) return;
@@ -109,7 +104,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
         throw new Error('Failed to get signer');
       }
 
-      const baseAmount = (parsedAmount * 1_000_000).toFixed(0);
+      const baseAmount = toBaseUnits(parsedAmount, DENOMS.PWR);
 
       const result = await fundCredit(signer, address, address, {
         denom: DENOMS.PWR,
@@ -153,19 +148,19 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
 
   const { mfxBalance, pwrBalance, creditAccount, creditEstimate, loading, error } = data;
   const creditPwrBalance = creditAccount?.balances?.find((b) => b.denom === DENOMS.PWR);
-  const creditBalanceNum = creditPwrBalance ? parseInt(creditPwrBalance.amount, 10) / 1_000_000 : 0;
-  const pwrBalanceNum = pwrBalance ? parseInt(pwrBalance.amount, 10) / 1_000_000 : 0;
+  const creditBalanceNum = creditPwrBalance ? fromBaseUnits(creditPwrBalance.amount, DENOMS.PWR) : 0;
+  const pwrBalanceNum = pwrBalance ? fromBaseUnits(pwrBalance.amount, DENOMS.PWR) : 0;
   const pwrRatePerSecond = creditEstimate?.total_rate_per_second?.find(
     (c) => c.denom === DENOMS.PWR || c.denom === 'upwr'
   );
-  const burnRatePerHour = pwrRatePerSecond ? parseInt(pwrRatePerSecond.amount, 10) * 3600 : 0;
+  const burnRatePerHour = pwrRatePerSecond ? parseBaseUnits(pwrRatePerSecond.amount) * 3600 : 0;
   const timeRemaining = creditEstimate?.estimated_duration_seconds
     ? parseInt(creditEstimate.estimated_duration_seconds, 10)
     : 0;
 
   // Determine credit health status
   const getCreditStatus = () => {
-    if (!creditPwrBalance || parseInt(creditPwrBalance.amount, 10) === 0) return 'empty';
+    if (!creditPwrBalance || parseBaseUnits(creditPwrBalance.amount) === 0) return 'empty';
     if (timeRemaining > 0 && timeRemaining < 3600) return 'critical'; // < 1 hour
     if (timeRemaining > 0 && timeRemaining < 86400) return 'low'; // < 24 hours
     return 'healthy';

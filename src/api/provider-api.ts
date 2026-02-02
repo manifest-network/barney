@@ -3,9 +3,13 @@
  * Uses ADR-036 off-chain signatures for authentication.
  */
 
+import { isPrivateHost } from '../ai/validation';
+import { logError } from '../utils/errors';
+
 /**
  * Validates that a provider API URL is safe to use.
- * Prevents SSRF attacks by ensuring URL is well-formed http(s).
+ * Prevents SSRF attacks by ensuring URL is well-formed http(s) and not pointing
+ * to private/internal addresses (in production).
  */
 function validateProviderUrl(url: string): URL {
   if (!url || typeof url !== 'string') {
@@ -21,6 +25,13 @@ function validateProviderUrl(url: string): URL {
 
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error(`Invalid provider API URL protocol: ${parsed.protocol}`);
+  }
+
+  // SSRF Protection: Block private/internal IP addresses in production
+  // Development mode allows localhost for local provider testing
+  const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
+  if (!isDev && isPrivateHost(parsed.hostname)) {
+    throw new Error('Provider API URL cannot point to private/internal addresses');
   }
 
   return parsed;
@@ -179,7 +190,8 @@ export async function getProviderHealth(
   let validatedUrl: URL;
   try {
     validatedUrl = validateProviderUrl(providerApiUrl);
-  } catch {
+  } catch (error) {
+    logError('provider-api.getProviderHealth.validateUrl', error);
     return null;
   }
 
@@ -219,7 +231,8 @@ export async function getProviderHealth(
     }
 
     return response.json();
-  } catch {
+  } catch (error) {
+    logError('provider-api.getProviderHealth.fetch', error);
     return null;
   } finally {
     clearTimeout(timeoutId);

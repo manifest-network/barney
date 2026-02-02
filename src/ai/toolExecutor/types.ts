@@ -16,17 +16,52 @@ export interface PayloadAttachment {
   hash: string; // Pre-computed SHA-256 hex
 }
 
-export interface ToolResult {
-  success: boolean;
-  data?: unknown;
-  error?: string;
-  requiresConfirmation?: boolean;
-  confirmationMessage?: string;
-  pendingAction?: {
+/**
+ * Successful tool execution result
+ */
+interface ToolResultSuccess {
+  success: true;
+  requiresConfirmation?: false;
+  data: unknown;
+  error?: never;
+  confirmationMessage?: never;
+  pendingAction?: never;
+}
+
+/**
+ * Failed tool execution result
+ */
+interface ToolResultFailure {
+  success: false;
+  requiresConfirmation?: false;
+  error: string;
+  data?: never;
+  confirmationMessage?: never;
+  pendingAction?: never;
+}
+
+/**
+ * Tool result that requires user confirmation before execution
+ */
+interface ToolResultConfirmation {
+  success: true;
+  requiresConfirmation: true;
+  confirmationMessage: string;
+  pendingAction: {
     toolName: string;
     args: Record<string, unknown>;
   };
+  data?: never;
+  error?: never;
 }
+
+/**
+ * Discriminated union for tool execution results.
+ * - Success: { success: true, data: ... }
+ * - Failure: { success: false, error: '...' }
+ * - Requires confirmation: { success: true, requiresConfirmation: true, ... }
+ */
+export type ToolResult = ToolResultSuccess | ToolResultFailure | ToolResultConfirmation;
 
 export interface ToolExecutorOptions {
   clientManager: CosmosClientManager | null;

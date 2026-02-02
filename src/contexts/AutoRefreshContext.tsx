@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { AUTO_REFRESH_INTERVAL_MS } from '../config/constants';
+import { logError } from '../utils/errors';
 
 /**
  * Context value for the auto-refresh system.
@@ -65,8 +66,9 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
       if (isMountedRef.current) {
         setLastRefresh(new Date());
       }
-    } catch {
-      // Errors are handled by individual tabs
+    } catch (error) {
+      // Log the error; individual tabs may also handle errors in their fetch functions
+      logError('AutoRefreshContext.doFetch', error);
     } finally {
       if (isMountedRef.current) {
         setIsRefreshing(false);

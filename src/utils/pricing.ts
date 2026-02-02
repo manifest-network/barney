@@ -2,6 +2,7 @@ import { DENOM_METADATA, UNIT_LABELS } from '../api/config';
 import { Unit } from '../api/sku';
 import type { SKU } from '../api/sku';
 import type { LeaseItemInput } from '../api/tx';
+import { parseBaseUnits, fromBaseUnits } from './format';
 
 /**
  * Validates that a lease item has a valid SKU and positive integer quantity.
@@ -33,9 +34,9 @@ export function calculateEstimatedCost(
     if (item.skuUuid) {
       const sku = skus.find((s) => s.uuid === item.skuUuid);
       if (sku) {
-        const price = parseInt(sku.base_price.amount, 10);
-        if (Number.isNaN(price)) {
-          // Skip items with invalid price data
+        const price = parseBaseUnits(sku.base_price.amount);
+        if (price === 0 && sku.base_price.amount !== '0') {
+          // Skip items with invalid price data (parseBaseUnits returns 0 for invalid)
           continue;
         }
         denom = sku.base_price.denom;
@@ -48,7 +49,7 @@ export function calculateEstimatedCost(
   if (total === 0) return null;
 
   const meta = DENOM_METADATA[denom] || { symbol: denom, exponent: 6 };
-  const value = total / Math.pow(10, meta.exponent);
+  const value = fromBaseUnits(String(total), denom);
   const unitLabel = UNIT_LABELS[unit] ?? '';
   return `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${meta.symbol}${unitLabel}`;
 }

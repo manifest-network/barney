@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { Link, Building2, Shield, Copy, Check, Clock, Zap, Package, ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
 import { LeaseState, getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams, type Lease, type ProviderWithdrawableResponse } from '../../api/billing';
@@ -10,9 +10,10 @@ import { DENOM_METADATA, formatPrice } from '../../api/config';
 import { isValidManifestAddress } from '../../utils/address';
 import { useLeaseItems } from '../../hooks/useLeaseItems';
 import { calculateEstimatedCost, isValidLeaseItem } from '../../utils/pricing';
-import { formatDate } from '../../utils/format';
+import { formatDate, parseBaseUnits } from '../../utils/format';
 import type { Coin } from '../../api/bank';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
+import { useAutoRefreshTab } from '../../hooks/useAutoRefreshTab';
 import { useToast } from '../../hooks/useToast';
 import { useTxHandler } from '../../hooks/useTxHandler';
 import { EmptyState } from '../ui/EmptyState';
@@ -105,12 +106,8 @@ export function ProviderTab() {
     }
   }, [address]);
 
-  const { registerFetchFn, unregisterFetchFn, refresh } = useAutoRefreshContext();
-
-  useEffect(() => {
-    registerFetchFn(fetchData);
-    return () => unregisterFetchFn();
-  }, [fetchData, registerFetchFn, unregisterFetchFn]);
+  const { refresh } = useAutoRefreshContext();
+  useAutoRefreshTab(fetchData);
 
   const pendingLeases = providerLeases.filter((l) => l.state === LeaseState.LEASE_STATE_PENDING);
   const activeLeases = providerLeases.filter((l) => l.state === LeaseState.LEASE_STATE_ACTIVE);
@@ -800,7 +797,7 @@ function ProviderLeaseCard({
     let total = 0;
     let denom = '';
     for (const item of lease.items) {
-      const perSecond = parseInt(item.locked_price.amount, 10);
+      const perSecond = parseBaseUnits(item.locked_price.amount);
       total += perSecond * parseInt(item.quantity, 10) * SECONDS_PER_HOUR;
       denom = item.locked_price.denom;
     }

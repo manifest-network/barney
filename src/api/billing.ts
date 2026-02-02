@@ -1,5 +1,6 @@
 import { liftedinit } from '@manifest-network/manifestjs';
 import { fetchJson, buildUrl, buildPaginationParams } from './utils';
+import { logError } from '../utils/errors';
 import type { Coin } from './bank';
 
 // Re-export LeaseState enum from manifestjs for type safety
@@ -351,8 +352,9 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
           'balance'
         );
         return { key: account.credit_address, balances: balanceData.balances ?? [] };
-      } catch {
-        // Balance fetch failures are non-critical; return empty balance
+      } catch (error) {
+        // Balance fetch failures are non-critical; log and return empty balance
+        logError('billing.getAllCredits.fetchBalance', error);
         return { key: account.credit_address, balances: [] };
       }
     });

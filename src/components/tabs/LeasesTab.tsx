@@ -5,7 +5,7 @@ import { LeaseState, type Lease } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { truncateAddress } from '../../utils/address';
-import { formatDate, formatRelativeTime, formatDuration } from '../../utils/format';
+import { formatDate, formatRelativeTime, formatDuration, parseBaseUnits, fromBaseUnits } from '../../utils/format';
 import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER, type LeaseFilterState } from '../../utils/leaseState';
 import { getLeasesByTenant, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
@@ -25,6 +25,7 @@ import {
 import { sha256, toHex, validatePayloadSize, getPayloadSize, MAX_PAYLOAD_SIZE } from '../../utils/hash';
 import { validateFile } from '../../utils/fileValidation';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
+import { useAutoRefreshTab } from '../../hooks/useAutoRefreshTab';
 import { useToast } from '../../hooks/useToast';
 import { useTxHandler } from '../../hooks/useTxHandler';
 import { EmptyState } from '../ui/EmptyState';
@@ -96,12 +97,8 @@ export function LeasesTab() {
     }
   }, [address]);
 
-  const { registerFetchFn, unregisterFetchFn, refresh } = useAutoRefreshContext();
-
-  useEffect(() => {
-    registerFetchFn(fetchData);
-    return () => unregisterFetchFn();
-  }, [fetchData, registerFetchFn, unregisterFetchFn]);
+  const { refresh } = useAutoRefreshContext();
+  useAutoRefreshTab(fetchData);
 
   const getSKU = (uuid: string) => skus.find((s) => s.uuid === uuid);
   const getProvider = (uuid: string) => providers.find((p) => p.uuid === uuid);
@@ -731,12 +728,11 @@ function LeaseCard({
   const costPerHour = (() => {
     let total = 0;
     for (const item of lease.items) {
-      const perSecond = parseInt(item.locked_price.amount, 10);
+      const perSecond = parseBaseUnits(item.locked_price.amount);
       total += perSecond * parseInt(item.quantity, 10) * SECONDS_PER_HOUR;
     }
-    const meta = lease.items[0]?.locked_price.denom
-      ? DENOM_METADATA[lease.items[0].locked_price.denom] || { symbol: 'tokens', exponent: 6 }
-      : { symbol: 'tokens', exponent: 6 };
+    const denom = lease.items[0]?.locked_price.denom;
+    const meta = denom ? DENOM_METADATA[denom] || { symbol: 'tokens', exponent: 6 } : { symbol: 'tokens', exponent: 6 };
     return `${(total / Math.pow(10, meta.exponent)).toFixed(4)} ${meta.symbol}/hr`;
   })();
 
@@ -975,9 +971,7 @@ function LeaseCard({
               <tbody>
                 {lease.items.map((item) => {
                   const sku = getSKU(item.sku_uuid);
-                  const pricePerHour =
-                    (parseInt(item.locked_price.amount, 10) * SECONDS_PER_HOUR) /
-                    Math.pow(10, DENOM_METADATA[item.locked_price.denom]?.exponent || 6);
+                  const pricePerHour = fromBaseUnits(item.locked_price.amount, item.locked_price.denom) * SECONDS_PER_HOUR;
                   const symbol = DENOM_METADATA[item.locked_price.denom]?.symbol || item.locked_price.denom;
                   return (
                     <tr key={`${lease.uuid}-item-${item.sku_uuid}`}>
