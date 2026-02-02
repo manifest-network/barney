@@ -8,8 +8,7 @@ import { useChain } from '@cosmos-kit/react';
 import { useAI } from '../../hooks/useAI';
 import { useManifestMCP } from '../../hooks/useManifestMCP';
 import { ChatBubble } from './ChatBubble';
-
-const CHAIN_NAME = 'manifestlocal';
+import { CHAIN_NAME } from '../../config/chain';
 
 export function AIAssistant() {
   const { setClientManager, setAddress, setSignArbitrary } = useAI();

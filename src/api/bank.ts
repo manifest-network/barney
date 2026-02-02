@@ -1,4 +1,4 @@
-import { REST_URL } from './config';
+import { fetchJson, buildUrl } from './utils';
 
 export interface Coin {
   denom: string;
@@ -14,26 +14,16 @@ export interface AllBalancesResponse {
 }
 
 export async function getBalance(address: string, denom: string): Promise<Coin> {
-  const encodedDenom = encodeURIComponent(denom);
-  const response = await fetch(
-    `${REST_URL}/cosmos/bank/v1beta1/balances/${address}/by_denom?denom=${encodedDenom}`
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch balance: ${response.statusText}`);
-  }
-
-  const data: BalanceResponse = await response.json();
+  // Note: buildUrl uses URLSearchParams which handles encoding automatically
+  const url = buildUrl(`/cosmos/bank/v1beta1/balances/${address}/by_denom`, { denom });
+  const data = await fetchJson<BalanceResponse>(url, 'balance');
   return data.balance ?? { denom, amount: '0' };
 }
 
 export async function getAllBalances(address: string): Promise<Coin[]> {
-  const response = await fetch(`${REST_URL}/cosmos/bank/v1beta1/balances/${address}`);
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch balances: ${response.statusText}`);
-  }
-
-  const data: AllBalancesResponse = await response.json();
+  const data = await fetchJson<AllBalancesResponse>(
+    `/cosmos/bank/v1beta1/balances/${address}`,
+    'balances'
+  );
   return data.balances ?? [];
 }

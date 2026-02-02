@@ -3,6 +3,8 @@
  * Provides schema validation for localStorage data and input sanitization
  */
 
+import * as ipaddr from 'ipaddr.js';
+
 // ============================================================================
 // Settings Validation
 // ============================================================================
@@ -22,8 +24,76 @@ const DEFAULT_SETTINGS: AISettings = {
 };
 
 /**
+ * IP ranges that should be blocked for SSRF protection.
+ * Uses ipaddr.js range classifications.
+ */
+const BLOCKED_IP_RANGES = new Set([
+  'unspecified', // 0.0.0.0, ::
+  'loopback', // 127.x.x.x, ::1
+  'private', // 10.x.x.x, 172.16-31.x.x, 192.168.x.x, fc00::/7
+  'linkLocal', // 169.254.x.x, fe80::/10
+  'multicast', // 224.0.0.0/4, ff00::/8
+  'reserved', // Various reserved ranges
+  'benchmarking', // 198.18.0.0/15
+  'amt', // 192.52.193.0/24
+  'as112', // 192.31.196.0/24, 192.175.48.0/24
+  'as112v6', // 2001:4:112::/48
+  'deprecated', // Various deprecated ranges
+  'orchid', // 2001:10::/28
+  'orchid2', // 2001:20::/28
+  '6to4', // 2002::/16
+  'teredo', // 2001::/32
+  'uniqueLocal', // fc00::/7
+]);
+
+/**
+ * Hostname patterns that indicate internal/private infrastructure.
+ */
+const INTERNAL_HOSTNAME_PATTERNS = [
+  /^localhost$/i,
+  /^localhost\.localdomain$/i,
+  /\.local$/i,
+  /\.internal$/i,
+  /\.localdomain$/i,
+  /^metadata\./i,
+  /^instance-data\./i,
+];
+
+/**
+ * Check if a hostname is a private/internal address that should be blocked (SSRF protection).
+ * Uses ipaddr.js for robust IP classification, handling edge cases like octal/hex notation.
+ * Exported for testing purposes.
+ */
+export function isPrivateHost(hostname: string): boolean {
+  // Check hostname patterns first (localhost, .local, .internal, etc.)
+  if (INTERNAL_HOSTNAME_PATTERNS.some((pattern) => pattern.test(hostname))) {
+    return true;
+  }
+
+  // Strip brackets from IPv6 addresses
+  const cleanHostname = hostname.replace(/^\[|\]$/g, '');
+
+  // Try to parse as IP address using ipaddr.js
+  if (ipaddr.isValid(cleanHostname)) {
+    try {
+      const addr = ipaddr.parse(cleanHostname);
+      const range = addr.range();
+      return BLOCKED_IP_RANGES.has(range);
+    } catch {
+      // If parsing fails, block it to be safe
+      return true;
+    }
+  }
+
+  // Not an IP address, allow it (DNS names will be resolved by the browser)
+  return false;
+}
+
+/**
  * Validate and sanitize an Ollama endpoint URL
  * Returns null if the URL is invalid or potentially dangerous
+ *
+ * Security: Blocks SSRF attacks by rejecting private/internal IP addresses
  */
 export function validateEndpointUrl(url: string): string | null {
   if (typeof url !== 'string' || url.length === 0) {
@@ -51,6 +121,13 @@ export function validateEndpointUrl(url: string): string | null {
     // Disallow data: or javascript: schemes that might be encoded
     const normalized = parsed.href.toLowerCase();
     if (normalized.includes('javascript:') || normalized.includes('data:')) {
+      return null;
+    }
+
+    // SSRF Protection: Block private/internal IP addresses
+    // Exception: Allow all private/internal addresses in development mode (for local Ollama, etc.)
+    const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
+    if (!isDev && isPrivateHost(parsed.hostname)) {
       return null;
     }
 

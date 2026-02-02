@@ -4,13 +4,35 @@
 
 /**
  * Computes SHA-256 hash of the given data.
+ *
+ * Handles the case where the input Uint8Array is a view into a larger
+ * ArrayBuffer (non-zero byteOffset or smaller byteLength) by creating
+ * a copy of the relevant bytes.
+ *
  * @param data - The data to hash (string or Uint8Array)
  * @returns The hash as a Uint8Array
  */
 export async function sha256(data: string | Uint8Array): Promise<Uint8Array> {
-  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes.buffer as ArrayBuffer);
+  // Convert to Uint8Array if string, then ensure we have a copy of just the
+  // relevant bytes. This handles the case where the input Uint8Array is a view
+  // into a larger ArrayBuffer (non-zero byteOffset or smaller byteLength).
+  const bytes = typeof data === 'string'
+    ? new TextEncoder().encode(data)
+    : new Uint8Array(data);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
   return new Uint8Array(hashBuffer);
+}
+
+/**
+ * Computes SHA-256 hash of the given data and returns it as a hex string.
+ * Convenience function that combines sha256() and toHex().
+ *
+ * @param data - The data to hash (string or Uint8Array)
+ * @returns The hash as a 64-character hex string
+ */
+export async function sha256Hex(data: string | Uint8Array): Promise<string> {
+  const hash = await sha256(data);
+  return toHex(hash);
 }
 
 /**

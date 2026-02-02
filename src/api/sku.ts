@@ -1,5 +1,5 @@
 import { liftedinit } from '@manifest-network/manifestjs';
-import { REST_URL } from './config';
+import { fetchJson, buildUrl } from './utils';
 
 // Re-export Unit enum from manifestjs for type safety
 export const Unit = liftedinit.sku.v1.Unit;
@@ -92,72 +92,45 @@ export interface SKUResponse {
 }
 
 export async function getProviders(activeOnly = false): Promise<Provider[]> {
-  const url = `${REST_URL}/liftedinit/sku/v1/providers${activeOnly ? '?active_only=true' : ''}`;
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch providers: ${response.statusText}`);
-  }
-
-  const data: ProvidersResponse = await response.json();
+  const url = buildUrl('/liftedinit/sku/v1/providers', activeOnly ? { active_only: 'true' } : undefined);
+  const data = await fetchJson<ProvidersResponse>(url, 'providers');
   return data.providers ?? [];
 }
 
 export async function getProvider(uuid: string): Promise<Provider | null> {
-  const response = await fetch(`${REST_URL}/liftedinit/sku/v1/provider/${uuid}`);
-
-  if (!response.ok) {
-    if (response.status === 404) return null;
-    throw new Error(`Failed to fetch provider: ${response.statusText}`);
-  }
-
-  const data: ProviderResponse = await response.json();
-  return data.provider;
+  const data = await fetchJson<ProviderResponse | Record<string, never>>(
+    `/liftedinit/sku/v1/provider/${uuid}`,
+    'provider',
+    { notFoundDefault: {} }
+  );
+  return 'provider' in data ? data.provider : null;
 }
 
 export async function getSKUs(activeOnly = false): Promise<SKU[]> {
-  const url = `${REST_URL}/liftedinit/sku/v1/skus${activeOnly ? '?active_only=true' : ''}`;
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch SKUs: ${response.statusText}`);
-  }
-
-  const data = await response.json();
+  const url = buildUrl('/liftedinit/sku/v1/skus', activeOnly ? { active_only: 'true' } : undefined);
+  const data = await fetchJson<{ skus?: RawSKU[] }>(url, 'SKUs');
   return parseSKUs(data.skus ?? []);
 }
 
 export async function getSKU(uuid: string): Promise<SKU | null> {
-  const response = await fetch(`${REST_URL}/liftedinit/sku/v1/sku/${uuid}`);
-
-  if (!response.ok) {
-    if (response.status === 404) return null;
-    throw new Error(`Failed to fetch SKU: ${response.statusText}`);
-  }
-
-  const data = await response.json();
+  const data = await fetchJson<{ sku?: RawSKU }>(
+    `/liftedinit/sku/v1/sku/${uuid}`,
+    'SKU',
+    { notFoundDefault: {} }
+  );
   return data.sku ? parseSKU(data.sku) : null;
 }
 
 export async function getSKUsByProvider(providerUuid: string, activeOnly = false): Promise<SKU[]> {
-  const url = `${REST_URL}/liftedinit/sku/v1/skus/provider/${providerUuid}${activeOnly ? '?active_only=true' : ''}`;
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch SKUs by provider: ${response.statusText}`);
-  }
-
-  const data = await response.json();
+  const url = buildUrl(
+    `/liftedinit/sku/v1/skus/provider/${providerUuid}`,
+    activeOnly ? { active_only: 'true' } : undefined
+  );
+  const data = await fetchJson<{ skus?: RawSKU[] }>(url, 'SKUs by provider');
   return parseSKUs(data.skus ?? []);
 }
 
 export async function getSKUParams(): Promise<SKUParams> {
-  const response = await fetch(`${REST_URL}/liftedinit/sku/v1/params`);
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch SKU params: ${response.statusText}`);
-  }
-
-  const data: SKUParamsResponse = await response.json();
+  const data = await fetchJson<SKUParamsResponse>('/liftedinit/sku/v1/params', 'SKU params');
   return data.params;
 }

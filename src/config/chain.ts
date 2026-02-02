@@ -1,5 +1,11 @@
 import type { Chain, AssetList } from '@chain-registry/types';
 
+/**
+ * The chain name used for cosmos-kit and chain registry lookups.
+ * Single source of truth for the chain identifier.
+ */
+export const CHAIN_NAME = 'manifestlocal';
+
 export const manifestLocalChain: Chain = {
   chain_name: 'manifestlocal',
   chain_type: 'cosmos',

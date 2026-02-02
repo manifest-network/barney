@@ -1,81 +1,146 @@
-# Barney - Billing Module Tester
+# Barney
 
-A single-page app for testing the SKU and Billing modules from [manifest-ledger](https://github.com/liftedinit/manifest-ledger).
-
-## Prerequisites
-
-- [Bun](https://bun.sh/) runtime
-- A local manifest-ledger chain running on `localhost:26657` (RPC) and `localhost:1317` (REST)
-- [Web3Auth](https://web3auth.io/) client ID (for social login)
-- [Ollama](https://ollama.com/) (optional, for AI assistant)
-
-## Setup
-
-1. Copy the environment file and configure your Web3Auth client ID:
-   ```bash
-   cp .env.example .env.local
-   ```
-
-2. Install dependencies:
-   ```bash
-   bun install
-   ```
-
-3. Start the development server:
-   ```bash
-   bun run dev
-   ```
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PUBLIC_REST_URL` | REST API endpoint | `http://localhost:1317` |
-| `PUBLIC_RPC_URL` | RPC endpoint | `http://localhost:26657` |
-| `PUBLIC_WEB3AUTH_CLIENT_ID` | Your Web3Auth client ID from [dashboard.web3auth.io](https://dashboard.web3auth.io) | — |
-| `PUBLIC_WEB3AUTH_NETWORK` | Web3Auth network (`sapphire_devnet` or `sapphire_mainnet`) | `sapphire_devnet` |
-| `PUBLIC_OLLAMA_URL` | Ollama endpoint URL | `http://localhost:11434` |
-| `PUBLIC_OLLAMA_MODEL` | Default Ollama model for the AI assistant | `llama3.2` |
+A React-based dApp for managing cloud compute resources on the Manifest blockchain. Barney provides a user-friendly interface for leasing compute resources from providers, managing credit accounts, and interacting with the billing system.
 
 ## Features
 
-The app has 5 tabs covering the full billing flow:
+- **Wallet Integration**: Connect with Keplr, Leap, Cosmostation, Ledger, or Web3Auth
+- **Credit Management**: Fund and monitor your credit account for compute leases
+- **Lease Management**: Create, monitor, and close compute resource leases
+- **Provider Catalog**: Browse available compute providers and their SKUs
+- **AI Assistant**: Natural language interface for blockchain operations (powered by Ollama)
+- **Provider Dashboard**: For compute providers to manage their offerings
 
-| Tab | Purpose |
-|-----|---------|
-| **Wallet & Credit** | Connect wallet (Keplr, Leap, Cosmostation, Ledger, or Google via Web3Auth), view balances, fund credit account |
-| **Catalog** | Browse providers & SKUs, create new ones (authority) |
-| **Leases** | Create/view/cancel leases (tenant view) |
-| **Provider Dashboard** | Acknowledge/reject leases, withdraw funds (provider view) |
-| **Network Overview** | Network-wide billing statistics and lease activity (admin) |
+## Prerequisites
+
+- Node.js 18+ or 20+
+- npm 9+
+- [Ollama](https://ollama.ai/) (optional, for AI assistant features)
+
+## Installation
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd barney
+
+# Install dependencies
+npm install
+```
+
+## Development
+
+```bash
+# Start development server
+npm run dev
+
+# Run linting
+npm run lint
+
+# Run tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+
+# Run tests with coverage
+npm run test:coverage
+
+# Build for production
+npm run build
+
+# Preview production build
+npm run preview
+```
+
+## Environment Variables
+
+Create a `.env.local` file in the project root:
+
+```env
+# Blockchain endpoints (optional, defaults shown)
+VITE_RPC_ENDPOINT=http://localhost:26657
+VITE_LCD_ENDPOINT=http://localhost:1317
+
+# Ollama AI settings (optional)
+PUBLIC_OLLAMA_URL=http://localhost:11434
+PUBLIC_OLLAMA_MODEL=llama3.2
+```
+
+## Project Structure
+
+```
+src/
+├── api/              # Blockchain API clients (billing, SKU, bank)
+├── ai/               # AI assistant (tools, validation, prompts)
+│   └── toolExecutor/ # Tool execution for AI operations
+├── components/       # React components
+│   ├── tabs/         # Main tab views (Wallet, Leases, Catalog, Provider)
+│   ├── ai/           # AI assistant components
+│   └── ui/           # Reusable UI components
+├── config/           # Chain configuration and constants
+├── contexts/         # React contexts (AI, AutoRefresh)
+├── hooks/            # Custom React hooks
+└── utils/            # Utility functions (format, hash, address, etc.)
+```
+
+## Architecture
+
+### Blockchain Integration
+
+- Uses `@cosmos-kit/react` for wallet management
+- `@manifest-network/manifestjs` for Manifest-specific message types
+- `@manifest-network/manifest-mcp-browser` for MCP (Model Context Protocol) integration
 
 ### AI Assistant
 
-An optional AI chat assistant (Ctrl+/) powered by [Ollama](https://ollama.com/) can execute blockchain queries and transactions through natural language. Requires a running Ollama instance with a compatible model.
+The AI assistant uses Ollama locally and can:
+- Query balances and credit accounts
+- List and filter leases
+- Create and manage leases
+- Execute arbitrary Cosmos SDK queries and transactions
 
-## Supported Wallets
+All transactions require user confirmation before execution.
 
-- Keplr
-- Leap
-- Cosmostation
-- Ledger
-- MetaMask (via Leap Snap)
-- Google (via Web3Auth)
+### Security
 
-## Scripts
+- **SSRF Protection**: URL validation using `ipaddr.js` to block private/internal addresses
+- **Input Validation**: All user inputs and localStorage data are validated
+- **Transaction Confirmation**: AI-initiated transactions require explicit user approval
+- **ADR-036 Signatures**: Off-chain authentication for provider API interactions
 
-| Command | Description |
-|---------|-------------|
-| `bun run dev` | Start development server |
-| `bun run build` | Build for production |
-| `bun run preview` | Preview production build |
-| `bun run lint` | Run ESLint |
+## Testing
+
+Tests are written with Vitest and use happy-dom for DOM simulation:
+
+```bash
+# Run all tests
+npm test
+
+# Run with coverage report
+npm run test:coverage
+```
+
+Coverage reports are generated in the `coverage/` directory.
+
+## Build
+
+```bash
+# Type check and build
+npm run build
+```
+
+Production builds are output to `dist/`.
 
 ## Tech Stack
 
-- React 19
-- Rsbuild
-- Tailwind CSS 4
-- cosmos-kit (wallet connections)
-- manifestjs (chain interactions)
-- Ollama (AI assistant)
+- **Framework**: React 19
+- **Language**: TypeScript 5.9
+- **Build Tool**: Rsbuild
+- **Styling**: Tailwind CSS 4
+- **Testing**: Vitest
+- **Blockchain**: Cosmos SDK / Manifest Network
+
+## License
+
+Private - All rights reserved

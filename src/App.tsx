@@ -11,8 +11,7 @@ import { getProviders } from './api/sku';
 import { getBillingParams } from './api/billing';
 import { truncateAddress } from './utils/address';
 import { getSafeImageUrl } from './utils/url';
-
-const CHAIN_NAME = 'manifestlocal';
+import { CHAIN_NAME } from './config/chain';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabId>('wallet');
