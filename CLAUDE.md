@@ -59,8 +59,10 @@ Tool definitions are in `src/ai/tools.ts`. The system prompt is dynamically gene
 | `billing.ts` | Leases, credit accounts (custom Manifest module) |
 | `sku.ts` | Provider catalog, SKU definitions |
 | `bank.ts` | Cosmos SDK bank queries |
+| `tx.ts` | Transaction utilities and message builders |
 | `provider-api.ts` | Payload upload with ADR-036 auth |
 | `ollama.ts` | LLM streaming with retry/backoff |
+| `utils.ts` | Shared fetch utilities (`fetchJson`, `buildUrl`) |
 
 ### Tab Components
 
@@ -77,12 +79,14 @@ Tabs are conditionally rendered based on `isProvider` and `isAdmin` roles checke
 - **Streaming with timeout**: `processStreamWithTimeout` prevents hung LLM connections
 - **SSRF protection**: `src/ai/validation.ts` uses `ipaddr.js` to block private/internal addresses (DEV mode allows localhost for Ollama)
 - **Error utilities**: Use `logError()` from `src/utils/errors.ts` instead of raw `console.error`
+- **Transaction handling**: Use `useTxHandler()` hook from `src/hooks/useTxHandler.ts` for standardized transaction execution with toast notifications
+- **API fetch utilities**: Use `fetchJson()` and `buildUrl()` from `src/api/utils.ts` for consistent error handling
 
 ## Chain Configuration
 
 Defined in `src/config/chain.ts`:
 - Chain: `manifestlocal` (manifest-ledger-beta)
-- Denoms: `umfx` (native), `upwr` (factory token) - both 6 decimals
+- Denoms: `umfx` (native), `factory/.../upwr` (PWR factory token) - both 6 decimals
 - Endpoints default to localhost (26657 RPC, 1317 REST)
 
 Environment variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_OLLAMA_URL`, `PUBLIC_OLLAMA_MODEL`

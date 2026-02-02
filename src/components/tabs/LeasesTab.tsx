@@ -9,7 +9,7 @@ import { formatDate, formatRelativeTime, formatDuration } from '../../utils/form
 import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER, type LeaseFilterState } from '../../utils/leaseState';
 import { getLeasesByTenant, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
-import { createLease, cancelLease, closeLease, type TxResult, type CreateLeaseResult } from '../../api/tx';
+import { createLease, cancelLease, closeLease, type CreateLeaseResult } from '../../api/tx';
 import { DENOM_METADATA, formatPrice } from '../../api/config';
 import { useLeaseItems } from '../../hooks/useLeaseItems';
 import { calculateEstimatedCost, isValidLeaseItem } from '../../utils/pricing';
@@ -26,6 +26,7 @@ import { sha256, toHex, validatePayloadSize, getPayloadSize, MAX_PAYLOAD_SIZE } 
 import { validateFile } from '../../utils/fileValidation';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { useToast } from '../../hooks/useToast';
+import { useTxHandler } from '../../hooks/useTxHandler';
 import { EmptyState } from '../ui/EmptyState';
 import { SkeletonCard } from '../ui/SkeletonCard';
 import { ErrorBanner } from '../ui/ErrorBanner';
@@ -46,8 +47,9 @@ function validateSignMessage(message: string, expectedPrefix: string): boolean {
 const LEASES_PER_PAGE = 10;
 
 export function LeasesTab() {
-  const { address, isWalletConnected, openView, getOfflineSigner, signArbitrary } = useChain(CHAIN_NAME);
+  const { address, isWalletConnected, openView, signArbitrary } = useChain(CHAIN_NAME);
   const toast = useToast();
+  const { txLoading, executeTx } = useTxHandler();
 
   const [activeFilter, setActiveFilter] = useState<LeaseFilterState>('all');
   const [currentPage, setCurrentPage] = useState(1);
@@ -58,7 +60,6 @@ export function LeasesTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isInAllowedList, setIsInAllowedList] = useState(false);
-  const [txLoading, setTxLoading] = useState(false);
   const { selected: selectedLeases, toggle: toggleLeaseSelection, selectAll: selectLeases, clear: deselectAll } = useBatchSelection();
 
   const initialLoadRef = useRef(false);
@@ -149,47 +150,17 @@ export function LeasesTab() {
   }, [activeFilter]);
 
   const handleCancelLease = async (leaseUuid: string) => {
-    if (!address) return;
-
-    try {
-      const signer = getOfflineSigner();
-      setTxLoading(true);
-
-      const result: TxResult = await cancelLease(signer, address, [leaseUuid]);
-
-      if (result.success) {
-        toast.success(`Lease cancelled! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
-      }
-    } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
-    }
+    await executeTx(
+      (signer) => cancelLease(signer, address!, [leaseUuid]),
+      { successMessage: (hash) => `Lease cancelled! Tx: ${hash}...`, onSuccess: fetchData }
+    );
   };
 
   const handleCloseLease = async (leaseUuid: string, reason?: string) => {
-    if (!address) return;
-
-    try {
-      const signer = getOfflineSigner();
-      setTxLoading(true);
-
-      const result: TxResult = await closeLease(signer, address, [leaseUuid], reason);
-
-      if (result.success) {
-        toast.success(`Lease closed! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
-      }
-    } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
-    }
+    await executeTx(
+      (signer) => closeLease(signer, address!, [leaseUuid], reason),
+      { successMessage: (hash) => `Lease closed! Tx: ${hash}...`, onSuccess: fetchData }
+    );
   };
 
   const handleCreateLease = async (
@@ -198,78 +169,72 @@ export function LeasesTab() {
     metaHash?: Uint8Array,
     providerUuid?: string
   ) => {
-    if (!address) return;
-
-    try {
-      const signer = getOfflineSigner();
-      setTxLoading(true);
-
-      const result: CreateLeaseResult = await createLease(signer, address, items, metaHash);
-
-      if (result.success) {
-        if (payload && metaHash && providerUuid) {
-          toast.info('Uploading payload to provider...');
-
-          const provider = providers.find((p) => p.uuid === providerUuid);
-          if (!provider?.api_url) {
-            toast.warning(`Lease created but provider has no API URL. Tx: ${result.transactionHash?.slice(0, 16)}...`);
-            setShowCreateLease(false);
-            await fetchData();
-            return;
-          }
-
-          const leaseUuid = result.leaseUuid;
-          if (!leaseUuid) {
-            toast.warning(`Lease created but couldn't extract UUID from transaction. Tx: ${result.transactionHash?.slice(0, 16)}...`);
-            setShowCreateLease(false);
-            await fetchData();
-            return;
-          }
-
-          const metaHashHex = toHex(metaHash);
-
-          try {
-            const timestamp = Math.floor(Date.now() / 1000);
-            const signMessage = createLeaseDataSignMessage(leaseUuid, metaHashHex, timestamp);
-
-            if (!validateSignMessage(signMessage, 'manifest lease data')) {
-              throw new Error('Invalid signature message format');
-            }
-
-            const signResult = await signArbitrary(address, signMessage);
-
-            const authToken = createLeaseDataAuthToken(
-              address,
-              leaseUuid,
-              metaHashHex,
-              timestamp,
-              signResult.pub_key.value,
-              signResult.signature
-            );
-
-            await uploadLeaseData(provider.api_url, leaseUuid, payload, authToken);
-            toast.success(`Lease created and payload uploaded! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-          } catch (uploadErr) {
-            toast.error(`Lease created but payload upload failed: ${uploadErr instanceof Error ? uploadErr.message : 'Unknown error'}`);
-          }
-        } else {
-          toast.success(`Lease created! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        }
-        setShowCreateLease(false);
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
+    const result = await executeTx<CreateLeaseResult>(
+      (signer) => createLease(signer, address!, items, metaHash),
+      {
+        showToast: false, // We handle toasts manually for the payload upload flow
+        onSuccess: async () => {
+          setShowCreateLease(false);
+          await fetchData();
+        },
       }
-    } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
+    );
+
+    if (!result) return;
+
+    if (result.success) {
+      if (payload && metaHash && providerUuid) {
+        toast.info('Uploading payload to provider...');
+
+        const provider = providers.find((p) => p.uuid === providerUuid);
+        if (!provider?.api_url) {
+          toast.warning(`Lease created but provider has no API URL. Tx: ${result.transactionHash?.slice(0, 16)}...`);
+          return;
+        }
+
+        const leaseUuid = result.leaseUuid;
+        if (!leaseUuid) {
+          toast.warning(`Lease created but couldn't extract UUID from transaction. Tx: ${result.transactionHash?.slice(0, 16)}...`);
+          return;
+        }
+
+        const metaHashHex = toHex(metaHash);
+
+        try {
+          const timestamp = Math.floor(Date.now() / 1000);
+          const signMessage = createLeaseDataSignMessage(leaseUuid, metaHashHex, timestamp);
+
+          if (!validateSignMessage(signMessage, 'manifest lease data')) {
+            throw new Error('Invalid signature message format');
+          }
+
+          const signResult = await signArbitrary(address!, signMessage);
+
+          const authToken = createLeaseDataAuthToken(
+            address!,
+            leaseUuid,
+            metaHashHex,
+            timestamp,
+            signResult.pub_key.value,
+            signResult.signature
+          );
+
+          await uploadLeaseData(provider.api_url, leaseUuid, payload, authToken);
+          toast.success(`Lease created and payload uploaded! Tx: ${result.transactionHash?.slice(0, 16)}...`);
+        } catch (uploadErr) {
+          toast.error(`Lease created but payload upload failed: ${uploadErr instanceof Error ? uploadErr.message : 'Unknown error'}`);
+        }
+      } else {
+        toast.success(`Lease created! Tx: ${result.transactionHash?.slice(0, 16)}...`);
+      }
+    } else {
+      toast.error(`Failed: ${result.error}`);
     }
   };
 
   // Batch operations
   const handleBatchCancel = async () => {
-    if (!address || selectedLeases.size === 0) return;
+    if (selectedLeases.size === 0) return;
 
     const pendingSelected = Array.from(selectedLeases).filter((uuid) => {
       const lease = leases.find((l) => l.uuid === uuid);
@@ -281,28 +246,20 @@ export function LeasesTab() {
       return;
     }
 
-    try {
-      const signer = getOfflineSigner();
-      setTxLoading(true);
-
-      const result: TxResult = await cancelLease(signer, address, pendingSelected);
-
-      if (result.success) {
-        toast.success(`${pendingSelected.length} lease(s) cancelled! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        deselectAll();
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
+    await executeTx(
+      (signer) => cancelLease(signer, address!, pendingSelected),
+      {
+        successMessage: (hash) => `${pendingSelected.length} lease(s) cancelled! Tx: ${hash}...`,
+        onSuccess: async () => {
+          deselectAll();
+          await fetchData();
+        },
       }
-    } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
-    }
+    );
   };
 
   const handleBatchClose = async () => {
-    if (!address || selectedLeases.size === 0) return;
+    if (selectedLeases.size === 0) return;
 
     const activeSelected = Array.from(selectedLeases).filter((uuid) => {
       const lease = leases.find((l) => l.uuid === uuid);
@@ -314,24 +271,16 @@ export function LeasesTab() {
       return;
     }
 
-    try {
-      const signer = getOfflineSigner();
-      setTxLoading(true);
-
-      const result: TxResult = await closeLease(signer, address, activeSelected);
-
-      if (result.success) {
-        toast.success(`${activeSelected.length} lease(s) closed! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        deselectAll();
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
+    await executeTx(
+      (signer) => closeLease(signer, address!, activeSelected),
+      {
+        successMessage: (hash) => `${activeSelected.length} lease(s) closed! Tx: ${hash}...`,
+        onSuccess: async () => {
+          deselectAll();
+          await fetchData();
+        },
       }
-    } catch (err) {
-      toast.error(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
-    }
+    );
   };
 
   // Count actionable (selectable) leases - from current page only

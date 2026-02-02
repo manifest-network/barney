@@ -21,7 +21,7 @@ import { AutoRefreshProvider } from './contexts/AutoRefreshContext';
 // Web3Auth configuration
 const WEB3AUTH_CLIENT_ID = import.meta.env.PUBLIC_WEB3AUTH_CLIENT_ID || 'YOUR_WEB3AUTH_CLIENT_ID';
 
-if (WEB3AUTH_CLIENT_ID === 'YOUR_WEB3AUTH_CLIENT_ID') {
+if (WEB3AUTH_CLIENT_ID === 'YOUR_WEB3AUTH_CLIENT_ID' && import.meta.env.DEV) {
   console.warn(
     'Web3Auth client ID is not configured. Social login (Google) will not work.\n' +
     'Set PUBLIC_WEB3AUTH_CLIENT_ID in your .env.local file.\n' +

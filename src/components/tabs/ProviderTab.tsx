@@ -5,24 +5,25 @@ import { LeaseState, getLeasesByProvider, getWithdrawableAmount, getProviderWith
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../api/sku';
-import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, createLeaseForTenant, type TxResult, type CreateLeaseResult } from '../../api/tx';
+import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, createLeaseForTenant, type CreateLeaseResult } from '../../api/tx';
 import { DENOM_METADATA, formatPrice } from '../../api/config';
 import { isValidManifestAddress } from '../../utils/address';
 import { useLeaseItems } from '../../hooks/useLeaseItems';
 import { calculateEstimatedCost, isValidLeaseItem } from '../../utils/pricing';
 import { formatDate } from '../../utils/format';
-import { logError } from '../../utils/errors';
 import type { Coin } from '../../api/bank';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { useToast } from '../../hooks/useToast';
+import { useTxHandler } from '../../hooks/useTxHandler';
 import { EmptyState } from '../ui/EmptyState';
 import { useBatchSelection } from '../../hooks/useBatchSelection';
 import { CHAIN_NAME } from '../../config/chain';
 
 
 export function ProviderTab() {
-  const { address, isWalletConnected, openView, getOfflineSigner } = useChain(CHAIN_NAME);
+  const { address, isWalletConnected, openView } = useChain(CHAIN_NAME);
   const toast = useToast();
+  const { txLoading, executeTx } = useTxHandler();
   const { copied, copyToClipboard } = useCopyToClipboard();
 
   const [myProvider, setMyProvider] = useState<Provider | null>(null);
@@ -33,7 +34,6 @@ export function ProviderTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isInBillingAllowedList, setIsInBillingAllowedList] = useState(false);
-  const [txLoading, setTxLoading] = useState(false);
   const [showCreateLeaseForTenant, setShowCreateLeaseForTenant] = useState(false);
   const { selected: selectedPendingLeases, toggle: togglePendingSelection, selectAll: selectAllPendingIds, clear: deselectAllPending } = useBatchSelection();
   const { selected: selectedActiveLeases, toggle: toggleActiveSelection, selectAll: selectAllActiveIds, clear: deselectAllActive } = useBatchSelection();
@@ -116,236 +116,128 @@ export function ProviderTab() {
   const activeLeases = providerLeases.filter((l) => l.state === LeaseState.LEASE_STATE_ACTIVE);
 
   const handleAcknowledge = async (leaseUuid: string) => {
-    if (!address) return;
-
-    try {
-      const signer = getOfflineSigner();
-      setTxLoading(true);
-
-      const result: TxResult = await acknowledgeLease(signer, address, [leaseUuid]);
-
-      if (result.success) {
-        toast.success(`Lease acknowledged! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
-      }
-    } catch (err) {
-      toast.error(`Failed to acknowledge lease: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
-    }
+    await executeTx(
+      (signer) => acknowledgeLease(signer, address!, [leaseUuid]),
+      { successMessage: (hash) => `Lease acknowledged! Tx: ${hash}...`, onSuccess: fetchData }
+    );
   };
 
   const handleReject = async (leaseUuid: string, reason: string) => {
-    if (!address) return;
-
-    try {
-      const signer = getOfflineSigner();
-      setTxLoading(true);
-
-      const result: TxResult = await rejectLease(signer, address, [leaseUuid], reason);
-
-      if (result.success) {
-        toast.success(`Lease rejected! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
-      }
-    } catch (err) {
-      toast.error(`Failed to reject lease: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
-    }
+    await executeTx(
+      (signer) => rejectLease(signer, address!, [leaseUuid], reason),
+      { successMessage: (hash) => `Lease rejected! Tx: ${hash}...`, onSuccess: fetchData }
+    );
   };
 
   const handleWithdraw = async (leaseUuids: string[]) => {
-    if (!address) return;
-
-    try {
-      const signer = getOfflineSigner();
-      setTxLoading(true);
-
-      const result: TxResult = await withdrawFromLeases(signer, address, leaseUuids);
-
-      if (result.success) {
-        toast.success(`Withdrawal successful! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
-      }
-    } catch (err) {
-      toast.error(`Failed to withdraw earnings: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
-    }
+    await executeTx(
+      (signer) => withdrawFromLeases(signer, address!, leaseUuids),
+      { successMessage: (hash) => `Withdrawal successful! Tx: ${hash}...`, onSuccess: fetchData }
+    );
   };
 
   const handleCloseLease = async (leaseUuid: string, reason?: string) => {
-    if (!address) return;
-
-    try {
-      const signer = getOfflineSigner();
-      setTxLoading(true);
-
-      const result: TxResult = await closeLease(signer, address, [leaseUuid], reason);
-
-      if (result.success) {
-        toast.success(`Lease closed! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
-      }
-    } catch (err) {
-      toast.error(`Failed to close lease: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
-    }
+    await executeTx(
+      (signer) => closeLease(signer, address!, [leaseUuid], reason),
+      { successMessage: (hash) => `Lease closed! Tx: ${hash}...`, onSuccess: fetchData }
+    );
   };
 
   const getSKU = (uuid: string) => providerSKUs.find((s) => s.uuid === uuid);
 
   // Batch operations
   const handleBatchAcknowledge = async () => {
-    if (!address || selectedPendingLeases.size === 0) return;
+    if (selectedPendingLeases.size === 0) return;
+    const leaseUuids = Array.from(selectedPendingLeases);
 
-    try {
-      const signer = getOfflineSigner();
-      const leaseUuids = Array.from(selectedPendingLeases);
-      setTxLoading(true);
-
-      const result: TxResult = await acknowledgeLease(signer, address, leaseUuids);
-
-      if (result.success) {
-        toast.success(`${leaseUuids.length} lease(s) acknowledged! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        deselectAllPending();
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
+    await executeTx(
+      (signer) => acknowledgeLease(signer, address!, leaseUuids),
+      {
+        successMessage: (hash) => `${leaseUuids.length} lease(s) acknowledged! Tx: ${hash}...`,
+        onSuccess: async () => {
+          deselectAllPending();
+          await fetchData();
+        },
       }
-    } catch (err) {
-      toast.error(`Failed to acknowledge leases: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
-    }
+    );
   };
 
   const handleBatchReject = async (reason: string) => {
-    if (!address || selectedPendingLeases.size === 0) return;
+    if (selectedPendingLeases.size === 0) return;
+    const leaseUuids = Array.from(selectedPendingLeases);
 
-    try {
-      const signer = getOfflineSigner();
-      const leaseUuids = Array.from(selectedPendingLeases);
-      setTxLoading(true);
-
-      const result: TxResult = await rejectLease(signer, address, leaseUuids, reason);
-
-      if (result.success) {
-        toast.success(`${leaseUuids.length} lease(s) rejected! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        deselectAllPending();
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
+    await executeTx(
+      (signer) => rejectLease(signer, address!, leaseUuids, reason),
+      {
+        successMessage: (hash) => `${leaseUuids.length} lease(s) rejected! Tx: ${hash}...`,
+        onSuccess: async () => {
+          deselectAllPending();
+          await fetchData();
+        },
       }
-    } catch (err) {
-      toast.error(`Failed to reject leases: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
-    }
+    );
   };
 
   const handleBatchClose = async (reason?: string) => {
-    if (!address || selectedActiveLeases.size === 0) return;
+    if (selectedActiveLeases.size === 0) return;
+    const leaseUuids = Array.from(selectedActiveLeases);
 
-    try {
-      const signer = getOfflineSigner();
-      const leaseUuids = Array.from(selectedActiveLeases);
-      setTxLoading(true);
-
-      const result: TxResult = await closeLease(signer, address, leaseUuids, reason);
-
-      if (result.success) {
-        toast.success(`${leaseUuids.length} lease(s) closed! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        deselectAllActive();
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
+    await executeTx(
+      (signer) => closeLease(signer, address!, leaseUuids, reason),
+      {
+        successMessage: (hash) => `${leaseUuids.length} lease(s) closed! Tx: ${hash}...`,
+        onSuccess: async () => {
+          deselectAllActive();
+          await fetchData();
+        },
       }
-    } catch (err) {
-      toast.error(`Failed to close leases: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
-    }
+    );
   };
 
   const handleBatchWithdraw = async () => {
-    if (!address || selectedActiveLeases.size === 0) return;
+    if (selectedActiveLeases.size === 0) return;
+    const leaseUuids = Array.from(selectedActiveLeases);
 
-    try {
-      const signer = getOfflineSigner();
-      const leaseUuids = Array.from(selectedActiveLeases);
-      setTxLoading(true);
-
-      const result: TxResult = await withdrawFromLeases(signer, address, leaseUuids);
-
-      if (result.success) {
-        toast.success(`Withdrawal from ${leaseUuids.length} lease(s) successful! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        deselectAllActive();
-        await fetchData();
-      } else {
-        toast.error(`Failed: ${result.error}`);
+    await executeTx(
+      (signer) => withdrawFromLeases(signer, address!, leaseUuids),
+      {
+        successMessage: (hash) => `Withdrawal from ${leaseUuids.length} lease(s) successful! Tx: ${hash}...`,
+        onSuccess: async () => {
+          deselectAllActive();
+          await fetchData();
+        },
       }
-    } catch (err) {
-      toast.error(`Failed to withdraw from leases: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
-    }
+    );
   };
 
   const selectAllPending = () => selectAllPendingIds(pendingLeases.map((l) => l.uuid));
   const selectAllActive = () => selectAllActiveIds(activeLeases.map((l) => l.uuid));
 
   const handleCreateLeaseForTenant = async (tenant: string, items: { skuUuid: string; quantity: number }[]) => {
-    if (!address) {
-      toast.error('Wallet not connected. Please connect your wallet.');
-      return;
-    }
-
     if (!isValidManifestAddress(tenant)) {
       toast.error('Invalid tenant address format.');
       return;
     }
 
-    try {
-      const signer = getOfflineSigner();
-      setTxLoading(true);
-
-      const result: CreateLeaseResult = await createLeaseForTenant(signer, address, tenant, items);
-
-      if (result.success) {
-        const uuidDisplay = result.leaseUuid
-          ? `UUID: ${result.leaseUuid.slice(0, 8)}...`
-          : '';
-        const txDisplay = result.transactionHash
-          ? `Tx: ${result.transactionHash.slice(0, 16)}...`
-          : '';
-        toast.success(`Lease created for tenant! ${uuidDisplay} ${txDisplay}`.trim());
-        setShowCreateLeaseForTenant(false);
-
-        // Refresh data separately so failure doesn't mask successful transaction
-        try {
+    const result = await executeTx<CreateLeaseResult>(
+      (signer) => createLeaseForTenant(signer, address!, tenant, items),
+      {
+        showToast: false, // We handle custom toast with UUID display
+        onSuccess: async () => {
+          setShowCreateLeaseForTenant(false);
           await fetchData();
-        } catch (refreshErr) {
-          logError('ProviderTab.handleCreateLeaseForTenant.refresh', refreshErr);
-        }
-      } else {
-        toast.error(`Failed: ${result.error}`);
+        },
       }
-    } catch (err) {
-      logError('ProviderTab.handleCreateLeaseForTenant', err);
-      toast.error(`Failed to create lease: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setTxLoading(false);
+    );
+
+    if (!result) return;
+
+    if (result.success) {
+      const uuidDisplay = result.leaseUuid ? `UUID: ${result.leaseUuid.slice(0, 8)}...` : '';
+      const txDisplay = result.transactionHash ? `Tx: ${result.transactionHash.slice(0, 16)}...` : '';
+      toast.success(`Lease created for tenant! ${uuidDisplay} ${txDisplay}`.trim());
+    } else {
+      toast.error(`Failed: ${result.error}`);
     }
   };
 

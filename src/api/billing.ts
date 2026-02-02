@@ -1,5 +1,5 @@
 import { liftedinit } from '@manifest-network/manifestjs';
-import { REST_URL } from './config';
+import { fetchJson, buildUrl, buildPaginationParams } from './utils';
 import type { Coin } from './bank';
 
 // Re-export LeaseState enum from manifestjs for type safety
@@ -127,106 +127,84 @@ export interface CreditEstimateResponse {
 }
 
 export async function getCreditAccount(tenant: string): Promise<CreditAccountResponse> {
-  const response = await fetch(`${REST_URL}/liftedinit/billing/v1/credit/${tenant}`);
+  // First try to get the credit address (this always works even if no account exists)
+  const creditAddress = await getCreditAddress(tenant);
 
-  if (!response.ok) {
-    if (response.status === 404) {
-      // No credit account exists yet
-      const creditAddress = await getCreditAddress(tenant);
-      return {
-        credit_account: {
-          tenant,
-          credit_address: creditAddress,
-          active_lease_count: 0,
-          pending_lease_count: 0,
-        },
-        balances: [],
-      };
-    }
-    throw new Error(`Failed to fetch credit account: ${response.statusText}`);
+  // Then try to get the full account, using empty defaults if 404
+  const data = await fetchJson<CreditAccountResponse | null>(
+    `/liftedinit/billing/v1/credit/${tenant}`,
+    'credit account',
+    { notFoundDefault: null }
+  );
+
+  if (data) {
+    return data;
   }
 
-  return response.json();
+  // No credit account exists yet - return placeholder
+  return {
+    credit_account: {
+      tenant,
+      credit_address: creditAddress,
+      active_lease_count: 0,
+      pending_lease_count: 0,
+    },
+    balances: [],
+  };
 }
 
 export async function getCreditAddress(tenant: string): Promise<string> {
-  const response = await fetch(`${REST_URL}/liftedinit/billing/v1/credit-address/${tenant}`);
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch credit address: ${response.statusText}`);
-  }
-
-  const data: CreditAddressResponse = await response.json();
+  const data = await fetchJson<CreditAddressResponse>(
+    `/liftedinit/billing/v1/credit-address/${tenant}`,
+    'credit address'
+  );
   return data.credit_address;
 }
 
 export async function getCreditEstimate(tenant: string): Promise<CreditEstimateResponse | null> {
-  const response = await fetch(`${REST_URL}/liftedinit/billing/v1/credit/${tenant}/estimate`);
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      return null;
-    }
-    throw new Error(`Failed to fetch credit estimate: ${response.statusText}`);
-  }
-
-  return response.json();
+  return fetchJson<CreditEstimateResponse | null>(
+    `/liftedinit/billing/v1/credit/${tenant}/estimate`,
+    'credit estimate',
+    { notFoundDefault: null }
+  );
 }
 
 export async function getBillingParams(): Promise<BillingParams> {
-  const response = await fetch(`${REST_URL}/liftedinit/billing/v1/params`);
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch billing params: ${response.statusText}`);
-  }
-
-  const data: BillingParamsResponse = await response.json();
+  const data = await fetchJson<BillingParamsResponse>(
+    '/liftedinit/billing/v1/params',
+    'billing params'
+  );
   return data.params;
 }
 
 export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState): Promise<Lease[]> {
-  let url = `${REST_URL}/liftedinit/billing/v1/leases/tenant/${tenant}`;
+  const params: Record<string, string | undefined> = {};
   if (stateFilter != null && stateFilter !== LeaseState.LEASE_STATE_UNSPECIFIED) {
-    url += `?state_filter=${leaseStateToString(stateFilter)}`;
+    params.state_filter = leaseStateToString(stateFilter);
   }
 
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    if (response.status === 404) return [];
-    throw new Error(`Failed to fetch leases: ${response.statusText}`);
-  }
-
-  const data = await response.json();
+  const url = buildUrl(`/liftedinit/billing/v1/leases/tenant/${tenant}`, params);
+  const data = await fetchJson<{ leases?: RawLease[] }>(url, 'leases', { notFoundDefault: { leases: [] } });
   return parseLeases(data.leases ?? []);
 }
 
 export async function getLeasesByProvider(providerUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
-  let url = `${REST_URL}/liftedinit/billing/v1/leases/provider/${providerUuid}`;
+  const params: Record<string, string | undefined> = {};
   if (stateFilter != null && stateFilter !== LeaseState.LEASE_STATE_UNSPECIFIED) {
-    url += `?state_filter=${leaseStateToString(stateFilter)}`;
+    params.state_filter = leaseStateToString(stateFilter);
   }
 
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    if (response.status === 404) return [];
-    throw new Error(`Failed to fetch leases: ${response.statusText}`);
-  }
-
-  const data = await response.json();
+  const url = buildUrl(`/liftedinit/billing/v1/leases/provider/${providerUuid}`, params);
+  const data = await fetchJson<{ leases?: RawLease[] }>(url, 'leases', { notFoundDefault: { leases: [] } });
   return parseLeases(data.leases ?? []);
 }
 
 export async function getLease(leaseUuid: string): Promise<Lease | null> {
-  const response = await fetch(`${REST_URL}/liftedinit/billing/v1/lease/${leaseUuid}`);
-
-  if (!response.ok) {
-    if (response.status === 404) return null;
-    throw new Error(`Failed to fetch lease: ${response.statusText}`);
-  }
-
-  const data = await response.json();
+  const data = await fetchJson<{ lease?: RawLease }>(
+    `/liftedinit/billing/v1/lease/${leaseUuid}`,
+    'lease',
+    { notFoundDefault: {} }
+  );
   return data.lease ? parseLease(data.lease) : null;
 }
 
@@ -235,14 +213,11 @@ export interface WithdrawableAmountResponse {
 }
 
 export async function getWithdrawableAmount(leaseUuid: string): Promise<Coin[]> {
-  const response = await fetch(`${REST_URL}/liftedinit/billing/v1/lease/${leaseUuid}/withdrawable`);
-
-  if (!response.ok) {
-    if (response.status === 404) return [];
-    throw new Error(`Failed to fetch withdrawable amount: ${response.statusText}`);
-  }
-
-  const data: WithdrawableAmountResponse = await response.json();
+  const data = await fetchJson<WithdrawableAmountResponse>(
+    `/liftedinit/billing/v1/lease/${leaseUuid}/withdrawable`,
+    'withdrawable amount',
+    { notFoundDefault: { amounts: [] } }
+  );
   return data.amounts ?? [];
 }
 
@@ -253,32 +228,21 @@ export interface ProviderWithdrawableResponse {
 }
 
 export async function getProviderWithdrawable(providerUuid: string): Promise<ProviderWithdrawableResponse> {
-  const response = await fetch(`${REST_URL}/liftedinit/billing/v1/provider/${providerUuid}/withdrawable`);
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      return { amounts: [], lease_count: '0', has_more: false };
-    }
-    throw new Error(`Failed to fetch provider withdrawable: ${response.statusText}`);
-  }
-
-  return response.json();
+  return fetchJson<ProviderWithdrawableResponse>(
+    `/liftedinit/billing/v1/provider/${providerUuid}/withdrawable`,
+    'provider withdrawable',
+    { notFoundDefault: { amounts: [], lease_count: '0', has_more: false } }
+  );
 }
 
 export async function getLeasesBySKU(skuUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
-  let url = `${REST_URL}/liftedinit/billing/v1/leases/sku/${skuUuid}`;
+  const params: Record<string, string | undefined> = {};
   if (stateFilter != null && stateFilter !== LeaseState.LEASE_STATE_UNSPECIFIED) {
-    url += `?state_filter=${leaseStateToString(stateFilter)}`;
+    params.state_filter = leaseStateToString(stateFilter);
   }
 
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    if (response.status === 404) return [];
-    throw new Error(`Failed to fetch leases by SKU: ${response.statusText}`);
-  }
-
-  const data = await response.json();
+  const url = buildUrl(`/liftedinit/billing/v1/leases/sku/${skuUuid}`, params);
+  const data = await fetchJson<{ leases?: RawLease[] }>(url, 'leases by SKU', { notFoundDefault: { leases: [] } });
   return parseLeases(data.leases ?? []);
 }
 
@@ -298,35 +262,26 @@ export interface GetAllLeasesParams {
 }
 
 export async function getAllLeases(params?: GetAllLeasesParams): Promise<PaginatedLeasesResponse> {
-  const searchParams = new URLSearchParams();
+  const queryParams: Record<string, string | undefined> = {
+    ...buildPaginationParams({
+      limit: params?.limit,
+      offset: params?.offset,
+      paginationKey: params?.paginationKey,
+      countTotal: !!params?.limit,
+    }),
+  };
 
   if (params?.stateFilter != null && params.stateFilter !== LeaseState.LEASE_STATE_UNSPECIFIED) {
-    searchParams.set('state_filter', leaseStateToString(params.stateFilter));
-  }
-  if (params?.limit) {
-    searchParams.set('pagination.limit', String(params.limit));
-    searchParams.set('pagination.count_total', 'true');
-  }
-  if (params?.offset) {
-    searchParams.set('pagination.offset', String(params.offset));
-  }
-  if (params?.paginationKey) {
-    searchParams.set('pagination.key', params.paginationKey);
+    queryParams.state_filter = leaseStateToString(params.stateFilter);
   }
 
-  const queryString = searchParams.toString();
-  const url = `${REST_URL}/liftedinit/billing/v1/leases${queryString ? `?${queryString}` : ''}`;
+  const url = buildUrl('/liftedinit/billing/v1/leases', queryParams);
+  const data = await fetchJson<{ leases?: RawLease[]; pagination?: PaginatedLeasesResponse['pagination'] }>(
+    url,
+    'all leases',
+    { notFoundDefault: { leases: [] } }
+  );
 
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      return { leases: [] };
-    }
-    throw new Error(`Failed to fetch all leases: ${response.statusText}`);
-  }
-
-  const data = await response.json();
   return {
     ...data,
     leases: parseLeases(data.leases ?? []),
@@ -369,32 +324,20 @@ export interface GetAllCreditsParams {
  * - Caching layer for balance data
  */
 export async function getAllCredits(params?: GetAllCreditsParams): Promise<PaginatedCreditsResponse> {
-  const searchParams = new URLSearchParams();
+  const queryParams = buildPaginationParams({
+    limit: params?.limit,
+    offset: params?.offset,
+    paginationKey: params?.paginationKey,
+    countTotal: !!params?.limit,
+  });
 
-  if (params?.limit) {
-    searchParams.set('pagination.limit', String(params.limit));
-    searchParams.set('pagination.count_total', 'true');
-  }
-  if (params?.offset) {
-    searchParams.set('pagination.offset', String(params.offset));
-  }
-  if (params?.paginationKey) {
-    searchParams.set('pagination.key', params.paginationKey);
-  }
+  const url = buildUrl('/liftedinit/billing/v1/credits', queryParams);
+  const data = await fetchJson<{ credit_accounts?: CreditAccount[]; pagination?: PaginatedCreditsResponse['pagination'] }>(
+    url,
+    'all credits',
+    { notFoundDefault: { credit_accounts: [] } }
+  );
 
-  const queryString = searchParams.toString();
-  const url = `${REST_URL}/liftedinit/billing/v1/credits${queryString ? `?${queryString}` : ''}`;
-
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      return { credit_accounts: [], balances: {} };
-    }
-    throw new Error(`Failed to fetch all credits: ${response.statusText}`);
-  }
-
-  const data = await response.json();
   const creditAccounts: CreditAccount[] = data.credit_accounts ?? [];
 
   // N+1 query: fetch balances from bank module (see function docs for rationale)
@@ -403,19 +346,15 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
   if (creditAccounts.length > 0) {
     const balancePromises = creditAccounts.map(async (account) => {
       try {
-        const balanceResponse = await fetch(
-          `${REST_URL}/cosmos/bank/v1beta1/balances/${account.credit_address}`
+        const balanceData = await fetchJson<{ balances?: Coin[] }>(
+          `/cosmos/bank/v1beta1/balances/${account.credit_address}`,
+          'balance'
         );
-        if (balanceResponse.ok) {
-          const balanceData = await balanceResponse.json();
-          return { key: account.credit_address, balances: balanceData.balances ?? [] };
-        }
-      } catch (err) {
-        if (import.meta.env.DEV) {
-          console.warn('[getAllCredits] Balance fetch failed:', err);
-        }
+        return { key: account.credit_address, balances: balanceData.balances ?? [] };
+      } catch {
+        // Balance fetch failures are non-critical; return empty balance
+        return { key: account.credit_address, balances: [] };
       }
-      return { key: account.credit_address, balances: [] };
     });
 
     const results = await Promise.all(balancePromises);

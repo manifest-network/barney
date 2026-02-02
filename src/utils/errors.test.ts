@@ -40,7 +40,6 @@ describe('getErrorMessage', () => {
 });
 
 describe('logError', () => {
-  const originalEnv = import.meta.env.DEV;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
