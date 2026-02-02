@@ -6,6 +6,11 @@ import { CHAIN_NAME } from '../config/chain';
 import { TX_HASH_DISPLAY_LENGTH } from '../config/constants';
 
 /**
+ * Type alias for the offline signer returned by cosmos-kit's useChain hook.
+ */
+type OfflineSigner = ReturnType<ReturnType<typeof useChain>['getOfflineSigner']>;
+
+/**
  * Return type for useTxHandler hook
  */
 export interface TxHandler {
@@ -28,7 +33,7 @@ export interface TxHandler {
    * );
    */
   executeTx: <T extends TxResult>(
-    txFn: (signer: ReturnType<ReturnType<typeof useChain>['getOfflineSigner']>) => Promise<T>,
+    txFn: (signer: OfflineSigner) => Promise<T>,
     options?: ExecuteTxOptions
   ) => Promise<T | null>;
 }
@@ -97,7 +102,7 @@ export function useTxHandler(): TxHandler {
 
   const executeTx = useCallback(
     async <T extends TxResult>(
-      txFn: (signer: ReturnType<typeof getOfflineSigner>) => Promise<T>,
+      txFn: (signer: OfflineSigner) => Promise<T>,
       options?: ExecuteTxOptions
     ): Promise<T | null> => {
       if (!address) {

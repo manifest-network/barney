@@ -125,7 +125,7 @@ export function validateEndpointUrl(url: string): string | null {
     }
 
     // SSRF Protection: Block private/internal IP addresses
-    // Exception: Allow localhost only in development mode for local Ollama
+    // Exception: Allow all private/internal addresses in development mode (for local Ollama, etc.)
     const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
     if (!isDev && isPrivateHost(parsed.hostname)) {
       return null;
