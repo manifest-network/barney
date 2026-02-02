@@ -1,20 +1,52 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { AUTO_REFRESH_INTERVAL_MS } from '../config/constants';
 
-const REFRESH_INTERVAL = 10000; // 10 seconds for all pages
-
+/**
+ * Context value for the auto-refresh system.
+ */
 interface AutoRefreshContextValue {
+  /** Whether auto-refresh is currently enabled */
   isEnabled: boolean;
+  /** Toggle auto-refresh on/off */
   toggle: () => void;
+  /** Whether a refresh is currently in progress */
   isRefreshing: boolean;
+  /** Timestamp of the last successful refresh */
   lastRefresh: Date | null;
+  /** Manually trigger a refresh */
   refresh: () => void;
+  /** Register a fetch function for the current tab */
   registerFetchFn: (fn: () => Promise<void>) => void;
+  /** Unregister the current fetch function */
   unregisterFetchFn: () => void;
 }
 
 const AutoRefreshContext = createContext<AutoRefreshContextValue | null>(null);
 
+/**
+ * Provider component for the auto-refresh system.
+ *
+ * This context provides centralized auto-refresh functionality for all tabs.
+ * Each tab can register its fetch function, and the context will automatically
+ * call it at the configured interval.
+ *
+ * Key behaviors:
+ * - Only one fetch function can be registered at a time (last one wins)
+ * - Polling pauses when the browser tab is hidden and resumes when visible
+ * - Manual refresh is always available via the `refresh` function
+ * - Toggle allows users to enable/disable auto-refresh globally
+ *
+ * Usage in tabs:
+ * ```tsx
+ * const { registerFetchFn, unregisterFetchFn } = useAutoRefreshContext();
+ *
+ * useEffect(() => {
+ *   registerFetchFn(fetchData);
+ *   return () => unregisterFetchFn();
+ * }, [fetchData, registerFetchFn, unregisterFetchFn]);
+ * ```
+ */
 export function AutoRefreshProvider({ children }: { children: ReactNode }) {
   const [isEnabled, setIsEnabled] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -46,7 +78,7 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
     }
-    intervalRef.current = setInterval(doFetch, REFRESH_INTERVAL);
+    intervalRef.current = setInterval(doFetch, AUTO_REFRESH_INTERVAL_MS);
   }, [doFetch]);
 
   const stopPolling = useCallback(() => {

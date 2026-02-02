@@ -2,8 +2,7 @@ import { Wallet, Package, FileText, Building2, Globe, RefreshCw } from 'lucide-r
 import { SidebarItem } from './SidebarItem';
 import { SidebarSection } from './SidebarSection';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
-
-const REFRESH_INTERVAL_SECONDS = 10;
+import { AUTO_REFRESH_INTERVAL_SECONDS } from '../../config/constants';
 
 export type TabId = 'wallet' | 'catalog' | 'leases' | 'provider' | 'network';
 
@@ -106,7 +105,7 @@ export function Sidebar({ activeTab, onTabChange, isProvider, isAdmin }: Sidebar
               <span className="sidebar-refresh-toggle-knob" />
             </button>
             <span className="sidebar-refresh-label">
-              {isEnabled ? `${REFRESH_INTERVAL_SECONDS}s` : 'Off'}
+              {isEnabled ? `${AUTO_REFRESH_INTERVAL_SECONDS}s` : 'Off'}
             </span>
           </div>
           {lastRefresh && (
