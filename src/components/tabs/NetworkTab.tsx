@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link, ShieldX, Globe, Copy, Check, Clock, Zap, Package, Users, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Wallet } from 'lucide-react';
+import { Link, ShieldX, Globe, Copy, Check, Clock, Zap, Package, Users, ChevronDown, ChevronUp, Wallet } from 'lucide-react';
 import {
   LeaseState,
   leaseStateToString,
@@ -21,9 +21,11 @@ import { SECONDS_PER_HOUR } from '../../config/constants';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
 import type { Coin } from '../../api/bank';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
+import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER } from '../../utils/leaseState';
 import { EmptyState } from '../ui/EmptyState';
 import { ErrorBanner } from '../ui/ErrorBanner';
 import { SkeletonCard } from '../ui/SkeletonCard';
+import { Pagination } from '../ui/Pagination';
 
 const PAGE_SIZE = 10;
 
@@ -34,27 +36,6 @@ interface NetworkTabProps {
 }
 
 type ViewMode = 'leases' | 'credits';
-type FilterState = 'all' | 'pending' | 'active' | 'closed' | 'rejected' | 'expired';
-
-const STATE_LABELS: Record<LeaseState, string> = {
-  [LeaseState.LEASE_STATE_UNSPECIFIED]: 'Unknown',
-  [LeaseState.LEASE_STATE_PENDING]: 'Pending',
-  [LeaseState.LEASE_STATE_ACTIVE]: 'Active',
-  [LeaseState.LEASE_STATE_CLOSED]: 'Closed',
-  [LeaseState.LEASE_STATE_REJECTED]: 'Rejected',
-  [LeaseState.LEASE_STATE_EXPIRED]: 'Expired',
-  [LeaseState.UNRECOGNIZED]: 'Unknown',
-};
-
-const LEASE_STATE_TO_FILTER: Record<LeaseState, FilterState> = {
-  [LeaseState.LEASE_STATE_PENDING]: 'pending',
-  [LeaseState.LEASE_STATE_ACTIVE]: 'active',
-  [LeaseState.LEASE_STATE_CLOSED]: 'closed',
-  [LeaseState.LEASE_STATE_REJECTED]: 'rejected',
-  [LeaseState.LEASE_STATE_EXPIRED]: 'expired',
-  [LeaseState.LEASE_STATE_UNSPECIFIED]: 'all',
-  [LeaseState.UNRECOGNIZED]: 'all',
-};
 
 export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps) {
   const [isAdmin, setIsAdmin] = useState(false);
@@ -418,6 +399,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
               currentPage={currentLeasePage}
               totalPages={totalLeasePages}
               totalItems={parseInt(leasesResponse?.pagination?.total || '0', 10)}
+              itemsPerPage={PAGE_SIZE}
               onPageChange={(page) => setLeaseOffset((page - 1) * PAGE_SIZE)}
             />
           )}
@@ -462,101 +444,12 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
               currentPage={currentCreditPage}
               totalPages={totalCreditPages}
               totalItems={parseInt(creditsResponse?.pagination?.total || '0', 10)}
+              itemsPerPage={PAGE_SIZE}
               onPageChange={(page) => setCreditOffset((page - 1) * PAGE_SIZE)}
             />
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-/* ============================================
-   PAGINATION COMPONENT
-   ============================================ */
-function Pagination({
-  currentPage,
-  totalPages,
-  totalItems,
-  onPageChange,
-}: {
-  currentPage: number;
-  totalPages: number;
-  totalItems: number;
-  onPageChange: (page: number) => void;
-}) {
-  const startItem = (currentPage - 1) * PAGE_SIZE + 1;
-  const endItem = Math.min(currentPage * PAGE_SIZE, totalItems);
-
-  // Generate page numbers to display
-  const getPageNumbers = () => {
-    const pages: (number | 'ellipsis')[] = [];
-
-    if (totalPages <= 7) {
-      // Show all pages if 7 or fewer
-      for (let i = 1; i <= totalPages; i++) pages.push(i);
-    } else {
-      // Always show first page
-      pages.push(1);
-
-      if (currentPage > 3) {
-        pages.push('ellipsis');
-      }
-
-      // Show pages around current
-      const start = Math.max(2, currentPage - 1);
-      const end = Math.min(totalPages - 1, currentPage + 1);
-      for (let i = start; i <= end; i++) pages.push(i);
-
-      if (currentPage < totalPages - 2) {
-        pages.push('ellipsis');
-      }
-
-      // Always show last page
-      pages.push(totalPages);
-    }
-
-    return pages;
-  };
-
-  return (
-    <div className="pagination">
-      <span className="pagination-info">
-        {startItem}–{endItem} of {totalItems}
-      </span>
-      <div className="pagination-controls">
-        <button
-          onClick={() => onPageChange(currentPage - 1)}
-          disabled={currentPage === 1}
-          className="pagination-btn"
-          title="Previous page"
-        >
-          <ChevronLeft size={14} />
-        </button>
-
-        {getPageNumbers().map((page, idx) =>
-          page === 'ellipsis' ? (
-            <span key={`ellipsis-${idx}`} className="pagination-ellipsis">…</span>
-          ) : (
-            <button
-              key={page}
-              onClick={() => onPageChange(page)}
-              className={`pagination-btn ${currentPage === page ? 'active' : ''}`}
-            >
-              {page}
-            </button>
-          )
-        )}
-
-        <button
-          onClick={() => onPageChange(currentPage + 1)}
-          disabled={currentPage === totalPages}
-          className="pagination-btn"
-          title="Next page"
-        >
-          <ChevronRight size={14} />
-        </button>
-      </div>
     </div>
   );
 }
@@ -599,7 +492,7 @@ function NetworkLeaseCard({ lease, getProvider, getSKU }: NetworkLeaseCardProps)
             {stateKey === 'pending' && <Clock size={12} />}
             {stateKey === 'active' && <Zap size={12} />}
           </span>
-          {STATE_LABELS[lease.state]}
+          {LEASE_STATE_LABELS[lease.state]}
         </span>
 
         {/* Content */}

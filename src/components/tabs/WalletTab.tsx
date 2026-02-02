@@ -264,7 +264,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
             </div>
             <button
               onClick={handleFundCredit}
-              disabled={!fundAmount || txLoading || pwrBalanceNum < parseFloat(fundAmount || '0')}
+              disabled={!fundAmount || txLoading || pwrBalanceNum < parseFloat(fundAmount)}
               className="wallet-fund-submit-btn"
             >
               {txLoading ? (

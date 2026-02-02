@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { Link, Package, Shield, Loader2, Plus, Copy, Check, Search, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { Link, Package, Shield, Loader2, Plus, Copy, Check, Search, X } from 'lucide-react';
 import { HEALTH_CHECK_TIMEOUT_MS, POST_TX_REFETCH_DELAY_MS } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { truncateAddress } from '../../utils/address';
@@ -27,6 +27,7 @@ import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { EmptyState } from '../ui/EmptyState';
 import { Modal } from '../ui/Modal';
 import { ErrorBanner } from '../ui/ErrorBanner';
+import { Pagination } from '../ui/Pagination';
 
 type HealthStatus = 'healthy' | 'unhealthy' | 'loading' | 'unknown';
 
@@ -431,6 +432,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
                 currentPage={providerPage}
                 totalPages={providerTotalPages}
                 totalItems={filteredProviders.length}
+                itemsPerPage={ITEMS_PER_PAGE}
                 onPageChange={setProviderPage}
               />
             )}
@@ -493,6 +495,7 @@ export function CatalogTab({ isConnected, address, onConnect }: CatalogTabProps)
                 currentPage={skuPage}
                 totalPages={skuTotalPages}
                 totalItems={filteredSkus.length}
+                itemsPerPage={ITEMS_PER_PAGE}
                 onPageChange={setSkuPage}
               />
             )}
@@ -551,49 +554,6 @@ function SearchInput({
           <X size={14} />
         </button>
       )}
-    </div>
-  );
-}
-
-/* ============================================
-   PAGINATION
-   ============================================ */
-function Pagination({
-  currentPage,
-  totalPages,
-  totalItems,
-  onPageChange,
-}: {
-  currentPage: number;
-  totalPages: number;
-  totalItems: number;
-  onPageChange: (page: number) => void;
-}) {
-  const startItem = (currentPage - 1) * ITEMS_PER_PAGE + 1;
-  const endItem = Math.min(currentPage * ITEMS_PER_PAGE, totalItems);
-
-  return (
-    <div className="catalog-pagination">
-      <span className="catalog-pagination-info">
-        {startItem}–{endItem} of {totalItems}
-      </span>
-      <div className="catalog-pagination-controls">
-        <button
-          onClick={() => onPageChange(currentPage - 1)}
-          disabled={currentPage === 1}
-          className="catalog-pagination-btn"
-        >
-          <ChevronLeft size={14} />
-        </button>
-        <span className="catalog-pagination-page">{currentPage} / {totalPages}</span>
-        <button
-          onClick={() => onPageChange(currentPage + 1)}
-          disabled={currentPage === totalPages}
-          className="catalog-pagination-btn"
-        >
-          <ChevronRight size={14} />
-        </button>
-      </div>
     </div>
   );
 }

@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { Link, Shield, Plus, ChevronDown, ChevronUp, Clock, Copy, Check, X, ExternalLink, Zap, MinusCircle, XCircle, Wifi, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Link, Shield, Plus, ChevronDown, ChevronUp, Clock, Copy, Check, X, ExternalLink, Zap, MinusCircle, XCircle, Wifi } from 'lucide-react';
 import { LeaseState, type Lease } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { truncateAddress } from '../../utils/address';
 import { formatDate, formatRelativeTime, formatDuration } from '../../utils/format';
-import { LEASE_STATE_LABELS } from '../../utils/leaseState';
+import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER, type LeaseFilterState } from '../../utils/leaseState';
 import { getLeasesByTenant, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
 import { createLease, cancelLease, closeLease, type TxResult, type CreateLeaseResult } from '../../api/tx';
@@ -28,6 +28,7 @@ import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { SkeletonCard } from '../ui/SkeletonCard';
 import { ErrorBanner } from '../ui/ErrorBanner';
+import { Pagination } from '../ui/Pagination';
 import { useBatchSelection } from '../../hooks/useBatchSelection';
 
 /**
@@ -42,25 +43,13 @@ function validateSignMessage(message: string, expectedPrefix: string): boolean {
 
 const CHAIN_NAME = 'manifestlocal';
 
-type FilterState = 'all' | 'pending' | 'active' | 'closed' | 'rejected';
-
 const LEASES_PER_PAGE = 10;
-
-const LEASE_STATE_TO_FILTER: Record<LeaseState, FilterState> = {
-  [LeaseState.LEASE_STATE_PENDING]: 'pending',
-  [LeaseState.LEASE_STATE_ACTIVE]: 'active',
-  [LeaseState.LEASE_STATE_CLOSED]: 'closed',
-  [LeaseState.LEASE_STATE_REJECTED]: 'rejected',
-  [LeaseState.LEASE_STATE_EXPIRED]: 'closed', // Group expired with closed
-  [LeaseState.LEASE_STATE_UNSPECIFIED]: 'all',
-  [LeaseState.UNRECOGNIZED]: 'all',
-};
 
 export function LeasesTab() {
   const { address, isWalletConnected, openView, getOfflineSigner, signArbitrary } = useChain(CHAIN_NAME);
   const toast = useToast();
 
-  const [activeFilter, setActiveFilter] = useState<FilterState>('all');
+  const [activeFilter, setActiveFilter] = useState<LeaseFilterState>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [showCreateLease, setShowCreateLease] = useState(false);
   const [leases, setLeases] = useState<Lease[]>([]);
@@ -537,11 +526,11 @@ function FilterTabs({
   onChange,
   counts,
 }: {
-  activeFilter: FilterState;
-  onChange: (filter: FilterState) => void;
-  counts: Record<FilterState, number>;
+  activeFilter: LeaseFilterState;
+  onChange: (filter: LeaseFilterState) => void;
+  counts: Record<LeaseFilterState, number>;
 }) {
-  const filters: { key: FilterState; label: string }[] = [
+  const filters: { key: LeaseFilterState; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'pending', label: 'Pending' },
     { key: 'active', label: 'Active' },
@@ -682,7 +671,7 @@ function formatKey(key: string): string {
    ============================================ */
 
 // State icons
-const STATE_ICONS: Record<FilterState, React.ReactNode> = {
+const STATE_ICONS: Record<LeaseFilterState, React.ReactNode> = {
   all: null,
   pending: <Clock size={12} />,
   active: <Zap size={12} />,
@@ -1068,98 +1057,6 @@ function LeaseCard({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-/* ============================================
-   PAGINATION COMPONENT
-   ============================================ */
-function Pagination({
-  currentPage,
-  totalPages,
-  totalItems,
-  itemsPerPage,
-  onPageChange,
-}: {
-  currentPage: number;
-  totalPages: number;
-  totalItems: number;
-  itemsPerPage: number;
-  onPageChange: (page: number) => void;
-}) {
-  const startItem = (currentPage - 1) * itemsPerPage + 1;
-  const endItem = Math.min(currentPage * itemsPerPage, totalItems);
-
-  // Generate page numbers to display
-  const getPageNumbers = () => {
-    const pages: (number | 'ellipsis')[] = [];
-
-    if (totalPages <= 7) {
-      // Show all pages if 7 or fewer
-      for (let i = 1; i <= totalPages; i++) pages.push(i);
-    } else {
-      // Always show first page
-      pages.push(1);
-
-      if (currentPage > 3) {
-        pages.push('ellipsis');
-      }
-
-      // Show pages around current
-      const start = Math.max(2, currentPage - 1);
-      const end = Math.min(totalPages - 1, currentPage + 1);
-      for (let i = start; i <= end; i++) pages.push(i);
-
-      if (currentPage < totalPages - 2) {
-        pages.push('ellipsis');
-      }
-
-      // Always show last page
-      pages.push(totalPages);
-    }
-
-    return pages;
-  };
-
-  return (
-    <div className="pagination">
-      <span className="pagination-info">
-        {startItem}–{endItem} of {totalItems}
-      </span>
-      <div className="pagination-controls">
-        <button
-          onClick={() => onPageChange(currentPage - 1)}
-          disabled={currentPage === 1}
-          className="pagination-btn"
-          title="Previous page"
-        >
-          <ChevronLeft size={14} />
-        </button>
-
-        {getPageNumbers().map((page, idx) =>
-          page === 'ellipsis' ? (
-            <span key={`ellipsis-${idx}`} className="pagination-ellipsis">…</span>
-          ) : (
-            <button
-              key={page}
-              onClick={() => onPageChange(page)}
-              className={`pagination-btn ${currentPage === page ? 'active' : ''}`}
-            >
-              {page}
-            </button>
-          )
-        )}
-
-        <button
-          onClick={() => onPageChange(currentPage + 1)}
-          disabled={currentPage === totalPages}
-          className="pagination-btn"
-          title="Next page"
-        >
-          <ChevronRight size={14} />
-        </button>
-      </div>
     </div>
   );
 }
