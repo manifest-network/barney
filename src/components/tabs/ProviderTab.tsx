@@ -1,12 +1,15 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { Link, Building2, Shield, Copy, Check, Clock, Zap, Package, ChevronDown, ChevronUp } from 'lucide-react';
+import { Link, Building2, Shield, Copy, Check, Clock, Zap, Package, ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
 import { LeaseState, getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams, type Lease, type ProviderWithdrawableResponse } from '../../api/billing';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../api/sku';
-import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, type TxResult } from '../../api/tx';
+import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, createLeaseForTenant, type TxResult, type CreateLeaseResult } from '../../api/tx';
 import { DENOM_METADATA, formatPrice } from '../../api/config';
+import { isValidManifestAddress } from '../../utils/address';
+import { useLeaseItems } from '../../hooks/useLeaseItems';
+import { calculateEstimatedCost, isValidLeaseItem } from '../../utils/pricing';
 import { formatDate } from '../../utils/format';
 import type { Coin } from '../../api/bank';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
@@ -31,6 +34,7 @@ export function ProviderTab() {
   const [error, setError] = useState<string | null>(null);
   const [isInBillingAllowedList, setIsInBillingAllowedList] = useState(false);
   const [txLoading, setTxLoading] = useState(false);
+  const [showCreateLeaseForTenant, setShowCreateLeaseForTenant] = useState(false);
   const { selected: selectedPendingLeases, toggle: togglePendingSelection, selectAll: selectAllPendingIds, clear: deselectAllPending } = useBatchSelection();
   const { selected: selectedActiveLeases, toggle: toggleActiveSelection, selectAll: selectAllActiveIds, clear: deselectAllActive } = useBatchSelection();
 
@@ -301,6 +305,56 @@ export function ProviderTab() {
   const selectAllPending = () => selectAllPendingIds(pendingLeases.map((l) => l.uuid));
   const selectAllActive = () => selectAllActiveIds(activeLeases.map((l) => l.uuid));
 
+  const handleCreateLeaseForTenant = async (tenant: string, items: { skuUuid: string; quantity: number }[]) => {
+    if (!address) {
+      toast.error('Wallet not connected. Please connect your wallet.');
+      return;
+    }
+
+    if (!isValidManifestAddress(tenant)) {
+      toast.error('Invalid tenant address format.');
+      return;
+    }
+
+    try {
+      const signer = getOfflineSigner();
+      setTxLoading(true);
+
+      const result: CreateLeaseResult = await createLeaseForTenant(signer, address, tenant, items);
+
+      if (result.success) {
+        const uuidDisplay = result.leaseUuid
+          ? `UUID: ${result.leaseUuid.slice(0, 8)}...`
+          : '';
+        const txDisplay = result.transactionHash
+          ? `Tx: ${result.transactionHash.slice(0, 16)}...`
+          : '';
+        toast.success(`Lease created for tenant! ${uuidDisplay} ${txDisplay}`.trim());
+        setShowCreateLeaseForTenant(false);
+
+        // Refresh data separately so failure doesn't mask successful transaction
+        try {
+          await fetchData();
+        } catch (refreshErr) {
+          if (import.meta.env.DEV) {
+            console.error('[handleCreateLeaseForTenant] Failed to refresh data:', refreshErr);
+          }
+        }
+      } else {
+        toast.error(`Failed: ${result.error}`);
+      }
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.error('[handleCreateLeaseForTenant]', err);
+      }
+      toast.error(`Failed to create lease: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setTxLoading(false);
+    }
+  };
+
+  const activeSKUs = providerSKUs.filter((s) => s.active);
+
   if (!isWalletConnected) {
     return (
       <EmptyState
@@ -354,11 +408,21 @@ export function ProviderTab() {
 
   return (
     <div className="provider-dashboard">
-      {/* Billing Module Admin Badge */}
+      {/* Billing Module Admin Section */}
       {isInBillingAllowedList && (
-        <div className="provider-admin-badge">
-          <Shield size={14} />
-          <span>Billing Module Admin</span>
+        <div className="provider-admin-section">
+          <div className="provider-admin-badge">
+            <Shield size={14} />
+            <span>Billing Module Admin</span>
+          </div>
+          <button
+            onClick={() => setShowCreateLeaseForTenant(true)}
+            disabled={txLoading || activeSKUs.length === 0}
+            className="btn btn-secondary btn-sm"
+          >
+            <Plus size={14} />
+            Create Lease for Tenant
+          </button>
         </div>
       )}
 
@@ -623,6 +687,181 @@ export function ProviderTab() {
             ))
           )}
         </div>
+      </div>
+
+      {/* Create Lease For Tenant Modal */}
+      {showCreateLeaseForTenant && (
+        <CreateLeaseForTenantModal
+          skus={activeSKUs}
+          onClose={() => setShowCreateLeaseForTenant(false)}
+          onSubmit={handleCreateLeaseForTenant}
+          loading={txLoading}
+        />
+      )}
+    </div>
+  );
+}
+
+interface CreateLeaseForTenantModalProps {
+  skus: SKU[];
+  onClose: () => void;
+  onSubmit: (tenant: string, items: { skuUuid: string; quantity: number }[]) => void | Promise<void>;
+  loading: boolean;
+}
+
+/**
+ * Modal for billing module admins to create leases on behalf of tenants.
+ * Note: metaHash parameter is supported by the API but intentionally omitted from
+ * this UI for MVP. Add payload input similar to CreateLeaseModal if needed.
+ */
+function CreateLeaseForTenantModal({ skus, onClose, onSubmit, loading }: CreateLeaseForTenantModalProps) {
+  const toast = useToast();
+  const [tenant, setTenant] = useState('');
+  const { items, addItem, removeItem, updateItem, getItemsForSubmit } = useLeaseItems();
+  const [tenantError, setTenantError] = useState<string | null>(null);
+
+  const handleTenantChange = (value: string) => {
+    setTenant(value);
+    if (value && !isValidManifestAddress(value)) {
+      setTenantError('Invalid address format (expected manifest1...)');
+    } else {
+      setTenantError(null);
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const submitItems = getItemsForSubmit().filter(isValidLeaseItem);
+    if (submitItems.length === 0) {
+      toast.error('Please add at least one valid SKU item.');
+      return;
+    }
+    if (tenant && !tenantError) {
+      onSubmit(tenant, submitItems);
+    }
+  };
+
+  const estimatedCost = calculateEstimatedCost(items, skus);
+  const isFormValid = tenant && !tenantError && items.every(isValidLeaseItem);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="card-static w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="sticky top-0 z-10 flex items-center justify-between p-4 border-b border-surface-700 bg-surface-900/95 backdrop-blur">
+          <h3 className="text-lg font-heading font-semibold">Create Lease for Tenant</h3>
+          <button
+            onClick={onClose}
+            className="text-muted hover:text-primary p-1"
+            disabled={loading}
+            aria-label="Close modal"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          {/* Tenant Address */}
+          <div>
+            <label className="mb-1 block text-sm text-muted">Tenant Address</label>
+            <input
+              type="text"
+              value={tenant}
+              onChange={(e) => handleTenantChange(e.target.value)}
+              placeholder="manifest1..."
+              className="input w-full font-mono"
+              required
+              disabled={loading}
+            />
+            {tenantError && (
+              <p className="mt-1 text-xs text-error">{tenantError}</p>
+            )}
+          </div>
+
+          {/* SKU Items */}
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="text-sm text-muted">SKU Items</label>
+              <button
+                type="button"
+                onClick={addItem}
+                className="text-sm text-primary-400 hover:text-primary-300"
+                disabled={loading}
+              >
+                + Add Item
+              </button>
+            </div>
+            {skus.length === 0 ? (
+              <p className="text-sm text-dim">No active SKUs available</p>
+            ) : (
+              <div className="space-y-2">
+                {items.map((item) => (
+                  <div key={item.id} className="flex gap-2">
+                    <select
+                      value={item.skuUuid}
+                      onChange={(e) => updateItem(item.id, 'skuUuid', e.target.value)}
+                      className="input select flex-1"
+                      required
+                      disabled={loading}
+                    >
+                      <option value="">Select SKU...</option>
+                      {skus.map((sku) => (
+                        <option key={sku.uuid} value={sku.uuid}>
+                          {sku.name} ({formatPrice(sku.base_price.amount, sku.base_price.denom, sku.unit)})
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min="1"
+                      value={item.quantity}
+                      onChange={(e) =>
+                        updateItem(item.id, 'quantity', parseInt(e.target.value, 10) || 1)
+                      }
+                      className="input w-20"
+                      disabled={loading}
+                    />
+                    {items.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeItem(item.id)}
+                        className="px-2 text-error hover:text-error/80"
+                        disabled={loading}
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Estimated Cost */}
+          {estimatedCost && (
+            <div className="rounded-lg bg-surface-800/50 p-3">
+              <div className="text-sm text-muted">Estimated Cost</div>
+              <div className="text-lg font-medium text-success">{estimatedCost}</div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="btn btn-ghost"
+              disabled={loading}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading || !isFormValid}
+              className="btn btn-primary"
+            >
+              {loading ? 'Creating...' : 'Create Lease'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

@@ -4074,6 +4074,14 @@ code.lease-card-mono {
   color: oklch(0.85 0.12 25);
 }
 
+/* Admin section */
+.provider-admin-section {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 /* Admin badge */
 .provider-admin-badge {
   display: flex;

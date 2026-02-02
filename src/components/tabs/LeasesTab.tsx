@@ -10,8 +10,9 @@ import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER, type LeaseFilterState } from
 import { getLeasesByTenant, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
 import { createLease, cancelLease, closeLease, type TxResult, type CreateLeaseResult } from '../../api/tx';
-import { DENOM_METADATA, formatPrice, UNIT_LABELS } from '../../api/config';
-import { Unit } from '../../api/sku';
+import { formatPrice } from '../../api/config';
+import { useLeaseItems } from '../../hooks/useLeaseItems';
+import { calculateEstimatedCost, isValidLeaseItem } from '../../utils/pricing';
 import {
   createSignMessage,
   createAuthToken,
@@ -1083,9 +1084,7 @@ function CreateLeaseModal({
   loading: boolean;
 }) {
   const [selectedProvider, setSelectedProvider] = useState<string>('');
-  const [items, setItems] = useState<{ skuUuid: string; quantity: number }[]>([
-    { skuUuid: '', quantity: 1 },
-  ]);
+  const { items, addItem, removeItem, updateItem, resetItems, getItemsForSubmit } = useLeaseItems();
   const [payloadText, setPayloadText] = useState('');
   const [payloadHash, setPayloadHash] = useState<string | null>(null);
   const [payloadError, setPayloadError] = useState<string | null>(null);
@@ -1158,15 +1157,9 @@ function CreateLeaseModal({
     reader.readAsText(file);
   };
 
-  const addItem = () => setItems([...items, { skuUuid: '', quantity: 1 }]);
-  const removeItem = (idx: number) => setItems(items.filter((_, i) => i !== idx));
-  const updateItem = (idx: number, field: 'skuUuid' | 'quantity', value: string | number) => {
-    setItems(items.map((item, i) => (i === idx ? { ...item, [field]: value } : item)));
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const validItems = items.filter((item) => item.skuUuid && item.quantity > 0);
+    const validItems = getItemsForSubmit().filter(isValidLeaseItem);
     if (validItems.length > 0) {
       if (payloadText && payloadHash && payloadHashBytesRef.current) {
         if (hashedPayloadTextRef.current !== payloadText) {
@@ -1183,39 +1176,19 @@ function CreateLeaseModal({
     }
   };
 
-  const calculateEstimatedCost = () => {
-    let total = 0;
-    let denom = '';
-    let unit: Unit = Unit.UNIT_UNSPECIFIED;
-
-    for (const item of items) {
-      if (item.skuUuid) {
-        const sku = skus.find((s) => s.uuid === item.skuUuid);
-        if (sku) {
-          denom = sku.base_price.denom;
-          unit = sku.unit;
-          const price = parseInt(sku.base_price.amount, 10);
-          total += price * item.quantity;
-        }
-      }
-    }
-
-    if (total === 0) return null;
-
-    const meta = DENOM_METADATA[denom] || { symbol: denom, exponent: 6 };
-    const value = total / Math.pow(10, meta.exponent);
-    const unitLabel = UNIT_LABELS[unit] ?? '';
-    return `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${meta.symbol}${unitLabel}`;
-  };
-
-  const estimatedCost = calculateEstimatedCost();
+  const estimatedCost = calculateEstimatedCost(items, skus);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="card-static w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="sticky top-0 z-10 flex items-center justify-between p-4 border-b border-surface-700 bg-surface-900/95 backdrop-blur">
           <h3 className="text-lg font-heading font-semibold">Create Lease</h3>
-          <button onClick={onClose} className="text-muted hover:text-primary p-1" disabled={loading}>
+          <button
+            onClick={onClose}
+            className="text-muted hover:text-primary p-1"
+            disabled={loading}
+            aria-label="Close modal"
+          >
             <X size={18} />
           </button>
         </div>
@@ -1228,7 +1201,7 @@ function CreateLeaseModal({
               value={selectedProvider}
               onChange={(e) => {
                 setSelectedProvider(e.target.value);
-                setItems([{ skuUuid: '', quantity: 1 }]);
+                resetItems();
               }}
               className="input select w-full"
               required
@@ -1261,11 +1234,11 @@ function CreateLeaseModal({
                 <p className="text-sm text-dim">No active SKUs for this provider</p>
               ) : (
                 <div className="space-y-2">
-                  {items.map((item, idx) => (
-                    <div key={`create-item-${idx}`} className="flex gap-2">
+                  {items.map((item) => (
+                    <div key={item.id} className="flex gap-2">
                       <select
                         value={item.skuUuid}
-                        onChange={(e) => updateItem(idx, 'skuUuid', e.target.value)}
+                        onChange={(e) => updateItem(item.id, 'skuUuid', e.target.value)}
                         className="input select flex-1"
                         required
                         disabled={loading}
@@ -1282,7 +1255,7 @@ function CreateLeaseModal({
                         min="1"
                         value={item.quantity}
                         onChange={(e) =>
-                          updateItem(idx, 'quantity', parseInt(e.target.value, 10) || 1)
+                          updateItem(item.id, 'quantity', parseInt(e.target.value, 10) || 1)
                         }
                         className="input w-20"
                         disabled={loading}
@@ -1290,7 +1263,7 @@ function CreateLeaseModal({
                       {items.length > 1 && (
                         <button
                           type="button"
-                          onClick={() => removeItem(idx)}
+                          onClick={() => removeItem(item.id)}
                           className="px-2 text-error hover:text-error/80"
                           disabled={loading}
                         >

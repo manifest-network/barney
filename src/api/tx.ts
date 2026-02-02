@@ -7,7 +7,7 @@ import { RPC_ENDPOINT } from './config';
 import { Unit } from './sku';
 export { Unit };
 
-const { MsgFundCredit, MsgCreateLease, MsgCancelLease, MsgCloseLease, MsgAcknowledgeLease, MsgRejectLease, MsgWithdraw } = liftedinit.billing.v1;
+const { MsgFundCredit, MsgCreateLease, MsgCreateLeaseForTenant, MsgCancelLease, MsgCloseLease, MsgAcknowledgeLease, MsgRejectLease, MsgWithdraw } = liftedinit.billing.v1;
 const { MsgCreateProvider, MsgUpdateProvider, MsgCreateSKU, MsgUpdateSKU, MsgDeactivateProvider, MsgDeactivateSKU } = liftedinit.sku.v1;
 
 export interface TxResult {
@@ -256,6 +256,51 @@ export interface LeaseItemInput {
   quantity: number;
 }
 
+/**
+ * Maps lease item inputs to the format expected by the blockchain message.
+ */
+function mapLeaseItems(items: LeaseItemInput[]) {
+  return items.map((item) => ({
+    skuUuid: item.skuUuid,
+    quantity: BigInt(item.quantity),
+  }));
+}
+
+/**
+ * Executes a lease creation transaction and extracts the lease UUID from events.
+ */
+async function executeLeaseCreation(
+  signer: OfflineSigner,
+  sender: string,
+  message: { typeUrl: string; value: unknown }
+): Promise<CreateLeaseResult> {
+  const result = await signAndBroadcast(signer, sender, [message]);
+
+  if (!result.success || !result.events) {
+    return result;
+  }
+
+  const leaseUuid = getEventAttribute(result.events, 'lease_created', 'lease_uuid');
+
+  if (!leaseUuid && import.meta.env.DEV) {
+    console.warn('[executeLeaseCreation] Transaction succeeded but lease_uuid not found in events');
+  }
+
+  return {
+    ...result,
+    leaseUuid,
+  };
+}
+
+/**
+ * Create a lease as the tenant.
+ *
+ * @param signer - Offline signer for the tenant
+ * @param tenant - Address of the tenant creating the lease
+ * @param items - Array of SKU items with quantities
+ * @param metaHash - Optional metadata hash
+ * @returns CreateLeaseResult with leaseUuid if successful
+ */
 export async function createLease(
   signer: OfflineSigner,
   tenant: string,
@@ -266,27 +311,43 @@ export async function createLease(
     typeUrl: MsgCreateLease.typeUrl,
     value: MsgCreateLease.fromPartial({
       tenant,
-      items: items.map((item) => ({
-        skuUuid: item.skuUuid,
-        quantity: BigInt(item.quantity),
-      })),
+      items: mapLeaseItems(items),
       metaHash: metaHash ?? new Uint8Array(),
     }),
   };
 
-  const result = await signAndBroadcast(signer, tenant, [msg]);
+  return executeLeaseCreation(signer, tenant, msg);
+}
 
-  if (!result.success || !result.events) {
-    return result;
-  }
-
-  // Extract lease UUID from events
-  const leaseUuid = getEventAttribute(result.events, 'lease_created', 'lease_uuid');
-
-  return {
-    ...result,
-    leaseUuid,
+/**
+ * Create a lease on behalf of a tenant. Only callable by addresses in the
+ * billing module's allowed_list.
+ *
+ * @param signer - Offline signer for the authority
+ * @param authority - Address of the admin creating the lease (must be in allowed_list)
+ * @param tenant - Address of the tenant for whom the lease is created
+ * @param items - Array of SKU items with quantities
+ * @param metaHash - Optional metadata hash
+ * @returns CreateLeaseResult with leaseUuid if successful
+ */
+export async function createLeaseForTenant(
+  signer: OfflineSigner,
+  authority: string,
+  tenant: string,
+  items: LeaseItemInput[],
+  metaHash?: Uint8Array
+): Promise<CreateLeaseResult> {
+  const msg = {
+    typeUrl: MsgCreateLeaseForTenant.typeUrl,
+    value: MsgCreateLeaseForTenant.fromPartial({
+      authority,
+      tenant,
+      items: mapLeaseItems(items),
+      metaHash: metaHash ?? new Uint8Array(),
+    }),
   };
+
+  return executeLeaseCreation(signer, authority, msg);
 }
 
 export async function cancelLease(
