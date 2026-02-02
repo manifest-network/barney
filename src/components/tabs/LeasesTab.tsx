@@ -10,7 +10,7 @@ import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER, type LeaseFilterState } from
 import { getLeasesByTenant, getBillingParams } from '../../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
 import { createLease, cancelLease, closeLease, type TxResult, type CreateLeaseResult } from '../../api/tx';
-import { formatPrice } from '../../api/config';
+import { DENOM_METADATA, formatPrice } from '../../api/config';
 import { useLeaseItems } from '../../hooks/useLeaseItems';
 import { calculateEstimatedCost, isValidLeaseItem } from '../../utils/pricing';
 import {
