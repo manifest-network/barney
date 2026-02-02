@@ -45,3 +45,24 @@ export const LEASE_STATE_COLORS: Record<LeaseState, string> = {
   [LeaseState.LEASE_STATE_EXPIRED]: 'text-muted',
   [LeaseState.UNRECOGNIZED]: 'text-muted',
 };
+
+/**
+ * Filter state type for lease filtering UI.
+ * Used to group lease states into filterable categories.
+ */
+export type LeaseFilterState = 'all' | 'pending' | 'active' | 'closed' | 'rejected';
+
+/**
+ * Maps LeaseState enum values to filter state categories.
+ * Expired leases are grouped with closed for filtering purposes.
+ * TypeScript enforces completeness - adding a new state to manifestjs will cause a compile error.
+ */
+export const LEASE_STATE_TO_FILTER: Record<LeaseState, LeaseFilterState> = {
+  [LeaseState.LEASE_STATE_PENDING]: 'pending',
+  [LeaseState.LEASE_STATE_ACTIVE]: 'active',
+  [LeaseState.LEASE_STATE_CLOSED]: 'closed',
+  [LeaseState.LEASE_STATE_REJECTED]: 'rejected',
+  [LeaseState.LEASE_STATE_EXPIRED]: 'closed', // Group expired with closed
+  [LeaseState.LEASE_STATE_UNSPECIFIED]: 'all',
+  [LeaseState.UNRECOGNIZED]: 'all',
+};

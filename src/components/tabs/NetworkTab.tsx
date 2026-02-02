@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link, ShieldX, Globe } from 'lucide-react';
+import { Link, ShieldX, Globe, Copy, Check, Clock, Zap, Package, Users, ChevronDown, ChevronUp, Wallet } from 'lucide-react';
 import {
   LeaseState,
   leaseStateToString,
@@ -14,19 +14,20 @@ import {
 } from '../../api/billing';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { logError } from '../../utils/errors';
+import { formatAmount, formatDate, formatDuration, formatRelativeTime } from '../../utils/format';
 import { truncateAddress } from '../../utils/address';
-import { formatAmount, formatDate } from '../../utils/format';
-import { LEASE_STATE_BADGE_CLASSES, LEASE_STATE_LABELS, LEASE_STATE_COLORS } from '../../utils/leaseState';
+import { DENOM_METADATA } from '../../api/config';
+import { SECONDS_PER_HOUR } from '../../config/constants';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
 import type { Coin } from '../../api/bank';
-import { useAutoRefresh } from '../../hooks/useAutoRefresh';
-import { AutoRefreshIndicator } from '../ui/AutoRefreshIndicator';
+import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
+import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER } from '../../utils/leaseState';
 import { EmptyState } from '../ui/EmptyState';
-import { SkeletonTable } from '../ui/SkeletonCard';
-import { StatCard } from '../ui/StatCard';
 import { ErrorBanner } from '../ui/ErrorBanner';
+import { SkeletonCard } from '../ui/SkeletonCard';
+import { Pagination } from '../ui/Pagination';
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 10;
 
 interface NetworkTabProps {
   isConnected: boolean;
@@ -172,11 +173,14 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
     }
   }, [fetchReferenceData, viewMode, fetchLeases, fetchCredits]);
 
-  const autoRefresh = useAutoRefresh(fetchCurrentView, {
-    interval: 30000, // 30 seconds for network stats (less critical)
-    enabled: isAdmin,
-    immediate: false, // We'll handle initial load separately
-  });
+  const { registerFetchFn, unregisterFetchFn, refresh } = useAutoRefreshContext();
+
+  useEffect(() => {
+    if (isAdmin) {
+      registerFetchFn(fetchCurrentView);
+    }
+    return () => unregisterFetchFn();
+  }, [isAdmin, fetchCurrentView, registerFetchFn, unregisterFetchFn]);
 
   // Initial data load
   useEffect(() => {
@@ -223,18 +227,11 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
 
   if (!isAdmin) {
     return (
-      <div className="card-static p-8 text-center">
-        <div className="empty-state-icon-wrapper">
-          <ShieldX size={48} className="empty-state-icon" />
-        </div>
-        <h2 className="empty-state-title">Access Denied</h2>
-        <p className="empty-state-description">
-          Your wallet is not in the billing module allowed list.
-        </p>
-        <p className="mt-4 text-sm text-dim">
-          Connected as: <span className="font-mono">{truncateAddress(address || '')}</span>
-        </p>
-      </div>
+      <EmptyState
+        icon={ShieldX}
+        title="Access Denied"
+        description="Your wallet is not in the billing module allowed list."
+      />
     );
   }
 
@@ -248,60 +245,110 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
   );
   const currentCreditPage = Math.floor(creditOffset / PAGE_SIZE) + 1;
 
+  const leases = leasesResponse?.leases || [];
+  const credits = creditsResponse?.credit_accounts || [];
+
   return (
     <div className="space-y-4">
       {/* Admin Badge */}
-      <div className="card-static p-3 border-purple-700 bg-purple-900/20">
-        <div className="flex items-center gap-2">
-          <Globe size={16} className="text-purple-400" />
-          <span className="font-medium text-purple-300">Network Admin Dashboard</span>
+      <div className="catalog-admin-banner" data-role="admin">
+        <div className="catalog-admin-icon">
+          <Globe size={16} />
         </div>
-        <p className="mt-1 text-sm text-purple-400/80">
-          Viewing network-wide billing data
-        </p>
+        <div className="catalog-admin-info">
+          <div className="catalog-admin-title">Network Admin Dashboard</div>
+          <div className="catalog-admin-desc">
+            View all network leases and credit accounts
+          </div>
+        </div>
       </div>
 
-      {/* Network Stats */}
+      {/* Stats Row */}
       {stats && (
-        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          <StatCard value={stats.totalLeases} label="Total Leases" />
-          <StatCard value={stats.pendingLeases} label="Pending" colorClass={LEASE_STATE_COLORS[LeaseState.LEASE_STATE_PENDING]} />
-          <StatCard value={stats.activeLeases} label="Active" colorClass={LEASE_STATE_COLORS[LeaseState.LEASE_STATE_ACTIVE]} />
-          <StatCard value={stats.closedLeases} label="Closed" colorClass={LEASE_STATE_COLORS[LeaseState.LEASE_STATE_CLOSED]} />
-          <StatCard value={stats.totalProviders} label="Providers" colorClass="text-blue-400" />
-          <StatCard value={stats.totalSKUs} label="SKUs" colorClass="text-purple-400" />
+        <div className="network-stats-row">
+          <div className="network-stat" data-type="pending">
+            <div className="network-stat-icon">
+              <Clock size={16} />
+            </div>
+            <div className="network-stat-content">
+              <span className="network-stat-value">{stats.pendingLeases}</span>
+              <span className="network-stat-label">Pending</span>
+            </div>
+          </div>
+          <div className="network-stat" data-type="active">
+            <div className="network-stat-icon">
+              <Zap size={16} />
+            </div>
+            <div className="network-stat-content">
+              <span className="network-stat-value">{stats.activeLeases}</span>
+              <span className="network-stat-label">Active</span>
+            </div>
+          </div>
+          <div className="network-stat" data-type="closed">
+            <div className="network-stat-icon">
+              <Check size={16} />
+            </div>
+            <div className="network-stat-content">
+              <span className="network-stat-value">{stats.closedLeases}</span>
+              <span className="network-stat-label">Closed</span>
+            </div>
+          </div>
+          <div className="network-stat" data-type="providers">
+            <div className="network-stat-icon">
+              <Users size={16} />
+            </div>
+            <div className="network-stat-content">
+              <span className="network-stat-value">{stats.totalProviders}</span>
+              <span className="network-stat-label">Providers</span>
+            </div>
+          </div>
+          <div className="network-stat" data-type="skus">
+            <div className="network-stat-icon">
+              <Package size={16} />
+            </div>
+            <div className="network-stat-content">
+              <span className="network-stat-value">{stats.totalSKUs}</span>
+              <span className="network-stat-label">SKUs</span>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* View Mode Tabs */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-gray-700">
-        <nav className="nav-tabs">
-          <button
-            onClick={() => setViewMode('leases')}
-            className={`nav-tab ${viewMode === 'leases' ? 'active' : ''}`}
-          >
-            All Leases
-          </button>
-          <button
-            onClick={() => setViewMode('credits')}
-            className={`nav-tab ${viewMode === 'credits' ? 'active' : ''}`}
-          >
-            All Credit Accounts
-          </button>
-        </nav>
-        <AutoRefreshIndicator autoRefresh={autoRefresh} intervalSeconds={30} />
-      </div>
-
       {/* Error */}
-      {error && <ErrorBanner error={error} onRetry={autoRefresh.refresh} />}
+      {error && <ErrorBanner error={error} onRetry={refresh} />}
+
+      {/* View Mode Tabs */}
+      <div className="filter-tabs">
+        <button
+          onClick={() => setViewMode('leases')}
+          className={`filter-tab ${viewMode === 'leases' ? 'active' : ''}`}
+          data-state="all"
+          data-has-items={leases.length > 0 ? 'true' : 'false'}
+        >
+          All Leases
+          <span className="filter-tab-count">{leasesResponse?.pagination?.total || 0}</span>
+        </button>
+        <button
+          onClick={() => setViewMode('credits')}
+          className={`filter-tab ${viewMode === 'credits' ? 'active' : ''}`}
+          data-state="active"
+          data-has-items={credits.length > 0 ? 'true' : 'false'}
+        >
+          Credit Accounts
+          <span className="filter-tab-count">{creditsResponse?.pagination?.total || 0}</span>
+        </button>
+      </div>
 
       {/* Leases View */}
       {viewMode === 'leases' && (
-        <div className="card-static p-4">
-          {/* Filters */}
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+        <div className="catalog-section">
+          <div className="catalog-section-header">
+            <div className="catalog-section-title">
+              Network Leases
+              <span className="catalog-section-count">({leasesResponse?.pagination?.total || 0})</span>
+            </div>
             <div className="flex items-center gap-2">
-              <label htmlFor="lease-state-filter" className="text-sm text-muted">Filter:</label>
+              <label htmlFor="lease-state-filter" className="text-sm text-muted">State:</label>
               <select
                 id="lease-state-filter"
                 value={leaseStateFilter === 'all' ? 'all' : leaseStateToString(leaseStateFilter)}
@@ -309,10 +356,9 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
                   const val = e.target.value;
                   setLeaseStateFilter(val === 'all' ? 'all' : leaseStateFromString(val));
                 }}
-                className="input select"
-                aria-label="Filter leases by state"
+                className="input select text-sm py-1.5 px-2"
               >
-                <option value="all">All States</option>
+                <option value="all">All</option>
                 <option value={leaseStateToString(LeaseState.LEASE_STATE_PENDING)}>Pending</option>
                 <option value={leaseStateToString(LeaseState.LEASE_STATE_ACTIVE)}>Active</option>
                 <option value={leaseStateToString(LeaseState.LEASE_STATE_CLOSED)}>Closed</option>
@@ -320,129 +366,87 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
                 <option value={leaseStateToString(LeaseState.LEASE_STATE_EXPIRED)}>Expired</option>
               </select>
             </div>
-            <div className="text-sm text-muted">
-              {leasesResponse?.pagination?.total || 0} total leases
-            </div>
           </div>
 
-          {/* Leases Table */}
-          {loading ? (
-            <SkeletonTable />
-          ) : leasesResponse?.leases?.length === 0 ? (
-            <div className="py-8 text-center text-muted">No leases found</div>
-          ) : (
-            <div className="table-container">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Lease UUID</th>
-                    <th>Tenant</th>
-                    <th>Provider</th>
-                    <th>State</th>
-                    <th>Items</th>
-                    <th>Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {leasesResponse?.leases?.map((lease) => (
-                    <LeaseRow
-                      key={lease.uuid}
-                      lease={lease}
-                      getProvider={getProvider}
-                      getSKU={getSKU}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <div className="space-y-2">
+            {loading ? (
+              <>
+                <SkeletonCard />
+                <SkeletonCard />
+                <SkeletonCard />
+              </>
+            ) : leases.length === 0 ? (
+              <div className="catalog-empty">
+                <span className="catalog-empty-text">No leases found</span>
+              </div>
+            ) : (
+              [...leases]
+                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                .map((lease) => (
+                  <NetworkLeaseCard
+                    key={lease.uuid}
+                    lease={lease}
+                    getProvider={getProvider}
+                    getSKU={getSKU}
+                  />
+                ))
+            )}
+          </div>
 
           {/* Pagination */}
           {totalLeasePages > 1 && (
-            <div className="mt-4 flex items-center justify-between">
-              <button
-                onClick={() => setLeaseOffset(Math.max(0, leaseOffset - PAGE_SIZE))}
-                disabled={leaseOffset === 0}
-                className="btn btn-secondary btn-sm disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Previous
-              </button>
-              <span className="text-sm text-muted">
-                Page {currentLeasePage} of {totalLeasePages}
-              </span>
-              <button
-                onClick={() => setLeaseOffset(leaseOffset + PAGE_SIZE)}
-                disabled={currentLeasePage >= totalLeasePages}
-                className="btn btn-secondary btn-sm disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Next
-              </button>
-            </div>
+            <Pagination
+              currentPage={currentLeasePage}
+              totalPages={totalLeasePages}
+              totalItems={parseInt(leasesResponse?.pagination?.total || '0', 10)}
+              itemsPerPage={PAGE_SIZE}
+              onPageChange={(page) => setLeaseOffset((page - 1) * PAGE_SIZE)}
+            />
           )}
         </div>
       )}
 
       {/* Credits View */}
       {viewMode === 'credits' && (
-        <div className="card-static p-4">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-lg font-heading font-semibold">Credit Accounts</h3>
-            <div className="text-sm text-muted">
-              {creditsResponse?.pagination?.total || 0} total accounts
+        <div className="catalog-section">
+          <div className="catalog-section-header">
+            <div className="catalog-section-title">
+              Credit Accounts
+              <span className="catalog-section-count">({creditsResponse?.pagination?.total || 0})</span>
             </div>
           </div>
 
-          {/* Credits Table */}
-          {loading ? (
-            <SkeletonTable />
-          ) : creditsResponse?.credit_accounts?.length === 0 ? (
-            <div className="py-8 text-center text-muted">No credit accounts found</div>
-          ) : (
-            <div className="table-container">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Tenant</th>
-                    <th>Balance</th>
-                    <th>Active Leases</th>
-                    <th>Pending Leases</th>
-                    <th>Credit Address</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {creditsResponse?.credit_accounts?.map((account) => (
-                    <CreditRow
-                      key={account.tenant}
-                      account={account}
-                      balances={creditsResponse.balances?.[account.tenant] || []}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <div className="space-y-2">
+            {loading ? (
+              <>
+                <SkeletonCard />
+                <SkeletonCard />
+                <SkeletonCard />
+              </>
+            ) : credits.length === 0 ? (
+              <div className="catalog-empty">
+                <span className="catalog-empty-text">No credit accounts found</span>
+              </div>
+            ) : (
+              credits.map((account) => (
+                <NetworkCreditCard
+                  key={account.tenant}
+                  account={account}
+                  balances={creditsResponse?.balances?.[account.tenant] || []}
+                />
+              ))
+            )}
+          </div>
 
           {/* Pagination */}
           {totalCreditPages > 1 && (
-            <div className="mt-4 flex items-center justify-between">
-              <button
-                onClick={() => setCreditOffset(Math.max(0, creditOffset - PAGE_SIZE))}
-                disabled={creditOffset === 0}
-                className="btn btn-secondary btn-sm disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Previous
-              </button>
-              <span className="text-sm text-muted">
-                Page {currentCreditPage} of {totalCreditPages}
-              </span>
-              <button
-                onClick={() => setCreditOffset(creditOffset + PAGE_SIZE)}
-                disabled={currentCreditPage >= totalCreditPages}
-                className="btn btn-secondary btn-sm disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Next
-              </button>
-            </div>
+            <Pagination
+              currentPage={currentCreditPage}
+              totalPages={totalCreditPages}
+              totalItems={parseInt(creditsResponse?.pagination?.total || '0', 10)}
+              itemsPerPage={PAGE_SIZE}
+              onPageChange={(page) => setCreditOffset((page - 1) * PAGE_SIZE)}
+            />
           )}
         </div>
       )}
@@ -450,120 +454,398 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
   );
 }
 
-function LeaseRow({
-  lease,
-  getProvider,
-  getSKU,
-}: {
+/* ============================================
+   NETWORK LEASE CARD
+   ============================================ */
+interface NetworkLeaseCardProps {
   lease: Lease;
   getProvider: (uuid: string) => Provider | undefined;
   getSKU: (uuid: string) => SKU | undefined;
-}) {
-  const { copied, copyToClipboard } = useCopyToClipboard();
-  const provider = getProvider(lease.provider_uuid);
+}
 
-  const handleCopy = () => {
-    copyToClipboard(lease.uuid);
-  };
+function NetworkLeaseCard({ lease, getProvider, getSKU }: NetworkLeaseCardProps) {
+  const { copied, copyToClipboard } = useCopyToClipboard();
+  const [isExpanded, setIsExpanded] = useState(false);
+  const provider = getProvider(lease.provider_uuid);
+  const stateKey = LEASE_STATE_TO_FILTER[lease.state];
+
+  // Calculate cost per hour
+  const costPerHour = (() => {
+    let total = 0;
+    for (const item of lease.items) {
+      const perSecond = parseInt(item.locked_price.amount, 10);
+      total += perSecond * parseInt(item.quantity, 10) * SECONDS_PER_HOUR;
+    }
+    const meta = lease.items[0]?.locked_price.denom
+      ? DENOM_METADATA[lease.items[0].locked_price.denom] || { symbol: 'tokens', exponent: 6 }
+      : { symbol: 'tokens', exponent: 6 };
+    return `${(total / Math.pow(10, meta.exponent)).toFixed(4)} ${meta.symbol}/hr`;
+  })();
 
   return (
-    <tr>
-      <td>
-        <button
-          onClick={handleCopy}
-          className="font-mono text-xs text-gray-300 hover:text-white"
-          title={lease.uuid}
-        >
-          {lease.uuid.slice(0, 8)}...
-          <span className="ml-1 text-gray-600">{copied ? '(copied!)' : ''}</span>
-        </button>
-      </td>
-      <td>
-        <span className="font-mono text-sm text-gray-300" title={lease.tenant}>
-          {truncateAddress(lease.tenant)}
-        </span>
-      </td>
-      <td>
-        <span className="text-sm text-gray-300" title={provider?.address}>
-          {provider ? truncateAddress(provider.address) : lease.provider_uuid.slice(0, 8)}
-        </span>
-      </td>
-      <td>
-        <span className={LEASE_STATE_BADGE_CLASSES[lease.state]}>
+    <div className="lease-card" data-state={stateKey}>
+      {/* Collapsed Row */}
+      <div className="lease-card-row" onClick={() => setIsExpanded(!isExpanded)}>
+        {/* State badge */}
+        <span className="lease-card-state" data-state={stateKey}>
+          <span className="lease-card-state-icon">
+            {stateKey === 'pending' && <Clock size={12} />}
+            {stateKey === 'active' && <Zap size={12} />}
+          </span>
           {LEASE_STATE_LABELS[lease.state]}
         </span>
-      </td>
-      <td>
-        <div className="text-sm text-muted">
-          {lease.items.map((item, idx) => {
-            const sku = getSKU(item.sku_uuid);
-            return (
-              <span key={`${lease.uuid}-${item.sku_uuid}-${idx}`}>
-                {sku?.name || item.sku_uuid.slice(0, 8)} x{item.quantity}
-                {idx < lease.items.length - 1 ? ', ' : ''}
-              </span>
-            );
-          })}
+
+        {/* Content */}
+        <div className="lease-card-content">
+          {/* Identifiers */}
+          <div className="lease-card-identifiers">
+            <span className="lease-card-labeled-field">
+              <span className="lease-card-label">Lease</span>
+              <code className="lease-card-mono">{truncateAddress(lease.uuid, 8, 6)}</code>
+              <button
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.uuid); }}
+                className="lease-card-copy-btn"
+                title="Copy Lease UUID"
+              >
+                {copied ? <Check size={10} /> : <Copy size={10} />}
+              </button>
+            </span>
+
+            <span className="lease-card-labeled-field">
+              <span className="lease-card-label">Tenant</span>
+              <code className="lease-card-mono">{truncateAddress(lease.tenant)}</code>
+              <button
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.tenant); }}
+                className="lease-card-copy-btn"
+                title="Copy Tenant Address"
+              >
+                <Copy size={10} />
+              </button>
+            </span>
+
+            <span className="lease-card-labeled-field">
+              <span className="lease-card-label">Provider</span>
+              <code className="lease-card-mono">{truncateAddress(provider?.address || lease.provider_uuid)}</code>
+              <button
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(provider?.address || lease.provider_uuid); }}
+                className="lease-card-copy-btn"
+                title="Copy Provider Address"
+              >
+                <Copy size={10} />
+              </button>
+            </span>
+          </div>
+
+          {/* Separator */}
+          <div className="lease-card-separator" />
+
+          {/* Metrics */}
+          <div className="lease-card-metrics">
+            <span className="lease-card-cost">{costPerHour}</span>
+            <span className="lease-card-time">
+              <Clock size={11} />
+              {formatRelativeTime(lease.created_at)}
+            </span>
+          </div>
         </div>
-      </td>
-      <td className="text-sm text-dim">{formatDate(lease.created_at, 'date')}</td>
-    </tr>
+
+        {/* Expand toggle */}
+        <button
+          onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+          className={`lease-card-expand ${isExpanded ? 'expanded' : ''}`}
+          title={isExpanded ? 'Collapse' : 'Expand'}
+        >
+          {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+      </div>
+
+      {/* Expanded Content */}
+      {isExpanded && (
+        <div className="lease-card-expanded">
+          {/* Identifiers */}
+          <div className="lease-card-section">
+            <div className="lease-card-section-title">Identifiers</div>
+            <div className="lease-card-kv-list">
+              <div className="lease-card-kv">
+                <span className="lease-card-kv-label">Lease UUID</span>
+                <code className="lease-card-kv-value">{lease.uuid}</code>
+                <button onClick={() => copyToClipboard(lease.uuid)} className="lease-card-copy-btn" title="Copy">
+                  <Copy size={10} />
+                </button>
+              </div>
+              <div className="lease-card-kv">
+                <span className="lease-card-kv-label">Tenant</span>
+                <code className="lease-card-kv-value">{lease.tenant}</code>
+                <button onClick={() => copyToClipboard(lease.tenant)} className="lease-card-copy-btn" title="Copy">
+                  <Copy size={10} />
+                </button>
+              </div>
+              <div className="lease-card-kv">
+                <span className="lease-card-kv-label">Provider UUID</span>
+                <code className="lease-card-kv-value">{lease.provider_uuid}</code>
+                <button onClick={() => copyToClipboard(lease.provider_uuid)} className="lease-card-copy-btn" title="Copy">
+                  <Copy size={10} />
+                </button>
+              </div>
+              {provider?.address && (
+                <div className="lease-card-kv">
+                  <span className="lease-card-kv-label">Provider Address</span>
+                  <code className="lease-card-kv-value">{provider.address}</code>
+                  <button onClick={() => copyToClipboard(provider.address)} className="lease-card-copy-btn" title="Copy">
+                    <Copy size={10} />
+                  </button>
+                </div>
+              )}
+              {lease.meta_hash && (
+                <div className="lease-card-kv">
+                  <span className="lease-card-kv-label">Meta Hash</span>
+                  <code className="lease-card-kv-value">{lease.meta_hash}</code>
+                  <button onClick={() => copyToClipboard(lease.meta_hash!)} className="lease-card-copy-btn" title="Copy">
+                    <Copy size={10} />
+                  </button>
+                </div>
+              )}
+              {lease.min_lease_duration_at_creation && (
+                <div className="lease-card-kv">
+                  <span className="lease-card-kv-label">Min Duration</span>
+                  <span className="lease-card-kv-value">{formatDuration(lease.min_lease_duration_at_creation)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Items */}
+          <div className="lease-card-section">
+            <div className="lease-card-section-title">Items ({lease.items.length})</div>
+            <table className="lease-card-table">
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lease.items.map((item, idx) => {
+                  const sku = getSKU(item.sku_uuid);
+                  const pricePerHour =
+                    (parseInt(item.locked_price.amount, 10) * SECONDS_PER_HOUR) /
+                    Math.pow(10, DENOM_METADATA[item.locked_price.denom]?.exponent || 6);
+                  const symbol = DENOM_METADATA[item.locked_price.denom]?.symbol || item.locked_price.denom;
+                  return (
+                    <tr key={`${lease.uuid}-item-${item.sku_uuid}-${idx}`}>
+                      <td>{sku?.name || item.sku_uuid.slice(0, 12)}</td>
+                      <td>{item.quantity}</td>
+                      <td>{pricePerHour.toFixed(4)} {symbol}/hr</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Timeline */}
+          <div className="lease-card-section">
+            <div className="lease-card-section-title">Timeline</div>
+            <div className="lease-card-timeline">
+              <div className="lease-card-timeline-event">
+                <span className="lease-card-timeline-dot" data-type="created" />
+                <span className="lease-card-timeline-label">Created</span>
+                <span className="lease-card-timeline-date">{formatDate(lease.created_at)}</span>
+              </div>
+              {lease.acknowledged_at && (
+                <div className="lease-card-timeline-event">
+                  <span className="lease-card-timeline-dot" data-type="ack" />
+                  <span className="lease-card-timeline-label">Acknowledged</span>
+                  <span className="lease-card-timeline-date">{formatDate(lease.acknowledged_at)}</span>
+                </div>
+              )}
+              {lease.closed_at && (
+                <div className="lease-card-timeline-event">
+                  <span className="lease-card-timeline-dot" data-type="closed" />
+                  <span className="lease-card-timeline-label">Closed</span>
+                  <span className="lease-card-timeline-date">{formatDate(lease.closed_at)}</span>
+                  {lease.closure_reason && (
+                    <span className="lease-card-timeline-reason">{lease.closure_reason}</span>
+                  )}
+                </div>
+              )}
+              {lease.rejected_at && (
+                <div className="lease-card-timeline-event">
+                  <span className="lease-card-timeline-dot" data-type="rejected" />
+                  <span className="lease-card-timeline-label">Rejected</span>
+                  <span className="lease-card-timeline-date">{formatDate(lease.rejected_at)}</span>
+                  {lease.rejection_reason && (
+                    <span className="lease-card-timeline-reason">{lease.rejection_reason}</span>
+                  )}
+                </div>
+              )}
+              {lease.expired_at && (
+                <div className="lease-card-timeline-event">
+                  <span className="lease-card-timeline-dot" data-type="expired" />
+                  <span className="lease-card-timeline-label">Expired</span>
+                  <span className="lease-card-timeline-date">{formatDate(lease.expired_at)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
-function CreditRow({
-  account,
-  balances,
-}: {
+/* ============================================
+   NETWORK CREDIT CARD
+   ============================================ */
+interface NetworkCreditCardProps {
   account: CreditAccount;
   balances: Coin[];
-}) {
-  const { copied, copyToClipboard } = useCopyToClipboard();
+}
 
-  const handleCopy = () => {
-    copyToClipboard(account.tenant);
-  };
+function NetworkCreditCard({ account, balances }: NetworkCreditCardProps) {
+  const { copied, copyToClipboard } = useCopyToClipboard();
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  // Determine status based on balance
+  const hasBalance = balances.some((b) => parseInt(b.amount, 10) > 0);
+  const statusKey = hasBalance ? 'active' : 'pending';
 
   return (
-    <tr>
-      <td>
-        <button
-          onClick={handleCopy}
-          className="font-mono text-sm text-gray-300 hover:text-white"
-          title={account.tenant}
-        >
-          {truncateAddress(account.tenant)}
-          <span className="ml-1 text-gray-600">{copied ? '(copied!)' : ''}</span>
-        </button>
-      </td>
-      <td>
-        {balances.length === 0 ? (
-          <span className="text-dim">0</span>
-        ) : (
-          <div className="text-sm">
-            {balances.map((coin) => (
-              <div key={coin.denom} className="text-green-400">
-                {formatAmount(coin.amount, coin.denom)}
-              </div>
-            ))}
+    <div className="lease-card" data-state={statusKey}>
+      {/* Collapsed Row */}
+      <div className="lease-card-row" onClick={() => setIsExpanded(!isExpanded)}>
+        {/* Status badge */}
+        <span className="lease-card-state" data-state={statusKey}>
+          <span className="lease-card-state-icon">
+            <Wallet size={12} />
+          </span>
+          Credit
+        </span>
+
+        {/* Content */}
+        <div className="lease-card-content">
+          {/* Identifiers */}
+          <div className="lease-card-identifiers">
+            <span className="lease-card-labeled-field">
+              <span className="lease-card-label">Tenant</span>
+              <code className="lease-card-mono">{truncateAddress(account.tenant)}</code>
+              <button
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(account.tenant); }}
+                className="lease-card-copy-btn"
+                title="Copy Tenant Address"
+              >
+                {copied ? <Check size={10} /> : <Copy size={10} />}
+              </button>
+            </span>
+
+            <span className="lease-card-labeled-field">
+              <span className="lease-card-label">Credit Address</span>
+              <code className="lease-card-mono">{truncateAddress(account.credit_address)}</code>
+              <button
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(account.credit_address); }}
+                className="lease-card-copy-btn"
+                title="Copy Credit Address"
+              >
+                <Copy size={10} />
+              </button>
+            </span>
           </div>
-        )}
-      </td>
-      <td>
-        <span className={`text-sm ${account.active_lease_count > 0 ? 'text-green-400' : 'text-dim'}`}>
-          {account.active_lease_count}
-        </span>
-      </td>
-      <td>
-        <span className={`text-sm ${account.pending_lease_count > 0 ? 'text-yellow-400' : 'text-dim'}`}>
-          {account.pending_lease_count}
-        </span>
-      </td>
-      <td>
-        <span className="font-mono text-xs text-dim" title={account.credit_address}>
-          {truncateAddress(account.credit_address)}
-        </span>
-      </td>
-    </tr>
+
+          {/* Separator */}
+          <div className="lease-card-separator" />
+
+          {/* Metrics */}
+          <div className="lease-card-metrics">
+            <span className="lease-card-cost">
+              {balances.length > 0
+                ? balances.map((c) => formatAmount(c.amount, c.denom)).join(', ')
+                : '0 PWR'}
+            </span>
+            <span className="lease-card-time">
+              <Zap size={11} />
+              {account.active_lease_count} active
+            </span>
+            <span className="lease-card-time">
+              <Clock size={11} />
+              {account.pending_lease_count} pending
+            </span>
+          </div>
+        </div>
+
+        {/* Expand toggle */}
+        <button
+          onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+          className={`lease-card-expand ${isExpanded ? 'expanded' : ''}`}
+          title={isExpanded ? 'Collapse' : 'Expand'}
+        >
+          {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+      </div>
+
+      {/* Expanded Content */}
+      {isExpanded && (
+        <div className="lease-card-expanded">
+          {/* Addresses */}
+          <div className="lease-card-section">
+            <div className="lease-card-section-title">Addresses</div>
+            <div className="lease-card-kv-list">
+              <div className="lease-card-kv">
+                <span className="lease-card-kv-label">Tenant Address</span>
+                <code className="lease-card-kv-value">{account.tenant}</code>
+                <button onClick={() => copyToClipboard(account.tenant)} className="lease-card-copy-btn" title="Copy">
+                  {copied ? <Check size={10} /> : <Copy size={10} />}
+                </button>
+              </div>
+              <div className="lease-card-kv">
+                <span className="lease-card-kv-label">Credit Address</span>
+                <code className="lease-card-kv-value">{account.credit_address}</code>
+                <button onClick={() => copyToClipboard(account.credit_address)} className="lease-card-copy-btn" title="Copy">
+                  <Copy size={10} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Balances */}
+          {balances.length > 0 && (
+            <div className="lease-card-section">
+              <div className="lease-card-section-title">Balances</div>
+              <table className="lease-card-table">
+                <thead>
+                  <tr>
+                    <th>Denom</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {balances.map((coin) => (
+                    <tr key={coin.denom}>
+                      <td>{DENOM_METADATA[coin.denom]?.symbol || coin.denom}</td>
+                      <td>{formatAmount(coin.amount, coin.denom)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Lease Stats */}
+          <div className="lease-card-section">
+            <div className="lease-card-section-title">Lease Stats</div>
+            <div className="lease-card-kv-list">
+              <div className="lease-card-kv">
+                <span className="lease-card-kv-label">Active Leases</span>
+                <span className="lease-card-kv-value">{account.active_lease_count}</span>
+              </div>
+              <div className="lease-card-kv">
+                <span className="lease-card-kv-label">Pending Leases</span>
+                <span className="lease-card-kv-value">{account.pending_lease_count}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

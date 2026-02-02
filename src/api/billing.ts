@@ -305,6 +305,7 @@ export async function getAllLeases(params?: GetAllLeasesParams): Promise<Paginat
   }
   if (params?.limit) {
     searchParams.set('pagination.limit', String(params.limit));
+    searchParams.set('pagination.count_total', 'true');
   }
   if (params?.offset) {
     searchParams.set('pagination.offset', String(params.offset));
@@ -352,6 +353,7 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
 
   if (params?.limit) {
     searchParams.set('pagination.limit', String(params.limit));
+    searchParams.set('pagination.count_total', 'true');
   }
   if (params?.offset) {
     searchParams.set('pagination.offset', String(params.offset));

@@ -23,8 +23,11 @@ export const MS_PER_SECOND = 1000;
 // Polling/Refresh Intervals (in milliseconds)
 // ============================================
 
-/** Default auto-refresh interval for data polling */
-export const DEFAULT_REFRESH_INTERVAL_MS = 5000;
+/** Auto-refresh interval for data polling (milliseconds) */
+export const AUTO_REFRESH_INTERVAL_MS = 10000;
+
+/** Auto-refresh interval for data polling (seconds) - for display purposes */
+export const AUTO_REFRESH_INTERVAL_SECONDS = AUTO_REFRESH_INTERVAL_MS / MS_PER_SECOND;
 
 /** Health check timeout */
 export const HEALTH_CHECK_TIMEOUT_MS = 5000;
