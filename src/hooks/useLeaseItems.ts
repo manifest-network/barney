@@ -6,12 +6,9 @@ export interface LeaseItemWithId extends LeaseItemInput {
   id: string;
 }
 
-/** Module-level counter for generating unique item IDs. */
-let idCounter = 0;
-
 function createItem(): LeaseItemWithId {
   return {
-    id: `item-${idCounter++}`,
+    id: crypto.randomUUID(),
     skuUuid: '',
     quantity: 1,
   };

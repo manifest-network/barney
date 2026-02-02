@@ -1159,20 +1159,19 @@ function CreateLeaseModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const validItems = getItemsForSubmit().filter(isValidLeaseItem);
-    if (validItems.length > 0) {
-      if (payloadText && payloadHash && payloadHashBytesRef.current) {
-        if (hashedPayloadTextRef.current !== payloadText) {
-          const hash = await sha256(payloadText);
-          payloadHashBytesRef.current = hash;
-          hashedPayloadTextRef.current = payloadText;
-        }
-
-        const payloadBytes = new TextEncoder().encode(hashedPayloadTextRef.current!);
-        onSubmit(validItems, payloadBytes, payloadHashBytesRef.current, selectedProvider);
-      } else {
-        onSubmit(validItems);
+    // Button is disabled until all items are valid, so no filtering needed
+    const submitItems = getItemsForSubmit();
+    if (payloadText && payloadHash && payloadHashBytesRef.current) {
+      if (hashedPayloadTextRef.current !== payloadText) {
+        const hash = await sha256(payloadText);
+        payloadHashBytesRef.current = hash;
+        hashedPayloadTextRef.current = payloadText;
       }
+
+      const payloadBytes = new TextEncoder().encode(hashedPayloadTextRef.current!);
+      onSubmit(submitItems, payloadBytes, payloadHashBytesRef.current, selectedProvider);
+    } else {
+      onSubmit(submitItems);
     }
   };
 
@@ -1333,7 +1332,7 @@ function CreateLeaseModal({
             </button>
             <button
               type="submit"
-              disabled={loading || !selectedProvider || items.some((i) => !i.skuUuid) || !!payloadError}
+              disabled={loading || !selectedProvider || !items.every(isValidLeaseItem) || !!payloadError}
               className="btn btn-primary"
             >
               {loading ? 'Creating...' : 'Create Lease'}

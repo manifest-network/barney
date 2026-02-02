@@ -715,7 +715,6 @@ interface CreateLeaseForTenantModalProps {
  * this UI for MVP. Add payload input similar to CreateLeaseModal if needed.
  */
 function CreateLeaseForTenantModal({ skus, onClose, onSubmit, loading }: CreateLeaseForTenantModalProps) {
-  const toast = useToast();
   const [tenant, setTenant] = useState('');
   const { items, addItem, removeItem, updateItem, getItemsForSubmit } = useLeaseItems();
   const [tenantError, setTenantError] = useState<string | null>(null);
@@ -731,13 +730,9 @@ function CreateLeaseForTenantModal({ skus, onClose, onSubmit, loading }: CreateL
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const submitItems = getItemsForSubmit().filter(isValidLeaseItem);
-    if (submitItems.length === 0) {
-      toast.error('Please add at least one valid SKU item.');
-      return;
-    }
+    // isFormValid ensures all items are valid before button is enabled
     if (tenant && !tenantError) {
-      onSubmit(tenant, submitItems);
+      onSubmit(tenant, getItemsForSubmit());
     }
   };
 

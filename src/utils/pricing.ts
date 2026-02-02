@@ -35,10 +35,7 @@ export function calculateEstimatedCost(
       if (sku) {
         denom = sku.base_price.denom;
         unit = sku.unit;
-        const price = Number(sku.base_price.amount);
-        if (!Number.isSafeInteger(price) && import.meta.env.DEV) {
-          console.warn(`[calculateEstimatedCost] Price exceeds safe integer range: ${sku.base_price.amount}`);
-        }
+        const price = parseInt(sku.base_price.amount, 10);
         total += price * item.quantity;
       }
     }
