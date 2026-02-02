@@ -390,8 +390,10 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
           const balanceData = await balanceResponse.json();
           return { key: account.credit_address, balances: balanceData.balances ?? [] };
         }
-      } catch {
-        // Ignore balance fetch errors
+      } catch (err) {
+        if (import.meta.env.DEV) {
+          console.warn('[getAllCredits] Balance fetch failed:', err);
+        }
       }
       return { key: account.credit_address, balances: [] };
     });

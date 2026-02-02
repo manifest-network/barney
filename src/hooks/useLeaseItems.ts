@@ -38,9 +38,11 @@ export function useLeaseItems() {
     setItems([createItem()]);
   }, []);
 
-  /** Get items without IDs for API submission. */
+  /** Get valid items without IDs for API submission. Filters out incomplete entries. */
   const getItemsForSubmit = useCallback((): LeaseItemInput[] => {
-    return items.map(({ skuUuid, quantity }) => ({ skuUuid, quantity }));
+    return items
+      .filter((item) => item.skuUuid && item.quantity > 0)
+      .map(({ skuUuid, quantity }) => ({ skuUuid, quantity }));
   }, [items]);
 
   return { items, addItem, removeItem, updateItem, resetItems, getItemsForSubmit };
