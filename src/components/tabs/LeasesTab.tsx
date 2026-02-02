@@ -613,17 +613,6 @@ function CopyButton({
    ============================================ */
 
 /**
- * Formats a port mapping for display.
- * Shows "host_ip:host_port" or just "host_port" if host_ip is 0.0.0.0
- */
-function formatPortBinding(mapping: PortMapping): string {
-  if (mapping.host_ip === '0.0.0.0' || !mapping.host_ip) {
-    return String(mapping.host_port);
-  }
-  return `${mapping.host_ip}:${mapping.host_port}`;
-}
-
-/**
  * Renders connection info in a structured, user-friendly format.
  * Displays host, ports, protocol, and metadata from the provider API response.
  */
@@ -638,28 +627,7 @@ function ConnectionInfoPanel({
   isCopied: (text: string) => boolean;
   onClose: () => void;
 }) {
-  const connection = info.connection;
-
-  // Handle case where connection might not be present
-  if (!connection) {
-    return (
-      <div className="lease-info-panel">
-        <div className="lease-info-header">
-          <span className="lease-info-title">
-            <Wifi size={12} />
-            Connection Info
-          </span>
-          <button onClick={onClose} className="lease-info-close" title="Dismiss">
-            <X size={14} />
-          </button>
-        </div>
-        <div className="lease-info-content">
-          <span className="lease-info-empty">No connection details available</span>
-        </div>
-      </div>
-    );
-  }
-
+  const { connection } = info;
   const hasPort = connection.ports && Object.keys(connection.ports).length > 0;
   const hasMetadata = connection.metadata && Object.keys(connection.metadata).length > 0;
 
@@ -714,7 +682,7 @@ function ConnectionInfoPanel({
                     <span className="lease-info-port-container">{containerPort}</span>
                     <span className="lease-info-port-arrow">→</span>
                     <span className="lease-info-string-container">
-                      <code className="lease-info-value">{formatPortBinding(mapping)}</code>
+                      <code className="lease-info-value">{hostPort}</code>
                       <CopyButton value={hostPort} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy host:port" />
                     </span>
                   </div>

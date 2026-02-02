@@ -716,15 +716,26 @@ interface CreateLeaseForTenantModalProps {
  */
 function CreateLeaseForTenantModal({ skus, onClose, onSubmit, loading }: CreateLeaseForTenantModalProps) {
   const [tenant, setTenant] = useState('');
+  const [tenantTouched, setTenantTouched] = useState(false);
   const { items, addItem, removeItem, updateItem, getItemsForSubmit } = useLeaseItems();
   const [tenantError, setTenantError] = useState<string | null>(null);
 
   const handleTenantChange = (value: string) => {
     setTenant(value);
-    if (value && !isValidManifestAddress(value)) {
+    setTenantTouched(true);
+    if (!value) {
+      setTenantError('Tenant address is required');
+    } else if (!isValidManifestAddress(value)) {
       setTenantError('Invalid address format (expected manifest1...)');
     } else {
       setTenantError(null);
+    }
+  };
+
+  const handleTenantBlur = () => {
+    setTenantTouched(true);
+    if (!tenant) {
+      setTenantError('Tenant address is required');
     }
   };
 
@@ -762,12 +773,13 @@ function CreateLeaseForTenantModal({ skus, onClose, onSubmit, loading }: CreateL
               type="text"
               value={tenant}
               onChange={(e) => handleTenantChange(e.target.value)}
+              onBlur={handleTenantBlur}
               placeholder="manifest1..."
               className="input w-full font-mono"
               required
               disabled={loading}
             />
-            {tenantError && (
+            {tenantTouched && tenantError && (
               <p className="mt-1 text-xs text-error">{tenantError}</p>
             )}
           </div>

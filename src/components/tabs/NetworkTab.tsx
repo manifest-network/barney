@@ -189,16 +189,19 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
     }
   }, [isAdmin, fetchReferenceData]);
 
-  // Fetch data when view mode or filters change
+  // Fetch leases when admin or lease filters/pagination change
   useEffect(() => {
     if (isAdmin) {
-      if (viewMode === 'leases') {
-        fetchLeases(true);
-      } else {
-        fetchCredits(true);
-      }
+      fetchLeases(viewMode === 'leases');
     }
-  }, [isAdmin, viewMode, fetchLeases, fetchCredits]);
+  }, [isAdmin, fetchLeases, viewMode]);
+
+  // Fetch credits when admin or credit pagination changes
+  useEffect(() => {
+    if (isAdmin) {
+      fetchCredits(viewMode === 'credits');
+    }
+  }, [isAdmin, fetchCredits, viewMode]);
 
   // Reset offsets when view mode changes
   useEffect(() => {
@@ -432,7 +435,7 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
                 <NetworkCreditCard
                   key={account.tenant}
                   account={account}
-                  balances={creditsResponse?.balances?.[account.tenant] || []}
+                  balances={creditsResponse?.balances?.[account.credit_address] || []}
                 />
               ))
             )}

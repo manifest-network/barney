@@ -374,5 +374,37 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
     throw new Error(`Failed to fetch all credits: ${response.statusText}`);
   }
 
-  return response.json();
+  const data = await response.json();
+  const creditAccounts: CreditAccount[] = data.credit_accounts ?? [];
+
+  // The bulk API doesn't return balances, fetch them from the bank module
+  const balances: Record<string, Coin[]> = {};
+
+  if (creditAccounts.length > 0) {
+    const balancePromises = creditAccounts.map(async (account) => {
+      try {
+        const balanceResponse = await fetch(
+          `${REST_URL}/cosmos/bank/v1beta1/balances/${account.credit_address}`
+        );
+        if (balanceResponse.ok) {
+          const balanceData = await balanceResponse.json();
+          return { key: account.credit_address, balances: balanceData.balances ?? [] };
+        }
+      } catch {
+        // Ignore balance fetch errors
+      }
+      return { key: account.credit_address, balances: [] };
+    });
+
+    const results = await Promise.all(balancePromises);
+    for (const result of results) {
+      balances[result.key] = result.balances;
+    }
+  }
+
+  return {
+    credit_accounts: creditAccounts,
+    balances,
+    pagination: data.pagination,
+  };
 }
