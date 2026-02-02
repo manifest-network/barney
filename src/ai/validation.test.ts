@@ -5,13 +5,14 @@ import {
   validateChatHistory,
   sanitizeToolArgs,
   validateUserInput,
+  isPrivateHost,
   MAX_INPUT_LENGTH,
 } from './validation';
 
 describe('validateEndpointUrl', () => {
-  it('accepts valid http URLs', () => {
-    expect(validateEndpointUrl('http://localhost:11434')).toBe('http://localhost:11434');
+  it('accepts valid public http URLs', () => {
     expect(validateEndpointUrl('http://example.com')).toBe('http://example.com');
+    expect(validateEndpointUrl('http://ollama.example.com:11434')).toBe('http://ollama.example.com:11434');
   });
 
   it('accepts valid https URLs', () => {
@@ -38,7 +39,95 @@ describe('validateEndpointUrl', () => {
   });
 
   it('strips paths and returns origin', () => {
-    expect(validateEndpointUrl('http://localhost:11434/api/generate')).toBe('http://localhost:11434');
+    expect(validateEndpointUrl('https://api.example.com/api/generate')).toBe('https://api.example.com');
+  });
+
+  // Note: In development mode (import.meta.env.DEV === true), private hosts are allowed
+  // The isPrivateHost function is tested separately below
+});
+
+describe('isPrivateHost (SSRF protection via ipaddr.js)', () => {
+  it('identifies localhost as private', () => {
+    expect(isPrivateHost('localhost')).toBe(true);
+    expect(isPrivateHost('LOCALHOST')).toBe(true);
+    expect(isPrivateHost('localhost.localdomain')).toBe(true);
+  });
+
+  it('identifies IPv6 localhost as private', () => {
+    expect(isPrivateHost('::1')).toBe(true);
+    expect(isPrivateHost('[::1]')).toBe(true);
+  });
+
+  it('identifies cloud metadata endpoint as private (link-local)', () => {
+    // 169.254.169.254 is the AWS/GCP/Azure metadata endpoint
+    expect(isPrivateHost('169.254.169.254')).toBe(true);
+    expect(isPrivateHost('169.254.0.1')).toBe(true);
+  });
+
+  it('identifies 10.x.x.x private range', () => {
+    expect(isPrivateHost('10.0.0.1')).toBe(true);
+    expect(isPrivateHost('10.255.255.255')).toBe(true);
+  });
+
+  it('identifies 172.16-31.x.x private range', () => {
+    expect(isPrivateHost('172.16.0.1')).toBe(true);
+    expect(isPrivateHost('172.31.255.255')).toBe(true);
+    // 172.15.x.x and 172.32.x.x are NOT private
+    expect(isPrivateHost('172.15.0.1')).toBe(false);
+    expect(isPrivateHost('172.32.0.1')).toBe(false);
+  });
+
+  it('identifies 192.168.x.x private range', () => {
+    expect(isPrivateHost('192.168.1.1')).toBe(true);
+    expect(isPrivateHost('192.168.0.100')).toBe(true);
+  });
+
+  it('identifies loopback addresses', () => {
+    expect(isPrivateHost('127.0.0.1')).toBe(true);
+    expect(isPrivateHost('127.0.0.2')).toBe(true);
+    expect(isPrivateHost('127.255.255.255')).toBe(true);
+  });
+
+  it('identifies internal domain patterns', () => {
+    expect(isPrivateHost('server.local')).toBe(true);
+    expect(isPrivateHost('app.internal')).toBe(true);
+    expect(isPrivateHost('host.localdomain')).toBe(true);
+  });
+
+  it('allows public IP addresses', () => {
+    expect(isPrivateHost('8.8.8.8')).toBe(false); // Google DNS
+    expect(isPrivateHost('1.1.1.1')).toBe(false); // Cloudflare DNS
+    expect(isPrivateHost('93.184.216.34')).toBe(false); // example.com
+  });
+
+  it('allows public domain names', () => {
+    expect(isPrivateHost('example.com')).toBe(false);
+    expect(isPrivateHost('api.ollama.com')).toBe(false);
+    expect(isPrivateHost('ollama.example.org')).toBe(false);
+  });
+
+  it('blocks multicast and reserved ranges', () => {
+    expect(isPrivateHost('224.0.0.1')).toBe(true); // Multicast
+    expect(isPrivateHost('240.0.0.1')).toBe(true); // Reserved
+    expect(isPrivateHost('0.0.0.0')).toBe(true); // Unspecified
+  });
+
+  // ipaddr.js handles unusual IP formats that could bypass naive validation
+  it('handles octal IP notation (SSRF bypass prevention)', () => {
+    // 0177.0.0.1 is octal for 127.0.0.1
+    expect(isPrivateHost('0177.0.0.1')).toBe(true);
+  });
+
+  it('handles IPv6 private ranges', () => {
+    expect(isPrivateHost('fc00::1')).toBe(true); // Unique local
+    expect(isPrivateHost('fe80::1')).toBe(true); // Link-local
+    expect(isPrivateHost('ff02::1')).toBe(true); // Multicast
+  });
+
+  it('allows non-IP hostnames (DNS resolution happens later)', () => {
+    // Invalid IPs that aren't valid hostnames are allowed through
+    // (they'll fail at DNS resolution)
+    expect(isPrivateHost('not-an-ip')).toBe(false);
   });
 });
 
@@ -51,15 +140,15 @@ describe('validateSettings', () => {
     expect(defaults.enableThinking).toBe(false);
   });
 
-  it('validates valid settings', () => {
+  it('validates valid settings with public URL', () => {
     const input = {
-      ollamaEndpoint: 'http://custom:8080',
+      ollamaEndpoint: 'https://ollama.example.com:8080',
       model: 'llama3.1',
       saveHistory: false,
       enableThinking: true,
     };
     const result = validateSettings(input);
-    expect(result.ollamaEndpoint).toBe('http://custom:8080');
+    expect(result.ollamaEndpoint).toBe('https://ollama.example.com:8080');
     expect(result.model).toBe('llama3.1');
     expect(result.saveHistory).toBe(false);
     expect(result.enableThinking).toBe(true);
@@ -84,6 +173,9 @@ describe('validateSettings', () => {
     const result = validateSettings(input);
     expect(result.model).toBe('llama3.2'); // defaults
   });
+
+  // Note: SSRF protection for validateSettings is tested via isPrivateHost.
+  // In dev mode, private IPs are allowed to enable local Ollama usage.
 });
 
 describe('validateChatHistory', () => {

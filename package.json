@@ -40,11 +40,12 @@
     "@cosmos-kit/react": "2.22.3",
     "@cosmos-kit/web3auth": "npm:@manifest-network/web3auth@2.16.6-ll.1",
     "@interchain-ui/react": "1.26.2",
+    "@manifest-network/manifest-mcp-browser": "0.1.13",
     "@manifest-network/manifestjs": "2.2.0-billing-v2.2",
     "axios": "1.13.2",
     "chain-registry": "2.0.140",
+    "ipaddr.js": "^2.3.0",
     "lucide-react": "^0.563.0",
-    "@manifest-network/manifest-mcp-browser": "0.1.13",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },
