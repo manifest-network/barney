@@ -82,3 +82,12 @@ export const AI_MESSAGE_DEBOUNCE_MS = 300;
 
 /** Ollama connection health check interval (milliseconds) */
 export const AI_HEALTH_CHECK_INTERVAL_MS = 30000;
+
+/** Timeout for pending confirmations before auto-cancel (milliseconds) - 5 minutes */
+export const AI_CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Cache TTL for query tool results (milliseconds) - 10 seconds */
+export const AI_TOOL_CACHE_TTL_MS = 10000;
+
+/** Maximum number of entries in the tool result cache */
+export const AI_TOOL_CACHE_MAX_SIZE = 50;

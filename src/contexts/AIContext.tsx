@@ -30,6 +30,9 @@ import {
   AI_STREAM_TIMEOUT_MS,
   AI_MESSAGE_DEBOUNCE_MS,
   AI_HEALTH_CHECK_INTERVAL_MS,
+  AI_CONFIRMATION_TIMEOUT_MS,
+  AI_TOOL_CACHE_TTL_MS,
+  AI_TOOL_CACHE_MAX_SIZE,
 } from '../config/constants';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 
@@ -203,6 +206,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
   const lastMessageTimeRef = useRef<number>(0);
   // Ref to track current messages for synchronous access in async operations
   const messagesRef = useRef<ChatMessage[]>([]);
+  // Cache for query tool results to reduce redundant API calls
+  const toolCacheRef = useRef<Map<string, { result: ToolResult; timestamp: number }>>(new Map());
 
   // Load settings and history from localStorage with validation
   useEffect(() => {
@@ -369,6 +374,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
     messagesRef.current = [];
     setMessages([]);
     localStorage.removeItem(STORAGE_KEY_HISTORY);
+    // Clear tool cache when history is cleared
+    toolCacheRef.current.clear();
   }, []);
 
   // Generate a unique message ID
@@ -496,7 +503,31 @@ export function AIProvider({ children }: { children: ReactNode }) {
     return [systemMessage, ...conversationMessages];
   }, []);
 
-  // Handle tool execution with validation
+  // Generate cache key for tool calls
+  const getToolCacheKey = useCallback((toolName: string, args: Record<string, unknown>): string => {
+    // Sort keys for consistent cache key regardless of arg order
+    const sortedArgs = Object.keys(args).sort().reduce((acc, key) => {
+      acc[key] = args[key];
+      return acc;
+    }, {} as Record<string, unknown>);
+    return `${toolName}:${JSON.stringify(sortedArgs)}`;
+  }, []);
+
+  // Check if cached result is still valid
+  const getCachedToolResult = useCallback((cacheKey: string): ToolResult | null => {
+    const cached = toolCacheRef.current.get(cacheKey);
+    if (!cached) return null;
+
+    const isExpired = Date.now() - cached.timestamp > AI_TOOL_CACHE_TTL_MS;
+    if (isExpired) {
+      toolCacheRef.current.delete(cacheKey);
+      return null;
+    }
+
+    return cached.result;
+  }, []);
+
+  // Handle tool execution with validation and caching
   const handleToolCall = useCallback(
     async (toolCall: OllamaToolCall): Promise<ToolResult> => {
       // Validate tool name
@@ -510,14 +541,37 @@ export function AIProvider({ children }: { children: ReactNode }) {
       // Sanitize arguments
       const sanitizedArgs = sanitizeToolArgs(toolCall.function.arguments);
 
+      // Check cache for query tools (only query tools are cacheable)
+      const cacheKey = getToolCacheKey(toolCall.function.name, sanitizedArgs);
+      const cachedResult = getCachedToolResult(cacheKey);
+      if (cachedResult) {
+        return cachedResult;
+      }
+
       const result = await executeTool(toolCall.function.name, sanitizedArgs, {
         clientManager: clientManagerRef.current,
         address: addressRef.current,
       });
 
+      // Cache successful query results (not confirmations or failures)
+      // Transaction tools return requiresConfirmation=true, so they won't be cached
+      if (result.success && !result.requiresConfirmation) {
+        // Evict oldest entries if cache is full
+        if (toolCacheRef.current.size >= AI_TOOL_CACHE_MAX_SIZE) {
+          const entries = Array.from(toolCacheRef.current.entries());
+          entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+          // Remove oldest 10% of entries
+          const toRemove = Math.max(1, Math.floor(AI_TOOL_CACHE_MAX_SIZE * 0.1));
+          for (let i = 0; i < toRemove; i++) {
+            toolCacheRef.current.delete(entries[i][0]);
+          }
+        }
+        toolCacheRef.current.set(cacheKey, { result, timestamp: Date.now() });
+      }
+
       return result;
     },
-    []
+    [getToolCacheKey, getCachedToolResult]
   );
 
   // Execute a single tool call and update UI
@@ -878,6 +932,32 @@ export function AIProvider({ children }: { children: ReactNode }) {
       messagesRef.current = updated;
       return updated;
     });
+  }, [pendingConfirmation]);
+
+  // Auto-cancel pending confirmations after timeout to prevent indefinite waiting
+  useEffect(() => {
+    if (!pendingConfirmation) return;
+
+    const timeoutId = setTimeout(() => {
+      const { messageId } = pendingConfirmation;
+      setPendingConfirmation(null);
+      pendingPayloadRef.current = null;
+      setPendingPayload(null);
+
+      setMessages((prev) => {
+        const updated = prev.map((m) =>
+          m.id === messageId
+            ? { ...m, content: 'Action timed out - confirmation not received within 5 minutes.', isStreaming: false, error: 'timeout' }
+            : m
+        );
+        messagesRef.current = updated;
+        return updated;
+      });
+
+      logError('AIContext.confirmationTimeout', new Error('Pending confirmation timed out'));
+    }, AI_CONFIRMATION_TIMEOUT_MS);
+
+    return () => clearTimeout(timeoutId);
   }, [pendingConfirmation]);
 
   const value = useMemo(

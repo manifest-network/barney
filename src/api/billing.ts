@@ -2,6 +2,20 @@ import { liftedinit } from '@manifest-network/manifestjs';
 import { fetchJson, buildUrl, buildPaginationParams } from './utils';
 import { logError } from '../utils/errors';
 import type { Coin } from './bank';
+import {
+  BillingParamsResponseSchema,
+  CreditAccountResponseSchema,
+  CreditAddressResponseSchema,
+  CreditEstimateResponseSchema,
+  LeasesResponseSchema,
+  LeaseResponseSchema,
+  WithdrawableAmountResponseSchema,
+  ProviderWithdrawableResponseSchema,
+  CreditsResponseSchema,
+  AllBalancesResponseSchema,
+  type RawLeaseValidated,
+  type CreditAccountValidated,
+} from './schemas';
 
 // Re-export LeaseState enum from manifestjs for type safety
 export const LeaseState = liftedinit.billing.v1.LeaseState;
@@ -70,9 +84,7 @@ export interface Lease {
 /**
  * Raw lease response from API (state is a string)
  */
-interface RawLease extends Omit<Lease, 'state'> {
-  state: string;
-}
+type RawLease = RawLeaseValidated;
 
 /**
  * Convert a raw API lease response to a typed Lease with enum state.
@@ -104,12 +116,7 @@ export interface BillingParamsResponse {
   params: BillingParams;
 }
 
-export interface CreditAccount {
-  tenant: string;
-  credit_address: string;
-  active_lease_count: number;
-  pending_lease_count: number;
-}
+export type CreditAccount = CreditAccountValidated;
 
 export interface CreditAccountResponse {
   credit_account: CreditAccount;
@@ -135,7 +142,7 @@ export async function getCreditAccount(tenant: string): Promise<CreditAccountRes
   const data = await fetchJson<CreditAccountResponse | null>(
     `/liftedinit/billing/v1/credit/${tenant}`,
     'credit account',
-    { notFoundDefault: null }
+    { notFoundDefault: null, schema: CreditAccountResponseSchema }
   );
 
   if (data) {
@@ -157,7 +164,8 @@ export async function getCreditAccount(tenant: string): Promise<CreditAccountRes
 export async function getCreditAddress(tenant: string): Promise<string> {
   const data = await fetchJson<CreditAddressResponse>(
     `/liftedinit/billing/v1/credit-address/${tenant}`,
-    'credit address'
+    'credit address',
+    { schema: CreditAddressResponseSchema }
   );
   return data.credit_address;
 }
@@ -166,14 +174,15 @@ export async function getCreditEstimate(tenant: string): Promise<CreditEstimateR
   return fetchJson<CreditEstimateResponse | null>(
     `/liftedinit/billing/v1/credit/${tenant}/estimate`,
     'credit estimate',
-    { notFoundDefault: null }
+    { notFoundDefault: null, schema: CreditEstimateResponseSchema }
   );
 }
 
 export async function getBillingParams(): Promise<BillingParams> {
   const data = await fetchJson<BillingParamsResponse>(
     '/liftedinit/billing/v1/params',
-    'billing params'
+    'billing params',
+    { schema: BillingParamsResponseSchema }
   );
   return data.params;
 }
@@ -185,7 +194,7 @@ export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState
   }
 
   const url = buildUrl(`/liftedinit/billing/v1/leases/tenant/${tenant}`, params);
-  const data = await fetchJson<{ leases?: RawLease[] }>(url, 'leases', { notFoundDefault: { leases: [] } });
+  const data = await fetchJson<{ leases?: RawLease[] }>(url, 'leases', { notFoundDefault: { leases: [] }, schema: LeasesResponseSchema });
   return parseLeases(data.leases ?? []);
 }
 
@@ -196,7 +205,7 @@ export async function getLeasesByProvider(providerUuid: string, stateFilter?: Le
   }
 
   const url = buildUrl(`/liftedinit/billing/v1/leases/provider/${providerUuid}`, params);
-  const data = await fetchJson<{ leases?: RawLease[] }>(url, 'leases', { notFoundDefault: { leases: [] } });
+  const data = await fetchJson<{ leases?: RawLease[] }>(url, 'leases', { notFoundDefault: { leases: [] }, schema: LeasesResponseSchema });
   return parseLeases(data.leases ?? []);
 }
 
@@ -204,7 +213,7 @@ export async function getLease(leaseUuid: string): Promise<Lease | null> {
   const data = await fetchJson<{ lease?: RawLease }>(
     `/liftedinit/billing/v1/lease/${leaseUuid}`,
     'lease',
-    { notFoundDefault: {} }
+    { notFoundDefault: {}, schema: LeaseResponseSchema }
   );
   return data.lease ? parseLease(data.lease) : null;
 }
@@ -217,7 +226,7 @@ export async function getWithdrawableAmount(leaseUuid: string): Promise<Coin[]> 
   const data = await fetchJson<WithdrawableAmountResponse>(
     `/liftedinit/billing/v1/lease/${leaseUuid}/withdrawable`,
     'withdrawable amount',
-    { notFoundDefault: { amounts: [] } }
+    { notFoundDefault: { amounts: [] }, schema: WithdrawableAmountResponseSchema }
   );
   return data.amounts ?? [];
 }
@@ -232,7 +241,7 @@ export async function getProviderWithdrawable(providerUuid: string): Promise<Pro
   return fetchJson<ProviderWithdrawableResponse>(
     `/liftedinit/billing/v1/provider/${providerUuid}/withdrawable`,
     'provider withdrawable',
-    { notFoundDefault: { amounts: [], lease_count: '0', has_more: false } }
+    { notFoundDefault: { amounts: [], lease_count: '0', has_more: false }, schema: ProviderWithdrawableResponseSchema }
   );
 }
 
@@ -243,7 +252,7 @@ export async function getLeasesBySKU(skuUuid: string, stateFilter?: LeaseState):
   }
 
   const url = buildUrl(`/liftedinit/billing/v1/leases/sku/${skuUuid}`, params);
-  const data = await fetchJson<{ leases?: RawLease[] }>(url, 'leases by SKU', { notFoundDefault: { leases: [] } });
+  const data = await fetchJson<{ leases?: RawLease[] }>(url, 'leases by SKU', { notFoundDefault: { leases: [] }, schema: LeasesResponseSchema });
   return parseLeases(data.leases ?? []);
 }
 
@@ -280,7 +289,7 @@ export async function getAllLeases(params?: GetAllLeasesParams): Promise<Paginat
   const data = await fetchJson<{ leases?: RawLease[]; pagination?: PaginatedLeasesResponse['pagination'] }>(
     url,
     'all leases',
-    { notFoundDefault: { leases: [] } }
+    { notFoundDefault: { leases: [] }, schema: LeasesResponseSchema }
   );
 
   return {
@@ -336,7 +345,7 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
   const data = await fetchJson<{ credit_accounts?: CreditAccount[]; pagination?: PaginatedCreditsResponse['pagination'] }>(
     url,
     'all credits',
-    { notFoundDefault: { credit_accounts: [] } }
+    { notFoundDefault: { credit_accounts: [] }, schema: CreditsResponseSchema }
   );
 
   const creditAccounts: CreditAccount[] = data.credit_accounts ?? [];
@@ -349,7 +358,8 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
       try {
         const balanceData = await fetchJson<{ balances?: Coin[] }>(
           `/cosmos/bank/v1beta1/balances/${account.credit_address}`,
-          'balance'
+          'balance',
+          { schema: AllBalancesResponseSchema }
         );
         return { key: account.credit_address, balances: balanceData.balances ?? [] };
       } catch (error) {
