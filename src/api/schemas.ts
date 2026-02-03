@@ -133,8 +133,8 @@ export const BillingParamsResponseSchema = z.object({
 export const CreditAccountSchema = z.object({
   tenant: z.string(),
   credit_address: z.string(),
-  active_lease_count: z.number(),
-  pending_lease_count: z.number(),
+  active_lease_count: z.coerce.number(),
+  pending_lease_count: z.coerce.number(),
 });
 
 export const CreditAccountResponseSchema = z.object({
