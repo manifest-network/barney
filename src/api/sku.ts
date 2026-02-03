@@ -13,8 +13,8 @@ export type { SKUParams, Provider, SKU };
 export const Unit = liftedinit.sku.v1.Unit;
 export type Unit = (typeof Unit)[keyof typeof Unit];
 
-// Conversion functions from manifestjs
-const { unitFromJSON: fromJSON, unitToJSON: toJSON } = liftedinit.sku.v1;
+// Conversion function from manifestjs (used by fixSKUEnums)
+const { unitFromJSON: fromJSON } = liftedinit.sku.v1;
 
 // fromAmino converters for query responses
 const {
@@ -24,14 +24,6 @@ const {
   QuerySKUResponse: QuerySKUResponseConverter,
   QuerySKUsResponse: QuerySKUsResponseConverter,
 } = liftedinit.sku.v1;
-
-export function unitToString(unit: Unit): string {
-  return toJSON(unit);
-}
-
-export function unitFromString(unit: string): Unit {
-  return fromJSON(unit);
-}
 
 // fromAmino doesn't convert enum strings to numeric values; LCD returns strings like "UNIT_PER_HOUR"
 // but Unit enum keys are numeric (0, 1, 2, ...). This fixes the mismatch.

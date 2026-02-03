@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { AUTO_REFRESH_INTERVAL_MS } from '../config/constants';
 import { logError } from '../utils/errors';
 
@@ -149,18 +149,21 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
     stopPolling();
   }, [stopPolling]);
 
+  const value = useMemo(
+    () => ({
+      isEnabled,
+      toggle,
+      isRefreshing,
+      lastRefresh,
+      refresh: doFetch,
+      registerFetchFn,
+      unregisterFetchFn,
+    }),
+    [isEnabled, toggle, isRefreshing, lastRefresh, doFetch, registerFetchFn, unregisterFetchFn]
+  );
+
   return (
-    <AutoRefreshContext.Provider
-      value={{
-        isEnabled,
-        toggle,
-        isRefreshing,
-        lastRefresh,
-        refresh: doFetch,
-        registerFetchFn,
-        unregisterFetchFn,
-      }}
-    >
+    <AutoRefreshContext.Provider value={value}>
       {children}
     </AutoRefreshContext.Provider>
   );
