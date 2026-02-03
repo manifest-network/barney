@@ -77,19 +77,30 @@ export function formatAmount(amount: string, denom: string, maxDecimals = 6): st
 }
 
 /**
- * Format a date string for display.
+ * Format a date for display.
+ * Accepts Date objects (from manifestjs fromAmino), ISO strings, or undefined.
  * Handles null/empty dates, invalid dates, and the Go zero time.
  *
- * @param dateStr - ISO date string or undefined
+ * @param dateInput - Date object, ISO date string, or undefined
  * @param options - 'datetime' for full datetime, 'date' for date only (default: 'datetime')
  * @returns Formatted date string or '-' for invalid/empty dates
  */
-export function formatDate(dateStr: string | undefined, options: 'datetime' | 'date' = 'datetime'): string {
-  if (!dateStr || dateStr === '0001-01-01T00:00:00Z') {
+export function formatDate(dateInput: Date | string | undefined, options: 'datetime' | 'date' = 'datetime'): string {
+  if (!dateInput) {
     return '-';
   }
-  const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) {
+
+  let date: Date;
+  if (dateInput instanceof Date) {
+    date = dateInput;
+  } else {
+    if (dateInput === '0001-01-01T00:00:00Z') {
+      return '-';
+    }
+    date = new Date(dateInput);
+  }
+
+  if (Number.isNaN(date.getTime()) || date.getFullYear() <= 1) {
     return '-';
   }
   return options === 'date' ? date.toLocaleDateString() : date.toLocaleString();
@@ -97,17 +108,28 @@ export function formatDate(dateStr: string | undefined, options: 'datetime' | 'd
 
 /**
  * Format a date as relative time (e.g., "2h ago", "3d ago").
+ * Accepts Date objects (from manifestjs fromAmino), ISO strings, or undefined.
  * Falls back to absolute date for older dates.
  *
- * @param dateStr - ISO date string or undefined
+ * @param dateInput - Date object, ISO date string, or undefined
  * @returns Relative time string or '-' for invalid dates
  */
-export function formatRelativeTime(dateStr: string | undefined): string {
-  if (!dateStr || dateStr === '0001-01-01T00:00:00Z') {
+export function formatRelativeTime(dateInput: Date | string | undefined): string {
+  if (!dateInput) {
     return '-';
   }
-  const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) {
+
+  let date: Date;
+  if (dateInput instanceof Date) {
+    date = dateInput;
+  } else {
+    if (dateInput === '0001-01-01T00:00:00Z') {
+      return '-';
+    }
+    date = new Date(dateInput);
+  }
+
+  if (Number.isNaN(date.getTime()) || date.getFullYear() <= 1) {
     return '-';
   }
 
@@ -138,19 +160,24 @@ export function formatFileSize(bytes: number): string {
 }
 
 /**
- * Format a duration string into human-readable format.
+ * Format a duration into human-readable format.
+ * Accepts bigint (seconds from manifestjs fromAmino), string durations, or undefined.
  * Handles Go-style durations like "3600s", "7200000000000" (nanoseconds), or plain seconds.
  *
- * @param duration - Duration string (e.g., "3600s", "7200000000000", "3600")
+ * @param duration - Duration as bigint (seconds), string (e.g., "3600s", "7200000000000", "3600"), or undefined
  * @returns Human-readable string like "1h", "2h 30m", "45m", "30s"
  */
-export function formatDuration(duration: string | undefined): string {
-  if (!duration) return '-';
+export function formatDuration(duration: bigint | string | undefined): string {
+  if (duration == null) return '-';
 
   let totalSeconds: number;
 
-  // Handle Go duration format with 's' suffix
-  if (duration.endsWith('s')) {
+  if (typeof duration === 'bigint') {
+    totalSeconds = Number(duration);
+  } else if (duration === '') {
+    return '-';
+  } else if (duration.endsWith('s')) {
+    // Handle Go duration format with 's' suffix
     totalSeconds = parseInt(duration.slice(0, -1), 10);
   } else {
     const num = parseInt(duration, 10);

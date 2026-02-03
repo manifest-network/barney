@@ -45,10 +45,10 @@ export function ProviderCard({
 
             <span className="catalog-provider-labeled-field" data-field="api">
               <span className="catalog-provider-label">API</span>
-              {provider.api_url ? (
+              {provider.apiUrl ? (
                 <>
-                  <code className="catalog-provider-mono">{provider.api_url}</code>
-                  <button onClick={() => copyToClipboard(provider.api_url)} className="catalog-copy-btn" title="Copy">
+                  <code className="catalog-provider-mono">{provider.apiUrl}</code>
+                  <button onClick={() => copyToClipboard(provider.apiUrl)} className="catalog-copy-btn" title="Copy">
                     <Copy size={10} />
                   </button>
                   {healthStatus && (

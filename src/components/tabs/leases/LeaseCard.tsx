@@ -54,7 +54,7 @@ export function LeaseCard({
   const [showCloseForm, setShowCloseForm] = useState(false);
   const [closeReason, setCloseReason] = useState('');
 
-  const provider = getProvider(lease.provider_uuid);
+  const provider = getProvider(lease.providerUuid);
   const stateKey = LEASE_STATE_TO_FILTER[lease.state];
   const canSelect = lease.state === LeaseState.LEASE_STATE_PENDING || lease.state === LeaseState.LEASE_STATE_ACTIVE;
   const isPending = lease.state === LeaseState.LEASE_STATE_PENDING;
@@ -69,7 +69,7 @@ export function LeaseCard({
       return;
     }
 
-    if (!tenantAddress || !provider?.api_url) {
+    if (!tenantAddress || !provider?.apiUrl) {
       setConnectionError('Missing tenant address or provider API URL');
       return;
     }
@@ -95,7 +95,7 @@ export function LeaseCard({
         signResult.signature
       );
 
-      const info = await getLeaseConnectionInfo(provider.api_url, lease.uuid, authToken);
+      const info = await getLeaseConnectionInfo(provider.apiUrl, lease.uuid, authToken);
       setLeaseInfo(info);
     } catch (err) {
       setConnectionError(err instanceof Error ? err.message : 'Failed to get connection info');
@@ -138,8 +138,8 @@ export function LeaseCard({
 
             <span className="lease-card-labeled-field" data-field="provider">
               <span className="lease-card-label">Provider</span>
-              <code className="lease-card-mono">{provider?.address || lease.provider_uuid}</code>
-              <CopyButton value={provider?.address || lease.provider_uuid} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy Provider Address" stopPropagation />
+              <code className="lease-card-mono">{provider?.address || lease.providerUuid}</code>
+              <CopyButton value={provider?.address || lease.providerUuid} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy Provider Address" stopPropagation />
             </span>
           </div>
 
@@ -156,7 +156,7 @@ export function LeaseCard({
               <span className="lease-card-label">Created</span>
               <span className="lease-card-time">
                 <Clock size={11} />
-                {formatRelativeTime(lease.created_at)}
+                {formatRelativeTime(lease.createdAt)}
               </span>
             </span>
           </div>
@@ -177,9 +177,9 @@ export function LeaseCard({
             <>
               <button
                 onClick={handleGetConnectionInfo}
-                disabled={connectionLoading || !provider?.api_url}
+                disabled={connectionLoading || !provider?.apiUrl}
                 className="btn btn-primary btn-sm"
-                title={!provider?.api_url ? 'Provider has no API URL' : undefined}
+                title={!provider?.apiUrl ? 'Provider has no API URL' : undefined}
               >
                 {connectionLoading ? '...' : 'Get Info'}
               </button>
@@ -296,20 +296,20 @@ function LeaseCardExpanded({
           </div>
           <div className="lease-card-kv">
             <span className="lease-card-kv-label">Provider UUID</span>
-            <code className="lease-card-kv-value">{lease.provider_uuid}</code>
-            <CopyButton value={lease.provider_uuid} copyToClipboard={copyToClipboard} isCopied={isCopied} />
+            <code className="lease-card-kv-value">{lease.providerUuid}</code>
+            <CopyButton value={lease.providerUuid} copyToClipboard={copyToClipboard} isCopied={isCopied} />
           </div>
-          {lease.meta_hash && (
+          {lease.metaHash && lease.metaHash.length > 0 && (
             <div className="lease-card-kv">
               <span className="lease-card-kv-label">Meta Hash</span>
-              <code className="lease-card-kv-value">{lease.meta_hash}</code>
-              <CopyButton value={lease.meta_hash} copyToClipboard={copyToClipboard} isCopied={isCopied} />
+              <code className="lease-card-kv-value">{Array.from(lease.metaHash).map(b => b.toString(16).padStart(2, '0')).join('')}</code>
+              <CopyButton value={Array.from(lease.metaHash).map(b => b.toString(16).padStart(2, '0')).join('')} copyToClipboard={copyToClipboard} isCopied={isCopied} />
             </div>
           )}
-          {lease.min_lease_duration_at_creation && (
+          {lease.minLeaseDurationAtCreation > 0n && (
             <div className="lease-card-kv">
               <span className="lease-card-kv-label">Min Duration</span>
-              <span className="lease-card-kv-value">{formatDuration(lease.min_lease_duration_at_creation)}</span>
+              <span className="lease-card-kv-value">{formatDuration(lease.minLeaseDurationAtCreation)}</span>
             </div>
           )}
         </div>
@@ -328,13 +328,13 @@ function LeaseCardExpanded({
           </thead>
           <tbody>
             {lease.items.map((item) => {
-              const sku = getSKU(item.sku_uuid);
-              const pricePerHour = fromBaseUnits(item.locked_price.amount, item.locked_price.denom) * SECONDS_PER_HOUR;
-              const symbol = DENOM_METADATA[item.locked_price.denom]?.symbol || item.locked_price.denom;
+              const sku = getSKU(item.skuUuid);
+              const pricePerHour = fromBaseUnits(item.lockedPrice.amount, item.lockedPrice.denom) * SECONDS_PER_HOUR;
+              const symbol = DENOM_METADATA[item.lockedPrice.denom]?.symbol || item.lockedPrice.denom;
               return (
-                <tr key={`${lease.uuid}-item-${item.sku_uuid}`}>
-                  <td>{sku?.name || item.sku_uuid.slice(0, 12)}</td>
-                  <td>{item.quantity}</td>
+                <tr key={`${lease.uuid}-item-${item.skuUuid}`}>
+                  <td>{sku?.name || item.skuUuid.slice(0, 12)}</td>
+                  <td>{String(item.quantity)}</td>
                   <td>{pricePerHour.toFixed(4)} {symbol}/hr</td>
                 </tr>
               );
@@ -350,40 +350,40 @@ function LeaseCardExpanded({
           <div className="lease-card-timeline-event">
             <span className="lease-card-timeline-dot" data-type="created" />
             <span className="lease-card-timeline-label">Created</span>
-            <span className="lease-card-timeline-date">{formatDate(lease.created_at)}</span>
+            <span className="lease-card-timeline-date">{formatDate(lease.createdAt)}</span>
           </div>
-          {lease.acknowledged_at && (
+          {lease.acknowledgedAt && (
             <div className="lease-card-timeline-event">
               <span className="lease-card-timeline-dot" data-type="ack" />
               <span className="lease-card-timeline-label">Acknowledged</span>
-              <span className="lease-card-timeline-date">{formatDate(lease.acknowledged_at)}</span>
+              <span className="lease-card-timeline-date">{formatDate(lease.acknowledgedAt)}</span>
             </div>
           )}
-          {lease.closed_at && (
+          {lease.closedAt && (
             <div className="lease-card-timeline-event">
               <span className="lease-card-timeline-dot" data-type="closed" />
               <span className="lease-card-timeline-label">Closed</span>
-              <span className="lease-card-timeline-date">{formatDate(lease.closed_at)}</span>
-              {lease.closure_reason && (
-                <span className="lease-card-timeline-reason">{lease.closure_reason}</span>
+              <span className="lease-card-timeline-date">{formatDate(lease.closedAt)}</span>
+              {lease.closureReason && (
+                <span className="lease-card-timeline-reason">{lease.closureReason}</span>
               )}
             </div>
           )}
-          {lease.rejected_at && (
+          {lease.rejectedAt && (
             <div className="lease-card-timeline-event">
               <span className="lease-card-timeline-dot" data-type="rejected" />
               <span className="lease-card-timeline-label">Rejected</span>
-              <span className="lease-card-timeline-date">{formatDate(lease.rejected_at)}</span>
-              {lease.rejection_reason && (
-                <span className="lease-card-timeline-reason">{lease.rejection_reason}</span>
+              <span className="lease-card-timeline-date">{formatDate(lease.rejectedAt)}</span>
+              {lease.rejectionReason && (
+                <span className="lease-card-timeline-reason">{lease.rejectionReason}</span>
               )}
             </div>
           )}
-          {lease.expired_at && (
+          {lease.expiredAt && (
             <div className="lease-card-timeline-event">
               <span className="lease-card-timeline-dot" data-type="expired" />
               <span className="lease-card-timeline-label">Expired</span>
-              <span className="lease-card-timeline-date">{formatDate(lease.expired_at)}</span>
+              <span className="lease-card-timeline-date">{formatDate(lease.expiredAt)}</span>
             </div>
           )}
         </div>

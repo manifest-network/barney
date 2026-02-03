@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { Link, Building2, Shield, Copy, Check, Clock, Zap, Package, Plus } from 'lucide-react';
-import { LeaseState, getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams, type Lease, type ProviderWithdrawableResponse } from '../../../api/billing';
+import { LeaseState, getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams, type Lease, type QueryProviderWithdrawableResponse } from '../../../api/billing';
 import { useCopyToClipboard } from '../../../hooks/useCopyToClipboard';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../../api/sku';
 import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, createLeaseForTenant, type CreateLeaseResult } from '../../../api/tx';
@@ -28,7 +28,7 @@ export function ProviderTab() {
   const [providerLeases, setProviderLeases] = useState<Lease[]>([]);
   const [providerSKUs, setProviderSKUs] = useState<SKU[]>([]);
   const [withdrawableAmounts, setWithdrawableAmounts] = useState<Map<string, Coin[]>>(new Map());
-  const [providerWithdrawable, setProviderWithdrawable] = useState<ProviderWithdrawableResponse | null>(null);
+  const [providerWithdrawable, setProviderWithdrawable] = useState<QueryProviderWithdrawableResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isInBillingAllowedList, setIsInBillingAllowedList] = useState(false);
@@ -63,7 +63,7 @@ export function ProviderTab() {
 
       const myProv = providers.find((p) => p.address === address);
       setMyProvider(myProv || null);
-      setIsInBillingAllowedList(billingParams.allowed_list.includes(address));
+      setIsInBillingAllowedList(billingParams.allowedList.includes(address));
 
       if (myProv) {
         // Fetch leases, SKUs, and provider-wide withdrawable summary
@@ -351,9 +351,9 @@ export function ProviderTab() {
             <div className="provider-info-field">
               <span className="provider-info-label">Payout Address</span>
               <div className="provider-info-value-row">
-                <code className="provider-info-value">{myProvider.payout_address}</code>
+                <code className="provider-info-value">{myProvider.payoutAddress}</code>
                 <button
-                  onClick={() => copyToClipboard(myProvider.payout_address)}
+                  onClick={() => copyToClipboard(myProvider.payoutAddress)}
                   className="provider-info-copy"
                   title="Copy Payout Address"
                 >
@@ -364,9 +364,9 @@ export function ProviderTab() {
             <div className="provider-info-field">
               <span className="provider-info-label">API URL</span>
               <div className="provider-info-value-row">
-                <code className="provider-info-value provider-info-api">{myProvider.api_url}</code>
+                <code className="provider-info-value provider-info-api">{myProvider.apiUrl}</code>
                 <button
-                  onClick={() => copyToClipboard(myProvider.api_url)}
+                  onClick={() => copyToClipboard(myProvider.apiUrl)}
                   className="provider-info-copy"
                   title="Copy API URL"
                 >

@@ -44,9 +44,9 @@ export function NetworkCreditCard({ account, balances }: NetworkCreditCardProps)
 
             <span className="lease-card-labeled-field">
               <span className="lease-card-label">Credit Address</span>
-              <code className="lease-card-mono">{truncateAddress(account.credit_address)}</code>
+              <code className="lease-card-mono">{truncateAddress(account.creditAddress)}</code>
               <button
-                onClick={(e) => { e.stopPropagation(); copyToClipboard(account.credit_address); }}
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(account.creditAddress); }}
                 className="lease-card-copy-btn"
                 title="Copy Credit Address"
               >
@@ -67,11 +67,11 @@ export function NetworkCreditCard({ account, balances }: NetworkCreditCardProps)
             </span>
             <span className="lease-card-time">
               <Zap size={11} />
-              {account.active_lease_count} active
+              {String(account.activeLeaseCount)} active
             </span>
             <span className="lease-card-time">
               <Clock size={11} />
-              {account.pending_lease_count} pending
+              {String(account.pendingLeaseCount)} pending
             </span>
           </div>
         </div>
@@ -102,8 +102,8 @@ export function NetworkCreditCard({ account, balances }: NetworkCreditCardProps)
               </div>
               <div className="lease-card-kv">
                 <span className="lease-card-kv-label">Credit Address</span>
-                <code className="lease-card-kv-value">{account.credit_address}</code>
-                <button onClick={() => copyToClipboard(account.credit_address)} className="lease-card-copy-btn" title="Copy">
+                <code className="lease-card-kv-value">{account.creditAddress}</code>
+                <button onClick={() => copyToClipboard(account.creditAddress)} className="lease-card-copy-btn" title="Copy">
                   <Copy size={10} />
                 </button>
               </div>
@@ -139,11 +139,11 @@ export function NetworkCreditCard({ account, balances }: NetworkCreditCardProps)
             <div className="lease-card-kv-list">
               <div className="lease-card-kv">
                 <span className="lease-card-kv-label">Active Leases</span>
-                <span className="lease-card-kv-value">{account.active_lease_count}</span>
+                <span className="lease-card-kv-value">{String(account.activeLeaseCount)}</span>
               </div>
               <div className="lease-card-kv">
                 <span className="lease-card-kv-label">Pending Leases</span>
-                <span className="lease-card-kv-value">{account.pending_lease_count}</span>
+                <span className="lease-card-kv-value">{String(account.pendingLeaseCount)}</span>
               </div>
             </div>
           </div>

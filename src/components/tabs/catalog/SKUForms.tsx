@@ -65,17 +65,17 @@ export function EditSKUForm({
   onSubmit,
   onClose,
 }: EditSKUFormProps) {
-  const [providerUuid, setProviderUuid] = useState(sku.provider_uuid);
+  const [providerUuid, setProviderUuid] = useState(sku.providerUuid);
   const [name, setName] = useState(sku.name);
   const [unit, setUnit] = useState<number>(sku.unit);
-  const [priceAmount, setPriceAmount] = useState(sku.base_price.amount);
+  const [priceAmount, setPriceAmount] = useState(sku.basePrice.amount);
   const [active, setActive] = useState(sku.active);
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
-    await onSubmit({ uuid: sku.uuid, providerUuid, name, unit, priceAmount, priceDenom: sku.base_price.denom, active });
+    await onSubmit({ uuid: sku.uuid, providerUuid, name, unit, priceAmount, priceDenom: sku.basePrice.denom, active });
     setSubmitting(false);
   };
 

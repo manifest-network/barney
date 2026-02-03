@@ -29,7 +29,7 @@ export function CreateLeaseModal({
   const hashedPayloadTextRef = useRef<string | null>(null);
 
   const providerSKUs = selectedProvider
-    ? skus.filter((s) => s.provider_uuid === selectedProvider)
+    ? skus.filter((s) => s.providerUuid === selectedProvider)
     : [];
 
   useEffect(() => {

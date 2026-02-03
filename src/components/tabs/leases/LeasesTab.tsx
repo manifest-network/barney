@@ -73,7 +73,7 @@ export function LeasesTab() {
       setLeases(leasesData);
       setProviders(providersData);
       setSKUs(skusData);
-      setIsInAllowedList(billingParams.allowed_list.includes(address));
+      setIsInAllowedList(billingParams.allowedList.includes(address));
       initialLoadRef.current = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch data');
@@ -115,8 +115,8 @@ export function LeasesTab() {
     // Sort by state priority first
     const priorityDiff = STATE_PRIORITY[a.state] - STATE_PRIORITY[b.state];
     if (priorityDiff !== 0) return priorityDiff;
-    // Within same state, sort by created_at descending (newest first)
-    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    // Within same state, sort by createdAt descending (newest first)
+    return b.createdAt.getTime() - a.createdAt.getTime();
   });
 
   // Pagination
@@ -169,7 +169,7 @@ export function LeasesTab() {
         toast.info('Uploading payload to provider...');
 
         const provider = providers.find((p) => p.uuid === providerUuid);
-        if (!provider?.api_url) {
+        if (!provider?.apiUrl) {
           toast.warning(`Lease created but provider has no API URL. Tx: ${result.transactionHash?.slice(0, 16)}...`);
           return;
         }
@@ -201,7 +201,7 @@ export function LeasesTab() {
             signResult.signature
           );
 
-          await uploadLeaseData(provider.api_url, leaseUuid, payload, authToken);
+          await uploadLeaseData(provider.apiUrl, leaseUuid, payload, authToken);
           toast.success(`Lease created and payload uploaded! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         } catch (uploadErr) {
           toast.error(`Lease created but payload upload failed: ${uploadErr instanceof Error ? uploadErr.message : 'Unknown error'}`);

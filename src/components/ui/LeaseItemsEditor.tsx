@@ -51,7 +51,7 @@ export function LeaseItemsEditor({
                 <option value="">Select SKU...</option>
                 {skus.map((sku) => (
                   <option key={sku.uuid} value={sku.uuid}>
-                    {sku.name} ({formatPrice(sku.base_price.amount, sku.base_price.denom, sku.unit)})
+                    {sku.name} ({formatPrice(sku.basePrice.amount, sku.basePrice.denom, sku.unit)})
                   </option>
                 ))}
               </select>

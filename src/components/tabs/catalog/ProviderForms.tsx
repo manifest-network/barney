@@ -48,8 +48,8 @@ export function EditProviderForm({
   onClose,
 }: EditProviderFormProps) {
   const [address, setAddress] = useState(provider.address);
-  const [payoutAddress, setPayoutAddress] = useState(provider.payout_address);
-  const [apiUrl, setApiUrl] = useState(provider.api_url || '');
+  const [payoutAddress, setPayoutAddress] = useState(provider.payoutAddress);
+  const [apiUrl, setApiUrl] = useState(provider.apiUrl || '');
   const [active, setActive] = useState(provider.active);
   const [submitting, setSubmitting] = useState(false);
 

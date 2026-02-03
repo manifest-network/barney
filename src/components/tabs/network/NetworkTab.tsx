@@ -64,7 +64,7 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
 
       try {
         const params = await getBillingParams();
-        setIsAdmin(params.allowed_list.includes(address));
+        setIsAdmin(params.allowedList.includes(address));
       } catch {
         setIsAdmin(false);
       }
@@ -92,12 +92,12 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
       ]);
 
       setStats({
-        totalLeases: parseInt(pending.pagination?.total || '0', 10) +
-                     parseInt(active.pagination?.total || '0', 10) +
-                     parseInt(closed.pagination?.total || '0', 10),
-        pendingLeases: parseInt(pending.pagination?.total || '0', 10),
-        activeLeases: parseInt(active.pagination?.total || '0', 10),
-        closedLeases: parseInt(closed.pagination?.total || '0', 10),
+        totalLeases: Number(pending.pagination?.total ?? 0n) +
+                     Number(active.pagination?.total ?? 0n) +
+                     Number(closed.pagination?.total ?? 0n),
+        pendingLeases: Number(pending.pagination?.total ?? 0n),
+        activeLeases: Number(active.pagination?.total ?? 0n),
+        closedLeases: Number(closed.pagination?.total ?? 0n),
         totalProviders: providersData.length,
         totalSKUs: skusData.length,
       });
@@ -216,17 +216,17 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
   }
 
   const totalLeasePages = Math.ceil(
-    parseInt(leasesResponse?.pagination?.total || '0', 10) / PAGE_SIZE
+    Number(leasesResponse?.pagination?.total ?? 0n) / PAGE_SIZE
   );
   const currentLeasePage = Math.floor(leaseOffset / PAGE_SIZE) + 1;
 
   const totalCreditPages = Math.ceil(
-    parseInt(creditsResponse?.pagination?.total || '0', 10) / PAGE_SIZE
+    Number(creditsResponse?.pagination?.total ?? 0n) / PAGE_SIZE
   );
   const currentCreditPage = Math.floor(creditOffset / PAGE_SIZE) + 1;
 
   const leases = leasesResponse?.leases || [];
-  const credits = creditsResponse?.credit_accounts || [];
+  const credits = creditsResponse?.creditAccounts || [];
 
   return (
     <div className="space-y-4">
@@ -306,7 +306,7 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
           data-has-items={leases.length > 0 ? 'true' : 'false'}
         >
           All Leases
-          <span className="filter-tab-count">{leasesResponse?.pagination?.total || 0}</span>
+          <span className="filter-tab-count">{String(leasesResponse?.pagination?.total ?? 0n)}</span>
         </button>
         <button
           onClick={() => setViewMode('credits')}
@@ -315,7 +315,7 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
           data-has-items={credits.length > 0 ? 'true' : 'false'}
         >
           Credit Accounts
-          <span className="filter-tab-count">{creditsResponse?.pagination?.total || 0}</span>
+          <span className="filter-tab-count">{String(creditsResponse?.pagination?.total ?? 0n)}</span>
         </button>
       </div>
 
@@ -325,7 +325,7 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
           <div className="catalog-section-header">
             <div className="catalog-section-title">
               Network Leases
-              <span className="catalog-section-count">({leasesResponse?.pagination?.total || 0})</span>
+              <span className="catalog-section-count">({String(leasesResponse?.pagination?.total ?? 0n)})</span>
             </div>
             <div className="flex items-center gap-2">
               <label htmlFor="lease-state-filter" className="text-sm text-muted">State:</label>
@@ -361,7 +361,7 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
               </div>
             ) : (
               [...leases]
-                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
                 .map((lease) => (
                   <NetworkLeaseCard
                     key={lease.uuid}
@@ -378,7 +378,7 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
             <Pagination
               currentPage={currentLeasePage}
               totalPages={totalLeasePages}
-              totalItems={parseInt(leasesResponse?.pagination?.total || '0', 10)}
+              totalItems={Number(leasesResponse?.pagination?.total ?? 0n)}
               itemsPerPage={PAGE_SIZE}
               onPageChange={(page) => setLeaseOffset((page - 1) * PAGE_SIZE)}
             />
@@ -392,7 +392,7 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
           <div className="catalog-section-header">
             <div className="catalog-section-title">
               Credit Accounts
-              <span className="catalog-section-count">({creditsResponse?.pagination?.total || 0})</span>
+              <span className="catalog-section-count">({String(creditsResponse?.pagination?.total ?? 0n)})</span>
             </div>
           </div>
 
@@ -412,7 +412,7 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
                 <NetworkCreditCard
                   key={account.tenant}
                   account={account}
-                  balances={creditsResponse?.balances?.[account.credit_address] || []}
+                  balances={creditsResponse?.balances?.[account.creditAddress] || []}
                 />
               ))
             )}
@@ -423,7 +423,7 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
             <Pagination
               currentPage={currentCreditPage}
               totalPages={totalCreditPages}
-              totalItems={parseInt(creditsResponse?.pagination?.total || '0', 10)}
+              totalItems={Number(creditsResponse?.pagination?.total ?? 0n)}
               itemsPerPage={PAGE_SIZE}
               onPageChange={(page) => setCreditOffset((page - 1) * PAGE_SIZE)}
             />

@@ -1,7 +1,24 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- LCD returns untyped JSON; `as any` is needed for fromAmino() */
 import { liftedinit } from '@manifest-network/manifestjs';
+import type {
+  Params as BillingParams,
+  Lease,
+  LeaseItem,
+  CreditAccount,
+} from '@manifest-network/manifestjs/dist/codegen/liftedinit/billing/v1/types';
+import type {
+  QueryCreditAccountResponse,
+  QueryCreditEstimateResponse,
+  QueryProviderWithdrawableResponse,
+} from '@manifest-network/manifestjs/dist/codegen/liftedinit/billing/v1/query';
+import type { Coin } from '@manifest-network/manifestjs/dist/codegen/cosmos/base/v1beta1/coin';
+import type { PageResponse } from '@manifest-network/manifestjs/dist/codegen/cosmos/base/query/v1beta1/pagination';
 import { getQueryClient, queryWithNotFound } from './queryClient';
 import { logError } from '../utils/errors';
-import type { Coin } from './bank';
+
+// Re-export manifestjs types for consumers
+export type { BillingParams, Lease, LeaseItem, CreditAccount, Coin };
+export type { QueryCreditEstimateResponse, QueryCreditAccountResponse, QueryProviderWithdrawableResponse };
 
 // Re-export LeaseState enum from manifestjs for type safety
 export const LeaseState = liftedinit.billing.v1.LeaseState;
@@ -9,6 +26,19 @@ export type LeaseState = (typeof LeaseState)[keyof typeof LeaseState];
 
 // Conversion functions from manifestjs
 const { leaseStateFromJSON: fromJSON, leaseStateToJSON: toJSON } = liftedinit.billing.v1;
+
+// fromAmino converters for query responses
+const {
+  QueryParamsResponse: QueryParamsResponseConverter,
+  QueryLeaseResponse: QueryLeaseResponseConverter,
+  QueryLeasesResponse: QueryLeasesResponseConverter,
+  QueryCreditAccountResponse: QueryCreditAccountResponseConverter,
+  QueryCreditAddressResponse: QueryCreditAddressResponseConverter,
+  QueryWithdrawableAmountResponse: QueryWithdrawableAmountResponseConverter,
+  QueryProviderWithdrawableResponse: QueryProviderWithdrawableResponseConverter,
+  QueryCreditAccountsResponse: QueryCreditAccountsResponseConverter,
+  QueryCreditEstimateResponse: QueryCreditEstimateResponseConverter,
+} = liftedinit.billing.v1;
 
 export function leaseStateToString(state: LeaseState): string {
   return toJSON(state);
@@ -28,106 +58,13 @@ export const LEASE_STATE_MAP: Record<string, LeaseState> = {
 
 export const LEASE_STATE_FILTERS = ['all', ...Object.keys(LEASE_STATE_MAP)] as const;
 
-export interface LeaseItem {
-  sku_uuid: string;
-  quantity: string;
-  locked_price: Coin;
+// fromAmino doesn't convert enum strings to numeric values; LCD returns strings like "LEASE_STATE_ACTIVE"
+// but LeaseState enum keys are numeric (0, 1, 2, ...). This fixes the mismatch.
+function fixLeaseEnums(lease: Lease): Lease {
+  return { ...lease, state: fromJSON(lease.state) };
 }
 
-export interface Lease {
-  uuid: string;
-  tenant: string;
-  provider_uuid: string;
-  items: LeaseItem[];
-  state: LeaseState;
-  created_at: string;
-  last_settled_at: string;
-  closed_at?: string | null;
-  acknowledged_at?: string | null;
-  rejected_at?: string | null;
-  expired_at?: string | null;
-  rejection_reason?: string | null;
-  closure_reason?: string | null;
-  min_lease_duration_at_creation?: string | null;
-  meta_hash?: string | null;
-}
-
-interface RawLease {
-  uuid: string;
-  tenant: string;
-  provider_uuid: string;
-  items: LeaseItem[];
-  state: string;
-  created_at: string;
-  last_settled_at: string;
-  closed_at?: string | null;
-  acknowledged_at?: string | null;
-  rejected_at?: string | null;
-  expired_at?: string | null;
-  rejection_reason?: string | null;
-  closure_reason?: string | null;
-  min_lease_duration_at_creation?: string | null;
-  meta_hash?: string | null;
-}
-
-function parseLease(raw: RawLease): Lease {
-  return {
-    ...raw,
-    state: fromJSON(raw.state),
-  };
-}
-
-function parseLeases(raw: RawLease[]): Lease[] {
-  return raw.map(parseLease);
-}
-
-export interface BillingParams {
-  max_leases_per_tenant: string;
-  allowed_list: string[];
-  max_items_per_lease: string;
-  min_lease_duration: string;
-  max_pending_leases_per_tenant: string;
-  pending_timeout: string;
-}
-
-export interface BillingParamsResponse {
-  params: BillingParams;
-}
-
-export interface CreditAccount {
-  tenant: string;
-  credit_address: string;
-  active_lease_count: number;
-  pending_lease_count: number;
-}
-
-export interface CreditAccountResponse {
-  credit_account: CreditAccount;
-  balances: Coin[];
-}
-
-export interface CreditAddressResponse {
-  credit_address: string;
-}
-
-export interface CreditEstimateResponse {
-  current_balance: Coin[];
-  total_rate_per_second: Coin[];
-  estimated_duration_seconds: string;
-  active_lease_count: string;
-}
-
-function parseCreditAccount(raw: unknown): CreditAccount {
-  const r = raw as Record<string, unknown>;
-  return {
-    tenant: String(r.tenant),
-    credit_address: String(r.credit_address),
-    active_lease_count: Number(r.active_lease_count),
-    pending_lease_count: Number(r.pending_lease_count),
-  };
-}
-
-export async function getCreditAccount(tenant: string): Promise<CreditAccountResponse> {
+export async function getCreditAccount(tenant: string): Promise<QueryCreditAccountResponse> {
   const creditAddress = await getCreditAddress(tenant);
 
   const client = await getQueryClient();
@@ -137,43 +74,45 @@ export async function getCreditAccount(tenant: string): Promise<CreditAccountRes
   );
 
   if (data) {
-    return {
-      credit_account: parseCreditAccount(data.credit_account),
-      balances: (data.balances ?? []) as unknown as Coin[],
-    };
+    const converted = QueryCreditAccountResponseConverter.fromAmino(data as any);
+    return converted;
   }
 
   return {
-    credit_account: {
+    creditAccount: {
       tenant,
-      credit_address: creditAddress,
-      active_lease_count: 0,
-      pending_lease_count: 0,
+      creditAddress,
+      activeLeaseCount: 0n,
+      pendingLeaseCount: 0n,
+      reservedAmounts: [],
     },
     balances: [],
+    availableBalances: [],
   };
 }
 
 export async function getCreditAddress(tenant: string): Promise<string> {
   const client = await getQueryClient();
   const data = await client.liftedinit.billing.v1.creditAddress({ tenant });
-  return data.credit_address;
+  const converted = QueryCreditAddressResponseConverter.fromAmino(data as any);
+  return converted.creditAddress;
 }
 
-export async function getCreditEstimate(tenant: string): Promise<CreditEstimateResponse | null> {
+export async function getCreditEstimate(tenant: string): Promise<QueryCreditEstimateResponse | null> {
   const client = await getQueryClient();
   const data = await queryWithNotFound(
     () => client.liftedinit.billing.v1.creditEstimate({ tenant }),
     null,
   );
   if (!data) return null;
-  return data as unknown as CreditEstimateResponse;
+  return QueryCreditEstimateResponseConverter.fromAmino(data as any);
 }
 
 export async function getBillingParams(): Promise<BillingParams> {
   const client = await getQueryClient();
   const data = await client.liftedinit.billing.v1.params();
-  return data.params as unknown as BillingParams;
+  const converted = QueryParamsResponseConverter.fromAmino(data as any);
+  return converted.params;
 }
 
 export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState): Promise<Lease[]> {
@@ -182,7 +121,8 @@ export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState
     tenant,
     stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
   });
-  return parseLeases((data.leases ?? []) as unknown as RawLease[]);
+  const converted = QueryLeasesResponseConverter.fromAmino(data as any);
+  return converted.leases.map(fixLeaseEnums);
 }
 
 export async function getLeasesByProvider(providerUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
@@ -191,7 +131,8 @@ export async function getLeasesByProvider(providerUuid: string, stateFilter?: Le
     providerUuid,
     stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
   });
-  return parseLeases((data.leases ?? []) as unknown as RawLease[]);
+  const converted = QueryLeasesResponseConverter.fromAmino(data as any);
+  return converted.leases.map(fixLeaseEnums);
 }
 
 export async function getLease(leaseUuid: string): Promise<Lease | null> {
@@ -201,11 +142,8 @@ export async function getLease(leaseUuid: string): Promise<Lease | null> {
     null,
   );
   if (!data) return null;
-  return parseLease(data.lease as unknown as RawLease);
-}
-
-export interface WithdrawableAmountResponse {
-  amounts: Coin[];
+  const converted = QueryLeaseResponseConverter.fromAmino(data as any);
+  return fixLeaseEnums(converted.lease);
 }
 
 export async function getWithdrawableAmount(leaseUuid: string): Promise<Coin[]> {
@@ -215,27 +153,18 @@ export async function getWithdrawableAmount(leaseUuid: string): Promise<Coin[]> 
     null,
   );
   if (!data) return [];
-  return (data.amounts ?? []) as unknown as Coin[];
+  const converted = QueryWithdrawableAmountResponseConverter.fromAmino(data as any);
+  return converted.amounts;
 }
 
-export interface ProviderWithdrawableResponse {
-  amounts: Coin[];
-  lease_count: string;
-  has_more: boolean;
-}
-
-export async function getProviderWithdrawable(providerUuid: string): Promise<ProviderWithdrawableResponse> {
+export async function getProviderWithdrawable(providerUuid: string): Promise<QueryProviderWithdrawableResponse> {
   const client = await getQueryClient();
   const data = await queryWithNotFound(
     () => client.liftedinit.billing.v1.providerWithdrawable({ providerUuid, limit: BigInt(0) }),
     null,
   );
-  if (!data) return { amounts: [], lease_count: '0', has_more: false };
-  return {
-    amounts: (data.amounts ?? []) as unknown as Coin[],
-    lease_count: String(data.lease_count),
-    has_more: data.has_more,
-  };
+  if (!data) return { amounts: [], leaseCount: 0n, hasMore: false };
+  return QueryProviderWithdrawableResponseConverter.fromAmino(data as any);
 }
 
 export async function getLeasesBySKU(skuUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
@@ -244,15 +173,13 @@ export async function getLeasesBySKU(skuUuid: string, stateFilter?: LeaseState):
     skuUuid,
     stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
   });
-  return parseLeases((data.leases ?? []) as unknown as RawLease[]);
+  const converted = QueryLeasesResponseConverter.fromAmino(data as any);
+  return converted.leases.map(fixLeaseEnums);
 }
 
 export interface PaginatedLeasesResponse {
   leases: Lease[];
-  pagination?: {
-    next_key?: string;
-    total?: string;
-  };
+  pagination?: PageResponse;
 }
 
 export interface GetAllLeasesParams {
@@ -285,21 +212,18 @@ export async function getAllLeases(params?: GetAllLeasesParams): Promise<Paginat
     stateFilter: params?.stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
   });
 
-  const pagination = data.pagination as unknown as PaginatedLeasesResponse['pagination'];
+  const converted = QueryLeasesResponseConverter.fromAmino(data as any);
 
   return {
-    leases: parseLeases((data.leases ?? []) as unknown as RawLease[]),
-    pagination,
+    leases: converted.leases.map(fixLeaseEnums),
+    pagination: converted.pagination,
   };
 }
 
 export interface PaginatedCreditsResponse {
-  credit_accounts: CreditAccount[];
+  creditAccounts: CreditAccount[];
   balances: Record<string, Coin[]>;
-  pagination?: {
-    next_key?: string;
-    total?: string;
-  };
+  pagination?: PageResponse;
 }
 
 export interface GetAllCreditsParams {
@@ -334,8 +258,8 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
     }),
   });
 
-  const creditAccounts: CreditAccount[] = ((data.credit_accounts ?? []) as unknown[]).map(parseCreditAccount);
-  const pagination = data.pagination as unknown as PaginatedCreditsResponse['pagination'];
+  const converted = QueryCreditAccountsResponseConverter.fromAmino(data as any);
+  const creditAccounts = converted.creditAccounts;
 
   // N+1 query: fetch balances from bank module (see function docs for rationale)
   const balances: Record<string, Coin[]> = {};
@@ -343,11 +267,11 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
   if (creditAccounts.length > 0) {
     const balancePromises = creditAccounts.map(async (account) => {
       try {
-        const balanceData = await client.cosmos.bank.v1beta1.allBalances({ address: account.credit_address, resolveDenom: false });
-        return { key: account.credit_address, balances: (balanceData.balances ?? []) as unknown as Coin[] };
+        const balanceData = await client.cosmos.bank.v1beta1.allBalances({ address: account.creditAddress, resolveDenom: false });
+        return { key: account.creditAddress, balances: (balanceData.balances ?? []) as Coin[] };
       } catch (error) {
         logError('billing.getAllCredits.fetchBalance', error);
-        return { key: account.credit_address, balances: [] };
+        return { key: account.creditAddress, balances: [] as Coin[] };
       }
     });
 
@@ -358,8 +282,8 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
   }
 
   return {
-    credit_accounts: creditAccounts,
+    creditAccounts,
     balances,
-    pagination,
+    pagination: converted.pagination,
   };
 }

@@ -163,7 +163,7 @@ async function executeCreateLease(
       }
       if (matches.length > 1) {
         const details = matches
-          .map((s) => `${s.uuid} (provider ${s.provider_uuid})`)
+          .map((s) => `${s.uuid} (provider ${s.providerUuid})`)
           .join(', ');
         return {
           success: false,
@@ -283,10 +283,10 @@ async function handlePayloadUploadAfterLeaseCreation(
     }
 
     const provider = await getProviders(false).then((providers) =>
-      providers.find((p) => p.uuid === leaseData.provider_uuid)
+      providers.find((p) => p.uuid === leaseData.providerUuid)
     );
 
-    if (!provider || !provider.api_url) {
+    if (!provider || !provider.apiUrl) {
       return {
         success: true,
         data: {
@@ -299,7 +299,7 @@ async function handlePayloadUploadAfterLeaseCreation(
 
     // Upload the payload
     const uploadResult = await uploadPayloadToProvider(
-      provider.api_url,
+      provider.apiUrl,
       leaseUuid,
       metaHashHex,
       payloadBytes,
@@ -370,7 +370,7 @@ async function executeUploadPayload(
     };
   }
 
-  if (!lease.meta_hash || lease.meta_hash === '') {
+  if (!lease.metaHash || lease.metaHash.length === 0) {
     return {
       success: false,
       error: 'Lease does not have a meta_hash. Payload upload requires a lease created with meta_hash.',
@@ -380,30 +380,30 @@ async function executeUploadPayload(
   // SECURITY: Derive provider API URL from on-chain lease data, not from tool args
   // This prevents prompt injection attacks that could redirect auth tokens to attacker endpoints
   const providers = await getProviders(false);
-  const provider = providers.find((p) => p.uuid === lease.provider_uuid);
+  const provider = providers.find((p) => p.uuid === lease.providerUuid);
 
   if (!provider) {
     return {
       success: false,
-      error: `Provider not found for lease. Provider UUID: ${lease.provider_uuid}`,
+      error: `Provider not found for lease. Provider UUID: ${lease.providerUuid}`,
     };
   }
 
-  if (!provider.api_url) {
+  if (!provider.apiUrl) {
     return {
       success: false,
       error: `Provider ${provider.uuid} does not have an API URL configured.`,
     };
   }
 
-  const providerApiUrl = provider.api_url;
+  const providerApiUrl = provider.apiUrl;
 
   // Compute payload hash and verify it matches the lease meta_hash
   const payloadBytes = new TextEncoder().encode(payload);
   const computedHash = await computePayloadHash(payloadBytes);
 
-  // The lease.meta_hash is stored as a string
-  const leaseMetaHashHex = lease.meta_hash;
+  // The lease.metaHash is a Uint8Array - convert to hex for comparison
+  const leaseMetaHashHex = Array.from(lease.metaHash).map(b => b.toString(16).padStart(2, '0')).join('');
 
   if (computedHash.toLowerCase() !== leaseMetaHashHex.toLowerCase()) {
     return {

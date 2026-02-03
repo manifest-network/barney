@@ -224,12 +224,12 @@ export function ProviderLeaseCard({
           <div className="provider-lease-details">
             <div className="provider-lease-detail">
               <span className="provider-lease-detail-label">Created</span>
-              <span className="provider-lease-detail-value">{formatDate(lease.created_at)}</span>
+              <span className="provider-lease-detail-value">{formatDate(lease.createdAt)}</span>
             </div>
-            {type === 'active' && lease.acknowledged_at && (
+            {type === 'active' && lease.acknowledgedAt && (
               <div className="provider-lease-detail">
                 <span className="provider-lease-detail-label">Active Since</span>
-                <span className="provider-lease-detail-value">{formatDate(lease.acknowledged_at)}</span>
+                <span className="provider-lease-detail-value">{formatDate(lease.acknowledgedAt)}</span>
               </div>
             )}
           </div>
@@ -237,14 +237,14 @@ export function ProviderLeaseCard({
           <div className="provider-lease-items">
             <div className="provider-lease-items-title">Requested Items</div>
             {lease.items.map((item) => {
-              const sku = getSKU(item.sku_uuid);
+              const sku = getSKU(item.skuUuid);
               return (
-                <div key={`${lease.uuid}-${item.sku_uuid}`} className="provider-lease-item">
+                <div key={`${lease.uuid}-${item.skuUuid}`} className="provider-lease-item">
                   <span className="provider-lease-item-name">
-                    {sku?.name || item.sku_uuid} × {item.quantity}
+                    {sku?.name || item.skuUuid} × {String(item.quantity)}
                   </span>
                   <span className="provider-lease-item-price">
-                    {formatPrice(item.locked_price.amount, item.locked_price.denom)}/sec
+                    {formatPrice(item.lockedPrice.amount, item.lockedPrice.denom)}/sec
                   </span>
                 </div>
               );

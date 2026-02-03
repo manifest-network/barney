@@ -35,7 +35,7 @@ function App() {
       try {
         const [providers, billingParams] = await Promise.all([
           getProviders(),
-          getBillingParams().catch(() => ({ allowed_list: [] as string[] })),
+          getBillingParams().catch(() => ({ allowedList: [] as string[] })),
         ]);
 
         // Only update state if component is still mounted
@@ -46,7 +46,7 @@ function App() {
         setIsProvider(!!myProvider);
 
         // Check if connected address is in billing allowed list
-        setIsAdmin(billingParams.allowed_list?.includes(address) ?? false);
+        setIsAdmin(billingParams.allowedList?.includes(address) ?? false);
       } catch {
         if (isMounted) {
           setIsProvider(false);

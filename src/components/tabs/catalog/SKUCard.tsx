@@ -55,7 +55,7 @@ export function SKUCard({
             <span className="catalog-sku-labeled-field" data-field="price">
               <span className="catalog-sku-label">Price</span>
               <span className="catalog-sku-price">
-                {formatPrice(sku.base_price.amount, sku.base_price.denom, sku.unit)}
+                {formatPrice(sku.basePrice.amount, sku.basePrice.denom, sku.unit)}
               </span>
             </span>
 

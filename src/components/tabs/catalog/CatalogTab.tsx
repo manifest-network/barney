@@ -98,7 +98,7 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
     return providers.filter(p =>
       p.address.toLowerCase().includes(search) ||
       p.uuid.toLowerCase().includes(search) ||
-      (p.api_url && p.api_url.toLowerCase().includes(search))
+      (p.apiUrl && p.apiUrl.toLowerCase().includes(search))
     );
   }, [providers, providerSearch]);
 
@@ -167,7 +167,7 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
     const abortController = new AbortController();
 
     const checkHealth = async () => {
-      const providersWithApi = providers.filter((p) => p.api_url && p.active);
+      const providersWithApi = providers.filter((p) => p.apiUrl && p.active);
       if (providersWithApi.length === 0) return;
 
       setProviderHealth((prev) => {
@@ -182,7 +182,7 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
 
       const results = await Promise.all(
         providersWithApi.map(async (p) => {
-          const health = await getProviderHealth(p.api_url, HEALTH_CHECK_TIMEOUT_MS, abortController.signal);
+          const health = await getProviderHealth(p.apiUrl, HEALTH_CHECK_TIMEOUT_MS, abortController.signal);
           return { uuid: p.uuid, status: health?.status === 'healthy' ? 'healthy' : 'unhealthy' } as const;
         })
       );
@@ -210,7 +210,7 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
     return provider?.address || 'Unknown';
   };
 
-  const isInSKUAllowedList = address && skuParams?.allowed_list?.includes(address);
+  const isInSKUAllowedList = address && skuParams?.allowedList?.includes(address);
 
   // Handlers
   const handleDeactivateProvider = async (uuid: string) => {
@@ -475,7 +475,7 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
                 <SKUCard
                   key={sku.uuid}
                   sku={sku}
-                  providerAddress={getProviderAddress(sku.provider_uuid)}
+                  providerAddress={getProviderAddress(sku.providerUuid)}
                   usage={skuUsage[sku.uuid]}
                   usageLoading={skuUsageLoading && !(sku.uuid in skuUsage)}
                   onEdit={isInSKUAllowedList ? () => setEditingSKU(sku) : undefined}

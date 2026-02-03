@@ -125,6 +125,17 @@ describe('formatDate', () => {
     // Should not include time
     expect(result.includes(':')).toBe(false);
   });
+
+  it('formats Date objects directly', () => {
+    const result = formatDate(new Date('2024-01-15T10:30:00Z'));
+    expect(result).not.toBe('-');
+    expect(typeof result).toBe('string');
+  });
+
+  it('returns "-" for Date objects with year <= 1', () => {
+    const zeroDate = new Date('0001-01-01T00:00:00Z');
+    expect(formatDate(zeroDate)).toBe('-');
+  });
 });
 
 describe('formatRelativeTime', () => {
@@ -142,6 +153,11 @@ describe('formatRelativeTime', () => {
 
   it('returns "just now" for very recent dates', () => {
     const now = new Date().toISOString();
+    expect(formatRelativeTime(now)).toBe('just now');
+  });
+
+  it('handles Date objects directly', () => {
+    const now = new Date();
     expect(formatRelativeTime(now)).toBe('just now');
   });
 });
@@ -191,6 +207,12 @@ describe('formatDuration', () => {
 
   it('returns "0s" for zero', () => {
     expect(formatDuration('0')).toBe('0s');
+  });
+
+  it('handles bigint values', () => {
+    expect(formatDuration(3600n)).toBe('1h');
+    expect(formatDuration(86400n)).toBe('1d');
+    expect(formatDuration(0n)).toBe('0s');
   });
 });
 
