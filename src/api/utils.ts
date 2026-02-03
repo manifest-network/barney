@@ -173,28 +173,6 @@ export async function fetchJson<T>(
   return doFetch();
 }
 
-/**
- * Fetches JSON from a URL with required schema validation.
- * Returns the validated and typed response.
- *
- * @param url - The URL to fetch
- * @param resourceName - Human-readable name for error messages
- * @param schema - Zod schema to validate the response
- * @param options - Optional configuration (notFoundDefault, retry settings)
- * @returns The validated and typed response
- *
- * @example
- * const data = await fetchJsonValidated('/api/providers', 'providers', ProvidersResponseSchema);
- * // data is typed as z.infer<typeof ProvidersResponseSchema>
- */
-export async function fetchJsonValidated<TSchema extends z.ZodTypeAny>(
-  url: string,
-  resourceName: string,
-  schema: TSchema,
-  options?: Omit<FetchJsonOptions<z.infer<TSchema>>, 'schema'>
-): Promise<z.infer<TSchema>> {
-  return fetchJson(url, resourceName, { ...options, schema });
-}
 
 /**
  * Builds a URL with optional query parameters.

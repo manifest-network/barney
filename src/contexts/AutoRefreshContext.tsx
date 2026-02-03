@@ -56,6 +56,7 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
   const fetchFnRef = useRef<(() => Promise<void>) | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isMountedRef = useRef(true);
+  const isEnabledRef = useRef(isEnabled);
 
   const doFetch = useCallback(async () => {
     if (!isMountedRef.current || !fetchFnRef.current) return;
@@ -89,6 +90,11 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
       intervalRef.current = null;
     }
   }, []);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    isEnabledRef.current = isEnabled;
+  }, [isEnabled]);
 
   // Handle visibility change
   useEffect(() => {
@@ -132,11 +138,11 @@ export function AutoRefreshProvider({ children }: { children: ReactNode }) {
   const registerFetchFn = useCallback((fn: () => Promise<void>) => {
     fetchFnRef.current = fn;
     // Immediate fetch when registering
-    if (isEnabled && !document.hidden) {
+    if (isEnabledRef.current && !document.hidden) {
       doFetch();
       startPolling();
     }
-  }, [isEnabled, doFetch, startPolling]);
+  }, [doFetch, startPolling]);
 
   const unregisterFetchFn = useCallback(() => {
     fetchFnRef.current = null;
