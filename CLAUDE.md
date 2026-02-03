@@ -62,8 +62,9 @@ Tool definitions are in `src/ai/tools.ts`. The system prompt is dynamically gene
 | `tx.ts` | Transaction utilities and message builders |
 | `provider-api.ts` | Payload upload with ADR-036 auth |
 | `ollama.ts` | LLM streaming with retry/backoff |
-| `utils.ts` | Shared fetch utilities (`fetchJson`, `buildUrl`, `withRetry`) |
-| `schemas.ts` | Zod schemas for API response validation |
+| `config.ts` | API endpoints, denom metadata, price formatting |
+| `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
+| `queryClient.ts` | LCD query client factory (cached singleton) |
 
 ### Tab Components
 
@@ -81,9 +82,7 @@ Tabs are conditionally rendered based on `isProvider` and `isAdmin` roles checke
 - **SSRF protection**: `src/ai/validation.ts` uses `ipaddr.js` to block private/internal addresses (DEV mode allows localhost for Ollama)
 - **Error utilities**: Use `logError()` from `src/utils/errors.ts` instead of raw `console.error`
 - **Transaction handling**: Use `useTxHandler()` hook from `src/hooks/useTxHandler.ts` for standardized transaction execution with toast notifications
-- **API fetch utilities**: Use `fetchJson()` and `buildUrl()` from `src/api/utils.ts` for consistent error handling
-- **API validation**: Use Zod schemas from `src/api/schemas.ts` with `fetchJson({ schema })` for runtime response validation
-- **Retry logic**: Use `withRetry()` or `fetchJson({ retry: true })` for transient network error recovery with exponential backoff
+- **Retry logic**: Use `withRetry()` from `src/api/utils.ts` for transient network error recovery with exponential backoff
 - **Tool result caching**: Query tool results cached for 10s in AIContext to reduce redundant API calls (max 50 entries, LRU eviction)
 
 ## Chain Configuration
