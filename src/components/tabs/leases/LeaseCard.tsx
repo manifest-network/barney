@@ -13,6 +13,7 @@ import { formatDate, formatRelativeTime, formatDuration, fromBaseUnits } from '.
 import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER, type LeaseFilterState } from '../../../utils/leaseState';
 import { DENOM_METADATA } from '../../../api/config';
 import { formatCostPerHour } from '../../../utils/pricing';
+import { toHex } from '../../../utils/hash';
 import {
   createSignMessage,
   createAuthToken,
@@ -302,8 +303,8 @@ function LeaseCardExpanded({
           {lease.metaHash && lease.metaHash.length > 0 && (
             <div className="lease-card-kv">
               <span className="lease-card-kv-label">Meta Hash</span>
-              <code className="lease-card-kv-value">{Array.from(lease.metaHash).map(b => b.toString(16).padStart(2, '0')).join('')}</code>
-              <CopyButton value={Array.from(lease.metaHash).map(b => b.toString(16).padStart(2, '0')).join('')} copyToClipboard={copyToClipboard} isCopied={isCopied} />
+              <code className="lease-card-kv-value">{toHex(lease.metaHash)}</code>
+              <CopyButton value={toHex(lease.metaHash)} copyToClipboard={copyToClipboard} isCopied={isCopied} />
             </div>
           )}
           {lease.minLeaseDurationAtCreation > 0n && (

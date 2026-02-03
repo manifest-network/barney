@@ -76,12 +76,14 @@ UI components and AI tools use separate transaction paths that both leverage man
 
 ### Tab Components
 
-Tabs register a fetch function with `AutoRefreshContext` on mount. Data flows:
+Tabs register a fetch function with `AutoRefreshContext` on mount via `useAutoRefreshTab()`. Data flows:
 ```
 Tab mounts → registers fetch → polls every 10s → local state → render
 ```
 
-Tabs are conditionally rendered based on `isProvider` and `isAdmin` roles checked in `App.tsx`.
+**Important:** AutoRefreshContext uses a "last one wins" model — only one fetch function is active at a time. When a new tab mounts and registers its fetch, the previous tab's fetch is replaced. This assumes only one tab is mounted at a time (tabs unmount on switch via conditional rendering in `App.tsx`).
+
+Tabs are conditionally rendered based on `isProvider` and `isAdmin` roles checked in `App.tsx`. Each tab lives in its own subdirectory under `src/components/tabs/` (e.g., `tabs/leases/`, `tabs/catalog/`) with a barrel `index.ts` export.
 
 ## Key Patterns
 
@@ -93,6 +95,7 @@ Tabs are conditionally rendered based on `isProvider` and `isAdmin` roles checke
 - **Retry logic**: Use `withRetry()` from `src/api/utils.ts` for transient network error recovery with exponential backoff
 - **Tool result caching**: Query tool results cached for 10s in AIContext to reduce redundant API calls (max 50 entries, LRU eviction)
 - **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
+- **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
 - **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs.
 
 ## Chain Configuration

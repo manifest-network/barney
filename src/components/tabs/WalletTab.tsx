@@ -1,5 +1,4 @@
 import { useState, useCallback } from 'react';
-import { useChain } from '@cosmos-kit/react';
 import { Link, Wallet, Clock, Flame, Loader2, Copy, Check, Zap, TrendingDown, Plus, ArrowRight, GitBranch, UserPlus } from 'lucide-react';
 import {
   getBalance,
@@ -14,10 +13,10 @@ import type { QueryCreditAccountResponse, QueryCreditEstimateResponse } from '..
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { useAutoRefreshTab } from '../../hooks/useAutoRefreshTab';
 import { useToast } from '../../hooks/useToast';
+import { useTxHandler } from '../../hooks/useTxHandler';
 import { EmptyState } from '../ui/EmptyState';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { truncateAddress, isValidManifestAddress } from '../../utils/address';
-import { CHAIN_NAME } from '../../config/chain';
 
 interface WalletTabProps {
   isConnected: boolean;
@@ -35,12 +34,11 @@ interface WalletData {
 }
 
 export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
-  const { getOfflineSignerDirect } = useChain(CHAIN_NAME);
   const toast = useToast();
+  const { txLoading, executeTx } = useTxHandler();
   const { copied, copyToClipboard } = useCopyToClipboard();
   const [fundAmount, setFundAmount] = useState('');
   const [fundRecipient, setFundRecipient] = useState('');
-  const [txLoading, setTxLoading] = useState(false);
   const [data, setData] = useState<WalletData>({
     mfxBalance: null,
     pwrBalance: null,
@@ -103,35 +101,20 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
       return;
     }
 
-    setTxLoading(true);
+    const baseAmount = toBaseUnits(parsedAmount, DENOMS.PWR);
+    const target = tenant === address ? '' : ` for ${truncateAddress(tenant)}`;
 
-    try {
-      const signer = getOfflineSignerDirect();
-      if (!signer) {
-        throw new Error('Failed to get signer');
+    await executeTx(
+      (signer) => fundCredit(signer, address, tenant, { denom: DENOMS.PWR, amount: baseAmount }),
+      {
+        successMessage: (txHash) => `Funded ${fundAmount} PWR${target}! Tx: ${txHash}...`,
+        onSuccess: () => {
+          setFundAmount('');
+          setFundRecipient('');
+          refresh();
+        },
       }
-
-      const baseAmount = toBaseUnits(parsedAmount, DENOMS.PWR);
-
-      const result = await fundCredit(signer, address, tenant, {
-        denom: DENOMS.PWR,
-        amount: baseAmount,
-      });
-
-      if (result.success) {
-        const target = tenant === address ? '' : ` for ${truncateAddress(tenant)}`;
-        toast.success(`Funded ${fundAmount} PWR${target}! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        setFundAmount('');
-        setFundRecipient('');
-        refresh();
-      } else {
-        toast.error(result.error || 'Transaction failed');
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Transaction failed');
-    } finally {
-      setTxLoading(false);
-    }
+    );
   };
 
   const formatDuration = (seconds: number) => {

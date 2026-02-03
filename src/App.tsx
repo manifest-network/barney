@@ -3,7 +3,7 @@ import { useChain } from '@cosmos-kit/react';
 import { Layout, type TabId } from './components/layout/Layout';
 import { WalletTab } from './components/tabs/WalletTab';
 import { CatalogTab } from './components/tabs/catalog';
-import { LeasesTab } from './components/tabs/LeasesTab';
+import { LeasesTab } from './components/tabs/leases';
 import { ProviderTab } from './components/tabs/provider';
 import { NetworkTab } from './components/tabs/network';
 import { TabErrorBoundary } from './components/ui/ErrorBoundary';

@@ -268,9 +268,20 @@ export async function* streamChat(
  * @returns Array of available models, or empty array on failure
  */
 export async function listModels(endpoint: string): Promise<OllamaModel[]> {
+  let apiUrl: string;
+  try {
+    const url = new URL('/api/tags', endpoint);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return [];
+    }
+    apiUrl = url.href;
+  } catch {
+    return [];
+  }
+
   try {
     return await withRetry(async () => {
-      const response = await fetch(`${endpoint}/api/tags`);
+      const response = await fetch(apiUrl);
       if (!response.ok) {
         throw new Error(`Failed to fetch models: ${response.status}`);
       }
@@ -291,8 +302,19 @@ export async function listModels(endpoint: string): Promise<OllamaModel[]> {
  * @returns true if Ollama is healthy, false otherwise
  */
 export async function checkOllamaHealth(endpoint: string): Promise<boolean> {
+  let apiUrl: string;
   try {
-    const response = await fetch(`${endpoint}/api/tags`, {
+    const url = new URL('/api/tags', endpoint);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return false;
+    }
+    apiUrl = url.href;
+  } catch {
+    return false;
+  }
+
+  try {
+    const response = await fetch(apiUrl, {
       method: 'GET',
       signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
     });

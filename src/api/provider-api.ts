@@ -5,6 +5,7 @@
 
 import { logError } from '../utils/errors';
 import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
+import { HEALTH_CHECK_TIMEOUT_MS } from '../config/constants';
 
 /**
  * Validates that a provider API URL is safe to use.
@@ -169,7 +170,7 @@ export async function getLeaseConnectionInfo(
  */
 export async function getProviderHealth(
   providerApiUrl: string,
-  timeoutMs: number = 5000,
+  timeoutMs: number = HEALTH_CHECK_TIMEOUT_MS,
   abortSignal?: AbortSignal
 ): Promise<ProviderHealthResponse | null> {
   if (!providerApiUrl) {

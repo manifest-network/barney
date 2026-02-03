@@ -7,6 +7,7 @@ import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getLease } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { isValidUUID, parseJsonStringArray } from '../../utils/format';
+import { toHex } from '../../utils/hash';
 import type { ToolResult, SignResult, PayloadAttachment } from './types';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, computePayloadHash } from './utils';
 
@@ -403,7 +404,7 @@ async function executeUploadPayload(
   const computedHash = await computePayloadHash(payloadBytes);
 
   // The lease.metaHash is a Uint8Array - convert to hex for comparison
-  const leaseMetaHashHex = Array.from(lease.metaHash).map(b => b.toString(16).padStart(2, '0')).join('');
+  const leaseMetaHashHex = toHex(lease.metaHash);
 
   if (computedHash.toLowerCase() !== leaseMetaHashHex.toLowerCase()) {
     return {
