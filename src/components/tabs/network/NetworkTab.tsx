@@ -20,13 +20,11 @@ import { SkeletonCard } from '../../ui/SkeletonCard';
 import { Pagination } from '../../ui/Pagination';
 import { NetworkLeaseCard } from './NetworkLeaseCard';
 import { NetworkCreditCard } from './NetworkCreditCard';
-import { PAGE_SIZE } from './types';
+import { DEFAULT_PAGE_SIZE } from '../../../config/constants';
 import type { ViewMode } from './types';
 
 export function NetworkTab({ isConnected, address, onConnect }: { isConnected: boolean; address?: string; onConnect: () => void }) {
   const [isAdmin, setIsAdmin] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   // View mode
   const [viewMode, setViewMode] = useState<ViewMode>('leases');
@@ -43,6 +41,10 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
   // Reference data
   const [providers, setProviders] = useState<Provider[]>([]);
   const [skus, setSKUs] = useState<SKU[]>([]);
+
+  // Loading and error state
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   // Network stats
   const [stats, setStats] = useState<{
@@ -106,20 +108,16 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
     }
   }, []);
 
-  // Fetch leases
-  const fetchLeases = useCallback(async (showLoading = true) => {
-    if (showLoading) {
-      setLoading(true);
-    }
-    setError(null);
-
+  // Separate fetch functions with showLoading control
+  const fetchLeases = useCallback(async (showLoading: boolean) => {
     try {
+      if (showLoading) setLoading(true);
+      setError(null);
       const response = await getAllLeases({
         stateFilter: leaseStateFilter === 'all' ? undefined : leaseStateFilter,
-        limit: PAGE_SIZE,
+        limit: DEFAULT_PAGE_SIZE,
         offset: leaseOffset,
       });
-
       setLeasesResponse(response);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch leases');
@@ -128,19 +126,14 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
     }
   }, [leaseStateFilter, leaseOffset]);
 
-  // Fetch credits
-  const fetchCredits = useCallback(async (showLoading = true) => {
-    if (showLoading) {
-      setLoading(true);
-    }
-    setError(null);
-
+  const fetchCredits = useCallback(async (showLoading: boolean) => {
     try {
+      if (showLoading) setLoading(true);
+      setError(null);
       const response = await getAllCredits({
-        limit: PAGE_SIZE,
+        limit: DEFAULT_PAGE_SIZE,
         offset: creditOffset,
       });
-
       setCreditsResponse(response);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch credits');
@@ -149,7 +142,7 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
     }
   }, [creditOffset]);
 
-  // Combined fetch for auto-refresh
+  // Combined fetch for auto-refresh (no loading spinner)
   const fetchCurrentView = useCallback(async () => {
     await fetchReferenceData();
     if (viewMode === 'leases') {
@@ -162,17 +155,9 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
   const { refresh } = useAutoRefreshContext();
   useAutoRefreshTab(fetchCurrentView, isAdmin);
 
-  // Initial data load
-  useEffect(() => {
-    if (isAdmin) {
-      fetchReferenceData();
-    }
-  }, [isAdmin, fetchReferenceData]);
-
-  // Fetch data for the active view when dependencies change
+  // Initial load with loading spinner
   useEffect(() => {
     if (!isAdmin) return;
-
     if (viewMode === 'leases') {
       fetchLeases(true);
     } else {
@@ -216,14 +201,14 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
   }
 
   const totalLeasePages = Math.ceil(
-    Number(leasesResponse?.pagination?.total ?? 0n) / PAGE_SIZE
+    Number(leasesResponse?.pagination?.total ?? 0n) / DEFAULT_PAGE_SIZE
   );
-  const currentLeasePage = Math.floor(leaseOffset / PAGE_SIZE) + 1;
+  const currentLeasePage = Math.floor(leaseOffset / DEFAULT_PAGE_SIZE) + 1;
 
   const totalCreditPages = Math.ceil(
-    Number(creditsResponse?.pagination?.total ?? 0n) / PAGE_SIZE
+    Number(creditsResponse?.pagination?.total ?? 0n) / DEFAULT_PAGE_SIZE
   );
-  const currentCreditPage = Math.floor(creditOffset / PAGE_SIZE) + 1;
+  const currentCreditPage = Math.floor(creditOffset / DEFAULT_PAGE_SIZE) + 1;
 
   const leases = leasesResponse?.leases || [];
   const credits = creditsResponse?.creditAccounts || [];
@@ -379,8 +364,8 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
               currentPage={currentLeasePage}
               totalPages={totalLeasePages}
               totalItems={Number(leasesResponse?.pagination?.total ?? 0n)}
-              itemsPerPage={PAGE_SIZE}
-              onPageChange={(page) => setLeaseOffset((page - 1) * PAGE_SIZE)}
+              itemsPerPage={DEFAULT_PAGE_SIZE}
+              onPageChange={(page) => setLeaseOffset((page - 1) * DEFAULT_PAGE_SIZE)}
             />
           )}
         </div>
@@ -424,8 +409,8 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
               currentPage={currentCreditPage}
               totalPages={totalCreditPages}
               totalItems={Number(creditsResponse?.pagination?.total ?? 0n)}
-              itemsPerPage={PAGE_SIZE}
-              onPageChange={(page) => setCreditOffset((page - 1) * PAGE_SIZE)}
+              itemsPerPage={DEFAULT_PAGE_SIZE}
+              onPageChange={(page) => setCreditOffset((page - 1) * DEFAULT_PAGE_SIZE)}
             />
           )}
         </div>

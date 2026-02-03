@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useChain } from '@cosmos-kit/react';
 import { Link, Package, Shield, Loader2, Plus, X } from 'lucide-react';
-import { HEALTH_CHECK_TIMEOUT_MS, POST_TX_REFETCH_DELAY_MS } from '../../../config/constants';
+import { HEALTH_CHECK_TIMEOUT_MS, DEFAULT_PAGE_SIZE } from '../../../config/constants';
 import { truncateAddress } from '../../../utils/address';
 import {
   getProviders,
@@ -18,24 +17,21 @@ import {
 import type { Provider, SKU, SKUParams } from '../../../api/sku';
 import { getProviderHealth } from '../../../api/provider-api';
 import { getLeasesBySKU, LeaseState } from '../../../api/billing';
-import { useToast } from '../../../hooks/useToast';
+import { useTxHandler } from '../../../hooks/useTxHandler';
 import { useAutoRefreshContext } from '../../../contexts/AutoRefreshContext';
 import { EmptyState } from '../../ui/EmptyState';
 import { Modal } from '../../ui/Modal';
 import { ErrorBanner } from '../../ui/ErrorBanner';
 import { Pagination } from '../../ui/Pagination';
-import { CHAIN_NAME } from '../../../config/chain';
 import { SearchInput } from './SearchInput';
 import { ProviderCard } from './ProviderCard';
 import { SKUCard } from './SKUCard';
 import { CreateProviderForm, EditProviderForm } from './ProviderForms';
 import { CreateSKUForm, EditSKUForm } from './SKUForms';
 import type { HealthStatus } from './types';
-import { ITEMS_PER_PAGE } from './types';
 
 export function CatalogTab({ isConnected, address, onConnect }: { isConnected: boolean; address?: string; onConnect: () => void }) {
-  const { getOfflineSignerDirect } = useChain(CHAIN_NAME);
-  const toast = useToast();
+  const { executeTx } = useTxHandler();
 
   // Filters and pagination
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
@@ -61,11 +57,12 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
   const [skuUsage, setSkuUsage] = useState<Record<string, { active: number; total: number }>>({});
   const [skuUsageLoading, setSkuUsageLoading] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const { registerFetchFn, unregisterFetchFn } = useAutoRefreshContext();
 
+  const fetchData = useCallback(async () => {
     try {
+      setError(null);
+
       const [fetchedProviders, fetchedSkus, fetchedParams] = await Promise.all([
         getProviders(!showInactive),
         selectedProvider
@@ -84,8 +81,6 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
     }
   }, [showInactive, selectedProvider]);
 
-  const { registerFetchFn, unregisterFetchFn } = useAutoRefreshContext();
-
   useEffect(() => {
     registerFetchFn(fetchData);
     return () => unregisterFetchFn();
@@ -103,11 +98,11 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
   }, [providers, providerSearch]);
 
   const paginatedProviders = useMemo(() => {
-    const start = (providerPage - 1) * ITEMS_PER_PAGE;
-    return filteredProviders.slice(start, start + ITEMS_PER_PAGE);
+    const start = (providerPage - 1) * DEFAULT_PAGE_SIZE;
+    return filteredProviders.slice(start, start + DEFAULT_PAGE_SIZE);
   }, [filteredProviders, providerPage]);
 
-  const providerTotalPages = Math.ceil(filteredProviders.length / ITEMS_PER_PAGE);
+  const providerTotalPages = Math.ceil(filteredProviders.length / DEFAULT_PAGE_SIZE);
 
   // Filter and paginate SKUs
   const filteredSkus = useMemo(() => {
@@ -120,11 +115,11 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
   }, [skus, skuSearch]);
 
   const paginatedSkus = useMemo(() => {
-    const start = (skuPage - 1) * ITEMS_PER_PAGE;
-    return filteredSkus.slice(start, start + ITEMS_PER_PAGE);
+    const start = (skuPage - 1) * DEFAULT_PAGE_SIZE;
+    return filteredSkus.slice(start, start + DEFAULT_PAGE_SIZE);
   }, [filteredSkus, skuPage]);
 
-  const skuTotalPages = Math.ceil(filteredSkus.length / ITEMS_PER_PAGE);
+  const skuTotalPages = Math.ceil(filteredSkus.length / DEFAULT_PAGE_SIZE);
 
   // Reset pagination when search changes
   useEffect(() => { setProviderPage(1); }, [providerSearch]);
@@ -214,105 +209,69 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
 
   // Handlers
   const handleDeactivateProvider = async (uuid: string) => {
-    if (!address) return;
-    const signer = getOfflineSignerDirect();
-    if (!signer) { toast.error('Failed to get signer'); return; }
-
-    const result = await deactivateProvider(signer, address, uuid);
-    if (result.success) {
-      toast.success(`Provider deactivated! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-      setTimeout(fetchData, POST_TX_REFETCH_DELAY_MS);
-    } else {
-      toast.error(result.error || 'Failed to deactivate provider');
-    }
+    await executeTx(
+      (signer) => deactivateProvider(signer, address!, uuid),
+      { successMessage: (hash) => `Provider deactivated! Tx: ${hash}...`, onSuccess: fetchData },
+    );
   };
 
   const handleDeactivateSKU = async (uuid: string) => {
-    if (!address) return;
-    const signer = getOfflineSignerDirect();
-    if (!signer) { toast.error('Failed to get signer'); return; }
-
-    const result = await deactivateSKU(signer, address, uuid);
-    if (result.success) {
-      toast.success(`SKU deactivated! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-      setTimeout(fetchData, POST_TX_REFETCH_DELAY_MS);
-    } else {
-      toast.error(result.error || 'Failed to deactivate SKU');
-    }
+    await executeTx(
+      (signer) => deactivateSKU(signer, address!, uuid),
+      { successMessage: (hash) => `SKU deactivated! Tx: ${hash}...`, onSuccess: fetchData },
+    );
   };
 
   const handleCreateProvider = async (params: { address: string; payoutAddress: string; apiUrl: string }) => {
-    if (!address) return;
-    const signer = getOfflineSignerDirect();
-    if (!signer) { toast.error('Failed to get signer'); return; }
-
-    const result = await createProvider(signer, address, params);
-    if (result.success) {
-      toast.success(`Provider created! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-      setShowCreateProvider(false);
-      setTimeout(fetchData, POST_TX_REFETCH_DELAY_MS);
-    } else {
-      toast.error(result.error || 'Failed to create provider');
-    }
+    await executeTx(
+      (signer) => createProvider(signer, address!, params),
+      {
+        successMessage: (hash) => `Provider created! Tx: ${hash}...`,
+        onSuccess: async () => { setShowCreateProvider(false); await fetchData(); },
+      },
+    );
   };
 
   const handleUpdateProvider = async (params: { uuid: string; address: string; payoutAddress: string; apiUrl: string; active: boolean }) => {
-    if (!address) return;
-    const signer = getOfflineSignerDirect();
-    if (!signer) { toast.error('Failed to get signer'); return; }
-
-    const result = await updateProvider(signer, address, params);
-    if (result.success) {
-      toast.success(`Provider updated! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-      setEditingProvider(null);
-      setTimeout(fetchData, POST_TX_REFETCH_DELAY_MS);
-    } else {
-      toast.error(result.error || 'Failed to update provider');
-    }
+    await executeTx(
+      (signer) => updateProvider(signer, address!, params),
+      {
+        successMessage: (hash) => `Provider updated! Tx: ${hash}...`,
+        onSuccess: async () => { setEditingProvider(null); await fetchData(); },
+      },
+    );
   };
 
   const handleCreateSKU = async (params: { providerUuid: string; name: string; unit: number; priceAmount: string; priceDenom: string }) => {
-    if (!address) return;
-    const signer = getOfflineSignerDirect();
-    if (!signer) { toast.error('Failed to get signer'); return; }
-
-    const result = await createSKU(signer, address, {
-      providerUuid: params.providerUuid,
-      name: params.name,
-      unit: params.unit,
-      basePrice: { denom: params.priceDenom, amount: params.priceAmount },
-    });
-
-    if (result.success) {
-      toast.success(`SKU created! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-      setShowCreateSKU(false);
-      setTimeout(fetchData, POST_TX_REFETCH_DELAY_MS);
-    } else {
-      toast.error(result.error || 'Failed to create SKU');
-    }
+    await executeTx(
+      (signer) => createSKU(signer, address!, {
+        providerUuid: params.providerUuid,
+        name: params.name,
+        unit: params.unit,
+        basePrice: { denom: params.priceDenom, amount: params.priceAmount },
+      }),
+      {
+        successMessage: (hash) => `SKU created! Tx: ${hash}...`,
+        onSuccess: async () => { setShowCreateSKU(false); await fetchData(); },
+      },
+    );
   };
 
   const handleUpdateSKU = async (params: { uuid: string; providerUuid: string; name: string; unit: number; priceAmount: string; priceDenom: string; active: boolean }) => {
-    if (!address) return;
-    const signer = getOfflineSignerDirect();
-    if (!signer) { toast.error('Failed to get signer'); return; }
-
-    const result = await updateSKU(signer, address, {
-      uuid: params.uuid,
-      providerUuid: params.providerUuid,
-      name: params.name,
-      unit: params.unit,
-      basePrice: { denom: params.priceDenom, amount: params.priceAmount },
-      active: params.active,
-    });
-
-    if (result.success) {
-      toast.success(`SKU updated! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-      setEditingSKU(null);
-      setTimeout(fetchData, POST_TX_REFETCH_DELAY_MS);
-    } else {
-      toast.error(result.error || 'Failed to update SKU');
-    }
+    await executeTx(
+      (signer) => updateSKU(signer, address!, {
+        uuid: params.uuid,
+        providerUuid: params.providerUuid,
+        name: params.name,
+        unit: params.unit,
+        basePrice: { denom: params.priceDenom, amount: params.priceAmount },
+        active: params.active,
+      }),
+      {
+        successMessage: (hash) => `SKU updated! Tx: ${hash}...`,
+        onSuccess: async () => { setEditingSKU(null); await fetchData(); },
+      },
+    );
   };
 
   const handleSelectProvider = (uuid: string | null) => {
@@ -425,7 +384,7 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
                 currentPage={providerPage}
                 totalPages={providerTotalPages}
                 totalItems={filteredProviders.length}
-                itemsPerPage={ITEMS_PER_PAGE}
+                itemsPerPage={DEFAULT_PAGE_SIZE}
                 onPageChange={setProviderPage}
               />
             )}
@@ -488,7 +447,7 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
                 currentPage={skuPage}
                 totalPages={skuTotalPages}
                 totalItems={filteredSkus.length}
-                itemsPerPage={ITEMS_PER_PAGE}
+                itemsPerPage={DEFAULT_PAGE_SIZE}
                 onPageChange={setSkuPage}
               />
             )}

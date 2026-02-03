@@ -3,6 +3,7 @@ import { Copy, Check, Clock, Zap, ChevronDown, ChevronUp } from 'lucide-react';
 import { useCopyToClipboard } from '../../../hooks/useCopyToClipboard';
 import { truncateAddress } from '../../../utils/address';
 import { formatDate, formatDuration, formatRelativeTime, fromBaseUnits } from '../../../utils/format';
+import { toHex } from '../../../utils/hash';
 import { DENOM_METADATA } from '../../../api/config';
 import { SECONDS_PER_HOUR } from '../../../config/constants';
 import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER } from '../../../utils/leaseState';
@@ -134,8 +135,8 @@ export function NetworkLeaseCard({ lease, getProvider, getSKU }: NetworkLeaseCar
               {lease.metaHash && lease.metaHash.length > 0 && (
                 <div className="lease-card-kv">
                   <span className="lease-card-kv-label">Meta Hash</span>
-                  <code className="lease-card-kv-value">{Array.from(lease.metaHash).map(b => b.toString(16).padStart(2, '0')).join('')}</code>
-                  <button onClick={() => copyToClipboard(Array.from(lease.metaHash).map(b => b.toString(16).padStart(2, '0')).join(''))} className="lease-card-copy-btn" title="Copy">
+                  <code className="lease-card-kv-value">{toHex(lease.metaHash)}</code>
+                  <button onClick={() => copyToClipboard(toHex(lease.metaHash))} className="lease-card-copy-btn" title="Copy">
                     <Copy size={10} />
                   </button>
                 </div>

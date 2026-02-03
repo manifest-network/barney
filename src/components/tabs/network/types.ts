@@ -2,8 +2,6 @@ import type { Lease, CreditAccount } from '../../../api/billing';
 import type { Provider, SKU } from '../../../api/sku';
 import type { Coin } from '../../../api/bank';
 
-export const PAGE_SIZE = 10;
-
 export type ViewMode = 'leases' | 'credits';
 
 export interface NetworkTabProps {

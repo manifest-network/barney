@@ -2,7 +2,8 @@
  * Shared formatting utilities
  */
 
-import { DENOM_METADATA } from '../api/config';
+import { DENOM_METADATA, UNIT_LABELS } from '../api/config';
+import type { Unit } from '../api/sku';
 
 // ============================================
 // Amount Conversion Utilities
@@ -77,6 +78,36 @@ export function formatAmount(amount: string, denom: string, maxDecimals = 6): st
 }
 
 /**
+ * Format a price amount with symbol and optional unit label.
+ * Delegates to formatAmount for the core conversion, then appends a unit suffix.
+ *
+ * @param amount - Raw amount string (in base units, e.g., umfx)
+ * @param denom - Denomination string
+ * @param unit - Optional unit type for suffix (e.g., "/hr", "/day")
+ * @returns Formatted price string like "1.5 MFX/hr" or "0 SYMBOL" for invalid amounts
+ */
+export function formatPrice(amount: string, denom: string, unit?: Unit): string {
+  const base = formatAmount(amount, denom);
+  if (unit != null) {
+    const unitLabel = UNIT_LABELS[unit] ?? '';
+    return `${base}${unitLabel}`;
+  }
+  return base;
+}
+
+/**
+ * Parse a date input into a valid Date, returning null for
+ * undefined, Go zero time, invalid dates, and year <= 1.
+ */
+function parseValidDate(input: Date | string | undefined): Date | null {
+  if (!input) return null;
+  if (typeof input === 'string' && input === '0001-01-01T00:00:00Z') return null;
+  const date = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(date.getTime()) || date.getFullYear() <= 1) return null;
+  return date;
+}
+
+/**
  * Format a date for display.
  * Accepts Date objects (from manifestjs fromAmino), ISO strings, or undefined.
  * Handles null/empty dates, invalid dates, and the Go zero time.
@@ -86,23 +117,8 @@ export function formatAmount(amount: string, denom: string, maxDecimals = 6): st
  * @returns Formatted date string or '-' for invalid/empty dates
  */
 export function formatDate(dateInput: Date | string | undefined, options: 'datetime' | 'date' = 'datetime'): string {
-  if (!dateInput) {
-    return '-';
-  }
-
-  let date: Date;
-  if (dateInput instanceof Date) {
-    date = dateInput;
-  } else {
-    if (dateInput === '0001-01-01T00:00:00Z') {
-      return '-';
-    }
-    date = new Date(dateInput);
-  }
-
-  if (Number.isNaN(date.getTime()) || date.getFullYear() <= 1) {
-    return '-';
-  }
+  const date = parseValidDate(dateInput);
+  if (!date) return '-';
   return options === 'date' ? date.toLocaleDateString() : date.toLocaleString();
 }
 
@@ -115,23 +131,8 @@ export function formatDate(dateInput: Date | string | undefined, options: 'datet
  * @returns Relative time string or '-' for invalid dates
  */
 export function formatRelativeTime(dateInput: Date | string | undefined): string {
-  if (!dateInput) {
-    return '-';
-  }
-
-  let date: Date;
-  if (dateInput instanceof Date) {
-    date = dateInput;
-  } else {
-    if (dateInput === '0001-01-01T00:00:00Z') {
-      return '-';
-    }
-    date = new Date(dateInput);
-  }
-
-  if (Number.isNaN(date.getTime()) || date.getFullYear() <= 1) {
-    return '-';
-  }
+  const date = parseValidDate(dateInput);
+  if (!date) return '-';
 
   const now = Date.now();
   const diffMs = now - date.getTime();

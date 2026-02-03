@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { formatPrice } from '../../api/config';
+import { formatPrice } from '../../utils/format';
 import type { SKU } from '../../api/sku';
 import type { LeaseItemWithId } from '../../hooks/useLeaseItems';
 

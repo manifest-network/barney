@@ -16,8 +16,8 @@ import type { PageResponse } from '@manifest-network/manifestjs/dist/codegen/cos
 import { getQueryClient, queryWithNotFound } from './queryClient';
 import { logError } from '../utils/errors';
 
-// Re-export manifestjs types for consumers
-export type { BillingParams, Lease, LeaseItem, CreditAccount, Coin };
+// Re-export manifestjs types for consumers (Coin is exported from bank.ts)
+export type { BillingParams, Lease, LeaseItem, CreditAccount };
 export type { QueryCreditEstimateResponse, QueryCreditAccountResponse, QueryProviderWithdrawableResponse };
 
 // Re-export LeaseState enum from manifestjs for type safety

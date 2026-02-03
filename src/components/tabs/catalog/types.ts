@@ -2,8 +2,6 @@ import type { Provider, SKU } from '../../../api/sku';
 
 export type HealthStatus = 'healthy' | 'unhealthy' | 'loading' | 'unknown';
 
-export const ITEMS_PER_PAGE = 10;
-
 export interface CatalogTabProps {
   isConnected: boolean;
   address?: string;

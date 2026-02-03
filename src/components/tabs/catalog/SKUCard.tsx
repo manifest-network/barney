@@ -1,6 +1,6 @@
 import { Copy, Check, Loader2 } from 'lucide-react';
 import { useCopyToClipboard } from '../../../hooks/useCopyToClipboard';
-import { formatPrice } from '../../../api';
+import { formatPrice } from '../../../utils/format';
 import type { SKUCardProps } from './types';
 
 export function SKUCard({

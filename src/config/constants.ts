@@ -43,7 +43,7 @@ export const COPY_FEEDBACK_DURATION_MS = 2000;
 // ============================================
 
 /** Default page size for paginated lists */
-export const DEFAULT_PAGE_SIZE = 20;
+export const DEFAULT_PAGE_SIZE = 10;
 
 /** Transaction hash display length (truncated) */
 export const TX_HASH_DISPLAY_LENGTH = 16;

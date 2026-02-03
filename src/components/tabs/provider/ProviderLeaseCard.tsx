@@ -2,8 +2,7 @@ import { useState } from 'react';
 import { Copy, Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { useCopyToClipboard } from '../../../hooks/useCopyToClipboard';
 import { formatCostPerHour } from '../../../utils/pricing';
-import { formatPrice } from '../../../api/config';
-import { formatDate } from '../../../utils/format';
+import { formatDate, formatPrice } from '../../../utils/format';
 import type { ProviderLeaseCardProps } from './types';
 
 export function ProviderLeaseCard({

@@ -30,7 +30,7 @@ import { validateSignMessage } from './utils';
 import { FilterTabs } from './FilterTabs';
 import { LeaseCard } from './LeaseCard';
 import { CreateLeaseModal } from './CreateLeaseModal';
-import { LEASES_PER_PAGE } from './types';
+import { DEFAULT_PAGE_SIZE } from '../../../config/constants';
 
 export function LeasesTab() {
   const { address, isWalletConnected, openView, signArbitrary } = useChain(CHAIN_NAME);
@@ -120,10 +120,10 @@ export function LeasesTab() {
   });
 
   // Pagination
-  const totalPages = Math.ceil(filteredLeases.length / LEASES_PER_PAGE);
+  const totalPages = Math.ceil(filteredLeases.length / DEFAULT_PAGE_SIZE);
   const paginatedLeases = filteredLeases.slice(
-    (currentPage - 1) * LEASES_PER_PAGE,
-    currentPage * LEASES_PER_PAGE
+    (currentPage - 1) * DEFAULT_PAGE_SIZE,
+    currentPage * DEFAULT_PAGE_SIZE
   );
 
   // Reset to page 1 when filter changes
@@ -389,7 +389,7 @@ export function LeasesTab() {
           currentPage={currentPage}
           totalPages={totalPages}
           totalItems={filteredLeases.length}
-          itemsPerPage={LEASES_PER_PAGE}
+          itemsPerPage={DEFAULT_PAGE_SIZE}
           onPageChange={setCurrentPage}
         />
       )}

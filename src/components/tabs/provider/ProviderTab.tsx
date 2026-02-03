@@ -5,7 +5,7 @@ import { LeaseState, getLeasesByProvider, getWithdrawableAmount, getProviderWith
 import { useCopyToClipboard } from '../../../hooks/useCopyToClipboard';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../../api/sku';
 import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, createLeaseForTenant, type CreateLeaseResult } from '../../../api/tx';
-import { formatPrice } from '../../../api/config';
+import { formatPrice } from '../../../utils/format';
 import { isValidManifestAddress } from '../../../utils/address';
 import type { Coin } from '../../../api/bank';
 import { useAutoRefreshContext } from '../../../contexts/AutoRefreshContext';
@@ -13,7 +13,7 @@ import { useAutoRefreshTab } from '../../../hooks/useAutoRefreshTab';
 import { useToast } from '../../../hooks/useToast';
 import { useTxHandler } from '../../../hooks/useTxHandler';
 import { EmptyState } from '../../ui/EmptyState';
-import { useBatchSelection } from '../../../hooks/useBatchSelection';
+import { useProviderBatchActions } from '../../../hooks/useProviderBatchActions';
 import { CHAIN_NAME } from '../../../config/chain';
 import { CreateLeaseForTenantModal } from './CreateLeaseForTenantModal';
 import { ProviderLeaseCard } from './ProviderLeaseCard';
@@ -33,10 +33,7 @@ export function ProviderTab() {
   const [error, setError] = useState<string | null>(null);
   const [isInBillingAllowedList, setIsInBillingAllowedList] = useState(false);
   const [showCreateLeaseForTenant, setShowCreateLeaseForTenant] = useState(false);
-  const { selected: selectedPendingLeases, toggle: togglePendingSelection, selectAll: selectAllPendingIds, clear: deselectAllPending } = useBatchSelection();
-  const { selected: selectedActiveLeases, toggle: toggleActiveSelection, selectAll: selectAllActiveIds, clear: deselectAllActive } = useBatchSelection();
 
-  // Track if initial load has completed
   const initialLoadRef = useRef(false);
 
   const fetchData = useCallback(async () => {
@@ -49,7 +46,6 @@ export function ProviderTab() {
     }
 
     try {
-      // Only show loading on initial load
       if (!initialLoadRef.current) {
         setLoading(true);
       }
@@ -78,11 +74,11 @@ export function ProviderTab() {
         setProviderWithdrawable(withdrawableSummary);
 
         // Fetch withdrawable amounts for active leases (for individual card display)
-        const activeLeases = leases.filter((l) => l.state === LeaseState.LEASE_STATE_ACTIVE);
+        const activeLs = leases.filter((l) => l.state === LeaseState.LEASE_STATE_ACTIVE);
         const withdrawableMap = new Map<string, Coin[]>();
 
         await Promise.all(
-          activeLeases.map(async (lease) => {
+          activeLs.map(async (lease) => {
             try {
               const amounts = await getWithdrawableAmount(lease.uuid);
               withdrawableMap.set(lease.uuid, amounts);
@@ -108,6 +104,7 @@ export function ProviderTab() {
 
   const pendingLeases = providerLeases.filter((l) => l.state === LeaseState.LEASE_STATE_PENDING);
   const activeLeases = providerLeases.filter((l) => l.state === LeaseState.LEASE_STATE_ACTIVE);
+  const batch = useProviderBatchActions({ address, executeTx, pendingLeases, activeLeases, onSuccess: fetchData });
 
   const handleAcknowledge = async (leaseUuid: string) => {
     await executeTx(
@@ -138,74 +135,6 @@ export function ProviderTab() {
   };
 
   const getSKU = (uuid: string) => providerSKUs.find((s) => s.uuid === uuid);
-
-  // Batch operations
-  const handleBatchAcknowledge = async () => {
-    if (selectedPendingLeases.size === 0) return;
-    const leaseUuids = Array.from(selectedPendingLeases);
-
-    await executeTx(
-      (signer) => acknowledgeLease(signer, address!, leaseUuids),
-      {
-        successMessage: (hash) => `${leaseUuids.length} lease(s) acknowledged! Tx: ${hash}...`,
-        onSuccess: async () => {
-          deselectAllPending();
-          await fetchData();
-        },
-      }
-    );
-  };
-
-  const handleBatchReject = async (reason: string) => {
-    if (selectedPendingLeases.size === 0) return;
-    const leaseUuids = Array.from(selectedPendingLeases);
-
-    await executeTx(
-      (signer) => rejectLease(signer, address!, leaseUuids, reason),
-      {
-        successMessage: (hash) => `${leaseUuids.length} lease(s) rejected! Tx: ${hash}...`,
-        onSuccess: async () => {
-          deselectAllPending();
-          await fetchData();
-        },
-      }
-    );
-  };
-
-  const handleBatchClose = async (reason?: string) => {
-    if (selectedActiveLeases.size === 0) return;
-    const leaseUuids = Array.from(selectedActiveLeases);
-
-    await executeTx(
-      (signer) => closeLease(signer, address!, leaseUuids, reason),
-      {
-        successMessage: (hash) => `${leaseUuids.length} lease(s) closed! Tx: ${hash}...`,
-        onSuccess: async () => {
-          deselectAllActive();
-          await fetchData();
-        },
-      }
-    );
-  };
-
-  const handleBatchWithdraw = async () => {
-    if (selectedActiveLeases.size === 0) return;
-    const leaseUuids = Array.from(selectedActiveLeases);
-
-    await executeTx(
-      (signer) => withdrawFromLeases(signer, address!, leaseUuids),
-      {
-        successMessage: (hash) => `Withdrawal from ${leaseUuids.length} lease(s) successful! Tx: ${hash}...`,
-        onSuccess: async () => {
-          deselectAllActive();
-          await fetchData();
-        },
-      }
-    );
-  };
-
-  const selectAllPending = () => selectAllPendingIds(pendingLeases.map((l) => l.uuid));
-  const selectAllActive = () => selectAllActiveIds(activeLeases.map((l) => l.uuid));
 
   const handleCreateLeaseForTenant = async (tenant: string, items: { skuUuid: string; quantity: number }[]) => {
     if (!isValidManifestAddress(tenant)) {
@@ -456,28 +385,28 @@ export function ProviderTab() {
           </div>
           {pendingLeases.length > 0 && (
             <div className="provider-batch-controls">
-              <button onClick={selectAllPending} className="provider-select-btn">
+              <button onClick={batch.selectAllPending} className="provider-select-btn">
                 Select all {pendingLeases.length}
               </button>
-              {selectedPendingLeases.size > 0 && (
+              {batch.pending.selected.size > 0 && (
                 <>
-                  <button onClick={deselectAllPending} className="provider-select-btn">
+                  <button onClick={batch.pending.clear} className="provider-select-btn">
                     Clear
                   </button>
                   <div className="provider-batch-actions">
                     <button
-                      onClick={handleBatchAcknowledge}
+                      onClick={batch.handleBatchAcknowledge}
                       disabled={txLoading}
                       className="btn btn-success btn-sm"
                     >
-                      Acknowledge {selectedPendingLeases.size}
+                      Acknowledge {batch.pending.selected.size}
                     </button>
                     <button
-                      onClick={() => handleBatchReject('')}
+                      onClick={() => batch.handleBatchReject('')}
                       disabled={txLoading}
                       className="btn btn-danger btn-sm"
                     >
-                      Reject {selectedPendingLeases.size}
+                      Reject {batch.pending.selected.size}
                     </button>
                   </div>
                 </>
@@ -499,8 +428,8 @@ export function ProviderTab() {
                 onAcknowledge={() => handleAcknowledge(lease.uuid)}
                 onReject={(reason) => handleReject(lease.uuid, reason)}
                 txLoading={txLoading}
-                isSelected={selectedPendingLeases.has(lease.uuid)}
-                onToggleSelect={() => togglePendingSelection(lease.uuid)}
+                isSelected={batch.pending.selected.has(lease.uuid)}
+                onToggleSelect={() => batch.pending.toggle(lease.uuid)}
               />
             ))
           )}
@@ -519,28 +448,28 @@ export function ProviderTab() {
           </div>
           {activeLeases.length > 0 && (
             <div className="provider-batch-controls">
-              <button onClick={selectAllActive} className="provider-select-btn">
+              <button onClick={batch.selectAllActive} className="provider-select-btn">
                 Select all {activeLeases.length}
               </button>
-              {selectedActiveLeases.size > 0 && (
+              {batch.active.selected.size > 0 && (
                 <>
-                  <button onClick={deselectAllActive} className="provider-select-btn">
+                  <button onClick={batch.active.clear} className="provider-select-btn">
                     Clear
                   </button>
                   <div className="provider-batch-actions">
                     <button
-                      onClick={handleBatchWithdraw}
+                      onClick={batch.handleBatchWithdraw}
                       disabled={txLoading}
                       className="btn btn-success btn-sm"
                     >
-                      Withdraw {selectedActiveLeases.size}
+                      Withdraw {batch.active.selected.size}
                     </button>
                     <button
-                      onClick={() => handleBatchClose()}
+                      onClick={() => batch.handleBatchClose()}
                       disabled={txLoading}
                       className="btn btn-ghost btn-sm"
                     >
-                      Close {selectedActiveLeases.size}
+                      Close {batch.active.selected.size}
                     </button>
                   </div>
                 </>
@@ -563,8 +492,8 @@ export function ProviderTab() {
                 onWithdraw={() => handleWithdraw([lease.uuid])}
                 onClose={(reason) => handleCloseLease(lease.uuid, reason)}
                 txLoading={txLoading}
-                isSelected={selectedActiveLeases.has(lease.uuid)}
-                onToggleSelect={() => toggleActiveSelection(lease.uuid)}
+                isSelected={batch.active.selected.has(lease.uuid)}
+                onToggleSelect={() => batch.active.toggle(lease.uuid)}
               />
             ))
           )}
