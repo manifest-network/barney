@@ -159,8 +159,10 @@ export function getConfirmationMessage(toolName: string, args: Record<string, un
       return `Close lease ${args.lease_uuid}${args.reason ? ` (reason: ${args.reason})` : ''}?`;
     case 'upload_payload':
       return `Upload deployment payload to lease ${args.lease_uuid}?`;
-    case 'cosmos_tx':
-      return `Execute transaction: ${args.module} ${args.subcommand}?`;
+    case 'cosmos_tx': {
+      const txArgsDisplay = args.args ? ` with args: ${typeof args.args === 'string' ? args.args : JSON.stringify(args.args)}` : '';
+      return `Execute transaction: ${args.module} ${args.subcommand}${txArgsDisplay}?`;
+    }
     default:
       return `Execute ${toolName}?`;
   }

@@ -5,11 +5,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { truncateAddress } from '../../../utils/address';
-import { formatPrice } from '../../../api/config';
 import { useLeaseItems } from '../../../hooks/useLeaseItems';
 import { calculateEstimatedCost, isValidLeaseItem } from '../../../utils/pricing';
 import { sha256, toHex, validatePayloadSize, getPayloadSize, MAX_PAYLOAD_SIZE } from '../../../utils/hash';
 import { validateFile } from '../../../utils/fileValidation';
+import { LeaseItemsEditor } from '../../ui/LeaseItemsEditor';
 import type { CreateLeaseModalProps } from './types';
 
 export function CreateLeaseModal({
@@ -153,63 +153,15 @@ export function CreateLeaseModal({
 
           {/* SKU Items */}
           {selectedProvider && (
-            <div>
-              <div className="mb-2 flex items-center justify-between">
-                <label className="text-sm text-muted">SKU Items</label>
-                <button
-                  type="button"
-                  onClick={addItem}
-                  className="text-sm text-primary-400 hover:text-primary-300"
-                  disabled={loading}
-                >
-                  + Add Item
-                </button>
-              </div>
-              {providerSKUs.length === 0 ? (
-                <p className="text-sm text-dim">No active SKUs for this provider</p>
-              ) : (
-                <div className="space-y-2">
-                  {items.map((item) => (
-                    <div key={item.id} className="flex gap-2">
-                      <select
-                        value={item.skuUuid}
-                        onChange={(e) => updateItem(item.id, 'skuUuid', e.target.value)}
-                        className="input select flex-1"
-                        required
-                        disabled={loading}
-                      >
-                        <option value="">Select SKU...</option>
-                        {providerSKUs.map((sku) => (
-                          <option key={sku.uuid} value={sku.uuid}>
-                            {sku.name} ({formatPrice(sku.base_price.amount, sku.base_price.denom, sku.unit)})
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        min="1"
-                        value={item.quantity}
-                        onChange={(e) =>
-                          updateItem(item.id, 'quantity', Math.max(1, parseInt(e.target.value, 10) || 1))
-                        }
-                        className="input w-20"
-                        disabled={loading}
-                      />
-                      {items.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removeItem(item.id)}
-                          className="px-2 text-error hover:text-error/80"
-                          disabled={loading}
-                        >
-                          <X size={16} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <LeaseItemsEditor
+              items={items}
+              skus={providerSKUs}
+              onAddItem={addItem}
+              onRemoveItem={removeItem}
+              onUpdateItem={updateItem}
+              disabled={loading}
+              emptyMessage="No active SKUs for this provider"
+            />
           )}
 
           {/* Deployment Payload */}
