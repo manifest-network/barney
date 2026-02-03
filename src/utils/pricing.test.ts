@@ -1,8 +1,77 @@
 import { describe, it, expect } from 'vitest';
-import { isValidLeaseItem, calculateEstimatedCost } from './pricing';
+import { formatCostPerHour, isValidLeaseItem, calculateEstimatedCost } from './pricing';
 import { Unit } from '../api/sku';
 import type { SKU } from '../api/sku';
+import type { LeaseItem } from '../api/billing';
 import { DENOMS } from '../api/config';
+
+function makeItem(amount: string, quantity: string, denom: string = DENOMS.PWR): LeaseItem {
+  return { sku_uuid: 'sku-1', quantity, locked_price: { amount, denom } };
+}
+
+describe('formatCostPerHour', () => {
+  it('returns 0 for empty items array', () => {
+    expect(formatCostPerHour([])).toBe('0.0000 tokens/hr');
+  });
+
+  it('calculates hourly cost from per-second rate', () => {
+    // 10 upwr/sec * quantity 1 * 3600 = 36000 upwr/hr = 0.036 PWR/hr
+    const items = [makeItem('10', '1')];
+    expect(formatCostPerHour(items)).toBe('0.0360 PWR/hr');
+  });
+
+  it('multiplies by quantity', () => {
+    // 10 upwr/sec * quantity 3 * 3600 = 108000 upwr/hr = 0.108 PWR/hr
+    const items = [makeItem('10', '3')];
+    expect(formatCostPerHour(items)).toBe('0.1080 PWR/hr');
+  });
+
+  it('sums across multiple items', () => {
+    // (10 * 1 + 40 * 2) * 3600 = 90 * 3600 = 324000 upwr/hr = 0.324 PWR/hr
+    const items = [makeItem('10', '1'), makeItem('40', '2')];
+    expect(formatCostPerHour(items)).toBe('0.3240 PWR/hr');
+  });
+
+  it('handles zero per-second rate', () => {
+    const items = [makeItem('0', '5')];
+    expect(formatCostPerHour(items)).toBe('0.0000 PWR/hr');
+  });
+
+  it('handles zero quantity', () => {
+    const items = [makeItem('10', '0')];
+    expect(formatCostPerHour(items)).toBe('0.0000 PWR/hr');
+  });
+
+  it('handles invalid quantity string gracefully', () => {
+    const items = [makeItem('10', 'abc')];
+    expect(formatCostPerHour(items)).toBe('0.0000 PWR/hr');
+  });
+
+  it('handles invalid amount string gracefully', () => {
+    const items = [makeItem('not-a-number', '1')];
+    expect(formatCostPerHour(items)).toBe('0.0000 PWR/hr');
+  });
+
+  it('handles large values without losing precision via BigInt', () => {
+    // 1_000_000_000 upwr/sec * quantity 1000 * 3600 = 3.6e15 upwr/hr
+    // This exceeds Number.MAX_SAFE_INTEGER for intermediate multiplication
+    // but BigInt keeps it exact. 3_600_000_000_000_000 / 1e6 = 3_600_000_000 PWR/hr
+    const items = [makeItem('1000000000', '1000')];
+    expect(formatCostPerHour(items)).toBe('3600000000.0000 PWR/hr');
+  });
+
+  it('uses fallback metadata for unknown denom', () => {
+    const items = [makeItem('1000000', '1', 'uunknown')];
+    // 1000000 * 1 * 3600 = 3_600_000_000 / 1e6 (default exponent) = 3600
+    expect(formatCostPerHour(items)).toBe('3600.0000 tokens/hr');
+  });
+
+  it('uses MFX denom metadata when applicable', () => {
+    // 10 umfx/sec * 1 * 3600 = 36000 / 1e6 = 0.036
+    const items = [makeItem('10', '1', DENOMS.MFX)];
+    expect(formatCostPerHour(items)).toBe('0.0360 MFX/hr');
+  });
+});
 
 describe('isValidLeaseItem', () => {
   it('returns true for valid item with skuUuid and positive quantity', () => {

@@ -28,15 +28,18 @@ export function getErrorMessage(
 
 /**
  * Logs an error with consistent formatting for debugging.
- * Only logs in development mode to avoid cluttering production logs.
+ * Logs to console in all environments. When backend logging is added,
+ * production errors will also be sent to the logging service.
  *
  * @param context - Description of where/what operation failed
  * @param error - The error that occurred
  */
 export function logError(context: string, error: unknown): void {
-  if (import.meta.env.DEV) {
-    console.error(`[${context}]`, error);
-  }
+  console.error(`[${context}]`, error);
+  // TODO: Add backend logging here when ready
+  // if (!import.meta.env.DEV) {
+  //   sendErrorToBackend(context, error);
+  // }
 }
 
 /**

@@ -11,16 +11,50 @@ export { Unit };
 const { MsgFundCredit, MsgCreateLease, MsgCreateLeaseForTenant, MsgCancelLease, MsgCloseLease, MsgAcknowledgeLease, MsgRejectLease, MsgWithdraw } = liftedinit.billing.v1;
 const { MsgCreateProvider, MsgUpdateProvider, MsgCreateSKU, MsgUpdateSKU, MsgDeactivateProvider, MsgDeactivateSKU } = liftedinit.sku.v1;
 
-export interface TxResult {
-  success: boolean;
-  transactionHash?: string;
-  error?: string;
-  events?: readonly { type: string; attributes: readonly { key: string; value: string }[] }[];
+/** Event structure from transaction result */
+export interface TxEvent {
+  type: string;
+  attributes: readonly { key: string; value: string }[];
 }
 
-export interface CreateLeaseResult extends TxResult {
-  leaseUuid?: string;
-}
+/**
+ * Discriminated union for transaction results.
+ * - Success: { success: true, transactionHash: '...', events: [...] }
+ * - Failure: { success: false, error: '...', transactionHash?: '...' }
+ */
+export type TxResult =
+  | {
+      success: true;
+      transactionHash: string;
+      events: readonly TxEvent[];
+      error?: never;
+    }
+  | {
+      success: false;
+      error: string;
+      transactionHash?: string;
+      events?: never;
+    };
+
+/**
+ * Extended transaction result for lease creation.
+ * Adds leaseUuid on success.
+ */
+export type CreateLeaseResult =
+  | {
+      success: true;
+      transactionHash: string;
+      events: readonly TxEvent[];
+      leaseUuid?: string;
+      error?: never;
+    }
+  | {
+      success: false;
+      error: string;
+      transactionHash?: string;
+      leaseUuid?: never;
+      events?: never;
+    };
 
 export async function getSigningClient(signer: OfflineSigner) {
   return getSigningLiftedinitClient({

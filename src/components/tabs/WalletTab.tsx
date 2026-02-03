@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { Link, Wallet, Clock, Flame, Loader2, Copy, Check, Zap, TrendingDown, Plus, ArrowRight, GitBranch } from 'lucide-react';
+import { Link, Wallet, Clock, Flame, Loader2, Copy, Check, Zap, TrendingDown, Plus, ArrowRight, GitBranch, UserPlus } from 'lucide-react';
 import {
   getBalance,
   getCreditAccount,
@@ -8,14 +8,15 @@ import {
   fundCredit,
   DENOMS,
 } from '../../api';
-import { formatAmount } from '../../utils/format';
+import { formatAmount, toBaseUnits, fromBaseUnits, parseBaseUnits } from '../../utils/format';
 import type { Coin } from '../../api/bank';
 import type { CreditAccountResponse, CreditEstimateResponse } from '../../api/billing';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
+import { useAutoRefreshTab } from '../../hooks/useAutoRefreshTab';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { truncateAddress } from '../../utils/address';
+import { truncateAddress, isValidManifestAddress } from '../../utils/address';
 import { CHAIN_NAME } from '../../config/chain';
 
 interface WalletTabProps {
@@ -38,6 +39,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const toast = useToast();
   const { copied, copyToClipboard } = useCopyToClipboard();
   const [fundAmount, setFundAmount] = useState('');
+  const [fundRecipient, setFundRecipient] = useState('');
   const [txLoading, setTxLoading] = useState(false);
   const [data, setData] = useState<WalletData>({
     mfxBalance: null,
@@ -83,14 +85,8 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
     }
   }, [address]);
 
-  const { registerFetchFn, unregisterFetchFn, refresh } = useAutoRefreshContext();
-
-  useEffect(() => {
-    if (isConnected && address) {
-      registerFetchFn(fetchData);
-    }
-    return () => unregisterFetchFn();
-  }, [isConnected, address, fetchData, registerFetchFn, unregisterFetchFn]);
+  const { refresh } = useAutoRefreshContext();
+  useAutoRefreshTab(fetchData, isConnected && !!address);
 
   const handleFundCredit = async () => {
     if (!address || !fundAmount) return;
@@ -98,6 +94,12 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
     const parsedAmount = parseFloat(fundAmount);
     if (isNaN(parsedAmount) || parsedAmount <= 0 || !isFinite(parsedAmount)) {
       toast.error('Please enter a valid positive amount');
+      return;
+    }
+
+    const tenant = fundRecipient.trim() || address;
+    if (tenant !== address && !isValidManifestAddress(tenant)) {
+      toast.error('Please enter a valid manifest address');
       return;
     }
 
@@ -109,16 +111,18 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
         throw new Error('Failed to get signer');
       }
 
-      const baseAmount = (parsedAmount * 1_000_000).toFixed(0);
+      const baseAmount = toBaseUnits(parsedAmount, DENOMS.PWR);
 
-      const result = await fundCredit(signer, address, address, {
+      const result = await fundCredit(signer, address, tenant, {
         denom: DENOMS.PWR,
         amount: baseAmount,
       });
 
       if (result.success) {
-        toast.success(`Funded ${fundAmount} PWR! Tx: ${result.transactionHash?.slice(0, 16)}...`);
+        const target = tenant === address ? '' : ` for ${truncateAddress(tenant)}`;
+        toast.success(`Funded ${fundAmount} PWR${target}! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         setFundAmount('');
+        setFundRecipient('');
         refresh();
       } else {
         toast.error(result.error || 'Transaction failed');
@@ -153,19 +157,19 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
 
   const { mfxBalance, pwrBalance, creditAccount, creditEstimate, loading, error } = data;
   const creditPwrBalance = creditAccount?.balances?.find((b) => b.denom === DENOMS.PWR);
-  const creditBalanceNum = creditPwrBalance ? parseInt(creditPwrBalance.amount, 10) / 1_000_000 : 0;
-  const pwrBalanceNum = pwrBalance ? parseInt(pwrBalance.amount, 10) / 1_000_000 : 0;
+  const creditBalanceNum = creditPwrBalance ? fromBaseUnits(creditPwrBalance.amount, DENOMS.PWR) : 0;
+  const pwrBalanceNum = pwrBalance ? fromBaseUnits(pwrBalance.amount, DENOMS.PWR) : 0;
   const pwrRatePerSecond = creditEstimate?.total_rate_per_second?.find(
     (c) => c.denom === DENOMS.PWR || c.denom === 'upwr'
   );
-  const burnRatePerHour = pwrRatePerSecond ? parseInt(pwrRatePerSecond.amount, 10) * 3600 : 0;
+  const burnRatePerHour = pwrRatePerSecond ? parseBaseUnits(pwrRatePerSecond.amount) * 3600 : 0;
   const timeRemaining = creditEstimate?.estimated_duration_seconds
     ? parseInt(creditEstimate.estimated_duration_seconds, 10)
     : 0;
 
   // Determine credit health status
   const getCreditStatus = () => {
-    if (!creditPwrBalance || parseInt(creditPwrBalance.amount, 10) === 0) return 'empty';
+    if (!creditPwrBalance || parseBaseUnits(creditPwrBalance.amount) === 0) return 'empty';
     if (timeRemaining > 0 && timeRemaining < 3600) return 'critical'; // < 1 hour
     if (timeRemaining > 0 && timeRemaining < 86400) return 'low'; // < 24 hours
     return 'healthy';
@@ -261,16 +265,27 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
                 </button>
               ))}
             </div>
+            <div className="wallet-fund-recipient-group">
+              <UserPlus size={14} className="wallet-fund-recipient-icon" />
+              <input
+                type="text"
+                value={fundRecipient}
+                onChange={(e) => setFundRecipient(e.target.value)}
+                placeholder="Recipient address (leave empty for self)"
+                disabled={txLoading}
+                className="wallet-fund-recipient-input"
+              />
+            </div>
             <button
               onClick={handleFundCredit}
-              disabled={!fundAmount || txLoading || pwrBalanceNum < parseFloat(fundAmount)}
+              disabled={!fundAmount || txLoading || pwrBalanceNum < parseFloat(fundAmount) || (!!fundRecipient.trim() && !isValidManifestAddress(fundRecipient.trim()))}
               className="wallet-fund-submit-btn"
             >
               {txLoading ? (
                 <Loader2 className="animate-spin" size={16} />
               ) : (
                 <>
-                  Fund Account
+                  {fundRecipient.trim() ? 'Fund Recipient' : 'Fund Account'}
                   <ArrowRight size={14} />
                 </>
               )}

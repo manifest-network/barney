@@ -14,14 +14,16 @@ import {
 } from '../../api/billing';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { logError } from '../../utils/errors';
-import { formatAmount, formatDate, formatDuration, formatRelativeTime } from '../../utils/format';
+import { formatAmount, formatDate, formatDuration, formatRelativeTime, parseBaseUnits, fromBaseUnits } from '../../utils/format';
 import { truncateAddress } from '../../utils/address';
 import { DENOM_METADATA } from '../../api/config';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { getProviders, getSKUs, type Provider, type SKU } from '../../api/sku';
 import type { Coin } from '../../api/bank';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
+import { useAutoRefreshTab } from '../../hooks/useAutoRefreshTab';
 import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER } from '../../utils/leaseState';
+import { formatCostPerHour } from '../../utils/pricing';
 import { EmptyState } from '../ui/EmptyState';
 import { ErrorBanner } from '../ui/ErrorBanner';
 import { SkeletonCard } from '../ui/SkeletonCard';
@@ -173,14 +175,8 @@ export function NetworkTab({ isConnected, address, onConnect }: NetworkTabProps)
     }
   }, [fetchReferenceData, viewMode, fetchLeases, fetchCredits]);
 
-  const { registerFetchFn, unregisterFetchFn, refresh } = useAutoRefreshContext();
-
-  useEffect(() => {
-    if (isAdmin) {
-      registerFetchFn(fetchCurrentView);
-    }
-    return () => unregisterFetchFn();
-  }, [isAdmin, fetchCurrentView, registerFetchFn, unregisterFetchFn]);
+  const { refresh } = useAutoRefreshContext();
+  useAutoRefreshTab(fetchCurrentView, isAdmin);
 
   // Initial data load
   useEffect(() => {
@@ -469,18 +465,7 @@ function NetworkLeaseCard({ lease, getProvider, getSKU }: NetworkLeaseCardProps)
   const provider = getProvider(lease.provider_uuid);
   const stateKey = LEASE_STATE_TO_FILTER[lease.state];
 
-  // Calculate cost per hour
-  const costPerHour = (() => {
-    let total = 0;
-    for (const item of lease.items) {
-      const perSecond = parseInt(item.locked_price.amount, 10);
-      total += perSecond * parseInt(item.quantity, 10) * SECONDS_PER_HOUR;
-    }
-    const meta = lease.items[0]?.locked_price.denom
-      ? DENOM_METADATA[lease.items[0].locked_price.denom] || { symbol: 'tokens', exponent: 6 }
-      : { symbol: 'tokens', exponent: 6 };
-    return `${(total / Math.pow(10, meta.exponent)).toFixed(4)} ${meta.symbol}/hr`;
-  })();
+  const costPerHour = formatCostPerHour(lease.items);
 
   return (
     <div className="lease-card" data-state={stateKey}>
@@ -628,9 +613,7 @@ function NetworkLeaseCard({ lease, getProvider, getSKU }: NetworkLeaseCardProps)
               <tbody>
                 {lease.items.map((item, idx) => {
                   const sku = getSKU(item.sku_uuid);
-                  const pricePerHour =
-                    (parseInt(item.locked_price.amount, 10) * SECONDS_PER_HOUR) /
-                    Math.pow(10, DENOM_METADATA[item.locked_price.denom]?.exponent || 6);
+                  const pricePerHour = fromBaseUnits(item.locked_price.amount, item.locked_price.denom) * SECONDS_PER_HOUR;
                   const symbol = DENOM_METADATA[item.locked_price.denom]?.symbol || item.locked_price.denom;
                   return (
                     <tr key={`${lease.uuid}-item-${item.sku_uuid}-${idx}`}>
@@ -708,7 +691,7 @@ function NetworkCreditCard({ account, balances }: NetworkCreditCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   // Determine status based on balance
-  const hasBalance = balances.some((b) => parseInt(b.amount, 10) > 0);
+  const hasBalance = balances.some((b) => parseBaseUnits(b.amount) > 0);
   const statusKey = hasBalance ? 'active' : 'pending';
 
   return (

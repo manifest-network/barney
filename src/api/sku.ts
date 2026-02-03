@@ -1,5 +1,14 @@
 import { liftedinit } from '@manifest-network/manifestjs';
 import { fetchJson, buildUrl } from './utils';
+import {
+  ProvidersResponseSchema,
+  ProviderResponseSchema,
+  SKUsResponseSchema,
+  SKUResponseSchema,
+  SKUParamsResponseSchema,
+  type ProviderValidated,
+  type RawSKUValidated,
+} from './schemas';
 
 // Re-export Unit enum from manifestjs for type safety
 export const Unit = liftedinit.sku.v1.Unit;
@@ -32,14 +41,7 @@ export interface SKUParamsResponse {
   params: SKUParams;
 }
 
-export interface Provider {
-  uuid: string;
-  address: string;
-  payout_address: string;
-  meta_hash: string;
-  active: boolean;
-  api_url: string;
-}
+export type Provider = ProviderValidated;
 
 export interface SKU {
   uuid: string;
@@ -47,16 +49,14 @@ export interface SKU {
   name: string;
   unit: Unit;
   base_price: { denom: string; amount: string };
-  meta_hash: string;
+  meta_hash?: string | null;
   active: boolean;
 }
 
 /**
  * Raw SKU response from API (unit is a string)
  */
-interface RawSKU extends Omit<SKU, 'unit'> {
-  unit: string;
-}
+type RawSKU = RawSKUValidated;
 
 /**
  * Convert a raw API SKU response to a typed SKU with enum unit.
@@ -93,7 +93,7 @@ export interface SKUResponse {
 
 export async function getProviders(activeOnly = false): Promise<Provider[]> {
   const url = buildUrl('/liftedinit/sku/v1/providers', activeOnly ? { active_only: 'true' } : undefined);
-  const data = await fetchJson<ProvidersResponse>(url, 'providers');
+  const data = await fetchJson<ProvidersResponse>(url, 'providers', { schema: ProvidersResponseSchema });
   return data.providers ?? [];
 }
 
@@ -101,14 +101,14 @@ export async function getProvider(uuid: string): Promise<Provider | null> {
   const data = await fetchJson<ProviderResponse | Record<string, never>>(
     `/liftedinit/sku/v1/provider/${uuid}`,
     'provider',
-    { notFoundDefault: {} }
+    { notFoundDefault: {}, schema: ProviderResponseSchema }
   );
   return 'provider' in data ? data.provider : null;
 }
 
 export async function getSKUs(activeOnly = false): Promise<SKU[]> {
   const url = buildUrl('/liftedinit/sku/v1/skus', activeOnly ? { active_only: 'true' } : undefined);
-  const data = await fetchJson<{ skus?: RawSKU[] }>(url, 'SKUs');
+  const data = await fetchJson<{ skus?: RawSKU[] }>(url, 'SKUs', { schema: SKUsResponseSchema });
   return parseSKUs(data.skus ?? []);
 }
 
@@ -116,7 +116,7 @@ export async function getSKU(uuid: string): Promise<SKU | null> {
   const data = await fetchJson<{ sku?: RawSKU }>(
     `/liftedinit/sku/v1/sku/${uuid}`,
     'SKU',
-    { notFoundDefault: {} }
+    { notFoundDefault: {}, schema: SKUResponseSchema }
   );
   return data.sku ? parseSKU(data.sku) : null;
 }
@@ -126,11 +126,11 @@ export async function getSKUsByProvider(providerUuid: string, activeOnly = false
     `/liftedinit/sku/v1/skus/provider/${providerUuid}`,
     activeOnly ? { active_only: 'true' } : undefined
   );
-  const data = await fetchJson<{ skus?: RawSKU[] }>(url, 'SKUs by provider');
+  const data = await fetchJson<{ skus?: RawSKU[] }>(url, 'SKUs by provider', { schema: SKUsResponseSchema });
   return parseSKUs(data.skus ?? []);
 }
 
 export async function getSKUParams(): Promise<SKUParams> {
-  const data = await fetchJson<SKUParamsResponse>('/liftedinit/sku/v1/params', 'SKU params');
+  const data = await fetchJson<SKUParamsResponse>('/liftedinit/sku/v1/params', 'SKU params', { schema: SKUParamsResponseSchema });
   return data.params;
 }

@@ -34,7 +34,7 @@ export async function executeTransaction(
       // fund-credit requires: <tenant-address> <amount>
       const result = await cosmosTx(clientManager, 'billing', 'fund-credit', [address, amount], true);
       if (result.code !== 0) {
-        return { success: false, error: result.rawLog };
+        return { success: false, error: result.rawLog ?? 'Transaction failed' };
       }
       return {
         success: true,
@@ -62,7 +62,7 @@ export async function executeTransaction(
 
       const result = await cosmosTx(clientManager, 'billing', 'close-lease', txArgs, true);
       if (result.code !== 0) {
-        return { success: false, error: result.rawLog };
+        return { success: false, error: result.rawLog ?? 'Transaction failed' };
       }
       return {
         success: true,
@@ -91,7 +91,7 @@ export async function executeTransaction(
 
       const result = await cosmosTx(clientManager, module, subcommand, txArgs, true);
       if (result.code !== 0) {
-        return { success: false, error: result.rawLog };
+        return { success: false, error: result.rawLog ?? 'Transaction failed' };
       }
       return {
         success: true,
@@ -212,7 +212,7 @@ async function executeCreateLease(
   if (result.code !== 0) {
     return {
       success: false,
-      error: result.rawLog,
+      error: result.rawLog ?? 'Transaction failed',
     };
   }
 
