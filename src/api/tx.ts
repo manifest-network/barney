@@ -45,7 +45,7 @@ export type CreateLeaseResult =
       success: true;
       transactionHash: string;
       events: readonly TxEvent[];
-      leaseUuid: string;
+      leaseUuid?: string;
       error?: never;
     }
   | {

@@ -61,7 +61,7 @@ export async function withRetry<T>(
       }
 
       // Log retry attempt
-      logError(`${context}.retry`, `Attempt ${attempt + 1}/${maxRetries + 1} failed, retrying...`);
+      logError(`${context}.retry (attempt ${attempt + 1}/${maxRetries + 1})`, lastError);
 
       // Exponential backoff with jitter
       const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 100;

@@ -947,7 +947,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       setMessages((prev) => {
         const updated = prev.map((m) =>
           m.id === messageId
-            ? { ...m, content: 'Action timed out - confirmation not received within 5 minutes.', isStreaming: false, error: 'timeout' }
+            ? { ...m, content: `Action timed out - confirmation not received within ${AI_CONFIRMATION_TIMEOUT_MS / 60000} minutes.`, isStreaming: false, error: 'timeout' }
             : m
         );
         messagesRef.current = updated;

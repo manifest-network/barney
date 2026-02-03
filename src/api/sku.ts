@@ -49,7 +49,7 @@ export interface SKU {
   name: string;
   unit: Unit;
   base_price: { denom: string; amount: string };
-  meta_hash: string | null;
+  meta_hash?: string | null;
   active: boolean;
 }
 

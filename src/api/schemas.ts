@@ -41,7 +41,7 @@ export const ProviderSchema = z.object({
   uuid: z.string(),
   address: z.string(),
   payout_address: z.string(),
-  meta_hash: z.string().nullable(),
+  meta_hash: z.string().nullish(),
   active: z.boolean(),
   api_url: z.string(),
 });
@@ -52,7 +52,7 @@ export const RawSKUSchema = z.object({
   name: z.string(),
   unit: z.string(),
   base_price: CoinSchema,
-  meta_hash: z.string().nullable(),
+  meta_hash: z.string().nullish(),
   active: z.boolean(),
 });
 

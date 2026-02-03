@@ -2,15 +2,15 @@ import { useState, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { Link, Building2, Shield, Copy, Check, Clock, Zap, Package, ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
 import { LeaseState, getLeasesByProvider, getWithdrawableAmount, getProviderWithdrawable, getBillingParams, type Lease, type ProviderWithdrawableResponse } from '../../api/billing';
-import { SECONDS_PER_HOUR } from '../../config/constants';
+import { formatCostPerHour } from '../../utils/pricing';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { getProviders, getSKUsByProvider, type Provider, type SKU } from '../../api/sku';
 import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease, createLeaseForTenant, type CreateLeaseResult } from '../../api/tx';
-import { DENOM_METADATA, formatPrice } from '../../api/config';
+import { formatPrice } from '../../api/config';
 import { isValidManifestAddress } from '../../utils/address';
 import { useLeaseItems } from '../../hooks/useLeaseItems';
 import { calculateEstimatedCost, isValidLeaseItem } from '../../utils/pricing';
-import { formatDate, parseBaseUnits } from '../../utils/format';
+import { formatDate } from '../../utils/format';
 import type { Coin } from '../../api/bank';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { useAutoRefreshTab } from '../../hooks/useAutoRefreshTab';
@@ -793,19 +793,7 @@ function ProviderLeaseCard({
   const [rejectReason, setRejectReason] = useState('');
   const [closeReason, setCloseReason] = useState('');
 
-  const hourlyRate = () => {
-    let total = 0;
-    let denom = '';
-    for (const item of lease.items) {
-      const perSecond = parseBaseUnits(item.locked_price.amount);
-      total += perSecond * parseInt(item.quantity, 10) * SECONDS_PER_HOUR;
-      denom = item.locked_price.denom;
-    }
-    const meta = DENOM_METADATA[denom];
-    const symbol = meta?.symbol || denom;
-    const exponent = meta?.exponent || 6;
-    return `${(total / Math.pow(10, exponent)).toFixed(4)} ${symbol}/hr`;
-  };
+  const hourlyRate = () => formatCostPerHour(lease.items);
 
   return (
     <div

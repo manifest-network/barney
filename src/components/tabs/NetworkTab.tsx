@@ -23,6 +23,7 @@ import type { Coin } from '../../api/bank';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { useAutoRefreshTab } from '../../hooks/useAutoRefreshTab';
 import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER } from '../../utils/leaseState';
+import { formatCostPerHour } from '../../utils/pricing';
 import { EmptyState } from '../ui/EmptyState';
 import { ErrorBanner } from '../ui/ErrorBanner';
 import { SkeletonCard } from '../ui/SkeletonCard';
@@ -464,17 +465,7 @@ function NetworkLeaseCard({ lease, getProvider, getSKU }: NetworkLeaseCardProps)
   const provider = getProvider(lease.provider_uuid);
   const stateKey = LEASE_STATE_TO_FILTER[lease.state];
 
-  // Calculate cost per hour
-  const costPerHour = (() => {
-    let total = 0;
-    for (const item of lease.items) {
-      const perSecond = parseBaseUnits(item.locked_price.amount);
-      total += perSecond * parseInt(item.quantity, 10) * SECONDS_PER_HOUR;
-    }
-    const denom = lease.items[0]?.locked_price.denom;
-    const meta = denom ? DENOM_METADATA[denom] || { symbol: 'tokens', exponent: 6 } : { symbol: 'tokens', exponent: 6 };
-    return `${(total / Math.pow(10, meta.exponent)).toFixed(4)} ${meta.symbol}/hr`;
-  })();
+  const costPerHour = formatCostPerHour(lease.items);
 
   return (
     <div className="lease-card" data-state={stateKey}>

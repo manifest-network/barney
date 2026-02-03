@@ -12,6 +12,7 @@ import { useCopyToClipboard } from '../../../hooks/useCopyToClipboard';
 import { formatDate, formatRelativeTime, formatDuration, parseBaseUnits, fromBaseUnits } from '../../../utils/format';
 import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER, type LeaseFilterState } from '../../../utils/leaseState';
 import { DENOM_METADATA } from '../../../api/config';
+import { formatCostPerHour } from '../../../utils/pricing';
 import {
   createSignMessage,
   createAuthToken,
@@ -59,17 +60,7 @@ export function LeaseCard({
   const isPending = lease.state === LeaseState.LEASE_STATE_PENDING;
   const isActive = lease.state === LeaseState.LEASE_STATE_ACTIVE;
 
-  // Calculate cost per hour
-  const costPerHour = (() => {
-    let total = 0;
-    for (const item of lease.items) {
-      const perSecond = parseBaseUnits(item.locked_price.amount);
-      total += perSecond * parseInt(item.quantity, 10) * SECONDS_PER_HOUR;
-    }
-    const denom = lease.items[0]?.locked_price.denom;
-    const meta = denom ? DENOM_METADATA[denom] || { symbol: 'tokens', exponent: 6 } : { symbol: 'tokens', exponent: 6 };
-    return `${(total / Math.pow(10, meta.exponent)).toFixed(4)} ${meta.symbol}/hr`;
-  })();
+  const costPerHour = formatCostPerHour(lease.items);
 
   const handleGetConnectionInfo = async () => {
     // Toggle: if already showing, close it
@@ -139,13 +130,13 @@ export function LeaseCard({
         <div className="lease-card-content">
           {/* Identifiers group */}
           <div className="lease-card-identifiers">
-            <span className="lease-card-labeled-field">
+            <span className="lease-card-labeled-field" data-field="lease">
               <span className="lease-card-label">Lease</span>
               <code className="lease-card-mono">{lease.uuid}</code>
               <CopyButton value={lease.uuid} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy Lease UUID" stopPropagation />
             </span>
 
-            <span className="lease-card-labeled-field">
+            <span className="lease-card-labeled-field" data-field="provider">
               <span className="lease-card-label">Provider</span>
               <code className="lease-card-mono">{provider?.address || lease.provider_uuid}</code>
               <CopyButton value={provider?.address || lease.provider_uuid} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy Provider Address" stopPropagation />
@@ -157,10 +148,16 @@ export function LeaseCard({
 
           {/* Metrics group */}
           <div className="lease-card-metrics">
-            <span className="lease-card-cost">{costPerHour}</span>
-            <span className="lease-card-time">
-              <Clock size={11} />
-              {formatRelativeTime(lease.created_at)}
+            <span className="lease-card-labeled-field" data-field="cost">
+              <span className="lease-card-label">Cost</span>
+              <span className="lease-card-cost">{costPerHour}</span>
+            </span>
+            <span className="lease-card-labeled-field" data-field="created">
+              <span className="lease-card-label">Created</span>
+              <span className="lease-card-time">
+                <Clock size={11} />
+                {formatRelativeTime(lease.created_at)}
+              </span>
             </span>
           </div>
         </div>

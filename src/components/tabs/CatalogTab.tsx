@@ -704,22 +704,27 @@ function SKUCard({
 
           {/* Metrics group */}
           <div className="catalog-sku-metrics">
-            <span className="catalog-sku-price">
-              {formatPrice(sku.base_price.amount, sku.base_price.denom, sku.unit)}
+            <span className="catalog-sku-labeled-field" data-field="price">
+              <span className="catalog-sku-label">Price</span>
+              <span className="catalog-sku-price">
+                {formatPrice(sku.base_price.amount, sku.base_price.denom, sku.unit)}
+              </span>
             </span>
 
-            <span className="catalog-sku-usage">
+            <span className="catalog-sku-labeled-field" data-field="leases">
+              <span className="catalog-sku-label">Leases</span>
+              <span className="catalog-sku-usage">
               {usageLoading ? (
                 <Loader2 className="animate-spin" size={12} />
               ) : usage ? (
                 <>
                   <span className="catalog-sku-usage-active">{usage.active}</span>
                   <span className="catalog-sku-usage-total">/ {usage.total}</span>
-                  <span className="catalog-sku-usage-label">leases</span>
                 </>
               ) : (
                 <span className="catalog-sku-usage-total">-</span>
               )}
+              </span>
             </span>
           </div>
         </div>

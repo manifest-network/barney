@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { Link, Wallet, Clock, Flame, Loader2, Copy, Check, Zap, TrendingDown, Plus, ArrowRight, GitBranch } from 'lucide-react';
+import { Link, Wallet, Clock, Flame, Loader2, Copy, Check, Zap, TrendingDown, Plus, ArrowRight, GitBranch, UserPlus } from 'lucide-react';
 import {
   getBalance,
   getCreditAccount,
@@ -16,7 +16,7 @@ import { useAutoRefreshTab } from '../../hooks/useAutoRefreshTab';
 import { useToast } from '../../hooks/useToast';
 import { EmptyState } from '../ui/EmptyState';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { truncateAddress } from '../../utils/address';
+import { truncateAddress, isValidManifestAddress } from '../../utils/address';
 import { CHAIN_NAME } from '../../config/chain';
 
 interface WalletTabProps {
@@ -39,6 +39,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const toast = useToast();
   const { copied, copyToClipboard } = useCopyToClipboard();
   const [fundAmount, setFundAmount] = useState('');
+  const [fundRecipient, setFundRecipient] = useState('');
   const [txLoading, setTxLoading] = useState(false);
   const [data, setData] = useState<WalletData>({
     mfxBalance: null,
@@ -96,6 +97,12 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
       return;
     }
 
+    const tenant = fundRecipient.trim() || address;
+    if (tenant !== address && !isValidManifestAddress(tenant)) {
+      toast.error('Please enter a valid manifest address');
+      return;
+    }
+
     setTxLoading(true);
 
     try {
@@ -106,14 +113,16 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
 
       const baseAmount = toBaseUnits(parsedAmount, DENOMS.PWR);
 
-      const result = await fundCredit(signer, address, address, {
+      const result = await fundCredit(signer, address, tenant, {
         denom: DENOMS.PWR,
         amount: baseAmount,
       });
 
       if (result.success) {
-        toast.success(`Funded ${fundAmount} PWR! Tx: ${result.transactionHash?.slice(0, 16)}...`);
+        const target = tenant === address ? '' : ` for ${truncateAddress(tenant)}`;
+        toast.success(`Funded ${fundAmount} PWR${target}! Tx: ${result.transactionHash?.slice(0, 16)}...`);
         setFundAmount('');
+        setFundRecipient('');
         refresh();
       } else {
         toast.error(result.error || 'Transaction failed');
@@ -256,16 +265,27 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
                 </button>
               ))}
             </div>
+            <div className="wallet-fund-recipient-group">
+              <UserPlus size={14} className="wallet-fund-recipient-icon" />
+              <input
+                type="text"
+                value={fundRecipient}
+                onChange={(e) => setFundRecipient(e.target.value)}
+                placeholder="Recipient address (leave empty for self)"
+                disabled={txLoading}
+                className="wallet-fund-recipient-input"
+              />
+            </div>
             <button
               onClick={handleFundCredit}
-              disabled={!fundAmount || txLoading || pwrBalanceNum < parseFloat(fundAmount)}
+              disabled={!fundAmount || txLoading || pwrBalanceNum < parseFloat(fundAmount) || (!!fundRecipient.trim() && !isValidManifestAddress(fundRecipient.trim()))}
               className="wallet-fund-submit-btn"
             >
               {txLoading ? (
                 <Loader2 className="animate-spin" size={16} />
               ) : (
                 <>
-                  Fund Account
+                  {fundRecipient.trim() ? 'Fund Recipient' : 'Fund Account'}
                   <ArrowRight size={14} />
                 </>
               )}

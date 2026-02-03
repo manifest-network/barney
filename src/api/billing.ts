@@ -71,14 +71,14 @@ export interface Lease {
   state: LeaseState;
   created_at: string;
   last_settled_at: string;
-  closed_at?: string;
-  acknowledged_at?: string;
-  rejected_at?: string;
-  expired_at?: string;
-  rejection_reason?: string;
-  closure_reason?: string;
-  min_lease_duration_at_creation?: string;
-  meta_hash?: string;
+  closed_at?: string | null;
+  acknowledged_at?: string | null;
+  rejected_at?: string | null;
+  expired_at?: string | null;
+  rejection_reason?: string | null;
+  closure_reason?: string | null;
+  min_lease_duration_at_creation?: string | null;
+  meta_hash?: string | null;
 }
 
 /**
