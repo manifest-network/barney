@@ -9,7 +9,7 @@ import { LeaseState } from '../../../api/billing';
 import { SECONDS_PER_HOUR } from '../../../config/constants';
 import { CHAIN_NAME } from '../../../config/chain';
 import { useCopyToClipboard } from '../../../hooks/useCopyToClipboard';
-import { formatDate, formatRelativeTime, formatDuration, parseBaseUnits, fromBaseUnits } from '../../../utils/format';
+import { formatDate, formatRelativeTime, formatDuration, fromBaseUnits } from '../../../utils/format';
 import { LEASE_STATE_LABELS, LEASE_STATE_TO_FILTER, type LeaseFilterState } from '../../../utils/leaseState';
 import { DENOM_METADATA } from '../../../api/config';
 import { formatCostPerHour } from '../../../utils/pricing';
