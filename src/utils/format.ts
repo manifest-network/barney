@@ -208,6 +208,14 @@ export function formatDuration(duration: bigint | string | undefined): string {
 }
 
 /**
+ * Coerce an unknown value to boolean.
+ * Handles both boolean `true` and string `"true"` from tool arguments.
+ */
+export function toBool(value: unknown): boolean {
+  return value === true || value === 'true';
+}
+
+/**
  * UUID validation regex pattern
  * Matches standard UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
  */

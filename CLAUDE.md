@@ -29,9 +29,10 @@ npx vitest run -t "validateFile"
 
 ```
 ChainProvider (cosmos-kit wallet abstraction)
-  └─ AutoRefreshProvider (10s polling, pauses when tab hidden)
-      └─ AIProvider (chat state, tool execution, Ollama streaming)
-          └─ App (tab routing based on user role)
+  └─ ToastProvider (toast notifications)
+      └─ AutoRefreshProvider (10s polling, pauses when tab hidden)
+          └─ AIProvider (chat state, tool execution, Ollama streaming)
+              └─ App (tab routing based on user role)
 ```
 
 ### AI Tool Execution Flow
@@ -45,6 +46,13 @@ The AI assistant uses a 3-layer architecture:
    - **Transaction tools**: Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts
 
 Tool definitions are in `src/ai/tools.ts`. The system prompt is dynamically generated from blockchain module documentation.
+
+### Dual Transaction Paths
+
+UI components and AI tools use separate transaction paths that both leverage manifestjs internally:
+
+- **UI components** use `src/api/tx.ts` via `signAndBroadcast()` (cosmos-kit signer + manifestjs `getSigningLiftedinitClient`)
+- **AI tool executor** uses `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (an MCP server that also uses manifestjs internally)
 
 ### Wallet Integration
 
@@ -84,6 +92,8 @@ Tabs are conditionally rendered based on `isProvider` and `isAdmin` roles checke
 - **Transaction handling**: Use `useTxHandler()` hook from `src/hooks/useTxHandler.ts` for standardized transaction execution with toast notifications
 - **Retry logic**: Use `withRetry()` from `src/api/utils.ts` for transient network error recovery with exponential backoff
 - **Tool result caching**: Query tool results cached for 10s in AIContext to reduce redundant API calls (max 50 entries, LRU eviction)
+- **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
+- **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs.
 
 ## Chain Configuration
 

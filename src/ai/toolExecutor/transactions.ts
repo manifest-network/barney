@@ -216,7 +216,7 @@ async function executeCreateLease(
     };
   }
 
-  const leaseUuid = extractLeaseUuidFromTxResult(result as unknown as Record<string, unknown>);
+  const leaseUuid = extractLeaseUuidFromTxResult(result);
   const itemsSummary = items.map((item, i) => {
     const name = rawItems[i]?.sku_name;
     return `${item.quantity}x ${name || item.sku_uuid}`;

@@ -42,10 +42,14 @@ export function getEventAttribute(
  * @param result - The transaction result object
  * @returns The lease UUID if found, null otherwise
  */
-export function extractLeaseUuid(result: Record<string, unknown>): string | null {
+export function extractLeaseUuid(result: unknown): string | null {
+  if (!result || typeof result !== 'object') return null;
+
+  const obj = result as Record<string, unknown>;
+
   try {
     // Strategy 1: Look in top-level events array
-    const events = result.events as TxEvent[] | undefined;
+    const events = obj.events as TxEvent[] | undefined;
     if (events) {
       const uuid = getEventAttribute(events, 'lease_created', 'lease_uuid');
       if (uuid) return uuid;
@@ -56,13 +60,13 @@ export function extractLeaseUuid(result: Record<string, unknown>): string | null
     }
 
     // Strategy 2: Check the response data directly
-    const data = result.data as Record<string, unknown> | undefined;
+    const data = obj.data as Record<string, unknown> | undefined;
     if (data && typeof data.lease_uuid === 'string') {
       return data.lease_uuid;
     }
 
     // Strategy 3: Check parsed logs (some cosmos SDK versions use this format)
-    const logs = result.logs as
+    const logs = obj.logs as
       | Array<{
           events: Array<{
             type: string;

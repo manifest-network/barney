@@ -3,8 +3,8 @@
  * Uses ADR-036 off-chain signatures for authentication.
  */
 
-import { isPrivateHost } from '../ai/validation';
 import { logError } from '../utils/errors';
+import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
 
 /**
  * Validates that a provider API URL is safe to use.
@@ -12,29 +12,35 @@ import { logError } from '../utils/errors';
  * to private/internal addresses (in production).
  */
 function validateProviderUrl(url: string): URL {
-  if (!url || typeof url !== 'string') {
-    throw new Error('Invalid provider API URL: URL is required');
+  const parsed = parseHttpUrl(url);
+  if (!parsed) {
+    throw new Error(`Invalid provider API URL: ${url || '(empty)'}`);
   }
 
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`Invalid provider API URL: ${url}`);
-  }
-
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`Invalid provider API URL protocol: ${parsed.protocol}`);
-  }
-
-  // SSRF Protection: Block private/internal IP addresses in production
-  // Development mode allows localhost for local provider testing
-  const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
-  if (!isDev && isPrivateHost(parsed.hostname)) {
+  if (!isUrlSsrfSafe(parsed)) {
     throw new Error('Provider API URL cannot point to private/internal addresses');
   }
 
   return parsed;
+}
+
+/**
+ * Build a fetch URL and headers for provider API requests.
+ * In development, routes through the CORS proxy with X-Proxy-Target header.
+ */
+function buildProviderFetchArgs(
+  baseUrl: string,
+  path: string,
+  extraHeaders?: Record<string, string>
+): { url: string; headers: Record<string, string> } {
+  const headers: Record<string, string> = { ...extraHeaders };
+
+  if (import.meta.env.DEV) {
+    headers['X-Proxy-Target'] = baseUrl;
+    return { url: `/proxy-provider${path}`, headers };
+  }
+
+  return { url: `${baseUrl}${path}`, headers };
 }
 
 export interface ProviderHealthResponse {
@@ -137,21 +143,12 @@ export async function getLeaseConnectionInfo(
   const validatedUrl = validateProviderUrl(providerApiUrl);
   const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
 
-  // In development, use the proxy to bypass CORS
-  // The proxy dynamically routes to the target specified in X-Proxy-Target header
-  let url: string;
-  const headers: Record<string, string> = {
-    'Authorization': `Bearer ${authToken}`,
-    'Content-Type': 'application/json',
-  };
-
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  if (import.meta.env.DEV) {
-    url = `/proxy-provider/v1/leases/${encodedLeaseUuid}/connection`;
-    headers['X-Proxy-Target'] = baseUrl;
-  } else {
-    url = `${baseUrl}/v1/leases/${encodedLeaseUuid}/connection`;
-  }
+  const { url, headers } = buildProviderFetchArgs(
+    baseUrl,
+    `/v1/leases/${encodedLeaseUuid}/connection`,
+    { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+  );
 
   const response = await fetch(url, {
     method: 'GET',
@@ -190,15 +187,7 @@ export async function getProviderHealth(
 
   const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
 
-  let url: string;
-  const headers: Record<string, string> = {};
-
-  if (import.meta.env.DEV) {
-    url = `/proxy-provider/health`;
-    headers['X-Proxy-Target'] = baseUrl;
-  } else {
-    url = `${baseUrl}/health`;
-  }
+  const { url, headers } = buildProviderFetchArgs(baseUrl, '/health');
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -294,19 +283,12 @@ export async function uploadLeaseData(
   const validatedUrl = validateProviderUrl(providerApiUrl);
   const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
 
-  let url: string;
-  const headers: Record<string, string> = {
-    'Authorization': `Bearer ${authToken}`,
-    'Content-Type': 'application/octet-stream',
-  };
-
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  if (import.meta.env.DEV) {
-    url = `/proxy-provider/v1/leases/${encodedLeaseUuid}/data`;
-    headers['X-Proxy-Target'] = baseUrl;
-  } else {
-    url = `${baseUrl}/v1/leases/${encodedLeaseUuid}/data`;
-  }
+  const { url, headers } = buildProviderFetchArgs(
+    baseUrl,
+    `/v1/leases/${encodedLeaseUuid}/data`,
+    { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/octet-stream' },
+  );
 
   const response = await fetch(url, {
     method: 'POST',

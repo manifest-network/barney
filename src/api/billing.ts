@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- LCD returns untyped JSON; `as any` is needed for fromAmino() */
 import { liftedinit } from '@manifest-network/manifestjs';
 import type {
   Params as BillingParams,
@@ -13,7 +12,7 @@ import type {
 } from '@manifest-network/manifestjs/dist/codegen/liftedinit/billing/v1/query';
 import type { Coin } from '@manifest-network/manifestjs/dist/codegen/cosmos/base/v1beta1/coin';
 import type { PageResponse } from '@manifest-network/manifestjs/dist/codegen/cosmos/base/query/v1beta1/pagination';
-import { getQueryClient, queryWithNotFound } from './queryClient';
+import { getQueryClient, queryWithNotFound, lcdConvert, fixEnumField } from './queryClient';
 import { logError } from '../utils/errors';
 
 // Re-export manifestjs types for consumers (Coin is exported from bank.ts)
@@ -61,7 +60,7 @@ export const LEASE_STATE_FILTERS = ['all', ...Object.keys(LEASE_STATE_MAP)] as c
 // fromAmino doesn't convert enum strings to numeric values; LCD returns strings like "LEASE_STATE_ACTIVE"
 // but LeaseState enum keys are numeric (0, 1, 2, ...). This fixes the mismatch.
 function fixLeaseEnums(lease: Lease): Lease {
-  return { ...lease, state: fromJSON(lease.state) };
+  return fixEnumField(lease, 'state', fromJSON);
 }
 
 export async function getCreditAccount(tenant: string): Promise<QueryCreditAccountResponse> {
@@ -74,8 +73,7 @@ export async function getCreditAccount(tenant: string): Promise<QueryCreditAccou
   );
 
   if (data) {
-    const converted = QueryCreditAccountResponseConverter.fromAmino(data as any);
-    return converted;
+    return lcdConvert(data, QueryCreditAccountResponseConverter);
   }
 
   return {
@@ -94,8 +92,7 @@ export async function getCreditAccount(tenant: string): Promise<QueryCreditAccou
 export async function getCreditAddress(tenant: string): Promise<string> {
   const client = await getQueryClient();
   const data = await client.liftedinit.billing.v1.creditAddress({ tenant });
-  const converted = QueryCreditAddressResponseConverter.fromAmino(data as any);
-  return converted.creditAddress;
+  return lcdConvert(data, QueryCreditAddressResponseConverter).creditAddress;
 }
 
 export async function getCreditEstimate(tenant: string): Promise<QueryCreditEstimateResponse | null> {
@@ -105,14 +102,13 @@ export async function getCreditEstimate(tenant: string): Promise<QueryCreditEsti
     null,
   );
   if (!data) return null;
-  return QueryCreditEstimateResponseConverter.fromAmino(data as any);
+  return lcdConvert(data, QueryCreditEstimateResponseConverter);
 }
 
 export async function getBillingParams(): Promise<BillingParams> {
   const client = await getQueryClient();
   const data = await client.liftedinit.billing.v1.params();
-  const converted = QueryParamsResponseConverter.fromAmino(data as any);
-  return converted.params;
+  return lcdConvert(data, QueryParamsResponseConverter).params;
 }
 
 export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState): Promise<Lease[]> {
@@ -121,8 +117,7 @@ export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState
     tenant,
     stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
   });
-  const converted = QueryLeasesResponseConverter.fromAmino(data as any);
-  return converted.leases.map(fixLeaseEnums);
+  return lcdConvert(data, QueryLeasesResponseConverter).leases.map(fixLeaseEnums);
 }
 
 export async function getLeasesByProvider(providerUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
@@ -131,8 +126,7 @@ export async function getLeasesByProvider(providerUuid: string, stateFilter?: Le
     providerUuid,
     stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
   });
-  const converted = QueryLeasesResponseConverter.fromAmino(data as any);
-  return converted.leases.map(fixLeaseEnums);
+  return lcdConvert(data, QueryLeasesResponseConverter).leases.map(fixLeaseEnums);
 }
 
 export async function getLease(leaseUuid: string): Promise<Lease | null> {
@@ -142,8 +136,7 @@ export async function getLease(leaseUuid: string): Promise<Lease | null> {
     null,
   );
   if (!data) return null;
-  const converted = QueryLeaseResponseConverter.fromAmino(data as any);
-  return fixLeaseEnums(converted.lease);
+  return fixLeaseEnums(lcdConvert(data, QueryLeaseResponseConverter).lease);
 }
 
 export async function getWithdrawableAmount(leaseUuid: string): Promise<Coin[]> {
@@ -153,8 +146,7 @@ export async function getWithdrawableAmount(leaseUuid: string): Promise<Coin[]> 
     null,
   );
   if (!data) return [];
-  const converted = QueryWithdrawableAmountResponseConverter.fromAmino(data as any);
-  return converted.amounts;
+  return lcdConvert(data, QueryWithdrawableAmountResponseConverter).amounts;
 }
 
 export async function getProviderWithdrawable(providerUuid: string): Promise<QueryProviderWithdrawableResponse> {
@@ -164,7 +156,7 @@ export async function getProviderWithdrawable(providerUuid: string): Promise<Que
     null,
   );
   if (!data) return { amounts: [], leaseCount: 0n, hasMore: false };
-  return QueryProviderWithdrawableResponseConverter.fromAmino(data as any);
+  return lcdConvert(data, QueryProviderWithdrawableResponseConverter);
 }
 
 export async function getLeasesBySKU(skuUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
@@ -173,8 +165,7 @@ export async function getLeasesBySKU(skuUuid: string, stateFilter?: LeaseState):
     skuUuid,
     stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
   });
-  const converted = QueryLeasesResponseConverter.fromAmino(data as any);
-  return converted.leases.map(fixLeaseEnums);
+  return lcdConvert(data, QueryLeasesResponseConverter).leases.map(fixLeaseEnums);
 }
 
 export interface PaginatedLeasesResponse {
@@ -212,7 +203,7 @@ export async function getAllLeases(params?: GetAllLeasesParams): Promise<Paginat
     stateFilter: params?.stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
   });
 
-  const converted = QueryLeasesResponseConverter.fromAmino(data as any);
+  const converted = lcdConvert(data, QueryLeasesResponseConverter);
 
   return {
     leases: converted.leases.map(fixLeaseEnums),
@@ -258,7 +249,7 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
     }),
   });
 
-  const converted = QueryCreditAccountsResponseConverter.fromAmino(data as any);
+  const converted = lcdConvert(data, QueryCreditAccountsResponseConverter);
   const creditAccounts = converted.creditAccounts;
 
   // N+1 query: fetch balances from bank module (see function docs for rationale)
