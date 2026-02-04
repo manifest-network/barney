@@ -112,11 +112,19 @@ export async function getLeaseStatus(
   }
 }
 
+/** Chain lease states that indicate the lease is no longer viable */
+export type TerminalChainState = 'closed' | 'rejected' | 'expired';
+
 export interface PollOptions {
   intervalMs?: number;
   maxAttempts?: number;
   onProgress?: (status: FredLeaseStatus) => void;
   abortSignal?: AbortSignal;
+  /**
+   * Optional callback to check chain state during polling.
+   * If it returns a terminal state, polling stops with a 'failed' status.
+   */
+  checkChainState?: () => Promise<TerminalChainState | null>;
 }
 
 /**
@@ -147,6 +155,26 @@ export async function pollLeaseUntilReady(
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (opts.abortSignal?.aborted) {
       return lastStatus;
+    }
+
+    // Check chain state first — lease may be rejected/closed before fred knows
+    if (opts.checkChainState) {
+      try {
+        const chainState = await opts.checkChainState();
+        if (chainState) {
+          // Terminal chain state — return failed status
+          lastStatus = {
+            status: 'failed',
+            phase: 'chain_rejected',
+            error: `Lease ${chainState} on chain`,
+          };
+          opts.onProgress?.(lastStatus);
+          return lastStatus;
+        }
+      } catch (error) {
+        // Log but continue — chain check failure shouldn't stop polling
+        logError('fred.pollLeaseUntilReady.checkChainState', error);
+      }
     }
 
     try {

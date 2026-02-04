@@ -13,13 +13,14 @@ import {
   LeaseState,
 } from '../../api/billing';
 import { getAllBalances } from '../../api/bank';
-import { getProviders, getSKUs } from '../../api/sku';
+import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseStatus } from '../../api/fred';
 import { createSignMessage, createAuthToken } from '../../api/provider-api';
-import { DENOMS, getDenomMetadata } from '../../api/config';
+import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
+import { withTimeout } from '../../api/utils';
 import type { ToolResult, ToolExecutorOptions, SignResult } from './types';
 
 /**
@@ -40,8 +41,8 @@ export async function executeListApps(
 
   // Reconcile with chain: mark apps as stopped if lease is gone
   try {
-    const activeLeases = await getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE);
-    const pendingLeases = await getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING);
+    const activeLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE), undefined, 'Fetch active leases');
+    const pendingLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING), undefined, 'Fetch pending leases');
     const activeUuids = new Set([
       ...activeLeases.map((l) => l.uuid),
       ...pendingLeases.map((l) => l.uuid),
@@ -91,7 +92,7 @@ export async function executeAppStatus(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
-  const name = args.name as string;
+  const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
 
   const app = appRegistry.getApp(address, name);
@@ -160,12 +161,12 @@ export async function executeGetBalance(
   if (!address) return { success: false, error: 'Wallet not connected' };
 
   const [balances, creditAccount, estimate] = await Promise.all([
-    getAllBalances(address),
-    getCreditAccount(address).catch((error) => {
+    withTimeout(getAllBalances(address), undefined, 'Fetch balances'),
+    withTimeout(getCreditAccount(address), undefined, 'Fetch credit account').catch((error) => {
       logError('compositeQueries.executeGetBalance.creditAccount', error);
       return null;
     }),
-    getCreditEstimate(address).catch((error) => {
+    withTimeout(getCreditEstimate(address), undefined, 'Fetch credit estimate').catch((error) => {
       logError('compositeQueries.executeGetBalance.creditEstimate', error);
       return null;
     }),
@@ -226,8 +227,8 @@ export async function executeGetBalance(
  */
 export async function executeBrowseCatalog(): Promise<ToolResult> {
   const [providers, skus] = await Promise.all([
-    getProviders(true),
-    getSKUs(true),
+    withTimeout(getProviders(true), undefined, 'Fetch providers'),
+    withTimeout(getSKUs(true), undefined, 'Fetch SKUs'),
   ]);
 
   // Check provider health in parallel
@@ -258,8 +259,10 @@ export async function executeBrowseCatalog(): Promise<ToolResult> {
     if (!tiers[tierName]) tiers[tierName] = [];
 
     const provider = providersWithHealth.find((p) => p.uuid === sku.providerUuid);
-    const priceDisplay = sku.price
-      ? `${fromBaseUnits(sku.price.amount, sku.price.denom)} ${getDenomMetadata(sku.price.denom).symbol}`
+    // Use SKU's unit field for correct display (e.g., /hr, /day)
+    const unitLabel = UNIT_LABELS[sku.unit as Unit] || '';
+    const priceDisplay = sku.basePrice
+      ? `${fromBaseUnits(sku.basePrice.amount, sku.basePrice.denom)} ${getDenomMetadata(sku.basePrice.denom).symbol}${unitLabel}`
       : 'unknown';
 
     tiers[tierName].push({

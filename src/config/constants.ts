@@ -91,3 +91,6 @@ export const AI_TOOL_CACHE_TTL_MS = 10000;
 
 /** Maximum number of entries in the tool result cache */
 export const AI_TOOL_CACHE_MAX_SIZE = 50;
+
+/** Timeout for blockchain API calls during tool execution (milliseconds) */
+export const AI_TOOL_API_TIMEOUT_MS = 15000;

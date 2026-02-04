@@ -6,8 +6,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { LogOut, Plus, Circle, Zap } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
-import { getApps, type AppEntry } from '../../registry/appRegistry';
-import { getCreditEstimate } from '../../api/billing';
+import { getApps, updateApp, type AppEntry } from '../../registry/appRegistry';
+import { getCreditEstimate, getLeasesByTenant, LeaseState } from '../../api/billing';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits } from '../../utils/format';
 import { truncateAddress } from '../../utils/address';
@@ -32,11 +32,37 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const [credits, setCredits] = useState<number | null>(null);
   const [hoursRemaining, setHoursRemaining] = useState<number | null>(null);
 
-  // Load apps and credit info
+  // Load apps and credit info, reconcile with chain state
   const refresh = useCallback(async () => {
     if (!address) return;
 
-    setApps(getApps(address));
+    let apps = getApps(address);
+
+    // Reconcile: mark apps as stopped if lease is no longer active/pending
+    try {
+      const [activeLeases, pendingLeases] = await Promise.all([
+        getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE),
+        getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING),
+      ]);
+      const activeUuids = new Set([
+        ...activeLeases.map((l) => l.uuid),
+        ...pendingLeases.map((l) => l.uuid),
+      ]);
+
+      for (const app of apps) {
+        if (
+          (app.status === 'running' || app.status === 'deploying') &&
+          !activeUuids.has(app.leaseUuid)
+        ) {
+          updateApp(address, app.leaseUuid, { status: 'stopped' });
+          app.status = 'stopped';
+        }
+      }
+    } catch (error) {
+      logError('AppsSidebar.refresh.reconcile', error);
+    }
+
+    setApps(apps);
 
     try {
       const estimate = await getCreditEstimate(address);

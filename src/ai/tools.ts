@@ -18,7 +18,7 @@ export const AI_TOOLS: OllamaTool[] = [
       parameters: {
         type: 'object',
         properties: {
-          name: {
+          app_name: {
             type: 'string',
             description: 'App name (lowercase, alphanumeric + hyphens, 1-32 chars). Derived from filename if omitted.',
           },
@@ -40,12 +40,12 @@ export const AI_TOOLS: OllamaTool[] = [
       parameters: {
         type: 'object',
         properties: {
-          name: {
+          app_name: {
             type: 'string',
             description: 'The name of the app to stop.',
           },
         },
-        required: ['name'],
+        required: ['app_name'],
       },
     },
   },
@@ -95,12 +95,12 @@ export const AI_TOOLS: OllamaTool[] = [
       parameters: {
         type: 'object',
         properties: {
-          name: {
+          app_name: {
             type: 'string',
             description: 'The app name to check.',
           },
         },
-        required: ['name'],
+        required: ['app_name'],
       },
     },
   },
@@ -216,18 +216,18 @@ export function getToolCallDescription(
 ): string {
   switch (toolName) {
     case 'deploy_app': {
-      const name = args.name ? ` "${args.name}"` : '';
+      const name = args.app_name ? ` "${args.app_name}"` : '';
       const size = args.size ? ` (${args.size})` : '';
       return `Deploying app${name}${size}...`;
     }
     case 'stop_app':
-      return `Stopping app "${args.name}"...`;
+      return `Stopping app "${args.app_name}"...`;
     case 'fund_credits':
       return `Funding credits with ${args.amount} PWR...`;
     case 'list_apps':
       return args.state ? `Listing ${args.state} apps...` : 'Listing running apps...';
     case 'app_status':
-      return `Checking status of "${args.name}"...`;
+      return `Checking status of "${args.app_name}"...`;
     case 'get_balance':
       return 'Checking your balance and credits...';
     case 'browse_catalog':

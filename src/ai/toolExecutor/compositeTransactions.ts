@@ -5,13 +5,15 @@
 
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
-import { getCreditEstimate } from '../../api/billing';
-import { getProviders, getSKUs } from '../../api/sku';
+import { getCreditAccount, getLease } from '../../api/billing';
+import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { createSignMessage, createAuthToken } from '../../api/provider-api';
-import { pollLeaseUntilReady } from '../../api/fred';
-import { DENOMS, getDenomMetadata } from '../../api/config';
+import { pollLeaseUntilReady, type TerminalChainState } from '../../api/fred';
+import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
+import { SECONDS_PER_DAY } from '../../config/constants';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
+import { withTimeout } from '../../api/utils';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 import { validateAppName } from '../../registry/appRegistry';
@@ -52,7 +54,7 @@ export async function executeDeployApp(
   }
 
   // Resolve name
-  let name = args.name as string | undefined;
+  let name = args.app_name as string | undefined;
   if (!name && payload.filename) {
     name = deriveAppName(payload.filename);
   }
@@ -73,7 +75,7 @@ export async function executeDeployApp(
   // Find matching SKU
   let allSKUs;
   try {
-    allSKUs = await getSKUs(true);
+    allSKUs = await withTimeout(getSKUs(true), undefined, 'Fetch tiers');
   } catch {
     return { success: false, error: 'Failed to fetch available tiers. Please try again.' };
   }
@@ -95,7 +97,7 @@ export async function executeDeployApp(
   const matchingSku = allSKUs.find((s) => s.uuid === skuUuid);
   let providers;
   try {
-    providers = await getProviders(true);
+    providers = await withTimeout(getProviders(true), undefined, 'Fetch providers');
   } catch {
     return { success: false, error: 'Failed to fetch providers. Please try again.' };
   }
@@ -108,42 +110,67 @@ export async function executeDeployApp(
     return { success: false, error: 'No available provider found for this tier.' };
   }
 
-  // Check credits
+  // Format price for display using SKU's unit, and calculate hourly cost for credit check
+  let priceDisplay = '';
+  let skuHourlyCost = 0;
+  if (matchingSku?.basePrice) {
+    const { symbol } = getDenomMetadata(matchingSku.basePrice.denom);
+    const basePrice = fromBaseUnits(matchingSku.basePrice.amount, matchingSku.basePrice.denom);
+    const unitLabel = UNIT_LABELS[matchingSku.unit as Unit] || '/hr';
+
+    // Convert to hourly cost based on unit
+    if (matchingSku.unit === Unit.UNIT_PER_DAY) {
+      skuHourlyCost = basePrice / 24;
+    } else {
+      // Default to per-hour for UNIT_PER_HOUR or unspecified
+      skuHourlyCost = basePrice;
+    }
+
+    priceDisplay = `${Math.round(basePrice * 100) / 100} ${symbol}${unitLabel}`;
+  }
+
+  // Check credits - verify user can afford at least 1 hour of this SKU
   let creditWarning = '';
   try {
-    const estimate = await getCreditEstimate(address);
-    if (estimate) {
-      const hoursRemaining = Math.floor(Number(estimate.estimatedDurationSeconds) / 3600);
-      if (hoursRemaining < 1) {
+    const creditAccount = await withTimeout(getCreditAccount(address), undefined, 'Credit check');
+    if (creditAccount?.balances) {
+      // Find PWR balance
+      let credits = 0;
+      for (const bal of creditAccount.balances) {
+        if (bal.denom === DENOMS.PWR || bal.denom.includes('upwr')) {
+          credits = fromBaseUnits(bal.amount, bal.denom);
+          break;
+        }
+      }
+
+      // Check if user can afford at least 1 hour of this SKU
+      if (skuHourlyCost > 0 && credits < skuHourlyCost) {
         return {
           success: false,
-          error: 'Insufficient credits. You have less than 1 hour of runway. Use fund_credits to add more credits before deploying.',
+          error: `Insufficient credits. You have ${Math.round(credits * 100) / 100} credits but need at least ${Math.round(skuHourlyCost * 100) / 100} for 1 hour. Selected: ${size} tier on ${provider.name} (${priceDisplay}). Use fund_credits to add more credits.`,
         };
       }
-      if (hoursRemaining < 24) {
-        creditWarning = ` Warning: only ~${hoursRemaining}h of credits remaining.`;
+
+      // Warn if less than 24 hours of runway for this SKU
+      if (skuHourlyCost > 0) {
+        const hoursAffordable = credits / skuHourlyCost;
+        if (hoursAffordable < 24) {
+          creditWarning = ` Warning: only ~${Math.floor(hoursAffordable)}h of credits remaining at this rate.`;
+        }
       }
     }
   } catch (error) {
     logError('compositeTransactions.executeDeployApp.creditCheck', error);
   }
 
-  // Format price for confirmation
-  let priceDisplay = '';
-  if (matchingSku?.price) {
-    const { symbol } = getDenomMetadata(matchingSku.price.denom);
-    const displayPrice = fromBaseUnits(matchingSku.price.amount, matchingSku.price.denom);
-    priceDisplay = ` (~${displayPrice} ${symbol}/hr)`;
-  }
-
   return {
     success: true,
     requiresConfirmation: true,
-    confirmationMessage: `Deploy "${name}" on ${size} tier${priceDisplay}?${creditWarning}`,
+    confirmationMessage: `Deploy "${name}" on ${size} tier${priceDisplay ? ` (~${priceDisplay})` : ''}?${creditWarning}`,
     pendingAction: {
       toolName: 'deploy_app',
       args: {
-        name,
+        app_name: name,
         size,
         skuUuid,
         providerUuid: provider.uuid,
@@ -168,7 +195,7 @@ export async function executeConfirmedDeployApp(
   if (!payload) return { success: false, error: 'Payload missing' };
   if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
 
-  const name = args.name as string;
+  const name = args.app_name as string;
   const size = args.size as string;
   const skuUuid = args.skuUuid as string;
   const providerUuid = args.providerUuid as string;
@@ -247,6 +274,16 @@ export async function executeConfirmedDeployApp(
           fredStatus: status,
         });
       },
+      // Check chain state to detect rejected/closed leases
+      checkChainState: async (): Promise<TerminalChainState | null> => {
+        const lease = await getLease(leaseUuid);
+        if (!lease) return 'closed';
+        // State: 3=closed, 4=rejected, 5=expired
+        if (lease.state === 3) return 'closed';
+        if (lease.state === 4) return 'rejected';
+        if (lease.state === 5) return 'expired';
+        return null;
+      },
     });
 
     if (fredStatus.status === 'ready') {
@@ -319,7 +356,7 @@ export async function executeStopApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
-  const name = args.name as string;
+  const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
 
   const app = appRegistry.getApp(address, name);
@@ -335,7 +372,7 @@ export async function executeStopApp(
     confirmationMessage: `Stop app "${name}"? This will terminate the deployment and stop billing.`,
     pendingAction: {
       toolName: 'stop_app',
-      args: { name, leaseUuid: app.leaseUuid },
+      args: { app_name: name, leaseUuid: app.leaseUuid },
     },
   };
 }
@@ -352,7 +389,7 @@ export async function executeConfirmedStopApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
-  const name = args.name as string;
+  const name = args.app_name as string;
   const leaseUuid = args.leaseUuid as string;
 
   const result = await cosmosTx(clientManager, 'billing', 'close-lease', [leaseUuid], true);
@@ -367,7 +404,7 @@ export async function executeConfirmedStopApp(
     success: true,
     data: {
       message: `App "${name}" has been stopped.`,
-      name,
+      app_name: name,
       status: 'stopped',
     },
   };

@@ -249,21 +249,21 @@ describe('executeStopApp', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('returns error for nonexistent app', async () => {
-    const result = await executeStopApp({ name: 'ghost' }, makeOptions());
+    const result = await executeStopApp({ app_name: 'ghost' }, makeOptions());
     expect(result.success).toBe(false);
     expect(result.error).toContain('No app found');
   });
 
   it('returns error for already stopped app', async () => {
     const app = makeApp({ status: 'stopped' });
-    const result = await executeStopApp({ name: 'my-app' }, makeOptions({ appRegistry: makeRegistry([app]) }));
+    const result = await executeStopApp({ app_name: 'my-app' }, makeOptions({ appRegistry: makeRegistry([app]) }));
     expect(result.success).toBe(false);
     expect(result.error).toContain('already stopped');
   });
 
   it('returns confirmation for running app', async () => {
     const app = makeApp();
-    const result = await executeStopApp({ name: 'my-app' }, makeOptions({ appRegistry: makeRegistry([app]) }));
+    const result = await executeStopApp({ app_name: 'my-app' }, makeOptions({ appRegistry: makeRegistry([app]) }));
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
   });
@@ -278,7 +278,7 @@ describe('executeConfirmedStopApp', () => {
     const app = makeApp();
     const registry = makeRegistry([app]);
     const result = await executeConfirmedStopApp(
-      { name: 'my-app', leaseUuid: app.leaseUuid },
+      { app_name: 'my-app', leaseUuid: app.leaseUuid },
       CLIENT_MANAGER,
       makeOptions({ appRegistry: registry })
     );

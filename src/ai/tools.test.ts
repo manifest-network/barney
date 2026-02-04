@@ -65,13 +65,13 @@ describe('getToolCallDescription', () => {
   });
 
   it('interpolates name in deploy_app', () => {
-    const desc = getToolCallDescription('deploy_app', { name: 'my-app', size: 'small' });
+    const desc = getToolCallDescription('deploy_app', { app_name: 'my-app', size: 'small' });
     expect(desc).toContain('my-app');
     expect(desc).toContain('small');
   });
 
   it('interpolates name in stop_app', () => {
-    const desc = getToolCallDescription('stop_app', { name: 'my-app' });
+    const desc = getToolCallDescription('stop_app', { app_name: 'my-app' });
     expect(desc).toContain('my-app');
   });
 
@@ -86,7 +86,7 @@ describe('getToolCallDescription', () => {
   });
 
   it('interpolates name in app_status', () => {
-    const desc = getToolCallDescription('app_status', { name: 'my-app' });
+    const desc = getToolCallDescription('app_status', { app_name: 'my-app' });
     expect(desc).toContain('my-app');
   });
 

@@ -684,8 +684,19 @@ export function AIProvider({ children }: { children: ReactNode }) {
   // Send a message
   const sendMessage = useCallback(
     async (content: string) => {
+      // Build effective content: include attachment info so the model knows about the file
+      const payload = pendingPayloadRef.current;
+      let effectiveContent = content;
+      if (payload) {
+        // Use natural language format - brackets confuse some models
+        const attachNote = `(File attached: ${payload.filename})`;
+        effectiveContent = content.trim()
+          ? `${content.trim()} ${attachNote}`
+          : `Deploy this ${attachNote}`;
+      }
+
       // Validate user input
-      const validatedInput = validateUserInput(content);
+      const validatedInput = validateUserInput(effectiveContent);
       if (!validatedInput) return;
 
       // Don't send if not connected to Ollama
@@ -747,13 +758,24 @@ export function AIProvider({ children }: { children: ReactNode }) {
             signal: abortControllerRef.current?.signal,
           });
 
-          // Process stream with timeout protection
-          const streamResult = await processStreamWithTimeout(
-            stream,
-            (content, thinking) => {
-              scheduleStreamingUpdate(currentAssistantMessageId, content, thinking);
-            }
-          );
+          // Process stream with timeout protection.
+          // Two layers: per-chunk timeout inside processStreamWithTimeout,
+          // plus an overall timeout here as a safety net.
+          let totalTimeoutId: ReturnType<typeof setTimeout> | undefined;
+          const streamResult = await Promise.race([
+            processStreamWithTimeout(
+              stream,
+              (content, thinking) => {
+                scheduleStreamingUpdate(currentAssistantMessageId, content, thinking);
+              }
+            ).finally(() => { if (totalTimeoutId) clearTimeout(totalTimeoutId); }),
+            new Promise<never>((_, reject) => {
+              totalTimeoutId = setTimeout(
+                () => reject(new Error('Stream timeout: no response received')),
+                AI_STREAM_TIMEOUT_MS * 2
+              );
+            }),
+          ]);
 
           // Flush any pending throttled updates before finalizing
           flushPendingUpdate();
@@ -771,10 +793,14 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
           // If no tool calls, we're done
           if (streamResult.toolCalls.length === 0) {
+            // Handle empty response - model returned nothing
+            const finalContent = streamResult.content.trim() ||
+              'I received your message but couldn\'t generate a response. This may indicate the model doesn\'t support tool calling. Please check that your Ollama model supports function calling (e.g., llama3.1, mistral-nemo, qwen2.5).';
             updateMessageById(currentAssistantMessageId, {
-              content: streamResult.content,
+              content: finalContent,
               thinking: streamResult.thinking || undefined,
               isStreaming: false,
+              error: streamResult.content.trim() ? undefined : 'empty_response',
             });
             break;
           }

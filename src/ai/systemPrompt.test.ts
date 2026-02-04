@@ -49,8 +49,14 @@ describe('getSystemPrompt', () => {
 
   it('contains behavior rules', () => {
     const prompt = getSystemPrompt();
-    expect(prompt).toContain('On file drop');
+    expect(prompt).toContain('On file attachment');
     expect(prompt).toContain('Default size');
     expect(prompt).toContain('Be concise');
+  });
+
+  it('contains file attachment instructions', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('(File attached:');
+    expect(prompt).toContain('immediately call deploy_app()');
   });
 });

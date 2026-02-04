@@ -138,7 +138,7 @@ describe('Deploy Flow Integration', () => {
     };
 
     // Step 1: Deploy → should return confirmation
-    const deployResult = await executeTool('deploy_app', { name: 'my-app', size: 'small' }, options, payload);
+    const deployResult = await executeTool('deploy_app', { app_name: 'my-app', size: 'small' }, options, payload);
     expect(deployResult.success).toBe(true);
     expect(deployResult.requiresConfirmation).toBe(true);
     expect(deployResult.confirmationMessage).toContain('my-app');
@@ -157,7 +157,7 @@ describe('Deploy Flow Integration', () => {
       endpoints: { http: 'https://my-app.example.com' },
     });
 
-    const confirmedResult = await executeConfirmedTool('deploy_app', { name: 'my-app', size: 'small' }, CLIENT_MANAGER, options, payload);
+    const confirmedResult = await executeConfirmedTool('deploy_app', { app_name: 'my-app', size: 'small' }, CLIENT_MANAGER, options, payload);
     expect(confirmedResult.success).toBe(true);
 
     // Verify app was added to registry
@@ -187,7 +187,7 @@ describe('Deploy Flow Integration', () => {
     // Step 4: App status
     vi.mocked(getLease).mockResolvedValue({ state: 2 } as ReturnType<typeof getLease> extends Promise<infer T> ? T : never);
 
-    const statusResult = await executeTool('app_status', { name: 'my-app' }, options);
+    const statusResult = await executeTool('app_status', { app_name: 'my-app' }, options);
     expect(statusResult.success).toBe(true);
     const statusData = statusResult.data as { name: string; status: string; chainState: string };
     expect(statusData.name).toBe('my-app');
@@ -195,7 +195,7 @@ describe('Deploy Flow Integration', () => {
     expect(statusData.chainState).toBe('active');
 
     // Step 5: Stop app → should return confirmation
-    const stopResult = await executeTool('stop_app', { name: 'my-app' }, options);
+    const stopResult = await executeTool('stop_app', { app_name: 'my-app' }, options);
     expect(stopResult.success).toBe(true);
     expect(stopResult.requiresConfirmation).toBe(true);
 

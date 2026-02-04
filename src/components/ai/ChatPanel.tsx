@@ -42,7 +42,8 @@ export function ChatPanel() {
   }, []);
 
   const doSubmit = async () => {
-    if (!input.trim() || isStreaming) return;
+    // Allow submit with just an attachment (no text required)
+    if ((!input.trim() && !pendingPayload) || isStreaming) return;
 
     const message = input.trim();
     setInput('');
@@ -247,7 +248,7 @@ export function ChatPanel() {
           />
           <button
             type="submit"
-            disabled={!input.trim() || !isConnected || isStreaming}
+            disabled={(!input.trim() && !pendingPayload) || !isConnected || isStreaming}
             className="chat-send-btn"
             aria-label={isStreaming ? "Sending message..." : "Send message"}
           >

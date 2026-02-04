@@ -145,7 +145,7 @@ describe('executeAppStatus', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('returns error when app not found', async () => {
-    const result = await executeAppStatus({ name: 'nonexistent' }, makeOptions());
+    const result = await executeAppStatus({ app_name: 'nonexistent' }, makeOptions());
     expect(result.success).toBe(false);
     expect(result.error).toContain('No app found');
   });
@@ -153,7 +153,7 @@ describe('executeAppStatus', () => {
   it('returns app status', async () => {
     const app = makeApp();
     const registry = makeRegistry([app]);
-    const result = await executeAppStatus({ name: 'my-app' }, makeOptions({ appRegistry: registry }));
+    const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
     expect(result.success).toBe(true);
     expect((result.data as any).name).toBe('my-app');
     expect((result.data as any).status).toBe('running');
