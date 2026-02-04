@@ -25,7 +25,7 @@ export function validateConfirmationToolArgs(
         return 'Missing required argument: amount. Please specify an amount (e.g., "1000000umfx").';
       }
       // Basic format check - should be digits followed by denomination
-      if (!/^\d+[a-zA-Z]/.test(amount)) {
+      if (!/^\d+[a-zA-Z][a-zA-Z0-9/_.-]*$/.test(amount)) {
         return `Invalid amount format: "${amount}". Use format like "1000000umfx" or "10000000factory/...".`;
       }
       return null;

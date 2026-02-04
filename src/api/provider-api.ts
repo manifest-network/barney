@@ -8,6 +8,21 @@ import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
 import { HEALTH_CHECK_TIMEOUT_MS } from '../config/constants';
 
 /**
+ * Typed error for provider API HTTP failures.
+ * Carries the HTTP status code so callers can match on `error.status`
+ * instead of parsing error message strings.
+ */
+export class ProviderApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ProviderApiError';
+    this.status = status;
+  }
+}
+
+/**
  * Validates that a provider API URL is safe to use.
  * Prevents SSRF attacks by ensuring URL is well-formed http(s) and not pointing
  * to private/internal addresses (in production).
@@ -158,7 +173,7 @@ export async function getLeaseConnectionInfo(
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`Provider API error (${response.status}): ${errorText}`);
+    throw new ProviderApiError(response.status, `Provider API error (${response.status}): ${errorText}`);
   }
 
   return response.json();
@@ -190,24 +205,16 @@ export async function getProviderHealth(
 
   const { url, headers } = buildProviderFetchArgs(baseUrl, '/health');
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  // Link external abort signal if provided
-  let abortHandler: (() => void) | null = null;
-  if (abortSignal) {
-    abortHandler = () => controller.abort();
-    abortSignal.addEventListener('abort', abortHandler);
-  }
+  const signals = [AbortSignal.timeout(timeoutMs)];
+  if (abortSignal) signals.push(abortSignal);
+  const combinedSignal = AbortSignal.any(signals);
 
   try {
     const response = await fetch(url, {
       method: 'GET',
       headers,
-      signal: controller.signal,
+      signal: combinedSignal,
     });
-
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
       return null;
@@ -217,12 +224,6 @@ export async function getProviderHealth(
   } catch (error) {
     logError('provider-api.getProviderHealth.fetch', error);
     return null;
-  } finally {
-    clearTimeout(timeoutId);
-    // Clean up abort listener to prevent memory leak
-    if (abortSignal && abortHandler) {
-      abortSignal.removeEventListener('abort', abortHandler);
-    }
   }
 }
 
@@ -300,6 +301,6 @@ export async function uploadLeaseData(
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`Failed to upload lease data (${response.status}): ${errorText}`);
+    throw new ProviderApiError(response.status, `Failed to upload lease data (${response.status}): ${errorText}`);
   }
 }

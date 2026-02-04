@@ -11,6 +11,7 @@ export function SearchInput({ value, onChange, placeholder }: SearchInputProps) 
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         className="catalog-search-input"
+        aria-label={placeholder || 'Search'}
       />
       {value && (
         <button onClick={() => onChange('')} className="catalog-search-clear" title="Clear">

@@ -3,6 +3,7 @@
  */
 
 import type { ReactNode } from 'react';
+import { cn } from '../../utils/cn';
 
 export interface StatCardProps {
   /** The main value to display */
@@ -16,7 +17,7 @@ export interface StatCardProps {
 export function StatCard({ value, label, colorClass }: StatCardProps) {
   return (
     <div className="stat-card">
-      <div className={colorClass ? `stat-value ${colorClass}` : 'stat-value'}>{value}</div>
+      <div className={cn('stat-value', colorClass)}>{value}</div>
       <div className="stat-label">{label}</div>
     </div>
   );

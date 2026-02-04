@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { cn } from '../../utils/cn';
 
 interface PaginationProps {
   currentPage: number;
@@ -74,7 +75,7 @@ export function Pagination({
             <button
               key={page}
               onClick={() => onPageChange(page)}
-              className={`pagination-btn ${currentPage === page ? 'active' : ''}`}
+              className={cn('pagination-btn', currentPage === page && 'active')}
             >
               {page}
             </button>

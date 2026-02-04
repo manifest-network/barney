@@ -56,7 +56,7 @@ UI components and AI tools use separate transaction paths that both leverage man
 
 ### Wallet Integration
 
-- cosmos-kit provides wallet abstraction (Keplr, Leap, Cosmostation, Ledger, Web3Auth)
+- cosmos-kit provides wallet abstraction (Keplr, Leap, Leap MetaMask Cosmos Snap, Cosmostation, Ledger, Web3Auth)
 - `CosmosClientManager` singleton wraps the signer for MCP operations
 - `signArbitrary` used for ADR-036 off-chain authentication (payload uploads to providers)
 

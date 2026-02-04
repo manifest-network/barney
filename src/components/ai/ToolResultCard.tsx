@@ -1,4 +1,5 @@
 import { CheckCircle, XCircle, Loader } from 'lucide-react';
+import { cn } from '../../utils/cn';
 
 interface ToolResultCardProps {
   toolName: string;
@@ -10,7 +11,7 @@ interface ToolResultCardProps {
 
 export function ToolResultCard({ toolName, isExecuting, success, data, error }: ToolResultCardProps) {
   return (
-    <div className={`tool-result-card ${error ? 'error' : success ? 'success' : ''}`}>
+    <div className={cn('tool-result-card', error ? 'error' : success && 'success')}>
       <div className="tool-result-header">
         {isExecuting ? (
           <Loader className="w-4 h-4 animate-spin" />

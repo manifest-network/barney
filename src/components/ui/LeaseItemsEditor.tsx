@@ -25,7 +25,7 @@ export function LeaseItemsEditor({
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
-        <label className="text-sm text-muted">SKU Items</label>
+        <label htmlFor="sku-item-select" className="text-sm text-muted">SKU Items</label>
         <button
           type="button"
           onClick={onAddItem}
@@ -39,9 +39,10 @@ export function LeaseItemsEditor({
         <p className="text-sm text-dim">{emptyMessage}</p>
       ) : (
         <div className="space-y-2">
-          {items.map((item) => (
+          {items.map((item, idx) => (
             <div key={item.id} className="flex gap-2">
               <select
+                id={idx === 0 ? 'sku-item-select' : undefined}
                 value={item.skuUuid}
                 onChange={(e) => onUpdateItem(item.id, 'skuUuid', e.target.value)}
                 className="input select flex-1"

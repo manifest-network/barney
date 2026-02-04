@@ -24,10 +24,10 @@ export async function executeTransaction(
 ): Promise<ToolResult> {
   switch (toolName) {
     case 'fund_credit': {
-      const amount = args.amount as string;
-      if (!amount) {
+      if (typeof args.amount !== 'string' || !args.amount) {
         return { success: false, error: 'amount is required' };
       }
+      const amount = args.amount;
       if (!address) {
         return { success: false, error: 'Wallet not connected' };
       }
@@ -53,12 +53,12 @@ export async function executeTransaction(
       return executeUploadPayload(args, address, signArbitrary);
 
     case 'close_lease': {
-      const leaseUuid = args.lease_uuid as string;
-      if (!leaseUuid) {
+      if (typeof args.lease_uuid !== 'string' || !args.lease_uuid) {
         return { success: false, error: 'lease_uuid is required' };
       }
+      const leaseUuid = args.lease_uuid;
 
-      const reason = args.reason as string | undefined;
+      const reason = typeof args.reason === 'string' ? args.reason : undefined;
       const txArgs = reason ? ['--reason', reason, leaseUuid] : [leaseUuid];
 
       const result = await cosmosTx(clientManager, 'billing', 'close-lease', txArgs, true);
@@ -76,8 +76,14 @@ export async function executeTransaction(
     }
 
     case 'cosmos_tx': {
-      const module = args.module as string;
-      const subcommand = args.subcommand as string;
+      if (typeof args.module !== 'string' || !args.module) {
+        return { success: false, error: 'Missing required argument: module' };
+      }
+      if (typeof args.subcommand !== 'string' || !args.subcommand) {
+        return { success: false, error: 'Missing required argument: subcommand' };
+      }
+      const module = args.module;
+      const subcommand = args.subcommand;
 
       // Validate args.args is present and valid
       if (!args.args) {
@@ -354,12 +360,14 @@ async function executeUploadPayload(
     return { success: false, error: 'Signing not available. Please reconnect your wallet.' };
   }
 
-  const leaseUuid = args.lease_uuid as string;
-  const payload = args.payload as string;
-
-  if (!leaseUuid || !payload) {
-    return { success: false, error: 'Missing required arguments: lease_uuid and payload are required.' };
+  if (typeof args.lease_uuid !== 'string' || !args.lease_uuid) {
+    return { success: false, error: 'Missing required argument: lease_uuid' };
   }
+  if (typeof args.payload !== 'string' || !args.payload) {
+    return { success: false, error: 'Missing required argument: payload' };
+  }
+  const leaseUuid = args.lease_uuid;
+  const payload = args.payload;
 
   // Get the lease to verify meta_hash and get provider_uuid
   const lease = await getLease(leaseUuid);

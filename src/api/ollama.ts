@@ -190,7 +190,7 @@ export async function* streamChat(
             const tcId = (tc as Record<string, unknown>).id;
             const id = (typeof tcId === 'string' && tcId)
               ? tcId
-              : `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+              : crypto.randomUUID();
 
             // Get function name with guard
             const funcName = funcObj.name;
