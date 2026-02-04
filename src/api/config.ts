@@ -25,6 +25,14 @@ export const DENOM_METADATA: Record<string, { symbol: string; exponent: number }
   },
 };
 
+/**
+ * Look up denomination metadata with a consistent fallback.
+ * Uses the denom string itself as the symbol when unknown, with a default exponent of 6.
+ */
+export function getDenomMetadata(denom: string): { symbol: string; exponent: number } {
+  return DENOM_METADATA[denom] ?? { symbol: denom, exponent: 6 };
+}
+
 // Import Unit directly from manifestjs to avoid circular dependency with sku.ts
 const Unit = liftedinit.sku.v1.Unit;
 type Unit = (typeof Unit)[keyof typeof Unit];

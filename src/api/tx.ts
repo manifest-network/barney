@@ -3,6 +3,7 @@ import type { OfflineSigner } from '@cosmjs/proto-signing';
 import type { Coin } from './bank';
 import { RPC_ENDPOINT } from './config';
 import { getEventAttribute, type TxEvent } from '../utils/tx';
+import { logError } from '../utils/errors';
 
 // Re-export TxEvent for consumers that import from api/tx
 export type { TxEvent };
@@ -294,8 +295,8 @@ async function executeLeaseCreation(
 
   const leaseUuid = getEventAttribute(result.events, 'lease_created', 'lease_uuid');
 
-  if (!leaseUuid && import.meta.env.DEV) {
-    console.warn('[executeLeaseCreation] Transaction succeeded but lease_uuid not found in events');
+  if (!leaseUuid) {
+    logError('executeLeaseCreation', 'Transaction succeeded but lease_uuid not found in events');
   }
 
   return {

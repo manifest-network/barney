@@ -67,6 +67,28 @@ function buildProviderFetchArgs(
   return { url: `${baseUrl}${path}`, headers };
 }
 
+/**
+ * Validates a provider URL, normalizes it, and builds fetch args in one step.
+ * Combines validateProviderUrl → normalizeBaseUrl → buildProviderFetchArgs.
+ */
+function buildValidatedProviderRequest(
+  providerApiUrl: string,
+  path: string,
+  extraHeaders?: Record<string, string>
+): { url: string; headers: Record<string, string> } {
+  const validatedUrl = validateProviderUrl(providerApiUrl);
+  const baseUrl = normalizeBaseUrl(validatedUrl);
+  return buildProviderFetchArgs(baseUrl, path, extraHeaders);
+}
+
+/**
+ * Extracts error text from a failed response and throws a ProviderApiError.
+ */
+async function throwProviderApiError(response: Response, prefix: string): Promise<never> {
+  const errorText = await response.text().catch(() => response.statusText);
+  throw new ProviderApiError(response.status, `${prefix} (${response.status}): ${errorText}`);
+}
+
 export interface ProviderHealthResponse {
   status: 'healthy' | 'unhealthy';
   provider_uuid: string;
@@ -163,13 +185,9 @@ export async function getLeaseConnectionInfo(
   leaseUuid: string,
   authToken: string
 ): Promise<LeaseConnectionResponse> {
-  // Validate and normalize the API URL
-  const validatedUrl = validateProviderUrl(providerApiUrl);
-  const baseUrl = normalizeBaseUrl(validatedUrl);
-
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  const { url, headers } = buildProviderFetchArgs(
-    baseUrl,
+  const { url, headers } = buildValidatedProviderRequest(
+    providerApiUrl,
     `/v1/leases/${encodedLeaseUuid}/connection`,
     { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
   );
@@ -180,11 +198,14 @@ export async function getLeaseConnectionInfo(
   });
 
   if (!response.ok) {
-    const errorText = await response.text().catch(() => response.statusText);
-    throw new ProviderApiError(response.status, `Provider API error (${response.status}): ${errorText}`);
+    await throwProviderApiError(response, 'Provider API error');
   }
 
-  return response.json();
+  try {
+    return await response.json();
+  } catch {
+    throw new ProviderApiError(response.status, 'Provider returned invalid JSON');
+  }
 }
 
 /**
@@ -200,18 +221,15 @@ export async function getProviderHealth(
     return null;
   }
 
-  // Validate the URL before using it
-  let validatedUrl: URL;
+  let requestArgs: { url: string; headers: Record<string, string> };
   try {
-    validatedUrl = validateProviderUrl(providerApiUrl);
+    requestArgs = buildValidatedProviderRequest(providerApiUrl, '/health');
   } catch (error) {
     logError('provider-api.getProviderHealth.validateUrl', error);
     return null;
   }
 
-  const baseUrl = normalizeBaseUrl(validatedUrl);
-
-  const { url, headers } = buildProviderFetchArgs(baseUrl, '/health');
+  const { url, headers } = requestArgs;
 
   const signals = [AbortSignal.timeout(timeoutMs)];
   if (abortSignal) signals.push(abortSignal);
@@ -289,13 +307,9 @@ export async function uploadLeaseData(
   payload: Uint8Array,
   authToken: string
 ): Promise<void> {
-  // Validate and normalize the API URL
-  const validatedUrl = validateProviderUrl(providerApiUrl);
-  const baseUrl = normalizeBaseUrl(validatedUrl);
-
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  const { url, headers } = buildProviderFetchArgs(
-    baseUrl,
+  const { url, headers } = buildValidatedProviderRequest(
+    providerApiUrl,
     `/v1/leases/${encodedLeaseUuid}/data`,
     { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/octet-stream' },
   );
@@ -308,7 +322,6 @@ export async function uploadLeaseData(
   });
 
   if (!response.ok) {
-    const errorText = await response.text().catch(() => response.statusText);
-    throw new ProviderApiError(response.status, `Failed to upload lease data (${response.status}): ${errorText}`);
+    await throwProviderApiError(response, 'Failed to upload lease data');
   }
 }

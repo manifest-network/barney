@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect, useCallback, type FormEvent } from 'react';
+import { useState, useRef, useEffect, type FormEvent } from 'react';
 import { Send, Settings, X, Sparkles, Loader, WifiOff, Maximize2, Minimize2, Paperclip } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
+import { useAutoScroll } from '../../hooks/useAutoScroll';
 import { MessageBubble } from './MessageBubble';
 import { ConfirmationCard } from './ConfirmationCard';
 import { AISettings } from './AISettings';
@@ -30,46 +31,10 @@ export function ChatPanel() {
   const [showSettings, setShowSettings] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const prevMessageCountRef = useRef(messages.length);
-  const userScrolledUpRef = useRef(false);
 
-  // Check if user is near the bottom of the messages container
-  const isNearBottom = useCallback(() => {
-    const container = messagesContainerRef.current;
-    if (!container) return true;
-    const threshold = 100; // pixels from bottom
-    return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
-  }, []);
-
-  // Handle user scroll - track if they've scrolled up
-  const handleScroll = useCallback(() => {
-    userScrolledUpRef.current = !isNearBottom();
-  }, [isNearBottom]);
-
-  // Auto-scroll to bottom only when appropriate
-  useEffect(() => {
-    const messageCount = messages.length;
-    const prevCount = prevMessageCountRef.current;
-    const isNewMessage = messageCount > prevCount;
-
-    // Update previous count
-    prevMessageCountRef.current = messageCount;
-
-    // Auto-scroll if:
-    // 1. A new message was added (not just content update), OR
-    // 2. User hasn't scrolled up (is near bottom)
-    if (isNewMessage || !userScrolledUpRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      // Reset scroll tracking when we auto-scroll due to new message
-      if (isNewMessage) {
-        userScrolledUpRef.current = false;
-      }
-    }
-  }, [messages]);
+  const { containerRef: messagesContainerRef, endRef: messagesEndRef, handleScroll } = useAutoScroll(messages.length);
 
   // Focus input when panel opens
   useEffect(() => {

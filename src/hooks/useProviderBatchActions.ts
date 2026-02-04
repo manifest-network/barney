@@ -1,5 +1,7 @@
 import { useCallback } from 'react';
+import type { OfflineSigner } from '@cosmjs/proto-signing';
 import type { Lease } from '../api/billing';
+import type { TxResult } from '../api/tx';
 import { acknowledgeLease, rejectLease, withdrawFromLeases, closeLease } from '../api/tx';
 import type { TxHandler } from './useTxHandler';
 import { useBatchSelection, type UseBatchSelectionReturn } from './useBatchSelection';
@@ -43,69 +45,52 @@ export function useProviderBatchActions({
     [active, activeLeases],
   );
 
-  const handleBatchAcknowledge = useCallback(async () => {
-    if (pending.selected.size === 0) return;
-    const leaseUuids = Array.from(pending.selected);
+  /**
+   * Creates a batch action handler that checks selection, executes a tx, then clears selection.
+   */
+  const makeBatchHandler = useCallback(
+    (
+      selection: UseBatchSelectionReturn,
+      txFn: (signer: OfflineSigner, addr: string, uuids: string[], ...extra: string[]) => Promise<TxResult>,
+      successLabel: (count: number, hash: string) => string,
+    ) =>
+      async (...extra: string[]) => {
+        if (selection.selected.size === 0) return;
+        const leaseUuids = Array.from(selection.selected);
 
-    await executeTx(
-      (signer) => acknowledgeLease(signer, address!, leaseUuids),
-      {
-        successMessage: (hash) => `${leaseUuids.length} lease(s) acknowledged! Tx: ${hash}...`,
-        onSuccess: async () => {
-          pending.clear();
-          await onSuccess();
-        },
+        await executeTx(
+          (signer) => txFn(signer, address!, leaseUuids, ...extra),
+          {
+            successMessage: (hash) => successLabel(leaseUuids.length, hash),
+            onSuccess: async () => {
+              selection.clear();
+              await onSuccess();
+            },
+          },
+        );
       },
-    );
-  }, [pending, executeTx, address, onSuccess]);
+    [executeTx, address, onSuccess],
+  );
 
-  const handleBatchReject = useCallback(async (reason: string) => {
-    if (pending.selected.size === 0) return;
-    const leaseUuids = Array.from(pending.selected);
+  const handleBatchAcknowledge = useCallback(
+    () => makeBatchHandler(pending, acknowledgeLease, (n, hash) => `${n} lease(s) acknowledged! Tx: ${hash}...`)(),
+    [makeBatchHandler, pending],
+  );
 
-    await executeTx(
-      (signer) => rejectLease(signer, address!, leaseUuids, reason),
-      {
-        successMessage: (hash) => `${leaseUuids.length} lease(s) rejected! Tx: ${hash}...`,
-        onSuccess: async () => {
-          pending.clear();
-          await onSuccess();
-        },
-      },
-    );
-  }, [pending, executeTx, address, onSuccess]);
+  const handleBatchReject = useCallback(
+    (reason: string) => makeBatchHandler(pending, rejectLease, (n, hash) => `${n} lease(s) rejected! Tx: ${hash}...`)(reason),
+    [makeBatchHandler, pending],
+  );
 
-  const handleBatchWithdraw = useCallback(async () => {
-    if (active.selected.size === 0) return;
-    const leaseUuids = Array.from(active.selected);
+  const handleBatchWithdraw = useCallback(
+    () => makeBatchHandler(active, withdrawFromLeases, (n, hash) => `Withdrawal from ${n} lease(s) successful! Tx: ${hash}...`)(),
+    [makeBatchHandler, active],
+  );
 
-    await executeTx(
-      (signer) => withdrawFromLeases(signer, address!, leaseUuids),
-      {
-        successMessage: (hash) => `Withdrawal from ${leaseUuids.length} lease(s) successful! Tx: ${hash}...`,
-        onSuccess: async () => {
-          active.clear();
-          await onSuccess();
-        },
-      },
-    );
-  }, [active, executeTx, address, onSuccess]);
-
-  const handleBatchClose = useCallback(async (reason?: string) => {
-    if (active.selected.size === 0) return;
-    const leaseUuids = Array.from(active.selected);
-
-    await executeTx(
-      (signer) => closeLease(signer, address!, leaseUuids, reason),
-      {
-        successMessage: (hash) => `${leaseUuids.length} lease(s) closed! Tx: ${hash}...`,
-        onSuccess: async () => {
-          active.clear();
-          await onSuccess();
-        },
-      },
-    );
-  }, [active, executeTx, address, onSuccess]);
+  const handleBatchClose = useCallback(
+    (reason?: string) => makeBatchHandler(active, closeLease, (n, hash) => `${n} lease(s) closed! Tx: ${hash}...`)(reason ?? ''),
+    [makeBatchHandler, active],
+  );
 
   return {
     pending,

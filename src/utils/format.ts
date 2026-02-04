@@ -2,7 +2,7 @@
  * Shared formatting utilities
  */
 
-import { DENOM_METADATA, UNIT_LABELS } from '../api/config';
+import { getDenomMetadata, UNIT_LABELS } from '../api/config';
 import type { Unit } from '../api/sku';
 
 // ============================================
@@ -18,8 +18,7 @@ import type { Unit } from '../api/sku';
  * @returns Base unit amount as string, suitable for blockchain transactions
  */
 export function toBaseUnits(amount: number, denom: string): string {
-  const metadata = DENOM_METADATA[denom];
-  const exponent = metadata?.exponent ?? 6;
+  const { exponent } = getDenomMetadata(denom);
   return (amount * Math.pow(10, exponent)).toFixed(0);
 }
 
@@ -32,8 +31,7 @@ export function toBaseUnits(amount: number, denom: string): string {
  * @returns Display amount as number
  */
 export function fromBaseUnits(amount: string, denom: string): number {
-  const metadata = DENOM_METADATA[denom];
-  const exponent = metadata?.exponent ?? 6;
+  const { exponent } = getDenomMetadata(denom);
   const parsed = parseInt(amount, 10);
   if (Number.isNaN(parsed)) {
     return 0;
@@ -66,9 +64,7 @@ export function parseBaseUnits(amount: string): number {
  * @returns Formatted string like "1,234.56 MFX" or "0 DENOM" for invalid amounts
  */
 export function formatAmount(amount: string, denom: string, maxDecimals = 6): string {
-  const metadata = DENOM_METADATA[denom as keyof typeof DENOM_METADATA];
-  const exponent = metadata?.exponent ?? 6;
-  const symbol = metadata?.symbol ?? denom;
+  const { exponent, symbol } = getDenomMetadata(denom);
   const parsed = parseInt(amount, 10);
   if (Number.isNaN(parsed)) {
     return `0 ${symbol}`;
