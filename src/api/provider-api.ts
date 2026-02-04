@@ -42,6 +42,13 @@ function validateProviderUrl(url: string): URL {
 }
 
 /**
+ * Strips trailing slash from a validated URL and returns origin + pathname.
+ */
+function normalizeBaseUrl(validated: URL): string {
+  return validated.origin + validated.pathname.replace(/\/$/, '');
+}
+
+/**
  * Build a fetch URL and headers for provider API requests.
  * In development, routes through the CORS proxy with X-Proxy-Target header.
  */
@@ -58,6 +65,28 @@ function buildProviderFetchArgs(
   }
 
   return { url: `${baseUrl}${path}`, headers };
+}
+
+/**
+ * Validates a provider URL, normalizes it, and builds fetch args in one step.
+ * Combines validateProviderUrl → normalizeBaseUrl → buildProviderFetchArgs.
+ */
+function buildValidatedProviderRequest(
+  providerApiUrl: string,
+  path: string,
+  extraHeaders?: Record<string, string>
+): { url: string; headers: Record<string, string> } {
+  const validatedUrl = validateProviderUrl(providerApiUrl);
+  const baseUrl = normalizeBaseUrl(validatedUrl);
+  return buildProviderFetchArgs(baseUrl, path, extraHeaders);
+}
+
+/**
+ * Extracts error text from a failed response and throws a ProviderApiError.
+ */
+async function throwProviderApiError(response: Response, prefix: string): Promise<never> {
+  const errorText = await response.text().catch(() => response.statusText);
+  throw new ProviderApiError(response.status, `${prefix} (${response.status}): ${errorText}`);
 }
 
 export interface ProviderHealthResponse {
@@ -105,10 +134,7 @@ export interface AuthToken {
   timestamp: number;
   pub_key: string;
   signature: string;
-}
-
-export interface AuthTokenWithMetaHash extends AuthToken {
-  meta_hash: string;
+  meta_hash?: string;
 }
 
 /**
@@ -128,13 +154,15 @@ export function createLeaseDataSignMessage(leaseUuid: string, metaHashHex: strin
 
 /**
  * Creates a base64-encoded auth token from the signed data.
+ * When metaHashHex is provided, the token includes meta_hash for payload verification.
  */
 export function createAuthToken(
   tenant: string,
   leaseUuid: string,
   timestamp: number,
   pubKeyBase64: string,
-  signatureBase64: string
+  signatureBase64: string,
+  metaHashHex?: string
 ): string {
   const token: AuthToken = {
     tenant,
@@ -143,6 +171,10 @@ export function createAuthToken(
     pub_key: pubKeyBase64,
     signature: signatureBase64,
   };
+
+  if (metaHashHex) {
+    token.meta_hash = metaHashHex;
+  }
 
   return btoa(JSON.stringify(token));
 }
@@ -156,13 +188,9 @@ export async function getLeaseConnectionInfo(
   leaseUuid: string,
   authToken: string
 ): Promise<LeaseConnectionResponse> {
-  // Validate and normalize the API URL
-  const validatedUrl = validateProviderUrl(providerApiUrl);
-  const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
-
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  const { url, headers } = buildProviderFetchArgs(
-    baseUrl,
+  const { url, headers } = buildValidatedProviderRequest(
+    providerApiUrl,
     `/v1/leases/${encodedLeaseUuid}/connection`,
     { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
   );
@@ -173,11 +201,14 @@ export async function getLeaseConnectionInfo(
   });
 
   if (!response.ok) {
-    const errorText = await response.text().catch(() => response.statusText);
-    throw new ProviderApiError(response.status, `Provider API error (${response.status}): ${errorText}`);
+    await throwProviderApiError(response, 'Provider API error');
   }
 
-  return response.json();
+  try {
+    return await response.json();
+  } catch {
+    throw new ProviderApiError(response.status, 'Provider returned invalid JSON');
+  }
 }
 
 /**
@@ -193,18 +224,15 @@ export async function getProviderHealth(
     return null;
   }
 
-  // Validate the URL before using it
-  let validatedUrl: URL;
+  let requestArgs: { url: string; headers: Record<string, string> };
   try {
-    validatedUrl = validateProviderUrl(providerApiUrl);
+    requestArgs = buildValidatedProviderRequest(providerApiUrl, '/health');
   } catch (error) {
     logError('provider-api.getProviderHealth.validateUrl', error);
     return null;
   }
 
-  const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
-
-  const { url, headers } = buildProviderFetchArgs(baseUrl, '/health');
+  const { url, headers } = requestArgs;
 
   const signals = [AbortSignal.timeout(timeoutMs)];
   if (abortSignal) signals.push(abortSignal);
@@ -221,7 +249,19 @@ export async function getProviderHealth(
       return null;
     }
 
-    return response.json();
+    const data: unknown = await response.json();
+
+    // Validate response shape — provider could return unexpected JSON
+    if (
+      !data ||
+      typeof data !== 'object' ||
+      !('status' in data) ||
+      (data.status !== 'healthy' && data.status !== 'unhealthy')
+    ) {
+      return null;
+    }
+
+    return data as ProviderHealthResponse;
   } catch (error) {
     logError('provider-api.getProviderHealth.fetch', error);
     return null;
@@ -243,29 +283,6 @@ export function isValidMetaHash(hash: string): boolean {
   return /^[0-9a-f]{64}$/i.test(hash);
 }
 
-/**
- * Creates a base64-encoded auth token for lease data upload.
- * Includes meta_hash for payload verification.
- */
-export function createLeaseDataAuthToken(
-  tenant: string,
-  leaseUuid: string,
-  metaHashHex: string,
-  timestamp: number,
-  pubKeyBase64: string,
-  signatureBase64: string
-): string {
-  const token: AuthTokenWithMetaHash = {
-    tenant,
-    lease_uuid: leaseUuid,
-    meta_hash: metaHashHex,
-    timestamp,
-    pub_key: pubKeyBase64,
-    signature: signatureBase64,
-  };
-
-  return btoa(JSON.stringify(token));
-}
 
 /**
  * Uploads lease payload data to the provider's API.
@@ -282,13 +299,9 @@ export async function uploadLeaseData(
   payload: Uint8Array,
   authToken: string
 ): Promise<void> {
-  // Validate and normalize the API URL
-  const validatedUrl = validateProviderUrl(providerApiUrl);
-  const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
-
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  const { url, headers } = buildProviderFetchArgs(
-    baseUrl,
+  const { url, headers } = buildValidatedProviderRequest(
+    providerApiUrl,
     `/v1/leases/${encodedLeaseUuid}/data`,
     { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/octet-stream' },
   );
@@ -301,7 +314,6 @@ export async function uploadLeaseData(
   });
 
   if (!response.ok) {
-    const errorText = await response.text().catch(() => response.statusText);
-    throw new ProviderApiError(response.status, `Failed to upload lease data (${response.status}): ${errorText}`);
+    await throwProviderApiError(response, 'Failed to upload lease data');
   }
 }

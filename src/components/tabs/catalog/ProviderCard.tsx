@@ -1,5 +1,5 @@
-import { Copy, Check } from 'lucide-react';
 import { useCopyToClipboard } from '../../../hooks/useCopyToClipboard';
+import { CopyButton } from '../../ui/CopyButton';
 import type { ProviderCardProps } from './types';
 
 export function ProviderCard({
@@ -10,7 +10,7 @@ export function ProviderCard({
   onEdit,
   onDeactivate,
 }: ProviderCardProps) {
-  const { copied, copyToClipboard } = useCopyToClipboard();
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
 
   return (
     <div
@@ -30,17 +30,13 @@ export function ProviderCard({
             <span className="catalog-provider-labeled-field" data-field="address">
               <span className="catalog-provider-label">Address</span>
               <code className="catalog-provider-mono">{provider.address}</code>
-              <button onClick={() => copyToClipboard(provider.address)} className="catalog-copy-btn" title="Copy">
-                {copied ? <Check size={10} /> : <Copy size={10} />}
-              </button>
+              <CopyButton value={provider.address} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy" className="catalog-copy-btn" />
             </span>
 
             <span className="catalog-provider-labeled-field" data-field="uuid">
               <span className="catalog-provider-label">UUID</span>
               <code className="catalog-provider-mono">{provider.uuid}</code>
-              <button onClick={() => copyToClipboard(provider.uuid)} className="catalog-copy-btn" title="Copy">
-                <Copy size={10} />
-              </button>
+              <CopyButton value={provider.uuid} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy" className="catalog-copy-btn" />
             </span>
 
             <span className="catalog-provider-labeled-field" data-field="api">
@@ -48,9 +44,7 @@ export function ProviderCard({
               {provider.apiUrl ? (
                 <>
                   <code className="catalog-provider-mono">{provider.apiUrl}</code>
-                  <button onClick={() => copyToClipboard(provider.apiUrl)} className="catalog-copy-btn" title="Copy">
-                    <Copy size={10} />
-                  </button>
+                  <CopyButton value={provider.apiUrl} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy" className="catalog-copy-btn" />
                   {healthStatus && (
                     <span className="catalog-provider-health" data-status={healthStatus} title={healthStatus} />
                   )}

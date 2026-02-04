@@ -1,4 +1,4 @@
-import { DENOM_METADATA, UNIT_LABELS } from '../api/config';
+import { getDenomMetadata, UNIT_LABELS } from '../api/config';
 import type { LeaseItem } from '../api/billing';
 import { Unit } from '../api/sku';
 import type { SKU } from '../api/sku';
@@ -21,7 +21,7 @@ export function formatCostPerHour(items: readonly LeaseItem[]): string {
     total += perSecond * quantity * BigInt(SECONDS_PER_HOUR);
   }
   const denom = items[0]?.lockedPrice.denom;
-  const meta = denom ? DENOM_METADATA[denom] || { symbol: 'tokens', exponent: 6 } : { symbol: 'tokens', exponent: 6 };
+  const meta = denom ? getDenomMetadata(denom) : { symbol: 'tokens', exponent: 6 };
   return `${(Number(total) / Math.pow(10, meta.exponent)).toFixed(4)} ${meta.symbol}/hr`;
 }
 
@@ -69,7 +69,7 @@ export function calculateEstimatedCost(
 
   if (total === 0n) return null;
 
-  const meta = DENOM_METADATA[denom] || { symbol: denom, exponent: 6 };
+  const meta = getDenomMetadata(denom);
   const value = fromBaseUnits(String(total), denom);
   const unitLabel = UNIT_LABELS[unit] ?? '';
   return `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${meta.symbol}${unitLabel}`;

@@ -64,7 +64,7 @@ describe('formatCostPerHour', () => {
   it('uses fallback metadata for unknown denom', () => {
     const items = [makeItem('1000000', 1n, 'uunknown')];
     // 1000000 * 1 * 3600 = 3_600_000_000 / 1e6 (default exponent) = 3600
-    expect(formatCostPerHour(items)).toBe('3600.0000 tokens/hr');
+    expect(formatCostPerHour(items)).toBe('3600.0000 uunknown/hr');
   });
 
   it('uses MFX denom metadata when applicable', () => {

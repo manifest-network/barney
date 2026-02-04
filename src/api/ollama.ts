@@ -68,6 +68,22 @@ export interface OllamaModel {
 }
 
 /**
+ * Validates an Ollama endpoint URL and builds the full API URL for a given path.
+ * Returns null if the endpoint is invalid or uses a non-http(s) protocol.
+ */
+function buildOllamaUrl(endpoint: string, path: string): string | null {
+  try {
+    const url = new URL(path, endpoint);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return null;
+    }
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Parse NDJSON stream from Ollama
  */
 async function* parseNDJSON(
@@ -114,16 +130,8 @@ export async function* streamChat(
 ): AsyncGenerator<OllamaStreamChunk> {
   const { endpoint, model, messages, tools, think, signal } = options;
 
-  // Validate endpoint URL
-  let apiUrl: string;
-  try {
-    const url = new URL('/api/chat', endpoint);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      yield { type: 'error', error: 'Invalid Ollama endpoint: must use http or https protocol' };
-      return;
-    }
-    apiUrl = url.href;
-  } catch {
+  const apiUrl = buildOllamaUrl(endpoint, '/api/chat');
+  if (!apiUrl) {
     yield { type: 'error', error: 'Invalid Ollama endpoint URL' };
     return;
   }
@@ -268,16 +276,8 @@ export async function* streamChat(
  * @returns Array of available models, or empty array on failure
  */
 export async function listModels(endpoint: string): Promise<OllamaModel[]> {
-  let apiUrl: string;
-  try {
-    const url = new URL('/api/tags', endpoint);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return [];
-    }
-    apiUrl = url.href;
-  } catch {
-    return [];
-  }
+  const apiUrl = buildOllamaUrl(endpoint, '/api/tags');
+  if (!apiUrl) return [];
 
   try {
     return await withRetry(async () => {
@@ -302,16 +302,8 @@ export async function listModels(endpoint: string): Promise<OllamaModel[]> {
  * @returns true if Ollama is healthy, false otherwise
  */
 export async function checkOllamaHealth(endpoint: string): Promise<boolean> {
-  let apiUrl: string;
-  try {
-    const url = new URL('/api/tags', endpoint);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return false;
-    }
-    apiUrl = url.href;
-  } catch {
-    return false;
-  }
+  const apiUrl = buildOllamaUrl(endpoint, '/api/tags');
+  if (!apiUrl) return false;
 
   try {
     const response = await fetch(apiUrl, {

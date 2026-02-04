@@ -1,12 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { Link, Package, Shield, Loader2, Plus, X } from 'lucide-react';
-import { HEALTH_CHECK_TIMEOUT_MS, DEFAULT_PAGE_SIZE } from '../../../config/constants';
+import { DEFAULT_PAGE_SIZE } from '../../../config/constants';
 import { truncateAddress } from '../../../utils/address';
 import {
-  getProviders,
-  getSKUs,
-  getSKUsByProvider,
-  getSKUParams,
   createProvider,
   updateProvider,
   createSKU,
@@ -14,11 +10,9 @@ import {
   deactivateProvider,
   deactivateSKU,
 } from '../../../api';
-import type { Provider, SKU, SKUParams } from '../../../api/sku';
-import { getProviderHealth } from '../../../api/provider-api';
-import { getLeasesBySKU, LeaseState } from '../../../api/billing';
+import type { Provider, SKU } from '../../../api/sku';
 import { useTxHandler } from '../../../hooks/useTxHandler';
-import { useAutoRefreshContext } from '../../../contexts/AutoRefreshContext';
+import { useCatalogData } from '../../../hooks/useCatalogData';
 import { EmptyState } from '../../ui/EmptyState';
 import { Modal } from '../../ui/Modal';
 import { ErrorBanner } from '../../ui/ErrorBanner';
@@ -28,7 +22,6 @@ import { ProviderCard } from './ProviderCard';
 import { SKUCard } from './SKUCard';
 import { CreateProviderForm, EditProviderForm } from './ProviderForms';
 import { CreateSKUForm, EditSKUForm } from './SKUForms';
-import type { HealthStatus } from './types';
 
 export function CatalogTab({ isConnected, address, onConnect }: { isConnected: boolean; address?: string; onConnect: () => void }) {
   const { executeTx } = useTxHandler();
@@ -47,44 +40,11 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [editingSKU, setEditingSKU] = useState<SKU | null>(null);
 
-  // Data
-  const [providers, setProviders] = useState<Provider[]>([]);
-  const [skus, setSkus] = useState<SKU[]>([]);
-  const [skuParams, setSkuParams] = useState<SKUParams | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [providerHealth, setProviderHealth] = useState<Record<string, HealthStatus>>({});
-  const [skuUsage, setSkuUsage] = useState<Record<string, { active: number; total: number }>>({});
-  const [skuUsageLoading, setSkuUsageLoading] = useState(false);
-
-  const { registerFetchFn, unregisterFetchFn } = useAutoRefreshContext();
-
-  const fetchData = useCallback(async () => {
-    try {
-      setError(null);
-
-      const [fetchedProviders, fetchedSkus, fetchedParams] = await Promise.all([
-        getProviders(!showInactive),
-        selectedProvider
-          ? getSKUsByProvider(selectedProvider, !showInactive)
-          : getSKUs(!showInactive),
-        getSKUParams().catch(() => null),
-      ]);
-
-      setProviders(fetchedProviders);
-      setSkus(fetchedSkus);
-      setSkuParams(fetchedParams);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch data');
-    } finally {
-      setLoading(false);
-    }
-  }, [showInactive, selectedProvider]);
-
-  useEffect(() => {
-    registerFetchFn(fetchData);
-    return () => unregisterFetchFn();
-  }, [fetchData, registerFetchFn, unregisterFetchFn]);
+  // Data (fetching, health checks, SKU usage — all managed by the hook)
+  const {
+    providers, skus, skuParams, loading, error,
+    providerHealth, skuUsage, skuUsageLoading, fetchData,
+  } = useCatalogData({ showInactive, selectedProvider });
 
   // Filter and paginate providers
   const filteredProviders = useMemo(() => {
@@ -121,84 +81,16 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
 
   const skuTotalPages = Math.ceil(filteredSkus.length / DEFAULT_PAGE_SIZE);
 
-  // Reset pagination when search changes
-  useEffect(() => { setProviderPage(1); }, [providerSearch]);
-  useEffect(() => { setSkuPage(1); }, [skuSearch, selectedProvider]);
+  // Wrap search setters to reset pagination in the same event
+  const handleProviderSearchChange = (value: string) => {
+    setProviderSearch(value);
+    setProviderPage(1);
+  };
 
-  // Fetch SKU usage stats (non-blocking)
-  useEffect(() => {
-    const fetchSkuUsage = async () => {
-      if (skus.length === 0) return;
-
-      setSkuUsageLoading(true);
-      const usageRecord: Record<string, { active: number; total: number }> = {};
-
-      await Promise.all(
-        skus.map(async (sku) => {
-          try {
-            const [activeLeases, allLeases] = await Promise.all([
-              getLeasesBySKU(sku.uuid, LeaseState.LEASE_STATE_ACTIVE),
-              getLeasesBySKU(sku.uuid),
-            ]);
-            usageRecord[sku.uuid] = {
-              active: activeLeases.length,
-              total: allLeases.length,
-            };
-          } catch {
-            // Ignore errors for individual SKU queries
-          }
-        })
-      );
-
-      setSkuUsage(usageRecord);
-      setSkuUsageLoading(false);
-    };
-
-    fetchSkuUsage();
-  }, [skus]);
-
-  // Fetch health status for providers with api_url (non-blocking)
-  useEffect(() => {
-    const abortController = new AbortController();
-
-    const checkHealth = async () => {
-      const providersWithApi = providers.filter((p) => p.apiUrl && p.active);
-      if (providersWithApi.length === 0) return;
-
-      setProviderHealth((prev) => {
-        const next = { ...prev };
-        for (const p of providersWithApi) {
-          if (!(p.uuid in next)) {
-            next[p.uuid] = 'loading';
-          }
-        }
-        return next;
-      });
-
-      const results = await Promise.all(
-        providersWithApi.map(async (p) => {
-          const health = await getProviderHealth(p.apiUrl, HEALTH_CHECK_TIMEOUT_MS, abortController.signal);
-          return { uuid: p.uuid, status: health?.status === 'healthy' ? 'healthy' : 'unhealthy' } as const;
-        })
-      );
-
-      if (!abortController.signal.aborted) {
-        setProviderHealth((prev) => {
-          const next = { ...prev };
-          for (const r of results) {
-            next[r.uuid] = r.status;
-          }
-          return next;
-        });
-      }
-    };
-
-    checkHealth();
-
-    return () => {
-      abortController.abort();
-    };
-  }, [providers]);
+  const handleSkuSearchChange = (value: string) => {
+    setSkuSearch(value);
+    setSkuPage(1);
+  };
 
   const getProviderAddress = (uuid: string) => {
     const provider = providers.find((p) => p.uuid === uuid);
@@ -277,6 +169,7 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
   const handleSelectProvider = (uuid: string | null) => {
     setSelectedProvider(uuid);
     setSkuSearch('');
+    setSkuPage(1);
   };
 
   if (!isConnected) {
@@ -348,7 +241,7 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
           </div>
           <SearchInput
             value={providerSearch}
-            onChange={setProviderSearch}
+            onChange={handleProviderSearchChange}
             placeholder="Search providers..."
           />
         </div>
@@ -411,7 +304,7 @@ export function CatalogTab({ isConnected, address, onConnect }: { isConnected: b
           </div>
           <SearchInput
             value={skuSearch}
-            onChange={setSkuSearch}
+            onChange={handleSkuSearchChange}
             placeholder="Search SKUs..."
           />
         </div>

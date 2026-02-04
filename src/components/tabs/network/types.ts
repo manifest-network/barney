@@ -6,8 +6,8 @@ export type ViewMode = 'leases' | 'credits';
 
 export interface NetworkTabProps {
   isConnected: boolean;
-  address?: string;
   onConnect: () => void;
+  isAdmin: boolean;
 }
 
 export interface NetworkLeaseCardProps {

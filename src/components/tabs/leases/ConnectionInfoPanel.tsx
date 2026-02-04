@@ -5,7 +5,7 @@
 
 import { Wifi, X } from 'lucide-react';
 import type { LeaseConnectionResponse } from '../../../api/provider-api';
-import { CopyButton } from './CopyButton';
+import { CopyButton } from '../../ui/CopyButton';
 import { formatKey } from './utils';
 
 interface ConnectionInfoPanelProps {

@@ -507,14 +507,15 @@ export function AIProvider({ children }: { children: ReactNode }) {
     return [systemMessage, ...conversationMessages];
   }, []);
 
-  // Generate cache key for tool calls
+  // Generate cache key for tool calls (includes address to prevent cross-wallet stale hits)
   const getToolCacheKey = useCallback((toolName: string, args: Record<string, unknown>): string => {
+    const addr = addressRef.current ?? '';
     // Sort keys for consistent cache key regardless of arg order
     const sortedArgs = Object.keys(args).sort().reduce((acc, key) => {
       acc[key] = args[key];
       return acc;
     }, {} as Record<string, unknown>);
-    return `${toolName}:${JSON.stringify(sortedArgs)}`;
+    return `${addr}:${toolName}:${JSON.stringify(sortedArgs)}`;
   }, []);
 
   // Check if cached result is still valid

@@ -11,7 +11,7 @@ import { getProviders, getSKUs, type Provider, type SKU } from '../../../api/sku
 import { createLease, cancelLease, closeLease, type CreateLeaseResult } from '../../../api/tx';
 import {
   createLeaseDataSignMessage,
-  createLeaseDataAuthToken,
+  createAuthToken,
   uploadLeaseData,
 } from '../../../api/provider-api';
 import { toHex } from '../../../utils/hash';
@@ -192,13 +192,13 @@ export function LeasesTab() {
 
           const signResult = await signArbitrary(address!, signMessage);
 
-          const authToken = createLeaseDataAuthToken(
+          const authToken = createAuthToken(
             address!,
             leaseUuid,
-            metaHashHex,
             timestamp,
             signResult.pub_key.value,
-            signResult.signature
+            signResult.signature,
+            metaHashHex
           );
 
           await uploadLeaseData(provider.apiUrl, leaseUuid, payload, authToken);

@@ -2,7 +2,7 @@
  * Shared formatting utilities
  */
 
-import { DENOM_METADATA, UNIT_LABELS } from '../api/config';
+import { getDenomMetadata, UNIT_LABELS } from '../api/config';
 import type { Unit } from '../api/sku';
 
 // ============================================
@@ -18,9 +18,17 @@ import type { Unit } from '../api/sku';
  * @returns Base unit amount as string, suitable for blockchain transactions
  */
 export function toBaseUnits(amount: number, denom: string): string {
-  const metadata = DENOM_METADATA[denom];
-  const exponent = metadata?.exponent ?? 6;
-  return (amount * Math.pow(10, exponent)).toFixed(0);
+  const { exponent } = getDenomMetadata(denom);
+  // Round to the token's decimal precision first, then shift the decimal point
+  // via string manipulation to avoid floating-point errors from multiplication.
+  const fixed = amount.toFixed(exponent);
+  const dotIndex = fixed.indexOf('.');
+  if (dotIndex === -1) {
+    return fixed + '0'.repeat(exponent);
+  }
+  const raw = fixed.slice(0, dotIndex) + fixed.slice(dotIndex + 1);
+  // Strip leading zeros, preserving at least "0"
+  return raw.replace(/^0+(?=\d)/, '');
 }
 
 /**
@@ -32,8 +40,7 @@ export function toBaseUnits(amount: number, denom: string): string {
  * @returns Display amount as number
  */
 export function fromBaseUnits(amount: string, denom: string): number {
-  const metadata = DENOM_METADATA[denom];
-  const exponent = metadata?.exponent ?? 6;
+  const { exponent } = getDenomMetadata(denom);
   const parsed = parseInt(amount, 10);
   if (Number.isNaN(parsed)) {
     return 0;
@@ -66,9 +73,7 @@ export function parseBaseUnits(amount: string): number {
  * @returns Formatted string like "1,234.56 MFX" or "0 DENOM" for invalid amounts
  */
 export function formatAmount(amount: string, denom: string, maxDecimals = 6): string {
-  const metadata = DENOM_METADATA[denom as keyof typeof DENOM_METADATA];
-  const exponent = metadata?.exponent ?? 6;
-  const symbol = metadata?.symbol ?? denom;
+  const { exponent, symbol } = getDenomMetadata(denom);
   const parsed = parseInt(amount, 10);
   if (Number.isNaN(parsed)) {
     return `0 ${symbol}`;

@@ -36,11 +36,3 @@ export interface CreateLeaseModalProps {
   ) => void;
   loading: boolean;
 }
-
-export interface CopyButtonProps {
-  value: string;
-  copyToClipboard: (text: string) => void;
-  isCopied: (text: string) => boolean;
-  title?: string;
-  stopPropagation?: boolean;
-}

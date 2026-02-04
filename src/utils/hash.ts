@@ -3,6 +3,17 @@
  */
 
 /**
+ * Converts a string or Uint8Array to a guaranteed standalone Uint8Array.
+ * Strings are UTF-8 encoded. Uint8Array views are copied to ensure the
+ * result is not a view into a larger ArrayBuffer.
+ */
+export function toBytes(data: string | Uint8Array): Uint8Array {
+  return typeof data === 'string'
+    ? new TextEncoder().encode(data)
+    : new Uint8Array(data);
+}
+
+/**
  * Computes SHA-256 hash of the given data.
  *
  * Handles the case where the input Uint8Array is a view into a larger
@@ -13,13 +24,7 @@
  * @returns The hash as a Uint8Array
  */
 export async function sha256(data: string | Uint8Array): Promise<Uint8Array> {
-  // Convert to Uint8Array if string, then ensure we have a copy of just the
-  // relevant bytes. This handles the case where the input Uint8Array is a view
-  // into a larger ArrayBuffer (non-zero byteOffset or smaller byteLength).
-  const bytes = typeof data === 'string'
-    ? new TextEncoder().encode(data)
-    : new Uint8Array(data);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', toBytes(data));
   return new Uint8Array(hashBuffer);
 }
 
@@ -55,14 +60,12 @@ export const MAX_PAYLOAD_SIZE = 5 * 1024;
  * @returns true if valid, false if too large
  */
 export function validatePayloadSize(data: string | Uint8Array): boolean {
-  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-  return bytes.length <= MAX_PAYLOAD_SIZE;
+  return toBytes(data).length <= MAX_PAYLOAD_SIZE;
 }
 
 /**
  * Gets the size of a payload in bytes.
  */
 export function getPayloadSize(data: string | Uint8Array): number {
-  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-  return bytes.length;
+  return toBytes(data).length;
 }

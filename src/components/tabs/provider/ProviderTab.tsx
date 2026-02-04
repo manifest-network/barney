@@ -22,7 +22,7 @@ export function ProviderTab() {
   const { address, isWalletConnected, openView } = useChain(CHAIN_NAME);
   const toast = useToast();
   const { txLoading, executeTx } = useTxHandler();
-  const { copied, copyToClipboard } = useCopyToClipboard();
+  const { isCopied, copyToClipboard } = useCopyToClipboard();
 
   const [myProvider, setMyProvider] = useState<Provider | null>(null);
   const [providerLeases, setProviderLeases] = useState<Lease[]>([]);
@@ -256,11 +256,11 @@ export function ProviderTab() {
               <div className="provider-info-value-row">
                 <code className="provider-info-value">{myProvider.uuid}</code>
                 <button
-                  onClick={() => copyToClipboard(myProvider.uuid)}
+                  onClick={() => copyToClipboard(myProvider.uuid, 'uuid')}
                   className="provider-info-copy"
                   title="Copy UUID"
                 >
-                  {copied ? <Check size={10} /> : <Copy size={10} />}
+                  {isCopied('uuid') ? <Check size={10} /> : <Copy size={10} />}
                 </button>
               </div>
             </div>
@@ -269,11 +269,11 @@ export function ProviderTab() {
               <div className="provider-info-value-row">
                 <code className="provider-info-value">{myProvider.address}</code>
                 <button
-                  onClick={() => copyToClipboard(myProvider.address)}
+                  onClick={() => copyToClipboard(myProvider.address, 'address')}
                   className="provider-info-copy"
                   title="Copy Address"
                 >
-                  {copied ? <Check size={10} /> : <Copy size={10} />}
+                  {isCopied('address') ? <Check size={10} /> : <Copy size={10} />}
                 </button>
               </div>
             </div>
@@ -282,11 +282,11 @@ export function ProviderTab() {
               <div className="provider-info-value-row">
                 <code className="provider-info-value">{myProvider.payoutAddress}</code>
                 <button
-                  onClick={() => copyToClipboard(myProvider.payoutAddress)}
+                  onClick={() => copyToClipboard(myProvider.payoutAddress, 'payout')}
                   className="provider-info-copy"
                   title="Copy Payout Address"
                 >
-                  {copied ? <Check size={10} /> : <Copy size={10} />}
+                  {isCopied('payout') ? <Check size={10} /> : <Copy size={10} />}
                 </button>
               </div>
             </div>
@@ -295,11 +295,11 @@ export function ProviderTab() {
               <div className="provider-info-value-row">
                 <code className="provider-info-value provider-info-api">{myProvider.apiUrl}</code>
                 <button
-                  onClick={() => copyToClipboard(myProvider.apiUrl)}
+                  onClick={() => copyToClipboard(myProvider.apiUrl, 'api')}
                   className="provider-info-copy"
                   title="Copy API URL"
                 >
-                  {copied ? <Check size={10} /> : <Copy size={10} />}
+                  {isCopied('api') ? <Check size={10} /> : <Copy size={10} />}
                 </button>
               </div>
             </div>

@@ -21,7 +21,7 @@ import {
   type LeaseConnectionResponse,
 } from '../../../api/provider-api';
 import { validateSignMessage } from './utils';
-import { CopyButton } from './CopyButton';
+import { CopyButton } from '../../ui/CopyButton';
 import { ConnectionInfoPanel } from './ConnectionInfoPanel';
 import type { LeaseCardProps } from './types';
 

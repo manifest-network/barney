@@ -3,6 +3,7 @@ import type { OfflineSigner } from '@cosmjs/proto-signing';
 import type { Coin } from './bank';
 import { RPC_ENDPOINT } from './config';
 import { getEventAttribute, type TxEvent } from '../utils/tx';
+import { logError } from '../utils/errors';
 
 // Re-export TxEvent for consumers that import from api/tx
 export type { TxEvent };
@@ -65,6 +66,16 @@ const DEFAULT_FEE = {
   gas: '200000',
 };
 
+/**
+ * Build a signed message from a manifestjs Msg encoder and partial fields.
+ */
+function buildMsg<V>(
+  Msg: { typeUrl: string; fromPartial: (value: V) => unknown },
+  value: V
+): { typeUrl: string; value: unknown } {
+  return { typeUrl: Msg.typeUrl, value: Msg.fromPartial(value) };
+}
+
 async function signAndBroadcast(
   signer: OfflineSigner,
   sender: string,
@@ -101,16 +112,9 @@ export async function fundCredit(
   tenant: string,
   amount: Coin
 ): Promise<TxResult> {
-  const msg = {
-    typeUrl: MsgFundCredit.typeUrl,
-    value: MsgFundCredit.fromPartial({
-      sender,
-      tenant,
-      amount,
-    }),
-  };
-
-  return signAndBroadcast(signer, sender, [msg]);
+  return signAndBroadcast(signer, sender, [
+    buildMsg(MsgFundCredit, { sender, tenant, amount }),
+  ]);
 }
 
 export interface CreateProviderParams {
@@ -125,18 +129,15 @@ export async function createProvider(
   authority: string,
   params: CreateProviderParams
 ): Promise<TxResult> {
-  const msg = {
-    typeUrl: MsgCreateProvider.typeUrl,
-    value: MsgCreateProvider.fromPartial({
+  return signAndBroadcast(signer, authority, [
+    buildMsg(MsgCreateProvider, {
       authority,
       address: params.address,
       payoutAddress: params.payoutAddress,
       apiUrl: params.apiUrl,
       metaHash: params.metaHash ?? new Uint8Array(),
     }),
-  };
-
-  return signAndBroadcast(signer, authority, [msg]);
+  ]);
 }
 
 export interface UpdateProviderParams {
@@ -153,9 +154,8 @@ export async function updateProvider(
   authority: string,
   params: UpdateProviderParams
 ): Promise<TxResult> {
-  const msg = {
-    typeUrl: MsgUpdateProvider.typeUrl,
-    value: MsgUpdateProvider.fromPartial({
+  return signAndBroadcast(signer, authority, [
+    buildMsg(MsgUpdateProvider, {
       authority,
       uuid: params.uuid,
       address: params.address,
@@ -164,9 +164,7 @@ export async function updateProvider(
       active: params.active,
       metaHash: params.metaHash ?? new Uint8Array(),
     }),
-  };
-
-  return signAndBroadcast(signer, authority, [msg]);
+  ]);
 }
 
 export interface CreateSKUParams {
@@ -182,9 +180,8 @@ export async function createSKU(
   authority: string,
   params: CreateSKUParams
 ): Promise<TxResult> {
-  const msg = {
-    typeUrl: MsgCreateSKU.typeUrl,
-    value: MsgCreateSKU.fromPartial({
+  return signAndBroadcast(signer, authority, [
+    buildMsg(MsgCreateSKU, {
       authority,
       providerUuid: params.providerUuid,
       name: params.name,
@@ -192,9 +189,7 @@ export async function createSKU(
       basePrice: params.basePrice,
       metaHash: params.metaHash ?? new Uint8Array(),
     }),
-  };
-
-  return signAndBroadcast(signer, authority, [msg]);
+  ]);
 }
 
 export interface UpdateSKUParams {
@@ -212,9 +207,8 @@ export async function updateSKU(
   authority: string,
   params: UpdateSKUParams
 ): Promise<TxResult> {
-  const msg = {
-    typeUrl: MsgUpdateSKU.typeUrl,
-    value: MsgUpdateSKU.fromPartial({
+  return signAndBroadcast(signer, authority, [
+    buildMsg(MsgUpdateSKU, {
       authority,
       uuid: params.uuid,
       providerUuid: params.providerUuid,
@@ -224,9 +218,7 @@ export async function updateSKU(
       active: params.active,
       metaHash: params.metaHash ?? new Uint8Array(),
     }),
-  };
-
-  return signAndBroadcast(signer, authority, [msg]);
+  ]);
 }
 
 export async function deactivateProvider(
@@ -234,15 +226,9 @@ export async function deactivateProvider(
   authority: string,
   uuid: string
 ): Promise<TxResult> {
-  const msg = {
-    typeUrl: MsgDeactivateProvider.typeUrl,
-    value: MsgDeactivateProvider.fromPartial({
-      authority,
-      uuid,
-    }),
-  };
-
-  return signAndBroadcast(signer, authority, [msg]);
+  return signAndBroadcast(signer, authority, [
+    buildMsg(MsgDeactivateProvider, { authority, uuid }),
+  ]);
 }
 
 export async function deactivateSKU(
@@ -250,15 +236,9 @@ export async function deactivateSKU(
   authority: string,
   uuid: string
 ): Promise<TxResult> {
-  const msg = {
-    typeUrl: MsgDeactivateSKU.typeUrl,
-    value: MsgDeactivateSKU.fromPartial({
-      authority,
-      uuid,
-    }),
-  };
-
-  return signAndBroadcast(signer, authority, [msg]);
+  return signAndBroadcast(signer, authority, [
+    buildMsg(MsgDeactivateSKU, { authority, uuid }),
+  ]);
 }
 
 // Lease transactions
@@ -294,8 +274,8 @@ async function executeLeaseCreation(
 
   const leaseUuid = getEventAttribute(result.events, 'lease_created', 'lease_uuid');
 
-  if (!leaseUuid && import.meta.env.DEV) {
-    console.warn('[executeLeaseCreation] Transaction succeeded but lease_uuid not found in events');
+  if (!leaseUuid) {
+    logError('executeLeaseCreation', 'Transaction succeeded but lease_uuid not found in events');
   }
 
   return {
@@ -319,16 +299,13 @@ export async function createLease(
   items: LeaseItemInput[],
   metaHash?: Uint8Array
 ): Promise<CreateLeaseResult> {
-  const msg = {
-    typeUrl: MsgCreateLease.typeUrl,
-    value: MsgCreateLease.fromPartial({
+  return executeLeaseCreation(signer, tenant,
+    buildMsg(MsgCreateLease, {
       tenant,
       items: mapLeaseItems(items),
       metaHash: metaHash ?? new Uint8Array(),
     }),
-  };
-
-  return executeLeaseCreation(signer, tenant, msg);
+  );
 }
 
 /**
@@ -349,17 +326,14 @@ export async function createLeaseForTenant(
   items: LeaseItemInput[],
   metaHash?: Uint8Array
 ): Promise<CreateLeaseResult> {
-  const msg = {
-    typeUrl: MsgCreateLeaseForTenant.typeUrl,
-    value: MsgCreateLeaseForTenant.fromPartial({
+  return executeLeaseCreation(signer, authority,
+    buildMsg(MsgCreateLeaseForTenant, {
       authority,
       tenant,
       items: mapLeaseItems(items),
       metaHash: metaHash ?? new Uint8Array(),
     }),
-  };
-
-  return executeLeaseCreation(signer, authority, msg);
+  );
 }
 
 export async function cancelLease(
@@ -367,15 +341,9 @@ export async function cancelLease(
   tenant: string,
   leaseUuids: string[]
 ): Promise<TxResult> {
-  const msg = {
-    typeUrl: MsgCancelLease.typeUrl,
-    value: MsgCancelLease.fromPartial({
-      tenant,
-      leaseUuids,
-    }),
-  };
-
-  return signAndBroadcast(signer, tenant, [msg]);
+  return signAndBroadcast(signer, tenant, [
+    buildMsg(MsgCancelLease, { tenant, leaseUuids }),
+  ]);
 }
 
 export async function closeLease(
@@ -384,16 +352,9 @@ export async function closeLease(
   leaseUuids: string[],
   reason?: string
 ): Promise<TxResult> {
-  const msg = {
-    typeUrl: MsgCloseLease.typeUrl,
-    value: MsgCloseLease.fromPartial({
-      sender,
-      leaseUuids,
-      reason: reason ?? '',
-    }),
-  };
-
-  return signAndBroadcast(signer, sender, [msg]);
+  return signAndBroadcast(signer, sender, [
+    buildMsg(MsgCloseLease, { sender, leaseUuids, reason: reason ?? '' }),
+  ]);
 }
 
 // Provider transactions
@@ -403,15 +364,9 @@ export async function acknowledgeLease(
   sender: string,
   leaseUuids: string[]
 ): Promise<TxResult> {
-  const msg = {
-    typeUrl: MsgAcknowledgeLease.typeUrl,
-    value: MsgAcknowledgeLease.fromPartial({
-      sender,
-      leaseUuids,
-    }),
-  };
-
-  return signAndBroadcast(signer, sender, [msg]);
+  return signAndBroadcast(signer, sender, [
+    buildMsg(MsgAcknowledgeLease, { sender, leaseUuids }),
+  ]);
 }
 
 export async function rejectLease(
@@ -420,16 +375,9 @@ export async function rejectLease(
   leaseUuids: string[],
   reason?: string
 ): Promise<TxResult> {
-  const msg = {
-    typeUrl: MsgRejectLease.typeUrl,
-    value: MsgRejectLease.fromPartial({
-      sender,
-      leaseUuids,
-      reason: reason ?? '',
-    }),
-  };
-
-  return signAndBroadcast(signer, sender, [msg]);
+  return signAndBroadcast(signer, sender, [
+    buildMsg(MsgRejectLease, { sender, leaseUuids, reason: reason ?? '' }),
+  ]);
 }
 
 export async function withdrawFromLeases(
@@ -437,13 +385,7 @@ export async function withdrawFromLeases(
   sender: string,
   leaseUuids: string[]
 ): Promise<TxResult> {
-  const msg = {
-    typeUrl: MsgWithdraw.typeUrl,
-    value: MsgWithdraw.fromPartial({
-      sender,
-      leaseUuids,
-    }),
-  };
-
-  return signAndBroadcast(signer, sender, [msg]);
+  return signAndBroadcast(signer, sender, [
+    buildMsg(MsgWithdraw, { sender, leaseUuids }),
+  ]);
 }

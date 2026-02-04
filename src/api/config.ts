@@ -6,7 +6,7 @@ export const RPC_ENDPOINT = import.meta.env.PUBLIC_RPC_URL || 'http://localhost:
 
 export const DENOMS = {
   MFX: 'umfx',
-  PWR: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr',
+  PWR: import.meta.env.PUBLIC_PWR_DENOM || 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr',
 } as const;
 
 export const DENOM_METADATA: Record<string, { symbol: string; exponent: number }> = {
@@ -24,6 +24,14 @@ export const DENOM_METADATA: Record<string, { symbol: string; exponent: number }
     exponent: 6,
   },
 };
+
+/**
+ * Look up denomination metadata with a consistent fallback.
+ * Uses the denom string itself as the symbol when unknown, with a default exponent of 6.
+ */
+export function getDenomMetadata(denom: string): { symbol: string; exponent: number } {
+  return DENOM_METADATA[denom] ?? { symbol: denom, exponent: 6 };
+}
 
 // Import Unit directly from manifestjs to avoid circular dependency with sku.ts
 const Unit = liftedinit.sku.v1.Unit;

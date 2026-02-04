@@ -156,8 +156,8 @@ function App() {
           <TabErrorBoundary tabName="Network">
             <NetworkTab
               isConnected={isWalletConnected}
-              address={address}
               onConnect={() => openView()}
+              isAdmin={isAdmin}
             />
           </TabErrorBoundary>
         )}

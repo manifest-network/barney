@@ -7,7 +7,7 @@ import { DENOM_METADATA } from '../../../api/config';
 import type { NetworkCreditCardProps } from './types';
 
 export function NetworkCreditCard({ account, balances }: NetworkCreditCardProps) {
-  const { copied, copyToClipboard } = useCopyToClipboard();
+  const { isCopied, copyToClipboard } = useCopyToClipboard();
   const [isExpanded, setIsExpanded] = useState(false);
 
   // Determine status based on balance
@@ -34,11 +34,11 @@ export function NetworkCreditCard({ account, balances }: NetworkCreditCardProps)
               <span className="lease-card-label">Tenant</span>
               <code className="lease-card-mono">{truncateAddress(account.tenant)}</code>
               <button
-                onClick={(e) => { e.stopPropagation(); copyToClipboard(account.tenant); }}
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(account.tenant, 'tenant'); }}
                 className="lease-card-copy-btn"
                 title="Copy Tenant Address"
               >
-                {copied ? <Check size={10} /> : <Copy size={10} />}
+                {isCopied('tenant') ? <Check size={10} /> : <Copy size={10} />}
               </button>
             </span>
 
@@ -46,11 +46,11 @@ export function NetworkCreditCard({ account, balances }: NetworkCreditCardProps)
               <span className="lease-card-label">Credit Address</span>
               <code className="lease-card-mono">{truncateAddress(account.creditAddress)}</code>
               <button
-                onClick={(e) => { e.stopPropagation(); copyToClipboard(account.creditAddress); }}
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(account.creditAddress, 'credit'); }}
                 className="lease-card-copy-btn"
                 title="Copy Credit Address"
               >
-                <Copy size={10} />
+                {isCopied('credit') ? <Check size={10} /> : <Copy size={10} />}
               </button>
             </span>
           </div>
@@ -96,15 +96,15 @@ export function NetworkCreditCard({ account, balances }: NetworkCreditCardProps)
               <div className="lease-card-kv">
                 <span className="lease-card-kv-label">Tenant Address</span>
                 <code className="lease-card-kv-value">{account.tenant}</code>
-                <button onClick={() => copyToClipboard(account.tenant)} className="lease-card-copy-btn" title="Copy">
-                  {copied ? <Check size={10} /> : <Copy size={10} />}
+                <button onClick={() => copyToClipboard(account.tenant, 'tenant')} className="lease-card-copy-btn" title="Copy">
+                  {isCopied('tenant') ? <Check size={10} /> : <Copy size={10} />}
                 </button>
               </div>
               <div className="lease-card-kv">
                 <span className="lease-card-kv-label">Credit Address</span>
                 <code className="lease-card-kv-value">{account.creditAddress}</code>
-                <button onClick={() => copyToClipboard(account.creditAddress)} className="lease-card-copy-btn" title="Copy">
-                  <Copy size={10} />
+                <button onClick={() => copyToClipboard(account.creditAddress, 'credit')} className="lease-card-copy-btn" title="Copy">
+                  {isCopied('credit') ? <Check size={10} /> : <Copy size={10} />}
                 </button>
               </div>
             </div>
