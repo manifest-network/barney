@@ -1,35 +1,31 @@
 /**
- * AI Tool Definitions for the chat assistant
- * These tools enable the AI to interact with the Manifest blockchain
+ * AI Tool Definitions
+ *
+ * 9 tools: 3 TX (require confirmation), 4 query, 2 escape hatch.
+ * Model does intent classification; code does orchestration.
  */
 
 import type { OllamaTool } from '../api/ollama';
 
 export const AI_TOOLS: OllamaTool[] = [
+  // --- TX tools (require confirmation) ---
   {
     type: 'function',
     function: {
-      name: 'get_balance',
-      description: 'Get the wallet token balances and credit account status for the connected user',
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_leases',
-      description: 'List the current user\'s leases. Can filter by state: pending, active, closed, rejected, or expired.',
+      name: 'deploy_app',
+      description:
+        'Deploy an app from an attached manifest file. Requires a file attachment. Defaults size to "small" if not specified. Name is derived from filename if omitted.',
       parameters: {
         type: 'object',
         properties: {
-          state: {
+          name: {
             type: 'string',
-            description: 'Filter leases by state',
-            enum: ['all', 'pending', 'active', 'closed', 'rejected', 'expired'],
+            description: 'App name (lowercase, alphanumeric + hyphens, 1-32 chars). Derived from filename if omitted.',
+          },
+          size: {
+            type: 'string',
+            description: 'Resource tier: small, medium, large, or gpu.',
+            enum: ['small', 'medium', 'large', 'gpu'],
           },
         },
         required: [],
@@ -39,151 +35,106 @@ export const AI_TOOLS: OllamaTool[] = [
   {
     type: 'function',
     function: {
-      name: 'get_providers',
-      description: 'List all available compute providers in the catalog',
+      name: 'stop_app',
+      description: 'Stop a running app by name. This closes the lease on-chain.',
       parameters: {
         type: 'object',
         properties: {
-          active_only: {
-            type: 'boolean',
-            description: 'If true, only return active providers',
+          name: {
+            type: 'string',
+            description: 'The name of the app to stop.',
           },
         },
-        required: [],
+        required: ['name'],
       },
     },
   },
   {
     type: 'function',
     function: {
-      name: 'get_skus',
-      description: 'List available SKUs (compute resources). Can list all SKUs across all providers, or filter by provider_uuid. Only use when the user explicitly asks to see available SKUs.',
-      parameters: {
-        type: 'object',
-        properties: {
-          provider_uuid: {
-            type: 'string',
-            description: 'Optional: filter SKUs by provider UUID. If omitted, returns all SKUs from all providers.',
-          },
-          active_only: {
-            type: 'boolean',
-            description: 'If true, only return active SKUs',
-          },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_credit_estimate',
-      description: 'Get the estimated remaining time for the credit account based on current burn rate',
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'create_lease',
-      description: 'Create a new lease for compute resources. IMPORTANT: Requires user confirmation. Use sku_name to specify SKUs by name (the system resolves UUIDs automatically). Users can attach payload files via the chat input.',
-      parameters: {
-        type: 'object',
-        properties: {
-          items: {
-            type: 'string',
-            description: 'JSON array of items to lease. Use sku_name (preferred) or sku_uuid. Examples: [{"sku_name": "001", "quantity": 1}] or [{"sku_uuid": "019beb87-09de-7000-beef-ae733e73ff23", "quantity": 1}]',
-          },
-        },
-        required: ['items'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'upload_payload',
-      description: 'Upload deployment payload data to a provider for an existing PENDING lease. This requires a lease that was created with a meta_hash. The payload hash must match the meta_hash stored on-chain. The provider API URL is automatically derived from the lease for security. IMPORTANT: Requires user confirmation.',
-      parameters: {
-        type: 'object',
-        properties: {
-          lease_uuid: {
-            type: 'string',
-            description: 'The UUID of the PENDING lease to upload data for',
-          },
-          payload: {
-            type: 'string',
-            description: 'The deployment payload data (YAML/JSON) to upload to the provider',
-          },
-        },
-        required: ['lease_uuid', 'payload'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'close_lease',
-      description: 'Close an active lease. IMPORTANT: This will require user confirmation before executing.',
-      parameters: {
-        type: 'object',
-        properties: {
-          lease_uuid: {
-            type: 'string',
-            description: 'The UUID of the lease to close',
-          },
-          reason: {
-            type: 'string',
-            description: 'Optional reason for closing the lease',
-          },
-        },
-        required: ['lease_uuid'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fund_credit',
-      description: 'Add funds to the credit account. IMPORTANT: This will require user confirmation before executing.',
+      name: 'fund_credits',
+      description:
+        'Add credits to your account. Amount is in display units (e.g., 50 means 50 PWR).',
       parameters: {
         type: 'object',
         properties: {
           amount: {
-            type: 'string',
-            description: 'Amount to fund in format "<micro_amount><denom>". Examples: "10000000umfx" for 10 MFX, "10000000factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr" for 10 PWR. Always multiply display amount by 1,000,000.',
+            type: 'number',
+            description: 'Amount in display units (e.g., 50 for 50 PWR).',
           },
         },
         required: ['amount'],
       },
     },
   },
+
+  // --- Query tools ---
   {
     type: 'function',
     function: {
-      name: 'get_withdrawable',
-      description: 'Check the withdrawable amount for a specific lease',
+      name: 'list_apps',
+      description: 'List your deployed apps. Can filter by state.',
       parameters: {
         type: 'object',
         properties: {
-          lease_uuid: {
+          state: {
             type: 'string',
-            description: 'The UUID of the lease to check',
+            description: 'Filter: all, running, stopped, failed, deploying. Default: running.',
+            enum: ['all', 'running', 'stopped', 'failed', 'deploying'],
           },
         },
-        required: ['lease_uuid'],
+        required: [],
       },
     },
   },
   {
     type: 'function',
     function: {
+      name: 'app_status',
+      description: 'Get detailed status for a specific app by name.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'The app name to check.',
+          },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_balance',
+      description: 'Get your credits, spending rate, and estimated time remaining.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browse_catalog',
+      description: 'Browse available providers and resource tiers.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+
+  // --- Escape hatch ---
+  {
+    type: 'function',
+    function: {
       name: 'cosmos_query',
-      description: 'Execute any Cosmos SDK query. Use this for advanced queries not covered by other tools.',
+      description: 'Execute any Cosmos SDK query. For advanced queries not covered by other tools.',
       parameters: {
         type: 'object',
         properties: {
@@ -208,7 +159,7 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'cosmos_tx',
-      description: 'Execute any Cosmos SDK transaction. IMPORTANT: This will require user confirmation before executing.',
+      description: 'Execute any Cosmos SDK transaction. Requires confirmation.',
       parameters: {
         type: 'object',
         properties: {
@@ -234,62 +185,53 @@ export const AI_TOOLS: OllamaTool[] = [
 /**
  * Tools that require user confirmation before execution
  */
-export const CONFIRMATION_REQUIRED_TOOLS = new Set([
-  'create_lease',
-  'close_lease',
-  'fund_credit',
+export const CONFIRMATION_TOOLS = new Set([
+  'deploy_app',
+  'stop_app',
+  'fund_credits',
   'cosmos_tx',
-  'upload_payload',
 ]);
 
-/**
- * Check if a tool requires confirmation
- */
 export function requiresConfirmation(toolName: string): boolean {
-  return CONFIRMATION_REQUIRED_TOOLS.has(toolName);
+  return CONFIRMATION_TOOLS.has(toolName);
 }
 
 /**
- * Set of valid tool names derived from AI_TOOLS to ensure consistency
+ * Set of valid tool names
  */
 export const VALID_TOOL_NAMES: ReadonlySet<string> = new Set(
   AI_TOOLS.map((tool) => tool.function.name)
 );
 
-/**
- * Check if a tool name is valid
- */
 export function isValidToolName(name: unknown): name is string {
   return typeof name === 'string' && VALID_TOOL_NAMES.has(name);
 }
 
 /**
- * Get a human-readable description for a tool call
+ * Human-readable description for tool calls
  */
-export function getToolCallDescription(toolName: string, args: Record<string, unknown>): string {
+export function getToolCallDescription(
+  toolName: string,
+  args: Record<string, unknown>
+): string {
   switch (toolName) {
+    case 'deploy_app': {
+      const name = args.name ? ` "${args.name}"` : '';
+      const size = args.size ? ` (${args.size})` : '';
+      return `Deploying app${name}${size}...`;
+    }
+    case 'stop_app':
+      return `Stopping app "${args.name}"...`;
+    case 'fund_credits':
+      return `Funding credits with ${args.amount} PWR...`;
+    case 'list_apps':
+      return args.state ? `Listing ${args.state} apps...` : 'Listing running apps...';
+    case 'app_status':
+      return `Checking status of "${args.name}"...`;
     case 'get_balance':
-      return 'Checking your wallet balance and credit account...';
-    case 'get_leases':
-      return args.state ? `Fetching your ${args.state} leases...` : 'Fetching your leases...';
-    case 'get_providers':
-      return 'Listing available providers...';
-    case 'get_skus':
-      return args.provider_uuid
-        ? `Getting SKUs for provider ${args.provider_uuid}...`
-        : 'Listing all available SKUs...';
-    case 'get_credit_estimate':
-      return 'Calculating credit estimate...';
-    case 'create_lease':
-      return 'Creating a new lease (requires confirmation)';
-    case 'upload_payload':
-      return `Uploading deployment payload to lease ${args.lease_uuid} (requires confirmation)`;
-    case 'close_lease':
-      return `Closing lease ${args.lease_uuid} (requires confirmation)`;
-    case 'fund_credit':
-      return `Funding credit account with ${args.amount} (requires confirmation)`;
-    case 'get_withdrawable':
-      return `Checking withdrawable amount for lease ${args.lease_uuid}...`;
+      return 'Checking your balance and credits...';
+    case 'browse_catalog':
+      return 'Browsing available tiers and providers...';
     case 'cosmos_query':
       return `Querying ${args.module} ${args.subcommand}...`;
     case 'cosmos_tx':

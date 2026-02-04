@@ -1,16 +1,17 @@
 import { useState, useRef, useEffect, type FormEvent } from 'react';
-import { Send, Settings, X, Sparkles, Loader, WifiOff, Maximize2, Minimize2, Paperclip } from 'lucide-react';
+import { Send, Settings, X, Sparkles, Loader, WifiOff, Paperclip } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
 import { useAutoScroll } from '../../hooks/useAutoScroll';
 import { MessageBubble } from './MessageBubble';
 import { ConfirmationCard } from './ConfirmationCard';
+import { ProgressCard } from './ProgressCard';
+import { AppCard } from './AppCard';
 import { AISettings } from './AISettings';
 import { MAX_INPUT_LENGTH } from '../../ai/validation';
 import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
 import { formatFileSize } from '../../utils/format';
-import { cn } from '../../utils/cn';
 
-const SUGGESTIONS = ["What's my balance?", "Show my active leases", "List available providers"];
+const SUGGESTIONS = ['Deploy an app', 'Check my credits', "What's running?"];
 
 export function ChatPanel() {
   const {
@@ -19,8 +20,8 @@ export function ChatPanel() {
     isConnected,
     pendingConfirmation,
     pendingPayload,
+    deployProgress,
     sendMessage,
-    setIsOpen,
     confirmAction,
     cancelAction,
     attachPayload,
@@ -29,7 +30,6 @@ export function ChatPanel() {
 
   const [input, setInput] = useState('');
   const [showSettings, setShowSettings] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -93,18 +93,33 @@ export function ChatPanel() {
   const showCharCount = input.length > MAX_INPUT_LENGTH * 0.8;
   const isNearLimit = input.length > MAX_INPUT_LENGTH * 0.95;
 
+  // Check for deploy success in last message
+  const lastAssistantMsg = [...messages].reverse().find(
+    (m) => m.role === 'tool' && !m.isStreaming && m.content
+  );
+  let deploySuccessData: { name: string; url?: string; status: string } | null = null;
+  if (lastAssistantMsg?.content) {
+    try {
+      const parsed = JSON.parse(lastAssistantMsg.content);
+      if (parsed?.success && parsed?.data?.status === 'running' && parsed?.data?.name) {
+        deploySuccessData = parsed.data;
+      }
+    } catch {
+      // Not JSON
+    }
+  }
+
   return (
     <div
-      className={cn('chat-panel', isExpanded && 'chat-panel-expanded')}
-      role="dialog"
-      aria-label="AI Assistant chat panel"
-      aria-modal="false"
+      className="chat-panel chat-panel--fullscreen"
+      role="region"
+      aria-label="Chat"
     >
       {/* Header */}
       <div className="chat-panel-header">
         <div className="chat-panel-title">
           <Sparkles className="w-4 h-4" aria-hidden="true" />
-          <span id="chat-panel-title">AI Assistant</span>
+          <span id="chat-panel-title">Barney</span>
           {!isConnected && (
             <span
               className="chat-panel-offline"
@@ -119,33 +134,12 @@ export function ChatPanel() {
         <div className="chat-panel-actions">
           <button
             type="button"
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="chat-panel-btn"
-            aria-label={isExpanded ? "Collapse chat panel" : "Expand chat panel"}
-            aria-expanded={isExpanded}
-          >
-            {isExpanded ? (
-              <Minimize2 className="w-4 h-4" aria-hidden="true" />
-            ) : (
-              <Maximize2 className="w-4 h-4" aria-hidden="true" />
-            )}
-          </button>
-          <button
-            type="button"
             onClick={() => setShowSettings(!showSettings)}
             className="chat-panel-btn"
             aria-label="Open settings"
             aria-expanded={showSettings}
           >
             <Settings className="w-4 h-4" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsOpen(false)}
-            className="chat-panel-btn"
-            aria-label="Close chat panel"
-          >
-            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -166,9 +160,9 @@ export function ChatPanel() {
         {messages.length === 0 ? (
           <div className="chat-empty">
             <Sparkles className="w-8 h-8 text-primary-400 mb-2" aria-hidden="true" />
-            <p className="chat-empty-title">How can I help you today?</p>
+            <p className="chat-empty-title">What would you like to deploy?</p>
             <p className="chat-empty-hint">
-              Ask me about your balances, leases, or available providers.
+              Drop a manifest file or ask me anything about your apps and credits.
             </p>
             <div className="chat-suggestions" role="group" aria-label="Suggested questions">
               {SUGGESTIONS.map((text) => (
@@ -196,6 +190,19 @@ export function ChatPanel() {
                 onConfirm={confirmAction}
                 onCancel={cancelAction}
                 isExecuting={isStreaming}
+              />
+            )}
+            {/* Deploy Progress */}
+            {deployProgress && !pendingConfirmation && (
+              <ProgressCard progress={deployProgress} />
+            )}
+            {/* App Card on deploy success */}
+            {deploySuccessData && !deployProgress && !pendingConfirmation && (
+              <AppCard
+                name={deploySuccessData.name}
+                url={deploySuccessData.url}
+                status={deploySuccessData.status}
+                onStop={() => sendMessage(`stop ${deploySuccessData!.name}`)}
               />
             )}
           </>

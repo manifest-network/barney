@@ -1,22 +1,22 @@
 /**
- * AI Assistant wrapper component
- * Connects the AI context with cosmos-kit wallet
+ * AppShell — top-level router.
+ * Shows LandingPage when disconnected, MainLayout when connected.
  */
 
 import { useEffect, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { useAI } from '../../hooks/useAI';
 import { useManifestMCP } from '../../hooks/useManifestMCP';
-import { ChatBubble } from './ChatBubble';
+import { LandingPage } from '../landing/LandingPage';
+import { MainLayout } from './MainLayout';
 import { CHAIN_NAME } from '../../config/chain';
 
-export function AIAssistant() {
+export function AppShell() {
   const { setClientManager, setAddress, setSignArbitrary } = useAI();
   const { clientManager, address } = useManifestMCP();
-  const { signArbitrary, isWalletConnected } = useChain(CHAIN_NAME);
+  const { signArbitrary, isWalletConnected, openView } = useChain(CHAIN_NAME);
 
-  // Create a stable wrapper for signArbitrary that matches the expected signature
-  // Only create if signArbitrary is actually available (some wallets don't support it)
+  // Create a stable wrapper for signArbitrary
   const wrappedSignArbitrary = useCallback(
     async (signerAddress: string, data: string) => {
       if (typeof signArbitrary !== 'function') {
@@ -35,10 +35,13 @@ export function AIAssistant() {
   useEffect(() => {
     setClientManager(clientManager);
     setAddress(address);
-    // Only set signArbitrary if wallet is connected AND signArbitrary is available
     const canSign = isWalletConnected && typeof signArbitrary === 'function';
     setSignArbitrary(canSign ? wrappedSignArbitrary : undefined);
   }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, wrappedSignArbitrary]);
 
-  return <ChatBubble />;
+  if (!isWalletConnected) {
+    return <LandingPage onConnect={() => openView()} />;
+  }
+
+  return <MainLayout />;
 }

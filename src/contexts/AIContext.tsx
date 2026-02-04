@@ -9,15 +9,16 @@ import {
 import { AIContext } from './aiContextValue';
 import type { OllamaMessage, OllamaToolCall, OllamaStreamChunk } from '../api/ollama';
 import { streamChat, checkOllamaHealth, listModels, type OllamaModel } from '../api/ollama';
-import { AI_TOOLS, getToolCallDescription } from '../ai/tools';
+import { AI_TOOLS, getToolCallDescription, isValidToolName } from '../ai/tools';
 import { executeTool, executeConfirmedTool, type ToolResult, type PendingAction, type SignResult, type PayloadAttachment } from '../ai/toolExecutor';
 import { getSystemPrompt } from '../ai/systemPrompt';
+import type { DeployProgress } from '../ai/progress';
+import * as appRegistry from '../registry/appRegistry';
 import {
   validateSettings,
   validateChatHistory,
   validateEndpointUrl,
   validateUserInput,
-  isValidToolName,
   sanitizeToolArgs,
   type AISettings,
 } from '../ai/validation';
@@ -151,6 +152,7 @@ export interface AIContextType {
   availableModels: OllamaModel[];
   pendingConfirmation: PendingConfirmation | null;
   pendingPayload: PayloadAttachment | null;
+  deployProgress: DeployProgress | null;
 
   // Actions
   setIsOpen: (open: boolean) => void;
@@ -186,6 +188,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
   const [availableModels, setAvailableModels] = useState<OllamaModel[]>([]);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [pendingPayload, setPendingPayload] = useState<PayloadAttachment | null>(null);
+  const [deployProgress, setDeployProgress] = useState<DeployProgress | null>(null);
   const pendingPayloadRef = useRef<PayloadAttachment | null>(null);
 
   // Refs for client, address, and signing (to avoid re-renders)
@@ -300,14 +303,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
   const setClientManager = useCallback((manager: CosmosClientManager | null) => {
     clientManagerRef.current = manager;
-  }, []);
-
-  const setAddress = useCallback((address: string | undefined) => {
-    // Clear cached query results when wallet changes to prevent serving stale data
-    if (address !== addressRef.current) {
-      toolCacheRef.current.clear();
-    }
-    addressRef.current = address;
   }, []);
 
   const setSignArbitrary = useCallback((fn: SignArbitraryFn | undefined) => {
@@ -535,7 +530,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
   // Handle tool execution with validation and caching
   const handleToolCall = useCallback(
     async (toolCall: OllamaToolCall): Promise<ToolResult> => {
-      // Validate tool name
+      // Validate tool name against composite tools
       if (!isValidToolName(toolCall.function.name)) {
         return {
           success: false,
@@ -553,10 +548,22 @@ export function AIProvider({ children }: { children: ReactNode }) {
         return cachedResult;
       }
 
+      // Clear deploy progress on new tool call
+      setDeployProgress(null);
+
       const result = await executeTool(toolCall.function.name, sanitizedArgs, {
         clientManager: clientManagerRef.current,
         address: addressRef.current,
-      });
+        signArbitrary: signArbitraryRef.current,
+        onProgress: setDeployProgress,
+        appRegistry: {
+          getApps: appRegistry.getApps,
+          getApp: appRegistry.getApp,
+          getAppByLease: appRegistry.getAppByLease,
+          addApp: appRegistry.addApp,
+          updateApp: appRegistry.updateApp,
+        },
+      }, pendingPayloadRef.current ?? undefined);
 
       // Cache successful query results (not confirmations or failures)
       // Transaction tools return requiresConfirmation=true, so they won't be cached
@@ -627,9 +634,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
         const { result, messageId: toolMessageId } = await executeAndDisplayToolCall(toolCall);
 
         if (result.requiresConfirmation) {
-          // Capture pending payload at confirmation time for create_lease
+          // Capture pending payload at confirmation time for deploy_app/create_lease
           const toolName = result.pendingAction?.toolName || toolCall.function.name;
-          const actionPayload = toolName === 'create_lease' ? pendingPayloadRef.current ?? undefined : undefined;
+          const actionPayload = (toolName === 'deploy_app' || toolName === 'create_lease')
+            ? pendingPayloadRef.current ?? undefined
+            : undefined;
 
           // Set pending confirmation and stop the loop
           setPendingConfirmation({
@@ -709,6 +718,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
       addMessage(userMessage);
       setIsStreaming(true);
+      setDeployProgress(null);
 
       abortControllerRef.current = new AbortController();
 
@@ -842,12 +852,26 @@ export function AIProvider({ children }: { children: ReactNode }) {
     abortControllerRef.current = new AbortController();
 
     try {
+      // Clear deploy progress at start of confirmed execution
+      setDeployProgress(null);
+
       const result = await executeConfirmedTool(
         action.toolName,
         action.args,
         clientManager,
-        address,
-        signArbitrary,
+        {
+          clientManager,
+          address,
+          signArbitrary,
+          onProgress: setDeployProgress,
+          appRegistry: {
+            getApps: appRegistry.getApps,
+            getApp: appRegistry.getApp,
+            getAppByLease: appRegistry.getAppByLease,
+            addApp: appRegistry.addApp,
+            updateApp: appRegistry.updateApp,
+          },
+        },
         action.payload
       );
 
@@ -918,6 +942,16 @@ export function AIProvider({ children }: { children: ReactNode }) {
     }
   }, [pendingConfirmation, settings, toOllamaMessages, updateMessageById, createAssistantMessage, addMessage, getCurrentMessages, scheduleStreamingUpdate, flushPendingUpdate]);
 
+  // Clear deploy progress on wallet change
+  const setAddress = useCallback((address: string | undefined) => {
+    // Clear cached query results when wallet changes to prevent serving stale data
+    if (address !== addressRef.current) {
+      toolCacheRef.current.clear();
+      setDeployProgress(null);
+    }
+    addressRef.current = address;
+  }, []);
+
   // Cancel a pending action
   const cancelAction = useCallback(() => {
     if (!pendingConfirmation) return;
@@ -975,6 +1009,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       availableModels,
       pendingConfirmation,
       pendingPayload,
+      deployProgress,
       setIsOpen,
       sendMessage,
       updateSettings,
@@ -997,6 +1032,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       availableModels,
       pendingConfirmation,
       pendingPayload,
+      deployProgress,
       sendMessage,
       updateSettings,
       clearHistory,

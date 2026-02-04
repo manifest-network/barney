@@ -10,13 +10,11 @@ import { makeWeb3AuthWallets } from '@cosmos-kit/web3auth';
 
 import '@interchain-ui/react/styles';
 import './index.css';
-import App from './App.tsx';
 import { manifestLocalChain, manifestLocalAssets } from './config/chain';
 import { ToastProvider } from './contexts/ToastContext';
 import { ToastContainer } from './components/ui/Toast';
 import { AIProvider } from './contexts/AIContext';
-import { AIAssistant } from './components/ai';
-import { AutoRefreshProvider } from './contexts/AutoRefreshContext';
+import { AppShell } from './components/layout/AppShell';
 
 // Web3Auth configuration
 const WEB3AUTH_CLIENT_ID = import.meta.env.PUBLIC_WEB3AUTH_CLIENT_ID || 'YOUR_WEB3AUTH_CLIENT_ID';
@@ -79,13 +77,10 @@ createRoot(rootElement).render(
       }}
     >
       <ToastProvider>
-        <AutoRefreshProvider>
-          <AIProvider>
-            <App />
-            <AIAssistant />
-            <ToastContainer />
-          </AIProvider>
-        </AutoRefreshProvider>
+        <AIProvider>
+          <AppShell />
+          <ToastContainer />
+        </AIProvider>
       </ToastProvider>
     </ChainProvider>
   </StrictMode>
