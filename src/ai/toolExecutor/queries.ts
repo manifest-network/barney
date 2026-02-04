@@ -19,6 +19,30 @@ import { isValidUUID, parseJsonStringArray, toBool } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import type { ToolResult } from './types';
 
+type LeaseStateParam = Parameters<typeof getLeasesByTenant>[1];
+
+/**
+ * Normalize a raw lease state filter string into a LeaseState enum value.
+ * Returns `{ state }` on success or `{ error }` on invalid input.
+ */
+export function normalizeLeaseStateFilter(
+  raw: string | undefined
+): { state: LeaseStateParam; error?: never } | { state?: never; error: string } {
+  if (!raw) return { state: undefined };
+
+  const normalized = raw.toLowerCase();
+
+  if (!LEASE_STATE_FILTERS.includes(normalized as (typeof LEASE_STATE_FILTERS)[number])) {
+    return {
+      error: `Invalid state filter: "${raw}". Valid values are: ${LEASE_STATE_FILTERS.join(', ')}`,
+    };
+  }
+
+  if (normalized === 'all') return { state: undefined };
+
+  return { state: LEASE_STATE_MAP[normalized] };
+}
+
 /**
  * Execute a read-only tool (query).
  * Returns null if the tool is not a query tool.
@@ -64,25 +88,11 @@ export async function executeQuery(
         return { success: false, error: 'Wallet not connected' };
       }
 
-      const stateFilterRaw = args.state as string | undefined;
-      let state: Parameters<typeof getLeasesByTenant>[1] = undefined;
-
-      if (stateFilterRaw) {
-        // Normalize to lowercase for case-insensitive matching
-        const stateFilter = stateFilterRaw.toLowerCase();
-
-        // Validate against known state filters
-        if (!LEASE_STATE_FILTERS.includes(stateFilter as (typeof LEASE_STATE_FILTERS)[number])) {
-          return {
-            success: false,
-            error: `Invalid state filter: "${stateFilterRaw}". Valid values are: ${LEASE_STATE_FILTERS.join(', ')}`,
-          };
-        }
-
-        if (stateFilter !== 'all') {
-          state = LEASE_STATE_MAP[stateFilter];
-        }
+      const filterResult = normalizeLeaseStateFilter(args.state as string | undefined);
+      if (filterResult.error) {
+        return { success: false, error: filterResult.error };
       }
+      const state = filterResult.state;
 
       const leases = await getLeasesByTenant(address, state);
       return {

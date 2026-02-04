@@ -11,6 +11,67 @@ import { toHex } from '../../utils/hash';
 import type { ToolResult, SignResult, PayloadAttachment } from './types';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, computePayloadHash } from './utils';
 
+interface RawLeaseItem {
+  sku_uuid?: string;
+  sku_name?: string;
+  quantity: number;
+}
+
+interface SKULike {
+  uuid: string;
+  name: string;
+  providerUuid: string;
+}
+
+/**
+ * Resolve human-readable SKU names to UUIDs.
+ * Items that already have sku_uuid pass through unchanged.
+ * Returns `{ items }` on success or `{ error }` on failure.
+ */
+export function resolveSkuItems(
+  rawItems: RawLeaseItem[],
+  allSKUs: SKULike[] | undefined
+): { items: Array<{ sku_uuid: string; quantity: number }>; error?: never } | { items?: never; error: string } {
+  const items: Array<{ sku_uuid: string; quantity: number }> = [];
+
+  for (const item of rawItems) {
+    let uuid = item.sku_uuid;
+
+    if (!uuid && item.sku_name) {
+      if (!allSKUs) {
+        return { error: 'Failed to fetch SKU list for name resolution.' };
+      }
+      const matches = allSKUs.filter(
+        (s) => s.name.toLowerCase() === item.sku_name!.toLowerCase()
+      );
+      if (matches.length === 0) {
+        return {
+          error: `No SKU found with name "${item.sku_name}". Use get_skus to list available SKUs.`,
+        };
+      }
+      if (matches.length > 1) {
+        const details = matches
+          .map((s) => `${s.uuid} (provider ${s.providerUuid})`)
+          .join(', ');
+        return {
+          error: `Multiple SKUs found with name "${item.sku_name}": ${details}. Please specify the sku_uuid directly.`,
+        };
+      }
+      uuid = matches[0].uuid;
+    }
+
+    if (!uuid || !isValidUUID(uuid)) {
+      return {
+        error: `Invalid SKU UUID format: "${uuid}". SKU UUIDs must be valid UUIDs (e.g., "019beb87-09de-7000-beef-ae733e73ff23").`,
+      };
+    }
+
+    items.push({ sku_uuid: uuid, quantity: item.quantity });
+  }
+
+  return { items };
+}
+
 /**
  * Execute a confirmed transaction tool
  */
@@ -151,44 +212,11 @@ async function executeCreateLease(
     }
   }
 
-  const items: Array<{ sku_uuid: string; quantity: number }> = [];
-  for (const item of rawItems) {
-    let uuid = item.sku_uuid;
-
-    if (!uuid && item.sku_name) {
-      if (!allSKUs) {
-        return { success: false, error: 'Failed to fetch SKU list for name resolution.' };
-      }
-      const matches = allSKUs.filter(
-        (s) => s.name.toLowerCase() === item.sku_name!.toLowerCase()
-      );
-      if (matches.length === 0) {
-        return {
-          success: false,
-          error: `No SKU found with name "${item.sku_name}". Use get_skus to list available SKUs.`,
-        };
-      }
-      if (matches.length > 1) {
-        const details = matches
-          .map((s) => `${s.uuid} (provider ${s.providerUuid})`)
-          .join(', ');
-        return {
-          success: false,
-          error: `Multiple SKUs found with name "${item.sku_name}": ${details}. Please specify the sku_uuid directly.`,
-        };
-      }
-      uuid = matches[0].uuid;
-    }
-
-    if (!uuid || !isValidUUID(uuid)) {
-      return {
-        success: false,
-        error: `Invalid SKU UUID format: "${uuid}". SKU UUIDs must be valid UUIDs (e.g., "019beb87-09de-7000-beef-ae733e73ff23").`,
-      };
-    }
-
-    items.push({ sku_uuid: uuid, quantity: item.quantity });
+  const resolveResult = resolveSkuItems(rawItems, allSKUs);
+  if (resolveResult.error != null) {
+    return { success: false, error: resolveResult.error };
   }
+  const items = resolveResult.items;
 
   let metaHashHex: string | undefined;
   let payloadBytes: Uint8Array | undefined;
