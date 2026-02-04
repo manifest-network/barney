@@ -177,10 +177,9 @@ export interface GetAllLeasesParams {
   stateFilter?: LeaseState;
   limit?: number;
   offset?: number;
-  paginationKey?: string;
 }
 
-function buildPageRequest(params?: { limit?: number; offset?: number; paginationKey?: string; countTotal?: boolean }) {
+function buildPageRequest(params?: { limit?: number; offset?: number; countTotal?: boolean }) {
   if (!params) return undefined;
   return {
     key: new Uint8Array(),
@@ -197,7 +196,6 @@ export async function getAllLeases(params?: GetAllLeasesParams): Promise<Paginat
     pagination: buildPageRequest({
       limit: params?.limit,
       offset: params?.offset,
-      paginationKey: params?.paginationKey,
       countTotal: !!params?.limit,
     }),
     stateFilter: params?.stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
@@ -220,7 +218,6 @@ export interface PaginatedCreditsResponse {
 export interface GetAllCreditsParams {
   limit?: number;
   offset?: number;
-  paginationKey?: string;
 }
 
 /**
@@ -244,7 +241,6 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
     pagination: buildPageRequest({
       limit: params?.limit,
       offset: params?.offset,
-      paginationKey: params?.paginationKey,
       countTotal: !!params?.limit,
     }),
   });

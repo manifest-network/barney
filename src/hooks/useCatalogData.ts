@@ -8,7 +8,7 @@ import {
 import type { Provider, SKU, SKUParams } from '../api/sku';
 import { getProviderHealth } from '../api/provider-api';
 import { getLeasesBySKU, LeaseState } from '../api/billing';
-import { useAutoRefreshContext } from '../contexts/AutoRefreshContext';
+import { useAutoRefreshTab } from './useAutoRefreshTab';
 import { HEALTH_CHECK_TIMEOUT_MS } from '../config/constants';
 import type { HealthStatus } from '../components/tabs/catalog/types';
 
@@ -39,8 +39,6 @@ export function useCatalogData({ showInactive, selectedProvider }: UseCatalogDat
   const [skuUsage, setSkuUsage] = useState<Record<string, { active: number; total: number }>>({});
   const [skuUsageLoading, setSkuUsageLoading] = useState(false);
 
-  const { registerFetchFn, unregisterFetchFn } = useAutoRefreshContext();
-
   const fetchData = useCallback(async () => {
     try {
       setError(null);
@@ -63,10 +61,7 @@ export function useCatalogData({ showInactive, selectedProvider }: UseCatalogDat
     }
   }, [showInactive, selectedProvider]);
 
-  useEffect(() => {
-    registerFetchFn(fetchData);
-    return () => unregisterFetchFn();
-  }, [fetchData, registerFetchFn, unregisterFetchFn]);
+  useAutoRefreshTab(fetchData);
 
   // Fetch SKU usage stats (non-blocking)
   useEffect(() => {

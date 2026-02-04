@@ -83,7 +83,7 @@ Tab mounts → registers fetch → polls every 10s → local state → render
 
 **Important:** AutoRefreshContext uses a "last one wins" model — only one fetch function is active at a time. When a new tab mounts and registers its fetch, the previous tab's fetch is replaced. This assumes only one tab is mounted at a time (tabs unmount on switch via conditional rendering in `App.tsx`).
 
-Tabs are conditionally rendered based on `isProvider` and `isAdmin` roles checked in `App.tsx`. Each tab lives in its own subdirectory under `src/components/tabs/` (e.g., `tabs/leases/`, `tabs/catalog/`) with a barrel `index.ts` export.
+Tabs are conditionally rendered based on `isProvider` and `isAdmin` roles checked in `App.tsx`. Each tab lives in its own subdirectory under `src/components/tabs/` (e.g., `tabs/leases/`, `tabs/catalog/`) with a barrel `index.ts` export. **Exception:** `WalletTab` does not use `useAutoRefreshTab` since it has no polling data.
 
 ## Key Patterns
 
@@ -105,4 +105,4 @@ Defined in `src/config/chain.ts`:
 - Denoms: `umfx` (native), `factory/.../upwr` (PWR factory token) - both 6 decimals
 - Endpoints default to localhost (26657 RPC, 1317 REST)
 
-Environment variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_OLLAMA_URL`, `PUBLIC_OLLAMA_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`
+Environment variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_OLLAMA_URL`, `PUBLIC_OLLAMA_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`

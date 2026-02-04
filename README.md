@@ -4,7 +4,7 @@ A React-based dApp for managing cloud compute resources on the Manifest blockcha
 
 ## Features
 
-- **Wallet Integration**: Connect with Keplr, Leap, Cosmostation, Ledger, or Web3Auth
+- **Wallet Integration**: Connect with Keplr, Leap, Leap MetaMask Cosmos Snap, Cosmostation, Ledger, or Web3Auth
 - **Credit Management**: Fund and monitor your credit account for compute leases
 - **Lease Management**: Create, monitor, and close compute resource leases
 - **Provider Catalog**: Browse available compute providers and their SKUs
@@ -69,6 +69,9 @@ PUBLIC_WEB3AUTH_NETWORK=sapphire_devnet
 # Ollama AI settings (optional)
 PUBLIC_OLLAMA_URL=http://localhost:11434
 PUBLIC_OLLAMA_MODEL=llama3.2
+
+# Custom PWR token denom (optional, defaults to local factory address)
+# PUBLIC_PWR_DENOM=factory/manifest1.../upwr
 ```
 
 ## Project Structure

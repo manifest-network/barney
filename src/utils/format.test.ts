@@ -4,12 +4,14 @@ import {
   fromBaseUnits,
   parseBaseUnits,
   formatAmount,
+  formatPrice,
   formatDate,
   formatRelativeTime,
   formatFileSize,
   formatDuration,
   isValidUUID,
   parseJsonStringArray,
+  toBool,
 } from './format';
 
 describe('toBaseUnits', () => {
@@ -231,6 +233,57 @@ describe('isValidUUID', () => {
 
   it('is case insensitive', () => {
     expect(isValidUUID('550E8400-E29B-41D4-A716-446655440000')).toBe(true);
+  });
+});
+
+describe('toBool', () => {
+  it('returns true for boolean true', () => {
+    expect(toBool(true)).toBe(true);
+  });
+
+  it('returns true for string "true"', () => {
+    expect(toBool('true')).toBe(true);
+  });
+
+  it('returns false for boolean false', () => {
+    expect(toBool(false)).toBe(false);
+  });
+
+  it('returns false for string "false"', () => {
+    expect(toBool('false')).toBe(false);
+  });
+
+  it('returns false for other values', () => {
+    expect(toBool(null)).toBe(false);
+    expect(toBool(undefined)).toBe(false);
+    expect(toBool(0)).toBe(false);
+    expect(toBool(1)).toBe(false);
+    expect(toBool('yes')).toBe(false);
+    expect(toBool('')).toBe(false);
+  });
+});
+
+describe('formatPrice', () => {
+  it('formats price without unit', () => {
+    expect(formatPrice('1000000', 'umfx')).toBe('1 MFX');
+  });
+
+  it('formats price with per-hour unit', () => {
+    // Unit enum value 1 = UNIT_PER_HOUR
+    expect(formatPrice('1000000', 'umfx', 1)).toBe('1 MFX/hr');
+  });
+
+  it('formats price with per-day unit', () => {
+    // Unit enum value 2 = UNIT_PER_DAY
+    expect(formatPrice('1000000', 'umfx', 2)).toBe('1 MFX/day');
+  });
+
+  it('handles zero amounts', () => {
+    expect(formatPrice('0', 'umfx')).toBe('0 MFX');
+  });
+
+  it('handles invalid amounts', () => {
+    expect(formatPrice('invalid', 'umfx')).toBe('0 MFX');
   });
 });
 

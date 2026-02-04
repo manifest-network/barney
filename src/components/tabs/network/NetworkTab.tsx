@@ -20,9 +20,9 @@ import { Pagination } from '../../ui/Pagination';
 import { NetworkLeaseCard } from './NetworkLeaseCard';
 import { NetworkCreditCard } from './NetworkCreditCard';
 import { DEFAULT_PAGE_SIZE } from '../../../config/constants';
-import type { ViewMode } from './types';
+import type { ViewMode, NetworkTabProps } from './types';
 
-export function NetworkTab({ isConnected, onConnect, isAdmin }: { isConnected: boolean; onConnect: () => void; isAdmin: boolean }) {
+export function NetworkTab({ isConnected, onConnect, isAdmin }: NetworkTabProps) {
   // View mode
   const [viewMode, setViewMode] = useState<ViewMode>('leases');
 

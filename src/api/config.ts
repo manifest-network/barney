@@ -6,7 +6,7 @@ export const RPC_ENDPOINT = import.meta.env.PUBLIC_RPC_URL || 'http://localhost:
 
 export const DENOMS = {
   MFX: 'umfx',
-  PWR: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr',
+  PWR: import.meta.env.PUBLIC_PWR_DENOM || 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr',
 } as const;
 
 export const DENOM_METADATA: Record<string, { symbol: string; exponent: number }> = {
