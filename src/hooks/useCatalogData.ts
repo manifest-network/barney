@@ -65,9 +65,12 @@ export function useCatalogData({ showInactive, selectedProvider }: UseCatalogDat
 
   // Fetch SKU usage stats (non-blocking)
   useEffect(() => {
-    if (skus.length === 0) return;
+    if (skus.length === 0) {
+      setSkuUsageLoading(false);
+      return;
+    }
 
-    const abortController = new AbortController();
+    let cancelled = false;
 
     const fetchSkuUsage = async () => {
       setSkuUsageLoading(true);
@@ -75,7 +78,7 @@ export function useCatalogData({ showInactive, selectedProvider }: UseCatalogDat
 
       await Promise.all(
         skus.map(async (sku) => {
-          if (abortController.signal.aborted) return;
+          if (cancelled) return;
           try {
             const [activeLeases, allLeases] = await Promise.all([
               getLeasesBySKU(sku.uuid, LeaseState.LEASE_STATE_ACTIVE),
@@ -91,7 +94,7 @@ export function useCatalogData({ showInactive, selectedProvider }: UseCatalogDat
         })
       );
 
-      if (!abortController.signal.aborted) {
+      if (!cancelled) {
         setSkuUsage(usageRecord);
         setSkuUsageLoading(false);
       }
@@ -100,7 +103,8 @@ export function useCatalogData({ showInactive, selectedProvider }: UseCatalogDat
     fetchSkuUsage();
 
     return () => {
-      abortController.abort();
+      cancelled = true;
+      setSkuUsageLoading(false);
     };
   }, [skus]);
 

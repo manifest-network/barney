@@ -56,7 +56,7 @@ describe('isUrlSsrfSafe', () => {
     expect(isUrlSsrfSafe(url)).toBe(true);
   });
 
-  it('blocks private IP ranges in production', () => {
+  it('blocks private IP ranges', () => {
     // 10.x.x.x
     expect(isUrlSsrfSafe(new URL('http://10.0.0.1'))).toBe(false);
     // 192.168.x.x
