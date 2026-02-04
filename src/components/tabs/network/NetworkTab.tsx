@@ -6,7 +6,6 @@ import {
   leaseStateFromString,
   getAllLeases,
   getAllCredits,
-  getBillingParams,
   type PaginatedLeasesResponse,
   type PaginatedCreditsResponse,
 } from '../../../api/billing';
@@ -23,9 +22,7 @@ import { NetworkCreditCard } from './NetworkCreditCard';
 import { DEFAULT_PAGE_SIZE } from '../../../config/constants';
 import type { ViewMode } from './types';
 
-export function NetworkTab({ isConnected, address, onConnect }: { isConnected: boolean; address?: string; onConnect: () => void }) {
-  const [isAdmin, setIsAdmin] = useState(false);
-
+export function NetworkTab({ isConnected, onConnect, isAdmin }: { isConnected: boolean; onConnect: () => void; isAdmin: boolean }) {
   // View mode
   const [viewMode, setViewMode] = useState<ViewMode>('leases');
 
@@ -55,25 +52,6 @@ export function NetworkTab({ isConnected, address, onConnect }: { isConnected: b
     totalProviders: number;
     totalSKUs: number;
   } | null>(null);
-
-  // Check if user is admin
-  useEffect(() => {
-    const checkAdmin = async () => {
-      if (!address) {
-        setIsAdmin(false);
-        return;
-      }
-
-      try {
-        const params = await getBillingParams();
-        setIsAdmin(params.allowedList.includes(address));
-      } catch {
-        setIsAdmin(false);
-      }
-    };
-
-    checkAdmin();
-  }, [address]);
 
   // Fetch reference data (providers, SKUs) and stats
   const fetchReferenceData = useCallback(async () => {

@@ -24,15 +24,18 @@ export function parseHttpUrl(url: string): URL | null {
   return parsed;
 }
 
+/** Hostnames allowed through SSRF protection in DEV mode (for local Ollama, etc.) */
+const DEV_ALLOWED_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
 /**
  * Check whether a parsed URL targets a private/internal host.
  * Returns true if the URL is safe (not private), false if blocked.
- * In DEV mode, private hosts are allowed for local testing.
+ * In DEV mode, only localhost is allowed — other private ranges remain blocked.
  */
 export function isUrlSsrfSafe(parsed: URL): boolean {
-  const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
-  if (!isDev && isPrivateHost(parsed.hostname)) {
-    return false;
+  if (isPrivateHost(parsed.hostname)) {
+    const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
+    return isDev && DEV_ALLOWED_HOSTS.has(parsed.hostname.toLowerCase());
   }
   return true;
 }

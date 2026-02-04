@@ -42,6 +42,13 @@ function validateProviderUrl(url: string): URL {
 }
 
 /**
+ * Strips trailing slash from a validated URL and returns origin + pathname.
+ */
+function normalizeBaseUrl(validated: URL): string {
+  return validated.origin + validated.pathname.replace(/\/$/, '');
+}
+
+/**
  * Build a fetch URL and headers for provider API requests.
  * In development, routes through the CORS proxy with X-Proxy-Target header.
  */
@@ -158,7 +165,7 @@ export async function getLeaseConnectionInfo(
 ): Promise<LeaseConnectionResponse> {
   // Validate and normalize the API URL
   const validatedUrl = validateProviderUrl(providerApiUrl);
-  const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
+  const baseUrl = normalizeBaseUrl(validatedUrl);
 
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
   const { url, headers } = buildProviderFetchArgs(
@@ -202,7 +209,7 @@ export async function getProviderHealth(
     return null;
   }
 
-  const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
+  const baseUrl = normalizeBaseUrl(validatedUrl);
 
   const { url, headers } = buildProviderFetchArgs(baseUrl, '/health');
 
@@ -284,7 +291,7 @@ export async function uploadLeaseData(
 ): Promise<void> {
   // Validate and normalize the API URL
   const validatedUrl = validateProviderUrl(providerApiUrl);
-  const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
+  const baseUrl = normalizeBaseUrl(validatedUrl);
 
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
   const { url, headers } = buildProviderFetchArgs(

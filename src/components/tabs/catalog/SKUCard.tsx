@@ -1,5 +1,6 @@
-import { Copy, Check, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useCopyToClipboard } from '../../../hooks/useCopyToClipboard';
+import { CopyButton } from '../../ui/CopyButton';
 import { formatPrice } from '../../../utils/format';
 import type { SKUCardProps } from './types';
 
@@ -11,7 +12,7 @@ export function SKUCard({
   onEdit,
   onDeactivate,
 }: SKUCardProps) {
-  const { copied, copyToClipboard } = useCopyToClipboard();
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
 
   return (
     <div className="catalog-sku-card" data-status={sku.active ? 'active' : 'inactive'}>
@@ -33,17 +34,13 @@ export function SKUCard({
             <span className="catalog-sku-labeled-field" data-field="address">
               <span className="catalog-sku-label">Address</span>
               <code className="catalog-sku-mono">{providerAddress}</code>
-              <button onClick={() => copyToClipboard(providerAddress)} className="catalog-copy-btn" title="Copy Address">
-                <Copy size={10} />
-              </button>
+              <CopyButton value={providerAddress} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy Address" className="catalog-copy-btn" />
             </span>
 
             <span className="catalog-sku-labeled-field" data-field="uuid">
               <span className="catalog-sku-label">UUID</span>
               <code className="catalog-sku-mono">{sku.uuid}</code>
-              <button onClick={() => copyToClipboard(sku.uuid)} className="catalog-copy-btn" title="Copy UUID">
-                {copied ? <Check size={10} /> : <Copy size={10} />}
-              </button>
+              <CopyButton value={sku.uuid} copyToClipboard={copyToClipboard} isCopied={isCopied} title="Copy UUID" className="catalog-copy-btn" />
             </span>
           </div>
 

@@ -4,7 +4,15 @@
  */
 
 import { Copy, Check } from 'lucide-react';
-import type { CopyButtonProps } from './types';
+
+export interface CopyButtonProps {
+  value: string;
+  copyToClipboard: (text: string) => void;
+  isCopied: (text: string) => boolean;
+  title?: string;
+  stopPropagation?: boolean;
+  className?: string;
+}
 
 export function CopyButton({
   value,
@@ -12,6 +20,7 @@ export function CopyButton({
   isCopied,
   title = 'Copy',
   stopPropagation = false,
+  className = 'lease-card-copy-btn',
 }: CopyButtonProps) {
   const copied = isCopied(value);
   return (
@@ -20,7 +29,7 @@ export function CopyButton({
         if (stopPropagation) e.stopPropagation();
         copyToClipboard(value);
       }}
-      className={`lease-card-copy-btn ${copied ? 'copied' : ''}`}
+      className={`${className} ${copied ? 'copied' : ''}`}
       title={copied ? 'Copied!' : title}
     >
       {copied ? <Check size={10} /> : <Copy size={10} />}

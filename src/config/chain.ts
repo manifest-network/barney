@@ -1,4 +1,5 @@
 import type { Chain, AssetList } from '@chain-registry/types';
+import { REST_URL, RPC_ENDPOINT } from '../api/config';
 
 /**
  * The chain name used for cosmos-kit and chain registry lookups.
@@ -30,8 +31,8 @@ export const manifestLocalChain: Chain = {
     staking_tokens: [{ denom: 'umfx' }],
   },
   apis: {
-    rpc: [{ address: 'http://localhost:26657', provider: 'local' }],
-    rest: [{ address: 'http://localhost:1317', provider: 'local' }],
+    rpc: [{ address: RPC_ENDPOINT, provider: 'local' }],
+    rest: [{ address: REST_URL, provider: 'local' }],
     grpc: [{ address: 'localhost:9090', provider: 'local' }],
   },
 };

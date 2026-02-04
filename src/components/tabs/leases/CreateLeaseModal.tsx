@@ -3,13 +3,13 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { X } from 'lucide-react';
 import { truncateAddress } from '../../../utils/address';
 import { useLeaseItems } from '../../../hooks/useLeaseItems';
 import { calculateEstimatedCost, isValidLeaseItem } from '../../../utils/pricing';
 import { sha256, toHex, validatePayloadSize, getPayloadSize, MAX_PAYLOAD_SIZE } from '../../../utils/hash';
 import { validateFile } from '../../../utils/fileValidation';
 import { LeaseItemsEditor } from '../../ui/LeaseItemsEditor';
+import { Modal } from '../../ui/Modal';
 import type { CreateLeaseModalProps } from './types';
 
 export function CreateLeaseModal({
@@ -114,120 +114,106 @@ export function CreateLeaseModal({
   const estimatedCost = calculateEstimatedCost(items, skus);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="card-static w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="sticky top-0 z-10 flex items-center justify-between p-4 border-b border-surface-700 bg-surface-900/95 backdrop-blur">
-          <h3 className="text-lg font-heading font-semibold">Create Lease</h3>
-          <button
-            onClick={onClose}
-            className="text-muted hover:text-primary p-1"
+    <Modal isOpen onClose={() => { if (!loading) onClose(); }} title="Create Lease" size="lg">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Provider Selection */}
+        <div>
+          <label className="mb-1 block text-sm text-muted">Provider</label>
+          <select
+            value={selectedProvider}
+            onChange={(e) => {
+              setSelectedProvider(e.target.value);
+              resetItems();
+            }}
+            className="input select w-full"
+            required
             disabled={loading}
-            aria-label="Close modal"
           >
-            <X size={18} />
-          </button>
+            <option value="">Select a provider...</option>
+            {providers.map((p) => (
+              <option key={p.uuid} value={p.uuid}>
+                {truncateAddress(p.address)}
+              </option>
+            ))}
+          </select>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
-          {/* Provider Selection */}
+        {/* SKU Items */}
+        {selectedProvider && (
+          <LeaseItemsEditor
+            items={items}
+            skus={providerSKUs}
+            onAddItem={addItem}
+            onRemoveItem={removeItem}
+            onUpdateItem={updateItem}
+            disabled={loading}
+            emptyMessage="No active SKUs for this provider"
+          />
+        )}
+
+        {/* Deployment Payload */}
+        {selectedProvider && (
           <div>
-            <label className="mb-1 block text-sm text-muted">Provider</label>
-            <select
-              value={selectedProvider}
-              onChange={(e) => {
-                setSelectedProvider(e.target.value);
-                resetItems();
-              }}
-              className="input select w-full"
-              required
+            <div className="mb-2 flex items-center justify-between">
+              <label className="text-sm text-muted">Deployment Payload (optional)</label>
+              <label className="cursor-pointer text-sm text-primary-400 hover:text-primary-300">
+                <input
+                  type="file"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                  accept=".yaml,.yml,.json,.txt"
+                  disabled={loading}
+                />
+                Upload File
+              </label>
+            </div>
+            <textarea
+              value={payloadText}
+              onChange={(e) => setPayloadText(e.target.value)}
+              placeholder="Paste your deployment manifest here..."
+              rows={4}
+              className="input w-full font-mono text-sm"
               disabled={loading}
-            >
-              <option value="">Select a provider...</option>
-              {providers.map((p) => (
-                <option key={p.uuid} value={p.uuid}>
-                  {truncateAddress(p.address)}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* SKU Items */}
-          {selectedProvider && (
-            <LeaseItemsEditor
-              items={items}
-              skus={providerSKUs}
-              onAddItem={addItem}
-              onRemoveItem={removeItem}
-              onUpdateItem={updateItem}
-              disabled={loading}
-              emptyMessage="No active SKUs for this provider"
             />
-          )}
-
-          {/* Deployment Payload */}
-          {selectedProvider && (
-            <div>
-              <div className="mb-2 flex items-center justify-between">
-                <label className="text-sm text-muted">Deployment Payload (optional)</label>
-                <label className="cursor-pointer text-sm text-primary-400 hover:text-primary-300">
-                  <input
-                    type="file"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                    accept=".yaml,.yml,.json,.txt"
-                    disabled={loading}
-                  />
-                  Upload File
-                </label>
-              </div>
-              <textarea
-                value={payloadText}
-                onChange={(e) => setPayloadText(e.target.value)}
-                placeholder="Paste your deployment manifest here..."
-                rows={4}
-                className="input w-full font-mono text-sm"
-                disabled={loading}
-              />
-              <div className="mt-1 flex items-center justify-between text-xs">
-                <span className={payloadError ? 'text-error' : 'text-dim'}>
-                  {payloadError || `${getPayloadSize(payloadText).toLocaleString()} / ${(MAX_PAYLOAD_SIZE / 1024).toFixed(0)}KB`}
+            <div className="mt-1 flex items-center justify-between text-xs">
+              <span className={payloadError ? 'text-error' : 'text-dim'}>
+                {payloadError || `${getPayloadSize(payloadText).toLocaleString()} / ${(MAX_PAYLOAD_SIZE / 1024).toFixed(0)}KB`}
+              </span>
+              {payloadHash && (
+                <span className="font-mono text-dim" title={payloadHash}>
+                  SHA-256: {payloadHash.slice(0, 12)}...
                 </span>
-                {payloadHash && (
-                  <span className="font-mono text-dim" title={payloadHash}>
-                    SHA-256: {payloadHash.slice(0, 12)}...
-                  </span>
-                )}
-              </div>
+              )}
             </div>
-          )}
-
-          {/* Estimated Cost */}
-          {estimatedCost && (
-            <div className="rounded-lg bg-surface-800/50 p-3">
-              <div className="text-sm text-muted">Estimated Cost</div>
-              <div className="text-lg font-medium text-success">{estimatedCost}</div>
-            </div>
-          )}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn btn-ghost"
-              disabled={loading}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading || !selectedProvider || !items.every(isValidLeaseItem) || !!payloadError}
-              className="btn btn-primary"
-            >
-              {loading ? 'Creating...' : 'Create Lease'}
-            </button>
           </div>
-        </form>
-      </div>
-    </div>
+        )}
+
+        {/* Estimated Cost */}
+        {estimatedCost && (
+          <div className="rounded-lg bg-surface-800/50 p-3">
+            <div className="text-sm text-muted">Estimated Cost</div>
+            <div className="text-lg font-medium text-success">{estimatedCost}</div>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn btn-ghost"
+            disabled={loading}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={loading || !selectedProvider || !items.every(isValidLeaseItem) || !!payloadError}
+            className="btn btn-primary"
+          >
+            {loading ? 'Creating...' : 'Create Lease'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
