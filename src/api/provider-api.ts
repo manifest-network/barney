@@ -134,10 +134,7 @@ export interface AuthToken {
   timestamp: number;
   pub_key: string;
   signature: string;
-}
-
-export interface AuthTokenWithMetaHash extends AuthToken {
-  meta_hash: string;
+  meta_hash?: string;
 }
 
 /**
@@ -157,13 +154,15 @@ export function createLeaseDataSignMessage(leaseUuid: string, metaHashHex: strin
 
 /**
  * Creates a base64-encoded auth token from the signed data.
+ * When metaHashHex is provided, the token includes meta_hash for payload verification.
  */
 export function createAuthToken(
   tenant: string,
   leaseUuid: string,
   timestamp: number,
   pubKeyBase64: string,
-  signatureBase64: string
+  signatureBase64: string,
+  metaHashHex?: string
 ): string {
   const token: AuthToken = {
     tenant,
@@ -172,6 +171,10 @@ export function createAuthToken(
     pub_key: pubKeyBase64,
     signature: signatureBase64,
   };
+
+  if (metaHashHex) {
+    token.meta_hash = metaHashHex;
+  }
 
   return btoa(JSON.stringify(token));
 }
@@ -246,7 +249,19 @@ export async function getProviderHealth(
       return null;
     }
 
-    return response.json();
+    const data: unknown = await response.json();
+
+    // Validate response shape — provider could return unexpected JSON
+    if (
+      !data ||
+      typeof data !== 'object' ||
+      !('status' in data) ||
+      (data.status !== 'healthy' && data.status !== 'unhealthy')
+    ) {
+      return null;
+    }
+
+    return data as ProviderHealthResponse;
   } catch (error) {
     logError('provider-api.getProviderHealth.fetch', error);
     return null;
@@ -268,29 +283,6 @@ export function isValidMetaHash(hash: string): boolean {
   return /^[0-9a-f]{64}$/i.test(hash);
 }
 
-/**
- * Creates a base64-encoded auth token for lease data upload.
- * Includes meta_hash for payload verification.
- */
-export function createLeaseDataAuthToken(
-  tenant: string,
-  leaseUuid: string,
-  metaHashHex: string,
-  timestamp: number,
-  pubKeyBase64: string,
-  signatureBase64: string
-): string {
-  const token: AuthTokenWithMetaHash = {
-    tenant,
-    lease_uuid: leaseUuid,
-    meta_hash: metaHashHex,
-    timestamp,
-    pub_key: pubKeyBase64,
-    signature: signatureBase64,
-  };
-
-  return btoa(JSON.stringify(token));
-}
 
 /**
  * Uploads lease payload data to the provider's API.

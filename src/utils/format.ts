@@ -19,7 +19,16 @@ import type { Unit } from '../api/sku';
  */
 export function toBaseUnits(amount: number, denom: string): string {
   const { exponent } = getDenomMetadata(denom);
-  return (amount * Math.pow(10, exponent)).toFixed(0);
+  // Round to the token's decimal precision first, then shift the decimal point
+  // via string manipulation to avoid floating-point errors from multiplication.
+  const fixed = amount.toFixed(exponent);
+  const dotIndex = fixed.indexOf('.');
+  if (dotIndex === -1) {
+    return fixed + '0'.repeat(exponent);
+  }
+  const raw = fixed.slice(0, dotIndex) + fixed.slice(dotIndex + 1);
+  // Strip leading zeros, preserving at least "0"
+  return raw.replace(/^0+(?=\d)/, '');
 }
 
 /**

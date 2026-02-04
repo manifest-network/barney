@@ -3,7 +3,6 @@ import {
   createSignMessage,
   createLeaseDataSignMessage,
   createAuthToken,
-  createLeaseDataAuthToken,
   isValidMetaHash,
 } from './provider-api';
 
@@ -47,10 +46,10 @@ describe('createAuthToken', () => {
   });
 });
 
-describe('createLeaseDataAuthToken', () => {
-  it('includes meta_hash in the token', () => {
+describe('createAuthToken with metaHashHex', () => {
+  it('includes meta_hash in the token when provided', () => {
     const hash = 'b'.repeat(64);
-    const token = createLeaseDataAuthToken('manifest1abc', 'uuid-789', hash, 1700000000, 'pubkey==', 'sig==');
+    const token = createAuthToken('manifest1abc', 'uuid-789', 1700000000, 'pubkey==', 'sig==', hash);
     const decoded = JSON.parse(atob(token));
 
     expect(decoded).toEqual({
@@ -61,6 +60,13 @@ describe('createLeaseDataAuthToken', () => {
       pub_key: 'pubkey==',
       signature: 'sig==',
     });
+  });
+
+  it('omits meta_hash from token when not provided', () => {
+    const token = createAuthToken('manifest1abc', 'uuid-123', 1700000000, 'pubkey==', 'sig==');
+    const decoded = JSON.parse(atob(token));
+
+    expect(decoded).not.toHaveProperty('meta_hash');
   });
 });
 

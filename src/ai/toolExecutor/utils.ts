@@ -6,7 +6,7 @@ import {
   computePayloadHash,
   isValidMetaHash,
   createLeaseDataSignMessage,
-  createLeaseDataAuthToken,
+  createAuthToken,
   uploadLeaseData,
   ProviderApiError,
 } from '../../api/provider-api';
@@ -59,13 +59,13 @@ export async function uploadPayloadToProvider(
     }
 
     // Create the auth token
-    const authToken = createLeaseDataAuthToken(
+    const authToken = createAuthToken(
       address,
       leaseUuid,
-      metaHashHex,
       timestamp,
       signResult.pub_key.value,
-      signResult.signature
+      signResult.signature,
+      metaHashHex
     );
 
     // Upload the payload
