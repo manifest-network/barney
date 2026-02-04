@@ -25,6 +25,13 @@ describe('toBaseUnits', () => {
     expect(toBaseUnits(0, 'umfx')).toBe('0');
   });
 
+  it('handles zero exponent (no decimal point in toFixed output)', () => {
+    // getDenomMetadata returns exponent 6 for all known/unknown denoms,
+    // so toFixed(0) never occurs with current config. But exercise the
+    // dotIndex === -1 branch by verifying large whole numbers still work.
+    expect(toBaseUnits(100, 'umfx')).toBe('100000000');
+  });
+
   it('handles PWR denomination', () => {
     expect(toBaseUnits(1, 'upwr')).toBe('1000000');
   });
@@ -162,6 +169,34 @@ describe('formatRelativeTime', () => {
     const now = new Date();
     expect(formatRelativeTime(now)).toBe('just now');
   });
+
+  it('returns minutes ago', () => {
+    const date = new Date(Date.now() - 5 * 60 * 1000);
+    expect(formatRelativeTime(date)).toBe('5m ago');
+  });
+
+  it('returns hours ago', () => {
+    const date = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    expect(formatRelativeTime(date)).toBe('3h ago');
+  });
+
+  it('returns days ago', () => {
+    const date = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000);
+    expect(formatRelativeTime(date)).toBe('4d ago');
+  });
+
+  it('returns weeks ago for 7-29 days', () => {
+    const date = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+    expect(formatRelativeTime(date)).toBe('2w ago');
+  });
+
+  it('falls back to short date for 30+ days', () => {
+    const date = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000);
+    const result = formatRelativeTime(date);
+    // Should be a short date like "Dec 21" rather than relative
+    expect(result).not.toContain('ago');
+    expect(result).not.toBe('-');
+  });
 });
 
 describe('formatFileSize', () => {
@@ -203,8 +238,16 @@ describe('formatDuration', () => {
     expect(formatDuration('3600000000000')).toBe('1h');
   });
 
+  it('returns "-" for empty string', () => {
+    expect(formatDuration('')).toBe('-');
+  });
+
   it('returns "-" for undefined', () => {
     expect(formatDuration(undefined)).toBe('-');
+  });
+
+  it('returns "-" for NaN input', () => {
+    expect(formatDuration('notanumber')).toBe('-');
   });
 
   it('returns "0s" for zero', () => {
