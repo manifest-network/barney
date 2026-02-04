@@ -4,6 +4,7 @@
 
 import type { FilterTabsProps } from './types';
 import type { LeaseFilterState } from '../../../utils/leaseState';
+import { cn } from '../../../utils/cn';
 
 const FILTERS: { key: LeaseFilterState; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -19,8 +20,10 @@ export function FilterTabs({ activeFilter, onChange, counts }: FilterTabsProps) 
       {FILTERS.map(({ key, label }) => (
         <button
           key={key}
+          type="button"
           onClick={() => onChange(key)}
-          className={`filter-tab ${activeFilter === key ? 'active' : ''}`}
+          className={cn('filter-tab', activeFilter === key && 'active')}
+          aria-pressed={activeFilter === key}
           data-state={key}
           data-has-items={counts[key] > 0 ? 'true' : 'false'}
         >

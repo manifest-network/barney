@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 
 export interface UseBatchSelectionReturn {
   selected: Set<string>;
@@ -37,5 +37,8 @@ export function useBatchSelection(): UseBatchSelectionReturn {
 
   const has = useCallback((id: string) => selected.has(id), [selected]);
 
-  return { selected, toggle, selectAll, clear, has, count: selected.size };
+  return useMemo(
+    () => ({ selected, toggle, selectAll, clear, has, count: selected.size }),
+    [selected, toggle, selectAll, clear, has],
+  );
 }

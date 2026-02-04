@@ -1,5 +1,4 @@
 import { useState, useCallback } from 'react';
-import { useChain } from '@cosmos-kit/react';
 import { Link, Wallet, Clock, Flame, Loader2, Copy, Check, Zap, TrendingDown, Plus, ArrowRight, GitBranch, UserPlus } from 'lucide-react';
 import {
   getBalance,
@@ -10,14 +9,14 @@ import {
 } from '../../api';
 import { formatAmount, toBaseUnits, fromBaseUnits, parseBaseUnits } from '../../utils/format';
 import type { Coin } from '../../api/bank';
-import type { CreditAccountResponse, CreditEstimateResponse } from '../../api/billing';
+import type { QueryCreditAccountResponse, QueryCreditEstimateResponse } from '../../api/billing';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { useAutoRefreshTab } from '../../hooks/useAutoRefreshTab';
 import { useToast } from '../../hooks/useToast';
+import { useTxHandler } from '../../hooks/useTxHandler';
 import { EmptyState } from '../ui/EmptyState';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { truncateAddress, isValidManifestAddress } from '../../utils/address';
-import { CHAIN_NAME } from '../../config/chain';
 
 interface WalletTabProps {
   isConnected: boolean;
@@ -28,19 +27,18 @@ interface WalletTabProps {
 interface WalletData {
   mfxBalance: Coin | null;
   pwrBalance: Coin | null;
-  creditAccount: CreditAccountResponse | null;
-  creditEstimate: CreditEstimateResponse | null;
+  creditAccount: QueryCreditAccountResponse | null;
+  creditEstimate: QueryCreditEstimateResponse | null;
   loading: boolean;
   error: string | null;
 }
 
 export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
-  const { getOfflineSignerDirect } = useChain(CHAIN_NAME);
   const toast = useToast();
+  const { txLoading, executeTx } = useTxHandler();
   const { copied, copyToClipboard } = useCopyToClipboard();
   const [fundAmount, setFundAmount] = useState('');
   const [fundRecipient, setFundRecipient] = useState('');
-  const [txLoading, setTxLoading] = useState(false);
   const [data, setData] = useState<WalletData>({
     mfxBalance: null,
     pwrBalance: null,
@@ -103,35 +101,20 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
       return;
     }
 
-    setTxLoading(true);
+    const baseAmount = toBaseUnits(parsedAmount, DENOMS.PWR);
+    const target = tenant === address ? '' : ` for ${truncateAddress(tenant)}`;
 
-    try {
-      const signer = getOfflineSignerDirect();
-      if (!signer) {
-        throw new Error('Failed to get signer');
+    await executeTx(
+      (signer) => fundCredit(signer, address, tenant, { denom: DENOMS.PWR, amount: baseAmount }),
+      {
+        successMessage: (txHash) => `Funded ${fundAmount} PWR${target}! Tx: ${txHash}...`,
+        onSuccess: () => {
+          setFundAmount('');
+          setFundRecipient('');
+          refresh();
+        },
       }
-
-      const baseAmount = toBaseUnits(parsedAmount, DENOMS.PWR);
-
-      const result = await fundCredit(signer, address, tenant, {
-        denom: DENOMS.PWR,
-        amount: baseAmount,
-      });
-
-      if (result.success) {
-        const target = tenant === address ? '' : ` for ${truncateAddress(tenant)}`;
-        toast.success(`Funded ${fundAmount} PWR${target}! Tx: ${result.transactionHash?.slice(0, 16)}...`);
-        setFundAmount('');
-        setFundRecipient('');
-        refresh();
-      } else {
-        toast.error(result.error || 'Transaction failed');
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Transaction failed');
-    } finally {
-      setTxLoading(false);
-    }
+    );
   };
 
   const formatDuration = (seconds: number) => {
@@ -159,12 +142,12 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const creditPwrBalance = creditAccount?.balances?.find((b) => b.denom === DENOMS.PWR);
   const creditBalanceNum = creditPwrBalance ? fromBaseUnits(creditPwrBalance.amount, DENOMS.PWR) : 0;
   const pwrBalanceNum = pwrBalance ? fromBaseUnits(pwrBalance.amount, DENOMS.PWR) : 0;
-  const pwrRatePerSecond = creditEstimate?.total_rate_per_second?.find(
+  const pwrRatePerSecond = creditEstimate?.totalRatePerSecond?.find(
     (c) => c.denom === DENOMS.PWR || c.denom === 'upwr'
   );
   const burnRatePerHour = pwrRatePerSecond ? parseBaseUnits(pwrRatePerSecond.amount) * 3600 : 0;
-  const timeRemaining = creditEstimate?.estimated_duration_seconds
-    ? parseInt(creditEstimate.estimated_duration_seconds, 10)
+  const timeRemaining = creditEstimate?.estimatedDurationSeconds
+    ? Number(creditEstimate.estimatedDurationSeconds)
     : 0;
 
   // Determine credit health status
@@ -389,7 +372,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
               </div>
               <div className="wallet-credit-metric-content">
                 <span className="wallet-credit-metric-value">
-                  {creditAccount?.credit_account?.active_lease_count ?? 0}
+                  {String(creditAccount?.creditAccount?.activeLeaseCount ?? 0n)}
                 </span>
                 <span className="wallet-credit-metric-label">Active Leases</span>
               </div>
@@ -401,7 +384,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
               </div>
               <div className="wallet-credit-metric-content">
                 <span className="wallet-credit-metric-value">
-                  {creditAccount?.credit_account?.pending_lease_count ?? 0}
+                  {String(creditAccount?.creditAccount?.pendingLeaseCount ?? 0n)}
                 </span>
                 <span className="wallet-credit-metric-label">Pending Leases</span>
               </div>
@@ -409,7 +392,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
           </div>
 
           {/* Address Derivation Flow */}
-          {creditAccount?.credit_account?.credit_address && address && (
+          {creditAccount?.creditAccount?.creditAddress && address && (
             <div className="address-derivation">
               <div className="address-derivation-node" data-type="source">
                 <span className="address-derivation-label">Your Wallet</span>
@@ -425,9 +408,9 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
               <div className="address-derivation-node" data-type="derived">
                 <span className="address-derivation-label">Credit Account</span>
                 <div className="address-derivation-value-row">
-                  <code className="address-derivation-value">{truncateAddress(creditAccount.credit_account.credit_address, 11, 6)}</code>
+                  <code className="address-derivation-value">{truncateAddress(creditAccount.creditAccount.creditAddress, 11, 6)}</code>
                   <button
-                    onClick={() => copyToClipboard(creditAccount.credit_account?.credit_address || '')}
+                    onClick={() => copyToClipboard(creditAccount.creditAccount?.creditAddress || '')}
                     className="address-derivation-copy"
                     title="Copy credit address"
                   >

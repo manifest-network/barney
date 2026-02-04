@@ -2,7 +2,8 @@
  * Shared formatting utilities
  */
 
-import { DENOM_METADATA } from '../api/config';
+import { DENOM_METADATA, UNIT_LABELS } from '../api/config';
+import type { Unit } from '../api/sku';
 
 // ============================================
 // Amount Conversion Utilities
@@ -77,39 +78,61 @@ export function formatAmount(amount: string, denom: string, maxDecimals = 6): st
 }
 
 /**
- * Format a date string for display.
+ * Format a price amount with symbol and optional unit label.
+ * Delegates to formatAmount for the core conversion, then appends a unit suffix.
+ *
+ * @param amount - Raw amount string (in base units, e.g., umfx)
+ * @param denom - Denomination string
+ * @param unit - Optional unit type for suffix (e.g., "/hr", "/day")
+ * @returns Formatted price string like "1.5 MFX/hr" or "0 SYMBOL" for invalid amounts
+ */
+export function formatPrice(amount: string, denom: string, unit?: Unit): string {
+  const base = formatAmount(amount, denom);
+  if (unit != null) {
+    const unitLabel = UNIT_LABELS[unit] ?? '';
+    return `${base}${unitLabel}`;
+  }
+  return base;
+}
+
+/**
+ * Parse a date input into a valid Date, returning null for
+ * undefined, Go zero time, invalid dates, and year <= 1.
+ */
+function parseValidDate(input: Date | string | undefined): Date | null {
+  if (!input) return null;
+  if (typeof input === 'string' && input === '0001-01-01T00:00:00Z') return null;
+  const date = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(date.getTime()) || date.getFullYear() <= 1) return null;
+  return date;
+}
+
+/**
+ * Format a date for display.
+ * Accepts Date objects (from manifestjs fromAmino), ISO strings, or undefined.
  * Handles null/empty dates, invalid dates, and the Go zero time.
  *
- * @param dateStr - ISO date string or undefined
+ * @param dateInput - Date object, ISO date string, or undefined
  * @param options - 'datetime' for full datetime, 'date' for date only (default: 'datetime')
  * @returns Formatted date string or '-' for invalid/empty dates
  */
-export function formatDate(dateStr: string | undefined, options: 'datetime' | 'date' = 'datetime'): string {
-  if (!dateStr || dateStr === '0001-01-01T00:00:00Z') {
-    return '-';
-  }
-  const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) {
-    return '-';
-  }
+export function formatDate(dateInput: Date | string | undefined, options: 'datetime' | 'date' = 'datetime'): string {
+  const date = parseValidDate(dateInput);
+  if (!date) return '-';
   return options === 'date' ? date.toLocaleDateString() : date.toLocaleString();
 }
 
 /**
  * Format a date as relative time (e.g., "2h ago", "3d ago").
+ * Accepts Date objects (from manifestjs fromAmino), ISO strings, or undefined.
  * Falls back to absolute date for older dates.
  *
- * @param dateStr - ISO date string or undefined
+ * @param dateInput - Date object, ISO date string, or undefined
  * @returns Relative time string or '-' for invalid dates
  */
-export function formatRelativeTime(dateStr: string | undefined): string {
-  if (!dateStr || dateStr === '0001-01-01T00:00:00Z') {
-    return '-';
-  }
-  const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) {
-    return '-';
-  }
+export function formatRelativeTime(dateInput: Date | string | undefined): string {
+  const date = parseValidDate(dateInput);
+  if (!date) return '-';
 
   const now = Date.now();
   const diffMs = now - date.getTime();
@@ -138,19 +161,24 @@ export function formatFileSize(bytes: number): string {
 }
 
 /**
- * Format a duration string into human-readable format.
+ * Format a duration into human-readable format.
+ * Accepts bigint (seconds from manifestjs fromAmino), string durations, or undefined.
  * Handles Go-style durations like "3600s", "7200000000000" (nanoseconds), or plain seconds.
  *
- * @param duration - Duration string (e.g., "3600s", "7200000000000", "3600")
+ * @param duration - Duration as bigint (seconds), string (e.g., "3600s", "7200000000000", "3600"), or undefined
  * @returns Human-readable string like "1h", "2h 30m", "45m", "30s"
  */
-export function formatDuration(duration: string | undefined): string {
-  if (!duration) return '-';
+export function formatDuration(duration: bigint | string | undefined): string {
+  if (duration == null) return '-';
 
   let totalSeconds: number;
 
-  // Handle Go duration format with 's' suffix
-  if (duration.endsWith('s')) {
+  if (typeof duration === 'bigint') {
+    totalSeconds = Number(duration);
+  } else if (duration === '') {
+    return '-';
+  } else if (duration.endsWith('s')) {
+    // Handle Go duration format with 's' suffix
     totalSeconds = parseInt(duration.slice(0, -1), 10);
   } else {
     const num = parseInt(duration, 10);
@@ -177,6 +205,14 @@ export function formatDuration(duration: string | undefined): string {
   if (seconds > 0 && days === 0 && hours === 0) parts.push(`${seconds}s`);
 
   return parts.length > 0 ? parts.join(' ') : '0s';
+}
+
+/**
+ * Coerce an unknown value to boolean.
+ * Handles both boolean `true` and string `"true"` from tool arguments.
+ */
+export function toBool(value: unknown): boolean {
+  return value === true || value === 'true';
 }
 
 /**

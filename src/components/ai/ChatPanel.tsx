@@ -7,6 +7,9 @@ import { AISettings } from './AISettings';
 import { MAX_INPUT_LENGTH } from '../../ai/validation';
 import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
 import { formatFileSize } from '../../utils/format';
+import { cn } from '../../utils/cn';
+
+const SUGGESTIONS = ["What's my balance?", "Show my active leases", "List available providers"];
 
 export function ChatPanel() {
   const {
@@ -127,7 +130,7 @@ export function ChatPanel() {
 
   return (
     <div
-      className={`chat-panel ${isExpanded ? 'chat-panel-expanded' : ''}`}
+      className={cn('chat-panel', isExpanded && 'chat-panel-expanded')}
       role="dialog"
       aria-label="AI Assistant chat panel"
       aria-modal="false"
@@ -203,30 +206,17 @@ export function ChatPanel() {
               Ask me about your balances, leases, or available providers.
             </p>
             <div className="chat-suggestions" role="group" aria-label="Suggested questions">
-              <button
-                type="button"
-                onClick={() => sendMessage("What's my balance?")}
-                className="chat-suggestion"
-                disabled={!isConnected || isStreaming}
-              >
-                What's my balance?
-              </button>
-              <button
-                type="button"
-                onClick={() => sendMessage("Show my active leases")}
-                className="chat-suggestion"
-                disabled={!isConnected || isStreaming}
-              >
-                Show my active leases
-              </button>
-              <button
-                type="button"
-                onClick={() => sendMessage("List available providers")}
-                className="chat-suggestion"
-                disabled={!isConnected || isStreaming}
-              >
-                List available providers
-              </button>
+              {SUGGESTIONS.map((text) => (
+                <button
+                  key={text}
+                  type="button"
+                  onClick={() => sendMessage(text)}
+                  className="chat-suggestion"
+                  disabled={!isConnected || isStreaming}
+                >
+                  {text}
+                </button>
+              ))}
             </div>
           </div>
         ) : (

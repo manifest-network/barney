@@ -45,17 +45,6 @@ export function toHex(bytes: Uint8Array): string {
 }
 
 /**
- * Converts a hex string to a Uint8Array.
- */
-export function fromHex(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-  }
-  return bytes;
-}
-
-/**
  * Maximum payload size in bytes (5KB).
  */
 export const MAX_PAYLOAD_SIZE = 5 * 1024;

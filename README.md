@@ -59,8 +59,12 @@ Create a `.env.local` file in the project root:
 
 ```env
 # Blockchain endpoints (optional, defaults shown)
-VITE_RPC_ENDPOINT=http://localhost:26657
-VITE_LCD_ENDPOINT=http://localhost:1317
+PUBLIC_REST_URL=http://localhost:1317
+PUBLIC_RPC_URL=http://localhost:26657
+
+# Web3Auth social login (optional - get a client ID at https://dashboard.web3auth.io)
+PUBLIC_WEB3AUTH_CLIENT_ID=your_web3auth_client_id_here
+PUBLIC_WEB3AUTH_NETWORK=sapphire_devnet
 
 # Ollama AI settings (optional)
 PUBLIC_OLLAMA_URL=http://localhost:11434

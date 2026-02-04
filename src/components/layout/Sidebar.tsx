@@ -3,6 +3,7 @@ import { SidebarItem } from './SidebarItem';
 import { SidebarSection } from './SidebarSection';
 import { useAutoRefreshContext } from '../../contexts/AutoRefreshContext';
 import { AUTO_REFRESH_INTERVAL_SECONDS } from '../../config/constants';
+import { cn } from '../../utils/cn';
 
 export type TabId = 'wallet' | 'catalog' | 'leases' | 'provider' | 'network';
 
@@ -94,12 +95,12 @@ export function Sidebar({ activeTab, onTabChange, isProvider, isAdmin }: Sidebar
             className="sidebar-refresh-btn"
             title="Refresh now"
           >
-            <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+            <RefreshCw size={14} className={cn(isRefreshing && 'animate-spin')} />
           </button>
           <div className="sidebar-refresh-info">
             <button
               onClick={toggle}
-              className={`sidebar-refresh-toggle ${isEnabled ? 'active' : ''}`}
+              className={cn('sidebar-refresh-toggle', isEnabled && 'active')}
               title={isEnabled ? 'Disable auto-refresh' : 'Enable auto-refresh'}
             >
               <span className="sidebar-refresh-toggle-knob" />

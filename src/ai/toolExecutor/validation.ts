@@ -25,7 +25,7 @@ export function validateConfirmationToolArgs(
         return 'Missing required argument: amount. Please specify an amount (e.g., "1000000umfx").';
       }
       // Basic format check - should be digits followed by denomination
-      if (!/^\d+[a-zA-Z]/.test(amount)) {
+      if (!/^\d+[a-zA-Z][a-zA-Z0-9/_.-]*$/.test(amount)) {
         return `Invalid amount format: "${amount}". Use format like "1000000umfx" or "10000000factory/...".`;
       }
       return null;
@@ -159,8 +159,10 @@ export function getConfirmationMessage(toolName: string, args: Record<string, un
       return `Close lease ${args.lease_uuid}${args.reason ? ` (reason: ${args.reason})` : ''}?`;
     case 'upload_payload':
       return `Upload deployment payload to lease ${args.lease_uuid}?`;
-    case 'cosmos_tx':
-      return `Execute transaction: ${args.module} ${args.subcommand}?`;
+    case 'cosmos_tx': {
+      const txArgsDisplay = args.args ? ` with args: ${typeof args.args === 'string' ? args.args : JSON.stringify(args.args)}` : '';
+      return `Execute transaction: ${args.module} ${args.subcommand}${txArgsDisplay}?`;
+    }
     default:
       return `Execute ${toolName}?`;
   }

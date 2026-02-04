@@ -4,62 +4,8 @@
  */
 
 import { logError } from '../utils/errors';
-import { AI_MAX_RETRIES, AI_RETRY_BASE_DELAY_MS, HEALTH_CHECK_TIMEOUT_MS } from '../config/constants';
-
-/**
- * Sleep for a given number of milliseconds
- */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Execute a function with exponential backoff retry logic.
- * Retries on transient network errors (connection refused, timeout, etc.)
- *
- * @param fn - The async function to execute
- * @param maxRetries - Maximum number of retry attempts
- * @param baseDelay - Base delay in milliseconds (doubles each retry)
- * @returns The result of the function
- */
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  maxRetries: number = AI_MAX_RETRIES,
-  baseDelay: number = AI_RETRY_BASE_DELAY_MS
-): Promise<T> {
-  let lastError: Error | undefined;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-
-      // Don't retry on abort or non-transient errors
-      if (lastError.name === 'AbortError') {
-        throw lastError;
-      }
-
-      // Check if error is transient (network-related)
-      const isTransient =
-        lastError.message.includes('fetch') ||
-        lastError.message.includes('network') ||
-        lastError.message.includes('ECONNREFUSED') ||
-        lastError.message.includes('timeout') ||
-        lastError.message.includes('Failed to fetch');
-
-      if (!isTransient || attempt === maxRetries) {
-        throw lastError;
-      }
-
-      // Exponential backoff with jitter
-      const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 100;
-      await sleep(delay);
-    }
-  }
-
-  throw lastError;
-}
+import { HEALTH_CHECK_TIMEOUT_MS } from '../config/constants';
+import { withRetry } from './utils';
 
 export interface OllamaMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -244,7 +190,7 @@ export async function* streamChat(
             const tcId = (tc as Record<string, unknown>).id;
             const id = (typeof tcId === 'string' && tcId)
               ? tcId
-              : `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+              : crypto.randomUUID();
 
             // Get function name with guard
             const funcName = funcObj.name;
@@ -322,9 +268,20 @@ export async function* streamChat(
  * @returns Array of available models, or empty array on failure
  */
 export async function listModels(endpoint: string): Promise<OllamaModel[]> {
+  let apiUrl: string;
+  try {
+    const url = new URL('/api/tags', endpoint);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return [];
+    }
+    apiUrl = url.href;
+  } catch {
+    return [];
+  }
+
   try {
     return await withRetry(async () => {
-      const response = await fetch(`${endpoint}/api/tags`);
+      const response = await fetch(apiUrl);
       if (!response.ok) {
         throw new Error(`Failed to fetch models: ${response.status}`);
       }
@@ -345,8 +302,19 @@ export async function listModels(endpoint: string): Promise<OllamaModel[]> {
  * @returns true if Ollama is healthy, false otherwise
  */
 export async function checkOllamaHealth(endpoint: string): Promise<boolean> {
+  let apiUrl: string;
   try {
-    const response = await fetch(`${endpoint}/api/tags`, {
+    const url = new URL('/api/tags', endpoint);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return false;
+    }
+    apiUrl = url.href;
+  } catch {
+    return false;
+  }
+
+  try {
+    const response = await fetch(apiUrl, {
       method: 'GET',
       signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
     });

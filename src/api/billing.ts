@@ -1,21 +1,23 @@
 import { liftedinit } from '@manifest-network/manifestjs';
-import { fetchJson, buildUrl, buildPaginationParams } from './utils';
+import type {
+  Params as BillingParams,
+  Lease,
+  LeaseItem,
+  CreditAccount,
+} from '@manifest-network/manifestjs/dist/codegen/liftedinit/billing/v1/types';
+import type {
+  QueryCreditAccountResponse,
+  QueryCreditEstimateResponse,
+  QueryProviderWithdrawableResponse,
+} from '@manifest-network/manifestjs/dist/codegen/liftedinit/billing/v1/query';
+import type { Coin } from '@manifest-network/manifestjs/dist/codegen/cosmos/base/v1beta1/coin';
+import type { PageResponse } from '@manifest-network/manifestjs/dist/codegen/cosmos/base/query/v1beta1/pagination';
+import { getQueryClient, queryWithNotFound, lcdConvert, fixEnumField } from './queryClient';
 import { logError } from '../utils/errors';
-import type { Coin } from './bank';
-import {
-  BillingParamsResponseSchema,
-  CreditAccountResponseSchema,
-  CreditAddressResponseSchema,
-  CreditEstimateResponseSchema,
-  LeasesResponseSchema,
-  LeaseResponseSchema,
-  WithdrawableAmountResponseSchema,
-  ProviderWithdrawableResponseSchema,
-  CreditsResponseSchema,
-  AllBalancesResponseSchema,
-  type RawLeaseValidated,
-  type CreditAccountValidated,
-} from './schemas';
+
+// Re-export manifestjs types for consumers (Coin is exported from bank.ts)
+export type { BillingParams, Lease, LeaseItem, CreditAccount };
+export type { QueryCreditEstimateResponse, QueryCreditAccountResponse, QueryProviderWithdrawableResponse };
 
 // Re-export LeaseState enum from manifestjs for type safety
 export const LeaseState = liftedinit.billing.v1.LeaseState;
@@ -24,26 +26,27 @@ export type LeaseState = (typeof LeaseState)[keyof typeof LeaseState];
 // Conversion functions from manifestjs
 const { leaseStateFromJSON: fromJSON, leaseStateToJSON: toJSON } = liftedinit.billing.v1;
 
-/**
- * Convert a lease state enum to its string representation.
- * Used for API URLs and HTML select option values.
- */
+// fromAmino converters for query responses
+const {
+  QueryParamsResponse: QueryParamsResponseConverter,
+  QueryLeaseResponse: QueryLeaseResponseConverter,
+  QueryLeasesResponse: QueryLeasesResponseConverter,
+  QueryCreditAccountResponse: QueryCreditAccountResponseConverter,
+  QueryCreditAddressResponse: QueryCreditAddressResponseConverter,
+  QueryWithdrawableAmountResponse: QueryWithdrawableAmountResponseConverter,
+  QueryProviderWithdrawableResponse: QueryProviderWithdrawableResponseConverter,
+  QueryCreditAccountsResponse: QueryCreditAccountsResponseConverter,
+  QueryCreditEstimateResponse: QueryCreditEstimateResponseConverter,
+} = liftedinit.billing.v1;
+
 export function leaseStateToString(state: LeaseState): string {
   return toJSON(state);
 }
 
-/**
- * Convert a lease state string to enum value.
- * Used for parsing API responses and HTML select values.
- */
 export function leaseStateFromString(state: string): LeaseState {
   return fromJSON(state);
 }
 
-/**
- * Mapping from user-friendly lease state names to enum values.
- * Used by AI tools to convert user input to API format.
- */
 export const LEASE_STATE_MAP: Record<string, LeaseState> = {
   pending: LeaseState.LEASE_STATE_PENDING,
   active: LeaseState.LEASE_STATE_ACTIVE,
@@ -52,216 +55,122 @@ export const LEASE_STATE_MAP: Record<string, LeaseState> = {
   expired: LeaseState.LEASE_STATE_EXPIRED,
 };
 
-/**
- * Valid user-friendly lease state filter values (includes 'all' for no filter)
- */
 export const LEASE_STATE_FILTERS = ['all', ...Object.keys(LEASE_STATE_MAP)] as const;
 
-export interface LeaseItem {
-  sku_uuid: string;
-  quantity: string;
-  locked_price: Coin;
+// fromAmino doesn't convert enum strings to numeric values; LCD returns strings like "LEASE_STATE_ACTIVE"
+// but LeaseState enum keys are numeric (0, 1, 2, ...). This fixes the mismatch.
+function fixLeaseEnums(lease: Lease): Lease {
+  return fixEnumField(lease, 'state', fromJSON);
 }
 
-export interface Lease {
-  uuid: string;
-  tenant: string;
-  provider_uuid: string;
-  items: LeaseItem[];
-  state: LeaseState;
-  created_at: string;
-  last_settled_at: string;
-  closed_at?: string | null;
-  acknowledged_at?: string | null;
-  rejected_at?: string | null;
-  expired_at?: string | null;
-  rejection_reason?: string | null;
-  closure_reason?: string | null;
-  min_lease_duration_at_creation?: string | null;
-  meta_hash?: string | null;
-}
-
-/**
- * Raw lease response from API (state is a string)
- */
-type RawLease = RawLeaseValidated;
-
-/**
- * Convert a raw API lease response to a typed Lease with enum state.
- */
-function parseLease(raw: RawLease): Lease {
-  return {
-    ...raw,
-    state: fromJSON(raw.state),
-  };
-}
-
-/**
- * Convert an array of raw API leases to typed Leases.
- */
-function parseLeases(raw: RawLease[]): Lease[] {
-  return raw.map(parseLease);
-}
-
-export interface BillingParams {
-  max_leases_per_tenant: string;
-  allowed_list: string[];
-  max_items_per_lease: string;
-  min_lease_duration: string;
-  max_pending_leases_per_tenant: string;
-  pending_timeout: string;
-}
-
-export interface BillingParamsResponse {
-  params: BillingParams;
-}
-
-export type CreditAccount = CreditAccountValidated;
-
-export interface CreditAccountResponse {
-  credit_account: CreditAccount;
-  balances: Coin[];
-}
-
-export interface CreditAddressResponse {
-  credit_address: string;
-}
-
-export interface CreditEstimateResponse {
-  current_balance: Coin[];
-  total_rate_per_second: Coin[];
-  estimated_duration_seconds: string;
-  active_lease_count: string;
-}
-
-export async function getCreditAccount(tenant: string): Promise<CreditAccountResponse> {
-  // First try to get the credit address (this always works even if no account exists)
+export async function getCreditAccount(tenant: string): Promise<QueryCreditAccountResponse> {
   const creditAddress = await getCreditAddress(tenant);
 
-  // Then try to get the full account, using empty defaults if 404
-  const data = await fetchJson<CreditAccountResponse | null>(
-    `/liftedinit/billing/v1/credit/${tenant}`,
-    'credit account',
-    { notFoundDefault: null, schema: CreditAccountResponseSchema }
+  const client = await getQueryClient();
+  const data = await queryWithNotFound(
+    () => client.liftedinit.billing.v1.creditAccount({ tenant }),
+    null,
   );
 
   if (data) {
-    return data;
+    return lcdConvert(data, QueryCreditAccountResponseConverter);
   }
 
-  // No credit account exists yet - return placeholder
   return {
-    credit_account: {
+    creditAccount: {
       tenant,
-      credit_address: creditAddress,
-      active_lease_count: 0,
-      pending_lease_count: 0,
+      creditAddress,
+      activeLeaseCount: 0n,
+      pendingLeaseCount: 0n,
+      reservedAmounts: [],
     },
     balances: [],
+    availableBalances: [],
   };
 }
 
 export async function getCreditAddress(tenant: string): Promise<string> {
-  const data = await fetchJson<CreditAddressResponse>(
-    `/liftedinit/billing/v1/credit-address/${tenant}`,
-    'credit address',
-    { schema: CreditAddressResponseSchema }
-  );
-  return data.credit_address;
+  const client = await getQueryClient();
+  const data = await client.liftedinit.billing.v1.creditAddress({ tenant });
+  return lcdConvert(data, QueryCreditAddressResponseConverter).creditAddress;
 }
 
-export async function getCreditEstimate(tenant: string): Promise<CreditEstimateResponse | null> {
-  return fetchJson<CreditEstimateResponse | null>(
-    `/liftedinit/billing/v1/credit/${tenant}/estimate`,
-    'credit estimate',
-    { notFoundDefault: null, schema: CreditEstimateResponseSchema }
+export async function getCreditEstimate(tenant: string): Promise<QueryCreditEstimateResponse | null> {
+  const client = await getQueryClient();
+  const data = await queryWithNotFound(
+    () => client.liftedinit.billing.v1.creditEstimate({ tenant }),
+    null,
   );
+  if (!data) return null;
+  return lcdConvert(data, QueryCreditEstimateResponseConverter);
 }
 
 export async function getBillingParams(): Promise<BillingParams> {
-  const data = await fetchJson<BillingParamsResponse>(
-    '/liftedinit/billing/v1/params',
-    'billing params',
-    { schema: BillingParamsResponseSchema }
-  );
-  return data.params;
+  const client = await getQueryClient();
+  const data = await client.liftedinit.billing.v1.params();
+  return lcdConvert(data, QueryParamsResponseConverter).params;
 }
 
 export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState): Promise<Lease[]> {
-  const params: Record<string, string | undefined> = {};
-  if (stateFilter != null && stateFilter !== LeaseState.LEASE_STATE_UNSPECIFIED) {
-    params.state_filter = leaseStateToString(stateFilter);
-  }
-
-  const url = buildUrl(`/liftedinit/billing/v1/leases/tenant/${tenant}`, params);
-  const data = await fetchJson<{ leases?: RawLease[] }>(url, 'leases', { notFoundDefault: { leases: [] }, schema: LeasesResponseSchema });
-  return parseLeases(data.leases ?? []);
+  const client = await getQueryClient();
+  const data = await client.liftedinit.billing.v1.leasesByTenant({
+    tenant,
+    stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
+  });
+  return lcdConvert(data, QueryLeasesResponseConverter).leases.map(fixLeaseEnums);
 }
 
 export async function getLeasesByProvider(providerUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
-  const params: Record<string, string | undefined> = {};
-  if (stateFilter != null && stateFilter !== LeaseState.LEASE_STATE_UNSPECIFIED) {
-    params.state_filter = leaseStateToString(stateFilter);
-  }
-
-  const url = buildUrl(`/liftedinit/billing/v1/leases/provider/${providerUuid}`, params);
-  const data = await fetchJson<{ leases?: RawLease[] }>(url, 'leases', { notFoundDefault: { leases: [] }, schema: LeasesResponseSchema });
-  return parseLeases(data.leases ?? []);
+  const client = await getQueryClient();
+  const data = await client.liftedinit.billing.v1.leasesByProvider({
+    providerUuid,
+    stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
+  });
+  return lcdConvert(data, QueryLeasesResponseConverter).leases.map(fixLeaseEnums);
 }
 
 export async function getLease(leaseUuid: string): Promise<Lease | null> {
-  const data = await fetchJson<{ lease?: RawLease }>(
-    `/liftedinit/billing/v1/lease/${leaseUuid}`,
-    'lease',
-    { notFoundDefault: {}, schema: LeaseResponseSchema }
+  const client = await getQueryClient();
+  const data = await queryWithNotFound(
+    () => client.liftedinit.billing.v1.lease({ leaseUuid }),
+    null,
   );
-  return data.lease ? parseLease(data.lease) : null;
-}
-
-export interface WithdrawableAmountResponse {
-  amounts: Coin[];
+  if (!data) return null;
+  return fixLeaseEnums(lcdConvert(data, QueryLeaseResponseConverter).lease);
 }
 
 export async function getWithdrawableAmount(leaseUuid: string): Promise<Coin[]> {
-  const data = await fetchJson<WithdrawableAmountResponse>(
-    `/liftedinit/billing/v1/lease/${leaseUuid}/withdrawable`,
-    'withdrawable amount',
-    { notFoundDefault: { amounts: [] }, schema: WithdrawableAmountResponseSchema }
+  const client = await getQueryClient();
+  const data = await queryWithNotFound(
+    () => client.liftedinit.billing.v1.withdrawableAmount({ leaseUuid }),
+    null,
   );
-  return data.amounts ?? [];
+  if (!data) return [];
+  return lcdConvert(data, QueryWithdrawableAmountResponseConverter).amounts;
 }
 
-export interface ProviderWithdrawableResponse {
-  amounts: Coin[];
-  lease_count: string;
-  has_more: boolean;
-}
-
-export async function getProviderWithdrawable(providerUuid: string): Promise<ProviderWithdrawableResponse> {
-  return fetchJson<ProviderWithdrawableResponse>(
-    `/liftedinit/billing/v1/provider/${providerUuid}/withdrawable`,
-    'provider withdrawable',
-    { notFoundDefault: { amounts: [], lease_count: '0', has_more: false }, schema: ProviderWithdrawableResponseSchema }
+export async function getProviderWithdrawable(providerUuid: string): Promise<QueryProviderWithdrawableResponse> {
+  const client = await getQueryClient();
+  const data = await queryWithNotFound(
+    () => client.liftedinit.billing.v1.providerWithdrawable({ providerUuid, limit: BigInt(0) }),
+    null,
   );
+  if (!data) return { amounts: [], leaseCount: 0n, hasMore: false };
+  return lcdConvert(data, QueryProviderWithdrawableResponseConverter);
 }
 
 export async function getLeasesBySKU(skuUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
-  const params: Record<string, string | undefined> = {};
-  if (stateFilter != null && stateFilter !== LeaseState.LEASE_STATE_UNSPECIFIED) {
-    params.state_filter = leaseStateToString(stateFilter);
-  }
-
-  const url = buildUrl(`/liftedinit/billing/v1/leases/sku/${skuUuid}`, params);
-  const data = await fetchJson<{ leases?: RawLease[] }>(url, 'leases by SKU', { notFoundDefault: { leases: [] }, schema: LeasesResponseSchema });
-  return parseLeases(data.leases ?? []);
+  const client = await getQueryClient();
+  const data = await client.liftedinit.billing.v1.leasesBySKU({
+    skuUuid,
+    stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
+  });
+  return lcdConvert(data, QueryLeasesResponseConverter).leases.map(fixLeaseEnums);
 }
 
 export interface PaginatedLeasesResponse {
   leases: Lease[];
-  pagination?: {
-    next_key?: string;
-    total?: string;
-  };
+  pagination?: PageResponse;
 }
 
 export interface GetAllLeasesParams {
@@ -271,40 +180,41 @@ export interface GetAllLeasesParams {
   paginationKey?: string;
 }
 
+function buildPageRequest(params?: { limit?: number; offset?: number; paginationKey?: string; countTotal?: boolean }) {
+  if (!params) return undefined;
+  return {
+    key: new Uint8Array(),
+    offset: BigInt(params.offset ?? 0),
+    limit: BigInt(params.limit ?? 0),
+    countTotal: params.countTotal ?? false,
+    reverse: false,
+  };
+}
+
 export async function getAllLeases(params?: GetAllLeasesParams): Promise<PaginatedLeasesResponse> {
-  const queryParams: Record<string, string | undefined> = {
-    ...buildPaginationParams({
+  const client = await getQueryClient();
+  const data = await client.liftedinit.billing.v1.leases({
+    pagination: buildPageRequest({
       limit: params?.limit,
       offset: params?.offset,
       paginationKey: params?.paginationKey,
       countTotal: !!params?.limit,
     }),
-  };
+    stateFilter: params?.stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
+  });
 
-  if (params?.stateFilter != null && params.stateFilter !== LeaseState.LEASE_STATE_UNSPECIFIED) {
-    queryParams.state_filter = leaseStateToString(params.stateFilter);
-  }
-
-  const url = buildUrl('/liftedinit/billing/v1/leases', queryParams);
-  const data = await fetchJson<{ leases?: RawLease[]; pagination?: PaginatedLeasesResponse['pagination'] }>(
-    url,
-    'all leases',
-    { notFoundDefault: { leases: [] }, schema: LeasesResponseSchema }
-  );
+  const converted = lcdConvert(data, QueryLeasesResponseConverter);
 
   return {
-    ...data,
-    leases: parseLeases(data.leases ?? []),
+    leases: converted.leases.map(fixLeaseEnums),
+    pagination: converted.pagination,
   };
 }
 
 export interface PaginatedCreditsResponse {
-  credit_accounts: CreditAccount[];
+  creditAccounts: CreditAccount[];
   balances: Record<string, Coin[]>;
-  pagination?: {
-    next_key?: string;
-    total?: string;
-  };
+  pagination?: PageResponse;
 }
 
 export interface GetAllCreditsParams {
@@ -327,28 +237,20 @@ export interface GetAllCreditsParams {
  * - This is acceptable for current pagination sizes but could become a bottleneck if:
  *   - Page size increases significantly (>20-30 accounts)
  *   - This pattern is replicated elsewhere without consideration
- *
- * **Future improvements if needed:**
- * - Request throttling/batching for larger page sizes
- * - Backend API enhancement to include balances in bulk response
- * - Caching layer for balance data
  */
 export async function getAllCredits(params?: GetAllCreditsParams): Promise<PaginatedCreditsResponse> {
-  const queryParams = buildPaginationParams({
-    limit: params?.limit,
-    offset: params?.offset,
-    paginationKey: params?.paginationKey,
-    countTotal: !!params?.limit,
+  const client = await getQueryClient();
+  const data = await client.liftedinit.billing.v1.creditAccounts({
+    pagination: buildPageRequest({
+      limit: params?.limit,
+      offset: params?.offset,
+      paginationKey: params?.paginationKey,
+      countTotal: !!params?.limit,
+    }),
   });
 
-  const url = buildUrl('/liftedinit/billing/v1/credits', queryParams);
-  const data = await fetchJson<{ credit_accounts?: CreditAccount[]; pagination?: PaginatedCreditsResponse['pagination'] }>(
-    url,
-    'all credits',
-    { notFoundDefault: { credit_accounts: [] }, schema: CreditsResponseSchema }
-  );
-
-  const creditAccounts: CreditAccount[] = data.credit_accounts ?? [];
+  const converted = lcdConvert(data, QueryCreditAccountsResponseConverter);
+  const creditAccounts = converted.creditAccounts;
 
   // N+1 query: fetch balances from bank module (see function docs for rationale)
   const balances: Record<string, Coin[]> = {};
@@ -356,16 +258,11 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
   if (creditAccounts.length > 0) {
     const balancePromises = creditAccounts.map(async (account) => {
       try {
-        const balanceData = await fetchJson<{ balances?: Coin[] }>(
-          `/cosmos/bank/v1beta1/balances/${account.credit_address}`,
-          'balance',
-          { schema: AllBalancesResponseSchema }
-        );
-        return { key: account.credit_address, balances: balanceData.balances ?? [] };
+        const balanceData = await client.cosmos.bank.v1beta1.allBalances({ address: account.creditAddress, resolveDenom: false });
+        return { key: account.creditAddress, balances: (balanceData.balances ?? []) as Coin[] };
       } catch (error) {
-        // Balance fetch failures are non-critical; log and return empty balance
         logError('billing.getAllCredits.fetchBalance', error);
-        return { key: account.credit_address, balances: [] };
+        return { key: account.creditAddress, balances: [] as Coin[] };
       }
     });
 
@@ -376,8 +273,8 @@ export async function getAllCredits(params?: GetAllCreditsParams): Promise<Pagin
   }
 
   return {
-    credit_accounts: creditAccounts,
+    creditAccounts,
     balances,
-    pagination: data.pagination,
+    pagination: converted.pagination,
   };
 }

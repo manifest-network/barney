@@ -5,8 +5,9 @@ import type { SKU } from '../api/sku';
 import type { LeaseItem } from '../api/billing';
 import { DENOMS } from '../api/config';
 
-function makeItem(amount: string, quantity: string, denom: string = DENOMS.PWR): LeaseItem {
-  return { sku_uuid: 'sku-1', quantity, locked_price: { amount, denom } };
+function makeItem(amount: string, quantity: bigint | string, denom: string = DENOMS.PWR): LeaseItem {
+  const q = typeof quantity === 'string' ? BigInt(parseInt(quantity, 10) || 0) : quantity;
+  return { skuUuid: 'sku-1', quantity: q, lockedPrice: { amount, denom } };
 }
 
 describe('formatCostPerHour', () => {
@@ -16,39 +17,39 @@ describe('formatCostPerHour', () => {
 
   it('calculates hourly cost from per-second rate', () => {
     // 10 upwr/sec * quantity 1 * 3600 = 36000 upwr/hr = 0.036 PWR/hr
-    const items = [makeItem('10', '1')];
+    const items = [makeItem('10', 1n)];
     expect(formatCostPerHour(items)).toBe('0.0360 PWR/hr');
   });
 
   it('multiplies by quantity', () => {
     // 10 upwr/sec * quantity 3 * 3600 = 108000 upwr/hr = 0.108 PWR/hr
-    const items = [makeItem('10', '3')];
+    const items = [makeItem('10', 3n)];
     expect(formatCostPerHour(items)).toBe('0.1080 PWR/hr');
   });
 
   it('sums across multiple items', () => {
     // (10 * 1 + 40 * 2) * 3600 = 90 * 3600 = 324000 upwr/hr = 0.324 PWR/hr
-    const items = [makeItem('10', '1'), makeItem('40', '2')];
+    const items = [makeItem('10', 1n), makeItem('40', 2n)];
     expect(formatCostPerHour(items)).toBe('0.3240 PWR/hr');
   });
 
   it('handles zero per-second rate', () => {
-    const items = [makeItem('0', '5')];
+    const items = [makeItem('0', 5n)];
     expect(formatCostPerHour(items)).toBe('0.0000 PWR/hr');
   });
 
   it('handles zero quantity', () => {
-    const items = [makeItem('10', '0')];
+    const items = [makeItem('10', 0n)];
     expect(formatCostPerHour(items)).toBe('0.0000 PWR/hr');
   });
 
-  it('handles invalid quantity string gracefully', () => {
-    const items = [makeItem('10', 'abc')];
+  it('handles invalid quantity (0n) gracefully', () => {
+    const items = [makeItem('10', 0n)];
     expect(formatCostPerHour(items)).toBe('0.0000 PWR/hr');
   });
 
   it('handles invalid amount string gracefully', () => {
-    const items = [makeItem('not-a-number', '1')];
+    const items = [makeItem('not-a-number', 1n)];
     expect(formatCostPerHour(items)).toBe('0.0000 PWR/hr');
   });
 
@@ -56,19 +57,19 @@ describe('formatCostPerHour', () => {
     // 1_000_000_000 upwr/sec * quantity 1000 * 3600 = 3.6e15 upwr/hr
     // This exceeds Number.MAX_SAFE_INTEGER for intermediate multiplication
     // but BigInt keeps it exact. 3_600_000_000_000_000 / 1e6 = 3_600_000_000 PWR/hr
-    const items = [makeItem('1000000000', '1000')];
+    const items = [makeItem('1000000000', 1000n)];
     expect(formatCostPerHour(items)).toBe('3600000000.0000 PWR/hr');
   });
 
   it('uses fallback metadata for unknown denom', () => {
-    const items = [makeItem('1000000', '1', 'uunknown')];
+    const items = [makeItem('1000000', 1n, 'uunknown')];
     // 1000000 * 1 * 3600 = 3_600_000_000 / 1e6 (default exponent) = 3600
     expect(formatCostPerHour(items)).toBe('3600.0000 tokens/hr');
   });
 
   it('uses MFX denom metadata when applicable', () => {
     // 10 umfx/sec * 1 * 3600 = 36000 / 1e6 = 0.036
-    const items = [makeItem('10', '1', DENOMS.MFX)];
+    const items = [makeItem('10', 1n, DENOMS.MFX)];
     expect(formatCostPerHour(items)).toBe('0.0360 MFX/hr');
   });
 });
@@ -104,20 +105,20 @@ describe('calculateEstimatedCost', () => {
   const mockSKUs: SKU[] = [
     {
       uuid: 'sku-1',
-      provider_uuid: 'provider-1',
+      providerUuid: 'provider-1',
       name: 'Small VM',
       unit: Unit.UNIT_PER_HOUR,
-      base_price: { denom: DENOMS.PWR, amount: '1000000' }, // 1 PWR/hr
-      meta_hash: '',
+      basePrice: { denom: DENOMS.PWR, amount: '1000000' }, // 1 PWR/hr
+      metaHash: new Uint8Array(),
       active: true,
     },
     {
       uuid: 'sku-2',
-      provider_uuid: 'provider-1',
+      providerUuid: 'provider-1',
       name: 'Large VM',
       unit: Unit.UNIT_PER_HOUR,
-      base_price: { denom: DENOMS.PWR, amount: '5000000' }, // 5 PWR/hr
-      meta_hash: '',
+      basePrice: { denom: DENOMS.PWR, amount: '5000000' }, // 5 PWR/hr
+      metaHash: new Uint8Array(),
       active: true,
     },
   ];
@@ -184,11 +185,11 @@ describe('calculateEstimatedCost', () => {
     const skusWithInvalidPrice: SKU[] = [
       {
         uuid: 'sku-invalid',
-        provider_uuid: 'provider-1',
+        providerUuid: 'provider-1',
         name: 'Invalid',
         unit: Unit.UNIT_PER_HOUR,
-        base_price: { denom: DENOMS.PWR, amount: 'not-a-number' },
-        meta_hash: '',
+        basePrice: { denom: DENOMS.PWR, amount: 'not-a-number' },
+        metaHash: new Uint8Array(),
         active: true,
       },
     ];

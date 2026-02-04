@@ -2,7 +2,10 @@ import { getSigningLiftedinitClient, liftedinit } from '@manifest-network/manife
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import type { Coin } from './bank';
 import { RPC_ENDPOINT } from './config';
-import { getEventAttribute } from '../utils/tx';
+import { getEventAttribute, type TxEvent } from '../utils/tx';
+
+// Re-export TxEvent for consumers that import from api/tx
+export type { TxEvent };
 
 // Re-export Unit from sku.ts (single source of truth)
 import { Unit } from './sku';
@@ -10,12 +13,6 @@ export { Unit };
 
 const { MsgFundCredit, MsgCreateLease, MsgCreateLeaseForTenant, MsgCancelLease, MsgCloseLease, MsgAcknowledgeLease, MsgRejectLease, MsgWithdraw } = liftedinit.billing.v1;
 const { MsgCreateProvider, MsgUpdateProvider, MsgCreateSKU, MsgUpdateSKU, MsgDeactivateProvider, MsgDeactivateSKU } = liftedinit.sku.v1;
-
-/** Event structure from transaction result */
-export interface TxEvent {
-  type: string;
-  attributes: readonly { key: string; value: string }[];
-}
 
 /**
  * Discriminated union for transaction results.

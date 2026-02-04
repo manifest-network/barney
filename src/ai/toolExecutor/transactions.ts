@@ -7,6 +7,7 @@ import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getLease } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { isValidUUID, parseJsonStringArray } from '../../utils/format';
+import { toHex } from '../../utils/hash';
 import type { ToolResult, SignResult, PayloadAttachment } from './types';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, computePayloadHash } from './utils';
 
@@ -23,10 +24,10 @@ export async function executeTransaction(
 ): Promise<ToolResult> {
   switch (toolName) {
     case 'fund_credit': {
-      const amount = args.amount as string;
-      if (!amount) {
+      if (typeof args.amount !== 'string' || !args.amount) {
         return { success: false, error: 'amount is required' };
       }
+      const amount = args.amount;
       if (!address) {
         return { success: false, error: 'Wallet not connected' };
       }
@@ -52,12 +53,12 @@ export async function executeTransaction(
       return executeUploadPayload(args, address, signArbitrary);
 
     case 'close_lease': {
-      const leaseUuid = args.lease_uuid as string;
-      if (!leaseUuid) {
+      if (typeof args.lease_uuid !== 'string' || !args.lease_uuid) {
         return { success: false, error: 'lease_uuid is required' };
       }
+      const leaseUuid = args.lease_uuid;
 
-      const reason = args.reason as string | undefined;
+      const reason = typeof args.reason === 'string' ? args.reason : undefined;
       const txArgs = reason ? ['--reason', reason, leaseUuid] : [leaseUuid];
 
       const result = await cosmosTx(clientManager, 'billing', 'close-lease', txArgs, true);
@@ -75,8 +76,14 @@ export async function executeTransaction(
     }
 
     case 'cosmos_tx': {
-      const module = args.module as string;
-      const subcommand = args.subcommand as string;
+      if (typeof args.module !== 'string' || !args.module) {
+        return { success: false, error: 'Missing required argument: module' };
+      }
+      if (typeof args.subcommand !== 'string' || !args.subcommand) {
+        return { success: false, error: 'Missing required argument: subcommand' };
+      }
+      const module = args.module;
+      const subcommand = args.subcommand;
 
       // Validate args.args is present and valid
       if (!args.args) {
@@ -163,7 +170,7 @@ async function executeCreateLease(
       }
       if (matches.length > 1) {
         const details = matches
-          .map((s) => `${s.uuid} (provider ${s.provider_uuid})`)
+          .map((s) => `${s.uuid} (provider ${s.providerUuid})`)
           .join(', ');
         return {
           success: false,
@@ -216,7 +223,7 @@ async function executeCreateLease(
     };
   }
 
-  const leaseUuid = extractLeaseUuidFromTxResult(result as unknown as Record<string, unknown>);
+  const leaseUuid = extractLeaseUuidFromTxResult(result);
   const itemsSummary = items.map((item, i) => {
     const name = rawItems[i]?.sku_name;
     return `${item.quantity}x ${name || item.sku_uuid}`;
@@ -283,10 +290,10 @@ async function handlePayloadUploadAfterLeaseCreation(
     }
 
     const provider = await getProviders(false).then((providers) =>
-      providers.find((p) => p.uuid === leaseData.provider_uuid)
+      providers.find((p) => p.uuid === leaseData.providerUuid)
     );
 
-    if (!provider || !provider.api_url) {
+    if (!provider || !provider.apiUrl) {
       return {
         success: true,
         data: {
@@ -299,7 +306,7 @@ async function handlePayloadUploadAfterLeaseCreation(
 
     // Upload the payload
     const uploadResult = await uploadPayloadToProvider(
-      provider.api_url,
+      provider.apiUrl,
       leaseUuid,
       metaHashHex,
       payloadBytes,
@@ -353,12 +360,14 @@ async function executeUploadPayload(
     return { success: false, error: 'Signing not available. Please reconnect your wallet.' };
   }
 
-  const leaseUuid = args.lease_uuid as string;
-  const payload = args.payload as string;
-
-  if (!leaseUuid || !payload) {
-    return { success: false, error: 'Missing required arguments: lease_uuid and payload are required.' };
+  if (typeof args.lease_uuid !== 'string' || !args.lease_uuid) {
+    return { success: false, error: 'Missing required argument: lease_uuid' };
   }
+  if (typeof args.payload !== 'string' || !args.payload) {
+    return { success: false, error: 'Missing required argument: payload' };
+  }
+  const leaseUuid = args.lease_uuid;
+  const payload = args.payload;
 
   // Get the lease to verify meta_hash and get provider_uuid
   const lease = await getLease(leaseUuid);
@@ -370,7 +379,7 @@ async function executeUploadPayload(
     };
   }
 
-  if (!lease.meta_hash || lease.meta_hash === '') {
+  if (!lease.metaHash || lease.metaHash.length === 0) {
     return {
       success: false,
       error: 'Lease does not have a meta_hash. Payload upload requires a lease created with meta_hash.',
@@ -380,30 +389,30 @@ async function executeUploadPayload(
   // SECURITY: Derive provider API URL from on-chain lease data, not from tool args
   // This prevents prompt injection attacks that could redirect auth tokens to attacker endpoints
   const providers = await getProviders(false);
-  const provider = providers.find((p) => p.uuid === lease.provider_uuid);
+  const provider = providers.find((p) => p.uuid === lease.providerUuid);
 
   if (!provider) {
     return {
       success: false,
-      error: `Provider not found for lease. Provider UUID: ${lease.provider_uuid}`,
+      error: `Provider not found for lease. Provider UUID: ${lease.providerUuid}`,
     };
   }
 
-  if (!provider.api_url) {
+  if (!provider.apiUrl) {
     return {
       success: false,
       error: `Provider ${provider.uuid} does not have an API URL configured.`,
     };
   }
 
-  const providerApiUrl = provider.api_url;
+  const providerApiUrl = provider.apiUrl;
 
   // Compute payload hash and verify it matches the lease meta_hash
   const payloadBytes = new TextEncoder().encode(payload);
   const computedHash = await computePayloadHash(payloadBytes);
 
-  // The lease.meta_hash is stored as a string
-  const leaseMetaHashHex = lease.meta_hash;
+  // The lease.metaHash is a Uint8Array - convert to hex for comparison
+  const leaseMetaHashHex = toHex(lease.metaHash);
 
   if (computedHash.toLowerCase() !== leaseMetaHashHex.toLowerCase()) {
     return {

@@ -3,7 +3,6 @@ import {
   sha256,
   sha256Hex,
   toHex,
-  fromHex,
   validatePayloadSize,
   getPayloadSize,
   MAX_PAYLOAD_SIZE,
@@ -68,22 +67,6 @@ describe('toHex', () => {
 
   it('handles empty array', () => {
     expect(toHex(new Uint8Array([]))).toBe('');
-  });
-});
-
-describe('fromHex', () => {
-  it('converts hex string to bytes', () => {
-    const bytes = fromHex('00010f10ff');
-    expect(bytes).toEqual(new Uint8Array([0, 1, 15, 16, 255]));
-  });
-
-  it('handles empty string', () => {
-    expect(fromHex('')).toEqual(new Uint8Array([]));
-  });
-
-  it('handles uppercase hex', () => {
-    const bytes = fromHex('AABBCC');
-    expect(bytes).toEqual(new Uint8Array([170, 187, 204]));
   });
 });
 

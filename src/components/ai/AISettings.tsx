@@ -20,6 +20,7 @@ export function AISettings({ onClose }: AISettingsProps) {
 
   const [localEndpoint, setLocalEndpoint] = useState(settings.ollamaEndpoint);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   const handleEndpointChange = async () => {
     // Validate and normalize the endpoint before using it
@@ -46,8 +47,11 @@ export function AISettings({ onClose }: AISettingsProps) {
   };
 
   const handleClearHistory = () => {
-    if (confirm('Are you sure you want to clear your chat history?')) {
+    if (confirmingClear) {
       clearHistory();
+      setConfirmingClear(false);
+    } else {
+      setConfirmingClear(true);
     }
   };
 
@@ -203,15 +207,35 @@ export function AISettings({ onClose }: AISettingsProps) {
           <label className="ai-settings-label">
             Chat History
           </label>
-          <button
-            type="button"
-            onClick={handleClearHistory}
-            disabled={messages.length === 0}
-            className="btn btn-danger btn-sm"
-          >
-            <Trash2 className="w-4 h-4" />
-            Clear History ({messages.length} messages)
-          </button>
+          {confirmingClear ? (
+            <div className="ai-settings-input-group">
+              <button
+                type="button"
+                onClick={handleClearHistory}
+                className="btn btn-danger btn-sm"
+              >
+                <Trash2 className="w-4 h-4" />
+                Confirm?
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingClear(false)}
+                className="btn btn-secondary btn-sm"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={handleClearHistory}
+              disabled={messages.length === 0}
+              className="btn btn-danger btn-sm"
+            >
+              <Trash2 className="w-4 h-4" />
+              Clear History ({messages.length} messages)
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -15,7 +15,8 @@ import {
 } from '../../api/billing';
 import { getProviders, getSKUs, getSKUsByProvider } from '../../api/sku';
 import { getAllBalances } from '../../api/bank';
-import { isValidUUID, parseJsonStringArray } from '../../utils/format';
+import { isValidUUID, parseJsonStringArray, toBool } from '../../utils/format';
+import { logError } from '../../utils/errors';
 import type { ToolResult } from './types';
 
 /**
@@ -36,7 +37,10 @@ export async function executeQuery(
 
       const [balances, creditAccount] = await Promise.all([
         getAllBalances(address),
-        getCreditAccount(address).catch(() => null),
+        getCreditAccount(address).catch((error) => {
+          logError('toolExecutor.getBalance.creditAccount', error);
+          return null;
+        }),
       ]);
 
       return {
@@ -45,10 +49,10 @@ export async function executeQuery(
           walletBalances: balances,
           creditAccount: creditAccount
             ? {
-                creditAddress: creditAccount.credit_account.credit_address,
+                creditAddress: creditAccount.creditAccount.creditAddress,
                 balance: creditAccount.balances,
-                activeLeaseCount: creditAccount.credit_account.active_lease_count,
-                pendingLeaseCount: creditAccount.credit_account.pending_lease_count,
+                activeLeaseCount: String(creditAccount.creditAccount.activeLeaseCount),
+                pendingLeaseCount: String(creditAccount.creditAccount.pendingLeaseCount),
               }
             : null,
         },
@@ -88,7 +92,7 @@ export async function executeQuery(
     }
 
     case 'get_providers': {
-      const activeOnly = args.active_only === true || args.active_only === 'true';
+      const activeOnly = toBool(args.active_only);
       const providers = await getProviders(activeOnly);
       return {
         success: true,
@@ -98,7 +102,7 @@ export async function executeQuery(
 
     case 'get_skus': {
       const providerUuid = args.provider_uuid as string | undefined;
-      const activeOnly = args.active_only === true || args.active_only === 'true';
+      const activeOnly = toBool(args.active_only);
 
       if (providerUuid) {
         if (!isValidUUID(providerUuid)) {
@@ -134,18 +138,18 @@ export async function executeQuery(
         };
       }
 
-      const remainingHours = Math.floor(parseInt(estimate.estimated_duration_seconds) / 3600);
+      const remainingHours = Math.floor(Number(estimate.estimatedDurationSeconds) / 3600);
       const remainingDays = Math.floor(remainingHours / 24);
 
       return {
         success: true,
         data: {
-          currentBalance: estimate.current_balance,
-          burnRatePerSecond: estimate.total_rate_per_second,
-          estimatedDurationSeconds: estimate.estimated_duration_seconds,
+          currentBalance: estimate.currentBalance,
+          burnRatePerSecond: estimate.totalRatePerSecond,
+          estimatedDurationSeconds: String(estimate.estimatedDurationSeconds),
           remainingHours,
           remainingDays,
-          activeLeaseCount: estimate.active_lease_count,
+          activeLeaseCount: String(estimate.activeLeaseCount),
         },
       };
     }

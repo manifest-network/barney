@@ -29,9 +29,10 @@ npx vitest run -t "validateFile"
 
 ```
 ChainProvider (cosmos-kit wallet abstraction)
-  └─ AutoRefreshProvider (10s polling, pauses when tab hidden)
-      └─ AIProvider (chat state, tool execution, Ollama streaming)
-          └─ App (tab routing based on user role)
+  └─ ToastProvider (toast notifications)
+      └─ AutoRefreshProvider (10s polling, pauses when tab hidden)
+          └─ AIProvider (chat state, tool execution, Ollama streaming)
+              └─ App (tab routing based on user role)
 ```
 
 ### AI Tool Execution Flow
@@ -46,9 +47,16 @@ The AI assistant uses a 3-layer architecture:
 
 Tool definitions are in `src/ai/tools.ts`. The system prompt is dynamically generated from blockchain module documentation.
 
+### Dual Transaction Paths
+
+UI components and AI tools use separate transaction paths that both leverage manifestjs internally:
+
+- **UI components** use `src/api/tx.ts` via `signAndBroadcast()` (cosmos-kit signer + manifestjs `getSigningLiftedinitClient`)
+- **AI tool executor** uses `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (an MCP server that also uses manifestjs internally)
+
 ### Wallet Integration
 
-- cosmos-kit provides wallet abstraction (Keplr, Leap, Cosmostation, Ledger, Web3Auth)
+- cosmos-kit provides wallet abstraction (Keplr, Leap, Leap MetaMask Cosmos Snap, Cosmostation, Ledger, Web3Auth)
 - `CosmosClientManager` singleton wraps the signer for MCP operations
 - `signArbitrary` used for ADR-036 off-chain authentication (payload uploads to providers)
 
@@ -62,17 +70,20 @@ Tool definitions are in `src/ai/tools.ts`. The system prompt is dynamically gene
 | `tx.ts` | Transaction utilities and message builders |
 | `provider-api.ts` | Payload upload with ADR-036 auth |
 | `ollama.ts` | LLM streaming with retry/backoff |
-| `utils.ts` | Shared fetch utilities (`fetchJson`, `buildUrl`, `withRetry`) |
-| `schemas.ts` | Zod schemas for API response validation |
+| `config.ts` | API endpoints, denom metadata, price formatting |
+| `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
+| `queryClient.ts` | LCD query client factory (cached singleton) |
 
 ### Tab Components
 
-Tabs register a fetch function with `AutoRefreshContext` on mount. Data flows:
+Tabs register a fetch function with `AutoRefreshContext` on mount via `useAutoRefreshTab()`. Data flows:
 ```
 Tab mounts → registers fetch → polls every 10s → local state → render
 ```
 
-Tabs are conditionally rendered based on `isProvider` and `isAdmin` roles checked in `App.tsx`.
+**Important:** AutoRefreshContext uses a "last one wins" model — only one fetch function is active at a time. When a new tab mounts and registers its fetch, the previous tab's fetch is replaced. This assumes only one tab is mounted at a time (tabs unmount on switch via conditional rendering in `App.tsx`).
+
+Tabs are conditionally rendered based on `isProvider` and `isAdmin` roles checked in `App.tsx`. Each tab lives in its own subdirectory under `src/components/tabs/` (e.g., `tabs/leases/`, `tabs/catalog/`) with a barrel `index.ts` export.
 
 ## Key Patterns
 
@@ -81,10 +92,11 @@ Tabs are conditionally rendered based on `isProvider` and `isAdmin` roles checke
 - **SSRF protection**: `src/ai/validation.ts` uses `ipaddr.js` to block private/internal addresses (DEV mode allows localhost for Ollama)
 - **Error utilities**: Use `logError()` from `src/utils/errors.ts` instead of raw `console.error`
 - **Transaction handling**: Use `useTxHandler()` hook from `src/hooks/useTxHandler.ts` for standardized transaction execution with toast notifications
-- **API fetch utilities**: Use `fetchJson()` and `buildUrl()` from `src/api/utils.ts` for consistent error handling
-- **API validation**: Use Zod schemas from `src/api/schemas.ts` with `fetchJson({ schema })` for runtime response validation
-- **Retry logic**: Use `withRetry()` or `fetchJson({ retry: true })` for transient network error recovery with exponential backoff
+- **Retry logic**: Use `withRetry()` from `src/api/utils.ts` for transient network error recovery with exponential backoff
 - **Tool result caching**: Query tool results cached for 10s in AIContext to reduce redundant API calls (max 50 entries, LRU eviction)
+- **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
+- **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
+- **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs.
 
 ## Chain Configuration
 
@@ -93,4 +105,4 @@ Defined in `src/config/chain.ts`:
 - Denoms: `umfx` (native), `factory/.../upwr` (PWR factory token) - both 6 decimals
 - Endpoints default to localhost (26657 RPC, 1317 REST)
 
-Environment variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_OLLAMA_URL`, `PUBLIC_OLLAMA_MODEL`
+Environment variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_OLLAMA_URL`, `PUBLIC_OLLAMA_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`

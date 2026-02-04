@@ -303,6 +303,10 @@ export function AIProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setAddress = useCallback((address: string | undefined) => {
+    // Clear cached query results when wallet changes to prevent serving stale data
+    if (address !== addressRef.current) {
+      toolCacheRef.current.clear();
+    }
     addressRef.current = address;
   }, []);
 

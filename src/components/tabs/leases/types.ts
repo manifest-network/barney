@@ -44,6 +44,3 @@ export interface CopyButtonProps {
   title?: string;
   stopPropagation?: boolean;
 }
-
-/** Number of leases displayed per page */
-export const LEASES_PER_PAGE = 10;

@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { Layout, type TabId } from './components/layout/Layout';
 import { WalletTab } from './components/tabs/WalletTab';
-import { CatalogTab } from './components/tabs/CatalogTab';
-import { LeasesTab } from './components/tabs/LeasesTab';
-import { ProviderTab } from './components/tabs/ProviderTab';
-import { NetworkTab } from './components/tabs/NetworkTab';
+import { CatalogTab } from './components/tabs/catalog';
+import { LeasesTab } from './components/tabs/leases';
+import { ProviderTab } from './components/tabs/provider';
+import { NetworkTab } from './components/tabs/network';
 import { TabErrorBoundary } from './components/ui/ErrorBoundary';
 import { getProviders } from './api/sku';
 import { getBillingParams } from './api/billing';
@@ -35,7 +35,7 @@ function App() {
       try {
         const [providers, billingParams] = await Promise.all([
           getProviders(),
-          getBillingParams().catch(() => ({ allowed_list: [] as string[] })),
+          getBillingParams().catch(() => ({ allowedList: [] as string[] })),
         ]);
 
         // Only update state if component is still mounted
@@ -46,7 +46,7 @@ function App() {
         setIsProvider(!!myProvider);
 
         // Check if connected address is in billing allowed list
-        setIsAdmin(billingParams.allowed_list?.includes(address) ?? false);
+        setIsAdmin(billingParams.allowedList?.includes(address) ?? false);
       } catch {
         if (isMounted) {
           setIsProvider(false);

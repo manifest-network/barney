@@ -1,136 +1,76 @@
 import { liftedinit } from '@manifest-network/manifestjs';
-import { fetchJson, buildUrl } from './utils';
-import {
-  ProvidersResponseSchema,
-  ProviderResponseSchema,
-  SKUsResponseSchema,
-  SKUResponseSchema,
-  SKUParamsResponseSchema,
-  type ProviderValidated,
-  type RawSKUValidated,
-} from './schemas';
+import type {
+  Params as SKUParams,
+  Provider,
+  SKU,
+} from '@manifest-network/manifestjs/dist/codegen/liftedinit/sku/v1/types';
+import { getQueryClient, queryWithNotFound, lcdConvert, fixEnumField } from './queryClient';
+
+// Re-export manifestjs types for consumers
+export type { SKUParams, Provider, SKU };
 
 // Re-export Unit enum from manifestjs for type safety
 export const Unit = liftedinit.sku.v1.Unit;
 export type Unit = (typeof Unit)[keyof typeof Unit];
 
-// Conversion functions from manifestjs
-const { unitFromJSON: fromJSON, unitToJSON: toJSON } = liftedinit.sku.v1;
+// Conversion function from manifestjs (used by fixSKUEnums)
+const { unitFromJSON: fromJSON } = liftedinit.sku.v1;
 
-/**
- * Convert a unit enum to its string representation.
- * Used for display and API compatibility.
- */
-export function unitToString(unit: Unit): string {
-  return toJSON(unit);
-}
+// fromAmino converters for query responses
+const {
+  QueryParamsResponse: QueryParamsResponseConverter,
+  QueryProviderResponse: QueryProviderResponseConverter,
+  QueryProvidersResponse: QueryProvidersResponseConverter,
+  QuerySKUResponse: QuerySKUResponseConverter,
+  QuerySKUsResponse: QuerySKUsResponseConverter,
+} = liftedinit.sku.v1;
 
-/**
- * Convert a unit string to enum value.
- * Used for parsing API responses.
- */
-export function unitFromString(unit: string): Unit {
-  return fromJSON(unit);
-}
-
-export interface SKUParams {
-  allowed_list: string[];
-}
-
-export interface SKUParamsResponse {
-  params: SKUParams;
-}
-
-export type Provider = ProviderValidated;
-
-export interface SKU {
-  uuid: string;
-  provider_uuid: string;
-  name: string;
-  unit: Unit;
-  base_price: { denom: string; amount: string };
-  meta_hash?: string | null;
-  active: boolean;
-}
-
-/**
- * Raw SKU response from API (unit is a string)
- */
-type RawSKU = RawSKUValidated;
-
-/**
- * Convert a raw API SKU response to a typed SKU with enum unit.
- */
-function parseSKU(raw: RawSKU): SKU {
-  return {
-    ...raw,
-    unit: unitFromString(raw.unit),
-  };
-}
-
-/**
- * Convert an array of raw API SKUs to typed SKUs.
- */
-function parseSKUs(raw: RawSKU[]): SKU[] {
-  return raw.map(parseSKU);
-}
-
-export interface ProvidersResponse {
-  providers: Provider[];
-}
-
-export interface ProviderResponse {
-  provider: Provider;
-}
-
-export interface SKUsResponse {
-  skus: SKU[];
-}
-
-export interface SKUResponse {
-  sku: SKU;
+// fromAmino doesn't convert enum strings to numeric values; LCD returns strings like "UNIT_PER_HOUR"
+// but Unit enum keys are numeric (0, 1, 2, ...). This fixes the mismatch.
+function fixSKUEnums(sku: SKU): SKU {
+  return fixEnumField(sku, 'unit', fromJSON);
 }
 
 export async function getProviders(activeOnly = false): Promise<Provider[]> {
-  const url = buildUrl('/liftedinit/sku/v1/providers', activeOnly ? { active_only: 'true' } : undefined);
-  const data = await fetchJson<ProvidersResponse>(url, 'providers', { schema: ProvidersResponseSchema });
-  return data.providers ?? [];
+  const client = await getQueryClient();
+  const data = await client.liftedinit.sku.v1.providers({ activeOnly });
+  return lcdConvert(data, QueryProvidersResponseConverter).providers;
 }
 
 export async function getProvider(uuid: string): Promise<Provider | null> {
-  const data = await fetchJson<ProviderResponse | Record<string, never>>(
-    `/liftedinit/sku/v1/provider/${uuid}`,
-    'provider',
-    { notFoundDefault: {}, schema: ProviderResponseSchema }
+  const client = await getQueryClient();
+  const data = await queryWithNotFound(
+    () => client.liftedinit.sku.v1.provider({ uuid }),
+    null,
   );
-  return 'provider' in data ? data.provider : null;
+  if (!data) return null;
+  return lcdConvert(data, QueryProviderResponseConverter).provider;
 }
 
 export async function getSKUs(activeOnly = false): Promise<SKU[]> {
-  const url = buildUrl('/liftedinit/sku/v1/skus', activeOnly ? { active_only: 'true' } : undefined);
-  const data = await fetchJson<{ skus?: RawSKU[] }>(url, 'SKUs', { schema: SKUsResponseSchema });
-  return parseSKUs(data.skus ?? []);
+  const client = await getQueryClient();
+  const data = await client.liftedinit.sku.v1.sKUs({ activeOnly });
+  return lcdConvert(data, QuerySKUsResponseConverter).skus.map(fixSKUEnums);
 }
 
 export async function getSKU(uuid: string): Promise<SKU | null> {
-  const data = await fetchJson<{ sku?: RawSKU }>(
-    `/liftedinit/sku/v1/sku/${uuid}`,
-    'SKU',
-    { notFoundDefault: {}, schema: SKUResponseSchema }
+  const client = await getQueryClient();
+  const data = await queryWithNotFound(
+    () => client.liftedinit.sku.v1.sKU({ uuid }),
+    null,
   );
-  return data.sku ? parseSKU(data.sku) : null;
+  if (!data) return null;
+  return fixSKUEnums(lcdConvert(data, QuerySKUResponseConverter).sku);
 }
 
 export async function getSKUsByProvider(providerUuid: string, activeOnly = false): Promise<SKU[]> {
-  const url = buildUrl(
-    `/liftedinit/sku/v1/skus/provider/${providerUuid}`,
-    activeOnly ? { active_only: 'true' } : undefined
-  );
-  const data = await fetchJson<{ skus?: RawSKU[] }>(url, 'SKUs by provider', { schema: SKUsResponseSchema });
-  return parseSKUs(data.skus ?? []);
+  const client = await getQueryClient();
+  const data = await client.liftedinit.sku.v1.sKUsByProvider({ providerUuid, activeOnly });
+  return lcdConvert(data, QuerySKUsResponseConverter).skus.map(fixSKUEnums);
 }
 
 export async function getSKUParams(): Promise<SKUParams> {
-  const data = await fetchJson<SKUParamsResponse>('/liftedinit/sku/v1/params', 'SKU params', { schema: SKUParamsResponseSchema });
-  return data.params;
+  const client = await getQueryClient();
+  const data = await client.liftedinit.sku.v1.params();
+  return lcdConvert(data, QueryParamsResponseConverter).params;
 }

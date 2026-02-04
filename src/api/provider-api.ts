@@ -3,8 +3,25 @@
  * Uses ADR-036 off-chain signatures for authentication.
  */
 
-import { isPrivateHost } from '../ai/validation';
 import { logError } from '../utils/errors';
+import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
+import { HEALTH_CHECK_TIMEOUT_MS } from '../config/constants';
+
+/**
+ * Typed error for provider API HTTP failures.
+ * Carries the HTTP status code so callers can match on `error.status`
+ * instead of parsing error message strings.
+ */
+export class ProviderApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    Object.setPrototypeOf(this, ProviderApiError.prototype);
+    this.name = 'ProviderApiError';
+    this.status = status;
+  }
+}
 
 /**
  * Validates that a provider API URL is safe to use.
@@ -12,29 +29,35 @@ import { logError } from '../utils/errors';
  * to private/internal addresses (in production).
  */
 function validateProviderUrl(url: string): URL {
-  if (!url || typeof url !== 'string') {
-    throw new Error('Invalid provider API URL: URL is required');
+  const parsed = parseHttpUrl(url);
+  if (!parsed) {
+    throw new Error(`Invalid provider API URL: ${url || '(empty)'}`);
   }
 
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`Invalid provider API URL: ${url}`);
-  }
-
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`Invalid provider API URL protocol: ${parsed.protocol}`);
-  }
-
-  // SSRF Protection: Block private/internal IP addresses in production
-  // Development mode allows localhost for local provider testing
-  const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
-  if (!isDev && isPrivateHost(parsed.hostname)) {
+  if (!isUrlSsrfSafe(parsed)) {
     throw new Error('Provider API URL cannot point to private/internal addresses');
   }
 
   return parsed;
+}
+
+/**
+ * Build a fetch URL and headers for provider API requests.
+ * In development, routes through the CORS proxy with X-Proxy-Target header.
+ */
+function buildProviderFetchArgs(
+  baseUrl: string,
+  path: string,
+  extraHeaders?: Record<string, string>
+): { url: string; headers: Record<string, string> } {
+  const headers: Record<string, string> = { ...extraHeaders };
+
+  if (import.meta.env.DEV) {
+    headers['X-Proxy-Target'] = baseUrl;
+    return { url: `/proxy-provider${path}`, headers };
+  }
+
+  return { url: `${baseUrl}${path}`, headers };
 }
 
 export interface ProviderHealthResponse {
@@ -75,13 +98,6 @@ export interface LeaseConnectionResponse {
   provider_uuid: string;
   connection: ConnectionDetails;
 }
-
-/**
- * Flexible lease info from provider API.
- * Can contain any JSON-serializable data.
- * @deprecated Use LeaseConnectionResponse for typed access
- */
-export type LeaseInfo = Record<string, unknown>;
 
 export interface AuthToken {
   tenant: string;
@@ -144,21 +160,12 @@ export async function getLeaseConnectionInfo(
   const validatedUrl = validateProviderUrl(providerApiUrl);
   const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
 
-  // In development, use the proxy to bypass CORS
-  // The proxy dynamically routes to the target specified in X-Proxy-Target header
-  let url: string;
-  const headers: Record<string, string> = {
-    'Authorization': `Bearer ${authToken}`,
-    'Content-Type': 'application/json',
-  };
-
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  if (import.meta.env.DEV) {
-    url = `/proxy-provider/v1/leases/${encodedLeaseUuid}/connection`;
-    headers['X-Proxy-Target'] = baseUrl;
-  } else {
-    url = `${baseUrl}/v1/leases/${encodedLeaseUuid}/connection`;
-  }
+  const { url, headers } = buildProviderFetchArgs(
+    baseUrl,
+    `/v1/leases/${encodedLeaseUuid}/connection`,
+    { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+  );
 
   const response = await fetch(url, {
     method: 'GET',
@@ -167,7 +174,7 @@ export async function getLeaseConnectionInfo(
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`Provider API error (${response.status}): ${errorText}`);
+    throw new ProviderApiError(response.status, `Provider API error (${response.status}): ${errorText}`);
   }
 
   return response.json();
@@ -179,7 +186,7 @@ export async function getLeaseConnectionInfo(
  */
 export async function getProviderHealth(
   providerApiUrl: string,
-  timeoutMs: number = 5000,
+  timeoutMs: number = HEALTH_CHECK_TIMEOUT_MS,
   abortSignal?: AbortSignal
 ): Promise<ProviderHealthResponse | null> {
   if (!providerApiUrl) {
@@ -197,34 +204,18 @@ export async function getProviderHealth(
 
   const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
 
-  let url: string;
-  const headers: Record<string, string> = {};
+  const { url, headers } = buildProviderFetchArgs(baseUrl, '/health');
 
-  if (import.meta.env.DEV) {
-    url = `/proxy-provider/health`;
-    headers['X-Proxy-Target'] = baseUrl;
-  } else {
-    url = `${baseUrl}/health`;
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  // Link external abort signal if provided
-  let abortHandler: (() => void) | null = null;
-  if (abortSignal) {
-    abortHandler = () => controller.abort();
-    abortSignal.addEventListener('abort', abortHandler);
-  }
+  const signals = [AbortSignal.timeout(timeoutMs)];
+  if (abortSignal) signals.push(abortSignal);
+  const combinedSignal = AbortSignal.any(signals);
 
   try {
     const response = await fetch(url, {
       method: 'GET',
       headers,
-      signal: controller.signal,
+      signal: combinedSignal,
     });
-
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
       return null;
@@ -234,36 +225,7 @@ export async function getProviderHealth(
   } catch (error) {
     logError('provider-api.getProviderHealth.fetch', error);
     return null;
-  } finally {
-    clearTimeout(timeoutId);
-    // Clean up abort listener to prevent memory leak
-    if (abortSignal && abortHandler) {
-      abortSignal.removeEventListener('abort', abortHandler);
-    }
   }
-}
-
-/**
- * Helper to convert Uint8Array to base64 string.
- */
-export function uint8ArrayToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-/**
- * Helper to convert base64 string to Uint8Array.
- */
-export function base64ToUint8Array(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
 }
 
 /**
@@ -324,19 +286,12 @@ export async function uploadLeaseData(
   const validatedUrl = validateProviderUrl(providerApiUrl);
   const baseUrl = validatedUrl.origin + validatedUrl.pathname.replace(/\/$/, '');
 
-  let url: string;
-  const headers: Record<string, string> = {
-    'Authorization': `Bearer ${authToken}`,
-    'Content-Type': 'application/octet-stream',
-  };
-
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  if (import.meta.env.DEV) {
-    url = `/proxy-provider/v1/leases/${encodedLeaseUuid}/data`;
-    headers['X-Proxy-Target'] = baseUrl;
-  } else {
-    url = `${baseUrl}/v1/leases/${encodedLeaseUuid}/data`;
-  }
+  const { url, headers } = buildProviderFetchArgs(
+    baseUrl,
+    `/v1/leases/${encodedLeaseUuid}/data`,
+    { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/octet-stream' },
+  );
 
   const response = await fetch(url, {
     method: 'POST',
@@ -347,6 +302,6 @@ export async function uploadLeaseData(
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`Failed to upload lease data (${response.status}): ${errorText}`);
+    throw new ProviderApiError(response.status, `Failed to upload lease data (${response.status}): ${errorText}`);
   }
 }

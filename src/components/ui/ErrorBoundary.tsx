@@ -1,5 +1,6 @@
 import { Component, type ReactNode, type ErrorInfo } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { logError } from '../../utils/errors';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -23,7 +24,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-    console.error('ErrorBoundary caught an error:', error, errorInfo);
+    logError('ErrorBoundary', error);
     this.props.onError?.(error, errorInfo);
   }
 
@@ -87,7 +88,7 @@ export function TabErrorBoundary({ tabName, children }: TabErrorBoundaryProps) {
   return (
     <ErrorBoundary
       onError={(error) => {
-        console.error(`Error in ${tabName}:`, error);
+        logError(`TabErrorBoundary.${tabName}`, error);
       }}
       fallback={
         <div className="card p-8 text-center" role="alert">

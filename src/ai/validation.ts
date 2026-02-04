@@ -4,6 +4,7 @@
  */
 
 import * as ipaddr from 'ipaddr.js';
+import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
 
 // ============================================================================
 // Settings Validation
@@ -105,37 +106,28 @@ export function validateEndpointUrl(url: string): string | null {
     return null;
   }
 
-  try {
-    const parsed = new URL(url);
-
-    // Only allow http and https protocols
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return null;
-    }
-
-    // Disallow URLs with credentials
-    if (parsed.username || parsed.password) {
-      return null;
-    }
-
-    // Disallow data: or javascript: schemes that might be encoded
-    const normalized = parsed.href.toLowerCase();
-    if (normalized.includes('javascript:') || normalized.includes('data:')) {
-      return null;
-    }
-
-    // SSRF Protection: Block private/internal IP addresses
-    // Exception: Allow all private/internal addresses in development mode (for local Ollama, etc.)
-    const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
-    if (!isDev && isPrivateHost(parsed.hostname)) {
-      return null;
-    }
-
-    // Return the normalized URL (removes trailing slashes, normalizes encoding)
-    return parsed.origin;
-  } catch {
+  const parsed = parseHttpUrl(url);
+  if (!parsed) {
     return null;
   }
+
+  // Disallow URLs with credentials
+  if (parsed.username || parsed.password) {
+    return null;
+  }
+
+  // Disallow data: or javascript: schemes that might be encoded
+  const normalized = parsed.href.toLowerCase();
+  if (normalized.includes('javascript:') || normalized.includes('data:')) {
+    return null;
+  }
+
+  if (!isUrlSsrfSafe(parsed)) {
+    return null;
+  }
+
+  // Return the normalized URL (removes trailing slashes, normalizes encoding)
+  return parsed.origin;
 }
 
 /**

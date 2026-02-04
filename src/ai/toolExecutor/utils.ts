@@ -8,6 +8,7 @@ import {
   createLeaseDataSignMessage,
   createLeaseDataAuthToken,
   uploadLeaseData,
+  ProviderApiError,
 } from '../../api/provider-api';
 import type { ToolResult, SignResult } from './types';
 
@@ -79,40 +80,33 @@ export async function uploadPayloadToProvider(
       },
     };
   } catch (error) {
-    // Handle specific error codes
-    if (error instanceof Error) {
-      const errorMsg = error.message.toLowerCase();
-
-      if (errorMsg.includes('409') || errorMsg.includes('conflict')) {
-        return {
-          success: true,
-          data: {
-            message: 'Payload already uploaded (idempotent success)',
-            leaseUuid,
-            metaHash: metaHashHex,
-          },
-        };
-      }
-
-      if (errorMsg.includes('401') || errorMsg.includes('unauthorized')) {
-        return {
-          success: false,
-          error: 'Authentication failed. The signature may have expired. Please try again.',
-        };
-      }
-
-      if (errorMsg.includes('404') || errorMsg.includes('not found')) {
-        return {
-          success: false,
-          error: 'Lease not found or not in PENDING state. Payload upload is only allowed for pending leases.',
-        };
-      }
-
-      if (errorMsg.includes('400') || errorMsg.includes('bad request')) {
-        return {
-          success: false,
-          error: 'Payload hash does not match the lease meta_hash, or payload is invalid.',
-        };
+    // Handle specific HTTP status codes from provider API
+    if (error instanceof ProviderApiError) {
+      switch (error.status) {
+        case 409:
+          return {
+            success: true,
+            data: {
+              message: 'Payload already uploaded (idempotent success)',
+              leaseUuid,
+              metaHash: metaHashHex,
+            },
+          };
+        case 401:
+          return {
+            success: false,
+            error: 'Authentication failed. The signature may have expired. Please try again.',
+          };
+        case 404:
+          return {
+            success: false,
+            error: 'Lease not found or not in PENDING state. Payload upload is only allowed for pending leases.',
+          };
+        case 400:
+          return {
+            success: false,
+            error: 'Payload hash does not match the lease meta_hash, or payload is invalid.',
+          };
       }
     }
 
