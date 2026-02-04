@@ -17,6 +17,7 @@ export class ProviderApiError extends Error {
 
   constructor(status: number, message: string) {
     super(message);
+    Object.setPrototypeOf(this, ProviderApiError.prototype);
     this.name = 'ProviderApiError';
     this.status = status;
   }
