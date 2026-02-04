@@ -29,6 +29,7 @@ export function CopyButton({
   const copied = isCopied(key);
   return (
     <button
+      type="button"
       onClick={(e) => {
         if (stopPropagation) e.stopPropagation();
         copyToClipboard(value, copyKey);
