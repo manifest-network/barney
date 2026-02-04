@@ -18,7 +18,7 @@ export function ProviderLeaseCard({
   isSelected,
   onToggleSelect,
 }: ProviderLeaseCardProps) {
-  const { copied, copyToClipboard } = useCopyToClipboard();
+  const { isCopied, copyToClipboard } = useCopyToClipboard();
   const [isExpanded, setIsExpanded] = useState(false);
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [showCloseForm, setShowCloseForm] = useState(false);
@@ -58,22 +58,22 @@ export function ProviderLeaseCard({
               <span className="provider-lease-label">Lease</span>
               <code className="provider-lease-mono">{lease.uuid}</code>
               <button
-                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.uuid); }}
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.uuid, 'lease'); }}
                 className="provider-lease-copy"
                 title="Copy Lease UUID"
               >
-                {copied ? <Check size={10} /> : <Copy size={10} />}
+                {isCopied('lease') ? <Check size={10} /> : <Copy size={10} />}
               </button>
             </span>
             <span className="provider-lease-field">
               <span className="provider-lease-label">Tenant</span>
               <code className="provider-lease-mono">{lease.tenant}</code>
               <button
-                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.tenant); }}
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.tenant, 'tenant'); }}
                 className="provider-lease-copy"
                 title="Copy Tenant"
               >
-                {copied ? <Check size={10} /> : <Copy size={10} />}
+                {isCopied('tenant') ? <Check size={10} /> : <Copy size={10} />}
               </button>
             </span>
           </div>

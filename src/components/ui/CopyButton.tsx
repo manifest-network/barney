@@ -7,8 +7,10 @@ import { Copy, Check } from 'lucide-react';
 
 export interface CopyButtonProps {
   value: string;
-  copyToClipboard: (text: string) => void;
-  isCopied: (text: string) => boolean;
+  copyToClipboard: (text: string, key?: string) => void;
+  isCopied: (key: string) => boolean;
+  /** Unique key for tracking feedback independently of the copied value */
+  copyKey?: string;
   title?: string;
   stopPropagation?: boolean;
   className?: string;
@@ -18,16 +20,18 @@ export function CopyButton({
   value,
   copyToClipboard,
   isCopied,
+  copyKey,
   title = 'Copy',
   stopPropagation = false,
   className = 'lease-card-copy-btn',
 }: CopyButtonProps) {
-  const copied = isCopied(value);
+  const key = copyKey ?? value;
+  const copied = isCopied(key);
   return (
     <button
       onClick={(e) => {
         if (stopPropagation) e.stopPropagation();
-        copyToClipboard(value);
+        copyToClipboard(value, copyKey);
       }}
       className={`${className} ${copied ? 'copied' : ''}`}
       title={copied ? 'Copied!' : title}

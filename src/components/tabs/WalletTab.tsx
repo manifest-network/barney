@@ -36,7 +36,7 @@ interface WalletData {
 export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
   const toast = useToast();
   const { txLoading, executeTx } = useTxHandler();
-  const { copied, copyToClipboard } = useCopyToClipboard();
+  const { isCopied, copyToClipboard } = useCopyToClipboard();
   const [fundAmount, setFundAmount] = useState('');
   const [fundRecipient, setFundRecipient] = useState('');
   const [data, setData] = useState<WalletData>({
@@ -414,7 +414,7 @@ export function WalletTab({ isConnected, address, onConnect }: WalletTabProps) {
                     className="address-derivation-copy"
                     title="Copy credit address"
                   >
-                    {copied ? <Check size={10} /> : <Copy size={10} />}
+                    {isCopied(creditAccount.creditAccount?.creditAddress || '') ? <Check size={10} /> : <Copy size={10} />}
                   </button>
                 </div>
               </div>

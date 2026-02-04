@@ -11,7 +11,7 @@ import { formatCostPerHour } from '../../../utils/pricing';
 import type { NetworkLeaseCardProps } from './types';
 
 export function NetworkLeaseCard({ lease, getProvider, getSKU }: NetworkLeaseCardProps) {
-  const { copied, copyToClipboard } = useCopyToClipboard();
+  const { isCopied, copyToClipboard } = useCopyToClipboard();
   const [isExpanded, setIsExpanded] = useState(false);
   const provider = getProvider(lease.providerUuid);
   const stateKey = LEASE_STATE_TO_FILTER[lease.state];
@@ -39,11 +39,11 @@ export function NetworkLeaseCard({ lease, getProvider, getSKU }: NetworkLeaseCar
               <span className="lease-card-label">Lease</span>
               <code className="lease-card-mono">{truncateAddress(lease.uuid, 8, 6)}</code>
               <button
-                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.uuid); }}
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.uuid, 'lease'); }}
                 className="lease-card-copy-btn"
                 title="Copy Lease UUID"
               >
-                {copied ? <Check size={10} /> : <Copy size={10} />}
+                {isCopied('lease') ? <Check size={10} /> : <Copy size={10} />}
               </button>
             </span>
 
@@ -51,11 +51,11 @@ export function NetworkLeaseCard({ lease, getProvider, getSKU }: NetworkLeaseCar
               <span className="lease-card-label">Tenant</span>
               <code className="lease-card-mono">{truncateAddress(lease.tenant)}</code>
               <button
-                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.tenant); }}
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(lease.tenant, 'tenant'); }}
                 className="lease-card-copy-btn"
                 title="Copy Tenant Address"
               >
-                <Copy size={10} />
+                {isCopied('tenant') ? <Check size={10} /> : <Copy size={10} />}
               </button>
             </span>
 
@@ -63,11 +63,11 @@ export function NetworkLeaseCard({ lease, getProvider, getSKU }: NetworkLeaseCar
               <span className="lease-card-label">Provider</span>
               <code className="lease-card-mono">{truncateAddress(provider?.address || lease.providerUuid)}</code>
               <button
-                onClick={(e) => { e.stopPropagation(); copyToClipboard(provider?.address || lease.providerUuid); }}
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(provider?.address || lease.providerUuid, 'provider'); }}
                 className="lease-card-copy-btn"
                 title="Copy Provider Address"
               >
-                <Copy size={10} />
+                {isCopied('provider') ? <Check size={10} /> : <Copy size={10} />}
               </button>
             </span>
           </div>
@@ -105,30 +105,30 @@ export function NetworkLeaseCard({ lease, getProvider, getSKU }: NetworkLeaseCar
               <div className="lease-card-kv">
                 <span className="lease-card-kv-label">Lease UUID</span>
                 <code className="lease-card-kv-value">{lease.uuid}</code>
-                <button onClick={() => copyToClipboard(lease.uuid)} className="lease-card-copy-btn" title="Copy">
-                  <Copy size={10} />
+                <button onClick={() => copyToClipboard(lease.uuid, 'lease')} className="lease-card-copy-btn" title="Copy">
+                  {isCopied('lease') ? <Check size={10} /> : <Copy size={10} />}
                 </button>
               </div>
               <div className="lease-card-kv">
                 <span className="lease-card-kv-label">Tenant</span>
                 <code className="lease-card-kv-value">{lease.tenant}</code>
-                <button onClick={() => copyToClipboard(lease.tenant)} className="lease-card-copy-btn" title="Copy">
-                  <Copy size={10} />
+                <button onClick={() => copyToClipboard(lease.tenant, 'tenant')} className="lease-card-copy-btn" title="Copy">
+                  {isCopied('tenant') ? <Check size={10} /> : <Copy size={10} />}
                 </button>
               </div>
               <div className="lease-card-kv">
                 <span className="lease-card-kv-label">Provider UUID</span>
                 <code className="lease-card-kv-value">{lease.providerUuid}</code>
-                <button onClick={() => copyToClipboard(lease.providerUuid)} className="lease-card-copy-btn" title="Copy">
-                  <Copy size={10} />
+                <button onClick={() => copyToClipboard(lease.providerUuid, 'provider-uuid')} className="lease-card-copy-btn" title="Copy">
+                  {isCopied('provider-uuid') ? <Check size={10} /> : <Copy size={10} />}
                 </button>
               </div>
               {provider?.address && (
                 <div className="lease-card-kv">
                   <span className="lease-card-kv-label">Provider Address</span>
                   <code className="lease-card-kv-value">{provider.address}</code>
-                  <button onClick={() => copyToClipboard(provider.address)} className="lease-card-copy-btn" title="Copy">
-                    <Copy size={10} />
+                  <button onClick={() => copyToClipboard(provider.address, 'provider')} className="lease-card-copy-btn" title="Copy">
+                    {isCopied('provider') ? <Check size={10} /> : <Copy size={10} />}
                   </button>
                 </div>
               )}
@@ -136,8 +136,8 @@ export function NetworkLeaseCard({ lease, getProvider, getSKU }: NetworkLeaseCar
                 <div className="lease-card-kv">
                   <span className="lease-card-kv-label">Meta Hash</span>
                   <code className="lease-card-kv-value">{toHex(lease.metaHash)}</code>
-                  <button onClick={() => copyToClipboard(toHex(lease.metaHash))} className="lease-card-copy-btn" title="Copy">
-                    <Copy size={10} />
+                  <button onClick={() => copyToClipboard(toHex(lease.metaHash), 'meta-hash')} className="lease-card-copy-btn" title="Copy">
+                    {isCopied('meta-hash') ? <Check size={10} /> : <Copy size={10} />}
                   </button>
                 </div>
               )}

@@ -3,14 +3,15 @@ import { COPY_FEEDBACK_DURATION_MS } from '../config/constants';
 
 /**
  * Custom hook for copying text to clipboard with feedback state.
- * Tracks which specific value was copied so multiple copy buttons
- * can independently show their copied state.
+ * Tracks which button was clicked via an optional key so multiple
+ * copy buttons can independently show their copied state, even when
+ * they copy the same text.
  *
  * @param feedbackDuration - Duration in ms to show "copied" feedback (default: 2000ms)
- * @returns Object with `copied` state, `copiedValue`, `copyToClipboard` function, and `isCopied` helper
+ * @returns Object with `copied` state, `copiedKey`, `copyToClipboard` function, and `isCopied` helper
  */
 export function useCopyToClipboard(feedbackDuration = COPY_FEEDBACK_DURATION_MS) {
-  const [copiedValue, setCopiedValue] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Cleanup timeout on unmount
@@ -23,7 +24,7 @@ export function useCopyToClipboard(feedbackDuration = COPY_FEEDBACK_DURATION_MS)
   }, []);
 
   const copyToClipboard = useCallback(
-    async (text: string): Promise<boolean> => {
+    async (text: string, key?: string): Promise<boolean> => {
       // Clear any existing timeout
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
@@ -32,11 +33,11 @@ export function useCopyToClipboard(feedbackDuration = COPY_FEEDBACK_DURATION_MS)
 
       try {
         await navigator.clipboard.writeText(text);
-        setCopiedValue(text);
+        setCopiedKey(key ?? text);
 
         // Set new timeout with cleanup reference
         timeoutRef.current = setTimeout(() => {
-          setCopiedValue(null);
+          setCopiedKey(null);
           timeoutRef.current = null;
         }, feedbackDuration);
 
@@ -48,11 +49,11 @@ export function useCopyToClipboard(feedbackDuration = COPY_FEEDBACK_DURATION_MS)
     [feedbackDuration]
   );
 
-  /** Check if a specific value was just copied */
-  const isCopied = useCallback((text: string) => copiedValue === text, [copiedValue]);
+  /** Check if a specific key (or value) was just copied */
+  const isCopied = useCallback((key: string) => copiedKey === key, [copiedKey]);
 
   // Backward compatibility: `copied` is true if anything was copied
-  const copied = copiedValue !== null;
+  const copied = copiedKey !== null;
 
-  return { copied, copiedValue, copyToClipboard, isCopied };
+  return { copied, copiedKey, copyToClipboard, isCopied };
 }
