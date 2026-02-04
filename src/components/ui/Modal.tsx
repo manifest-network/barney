@@ -22,6 +22,8 @@ const sizeClasses: Record<ModalSize, string> = {
 export function Modal({ isOpen, onClose, title, size = 'md', children, footer }: ModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const previousActiveElement = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const titleId = useId();
 
   useEffect(() => {
@@ -37,7 +39,7 @@ export function Modal({ isOpen, onClose, title, size = 'md', children, footer }:
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
 
       // Focus trap - keep focus within modal
@@ -80,7 +82,7 @@ export function Modal({ isOpen, onClose, title, size = 'md', children, footer }:
       // Restore focus to the previously focused element
       previousActiveElement.current?.focus();
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
