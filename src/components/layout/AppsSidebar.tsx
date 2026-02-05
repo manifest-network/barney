@@ -83,13 +83,9 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   }, [address]);
 
   useEffect(() => {
-    // Use setTimeout(0) to avoid synchronous setState within effect body
-    const initialTimer = setTimeout(refresh, 0);
+    refresh();
     const interval = setInterval(refresh, 10000);
-    return () => {
-      clearTimeout(initialTimer);
-      clearInterval(interval);
-    };
+    return () => clearInterval(interval);
   }, [refresh]);
 
   const runningApps = apps.filter((a) => a.status === 'running' || a.status === 'deploying');

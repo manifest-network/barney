@@ -76,6 +76,8 @@ function saveApps(address: string, apps: AppEntry[]): void {
 /**
  * Validate an app name.
  * Returns null if valid, or an error string describing the issue.
+ *
+ * Names of stopped/failed apps can be reused — only running/deploying apps block a name.
  */
 export function validateAppName(
   name: string,
@@ -91,13 +93,16 @@ export function validateAppName(
   if (!APP_NAME_REGEX.test(name)) {
     return 'App name must be lowercase alphanumeric with hyphens, and cannot start or end with a hyphen.';
   }
-  // Uniqueness check
+  // Uniqueness check — only running/deploying apps block the name
   const apps = loadApps(address);
   const existing = apps.find(
-    (a) => a.name === name && a.leaseUuid !== excludeLeaseUuid
+    (a) =>
+      a.name === name &&
+      a.leaseUuid !== excludeLeaseUuid &&
+      (a.status === 'running' || a.status === 'deploying')
   );
   if (existing) {
-    return `An app named "${name}" already exists.`;
+    return `An app named "${name}" is already ${existing.status}.`;
   }
   return null;
 }
@@ -117,9 +122,18 @@ export function getAppByLease(address: string, leaseUuid: string): AppEntry | nu
   return loadApps(address).find((a) => a.leaseUuid === leaseUuid) ?? null;
 }
 
-/** Add a new app entry. Returns the added entry. */
+/**
+ * Add a new app entry. Returns the added entry.
+ * Removes any existing stopped/failed app with the same name (allows name reuse).
+ */
 export function addApp(address: string, entry: AppEntry): AppEntry {
-  const apps = loadApps(address);
+  let apps = loadApps(address);
+  // Remove old stopped/failed entries with the same name
+  apps = apps.filter(
+    (a) =>
+      a.name !== entry.name ||
+      (a.status !== 'stopped' && a.status !== 'failed')
+  );
   apps.push(entry);
   saveApps(address, apps);
   return entry;

@@ -10,7 +10,6 @@ import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { createSignMessage, createAuthToken } from '../../api/provider-api';
 import { pollLeaseUntilReady, type TerminalChainState } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
-import { SECONDS_PER_DAY } from '../../config/constants';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
@@ -286,7 +285,8 @@ export async function executeConfirmedDeployApp(
       },
     });
 
-    if (fredStatus.status === 'ready') {
+    // 'active' is an alias for 'ready' (fred may use either)
+    if (fredStatus.status === 'ready' || fredStatus.status === 'active') {
       const appUrl = fredStatus.endpoints
         ? Object.values(fredStatus.endpoints)[0]
         : undefined;

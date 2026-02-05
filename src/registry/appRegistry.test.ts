@@ -165,9 +165,19 @@ describe('appRegistry', () => {
       expect(validateAppName('my app', ADDR_A)).toContain('lowercase');
     });
 
-    it('rejects duplicate name within same wallet', () => {
-      addApp(ADDR_A, makeApp({ name: 'taken' }));
-      expect(validateAppName('taken', ADDR_A)).toContain('already exists');
+    it('rejects duplicate name within same wallet for running app', () => {
+      addApp(ADDR_A, makeApp({ name: 'taken', status: 'running' }));
+      expect(validateAppName('taken', ADDR_A)).toContain('is already running');
+    });
+
+    it('allows reusing name of stopped app', () => {
+      addApp(ADDR_A, makeApp({ name: 'stopped-app', status: 'stopped' }));
+      expect(validateAppName('stopped-app', ADDR_A)).toBeNull();
+    });
+
+    it('allows reusing name of failed app', () => {
+      addApp(ADDR_A, makeApp({ name: 'failed-app', status: 'failed' }));
+      expect(validateAppName('failed-app', ADDR_A)).toBeNull();
     });
 
     it('allows same name in different wallets', () => {

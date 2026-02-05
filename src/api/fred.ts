@@ -16,7 +16,7 @@ import { ProviderApiError } from './provider-api';
 import { logError } from '../utils/errors';
 
 export interface FredLeaseStatus {
-  status: 'provisioning' | 'ready' | 'failed';
+  status: 'provisioning' | 'ready' | 'active' | 'failed';
   phase?: string;
   steps?: Record<string, string>;
   instances?: Array<{ name: string; status: string; ports?: Record<string, number> }>;
@@ -181,7 +181,8 @@ export async function pollLeaseUntilReady(
       lastStatus = await getLeaseStatus(providerApiUrl, leaseUuid, authToken);
       opts.onProgress?.(lastStatus);
 
-      if (lastStatus.status === 'ready' || lastStatus.status === 'failed') {
+      // 'active' is an alias for 'ready' (fred may use either)
+      if (lastStatus.status === 'ready' || lastStatus.status === 'active' || lastStatus.status === 'failed') {
         return lastStatus;
       }
     } catch (error) {

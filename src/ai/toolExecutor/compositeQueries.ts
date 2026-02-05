@@ -83,6 +83,7 @@ export async function executeListApps(
 
 /**
  * Execute app_status: Registry lookup + chain state + fred status.
+ * Reconciles registry with current chain/fred state.
  */
 export async function executeAppStatus(
   args: Record<string, unknown>,
@@ -100,20 +101,22 @@ export async function executeAppStatus(
 
   // Get chain state
   let chainState = 'unknown';
+  let leaseState: number | null = null;
   try {
     const lease = await getLease(app.leaseUuid);
     if (lease) {
+      leaseState = lease.state as number;
       // Map numeric state to string
       const stateMap: Record<number, string> = {
         0: 'unspecified', 1: 'pending', 2: 'active', 3: 'closed', 4: 'rejected', 5: 'expired',
       };
-      chainState = stateMap[lease.state as number] ?? 'unknown';
+      chainState = stateMap[leaseState] ?? 'unknown';
     }
   } catch (error) {
     logError('compositeQueries.executeAppStatus.chainState', error);
   }
 
-  // Get fred status if app is active/deploying
+  // Get fred status if app could be active
   let fredStatus = null;
   if (
     (app.status === 'running' || app.status === 'deploying') &&
@@ -137,13 +140,40 @@ export async function executeAppStatus(
     }
   }
 
+  // Reconcile registry status with chain/fred state
+  let currentStatus = app.status;
+  let appUrl = app.url;
+
+  // If chain says closed/rejected/expired, mark as stopped
+  if (leaseState === 3 || leaseState === 4 || leaseState === 5) {
+    if (app.status !== 'stopped' && app.status !== 'failed') {
+      currentStatus = 'stopped';
+      appRegistry.updateApp(address, app.leaseUuid, { status: 'stopped' });
+    }
+  }
+  // If chain says active and fred says ready/active, mark as running
+  else if (leaseState === 2 && fredStatus) {
+    if (fredStatus.status === 'ready' || fredStatus.status === 'active') {
+      if (app.status !== 'running') {
+        currentStatus = 'running';
+        appUrl = fredStatus.endpoints ? Object.values(fredStatus.endpoints)[0] : app.url;
+        appRegistry.updateApp(address, app.leaseUuid, { status: 'running', url: appUrl });
+      }
+    } else if (fredStatus.status === 'failed') {
+      if (app.status !== 'failed') {
+        currentStatus = 'failed';
+        appRegistry.updateApp(address, app.leaseUuid, { status: 'failed' });
+      }
+    }
+  }
+
   return {
     success: true,
     data: {
       name: app.name,
-      status: app.status,
+      status: currentStatus,
       size: app.size,
-      url: app.url,
+      url: appUrl,
       chainState,
       fredStatus,
       created: new Date(app.createdAt).toISOString(),
