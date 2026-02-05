@@ -15,15 +15,19 @@ import type { AppRegistryAccess } from '../ai/toolExecutor/types';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import type { AppEntry } from '../registry/appRegistry';
 import type { DeployProgress } from '../ai/progress';
+import { LeaseState } from '../api/billing';
 
 // Mock all external API modules
-vi.mock('../api/billing', () => ({
-  getLeasesByTenant: vi.fn(),
-  getCreditAccount: vi.fn(),
-  getCreditEstimate: vi.fn(),
-  getLease: vi.fn(),
-  LeaseState: { LEASE_STATE_ACTIVE: 2, LEASE_STATE_PENDING: 1 },
-}));
+vi.mock('../api/billing', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api/billing')>();
+  return {
+    ...actual,
+    getLeasesByTenant: vi.fn(),
+    getCreditAccount: vi.fn(),
+    getCreditEstimate: vi.fn(),
+    getLease: vi.fn(),
+  };
+});
 
 vi.mock('../api/bank', () => ({
   getAllBalances: vi.fn(),
@@ -153,7 +157,7 @@ describe('Deploy Flow Integration', () => {
     vi.mocked(extractLeaseUuidFromTxResult).mockReturnValue(LEASE_UUID);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'uploaded' } });
     vi.mocked(pollLeaseUntilReady).mockResolvedValue({
-      status: 'ready',
+      state: LeaseState.LEASE_STATE_ACTIVE,
       endpoints: { http: 'https://my-app.example.com' },
     });
 

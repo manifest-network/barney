@@ -13,12 +13,17 @@ import {
 import type { ToolExecutorOptions, AppRegistryAccess, PayloadAttachment } from './types';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import type { AppEntry } from '../../registry/appRegistry';
+import { LeaseState } from '../../api/billing';
 
 // Mock external modules
-vi.mock('../../api/billing', () => ({
-  getCreditEstimate: vi.fn(),
-  getLease: vi.fn(),
-}));
+vi.mock('../../api/billing', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/billing')>();
+  return {
+    ...actual,
+    getCreditEstimate: vi.fn(),
+    getLease: vi.fn(),
+  };
+});
 
 vi.mock('../../api/sku', () => ({
   getProviders: vi.fn(),
@@ -189,7 +194,7 @@ describe('executeConfirmedDeployApp', () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
     vi.mocked(pollLeaseUntilReady).mockResolvedValue({
-      status: 'ready',
+      state: LeaseState.LEASE_STATE_ACTIVE,
       endpoints: { web: 'https://app.example.com' },
     });
 

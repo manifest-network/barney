@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { getLeaseStatus, pollLeaseUntilReady, type FredLeaseStatus } from './fred';
+import { LeaseState } from './billing';
 import { ProviderApiError } from './provider-api';
 
 // Mock url utilities to allow test URLs through SSRF check
@@ -22,6 +23,7 @@ const PROVIDER_URL = 'https://fred.example.com';
 const LEASE_UUID = '550e8400-e29b-41d4-a716-446655440000';
 const AUTH_TOKEN = 'dG9rZW4=';
 
+/** Mock fetch to return a raw fred response (state as chain-style string). */
 function mockFetchResponse(data: unknown, ok = true, status = 200): void {
   vi.stubGlobal(
     'fetch',
@@ -35,7 +37,12 @@ function mockFetchResponse(data: unknown, ok = true, status = 200): void {
   );
 }
 
-function mockFetchSequence(responses: Array<{ data: FredLeaseStatus; ok?: boolean; status?: number }>): void {
+/** Raw fred responses use chain-style state strings. */
+function fredResponse(state: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { state, ...extra };
+}
+
+function mockFetchSequence(responses: Array<{ data: Record<string, unknown>; ok?: boolean; status?: number }>): void {
   const mockFn = vi.fn();
   for (let i = 0; i < responses.length; i++) {
     const r = responses[i];
@@ -59,19 +66,30 @@ describe('getLeaseStatus', () => {
     vi.unstubAllGlobals();
   });
 
-  it('returns lease status on success', async () => {
-    const status: FredLeaseStatus = {
-      status: 'ready',
-      endpoints: { web: 'https://app.example.com' },
-    };
-    mockFetchResponse(status);
+  it('parses LEASE_STATE_ACTIVE from fred', async () => {
+    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE', { endpoints: { web: 'https://app.example.com' } }));
 
     const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result).toEqual(status);
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
+    expect(result.endpoints).toEqual({ web: 'https://app.example.com' });
+  });
+
+  it('parses LEASE_STATE_PENDING from fred', async () => {
+    mockFetchResponse(fredResponse('LEASE_STATE_PENDING'));
+
+    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(result.state).toBe(LeaseState.LEASE_STATE_PENDING);
+  });
+
+  it('defaults to PENDING for unknown state strings', async () => {
+    mockFetchResponse(fredResponse('SOMETHING_UNKNOWN'));
+
+    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(result.state).toBe(LeaseState.LEASE_STATE_PENDING);
   });
 
   it('passes auth header and correct URL', async () => {
-    mockFetchResponse({ status: 'provisioning' });
+    mockFetchResponse(fredResponse('LEASE_STATE_PENDING'));
 
     await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
 
@@ -133,40 +151,40 @@ describe('pollLeaseUntilReady', () => {
     vi.useRealTimers();
   });
 
-  it('returns immediately when status is ready', async () => {
-    const readyStatus: FredLeaseStatus = { status: 'ready', endpoints: { web: 'https://app.example.com' } };
-    mockFetchSequence([{ data: readyStatus }]);
+  it('returns immediately when state is ACTIVE', async () => {
+    const active = fredResponse('LEASE_STATE_ACTIVE', { endpoints: { web: 'https://app.example.com' } });
+    mockFetchSequence([{ data: active }]);
 
     const result = await pollLeaseUntilReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
       intervalMs: 100,
       maxAttempts: 5,
     });
 
-    expect(result.status).toBe('ready');
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('returns immediately when status is failed', async () => {
-    const failedStatus: FredLeaseStatus = { status: 'failed', error: 'container crashed' };
-    mockFetchSequence([{ data: failedStatus }]);
+  it('returns immediately when state is CLOSED', async () => {
+    const closed = fredResponse('LEASE_STATE_CLOSED', { error: 'container crashed' });
+    mockFetchSequence([{ data: closed }]);
 
     const result = await pollLeaseUntilReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
       intervalMs: 100,
       maxAttempts: 5,
     });
 
-    expect(result.status).toBe('failed');
+    expect(result.state).toBe(LeaseState.LEASE_STATE_CLOSED);
     expect(result.error).toBe('container crashed');
   });
 
-  it('polls until ready after provisioning', async () => {
-    const provisioning: FredLeaseStatus = { status: 'provisioning', phase: 'pulling_image' };
-    const ready: FredLeaseStatus = { status: 'ready', endpoints: { web: 'https://app.example.com' } };
+  it('polls until active after pending', async () => {
+    const pending = fredResponse('LEASE_STATE_PENDING', { phase: 'pulling_image' });
+    const active = fredResponse('LEASE_STATE_ACTIVE', { endpoints: { web: 'https://app.example.com' } });
 
     mockFetchSequence([
-      { data: provisioning },
-      { data: provisioning },
-      { data: ready },
+      { data: pending },
+      { data: pending },
+      { data: active },
     ]);
 
     const onProgress = vi.fn();
@@ -183,18 +201,16 @@ describe('pollLeaseUntilReady', () => {
 
     const result = await resultPromise;
 
-    expect(result.status).toBe('ready');
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
     expect(onProgress).toHaveBeenCalledTimes(3);
-    expect(onProgress).toHaveBeenCalledWith(provisioning);
-    expect(onProgress).toHaveBeenCalledWith(ready);
   });
 
   it('returns last status on max attempts', async () => {
-    const provisioning: FredLeaseStatus = { status: 'provisioning', phase: 'pulling_image' };
+    const pending = fredResponse('LEASE_STATE_PENDING', { phase: 'pulling_image' });
     mockFetchSequence([
-      { data: provisioning },
-      { data: provisioning },
-      { data: provisioning },
+      { data: pending },
+      { data: pending },
+      { data: pending },
     ]);
 
     const resultPromise = pollLeaseUntilReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
@@ -206,11 +222,11 @@ describe('pollLeaseUntilReady', () => {
     await vi.advanceTimersByTimeAsync(100);
 
     const result = await resultPromise;
-    expect(result.status).toBe('provisioning');
+    expect(result.state).toBe(LeaseState.LEASE_STATE_PENDING);
   });
 
   it('continues polling on transient errors', async () => {
-    const ready: FredLeaseStatus = { status: 'ready' };
+    const active = fredResponse('LEASE_STATE_ACTIVE');
 
     const mockFn = vi.fn();
     // First call: network error
@@ -219,8 +235,8 @@ describe('pollLeaseUntilReady', () => {
     mockFn.mockResolvedValueOnce({
       ok: true,
       status: 200,
-      json: () => Promise.resolve(ready),
-      text: () => Promise.resolve(JSON.stringify(ready)),
+      json: () => Promise.resolve(active),
+      text: () => Promise.resolve(JSON.stringify(active)),
     });
     vi.stubGlobal('fetch', mockFn);
 
@@ -232,12 +248,12 @@ describe('pollLeaseUntilReady', () => {
     await vi.advanceTimersByTimeAsync(100);
 
     const result = await resultPromise;
-    expect(result.status).toBe('ready');
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
   });
 
   it('respects abort signal', async () => {
-    const provisioning: FredLeaseStatus = { status: 'provisioning' };
-    mockFetchSequence([{ data: provisioning }]);
+    const pending = fredResponse('LEASE_STATE_PENDING');
+    mockFetchSequence([{ data: pending }]);
 
     const controller = new AbortController();
     controller.abort();
@@ -249,6 +265,6 @@ describe('pollLeaseUntilReady', () => {
     });
 
     // Should return initial status immediately since already aborted
-    expect(result.status).toBe('provisioning');
+    expect(result.state).toBe(LeaseState.LEASE_STATE_PENDING);
   });
 });

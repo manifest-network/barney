@@ -5,7 +5,7 @@
 
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
-import { getCreditAccount, getLease } from '../../api/billing';
+import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { createSignMessage, createAuthToken } from '../../api/provider-api';
 import { pollLeaseUntilReady, type TerminalChainState } from '../../api/fred';
@@ -277,16 +277,14 @@ export async function executeConfirmedDeployApp(
       checkChainState: async (): Promise<TerminalChainState | null> => {
         const lease = await getLease(leaseUuid);
         if (!lease) return 'closed';
-        // State: 3=closed, 4=rejected, 5=expired
-        if (lease.state === 3) return 'closed';
-        if (lease.state === 4) return 'rejected';
-        if (lease.state === 5) return 'expired';
+        if (lease.state === LeaseState.LEASE_STATE_CLOSED) return 'closed';
+        if (lease.state === LeaseState.LEASE_STATE_REJECTED) return 'rejected';
+        if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return 'expired';
         return null;
       },
     });
 
-    // 'active' is an alias for 'ready' (fred may use either)
-    if (fredStatus.status === 'ready' || fredStatus.status === 'active') {
+    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
       const appUrl = fredStatus.endpoints
         ? Object.values(fredStatus.endpoints)[0]
         : undefined;
@@ -308,7 +306,7 @@ export async function executeConfirmedDeployApp(
       };
     }
 
-    if (fredStatus.status === 'failed') {
+    if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
       appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
       onProgress?.({ phase: 'failed', detail: fredStatus.error || 'Deployment failed' });
       return {
@@ -317,28 +315,55 @@ export async function executeConfirmedDeployApp(
       };
     }
 
-    // Timeout (still provisioning)
-    appRegistry.updateApp(address, leaseUuid, { status: 'deploying' });
-    return {
-      success: true,
-      data: {
-        message: `App "${name}" is still deploying. Use app_status("${name}") to check progress.`,
-        name,
-        status: 'deploying',
-      },
-    };
+    // Fred didn't confirm — fall back to chain state
+    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress);
   } catch (error) {
     logError('compositeTransactions.executeConfirmedDeployApp.polling', error);
-    // Polling failed but lease+upload succeeded
-    return {
-      success: true,
-      data: {
-        message: `App "${name}" was deployed but status check failed. Use app_status("${name}") to check.`,
-        name,
-        status: 'deploying',
-      },
-    };
+    // Polling failed but lease+upload succeeded — fall back to chain state
+    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress);
   }
+}
+
+/**
+ * When fred polling doesn't confirm readiness, check the chain state.
+ * If the lease is ACTIVE on chain, trust it and mark the app as running.
+ */
+async function fallbackToChainState(
+  name: string,
+  leaseUuid: string,
+  appRegistry: ToolExecutorOptions['appRegistry'],
+  address: string,
+  onProgress?: ToolExecutorOptions['onProgress'],
+): Promise<ToolResult> {
+  try {
+    const lease = await getLease(leaseUuid);
+    if (lease && lease.state === LeaseState.LEASE_STATE_ACTIVE) {
+      // Chain says ACTIVE — trust it
+      appRegistry?.updateApp(address, leaseUuid, { status: 'running' });
+      onProgress?.({ phase: 'ready', detail: 'App is live!' });
+      return {
+        success: true,
+        data: {
+          message: `App "${name}" is live!`,
+          name,
+          status: 'running',
+        },
+      };
+    }
+  } catch (error) {
+    logError('compositeTransactions.fallbackToChainState', error);
+  }
+
+  // Chain state unknown or not active — keep as deploying
+  appRegistry?.updateApp(address, leaseUuid, { status: 'deploying' });
+  return {
+    success: true,
+    data: {
+      message: `App "${name}" is still deploying. Use app_status("${name}") to check progress.`,
+      name,
+      status: 'deploying',
+    },
+  };
 }
 
 // ============================================================================

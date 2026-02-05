@@ -13,10 +13,11 @@
 
 import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
 import { ProviderApiError } from './provider-api';
+import { LeaseState, leaseStateFromString } from './billing';
 import { logError } from '../utils/errors';
 
 export interface FredLeaseStatus {
-  status: 'provisioning' | 'ready' | 'active' | 'failed';
+  state: LeaseState;
   phase?: string;
   steps?: Record<string, string>;
   instances?: Array<{ name: string; status: string; ports?: Record<string, number> }>;
@@ -24,6 +25,37 @@ export interface FredLeaseStatus {
   error?: string;
   fail_count?: number;
   created_at?: string;
+}
+
+/** Terminal lease states — polling should stop when fred reports one of these. */
+const TERMINAL_STATES = new Set<LeaseState>([
+  LeaseState.LEASE_STATE_ACTIVE,
+  LeaseState.LEASE_STATE_CLOSED,
+  LeaseState.LEASE_STATE_REJECTED,
+  LeaseState.LEASE_STATE_EXPIRED,
+]);
+
+/**
+ * Parse a raw fred response into a FredLeaseStatus.
+ * Fred returns `state: 'LEASE_STATE_ACTIVE'` (chain-style enum string).
+ */
+function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
+  let state = LeaseState.LEASE_STATE_PENDING;
+  if (typeof raw.state === 'string' && raw.state) {
+    try {
+      const parsed = leaseStateFromString(raw.state);
+      if (parsed !== LeaseState.UNRECOGNIZED) {
+        state = parsed;
+      }
+    } catch {
+      // Unknown state string — default to pending
+    }
+  }
+
+  return {
+    ...raw,
+    state,
+  } as FredLeaseStatus;
 }
 
 /**
@@ -106,7 +138,8 @@ export async function getLeaseStatus(
   }
 
   try {
-    return await response.json();
+    const raw = await response.json();
+    return parseFredResponse(raw);
   } catch {
     throw new ProviderApiError(response.status, 'Fred returned invalid JSON');
   }
@@ -148,7 +181,7 @@ export async function pollLeaseUntilReady(
   const maxAttempts = opts.maxAttempts ?? 60;
 
   let lastStatus: FredLeaseStatus = {
-    status: 'provisioning',
+    state: LeaseState.LEASE_STATE_PENDING,
     phase: 'starting',
   };
 
@@ -164,7 +197,7 @@ export async function pollLeaseUntilReady(
         if (chainState) {
           // Terminal chain state — return failed status
           lastStatus = {
-            status: 'failed',
+            state: LeaseState.LEASE_STATE_CLOSED,
             phase: 'chain_rejected',
             error: `Lease ${chainState} on chain`,
           };
@@ -181,8 +214,7 @@ export async function pollLeaseUntilReady(
       lastStatus = await getLeaseStatus(providerApiUrl, leaseUuid, authToken);
       opts.onProgress?.(lastStatus);
 
-      // 'active' is an alias for 'ready' (fred may use either)
-      if (lastStatus.status === 'ready' || lastStatus.status === 'active' || lastStatus.status === 'failed') {
+      if (TERMINAL_STATES.has(lastStatus.state)) {
         return lastStatus;
       }
     } catch (error) {

@@ -18,6 +18,7 @@ import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseStatus } from '../../api/fred';
 import { createSignMessage, createAuthToken } from '../../api/provider-api';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
+import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
@@ -101,16 +102,12 @@ export async function executeAppStatus(
 
   // Get chain state
   let chainState = 'unknown';
-  let leaseState: number | null = null;
+  let leaseState: LeaseState | null = null;
   try {
     const lease = await getLease(app.leaseUuid);
     if (lease) {
-      leaseState = lease.state as number;
-      // Map numeric state to string
-      const stateMap: Record<number, string> = {
-        0: 'unspecified', 1: 'pending', 2: 'active', 3: 'closed', 4: 'rejected', 5: 'expired',
-      };
-      chainState = stateMap[leaseState] ?? 'unknown';
+      leaseState = lease.state as LeaseState;
+      chainState = LEASE_STATE_LABELS[leaseState]?.toLowerCase() ?? 'unknown';
     }
   } catch (error) {
     logError('compositeQueries.executeAppStatus.chainState', error);
@@ -145,25 +142,31 @@ export async function executeAppStatus(
   let appUrl = app.url;
 
   // If chain says closed/rejected/expired, mark as stopped
-  if (leaseState === 3 || leaseState === 4 || leaseState === 5) {
+  if (leaseState === LeaseState.LEASE_STATE_CLOSED || leaseState === LeaseState.LEASE_STATE_REJECTED || leaseState === LeaseState.LEASE_STATE_EXPIRED) {
     if (app.status !== 'stopped' && app.status !== 'failed') {
       currentStatus = 'stopped';
       appRegistry.updateApp(address, app.leaseUuid, { status: 'stopped' });
     }
   }
-  // If chain says active and fred says ready/active, mark as running
-  else if (leaseState === 2 && fredStatus) {
-    if (fredStatus.status === 'ready' || fredStatus.status === 'active') {
-      if (app.status !== 'running') {
-        currentStatus = 'running';
-        appUrl = fredStatus.endpoints ? Object.values(fredStatus.endpoints)[0] : app.url;
-        appRegistry.updateApp(address, app.leaseUuid, { status: 'running', url: appUrl });
+  // If chain says active, reconcile with fred (or trust chain if fred unavailable)
+  else if (leaseState === LeaseState.LEASE_STATE_ACTIVE) {
+    if (fredStatus) {
+      if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+        if (app.status !== 'running') {
+          currentStatus = 'running';
+          appUrl = fredStatus.endpoints ? Object.values(fredStatus.endpoints)[0] : app.url;
+          appRegistry.updateApp(address, app.leaseUuid, { status: 'running', url: appUrl });
+        }
+      } else if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
+        if (app.status !== 'failed') {
+          currentStatus = 'failed';
+          appRegistry.updateApp(address, app.leaseUuid, { status: 'failed' });
+        }
       }
-    } else if (fredStatus.status === 'failed') {
-      if (app.status !== 'failed') {
-        currentStatus = 'failed';
-        appRegistry.updateApp(address, app.leaseUuid, { status: 'failed' });
-      }
+    } else if (app.status !== 'running') {
+      // Fred unavailable but chain says active — trust the chain
+      currentStatus = 'running';
+      appRegistry.updateApp(address, app.leaseUuid, { status: 'running' });
     }
   }
 
