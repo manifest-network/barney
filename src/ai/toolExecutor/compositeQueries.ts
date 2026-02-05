@@ -15,7 +15,7 @@ import {
 import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
-import { getLeaseStatus } from '../../api/fred';
+import { getLeaseStatus, getLeaseInfo } from '../../api/fred';
 import { createSignMessage, createAuthToken } from '../../api/provider-api';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
@@ -154,7 +154,29 @@ export async function executeAppStatus(
       if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
         if (app.status !== 'running') {
           currentStatus = 'running';
-          appUrl = fredStatus.endpoints ? Object.values(fredStatus.endpoints)[0] : app.url;
+        }
+        // Fetch connection details from /info/ endpoint
+        if (signArbitrary && app.providerUrl) {
+          try {
+            const infoTimestamp = Math.floor(Date.now() / 1000);
+            const infoSignMessage = createSignMessage(address, app.leaseUuid, infoTimestamp);
+            const infoSignResult: SignResult = await signArbitrary(address, infoSignMessage);
+            const infoAuthToken = createAuthToken(
+              address,
+              app.leaseUuid,
+              infoTimestamp,
+              infoSignResult.pub_key.value,
+              infoSignResult.signature
+            );
+            const leaseInfo = await getLeaseInfo(app.providerUrl, app.leaseUuid, infoAuthToken);
+            if (leaseInfo.host) {
+              appUrl = leaseInfo.host;
+            }
+          } catch (error) {
+            logError('compositeQueries.executeAppStatus.info', error);
+          }
+        }
+        if (app.status !== 'running' || appUrl !== app.url) {
           appRegistry.updateApp(address, app.leaseUuid, { status: 'running', url: appUrl });
         }
       } else if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {

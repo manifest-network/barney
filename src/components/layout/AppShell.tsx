@@ -14,7 +14,7 @@ import { CHAIN_NAME } from '../../config/chain';
 export function AppShell() {
   const { setClientManager, setAddress, setSignArbitrary } = useAI();
   const { clientManager, address } = useManifestMCP();
-  const { signArbitrary, isWalletConnected, openView } = useChain(CHAIN_NAME);
+  const { signArbitrary, isWalletConnected, isWalletConnecting, openView } = useChain(CHAIN_NAME);
 
   // Create a stable wrapper for signArbitrary
   const wrappedSignArbitrary = useCallback(
@@ -40,7 +40,7 @@ export function AppShell() {
   }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, wrappedSignArbitrary]);
 
   if (!isWalletConnected) {
-    return <LandingPage onConnect={() => openView()} />;
+    return <LandingPage onConnect={() => openView()} isConnecting={isWalletConnecting} />;
   }
 
   return <MainLayout />;

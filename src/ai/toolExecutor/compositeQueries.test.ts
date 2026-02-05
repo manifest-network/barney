@@ -36,6 +36,7 @@ vi.mock('../../api/provider-api', () => ({
 
 vi.mock('../../api/fred', () => ({
   getLeaseStatus: vi.fn(),
+  getLeaseInfo: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-browser', () => ({

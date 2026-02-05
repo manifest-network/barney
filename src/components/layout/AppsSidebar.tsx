@@ -4,7 +4,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
-import { LogOut, Plus, Circle, Zap } from 'lucide-react';
+import { LogOut, Circle, Zap } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
 import { getApps, updateApp, type AppEntry } from '../../registry/appRegistry';
 import { getCreditEstimate, getLeasesByTenant, LeaseState } from '../../api/billing';
@@ -31,6 +31,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [credits, setCredits] = useState<number | null>(null);
   const [hoursRemaining, setHoursRemaining] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
 
   // Load apps and credit info, reconcile with chain state
   const refresh = useCallback(async () => {
@@ -102,14 +103,30 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
             <span className="apps-sidebar__wallet-name">
               {wallet?.prettyName || 'Wallet'}
             </span>
-            <span className="apps-sidebar__wallet-address">
-              {address ? truncateAddress(address) : ''}
-            </span>
+            {address && (
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(address);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  } catch (error) {
+                    logError('AppsSidebar.copyAddress', error);
+                  }
+                }}
+                className="apps-sidebar__wallet-address"
+                aria-label="Copy address to clipboard"
+                title="Click to copy address"
+              >
+                {copied ? 'Copied!' : truncateAddress(address)}
+              </button>
+            )}
           </div>
         </div>
         <button
           type="button"
-          onClick={() => { disconnect(); onClose?.(); }}
+          onClick={async () => { try { await disconnect(); } catch (error) { logError('AppsSidebar.disconnect', error); } onClose?.(); }}
           className="apps-sidebar__disconnect"
           aria-label="Disconnect wallet"
           title="Disconnect"
@@ -176,19 +193,6 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
           )}
         </div>
       </div>
-
-      {/* New deployment button */}
-      <button
-        type="button"
-        onClick={() => {
-          sendMessage("I'd like to deploy an app");
-          onClose?.();
-        }}
-        className="apps-sidebar__deploy-btn"
-      >
-        <Plus className="w-4 h-4" aria-hidden="true" />
-        New Deployment
-      </button>
     </div>
   );
 }

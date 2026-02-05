@@ -2289,26 +2289,47 @@ h1, h2, h3, h4, h5, h6 {
 .chat-suggestions {
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 0.5rem;
-  width: 100%;
 }
 
 .chat-suggestion {
-  padding: 0.625rem 1rem;
-  background: var(--panel-bg);
-  border: 1px solid var(--panel-border);
+  padding: 0.75rem 1.5rem;
+  background: var(--color-primary-500);
+  border: 1px solid var(--color-primary-400);
   border-radius: var(--radius-lg);
-  color: var(--text-secondary);
+  color: #fff;
   font-size: 0.875rem;
-  text-align: left;
+  font-weight: 500;
+  text-align: center;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .chat-suggestion:hover {
-  background: var(--interactive-hover);
-  border-color: var(--panel-border-hover);
-  color: var(--text-primary);
+  background: var(--color-primary-400);
+  border-color: var(--color-primary-400);
+  color: #fff;
+}
+
+.chat-example-apps {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin: 0.25rem 3rem 0.25rem 2.5rem;
+}
+
+.chat-example-apps__label {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.chat-example-apps__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 /* Message Bubbles */
@@ -6760,6 +6781,10 @@ code.lease-card-mono {
 }
 
 .landing-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
   font-size: 1.125rem;
   padding: 0.875rem 2.5rem;
 }
@@ -6905,6 +6930,7 @@ code.lease-card-mono {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.75rem;
   padding: 0.75rem;
   border-radius: var(--radius-lg);
   background: var(--color-surface-800);
@@ -6935,6 +6961,7 @@ code.lease-card-mono {
 .apps-sidebar__wallet-details {
   display: flex;
   flex-direction: column;
+  gap: 0.125rem;
   min-width: 0;
 }
 
@@ -6951,6 +6978,16 @@ code.lease-card-mono {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   color: var(--text-dim);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.15s;
+}
+
+.apps-sidebar__wallet-address:hover {
+  color: var(--text-body);
 }
 
 .apps-sidebar__disconnect {
@@ -7086,25 +7123,6 @@ code.lease-card-mono {
   color: var(--text-dim);
 }
 
-.apps-sidebar__deploy-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  border-radius: var(--radius-lg);
-  background: var(--color-primary-600);
-  color: white;
-  font-weight: 600;
-  font-size: 0.875rem;
-  border: none;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.apps-sidebar__deploy-btn:hover {
-  background: var(--color-primary-500);
-}
 
 /* ============================================
    PROGRESS CARD
@@ -7239,4 +7257,13 @@ code.lease-card-mono {
 .app-card__actions {
   display: flex;
   gap: 0.5rem;
+}
+
+/* ============================================
+   COSMOS-KIT WALLET MODAL OVERRIDES
+   ============================================ */
+
+/* Remove max-height on wallet list so all wallets are visible without scrolling */
+[data-has-list-wallets] {
+  max-height: none !important;
 }

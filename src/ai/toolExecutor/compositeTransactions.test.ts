@@ -38,6 +38,9 @@ vi.mock('../../api/provider-api', () => ({
 
 vi.mock('../../api/fred', () => ({
   pollLeaseUntilReady: vi.fn(),
+  getLeaseLogs: vi.fn(),
+  getLeaseProvision: vi.fn(),
+  getLeaseInfo: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-browser', () => ({
@@ -62,9 +65,9 @@ vi.mock('../../registry/appRegistry', () => ({
   validateAppName: vi.fn().mockReturnValue(null),
 }));
 
-import { getCreditEstimate } from '../../api/billing';
+import { getCreditEstimate, getLease } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
-import { pollLeaseUntilReady } from '../../api/fred';
+import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, getLeaseInfo } from '../../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
@@ -190,12 +193,15 @@ describe('executeDeployApp', () => {
 describe('executeConfirmedDeployApp', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('creates lease, uploads, and polls to ready', async () => {
+  it('creates lease, uploads, and polls to ready using /info/ for URL', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
     vi.mocked(pollLeaseUntilReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
-      endpoints: { web: 'https://app.example.com' },
+    });
+    vi.mocked(getLeaseInfo).mockResolvedValue({
+      host: 'https://app.example.com',
+      ports: { http: 80 },
     });
 
     const onProgress = vi.fn();
@@ -214,6 +220,7 @@ describe('executeConfirmedDeployApp', () => {
     expect((result.data as any).url).toBe('https://app.example.com');
     expect(onProgress).toHaveBeenCalled();
     expect(registry.addApp).toHaveBeenCalled();
+    expect(getLeaseInfo).toHaveBeenCalled();
   });
 
   it('handles lease creation failure', async () => {
@@ -247,6 +254,99 @@ describe('executeConfirmedDeployApp', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('upload failed');
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'new-lease-uuid', { status: 'failed' });
+  });
+
+  it('includes logs and provision last_error in failure message', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_CLOSED,
+      error: 'container crashed',
+    });
+    vi.mocked(getLeaseProvision).mockResolvedValue({
+      status: 'failed',
+      fail_count: 3,
+      last_error: 'OOMKilled',
+    });
+    vi.mocked(getLeaseLogs).mockResolvedValue({
+      '0': 'Error: out of memory',
+    });
+
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('container crashed');
+    expect(result.error).toContain('OOMKilled');
+    expect(result.error).toContain('out of memory');
+  });
+
+  it('still reports failure when log/provision fetch fails', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_REJECTED,
+      error: 'rejected by provider',
+    });
+    vi.mocked(getLeaseProvision).mockRejectedValue(new Error('network error'));
+    vi.mocked(getLeaseLogs).mockRejectedValue(new Error('network error'));
+
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('rejected by provider');
+  });
+
+  it('falls back to chain state when polling throws', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(pollLeaseUntilReady).mockRejectedValue(new Error('polling timeout'));
+
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
+
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload()
+    );
+
+    // Should fall back to chain state which says ACTIVE
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('running');
+  });
+
+  it('succeeds without URL when /info/ fails', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseInfo).mockRejectedValue(new Error('404 not found'));
+
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('running');
+    expect((result.data as any).url).toBeUndefined();
   });
 });
 

@@ -48,15 +48,15 @@ export function isValidManifestAddress(address: string): boolean {
 /**
  * Truncates a blockchain address for display
  * @param addr - The full address string
- * @param prefixLength - Number of characters to show at start (default: 10)
- * @param suffixLength - Number of characters to show at end (default: 6)
+ * @param prefixLength - Number of characters to show at start (default: 13, i.e. "manifest1" + 4 chars)
+ * @param suffixLength - Number of characters to show at end (default: 4)
  * @param maxLength - Maximum length before truncation (default: 20)
  * @returns Truncated address string
  */
 export function truncateAddress(
   addr: string,
-  prefixLength: number = 10,
-  suffixLength: number = 6,
+  prefixLength: number = 13,
+  suffixLength: number = 4,
   maxLength: number = 20
 ): string {
   if (!addr || addr.length <= maxLength) return addr;

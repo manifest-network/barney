@@ -47,6 +47,9 @@ vi.mock('../api/provider-api', () => ({
 vi.mock('../api/fred', () => ({
   getLeaseStatus: vi.fn(),
   pollLeaseUntilReady: vi.fn(),
+  getLeaseLogs: vi.fn(),
+  getLeaseProvision: vi.fn(),
+  getLeaseInfo: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-browser', () => ({
@@ -68,7 +71,7 @@ import { getLeasesByTenant, getCreditAccount, getCreditEstimate, getLease } from
 import { getAllBalances } from '../api/bank';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth } from '../api/provider-api';
-import { pollLeaseUntilReady } from '../api/fred';
+import { pollLeaseUntilReady, getLeaseInfo } from '../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from '../ai/toolExecutor/utils';
 
@@ -158,7 +161,10 @@ describe('Deploy Flow Integration', () => {
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'uploaded' } });
     vi.mocked(pollLeaseUntilReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
-      endpoints: { http: 'https://my-app.example.com' },
+    });
+    vi.mocked(getLeaseInfo).mockResolvedValue({
+      host: 'https://my-app.example.com',
+      ports: { http: 80 },
     });
 
     const confirmedResult = await executeConfirmedTool('deploy_app', { app_name: 'my-app', size: 'small' }, CLIENT_MANAGER, options, payload);

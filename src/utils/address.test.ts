@@ -39,17 +39,15 @@ describe('isValidManifestAddress', () => {
 });
 
 describe('truncateAddress', () => {
-  it('truncates long addresses', () => {
-    const addr = 'manifest1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqn4q5q5';
+  it('truncates long addresses with default prefix=13 and suffix=4', () => {
+    const addr = 'manifest1uqxan5chgq65eaj0f63knnr6u4t0yqhm5ck526e';
     const result = truncateAddress(addr);
-    expect(result).toContain('manifest1q');
-    expect(result).toContain('...');
-    expect(result.length).toBeLessThan(addr.length);
+    expect(result).toBe('manifest1uqxa...526e');
   });
 
   it('returns short addresses unchanged', () => {
     const short = 'manifest1abc';
-    expect(truncateAddress(short, 10, 6, 20)).toBe(short);
+    expect(truncateAddress(short)).toBe(short);
   });
 
   it('handles empty string', () => {

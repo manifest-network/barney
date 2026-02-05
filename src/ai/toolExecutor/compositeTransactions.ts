@@ -8,7 +8,7 @@ import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { createSignMessage, createAuthToken } from '../../api/provider-api';
-import { pollLeaseUntilReady, type TerminalChainState } from '../../api/fred';
+import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, getLeaseInfo, type TerminalChainState } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
@@ -33,6 +33,71 @@ export function deriveAppName(filename: string): string {
     || 'app';
 }
 
+/**
+ * Best-effort fetch of provider logs and provision status for failed deploys.
+ * Creates a fresh auth token since the original may be stale after long polling.
+ * Never throws — failure to get logs must not mask the deploy error.
+ */
+async function fetchFailureLogs(
+  providerUrl: string,
+  leaseUuid: string,
+  address: string,
+  signArbitrary: ToolExecutorOptions['signArbitrary']
+): Promise<string | null> {
+  if (!signArbitrary) return null;
+
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signMessage = createSignMessage(address, leaseUuid, timestamp);
+    const signResult: SignResult = await signArbitrary(address, signMessage);
+    const authToken = createAuthToken(
+      address,
+      leaseUuid,
+      timestamp,
+      signResult.pub_key.value,
+      signResult.signature
+    );
+
+    const parts: string[] = [];
+
+    // Fetch provision status first — more structured than raw logs
+    try {
+      const provision = await getLeaseProvision(providerUrl, leaseUuid, authToken);
+      if (provision.last_error) {
+        parts.push(`Provision error (fail_count=${provision.fail_count}): ${provision.last_error}`);
+      }
+    } catch (error) {
+      logError('compositeTransactions.fetchFailureLogs.provision', error);
+    }
+
+    // Fetch container logs
+    try {
+      const logs = await getLeaseLogs(providerUrl, leaseUuid, authToken, 100);
+      const logEntries = Object.entries(logs);
+      if (logEntries.length > 0) {
+        const logText = logEntries
+          .map(([key, value]) => `[${key}] ${value}`)
+          .join('\n');
+        parts.push(`Container logs:\n${logText}`);
+      }
+    } catch (error) {
+      logError('compositeTransactions.fetchFailureLogs.logs', error);
+    }
+
+    if (parts.length === 0) return null;
+
+    const combined = parts.join('\n\n');
+    // Truncate to last ~2000 chars to avoid bloating LLM context
+    if (combined.length > 2000) {
+      return '...' + combined.slice(-2000);
+    }
+    return combined;
+  } catch (error) {
+    logError('compositeTransactions.fetchFailureLogs', error);
+    return null;
+  }
+}
+
 // ============================================================================
 // deploy_app
 // ============================================================================
@@ -49,7 +114,7 @@ export async function executeDeployApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!payload) {
-    return { success: false, error: 'No file attached. Please attach a manifest file (e.g., docker-compose.yml) to deploy an app.' };
+    return { success: false, error: 'No file attached. Please attach a JSON manifest file to deploy an app.' };
   }
 
   // Resolve name
@@ -276,18 +341,35 @@ export async function executeConfirmedDeployApp(
       // Check chain state to detect rejected/closed leases
       checkChainState: async (): Promise<TerminalChainState | null> => {
         const lease = await getLease(leaseUuid);
-        if (!lease) return 'closed';
-        if (lease.state === LeaseState.LEASE_STATE_CLOSED) return 'closed';
-        if (lease.state === LeaseState.LEASE_STATE_REJECTED) return 'rejected';
-        if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return 'expired';
+        if (!lease) return { state: 'closed' };
+        if (lease.state === LeaseState.LEASE_STATE_CLOSED) return { state: 'closed' };
+        if (lease.state === LeaseState.LEASE_STATE_REJECTED) return { state: 'rejected' };
+        if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return { state: 'expired' };
         return null;
       },
     });
 
     if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
-      const appUrl = fredStatus.endpoints
-        ? Object.values(fredStatus.endpoints)[0]
-        : undefined;
+      // Fetch connection details from /info/ endpoint
+      let appUrl: string | undefined;
+      try {
+        const infoTimestamp = Math.floor(Date.now() / 1000);
+        const infoSignMessage = createSignMessage(address, leaseUuid, infoTimestamp);
+        const infoSignResult: SignResult = await signArbitrary(address, infoSignMessage);
+        const infoAuthToken = createAuthToken(
+          address,
+          leaseUuid,
+          infoTimestamp,
+          infoSignResult.pub_key.value,
+          infoSignResult.signature
+        );
+        const leaseInfo = await getLeaseInfo(providerUrl, leaseUuid, infoAuthToken);
+        if (leaseInfo.host) {
+          appUrl = leaseInfo.host;
+        }
+      } catch (error) {
+        logError('compositeTransactions.executeConfirmedDeployApp.info', error);
+      }
 
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
@@ -309,9 +391,15 @@ export async function executeConfirmedDeployApp(
     if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
       appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
       onProgress?.({ phase: 'failed', detail: fredStatus.error || 'Deployment failed' });
+
+      const diagnostics = await fetchFailureLogs(providerUrl, leaseUuid, address, signArbitrary);
+      const errorMsg = diagnostics
+        ? `Deployment failed: ${fredStatus.error || 'Unknown error'}\n\n${diagnostics}`
+        : `Deployment failed: ${fredStatus.error || 'Unknown error'}`;
+
       return {
         success: false,
-        error: `Deployment failed: ${fredStatus.error || 'Unknown error'}. The lease is active — use stop_app("${name}") to clean up.`,
+        error: errorMsg,
       };
     }
 
@@ -319,7 +407,8 @@ export async function executeConfirmedDeployApp(
     return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress);
   } catch (error) {
     logError('compositeTransactions.executeConfirmedDeployApp.polling', error);
-    // Polling failed but lease+upload succeeded — fall back to chain state
+    // Polling failed but lease+upload succeeded — check chain state to determine actual status.
+    // Don't use diagnostics alone to decide failure: they may describe a still-running app.
     return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress);
   }
 }

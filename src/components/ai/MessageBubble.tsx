@@ -17,6 +17,11 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
   const isAssistant = role === 'assistant';
   const hasThinking = isAssistant && thinking && thinking.length > 0;
 
+  // Skip empty assistant messages (tool call with no text)
+  if (isAssistant && !content && !hasThinking && !error && !isStreaming) {
+    return null;
+  }
+
   // Format content for display
   const formatContent = (text: string, streaming?: boolean) => {
     // Try to detect and format JSON

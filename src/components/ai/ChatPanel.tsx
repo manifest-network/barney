@@ -10,6 +10,14 @@ import { AISettings } from './AISettings';
 import { MAX_INPUT_LENGTH } from '../../ai/validation';
 import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
 import { formatFileSize } from '../../utils/format';
+import { logError } from '../../utils/errors';
+
+const EXAMPLE_APPS = [
+  { label: 'Tetris', manifest: { image: 'bsord/tetris', ports: { '80/tcp': {} }, env: {}, read_only: true, tmpfs: ['/var/cache/nginx', '/var/run'] } },
+  { label: 'Pac-Man', manifest: { image: 'uzyexe/pacman', ports: { '80/tcp': {} }, env: {}, read_only: true, tmpfs: ['/var/cache/nginx', '/var/run'] } },
+  { label: 'Doom', manifest: { image: 'mattipaksula/doom-js', ports: { '80/tcp': {} }, env: {}, read_only: true, tmpfs: ['/var/cache/nginx', '/var/run'] } },
+  { label: '2048', manifest: { image: 'alexwhen/docker-2048', ports: { '80/tcp': {} }, env: {}, read_only: true, tmpfs: ['/var/cache/nginx', '/var/run'] } },
+];
 
 const SUGGESTIONS = ['Deploy an app', 'Check my credits', "What's running?"];
 
@@ -90,6 +98,22 @@ export function ChatPanel() {
     e.target.value = '';
   };
 
+  const deployExample = async (app: typeof EXAMPLE_APPS[number]) => {
+    const filename = `manifest-${app.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}.json`;
+    const blob = new Blob([JSON.stringify(app.manifest, null, 2)], { type: 'application/json' });
+    const file = new File([blob], filename, { type: 'application/json' });
+    const result = await attachPayload(file);
+    if (result.error) {
+      setAttachError(result.error);
+      return;
+    }
+    try {
+      await sendMessage(`Deploy ${app.label}`);
+    } catch (error) {
+      logError('ChatPanel.deployExample', error);
+    }
+  };
+
   // Show character count when approaching limit
   const showCharCount = input.length > MAX_INPUT_LENGTH * 0.8;
   const isNearLimit = input.length > MAX_INPUT_LENGTH * 0.95;
@@ -109,6 +133,16 @@ export function ChatPanel() {
       // Not JSON
     }
   }
+
+  // Show example app buttons after the model explains how to deploy
+  // (user said "Deploy an app" without a file, model responded conversationally)
+  const showExampleApps = !isStreaming
+    && !pendingConfirmation
+    && !deployProgress
+    && messages.length >= 2
+    && messages.some((m) => m.role === 'user' && /deploy an app/i.test(m.content))
+    && messages[messages.length - 1]?.role === 'assistant'
+    && !messages.some((m) => m.role === 'user' && m.content.includes('(File attached:'));
 
   return (
     <div
@@ -165,7 +199,7 @@ export function ChatPanel() {
             <p className="chat-empty-hint">
               Drop a manifest file or ask me anything about your apps and credits.
             </p>
-            <div className="chat-suggestions" role="group" aria-label="Suggested questions">
+            <div className="chat-suggestions" role="group" aria-label="Suggested actions">
               {SUGGESTIONS.map((text) => (
                 <button
                   key={text}
@@ -184,6 +218,25 @@ export function ChatPanel() {
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
+            {/* Example app buttons after deploy explanation */}
+            {showExampleApps && (
+              <div className="chat-example-apps">
+                <p className="chat-example-apps__label">Or try an example:</p>
+                <div className="chat-example-apps__buttons" role="group" aria-label="Example apps">
+                  {EXAMPLE_APPS.map((app) => (
+                    <button
+                      key={app.label}
+                      type="button"
+                      onClick={() => deployExample(app)}
+                      className="chat-suggestion"
+                      disabled={!isConnected || isStreaming}
+                    >
+                      {app.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {/* Pending Confirmation */}
             {pendingConfirmation && (
               <ConfirmationCard

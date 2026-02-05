@@ -1,7 +1,8 @@
-import { Rocket, Shield, Cpu, Sparkles } from 'lucide-react';
+import { Rocket, Shield, Cpu, Sparkles, Loader } from 'lucide-react';
 
 interface LandingPageProps {
   onConnect: () => void;
+  isConnecting?: boolean;
 }
 
 const FEATURES = [
@@ -22,7 +23,7 @@ const FEATURES = [
   },
 ];
 
-export function LandingPage({ onConnect }: LandingPageProps) {
+export function LandingPage({ onConnect, isConnecting }: LandingPageProps) {
   return (
     <div className="landing-page">
       <div className="landing-hero">
@@ -39,11 +40,21 @@ export function LandingPage({ onConnect }: LandingPageProps) {
           type="button"
           onClick={onConnect}
           className="btn btn-primary btn-lg landing-cta"
+          disabled={isConnecting}
         >
-          Get Started
+          {isConnecting ? (
+            <>
+              <Loader className="w-4 h-4 animate-spin" aria-hidden="true" />
+              Connecting...
+            </>
+          ) : (
+            'Get Started'
+          )}
         </button>
         <p className="landing-hint">
-          Sign in with Google or connect a Cosmos wallet
+          {isConnecting
+            ? 'Reconnecting to your previous session...'
+            : 'Sign in with Google or connect a Cosmos wallet'}
         </p>
       </div>
 

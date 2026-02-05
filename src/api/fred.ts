@@ -146,7 +146,25 @@ export async function getLeaseStatus(
 }
 
 /** Chain lease states that indicate the lease is no longer viable */
-export type TerminalChainState = 'closed' | 'rejected' | 'expired';
+export interface TerminalChainState {
+  state: 'closed' | 'rejected' | 'expired';
+}
+
+/** Container logs keyed by instance index. */
+export type LeaseLogs = Record<string, string>;
+
+/** Provision status from the provider. */
+export interface LeaseProvision {
+  status: string;
+  fail_count: number;
+  last_error: string;
+}
+
+/** Connection details from the provider. */
+export interface LeaseInfo {
+  host: string;
+  ports?: Record<string, unknown>;
+}
 
 export interface PollOptions {
   intervalMs?: number;
@@ -195,11 +213,15 @@ export async function pollLeaseUntilReady(
       try {
         const chainState = await opts.checkChainState();
         if (chainState) {
-          // Terminal chain state — return failed status
+          const stateMap: Record<string, LeaseState> = {
+            closed: LeaseState.LEASE_STATE_CLOSED,
+            rejected: LeaseState.LEASE_STATE_REJECTED,
+            expired: LeaseState.LEASE_STATE_EXPIRED,
+          };
           lastStatus = {
-            state: LeaseState.LEASE_STATE_CLOSED,
+            state: stateMap[chainState.state] ?? LeaseState.LEASE_STATE_CLOSED,
             phase: 'chain_rejected',
-            error: `Lease ${chainState} on chain`,
+            error: `Lease ${chainState.state} on chain`,
           };
           opts.onProgress?.(lastStatus);
           return lastStatus;
@@ -246,4 +268,114 @@ export async function pollLeaseUntilReady(
   }
 
   return lastStatus;
+}
+
+/**
+ * Fetch container logs for a lease from the provider.
+ *
+ * @param providerApiUrl - The provider's API base URL
+ * @param leaseUuid - The lease UUID
+ * @param authToken - Base64-encoded ADR-036 auth token
+ * @param tail - Number of log lines to return (default 100)
+ */
+export async function getLeaseLogs(
+  providerApiUrl: string,
+  leaseUuid: string,
+  authToken: string,
+  tail = 100
+): Promise<LeaseLogs> {
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
+  const { url, headers } = buildValidatedFredRequest(
+    providerApiUrl,
+    `/logs/${encodedLeaseUuid}?tail=${tail}`,
+    { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
+  );
+
+  const response = await fetch(url, { method: 'GET', headers });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new ProviderApiError(
+      response.status,
+      `Fred logs error (${response.status}): ${errorText}`
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for logs');
+  }
+}
+
+/**
+ * Fetch provision status for a lease from the provider.
+ *
+ * @param providerApiUrl - The provider's API base URL
+ * @param leaseUuid - The lease UUID
+ * @param authToken - Base64-encoded ADR-036 auth token
+ */
+export async function getLeaseProvision(
+  providerApiUrl: string,
+  leaseUuid: string,
+  authToken: string
+): Promise<LeaseProvision> {
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
+  const { url, headers } = buildValidatedFredRequest(
+    providerApiUrl,
+    `/provisions/${encodedLeaseUuid}`,
+    { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
+  );
+
+  const response = await fetch(url, { method: 'GET', headers });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new ProviderApiError(
+      response.status,
+      `Fred provision error (${response.status}): ${errorText}`
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for provision');
+  }
+}
+
+/**
+ * Fetch connection details (host, ports) for a lease from the provider.
+ *
+ * @param providerApiUrl - The provider's API base URL
+ * @param leaseUuid - The lease UUID
+ * @param authToken - Base64-encoded ADR-036 auth token
+ */
+export async function getLeaseInfo(
+  providerApiUrl: string,
+  leaseUuid: string,
+  authToken: string
+): Promise<LeaseInfo> {
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
+  const { url, headers } = buildValidatedFredRequest(
+    providerApiUrl,
+    `/info/${encodedLeaseUuid}`,
+    { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
+  );
+
+  const response = await fetch(url, { method: 'GET', headers });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new ProviderApiError(
+      response.status,
+      `Fred info error (${response.status}): ${errorText}`
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for info');
+  }
 }
