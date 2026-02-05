@@ -300,7 +300,6 @@ export async function executeBrowseCatalog(): Promise<ToolResult> {
       }
       return {
         uuid: p.uuid,
-        name: p.name,
         apiUrl: p.apiUrl,
         healthy,
       };
@@ -321,7 +320,7 @@ export async function executeBrowseCatalog(): Promise<ToolResult> {
       : 'unknown';
 
     tiers[tierName].push({
-      provider: provider?.name ?? sku.providerUuid,
+      provider: provider?.uuid ?? sku.providerUuid,
       price: priceDisplay,
       unit: sku.unit != null ? String(sku.unit) : 'unknown',
     });

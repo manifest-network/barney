@@ -85,6 +85,9 @@ export async function executeTransaction(
 ): Promise<ToolResult> {
   switch (toolName) {
     case 'fund_credit': {
+      if (!address) {
+        return { success: false, error: 'Wallet not connected' };
+      }
       const amount = args.amount as string;
 
       // fund-credit requires: <tenant-address> <amount>

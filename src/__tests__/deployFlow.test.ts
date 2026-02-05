@@ -33,10 +33,14 @@ vi.mock('../api/bank', () => ({
   getAllBalances: vi.fn(),
 }));
 
-vi.mock('../api/sku', () => ({
-  getProviders: vi.fn(),
-  getSKUs: vi.fn(),
-}));
+vi.mock('../api/sku', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api/sku')>();
+  return {
+    ...actual,
+    getProviders: vi.fn(),
+    getSKUs: vi.fn(),
+  };
+});
 
 vi.mock('../api/provider-api', () => ({
   getProviderHealth: vi.fn(),
@@ -124,11 +128,15 @@ describe('Deploy Flow Integration', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       {
         uuid: SKU_UUID, name: 'docker-small', providerUuid: PROVIDER_UUID,
-        price: { denom: 'umfx', amount: '1000000' }, unit: 1, active: true,
-      } as ReturnType<typeof getSKUs> extends Promise<infer T> ? T extends Array<infer U> ? U : never : never,
+        basePrice: { denom: 'umfx', amount: '1000000' }, unit: 1, active: true,
+        metaHash: new Uint8Array(),
+      } as Awaited<ReturnType<typeof getSKUs>>[number],
     ]);
     vi.mocked(getProviders).mockResolvedValue([
-      { uuid: PROVIDER_UUID, name: 'TestProvider', apiUrl: 'https://fred.example.com', active: true } as ReturnType<typeof getProviders> extends Promise<infer T> ? T extends Array<infer U> ? U : never : never,
+      {
+        uuid: PROVIDER_UUID, address: 'manifest1provider', payoutAddress: 'manifest1payout',
+        apiUrl: 'https://fred.example.com', active: true, metaHash: new Uint8Array(),
+      } as Awaited<ReturnType<typeof getProviders>>[number],
     ]);
     vi.mocked(getProviderHealth).mockResolvedValue({ status: 'healthy', provider_uuid: PROVIDER_UUID });
     vi.mocked(getCreditEstimate).mockResolvedValue({
@@ -136,11 +144,13 @@ describe('Deploy Flow Integration', () => {
       totalRatePerSecond: [{ denom: 'umfx', amount: '1' }],
       estimatedDurationSeconds: 86400n,
       activeLeaseCount: 0n,
-    } as ReturnType<typeof getCreditEstimate> extends Promise<infer T> ? T : never);
+    } as Awaited<ReturnType<typeof getCreditEstimate>>);
 
+    const payloadBytes = new TextEncoder().encode('version: "3"');
     const payload: PayloadAttachment = {
       filename: 'docker-compose.yml',
-      bytes: new TextEncoder().encode('version: "3"'),
+      bytes: payloadBytes,
+      size: payloadBytes.byteLength,
       hash: 'abc123',
     };
 
@@ -152,11 +162,9 @@ describe('Deploy Flow Integration', () => {
 
     // Step 2: Confirm deploy
     vi.mocked(cosmosTx).mockResolvedValue({
-      code: 0,
-      transactionHash: 'tx-hash-1',
-      rawLog: '',
-      events: [],
-    } as ReturnType<typeof cosmosTx> extends Promise<infer T> ? T : never);
+      module: 'billing', subcommand: 'create-lease', height: '100',
+      code: 0, transactionHash: 'tx-hash-1', rawLog: '', events: [],
+    } as Awaited<ReturnType<typeof cosmosTx>>);
     vi.mocked(extractLeaseUuidFromTxResult).mockReturnValue(LEASE_UUID);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'uploaded' } });
     vi.mocked(pollLeaseUntilReady).mockResolvedValue({
@@ -185,7 +193,7 @@ describe('Deploy Flow Integration', () => {
     expect(phases).toContain('ready');
 
     // Step 3: List apps → should show the deployed app
-    vi.mocked(getLeasesByTenant).mockResolvedValue([{ uuid: LEASE_UUID } as ReturnType<typeof getLeasesByTenant> extends Promise<infer T> ? T extends Array<infer U> ? U : never : never]);
+    vi.mocked(getLeasesByTenant).mockResolvedValue([{ uuid: LEASE_UUID } as Awaited<ReturnType<typeof getLeasesByTenant>>[number]]);
 
     const listResult = await executeTool('list_apps', { state: 'running' }, options);
     expect(listResult.success).toBe(true);
@@ -195,7 +203,7 @@ describe('Deploy Flow Integration', () => {
     expect(listData.apps[0].status).toBe('running');
 
     // Step 4: App status
-    vi.mocked(getLease).mockResolvedValue({ state: 2 } as ReturnType<typeof getLease> extends Promise<infer T> ? T : never);
+    vi.mocked(getLease).mockResolvedValue({ state: 2 } as Awaited<ReturnType<typeof getLease>>);
 
     const statusResult = await executeTool('app_status', { app_name: 'my-app' }, options);
     expect(statusResult.success).toBe(true);
@@ -212,11 +220,9 @@ describe('Deploy Flow Integration', () => {
     // Step 6: Confirm stop — use args from pendingAction (includes leaseUuid)
     const stopArgs = stopResult.pendingAction!.args;
     vi.mocked(cosmosTx).mockResolvedValue({
-      code: 0,
-      transactionHash: 'tx-hash-2',
-      rawLog: '',
-      events: [],
-    } as ReturnType<typeof cosmosTx> extends Promise<infer T> ? T : never);
+      module: 'billing', subcommand: 'close-lease', height: '101',
+      code: 0, transactionHash: 'tx-hash-2', rawLog: '', events: [],
+    } as Awaited<ReturnType<typeof cosmosTx>>);
 
     const confirmedStop = await executeConfirmedTool('stop_app', stopArgs, CLIENT_MANAGER, options);
     expect(confirmedStop.success).toBe(true);
@@ -234,11 +240,9 @@ describe('Deploy Flow Integration', () => {
 
     // Step 2: Confirm fund
     vi.mocked(cosmosTx).mockResolvedValue({
-      code: 0,
-      transactionHash: 'tx-hash-fund',
-      rawLog: '',
-      events: [],
-    } as ReturnType<typeof cosmosTx> extends Promise<infer T> ? T : never);
+      module: 'billing', subcommand: 'fund-credit', height: '102',
+      code: 0, transactionHash: 'tx-hash-fund', rawLog: '', events: [],
+    } as Awaited<ReturnType<typeof cosmosTx>>);
 
     const confirmedFund = await executeConfirmedTool('fund_credits', { amount: 50 }, CLIENT_MANAGER, options);
     expect(confirmedFund.success).toBe(true);
@@ -250,13 +254,13 @@ describe('Deploy Flow Integration', () => {
       creditAccount: { tenant: ADDRESS, creditAddress: 'credit-addr', activeLeaseCount: 1n, pendingLeaseCount: 0n, reservedAmounts: [] },
       balances: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
       availableBalances: [],
-    } as ReturnType<typeof getCreditAccount> extends Promise<infer T> ? T : never);
+    } as Awaited<ReturnType<typeof getCreditAccount>>);
     vi.mocked(getCreditEstimate).mockResolvedValue({
       currentBalance: [{ denom: 'umfx', amount: '100000000' }],
       totalRatePerSecond: [{ denom: 'umfx', amount: '1' }],
       estimatedDurationSeconds: 86400n,
       activeLeaseCount: 1n,
-    } as ReturnType<typeof getCreditEstimate> extends Promise<infer T> ? T : never);
+    } as Awaited<ReturnType<typeof getCreditEstimate>>);
 
     const result = await executeTool('get_balance', {}, options);
     expect(result.success).toBe(true);

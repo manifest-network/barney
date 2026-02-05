@@ -148,7 +148,7 @@ export async function executeDeployApp(
     [{ sku_name: skuName, quantity: 1 }],
     allSKUs
   );
-  if (resolveResult.error) {
+  if (resolveResult.error || !resolveResult.items) {
     return {
       success: false,
       error: `Tier "${size}" is not available. Use browse_catalog to see available tiers.`,
@@ -211,7 +211,7 @@ export async function executeDeployApp(
       if (skuHourlyCost > 0 && credits < skuHourlyCost) {
         return {
           success: false,
-          error: `Insufficient credits. You have ${Math.round(credits * 100) / 100} credits but need at least ${Math.round(skuHourlyCost * 100) / 100} for 1 hour. Selected: ${size} tier on ${provider.name} (${priceDisplay}). Use fund_credits to add more credits.`,
+          error: `Insufficient credits. You have ${Math.round(credits * 100) / 100} credits but need at least ${Math.round(skuHourlyCost * 100) / 100} for 1 hour. Selected: ${size} tier on ${provider.uuid} (${priceDisplay}). Use fund_credits to add more credits.`,
         };
       }
 

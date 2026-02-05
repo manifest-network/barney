@@ -24,7 +24,11 @@ export function toBytes(data: string | Uint8Array): Uint8Array {
  * @returns The hash as a Uint8Array
  */
 export async function sha256(data: string | Uint8Array): Promise<Uint8Array> {
-  const hashBuffer = await crypto.subtle.digest('SHA-256', toBytes(data));
+  const bytes = toBytes(data);
+  // TS 5.9 parameterizes Uint8Array with buffer type; crypto.subtle.digest
+  // requires ArrayBuffer (not SharedArrayBuffer). toBytes always returns a
+  // fresh Uint8Array backed by ArrayBuffer, so the assertion is safe.
+  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes as Uint8Array<ArrayBuffer>);
   return new Uint8Array(hashBuffer);
 }
 

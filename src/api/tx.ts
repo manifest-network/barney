@@ -68,10 +68,14 @@ const DEFAULT_FEE = {
 
 /**
  * Build a signed message from a manifestjs Msg encoder and partial fields.
+ * Uses `any` for the fromPartial parameter because manifestjs generates
+ * overly restrictive intersection types (Record<string|number|symbol, never>)
+ * that prevent passing object literals. Same workaround as lcdConvert().
  */
-function buildMsg<V>(
-  Msg: { typeUrl: string; fromPartial: (value: V) => unknown },
-  value: V
+function buildMsg(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  Msg: { typeUrl: string; fromPartial: (value: any) => unknown },
+  value: Record<string, unknown>
 ): { typeUrl: string; value: unknown } {
   return { typeUrl: Msg.typeUrl, value: Msg.fromPartial(value) };
 }

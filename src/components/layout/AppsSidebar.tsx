@@ -37,7 +37,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const refresh = useCallback(async () => {
     if (!address) return;
 
-    let apps = getApps(address);
+    const apps = getApps(address);
 
     // Reconcile: mark apps as stopped if lease is no longer active/pending
     try {
@@ -84,6 +84,8 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   }, [address]);
 
   useEffect(() => {
+    // Initial fetch — refresh is async (setState calls happen after awaits, not synchronously)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
     const interval = setInterval(refresh, 10000);
     return () => clearInterval(interval);

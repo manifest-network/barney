@@ -231,7 +231,7 @@ describe('executeCosmosQuery', () => {
   });
 
   it('executes query', async () => {
-    vi.mocked(cosmosQuery).mockResolvedValue({ params: {} });
+    vi.mocked(cosmosQuery).mockResolvedValue({ module: 'bank', subcommand: 'params', result: {} } as Awaited<ReturnType<typeof cosmosQuery>>);
     const result = await executeCosmosQuery({ module: 'bank', subcommand: 'params' }, CLIENT_MANAGER);
     expect(result.success).toBe(true);
     expect(cosmosQuery).toHaveBeenCalledWith(CLIENT_MANAGER, 'bank', 'params', []);
