@@ -122,7 +122,7 @@ export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState
 
 export async function getLeasesByTenantPaginated(
   tenant: string,
-  params?: { stateFilter?: LeaseState; limit?: number; offset?: number }
+  params?: { stateFilter?: LeaseState; limit?: number; offset?: number; reverse?: boolean }
 ): Promise<PaginatedLeasesResponse> {
   const client = await getQueryClient();
   const data = await client.liftedinit.billing.v1.leasesByTenant({
@@ -132,6 +132,7 @@ export async function getLeasesByTenantPaginated(
       limit: params?.limit,
       offset: params?.offset,
       countTotal: true,
+      reverse: params?.reverse,
     }),
   });
   const converted = lcdConvert(data, QueryLeasesResponseConverter);
@@ -200,14 +201,14 @@ export interface GetAllLeasesParams {
   offset?: number;
 }
 
-function buildPageRequest(params?: { limit?: number; offset?: number; countTotal?: boolean }) {
+function buildPageRequest(params?: { limit?: number; offset?: number; countTotal?: boolean; reverse?: boolean }) {
   if (!params) return undefined;
   return {
     key: new Uint8Array(),
     offset: BigInt(params.offset ?? 0),
     limit: BigInt(params.limit ?? 0),
     countTotal: params.countTotal ?? false,
-    reverse: false,
+    reverse: params.reverse ?? false,
   };
 }
 

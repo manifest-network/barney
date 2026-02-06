@@ -14,7 +14,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    cancelRef.current?.focus();
+    cancelRef.current?.focus({ focusVisible: true } as FocusOptions);
   }, []);
 
   return (

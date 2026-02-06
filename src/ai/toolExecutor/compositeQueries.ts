@@ -401,7 +401,7 @@ export async function executeLeaseHistory(
     return { success: false, error: `Invalid state "${stateArg}". Valid: all, pending, active, closed, rejected, expired.` };
   }
 
-  const result = await getLeasesByTenantPaginated(address, { stateFilter, limit, offset });
+  const result = await getLeasesByTenantPaginated(address, { stateFilter, limit, offset, reverse: true });
 
   const leases = result.leases.map((lease) => {
     const app = appRegistry?.getAppByLease(address, lease.uuid);

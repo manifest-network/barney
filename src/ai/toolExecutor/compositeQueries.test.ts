@@ -314,6 +314,7 @@ describe('executeLeaseHistory', () => {
       stateFilter: 2,
       limit: 10,
       offset: 0,
+      reverse: true,
     });
   });
 
@@ -328,6 +329,7 @@ describe('executeLeaseHistory', () => {
       stateFilter: 0,
       limit: 5,
       offset: 20,
+      reverse: true,
     });
     const data = result.data as any;
     expect(data.limit).toBe(5);

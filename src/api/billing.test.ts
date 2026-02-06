@@ -120,6 +120,7 @@ describe('getLeasesByTenantPaginated', () => {
       stateFilter: LeaseState.LEASE_STATE_ACTIVE,
       limit: 5,
       offset: 10,
+      reverse: true,
     });
 
     expect(client.liftedinit.billing.v1.leasesByTenant).toHaveBeenCalledWith({
@@ -129,6 +130,7 @@ describe('getLeasesByTenantPaginated', () => {
         limit: 5n,
         offset: 10n,
         countTotal: true,
+        reverse: true,
       }),
     });
     expect(result.leases).toHaveLength(1);

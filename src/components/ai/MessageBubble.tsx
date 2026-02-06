@@ -111,7 +111,15 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
         {/* Main content (not for tool messages - those are in collapsible block) */}
         {!isTool && (content || !hasThinking) && (
           <div className="message-text">
-            {formatContent(content, isStreaming && !!content)}
+            {isStreaming && !content && !hasThinking ? (
+              <span className="thinking-indicator" aria-label="AI is thinking">
+                <span className="thinking-dot" />
+                <span className="thinking-dot" />
+                <span className="thinking-dot" />
+              </span>
+            ) : (
+              formatContent(content, isStreaming && !!content)
+            )}
           </div>
         )}
         {error && (
