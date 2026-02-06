@@ -32,6 +32,7 @@ For live pricing, call browse_catalog().
 5. **Don't pre-fetch**: Only call get_balance or browse_catalog when the user explicitly asks.
 6. **stop_app**: Use app_name="all" to stop all running apps at once.
 7. **Escape hatches**: cosmos_query and cosmos_tx are advanced tools. Only use when the user explicitly requests a raw chain operation.
+8. **lease_history**: Use when the user asks about past leases, lease history, or old deployments. Supports pagination with limit/offset.
 
 ## Don't
 - Explain blockchain or Cosmos internals
@@ -54,6 +55,8 @@ User: "Deploy this (File attached: manifest-tetris.json)"
 User: "Deploy as medium (File attached: app.json)"
 → deploy_app(app_name="app", size="medium")
 
+User: "Show my lease history" → lease_history()
+User: "Show closed leases" → lease_history(state="closed")
 User: "What's running?" → list_apps(state="running")
 User: "Stop all apps" → stop_app(app_name="all")
 User: "Check my-api" → app_status(app_name="my-api")

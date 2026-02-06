@@ -120,6 +120,27 @@ export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState
   return lcdConvert(data, QueryLeasesResponseConverter).leases.map(fixLeaseEnums);
 }
 
+export async function getLeasesByTenantPaginated(
+  tenant: string,
+  params?: { stateFilter?: LeaseState; limit?: number; offset?: number }
+): Promise<PaginatedLeasesResponse> {
+  const client = await getQueryClient();
+  const data = await client.liftedinit.billing.v1.leasesByTenant({
+    tenant,
+    stateFilter: params?.stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
+    pagination: buildPageRequest({
+      limit: params?.limit,
+      offset: params?.offset,
+      countTotal: true,
+    }),
+  });
+  const converted = lcdConvert(data, QueryLeasesResponseConverter);
+  return {
+    leases: converted.leases.map(fixLeaseEnums),
+    pagination: converted.pagination,
+  };
+}
+
 export async function getLeasesByProvider(providerUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
   const client = await getQueryClient();
   const data = await client.liftedinit.billing.v1.leasesByProvider({

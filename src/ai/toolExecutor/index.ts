@@ -10,6 +10,7 @@ import {
   executeGetBalance,
   executeBrowseCatalog,
   executeCosmosQuery,
+  executeLeaseHistory,
 } from './compositeQueries';
 import {
   executeDeployApp,
@@ -33,6 +34,7 @@ const QUERY_TOOLS = new Set([
   'app_status',
   'get_balance',
   'browse_catalog',
+  'lease_history',
 ]);
 
 /** TX tools that require user confirmation */
@@ -65,6 +67,8 @@ export async function executeTool(
           return await executeGetBalance(options);
         case 'browse_catalog':
           return await executeBrowseCatalog();
+        case 'lease_history':
+          return await executeLeaseHistory(args, options);
       }
     } catch (error) {
       return {

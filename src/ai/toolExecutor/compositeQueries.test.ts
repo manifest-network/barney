@@ -5,6 +5,7 @@ import {
   executeGetBalance,
   executeBrowseCatalog,
   executeCosmosQuery,
+  executeLeaseHistory,
 } from './compositeQueries';
 import type { ToolExecutorOptions, AppRegistryAccess } from './types';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
@@ -13,10 +14,25 @@ import type { AppEntry } from '../../registry/appRegistry';
 // Mock external modules
 vi.mock('../../api/billing', () => ({
   getLeasesByTenant: vi.fn(),
+  getLeasesByTenantPaginated: vi.fn(),
   getCreditAccount: vi.fn(),
   getCreditEstimate: vi.fn(),
   getLease: vi.fn(),
-  LeaseState: { LEASE_STATE_ACTIVE: 2, LEASE_STATE_PENDING: 1 },
+  LeaseState: {
+    LEASE_STATE_UNSPECIFIED: 0,
+    LEASE_STATE_PENDING: 1,
+    LEASE_STATE_ACTIVE: 2,
+    LEASE_STATE_CLOSED: 3,
+    LEASE_STATE_REJECTED: 4,
+    LEASE_STATE_EXPIRED: 5,
+  },
+  LEASE_STATE_MAP: {
+    pending: 1,
+    active: 2,
+    closed: 3,
+    rejected: 4,
+    expired: 5,
+  },
 }));
 
 vi.mock('../../api/bank', () => ({
@@ -51,7 +67,18 @@ vi.mock('../../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
-import { getLeasesByTenant, getCreditAccount, getCreditEstimate } from '../../api/billing';
+vi.mock('../../utils/leaseState', () => ({
+  LEASE_STATE_LABELS: {
+    0: 'Unspecified',
+    1: 'Pending',
+    2: 'Active',
+    3: 'Closed',
+    4: 'Rejected',
+    5: 'Expired',
+  },
+}));
+
+import { getLeasesByTenant, getCreditAccount, getCreditEstimate, getLeasesByTenantPaginated } from '../../api/billing';
 import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
@@ -243,5 +270,130 @@ describe('executeCosmosQuery', () => {
     const result = await executeCosmosQuery({ module: 'bank', subcommand: 'params' }, CLIENT_MANAGER);
     expect(result.success).toBe(true);
     expect(cosmosQuery).toHaveBeenCalledWith(CLIENT_MANAGER, 'bank', 'params', []);
+  });
+});
+
+describe('executeLeaseHistory', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns error without wallet', async () => {
+    const result = await executeLeaseHistory({}, makeOptions({ address: undefined }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Wallet not connected');
+  });
+
+  it('returns leases with default params (all states, limit 10, offset 0)', async () => {
+    vi.mocked(getLeasesByTenantPaginated).mockResolvedValue({
+      leases: [
+        { uuid: 'lease-1', state: 2, tenant: ADDRESS, items: [], createdAt: '2024-01-01T00:00:00Z', providerUuid: 'p1' } as any,
+        { uuid: 'lease-2', state: 3, tenant: ADDRESS, items: [], createdAt: '2024-01-02T00:00:00Z', closedAt: '2024-01-03T00:00:00Z', closureReason: 'user', providerUuid: 'p1' } as any,
+      ],
+      pagination: { total: 2n, nextKey: new Uint8Array() },
+    });
+
+    const result = await executeLeaseHistory({}, makeOptions());
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.count).toBe(2);
+    expect(data.total).toBe(2);
+    expect(data.offset).toBe(0);
+    expect(data.limit).toBe(10);
+    expect(data.hasMore).toBe(false);
+  });
+
+  it('filters by state', async () => {
+    vi.mocked(getLeasesByTenantPaginated).mockResolvedValue({
+      leases: [
+        { uuid: 'lease-1', state: 2, tenant: ADDRESS, items: [], createdAt: '2024-01-01T00:00:00Z', providerUuid: 'p1' } as any,
+      ],
+      pagination: { total: 1n, nextKey: new Uint8Array() },
+    });
+
+    await executeLeaseHistory({ state: 'active' }, makeOptions());
+    expect(getLeasesByTenantPaginated).toHaveBeenCalledWith(ADDRESS, {
+      stateFilter: 2,
+      limit: 10,
+      offset: 0,
+    });
+  });
+
+  it('passes pagination params (limit/offset)', async () => {
+    vi.mocked(getLeasesByTenantPaginated).mockResolvedValue({
+      leases: [],
+      pagination: { total: 50n, nextKey: new Uint8Array() },
+    });
+
+    const result = await executeLeaseHistory({ limit: 5, offset: 20 }, makeOptions());
+    expect(getLeasesByTenantPaginated).toHaveBeenCalledWith(ADDRESS, {
+      stateFilter: 0,
+      limit: 5,
+      offset: 20,
+    });
+    const data = result.data as any;
+    expect(data.limit).toBe(5);
+    expect(data.offset).toBe(20);
+  });
+
+  it('clamps limit to max 50', async () => {
+    vi.mocked(getLeasesByTenantPaginated).mockResolvedValue({
+      leases: [],
+      pagination: undefined,
+    });
+
+    await executeLeaseHistory({ limit: 100 }, makeOptions());
+    expect(getLeasesByTenantPaginated).toHaveBeenCalledWith(ADDRESS, expect.objectContaining({ limit: 50 }));
+  });
+
+  it('clamps limit to min 1', async () => {
+    vi.mocked(getLeasesByTenantPaginated).mockResolvedValue({
+      leases: [],
+      pagination: undefined,
+    });
+
+    await executeLeaseHistory({ limit: -5 }, makeOptions());
+    expect(getLeasesByTenantPaginated).toHaveBeenCalledWith(ADDRESS, expect.objectContaining({ limit: 1 }));
+  });
+
+  it('cross-references with app registry for friendly names', async () => {
+    const app = makeApp({ leaseUuid: 'lease-1', name: 'my-app' });
+    const registry = makeRegistry([app]);
+
+    vi.mocked(getLeasesByTenantPaginated).mockResolvedValue({
+      leases: [
+        { uuid: 'lease-1', state: 2, tenant: ADDRESS, items: [], createdAt: '2024-01-01T00:00:00Z', providerUuid: 'p1' } as any,
+        { uuid: 'lease-2', state: 3, tenant: ADDRESS, items: [], createdAt: '2024-01-02T00:00:00Z', providerUuid: 'p1' } as any,
+      ],
+      pagination: { total: 2n, nextKey: new Uint8Array() },
+    });
+
+    const result = await executeLeaseHistory({}, makeOptions({ appRegistry: registry }));
+    const data = result.data as any;
+    expect(data.leases[0].name).toBe('my-app');
+    expect(data.leases[1].name).toBeUndefined();
+  });
+
+  it('returns error for invalid state', async () => {
+    const result = await executeLeaseHistory({ state: 'invalid' }, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid state');
+  });
+
+  it('computes hasMore correctly', async () => {
+    vi.mocked(getLeasesByTenantPaginated).mockResolvedValue({
+      leases: Array.from({ length: 10 }, (_, i) => ({
+        uuid: `lease-${i}`,
+        state: 2,
+        tenant: ADDRESS,
+        items: [],
+        createdAt: '2024-01-01T00:00:00Z',
+        providerUuid: 'p1',
+      })) as any[],
+      pagination: { total: 25n, nextKey: new Uint8Array() },
+    });
+
+    const result = await executeLeaseHistory({ limit: 10, offset: 0 }, makeOptions());
+    const data = result.data as any;
+    expect(data.hasMore).toBe(true);
+    expect(data.total).toBe(25);
   });
 });

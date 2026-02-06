@@ -55,10 +55,10 @@ The AI assistant uses a 3-layer architecture:
 1. **AIContext** (`src/contexts/AIContext.tsx`) - Manages chat state, streams from Ollama, executes tools
 2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser`
 3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
-   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_balance`, `browse_catalog`, `cosmos_query`
+   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_balance`, `browse_catalog`, `lease_history`, `cosmos_query`
    - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `cosmos_tx`
 
-### 9 Composite Tools
+### 10 Composite Tools
 
 | Tool | Type | Description |
 |------|------|-------------|
@@ -69,6 +69,7 @@ The AI assistant uses a 3-layer architecture:
 | `app_status(name)` | Query | Detailed status: registry + chain + fred |
 | `get_balance()` | Query | Credits, spending rate, time remaining |
 | `browse_catalog()` | Query | Providers + SKU tiers with health checks |
+| `lease_history(state?, limit?, offset?)` | Query | Paginated on-chain lease history with state filtering |
 | `cosmos_query(module, subcommand, args?)` | Query | Raw chain query escape hatch |
 | `cosmos_tx(module, subcommand, args)` | TX | Raw chain TX escape hatch |
 

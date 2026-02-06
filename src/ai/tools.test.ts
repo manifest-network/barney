@@ -90,8 +90,25 @@ describe('getToolCallDescription', () => {
     expect(desc).toContain('my-app');
   });
 
+  it('interpolates state in lease_history', () => {
+    const desc = getToolCallDescription('lease_history', { state: 'closed' });
+    expect(desc).toContain('closed');
+  });
+
+  it('returns default description for lease_history without state', () => {
+    const desc = getToolCallDescription('lease_history', {});
+    expect(desc).toContain('lease history');
+  });
+
   it('returns fallback for unknown tool names', () => {
     const desc = getToolCallDescription('unknown_tool', {});
     expect(desc).toContain('unknown_tool');
+  });
+});
+
+describe('AI_TOOLS', () => {
+  it('includes lease_history tool', () => {
+    const toolNames = AI_TOOLS.map((t) => t.function.name);
+    expect(toolNames).toContain('lease_history');
   });
 });

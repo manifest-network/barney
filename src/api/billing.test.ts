@@ -1,11 +1,32 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   LeaseState,
   leaseStateToString,
   leaseStateFromString,
   LEASE_STATE_MAP,
   LEASE_STATE_FILTERS,
+  getLeasesByTenantPaginated,
 } from './billing';
+
+vi.mock('./queryClient', () => {
+  const mockLeasesByTenant = vi.fn();
+  return {
+    getQueryClient: vi.fn().mockResolvedValue({
+      liftedinit: {
+        billing: {
+          v1: {
+            leasesByTenant: mockLeasesByTenant,
+          },
+        },
+      },
+    }),
+    lcdConvert: vi.fn((data) => data),
+    queryWithNotFound: vi.fn(),
+    fixEnumField: vi.fn((obj) => obj),
+  };
+});
+
+import { getQueryClient, lcdConvert } from './queryClient';
 
 describe('leaseStateToString', () => {
   it('converts LEASE_STATE_ACTIVE to string', () => {
@@ -72,5 +93,60 @@ describe('LEASE_STATE_FILTERS', () => {
 
   it('has 6 entries (all + 5 states)', () => {
     expect(LEASE_STATE_FILTERS).toHaveLength(6);
+  });
+});
+
+describe('getLeasesByTenantPaginated', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('passes pagination params to LCD client', async () => {
+    const mockLease = {
+      uuid: 'lease-1',
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      tenant: 'addr1',
+      items: [],
+      createdAt: '2024-01-01T00:00:00Z',
+    };
+    const mockResponse = {
+      leases: [mockLease],
+      pagination: { total: 1n, nextKey: new Uint8Array() },
+    };
+
+    const client = await vi.mocked(getQueryClient)();
+    vi.mocked(client.liftedinit.billing.v1.leasesByTenant).mockResolvedValue(mockResponse as any);
+    vi.mocked(lcdConvert).mockReturnValue(mockResponse as any);
+
+    const result = await getLeasesByTenantPaginated('addr1', {
+      stateFilter: LeaseState.LEASE_STATE_ACTIVE,
+      limit: 5,
+      offset: 10,
+    });
+
+    expect(client.liftedinit.billing.v1.leasesByTenant).toHaveBeenCalledWith({
+      tenant: 'addr1',
+      stateFilter: LeaseState.LEASE_STATE_ACTIVE,
+      pagination: expect.objectContaining({
+        limit: 5n,
+        offset: 10n,
+        countTotal: true,
+      }),
+    });
+    expect(result.leases).toHaveLength(1);
+    expect(result.pagination).toBeDefined();
+  });
+
+  it('defaults to unspecified state filter', async () => {
+    const mockResponse = { leases: [], pagination: undefined };
+    const client = await vi.mocked(getQueryClient)();
+    vi.mocked(client.liftedinit.billing.v1.leasesByTenant).mockResolvedValue(mockResponse as any);
+    vi.mocked(lcdConvert).mockReturnValue(mockResponse as any);
+
+    await getLeasesByTenantPaginated('addr1');
+
+    expect(client.liftedinit.billing.v1.leasesByTenant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stateFilter: LeaseState.LEASE_STATE_UNSPECIFIED,
+      })
+    );
   });
 });

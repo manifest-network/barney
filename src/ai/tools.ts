@@ -1,7 +1,7 @@
 /**
  * AI Tool Definitions
  *
- * 9 tools: 3 TX (require confirmation), 4 query, 2 escape hatch.
+ * 10 tools: 3 TX (require confirmation), 5 query, 2 escape hatch.
  * Model does intent classification; code does orchestration.
  */
 
@@ -129,6 +129,34 @@ export const AI_TOOLS: OllamaTool[] = [
     },
   },
 
+  {
+    type: 'function',
+    function: {
+      name: 'lease_history',
+      description:
+        'List on-chain lease history for the connected wallet. Shows all leases including closed and expired. Supports pagination.',
+      parameters: {
+        type: 'object',
+        properties: {
+          state: {
+            type: 'string',
+            description: 'Filter by state: all, pending, active, closed, rejected, expired. Default: all.',
+            enum: ['all', 'pending', 'active', 'closed', 'rejected', 'expired'],
+          },
+          limit: {
+            type: 'number',
+            description: 'Max number of leases to return per page. Default: 10.',
+          },
+          offset: {
+            type: 'number',
+            description: 'Number of leases to skip (for pagination). Default: 0.',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+
   // --- Escape hatch ---
   {
     type: 'function',
@@ -232,6 +260,10 @@ export function getToolCallDescription(
       return 'Checking your balance and credits...';
     case 'browse_catalog':
       return 'Browsing available tiers and providers...';
+    case 'lease_history':
+      return args.state && args.state !== 'all'
+        ? `Fetching ${args.state} lease history...`
+        : 'Fetching lease history...';
     case 'cosmos_query':
       return `Querying ${args.module} ${args.subcommand}...`;
     case 'cosmos_tx':

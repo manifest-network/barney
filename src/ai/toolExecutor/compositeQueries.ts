@@ -7,10 +7,12 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser
 import { cosmosQuery } from '@manifest-network/manifest-mcp-browser';
 import {
   getLeasesByTenant,
+  getLeasesByTenantPaginated,
   getCreditAccount,
   getCreditEstimate,
   getLease,
   LeaseState,
+  LEASE_STATE_MAP,
 } from '../../api/billing';
 import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
@@ -376,4 +378,55 @@ export async function executeCosmosQuery(
 
   const result = await cosmosQuery(clientManager, module, subcommand, parseResult.data);
   return { success: true, data: result };
+}
+
+/**
+ * Execute lease_history: Paginated on-chain lease history.
+ */
+export async function executeLeaseHistory(
+  args: Record<string, unknown>,
+  options: ToolExecutorOptions
+): Promise<ToolResult> {
+  const { address, appRegistry } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+
+  const stateArg = (args.state as string | undefined)?.toLowerCase() || 'all';
+  const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 50);
+  const offset = Math.max(Number(args.offset) || 0, 0);
+
+  const stateFilter = stateArg === 'all'
+    ? LeaseState.LEASE_STATE_UNSPECIFIED
+    : LEASE_STATE_MAP[stateArg];
+  if (stateFilter === undefined) {
+    return { success: false, error: `Invalid state "${stateArg}". Valid: all, pending, active, closed, rejected, expired.` };
+  }
+
+  const result = await getLeasesByTenantPaginated(address, { stateFilter, limit, offset });
+
+  const leases = result.leases.map((lease) => {
+    const app = appRegistry?.getAppByLease(address, lease.uuid);
+    return {
+      uuid: lease.uuid,
+      name: app?.name,
+      state: LEASE_STATE_LABELS[lease.state as LeaseState] || 'unknown',
+      created: lease.createdAt ? new Date(lease.createdAt).toISOString() : undefined,
+      closed: lease.closedAt ? new Date(lease.closedAt).toISOString() : undefined,
+      closureReason: lease.closureReason || undefined,
+      rejectionReason: lease.rejectionReason || undefined,
+    };
+  });
+
+  const total = result.pagination?.total ? Number(result.pagination.total) : undefined;
+
+  return {
+    success: true,
+    data: {
+      leases,
+      count: leases.length,
+      total,
+      offset,
+      limit,
+      hasMore: total !== undefined ? offset + leases.length < total : leases.length === limit,
+    },
+  };
 }
