@@ -2315,10 +2315,10 @@ h1, h2, h3, h4, h5, h6 {
 .chat-example-apps {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  margin: 0.25rem 3rem 0.25rem 2.5rem;
+  margin: 0.25rem 2.5rem;
 }
 
 .chat-example-apps__label {
@@ -2327,9 +2327,17 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .chat-example-apps__buttons {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 0.5rem;
+  width: 100%;
+  max-width: 28rem;
+}
+
+@media (max-width: 480px) {
+  .chat-example-apps__buttons {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 /* Message Bubbles */
@@ -2427,6 +2435,16 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 0.75rem;
   white-space: pre-wrap;
   overflow-x: auto;
+}
+
+.message-link {
+  color: var(--color-primary-400);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.message-link:hover {
+  color: var(--color-primary-300);
 }
 
 .message-error {

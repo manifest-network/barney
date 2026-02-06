@@ -36,13 +36,13 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'stop_app',
-      description: 'Stop a running app by name. This closes the lease on-chain.',
+      description: 'Stop a running app by name, or use "all" to stop every running app at once.',
       parameters: {
         type: 'object',
         properties: {
           app_name: {
             type: 'string',
-            description: 'The name of the app to stop.',
+            description: 'The name of the app to stop, or "all" to stop all running apps.',
           },
         },
         required: ['app_name'],
@@ -221,7 +221,7 @@ export function getToolCallDescription(
       return `Deploying app${name}${size}...`;
     }
     case 'stop_app':
-      return `Stopping app "${args.app_name}"...`;
+      return args.app_name === 'all' ? 'Stopping all apps...' : `Stopping app "${args.app_name}"...`;
     case 'fund_credits':
       return `Funding credits with ${args.amount} PWR...`;
     case 'list_apps':

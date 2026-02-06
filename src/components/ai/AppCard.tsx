@@ -11,17 +11,23 @@ import { COPY_FEEDBACK_DURATION_MS } from '../../config/constants';
 interface AppCardProps {
   name: string;
   url?: string;
+  connection?: { host: string; ports?: Record<string, { host_ip: string; host_port: number }> };
   status: string;
   onStop?: () => void;
 }
 
-export const AppCard = memo(function AppCard({ name, url, status, onStop }: AppCardProps) {
+export const AppCard = memo(function AppCard({ name, url, connection, status, onStop }: AppCardProps) {
   const [copied, setCopied] = useState(false);
 
+  const portEntries = connection?.ports ? Object.entries(connection.ports) : [];
+  const copyTarget = portEntries.length > 0
+    ? `${portEntries[0][1].host_ip}:${portEntries[0][1].host_port}`
+    : url;
+
   const handleCopy = async () => {
-    if (!url) return;
+    if (!copyTarget) return;
     try {
-      await navigator.clipboard.writeText(url);
+      await navigator.clipboard.writeText(copyTarget);
       setCopied(true);
       setTimeout(() => setCopied(false), COPY_FEEDBACK_DURATION_MS);
     } catch {
@@ -60,6 +66,16 @@ export const AppCard = memo(function AppCard({ name, url, status, onStop }: AppC
               <Copy className="w-3.5 h-3.5" />
             )}
           </button>
+        </div>
+      )}
+
+      {portEntries.length > 0 && (
+        <div className="app-card__ports">
+          {portEntries.map(([containerPort, mapping]) => (
+            <span key={containerPort} className="app-card__port">
+              {containerPort} &rarr; {mapping.host_ip}:{mapping.host_port}
+            </span>
+          ))}
         </div>
       )}
 

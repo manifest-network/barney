@@ -44,6 +44,7 @@ vi.mock('../api/sku', async (importOriginal) => {
 
 vi.mock('../api/provider-api', () => ({
   getProviderHealth: vi.fn(),
+  getLeaseConnectionInfo: vi.fn(),
   createSignMessage: vi.fn().mockReturnValue('sign-msg'),
   createAuthToken: vi.fn().mockReturnValue('auth-token'),
 }));
@@ -53,7 +54,6 @@ vi.mock('../api/fred', () => ({
   pollLeaseUntilReady: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
-  getLeaseInfo: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-browser', () => ({
@@ -74,8 +74,8 @@ vi.mock('../ai/toolExecutor/utils', () => ({
 import { getLeasesByTenant, getCreditAccount, getCreditEstimate, getLease } from '../api/billing';
 import { getAllBalances } from '../api/bank';
 import { getProviders, getSKUs } from '../api/sku';
-import { getProviderHealth } from '../api/provider-api';
-import { pollLeaseUntilReady, getLeaseInfo } from '../api/fred';
+import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
+import { pollLeaseUntilReady } from '../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from '../ai/toolExecutor/utils';
 
@@ -170,9 +170,14 @@ describe('Deploy Flow Integration', () => {
     vi.mocked(pollLeaseUntilReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
-    vi.mocked(getLeaseInfo).mockResolvedValue({
-      host: 'https://my-app.example.com',
-      ports: { http: 80 },
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: LEASE_UUID,
+      tenant: ADDRESS,
+      provider_uuid: PROVIDER_UUID,
+      connection: {
+        host: 'https://my-app.example.com',
+        ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 12345 } },
+      },
     });
 
     const confirmedResult = await executeConfirmedTool('deploy_app', { app_name: 'my-app', size: 'small' }, CLIENT_MANAGER, options, payload);

@@ -7,8 +7,8 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
-import { createSignMessage, createAuthToken } from '../../api/provider-api';
-import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, getLeaseInfo, type TerminalChainState } from '../../api/fred';
+import { createSignMessage, createAuthToken, getLeaseConnectionInfo } from '../../api/provider-api';
+import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, type TerminalChainState } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
@@ -72,11 +72,11 @@ async function fetchFailureLogs(
 
     // Fetch container logs
     try {
-      const logs = await getLeaseLogs(providerUrl, leaseUuid, authToken, 100);
-      const logEntries = Object.entries(logs);
+      const response = await getLeaseLogs(providerUrl, leaseUuid, authToken, 100);
+      const logEntries = Object.entries(response.logs ?? {});
       if (logEntries.length > 0) {
         const logText = logEntries
-          .map(([key, value]) => `[${key}] ${value}`)
+          .map(([service, text]) => `[${service}]\n${typeof text === 'string' ? text : JSON.stringify(text)}`)
           .join('\n');
         parts.push(`Container logs:\n${logText}`);
       }
@@ -132,8 +132,15 @@ export async function executeDeployApp(
     return { success: false, error: nameError };
   }
 
-  // Resolve size
+  // Resolve and validate size
+  const VALID_SIZE_TIERS = ['micro', 'small', 'medium', 'large'] as const;
   const size = (args.size as string | undefined)?.toLowerCase() || 'small';
+  if (!VALID_SIZE_TIERS.includes(size as typeof VALID_SIZE_TIERS[number])) {
+    return {
+      success: false,
+      error: `Invalid size "${size}". Valid tiers: ${VALID_SIZE_TIERS.join(', ')}.`,
+    };
+  }
   const skuName = `docker-${size}`;
 
   // Find matching SKU
@@ -350,8 +357,9 @@ export async function executeConfirmedDeployApp(
     });
 
     if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
-      // Fetch connection details from /info/ endpoint
+      // Fetch connection details from provider API
       let appUrl: string | undefined;
+      let connection: { host: string; ports?: Record<string, { host_ip: string; host_port: number }> } | undefined;
       try {
         const infoTimestamp = Math.floor(Date.now() / 1000);
         const infoSignMessage = createSignMessage(address, leaseUuid, infoTimestamp);
@@ -363,17 +371,21 @@ export async function executeConfirmedDeployApp(
           infoSignResult.pub_key.value,
           infoSignResult.signature
         );
-        const leaseInfo = await getLeaseInfo(providerUrl, leaseUuid, infoAuthToken);
-        if (leaseInfo.host) {
-          appUrl = leaseInfo.host;
+        const connResponse = await getLeaseConnectionInfo(providerUrl, leaseUuid, infoAuthToken);
+        if (connResponse.connection) {
+          connection = connResponse.connection;
+          if (connResponse.connection.host) {
+            appUrl = connResponse.connection.host;
+          }
         }
       } catch (error) {
-        logError('compositeTransactions.executeConfirmedDeployApp.info', error);
+        logError('compositeTransactions.executeConfirmedDeployApp.connection', error);
       }
 
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
         url: appUrl,
+        connection,
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
 
@@ -383,6 +395,7 @@ export async function executeConfirmedDeployApp(
           message: `App "${name}" is live!`,
           name,
           url: appUrl,
+          connection,
           status: 'running',
         },
       };
@@ -461,6 +474,7 @@ async function fallbackToChainState(
 
 /**
  * Pre-validation for stop_app. Returns confirmation result or error.
+ * Supports app_name="all" to stop every running/deploying app at once.
  */
 export async function executeStopApp(
   args: Record<string, unknown>,
@@ -472,6 +486,26 @@ export async function executeStopApp(
 
   const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
+
+  // Bulk stop: gather all running/deploying apps
+  if (name.toLowerCase() === 'all') {
+    const allApps = appRegistry.getApps(address);
+    const active = allApps.filter((a) => a.status === 'running' || a.status === 'deploying');
+    if (active.length === 0) {
+      return { success: false, error: 'No running apps to stop.' };
+    }
+    const names = active.map((a) => a.name);
+    const entries = active.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid }));
+    return {
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Stop ${active.length} app${active.length > 1 ? 's' : ''} (${names.join(', ')})? This will terminate all deployments and stop billing.`,
+      pendingAction: {
+        toolName: 'stop_app',
+        args: { app_name: 'all', entries },
+      },
+    };
+  }
 
   const app = appRegistry.getApp(address, name);
   if (!app) return { success: false, error: `No app found named "${name}"` };
@@ -493,6 +527,7 @@ export async function executeStopApp(
 
 /**
  * Execute stop_app after user confirmation.
+ * Supports bulk stop when args.entries is present (from app_name="all").
  */
 export async function executeConfirmedStopApp(
   args: Record<string, unknown>,
@@ -503,6 +538,42 @@ export async function executeConfirmedStopApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
+  // Bulk stop
+  const entries = args.entries as Array<{ app_name: string; leaseUuid: string }> | undefined;
+  if (entries && entries.length > 0) {
+    const stopped: string[] = [];
+    const failed: string[] = [];
+
+    for (const entry of entries) {
+      const result = await cosmosTx(clientManager, 'billing', 'close-lease', [entry.leaseUuid], true);
+      if (result.code === 0) {
+        appRegistry.updateApp(address, entry.leaseUuid, { status: 'stopped' });
+        stopped.push(entry.app_name);
+      } else {
+        failed.push(entry.app_name);
+      }
+    }
+
+    if (failed.length > 0 && stopped.length === 0) {
+      return { success: false, error: `Failed to stop: ${failed.join(', ')}` };
+    }
+
+    const parts: string[] = [];
+    if (stopped.length > 0) parts.push(`Stopped: ${stopped.join(', ')}.`);
+    if (failed.length > 0) parts.push(`Failed to stop: ${failed.join(', ')}.`);
+
+    return {
+      success: true,
+      data: {
+        message: parts.join(' '),
+        stopped,
+        failed,
+        status: 'stopped',
+      },
+    };
+  }
+
+  // Single stop
   const name = args.app_name as string;
   const leaseUuid = args.leaseUuid as string;
 

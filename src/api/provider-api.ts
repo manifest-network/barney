@@ -137,6 +137,30 @@ export interface AuthToken {
   meta_hash?: string;
 }
 
+const MAX_AUTH_TOKEN_AGE_SECONDS = 300;
+const MAX_AUTH_TOKEN_FUTURE_SECONDS = 60;
+
+/**
+ * Validates that a timestamp is recent enough for auth token use.
+ * Rejects timestamps older than 5 minutes or more than 60 seconds in the future.
+ */
+export function validateAuthTimestamp(timestamp: number): void {
+  if (!Number.isFinite(timestamp)) {
+    throw new Error('Auth timestamp must be a finite number');
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const age = now - timestamp;
+
+  if (age > MAX_AUTH_TOKEN_AGE_SECONDS) {
+    throw new Error(`Auth token expired: timestamp is ${age}s old (max ${MAX_AUTH_TOKEN_AGE_SECONDS}s)`);
+  }
+
+  if (age < -MAX_AUTH_TOKEN_FUTURE_SECONDS) {
+    throw new Error(`Auth token timestamp is ${-age}s in the future (max ${MAX_AUTH_TOKEN_FUTURE_SECONDS}s)`);
+  }
+}
+
 /**
  * Creates the message to sign for ADR-036 authentication (connection info).
  */
@@ -164,6 +188,8 @@ export function createAuthToken(
   signatureBase64: string,
   metaHashHex?: string
 ): string {
+  validateAuthTimestamp(timestamp);
+
   const token: AuthToken = {
     tenant,
     lease_uuid: leaseUuid,

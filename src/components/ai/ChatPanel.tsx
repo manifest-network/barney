@@ -5,18 +5,40 @@ import { useAutoScroll } from '../../hooks/useAutoScroll';
 import { MessageBubble } from './MessageBubble';
 import { ConfirmationCard } from './ConfirmationCard';
 import { ProgressCard } from './ProgressCard';
-import { AppCard } from './AppCard';
 import { AISettings } from './AISettings';
 import { MAX_INPUT_LENGTH } from '../../ai/validation';
 import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
 
+const GAME_MANIFEST = (game: string) => ({
+  image: `docker.io/lifted/demo-games:${game}`,
+  ports: { '8080/tcp': {} },
+  env: {},
+  read_only: true,
+  tmpfs: ['/var/cache/nginx', '/var/run'],
+});
+
 const EXAMPLE_APPS = [
-  { label: 'Tetris', manifest: { image: 'bsord/tetris', ports: { '80/tcp': {} }, env: {}, read_only: true, tmpfs: ['/var/cache/nginx', '/var/run'] } },
-  { label: 'Pac-Man', manifest: { image: 'uzyexe/pacman', ports: { '80/tcp': {} }, env: {}, read_only: true, tmpfs: ['/var/cache/nginx', '/var/run'] } },
-  { label: 'Doom', manifest: { image: 'mattipaksula/doom-js', ports: { '80/tcp': {} }, env: {}, read_only: true, tmpfs: ['/var/cache/nginx', '/var/run'] } },
-  { label: '2048', manifest: { image: 'alexwhen/docker-2048', ports: { '80/tcp': {} }, env: {}, read_only: true, tmpfs: ['/var/cache/nginx', '/var/run'] } },
+  { label: 'Tetris', manifest: GAME_MANIFEST('tetris') },
+  { label: '2048', manifest: GAME_MANIFEST('2048') },
+  { label: 'Pac-Man', manifest: GAME_MANIFEST('pacman') },
+  { label: 'Floppy Bird', manifest: GAME_MANIFEST('floppybird') },
+  { label: 'Hextris', manifest: GAME_MANIFEST('hextris') },
+  { label: 'Clumsy Bird', manifest: GAME_MANIFEST('clumsy-bird') },
+  { label: 'Scorch', manifest: GAME_MANIFEST('scorch') },
+  { label: 'Secret Agent', manifest: GAME_MANIFEST('secretagent') },
+  { label: 'SimCity', manifest: GAME_MANIFEST('simcity') },
+  { label: 'SimCity 2000', manifest: GAME_MANIFEST('simcity2000') },
+  { label: 'Colossal Cave', manifest: GAME_MANIFEST('colossalcave') },
+  { label: 'Civilization', manifest: GAME_MANIFEST('civilization') },
+  { label: 'Space Quest 4', manifest: GAME_MANIFEST('spacequest4') },
+  { label: "King's Quest 5", manifest: GAME_MANIFEST('kingsquest5') },
+  { label: "King's Quest 6", manifest: GAME_MANIFEST('kingsquest6') },
+  { label: "King's Quest 7", manifest: GAME_MANIFEST('kingsquest7') },
+  { label: 'Monkey Island', manifest: GAME_MANIFEST('monkeyisland') },
+  { label: 'Battle Chess', manifest: GAME_MANIFEST('battlechess') },
+  { label: 'Oregon Trail', manifest: GAME_MANIFEST('oregontrail') },
 ];
 
 const SUGGESTIONS = ['Deploy an app', 'Check my credits', "What's running?"];
@@ -118,31 +140,23 @@ export function ChatPanel() {
   const showCharCount = input.length > MAX_INPUT_LENGTH * 0.8;
   const isNearLimit = input.length > MAX_INPUT_LENGTH * 0.95;
 
-  // Check for deploy success in last message
-  const lastAssistantMsg = [...messages].reverse().find(
-    (m) => m.role === 'tool' && !m.isStreaming && m.content
-  );
-  let deploySuccessData: { name: string; url?: string; status: string } | null = null;
-  if (lastAssistantMsg?.content) {
-    try {
-      const parsed = JSON.parse(lastAssistantMsg.content);
-      if (parsed?.success && parsed?.data?.status === 'running' && parsed?.data?.name) {
-        deploySuccessData = parsed.data;
-      }
-    } catch {
-      // Not JSON
-    }
-  }
-
-  // Show example app buttons after the model explains how to deploy
-  // (user said "Deploy an app" without a file, model responded conversationally)
+  // Show example app buttons when:
+  // - the user's most recent message mentions deploy/games, OR
+  // - the assistant's last response mentions "example apps below"
+  const GAME_TRIGGER_USER = /deploy an app|show\b.*\bgames|example apps|browse\b.*\bgames|more games/i;
+  const GAME_TRIGGER_AI = /example apps below/i;
+  const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+  const lastMsg = messages[messages.length - 1];
+  const userTriggered = lastUserMsg != null
+    && GAME_TRIGGER_USER.test(lastUserMsg.content)
+    && !lastUserMsg.content.includes('(File attached:');
+  const aiTriggered = lastMsg?.role === 'assistant' && GAME_TRIGGER_AI.test(lastMsg.content);
   const showExampleApps = !isStreaming
     && !pendingConfirmation
     && !deployProgress
     && messages.length >= 2
-    && messages.some((m) => m.role === 'user' && /deploy an app/i.test(m.content))
-    && messages[messages.length - 1]?.role === 'assistant'
-    && !messages.some((m) => m.role === 'user' && m.content.includes('(File attached:'));
+    && (userTriggered || aiTriggered)
+    && lastMsg?.role === 'assistant';
 
   return (
     <div
@@ -249,15 +263,6 @@ export function ChatPanel() {
             {/* Deploy Progress */}
             {deployProgress && !pendingConfirmation && (
               <ProgressCard progress={deployProgress} />
-            )}
-            {/* App Card on deploy success */}
-            {deploySuccessData && !deployProgress && !pendingConfirmation && (
-              <AppCard
-                name={deploySuccessData.name}
-                url={deploySuccessData.url}
-                status={deploySuccessData.status}
-                onStop={() => sendMessage(`stop ${deploySuccessData!.name}`)}
-              />
             )}
           </>
         )}

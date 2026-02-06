@@ -150,8 +150,14 @@ export interface TerminalChainState {
   state: 'closed' | 'rejected' | 'expired';
 }
 
-/** Container logs keyed by instance index. */
-export type LeaseLogs = Record<string, string>;
+/** Response from the logs endpoint. */
+export interface LeaseLogsResponse {
+  lease_uuid: string;
+  tenant: string;
+  provider_uuid: string;
+  /** Container logs keyed by service/container name. */
+  logs: Record<string, string>;
+}
 
 /** Provision status from the provider. */
 export interface LeaseProvision {
@@ -283,11 +289,11 @@ export async function getLeaseLogs(
   leaseUuid: string,
   authToken: string,
   tail = 100
-): Promise<LeaseLogs> {
+): Promise<LeaseLogsResponse> {
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
   const { url, headers } = buildValidatedFredRequest(
     providerApiUrl,
-    `/logs/${encodedLeaseUuid}?tail=${tail}`,
+    `/v1/leases/${encodedLeaseUuid}/logs?tail=${tail}`,
     { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
   );
 
@@ -323,7 +329,7 @@ export async function getLeaseProvision(
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
   const { url, headers } = buildValidatedFredRequest(
     providerApiUrl,
-    `/provisions/${encodedLeaseUuid}`,
+    `/v1/leases/${encodedLeaseUuid}/provision`,
     { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
   );
 

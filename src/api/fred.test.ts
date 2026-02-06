@@ -278,22 +278,27 @@ describe('getLeaseLogs', () => {
     vi.unstubAllGlobals();
   });
 
-  it('returns logs keyed by instance', async () => {
-    const logs = { '0': 'Starting server...', '1': 'Worker ready' };
-    mockFetchResponse(logs);
+  it('returns logs response with nested logs', async () => {
+    const response = {
+      lease_uuid: LEASE_UUID,
+      tenant: 'manifest1test',
+      provider_uuid: 'provider-uuid',
+      logs: { '0': 'Starting server...', '1': 'Worker ready' },
+    };
+    mockFetchResponse(response);
 
     const result = await getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result).toEqual(logs);
+    expect(result.logs).toEqual({ '0': 'Starting server...', '1': 'Worker ready' });
+    expect(result.lease_uuid).toBe(LEASE_UUID);
   });
 
-  it('uses /logs/ path with tail parameter', async () => {
+  it('uses /v1/leases/ path with tail parameter', async () => {
     mockFetchResponse({});
 
     await getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, 50);
 
     const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain(`/logs/${LEASE_UUID}?tail=50`);
-    expect(fetchCall[0]).not.toContain('/v1/leases/');
+    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/logs?tail=50`);
   });
 
   it('defaults tail to 100', async () => {
@@ -365,13 +370,13 @@ describe('getLeaseProvision', () => {
     expect(result.status).toBe('failed');
   });
 
-  it('uses /provisions/ path', async () => {
+  it('uses /v1/leases/ path', async () => {
     mockFetchResponse({ status: 'running', fail_count: 0, last_error: '' });
 
     await getLeaseProvision(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
 
     const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain(`/provisions/${LEASE_UUID}`);
+    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/provision`);
   });
 
   it('throws ProviderApiError on 404', async () => {

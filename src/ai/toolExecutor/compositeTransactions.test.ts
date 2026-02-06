@@ -34,13 +34,13 @@ vi.mock('../../api/provider-api', () => ({
   createSignMessage: vi.fn().mockReturnValue('sign-msg'),
   createAuthToken: vi.fn().mockReturnValue('auth-token'),
   createLeaseDataSignMessage: vi.fn().mockReturnValue('lease-data-sign-msg'),
+  getLeaseConnectionInfo: vi.fn(),
 }));
 
 vi.mock('../../api/fred', () => ({
   pollLeaseUntilReady: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
-  getLeaseInfo: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-browser', () => ({
@@ -67,7 +67,8 @@ vi.mock('../../registry/appRegistry', () => ({
 
 import { getCreditEstimate, getLease } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
-import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, getLeaseInfo } from '../../api/fred';
+import { getLeaseConnectionInfo } from '../../api/provider-api';
+import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision } from '../../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
@@ -168,6 +169,31 @@ describe('executeDeployApp', () => {
     expect(result.error).toContain('Wallet not connected');
   });
 
+  it('returns error for invalid size tier', async () => {
+    const result = await executeDeployApp({ size: 'xxlarge' }, makeOptions(), makePayload());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid size');
+    expect(result.error).toContain('micro, small, medium, large');
+  });
+
+  it('accepts all valid size tiers', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    for (const tier of ['micro', 'small', 'medium', 'large']) {
+      const result = await executeDeployApp({ size: tier }, makeOptions(), makePayload());
+      // Should not fail with size validation error
+      if (result.error) {
+        expect(result.error).not.toContain('Invalid size');
+      }
+    }
+  });
+
   it('returns confirmation with valid input', async () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-small', providerUuid: 'p1', price: { denom: 'umfx', amount: '1000000' } } as any,
@@ -193,15 +219,20 @@ describe('executeDeployApp', () => {
 describe('executeConfirmedDeployApp', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('creates lease, uploads, and polls to ready using /info/ for URL', async () => {
+  it('creates lease, uploads, and polls to ready using connection endpoint for URL', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
     vi.mocked(pollLeaseUntilReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
-    vi.mocked(getLeaseInfo).mockResolvedValue({
-      host: 'https://app.example.com',
-      ports: { http: 80 },
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: 'https://app.example.com',
+        ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 12345 } },
+      },
     });
 
     const onProgress = vi.fn();
@@ -218,9 +249,10 @@ describe('executeConfirmedDeployApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
     expect((result.data as any).url).toBe('https://app.example.com');
+    expect((result.data as any).connection.ports['80/tcp'].host_port).toBe(12345);
     expect(onProgress).toHaveBeenCalled();
     expect(registry.addApp).toHaveBeenCalled();
-    expect(getLeaseInfo).toHaveBeenCalled();
+    expect(getLeaseConnectionInfo).toHaveBeenCalled();
   });
 
   it('handles lease creation failure', async () => {
@@ -269,7 +301,10 @@ describe('executeConfirmedDeployApp', () => {
       last_error: 'OOMKilled',
     });
     vi.mocked(getLeaseLogs).mockResolvedValue({
-      '0': 'Error: out of memory',
+      lease_uuid: 'lease-1',
+      tenant: 'manifest1test',
+      provider_uuid: 'p1',
+      logs: { '0': 'Error: out of memory' },
     });
 
     const registry = makeRegistry();
@@ -328,13 +363,13 @@ describe('executeConfirmedDeployApp', () => {
     expect((result.data as any).status).toBe('running');
   });
 
-  it('succeeds without URL when /info/ fails', async () => {
+  it('succeeds without URL when connection endpoint fails', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
     vi.mocked(pollLeaseUntilReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
-    vi.mocked(getLeaseInfo).mockRejectedValue(new Error('404 not found'));
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('404 not found'));
 
     const registry = makeRegistry();
     const result = await executeConfirmedDeployApp(

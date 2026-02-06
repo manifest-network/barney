@@ -23,20 +23,24 @@ vi.mock('../../api/bank', () => ({
   getAllBalances: vi.fn(),
 }));
 
-vi.mock('../../api/sku', () => ({
-  getProviders: vi.fn(),
-  getSKUs: vi.fn(),
-}));
+vi.mock('../../api/sku', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/sku')>();
+  return {
+    ...actual,
+    getProviders: vi.fn(),
+    getSKUs: vi.fn(),
+  };
+});
 
 vi.mock('../../api/provider-api', () => ({
   getProviderHealth: vi.fn(),
+  getLeaseConnectionInfo: vi.fn(),
   createSignMessage: vi.fn().mockReturnValue('sign-msg'),
   createAuthToken: vi.fn().mockReturnValue('auth-token'),
 }));
 
 vi.mock('../../api/fred', () => ({
   getLeaseStatus: vi.fn(),
-  getLeaseInfo: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-browser', () => ({

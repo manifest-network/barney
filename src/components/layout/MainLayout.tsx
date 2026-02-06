@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { Menu, X } from 'lucide-react';
 import { AppsSidebar } from './AppsSidebar';
 import { ChatPanel } from '../ai/ChatPanel';
+import { AIErrorBoundary } from '../ai/AIErrorBoundary';
 
 export function MainLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -41,7 +42,9 @@ export function MainLayout() {
 
       {/* Chat area */}
       <main className="main-layout__chat">
-        <ChatPanel />
+        <AIErrorBoundary>
+          <ChatPanel />
+        </AIErrorBoundary>
       </main>
     </div>
   );

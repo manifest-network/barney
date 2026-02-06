@@ -14,9 +14,8 @@ import {
 } from '../../api/billing';
 import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
-import { getProviderHealth } from '../../api/provider-api';
-import { getLeaseStatus, getLeaseInfo } from '../../api/fred';
-import { createSignMessage, createAuthToken } from '../../api/provider-api';
+import { getProviderHealth, getLeaseConnectionInfo, createSignMessage, createAuthToken } from '../../api/provider-api';
+import { getLeaseStatus } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
@@ -140,6 +139,7 @@ export async function executeAppStatus(
   // Reconcile registry status with chain/fred state
   let currentStatus = app.status;
   let appUrl = app.url;
+  let appConnection = app.connection;
 
   // If chain says closed/rejected/expired, mark as stopped
   if (leaseState === LeaseState.LEASE_STATE_CLOSED || leaseState === LeaseState.LEASE_STATE_REJECTED || leaseState === LeaseState.LEASE_STATE_EXPIRED) {
@@ -155,7 +155,7 @@ export async function executeAppStatus(
         if (app.status !== 'running') {
           currentStatus = 'running';
         }
-        // Fetch connection details from /info/ endpoint
+        // Fetch connection details from provider API
         if (signArbitrary && app.providerUrl) {
           try {
             const infoTimestamp = Math.floor(Date.now() / 1000);
@@ -168,16 +168,19 @@ export async function executeAppStatus(
               infoSignResult.pub_key.value,
               infoSignResult.signature
             );
-            const leaseInfo = await getLeaseInfo(app.providerUrl, app.leaseUuid, infoAuthToken);
-            if (leaseInfo.host) {
-              appUrl = leaseInfo.host;
+            const connResponse = await getLeaseConnectionInfo(app.providerUrl, app.leaseUuid, infoAuthToken);
+            if (connResponse.connection) {
+              appConnection = connResponse.connection;
+              if (connResponse.connection.host) {
+                appUrl = connResponse.connection.host;
+              }
             }
           } catch (error) {
-            logError('compositeQueries.executeAppStatus.info', error);
+            logError('compositeQueries.executeAppStatus.connection', error);
           }
         }
         if (app.status !== 'running' || appUrl !== app.url) {
-          appRegistry.updateApp(address, app.leaseUuid, { status: 'running', url: appUrl });
+          appRegistry.updateApp(address, app.leaseUuid, { status: 'running', url: appUrl, connection: appConnection });
         }
       } else if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
         if (app.status !== 'failed') {
@@ -199,6 +202,7 @@ export async function executeAppStatus(
       status: currentStatus,
       size: app.size,
       url: appUrl,
+      connection: appConnection,
       chainState,
       fredStatus,
       created: new Date(app.createdAt).toISOString(),
