@@ -17,7 +17,7 @@ import {
 import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo, createSignMessage, createAuthToken } from '../../api/provider-api';
-import { getLeaseStatus } from '../../api/fred';
+import { getLeaseStatus, getLeaseLogs } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
@@ -263,14 +263,14 @@ export async function executeGetBalance(
     }
   }
 
-  // Time remaining
-  let hoursRemaining: number | null = null;
-  if (estimate?.estimatedDurationSeconds) {
-    hoursRemaining = Math.floor(Number(estimate.estimatedDurationSeconds) / 3600);
-  }
-
   // Running app count
   const runningApps = estimate?.activeLeaseCount ? Number(estimate.activeLeaseCount) : 0;
+
+  // Time remaining (only meaningful when credits are actively being spent)
+  let hoursRemaining: number | null = null;
+  if (spendingPerHour > 0 && estimate?.estimatedDurationSeconds) {
+    hoursRemaining = Math.floor(Number(estimate.estimatedDurationSeconds) / 3600);
+  }
 
   // Wallet MFX balance
   let mfxBalance = 0;
@@ -378,6 +378,96 @@ export async function executeCosmosQuery(
 
   const result = await cosmosQuery(clientManager, module, subcommand, parseResult.data);
   return { success: true, data: result };
+}
+
+/** Max total characters of log text before truncation to avoid bloating LLM context. */
+const MAX_LOG_CHARS = 4000;
+
+/**
+ * Execute get_logs: Fetch container logs for a running app.
+ */
+export async function executeGetLogs(
+  args: Record<string, unknown>,
+  options: ToolExecutorOptions
+): Promise<ToolResult> {
+  const { address, appRegistry, signArbitrary } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!appRegistry) return { success: false, error: 'App registry not available' };
+
+  const name = args.app_name as string;
+  if (!name) return { success: false, error: 'App name is required' };
+
+  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
+  if (!app) return { success: false, error: `No app found named "${name}"` };
+
+  if (!app.providerUrl) {
+    return { success: false, error: `App "${app.name}" has no provider URL (it may be stopped)` };
+  }
+  if (!signArbitrary) {
+    return { success: false, error: 'Signing not available' };
+  }
+
+  const tail = typeof args.tail === 'number' && args.tail > 0 ? Math.floor(args.tail) : 100;
+
+  // Mint auth token (same pattern as app_status)
+  const timestamp = Math.floor(Date.now() / 1000);
+  const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
+  const signResult: SignResult = await signArbitrary(address, signMessage);
+  const authToken = createAuthToken(
+    address,
+    app.leaseUuid,
+    timestamp,
+    signResult.pub_key.value,
+    signResult.signature
+  );
+
+  let logsResponse;
+  try {
+    logsResponse = await getLeaseLogs(app.providerUrl, app.leaseUuid, authToken, tail);
+  } catch (error) {
+    logError('compositeQueries.executeGetLogs', error);
+    return {
+      success: false,
+      error: `Failed to fetch logs for "${app.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+    };
+  }
+
+  // Truncate if total log text exceeds limit
+  const logs: Record<string, string> = {};
+  let totalChars = 0;
+  let truncated = false;
+  for (const [service, text] of Object.entries(logsResponse.logs)) {
+    if (totalChars >= MAX_LOG_CHARS) {
+      truncated = true;
+      break;
+    }
+    const remaining = MAX_LOG_CHARS - totalChars;
+    if (text.length > remaining) {
+      logs[service] = text.slice(text.length - remaining);
+      totalChars += remaining;
+      truncated = true;
+    } else {
+      logs[service] = text;
+      totalChars += text.length;
+    }
+  }
+
+  return {
+    success: true,
+    data: {
+      app_name: app.name,
+      logs,
+      truncated,
+    },
+    displayCard: {
+      type: 'logs',
+      data: {
+        app_name: app.name,
+        logs,
+        truncated,
+      },
+    },
+  };
 }
 
 /**

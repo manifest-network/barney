@@ -1,7 +1,7 @@
 /**
  * AI Tool Definitions
  *
- * 10 tools: 3 TX (require confirmation), 5 query, 2 escape hatch.
+ * 11 tools: 3 TX (require confirmation), 6 query, 2 escape hatch.
  * Model does intent classification; code does orchestration.
  */
 
@@ -98,6 +98,27 @@ export const AI_TOOLS: OllamaTool[] = [
           app_name: {
             type: 'string',
             description: 'The app name to check.',
+          },
+        },
+        required: ['app_name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_logs',
+      description: 'Get container logs for a running app by name.',
+      parameters: {
+        type: 'object',
+        properties: {
+          app_name: {
+            type: 'string',
+            description: 'The app name to get logs for.',
+          },
+          tail: {
+            type: 'number',
+            description: 'Number of log lines to return. Default: 100.',
           },
         },
         required: ['app_name'],
@@ -256,6 +277,8 @@ export function getToolCallDescription(
       return args.state ? `Listing ${args.state} apps...` : 'Listing running apps...';
     case 'app_status':
       return `Checking status of "${args.app_name}"...`;
+    case 'get_logs':
+      return `Fetching logs for "${args.app_name}"...`;
     case 'get_balance':
       return 'Checking your balance and credits...';
     case 'browse_catalog':

@@ -7,6 +7,7 @@ vi.mock('./compositeQueries', () => ({
   executeListApps: vi.fn(),
   executeAppStatus: vi.fn(),
   executeGetBalance: vi.fn(),
+  executeGetLogs: vi.fn(),
   executeBrowseCatalog: vi.fn(),
   executeCosmosQuery: vi.fn(),
   executeLeaseHistory: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock('./compositeTransactions', () => ({
 
 import {
   executeGetBalance,
+  executeGetLogs,
   executeListApps,
   executeBrowseCatalog,
   executeCosmosQuery,
@@ -82,6 +84,15 @@ describe('executeTool', () => {
 
     const result = await executeTool('browse_catalog', {}, makeOptions());
     expect(result).toBe(queryResult);
+  });
+
+  it('routes get_logs to executor', async () => {
+    const queryResult: ToolResult = { success: true, data: { app_name: 'my-app', logs: {}, truncated: false } };
+    vi.mocked(executeGetLogs).mockResolvedValue(queryResult);
+
+    const result = await executeTool('get_logs', { app_name: 'my-app' }, makeOptions());
+    expect(result).toBe(queryResult);
+    expect(executeGetLogs).toHaveBeenCalledWith({ app_name: 'my-app' }, expect.any(Object));
   });
 
   it('routes lease_history to executor', async () => {

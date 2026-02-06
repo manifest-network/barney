@@ -25,6 +25,7 @@ interface ToolResultSuccess {
   success: true;
   requiresConfirmation?: false;
   data: unknown;
+  displayCard?: { type: string; data: unknown };
   error?: never;
   confirmationMessage?: never;
   pendingAction?: never;

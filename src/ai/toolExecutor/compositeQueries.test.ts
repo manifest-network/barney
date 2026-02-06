@@ -3,6 +3,7 @@ import {
   executeListApps,
   executeAppStatus,
   executeGetBalance,
+  executeGetLogs,
   executeBrowseCatalog,
   executeCosmosQuery,
   executeLeaseHistory,
@@ -57,6 +58,7 @@ vi.mock('../../api/provider-api', () => ({
 
 vi.mock('../../api/fred', () => ({
   getLeaseStatus: vi.fn(),
+  getLeaseLogs: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-browser', () => ({
@@ -82,6 +84,7 @@ import { getLeasesByTenant, getCreditAccount, getCreditEstimate, getLeasesByTena
 import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
+import { getLeaseLogs } from '../../api/fred';
 import { cosmosQuery } from '@manifest-network/manifest-mcp-browser';
 
 const ADDRESS = 'manifest1abc';
@@ -225,6 +228,28 @@ describe('executeGetBalance', () => {
     expect(data.mfx_balance).toBe(5);
     expect(data.hours_remaining).toBe(24);
     expect(data.running_apps).toBe(1);
+  });
+
+  it('returns null hours_remaining when no running apps', async () => {
+    vi.mocked(getAllBalances).mockResolvedValue([{ denom: 'umfx', amount: '5000000' }]);
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      creditAccount: { tenant: ADDRESS, creditAddress: 'credit-addr', activeLeaseCount: 0n, pendingLeaseCount: 0n, reservedAmounts: [] },
+      balances: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
+      availableBalances: [],
+    } as any);
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      currentBalance: [{ denom: 'umfx', amount: '100000000' }],
+      totalRatePerSecond: [],
+      estimatedDurationSeconds: 2440800n,
+      activeLeaseCount: 0n,
+    } as any);
+
+    const result = await executeGetBalance(makeOptions());
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.running_apps).toBe(0);
+    expect(data.spending_per_hour).toBe(0);
+    expect(data.hours_remaining).toBeNull();
   });
 });
 
@@ -397,5 +422,177 @@ describe('executeLeaseHistory', () => {
     const data = result.data as any;
     expect(data.hasMore).toBe(true);
     expect(data.total).toBe(25);
+  });
+});
+
+const mockSignArbitrary = vi.fn().mockResolvedValue({
+  pub_key: { type: 'tendermint/PubKeySecp256k1', value: 'pubkey123' },
+  signature: 'sig123',
+});
+
+describe('executeGetLogs', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns error without wallet', async () => {
+    const result = await executeGetLogs({ app_name: 'my-app' }, makeOptions({ address: undefined }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Wallet not connected');
+  });
+
+  it('returns error without app registry', async () => {
+    const result = await executeGetLogs({ app_name: 'my-app' }, makeOptions({ appRegistry: undefined }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('App registry not available');
+  });
+
+  it('returns error without app_name', async () => {
+    const result = await executeGetLogs({}, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('App name is required');
+  });
+
+  it('returns error when app not found', async () => {
+    const result = await executeGetLogs({ app_name: 'nonexistent' }, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No app found');
+  });
+
+  it('returns error when app has no provider URL', async () => {
+    const app = makeApp({ providerUrl: undefined, status: 'stopped' });
+    const registry = makeRegistry([app]);
+    const result = await executeGetLogs(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('no provider URL');
+  });
+
+  it('returns error without signArbitrary', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeGetLogs(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: undefined })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Signing not available');
+  });
+
+  it('returns logs for running app', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseLogs).mockResolvedValue({
+      lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
+      logs: { web: 'line1\nline2\nline3' },
+    });
+
+    const result = await executeGetLogs(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.app_name).toBe('my-app');
+    expect(data.logs.web).toBe('line1\nline2\nline3');
+    expect(data.truncated).toBe(false);
+
+    // Verify displayCard is present with matching data
+    const card = (result as any).displayCard;
+    expect(card).toBeDefined();
+    expect(card.type).toBe('logs');
+    expect(card.data.app_name).toBe('my-app');
+    expect(card.data.logs.web).toBe('line1\nline2\nline3');
+    expect(card.data.truncated).toBe(false);
+
+    // Verify auth token was created
+    expect(getLeaseLogs).toHaveBeenCalledWith(
+      app.providerUrl,
+      app.leaseUuid,
+      'auth-token',
+      100
+    );
+  });
+
+  it('handles getLeaseLogs failure gracefully', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseLogs).mockRejectedValue(new Error('connection refused'));
+
+    const result = await executeGetLogs(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Failed to fetch logs');
+    expect(result.error).toContain('connection refused');
+  });
+
+  it('respects custom tail parameter', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseLogs).mockResolvedValue({
+      lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
+      logs: { web: 'line1' },
+    });
+
+    await executeGetLogs(
+      { app_name: 'my-app', tail: 50 },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(getLeaseLogs).toHaveBeenCalledWith(
+      app.providerUrl,
+      app.leaseUuid,
+      'auth-token',
+      50
+    );
+  });
+
+  it('truncates very long logs', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const longLog = 'x'.repeat(5000);
+    vi.mocked(getLeaseLogs).mockResolvedValue({
+      lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
+      logs: { web: longLog },
+    });
+
+    const result = await executeGetLogs(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.logs.web.length).toBe(4000);
+    expect(data.truncated).toBe(true);
+
+    // displayCard should also reflect truncation
+    const card = (result as any).displayCard;
+    expect(card).toBeDefined();
+    expect(card.data.truncated).toBe(true);
+  });
+
+  it('finds app via fuzzy match', async () => {
+    const app = makeApp({ name: 'my-cool-app' });
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseLogs).mockResolvedValue({
+      lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
+      logs: { web: 'log output' },
+    });
+
+    const result = await executeGetLogs(
+      { app_name: 'cool-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(true);
+    expect((result.data as any).app_name).toBe('my-cool-app');
   });
 });

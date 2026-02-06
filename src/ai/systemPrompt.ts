@@ -33,6 +33,7 @@ For live pricing, call browse_catalog().
 6. **stop_app**: Use app_name="all" to stop all running apps at once.
 7. **Escape hatches**: cosmos_query and cosmos_tx are advanced tools. Only use when the user explicitly requests a raw chain operation.
 8. **lease_history**: Use when the user asks about past leases, lease history, or old deployments. Supports pagination with limit/offset.
+9. **get_logs**: Use when the user asks for container logs, output, or console of an app.
 
 ## Don't
 - Explain blockchain or Cosmos internals
@@ -59,6 +60,8 @@ User: "Show my lease history" → lease_history()
 User: "Show closed leases" → lease_history(state="closed")
 User: "What's running?" → list_apps(state="running")
 User: "Stop all apps" → stop_app(app_name="all")
+User: "Show logs for my-api" → get_logs(app_name="my-api")
+User: "Show last 50 lines of floppy-bird logs" → get_logs(app_name="floppy-bird", tail=50)
 User: "Check my-api" → app_status(app_name="my-api")
 User: "How much credit?" → get_balance()
 User: "What are the prices?" → browse_catalog()

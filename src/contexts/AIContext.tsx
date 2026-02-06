@@ -149,6 +149,7 @@ export interface ChatMessage {
   toolDescription?: string;
   isStreaming?: boolean;
   error?: string;
+  card?: { type: string; data: unknown };
 }
 
 export interface PendingConfirmation {
@@ -196,12 +197,42 @@ const defaultSettings: AISettings = {
 };
 
 
+// Lazy initializers — run synchronously before first render so state is hydrated immediately.
+// This avoids the effect-based load/save race where save effects clobber localStorage
+// with empty state before the load effect's setState has taken effect.
+function loadSettings(): AISettings {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_SETTINGS);
+    if (saved) {
+      const validated = validateSettings(JSON.parse(saved));
+      return { ...defaultSettings, ...validated };
+    }
+  } catch (error) {
+    logError('AIContext.loadSettings', error);
+    localStorage.removeItem(STORAGE_KEY_SETTINGS);
+  }
+  return defaultSettings;
+}
+
+function loadHistory(): ChatMessage[] {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_HISTORY);
+    if (saved) {
+      return validateChatHistory(JSON.parse(saved)) as ChatMessage[];
+    }
+  } catch (error) {
+    logError('AIContext.loadHistory', error);
+    localStorage.removeItem(STORAGE_KEY_HISTORY);
+  }
+  return [];
+}
+
 export function AIProvider({ children }: { children: ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(loadHistory);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [settings, setSettings] = useState<AISettings>(defaultSettings);
+  const [settings, setSettings] = useState<AISettings>(loadSettings);
   const [availableModels, setAvailableModels] = useState<OllamaModel[]>([]);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [pendingPayload, setPendingPayload] = useState<PayloadAttachment | null>(null);
@@ -229,32 +260,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
   // Cache for query tool results to reduce redundant API calls
   const toolCacheRef = useRef<Map<string, { result: ToolResult; timestamp: number }>>(new Map());
 
-  // Load settings and history from localStorage with validation
-  useEffect(() => {
-    try {
-      const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
-      if (savedSettings) {
-        const parsed = JSON.parse(savedSettings);
-        // Validate and sanitize settings from localStorage
-        const validated = validateSettings(parsed);
-        setSettings({ ...defaultSettings, ...validated });
-      }
-
-      const savedHistory = localStorage.getItem(STORAGE_KEY_HISTORY);
-      if (savedHistory) {
-        const parsed = JSON.parse(savedHistory);
-        // Validate and sanitize chat history from localStorage
-        const validated = validateChatHistory(parsed) as ChatMessage[];
-        setMessages(validated);
-      }
-    } catch (error) {
-      logError('AIContext.loadSettings', error);
-      // On parse error, clear potentially corrupted data
-      localStorage.removeItem(STORAGE_KEY_SETTINGS);
-      localStorage.removeItem(STORAGE_KEY_HISTORY);
-    }
-  }, []);
-
   // Save settings to localStorage
   useEffect(() => {
     try {
@@ -268,8 +273,10 @@ export function AIProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (settings.saveHistory) {
       try {
-        // Only save non-streaming messages
-        const toSave = messages.filter((m) => !m.isStreaming);
+        // Only save non-streaming messages; strip card data to avoid persisting large logs
+        const toSave = messages
+          .filter((m) => !m.isStreaming)
+          .map(({ card, ...rest }) => rest);
         localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(toSave));
       } catch (error) {
         logError('AIContext.saveHistory', error);
@@ -648,6 +655,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       });
 
       // Execute each tool call
+      let hasDisplayCard = false;
       for (const toolCall of toolCalls) {
         const { result, messageId: toolMessageId } = await executeAndDisplayToolCall(toolCall);
 
@@ -680,15 +688,29 @@ export function AIProvider({ children }: { children: ReactNode }) {
         }
 
         // Update tool message with result
-        const resultContent = result.success
-          ? JSON.stringify(result.data, null, 2)
-          : `Error: ${result.error}`;
+        if (result.success && result.displayCard) {
+          hasDisplayCard = true;
+          updateMessageById(toolMessageId, {
+            content: '',
+            card: result.displayCard,
+            isStreaming: false,
+          });
+        } else {
+          const resultContent = result.success
+            ? JSON.stringify(result.data, null, 2)
+            : `Error: ${result.error}`;
 
-        updateMessageById(toolMessageId, {
-          content: resultContent,
-          error: result.success ? undefined : result.error,
-          isStreaming: false,
-        });
+          updateMessageById(toolMessageId, {
+            content: resultContent,
+            error: result.success ? undefined : result.error,
+            isStreaming: false,
+          });
+        }
+      }
+
+      // Skip LLM round-trip when results were rendered directly as cards
+      if (hasDisplayCard) {
+        return { shouldContinue: false };
       }
 
       // Create new assistant message for next iteration

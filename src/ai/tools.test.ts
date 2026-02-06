@@ -111,4 +111,20 @@ describe('AI_TOOLS', () => {
     const toolNames = AI_TOOLS.map((t) => t.function.name);
     expect(toolNames).toContain('lease_history');
   });
+
+  it('includes get_logs tool', () => {
+    const toolNames = AI_TOOLS.map((t) => t.function.name);
+    expect(toolNames).toContain('get_logs');
+  });
+
+  it('has 11 tools total', () => {
+    expect(AI_TOOLS).toHaveLength(11);
+  });
+});
+
+describe('getToolCallDescription - get_logs', () => {
+  it('interpolates name in get_logs', () => {
+    const desc = getToolCallDescription('get_logs', { app_name: 'my-app' });
+    expect(desc).toContain('my-app');
+  });
 });

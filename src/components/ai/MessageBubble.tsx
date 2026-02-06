@@ -2,6 +2,7 @@ import { useState, memo } from 'react';
 import { User, Bot, Wrench, AlertCircle, Brain, ChevronDown, ChevronRight } from 'lucide-react';
 import type { ChatMessage } from '../../contexts/AIContext';
 import { StreamingText } from './StreamingText';
+import { LogCard } from './LogCard';
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -58,8 +59,15 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
         )}
       </div>
       <div className="message-content">
-        {/* Tool results (collapsible) */}
-        {isTool && (
+        {/* Tool results: LogCard for logs, collapsible block for others */}
+        {isTool && message.card?.type === 'logs' && (
+          <LogCard
+            appName={(message.card.data as { app_name: string }).app_name}
+            logs={(message.card.data as { logs: Record<string, string> }).logs}
+            truncated={(message.card.data as { truncated: boolean }).truncated}
+          />
+        )}
+        {isTool && !message.card && (
           <div className="message-tool-block">
             <button
               type="button"

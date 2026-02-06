@@ -8,6 +8,7 @@ import {
   executeListApps,
   executeAppStatus,
   executeGetBalance,
+  executeGetLogs,
   executeBrowseCatalog,
   executeCosmosQuery,
   executeLeaseHistory,
@@ -32,6 +33,7 @@ export type { AppRegistryAccess } from './types';
 const QUERY_TOOLS = new Set([
   'list_apps',
   'app_status',
+  'get_logs',
   'get_balance',
   'browse_catalog',
   'lease_history',
@@ -63,6 +65,8 @@ export async function executeTool(
           return await executeListApps(args, options);
         case 'app_status':
           return await executeAppStatus(args, options);
+        case 'get_logs':
+          return await executeGetLogs(args, options);
         case 'get_balance':
           return await executeGetBalance(options);
         case 'browse_catalog':

@@ -75,8 +75,20 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
           }
         }
       }
-      if (estimate?.estimatedDurationSeconds) {
+      // Only show time remaining when credits are actively being spent
+      let spending = false;
+      if (estimate?.totalRatePerSecond) {
+        for (const rate of estimate.totalRatePerSecond) {
+          if (fromBaseUnits(rate.amount, rate.denom) > 0) {
+            spending = true;
+            break;
+          }
+        }
+      }
+      if (spending && estimate?.estimatedDurationSeconds) {
         setHoursRemaining(Math.floor(Number(estimate.estimatedDurationSeconds) / 3600));
+      } else {
+        setHoursRemaining(null);
       }
     } catch (error) {
       logError('AppsSidebar.refresh', error);

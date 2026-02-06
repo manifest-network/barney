@@ -65,6 +65,7 @@ export function ChatPanel() {
   const [attachError, setAttachError] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const deployQueueRef = useRef<typeof EXAMPLE_APPS>([]);
 
   const { containerRef: messagesContainerRef, endRef: messagesEndRef, handleScroll } = useAutoScroll(messages.length, isStreaming);
 
@@ -87,12 +88,49 @@ export function ChatPanel() {
     return () => document.removeEventListener('keydown', handleGlobalKey);
   }, []);
 
+  // Process queued deploys after each confirmation cycle completes
+  useEffect(() => {
+    if (deployQueueRef.current.length > 0 && !isStreaming && !pendingConfirmation) {
+      const next = deployQueueRef.current.shift()!;
+      deployExample(next);
+    }
+  }, [isStreaming, pendingConfirmation]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const doSubmit = async () => {
     // Allow submit with just an attachment (no text required)
     if ((!input.trim() && !pendingPayload) || isStreaming) return;
 
     const message = input.trim();
     setInput('');
+
+    // Match "deploy <example> [and <example> ...]" when no file is already attached
+    if (!pendingPayload) {
+      const deployMatch = message.match(/^deploy\s+(.+)$/i);
+      if (deployMatch) {
+        // Split on "and", ",", "&" to support multi-app deploys
+        const names = deployMatch[1]
+          .split(/\s*(?:,\s*(?:and\s+)?|&|\band\b)\s*/i)
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        const matched = names
+          .map((name) => {
+            const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return EXAMPLE_APPS.find(
+              (app) => app.label.toLowerCase().replace(/[^a-z0-9]/g, '') === normalized
+            );
+          })
+          .filter((app): app is typeof EXAMPLE_APPS[number] => app != null);
+
+        if (matched.length > 0) {
+          // Queue remaining apps; deploy the first one now
+          deployQueueRef.current = matched.slice(1);
+          await deployExample(matched[0]);
+          return;
+        }
+      }
+    }
+
     await sendMessage(message);
   };
 
@@ -358,7 +396,7 @@ export function ChatPanel() {
               {input.length.toLocaleString()} / {MAX_INPUT_LENGTH.toLocaleString()} characters
             </span>
           ) : (
-            'Press Enter to send, Shift+Enter for new line'
+            'Enter to send \u00b7 Shift+Enter for new line \u00b7 / to focus'
           )}
         </p>
       </form>
