@@ -182,6 +182,8 @@ export interface PollOptions {
    * If it returns a terminal state, polling stops with a 'failed' status.
    */
   checkChainState?: () => Promise<TerminalChainState | null>;
+  /** Optional callback to mint a fresh auth token for each poll request. */
+  getAuthToken?: () => Promise<string>;
 }
 
 /**
@@ -239,7 +241,8 @@ export async function pollLeaseUntilReady(
     }
 
     try {
-      lastStatus = await getLeaseStatus(providerApiUrl, leaseUuid, authToken);
+      const currentToken = opts.getAuthToken ? await opts.getAuthToken() : authToken;
+      lastStatus = await getLeaseStatus(providerApiUrl, leaseUuid, currentToken);
       opts.onProgress?.(lastStatus);
 
       if (TERMINAL_STATES.has(lastStatus.state)) {

@@ -13,6 +13,7 @@ import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
+import { AI_DEPLOY_PROVISION_TIMEOUT_MS } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 import { validateAppName } from '../../registry/appRegistry';
@@ -338,18 +339,19 @@ export async function executeConfirmedDeployApp(
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for deployment...' });
 
   try {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signMessage = createSignMessage(address, leaseUuid, timestamp);
-    const signResult: SignResult = await signArbitrary(address, signMessage);
-    const authToken = createAuthToken(
-      address,
-      leaseUuid,
-      timestamp,
-      signResult.pub_key.value,
-      signResult.signature
-    );
+    const getAuthToken = async (): Promise<string> => {
+      const ts = Math.floor(Date.now() / 1000);
+      const msg = createSignMessage(address, leaseUuid, ts);
+      const sig: SignResult = await signArbitrary(address, msg);
+      return createAuthToken(address, leaseUuid, ts, sig.pub_key.value, sig.signature);
+    };
 
+    const authToken = await getAuthToken();
+
+    const POLL_INTERVAL_MS = 3000;
     const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
+      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
+      intervalMs: POLL_INTERVAL_MS,
       onProgress: (status) => {
         onProgress?.({
           phase: 'provisioning',
@@ -357,6 +359,7 @@ export async function executeConfirmedDeployApp(
           fredStatus: status,
         });
       },
+      getAuthToken,
       // Check chain state to detect rejected/closed leases
       checkChainState: async (): Promise<TerminalChainState | null> => {
         const lease = await getLease(leaseUuid);
@@ -480,6 +483,7 @@ async function fallbackToChainState(
 
   // Chain state unknown or not active — keep as deploying
   appRegistry?.updateApp(address, leaseUuid, { status: 'deploying' });
+  onProgress?.({ phase: 'failed', detail: `Provisioning timed out. Use app_status("${name}") to check progress.` });
   return {
     success: true,
     data: {

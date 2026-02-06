@@ -257,6 +257,11 @@ describe('executeConfirmedDeployApp', () => {
     expect(onProgress).toHaveBeenCalled();
     expect(registry.addApp).toHaveBeenCalled();
     expect(getLeaseConnectionInfo).toHaveBeenCalled();
+
+    // Verify pollLeaseUntilReady receives getAuthToken callback for token refresh
+    const pollCall = vi.mocked(pollLeaseUntilReady).mock.calls[0];
+    expect(pollCall[3]).toHaveProperty('getAuthToken');
+    expect(typeof pollCall[3]!.getAuthToken).toBe('function');
   });
 
   it('handles lease creation failure', async () => {
@@ -365,6 +370,34 @@ describe('executeConfirmedDeployApp', () => {
     // Should fall back to chain state which says ACTIVE
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
+  });
+
+  it('calls onProgress with failed phase when provisioning times out and chain is not active', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    // pollLeaseUntilReady returns PENDING (non-terminal) — simulates timeout exhaustion
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_PENDING,
+    });
+    // Chain state is also not ACTIVE
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as any);
+
+    const onProgress = vi.fn();
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, onProgress }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('deploying');
+    expect((result.data as any).message).toContain('still deploying');
+    // Verify onProgress was called with failed phase to clear ProgressCard
+    expect(onProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'failed', detail: expect.stringContaining('timed out') })
+    );
   });
 
   it('succeeds without URL when connection endpoint fails', async () => {

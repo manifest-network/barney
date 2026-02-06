@@ -251,6 +251,54 @@ describe('pollLeaseUntilReady', () => {
     expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
   });
 
+  it('calls getAuthToken before each status request when provided', async () => {
+    const pending = fredResponse('LEASE_STATE_PENDING', { phase: 'pulling_image' });
+    const active = fredResponse('LEASE_STATE_ACTIVE');
+
+    mockFetchSequence([
+      { data: pending },
+      { data: active },
+    ]);
+
+    let callCount = 0;
+    const getAuthToken = vi.fn(async () => {
+      callCount++;
+      return `fresh-token-${callCount}`;
+    });
+
+    const resultPromise = pollLeaseUntilReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
+      intervalMs: 100,
+      maxAttempts: 5,
+      getAuthToken,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    const result = await resultPromise;
+
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
+    expect(getAuthToken).toHaveBeenCalledTimes(2);
+
+    // Verify each fetch used the token returned by getAuthToken
+    const fetchMock = vi.mocked(fetch);
+    expect(fetchMock.mock.calls[0][1]?.headers).toHaveProperty('Authorization', 'Bearer fresh-token-1');
+    expect(fetchMock.mock.calls[1][1]?.headers).toHaveProperty('Authorization', 'Bearer fresh-token-2');
+  });
+
+  it('uses static authToken when getAuthToken is not provided', async () => {
+    const active = fredResponse('LEASE_STATE_ACTIVE');
+    mockFetchSequence([{ data: active }]);
+
+    const result = await pollLeaseUntilReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
+      intervalMs: 100,
+      maxAttempts: 5,
+    });
+
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
+    const fetchMock = vi.mocked(fetch);
+    expect(fetchMock.mock.calls[0][1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
+  });
+
   it('respects abort signal', async () => {
     const pending = fredResponse('LEASE_STATE_PENDING');
     mockFetchSequence([{ data: pending }]);
