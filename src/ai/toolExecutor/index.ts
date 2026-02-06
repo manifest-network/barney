@@ -22,6 +22,7 @@ import {
   executeConfirmedFundCredits,
   executeCosmosTransaction,
   executeConfirmedCosmosTx,
+  executeConfirmedBatchDeploy,
 } from './compositeTransactions';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 
@@ -135,6 +136,8 @@ export async function executeConfirmedTool(
     switch (toolName) {
       case 'deploy_app':
         return await executeConfirmedDeployApp(args, clientManager, options, payload);
+      case 'batch_deploy':
+        return await executeConfirmedBatchDeploy(args, clientManager, options);
       case 'stop_app':
         return await executeConfirmedStopApp(args, clientManager, options);
       case 'fund_credits':

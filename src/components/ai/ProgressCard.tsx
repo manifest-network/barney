@@ -23,6 +23,12 @@ function getPhaseIndex(phase: string): number {
   return PHASES.findIndex((p) => p.key === phase);
 }
 
+function phaseIcon(phase: string, size: string = 'w-4 h-4') {
+  if (phase === 'ready') return <CheckCircle className={`${size} text-success-400`} aria-hidden="true" />;
+  if (phase === 'failed') return <AlertCircle className={`${size} text-error-400`} aria-hidden="true" />;
+  return <Loader className={`${size} text-primary-400 animate-spin`} aria-hidden="true" />;
+}
+
 export const ProgressCard = memo(function ProgressCard({ progress }: ProgressCardProps) {
   const currentIdx = getPhaseIndex(progress.phase);
   const isFailed = progress.phase === 'failed';
@@ -35,38 +41,44 @@ export const ProgressCard = memo(function ProgressCard({ progress }: ProgressCar
       aria-label="Deployment progress"
     >
       <div className="progress-card__header">
-        {isFailed ? (
-          <AlertCircle className="w-5 h-5 text-error-400" aria-hidden="true" />
-        ) : isReady ? (
-          <CheckCircle className="w-5 h-5 text-success-400" aria-hidden="true" />
-        ) : (
-          <Loader className="w-5 h-5 text-primary-400 animate-spin" aria-hidden="true" />
-        )}
+        {phaseIcon(progress.phase, 'w-5 h-5')}
         <span className="progress-card__title">
           {isFailed ? 'Deployment Failed' : isReady ? 'Deployed!' : 'Deploying...'}
         </span>
       </div>
 
-      <div className="progress-card__steps">
-        {PHASES.map((phase, idx) => {
-          const isDone = idx < currentIdx || isReady;
-          const isCurrent = idx === currentIdx && !isFailed && !isReady;
-          return (
-            <div key={phase.key} className="progress-card__step">
-              {isDone ? (
-                <CheckCircle className="w-4 h-4 text-success-400" aria-hidden="true" />
-              ) : isCurrent ? (
-                <Loader className="w-4 h-4 text-primary-400 animate-spin" aria-hidden="true" />
-              ) : (
-                <Circle className="w-4 h-4 text-surface-500" aria-hidden="true" />
-              )}
-              <span className={`progress-card__step-label ${isDone ? 'text-success-400' : isCurrent ? 'text-primary' : 'text-muted'}`}>
-                {phase.label}
-              </span>
+      {progress.batch ? (
+        <div className="progress-card__batch">
+          {progress.batch.map((app) => (
+            <div key={app.name} className="progress-card__batch-item">
+              {phaseIcon(app.phase)}
+              <span className="progress-card__batch-name">{app.name}</span>
+              <span className="text-muted">{app.detail || app.phase}</span>
             </div>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div className="progress-card__steps">
+          {PHASES.map((phase, idx) => {
+            const isDone = idx < currentIdx || isReady;
+            const isCurrent = idx === currentIdx && !isFailed && !isReady;
+            return (
+              <div key={phase.key} className="progress-card__step">
+                {isDone ? (
+                  <CheckCircle className="w-4 h-4 text-success-400" aria-hidden="true" />
+                ) : isCurrent ? (
+                  <Loader className="w-4 h-4 text-primary-400 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Circle className="w-4 h-4 text-surface-500" aria-hidden="true" />
+                )}
+                <span className={`progress-card__step-label ${isDone ? 'text-success-400' : isCurrent ? 'text-primary' : 'text-muted'}`}>
+                  {phase.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {progress.detail && (
         <p className="progress-card__detail">{progress.detail}</p>

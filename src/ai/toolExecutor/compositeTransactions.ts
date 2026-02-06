@@ -17,7 +17,45 @@ import { AI_DEPLOY_PROVISION_TIMEOUT_MS } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 import { validateAppName } from '../../registry/appRegistry';
+import type { DeployProgress } from '../progress';
 import type { ToolResult, ToolExecutorOptions, SignResult, PayloadAttachment } from './types';
+
+/**
+ * Build a clickable URL from connection info.
+ * Adds http:// prefix if missing, includes port if non-standard (not 80/443).
+ */
+export function formatConnectionUrl(
+  host: string | undefined,
+  connection?: { host: string; ports?: Record<string, { host_ip: string; host_port: number }> }
+): string | undefined {
+  let url = host;
+
+  if (connection?.ports) {
+    const firstPort = Object.values(connection.ports)[0];
+    if (firstPort) {
+      const h = firstPort.host_ip || connection.host || host;
+      if (!h) return undefined;
+      const port = firstPort.host_port;
+      // Omit port for standard HTTP/HTTPS
+      if (port === 80 || port === 443) {
+        url = h;
+      } else {
+        url = `${h}:${port}`;
+      }
+    }
+  }
+
+  if (!url) return undefined;
+
+  // Add protocol if missing: https by default, http only for localhost/loopback
+  if (!/^https?:\/\//i.test(url)) {
+    const hostPart = url.split(':')[0];
+    const isLocal = hostPart === 'localhost' || hostPart === '127.0.0.1' || hostPart === '::1';
+    url = `${isLocal ? 'http' : 'https'}://${url}`;
+  }
+
+  return url;
+}
 
 /**
  * Derive an app name from a filename.
@@ -397,15 +435,7 @@ export async function executeConfirmedDeployApp(
         logError('compositeTransactions.executeConfirmedDeployApp.connection', error);
       }
 
-      // Build a clickable connection URL from host + first port mapping
-      let connectionUrl = appUrl;
-      if (connection?.ports) {
-        const firstPort = Object.values(connection.ports)[0];
-        if (firstPort) {
-          const host = firstPort.host_ip || connection.host || appUrl;
-          connectionUrl = `${host}:${firstPort.host_port}`;
-        }
-      }
+      const connectionUrl = formatConnectionUrl(appUrl, connection);
 
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
@@ -490,6 +520,585 @@ async function fallbackToChainState(
       message: `App "${name}" is still deploying. Use app_status("${name}") to check progress.`,
       name,
       status: 'deploying',
+    },
+  };
+}
+
+// ============================================================================
+// deploy_app — single-app core helper (shared by single & batch paths)
+// ============================================================================
+
+export interface SingleDeployEntry {
+  app_name: string;
+  size: string;
+  skuUuid: string;
+  providerUuid: string;
+  providerUrl: string;
+  payload: PayloadAttachment;
+}
+
+/**
+ * Core single-app deploy logic: create lease → upload → poll.
+ * Used by both executeConfirmedDeployApp and executeConfirmedBatchDeploy.
+ */
+export async function deploySingleApp(
+  entry: SingleDeployEntry,
+  clientManager: CosmosClientManager,
+  options: ToolExecutorOptions,
+  onProgress: (progress: { phase: DeployProgress['phase']; detail?: string }) => void
+): Promise<ToolResult> {
+  const { address, appRegistry, signArbitrary } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!appRegistry) return { success: false, error: 'App registry not available' };
+  if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
+
+  const { app_name: name, size, skuUuid, providerUrl, providerUuid, payload } = entry;
+  const metaHashHex = payload.hash;
+
+  // Create lease
+  onProgress({ phase: 'creating_lease', detail: 'Creating lease on-chain...' });
+
+  const cmdArgs = ['--meta-hash', metaHashHex, `${skuUuid}:1`];
+  const result = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
+
+  if (result.code !== 0) {
+    onProgress({ phase: 'failed', detail: result.rawLog ?? 'Transaction failed' });
+    return { success: false, error: result.rawLog ?? 'Failed to create lease' };
+  }
+
+  const leaseUuid = extractLeaseUuidFromTxResult(result);
+  if (!leaseUuid) {
+    onProgress({ phase: 'failed', detail: 'Could not extract lease UUID from transaction' });
+    return { success: false, error: 'Lease created but could not extract UUID. Check your leases manually.' };
+  }
+
+  // Add to registry
+  appRegistry.addApp(address, {
+    name,
+    leaseUuid,
+    size,
+    providerUuid,
+    providerUrl,
+    createdAt: Date.now(),
+    status: 'deploying',
+  });
+
+  // Upload payload
+  onProgress({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
+
+  const uploadResult = await uploadPayloadToProvider(
+    providerUrl,
+    leaseUuid,
+    metaHashHex,
+    payload.bytes,
+    address,
+    signArbitrary
+  );
+
+  if (!uploadResult.success) {
+    onProgress({ phase: 'failed', detail: `Upload failed: ${uploadResult.error}` });
+    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    return {
+      success: false,
+      error: `Lease created but upload failed: ${uploadResult.error}. The lease ${leaseUuid} is active — you may need to stop it.`,
+    };
+  }
+
+  // Poll fred for readiness
+  onProgress({ phase: 'provisioning', detail: 'Waiting for deployment...' });
+
+  try {
+    const getAuthToken = async (): Promise<string> => {
+      const ts = Math.floor(Date.now() / 1000);
+      const msg = createSignMessage(address, leaseUuid, ts);
+      const sig: SignResult = await signArbitrary(address, msg);
+      return createAuthToken(address, leaseUuid, ts, sig.pub_key.value, sig.signature);
+    };
+
+    const authToken = await getAuthToken();
+
+    const POLL_INTERVAL_MS = 3000;
+    const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
+      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
+      intervalMs: POLL_INTERVAL_MS,
+      onProgress: (status) => {
+        onProgress({ phase: 'provisioning', detail: status.phase || 'Provisioning...' });
+      },
+      getAuthToken,
+      checkChainState: async (): Promise<TerminalChainState | null> => {
+        const lease = await getLease(leaseUuid);
+        if (!lease) return { state: 'closed' };
+        if (lease.state === LeaseState.LEASE_STATE_CLOSED) return { state: 'closed' };
+        if (lease.state === LeaseState.LEASE_STATE_REJECTED) return { state: 'rejected' };
+        if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return { state: 'expired' };
+        return null;
+      },
+    });
+
+    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+      let appUrl: string | undefined;
+      let connection: { host: string; ports?: Record<string, { host_ip: string; host_port: number }> } | undefined;
+      try {
+        const infoTimestamp = Math.floor(Date.now() / 1000);
+        const infoSignMessage = createSignMessage(address, leaseUuid, infoTimestamp);
+        const infoSignResult: SignResult = await signArbitrary(address, infoSignMessage);
+        const infoAuthToken = createAuthToken(
+          address,
+          leaseUuid,
+          infoTimestamp,
+          infoSignResult.pub_key.value,
+          infoSignResult.signature
+        );
+        const connResponse = await getLeaseConnectionInfo(providerUrl, leaseUuid, infoAuthToken);
+        if (connResponse.connection) {
+          connection = connResponse.connection;
+          if (connResponse.connection.host) {
+            appUrl = connResponse.connection.host;
+          }
+        }
+      } catch (error) {
+        logError('deploySingleApp.connection', error);
+      }
+
+      const connectionUrl = formatConnectionUrl(appUrl, connection);
+
+      appRegistry.updateApp(address, leaseUuid, { status: 'running', url: appUrl, connection });
+      onProgress({ phase: 'ready', detail: 'App is live!' });
+
+      return {
+        success: true,
+        data: { message: `App "${name}" is live!`, name, url: connectionUrl || appUrl, connection, status: 'running' },
+      };
+    }
+
+    if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
+      appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+      onProgress({ phase: 'failed', detail: fredStatus.error || 'Deployment failed' });
+
+      const diagnostics = await fetchFailureLogs(providerUrl, leaseUuid, address, signArbitrary);
+      const errorMsg = diagnostics
+        ? `Deployment failed: ${fredStatus.error || 'Unknown error'}\n\n${diagnostics}`
+        : `Deployment failed: ${fredStatus.error || 'Unknown error'}`;
+
+      return { success: false, error: errorMsg };
+    }
+
+    return await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => onProgress(p));
+  } catch (error) {
+    logError('deploySingleApp.polling', error);
+    return await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => onProgress(p));
+  }
+}
+
+// ============================================================================
+// batch_deploy
+// ============================================================================
+
+export interface BatchDeployEntry {
+  app_name: string;
+  payload: PayloadAttachment;
+}
+
+/**
+ * Pre-validation for batch deploy. Resolves SKU/provider once,
+ * checks total credits, validates all names.
+ * Returns a single ToolResultConfirmation with args.entries.
+ */
+export async function executeBatchDeploy(
+  entries: BatchDeployEntry[],
+  options: ToolExecutorOptions,
+  size: string = 'micro'
+): Promise<ToolResult> {
+  const { address, appRegistry } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!appRegistry) return { success: false, error: 'App registry not available' };
+  if (entries.length === 0) return { success: false, error: 'No apps to deploy' };
+
+  // Resolve and validate size
+  const VALID_SIZE_TIERS = ['micro', 'small', 'medium', 'large'] as const;
+  const normalizedSize = size.toLowerCase();
+  if (!VALID_SIZE_TIERS.includes(normalizedSize as typeof VALID_SIZE_TIERS[number])) {
+    return { success: false, error: `Invalid size "${size}". Valid tiers: ${VALID_SIZE_TIERS.join(', ')}.` };
+  }
+  const skuName = `docker-${normalizedSize}`;
+
+  // Find matching SKU
+  let allSKUs;
+  try {
+    allSKUs = await withTimeout(getSKUs(true), undefined, 'Fetch tiers');
+  } catch {
+    return { success: false, error: 'Failed to fetch available tiers. Please try again.' };
+  }
+
+  const resolveResult = resolveSkuItems([{ sku_name: skuName, quantity: 1 }], allSKUs);
+  if (resolveResult.error || !resolveResult.items) {
+    return { success: false, error: `Tier "${size}" is not available. Use browse_catalog to see available tiers.` };
+  }
+  const skuUuid = resolveResult.items[0].sku_uuid;
+
+  // Find provider
+  const matchingSku = allSKUs.find((s) => s.uuid === skuUuid);
+  let providers;
+  try {
+    providers = await withTimeout(getProviders(true), undefined, 'Fetch providers');
+  } catch {
+    return { success: false, error: 'Failed to fetch providers. Please try again.' };
+  }
+
+  const provider = matchingSku
+    ? providers.find((p) => p.uuid === matchingSku.providerUuid)
+    : providers[0];
+
+  if (!provider || !provider.apiUrl) {
+    return { success: false, error: 'No available provider found for this tier.' };
+  }
+
+  // Validate all names (auto-suffix on collision)
+  const resolvedEntries: Array<SingleDeployEntry> = [];
+  const usedNames = new Set<string>();
+
+  for (const entry of entries) {
+    let name = entry.app_name;
+
+    // Auto-suffix for duplicates within the batch
+    let nameError = validateAppName(name, address);
+    if (nameError || usedNames.has(name)) {
+      const baseName = name;
+      let suffix = 2;
+      while ((nameError || usedNames.has(name)) && suffix <= 99) {
+        const candidate = `${baseName}-${suffix}`.slice(0, 32);
+        nameError = validateAppName(candidate, address);
+        if (!nameError && !usedNames.has(candidate)) {
+          name = candidate;
+          nameError = null;
+        }
+        suffix++;
+      }
+      if (nameError) {
+        return { success: false, error: `Cannot deploy "${entry.app_name}": ${nameError}` };
+      }
+    }
+
+    usedNames.add(name);
+    resolvedEntries.push({
+      app_name: name,
+      size: normalizedSize,
+      skuUuid,
+      providerUuid: provider.uuid,
+      providerUrl: provider.apiUrl,
+      payload: entry.payload,
+    });
+  }
+
+  // Format price for display
+  let priceDisplay = '';
+  if (matchingSku?.basePrice) {
+    const { symbol } = getDenomMetadata(matchingSku.basePrice.denom);
+    const basePrice = fromBaseUnits(matchingSku.basePrice.amount, matchingSku.basePrice.denom);
+    const unitLabel = UNIT_LABELS[matchingSku.unit as Unit] || '/hr';
+    priceDisplay = `${Math.round(basePrice * 100) / 100} ${symbol}${unitLabel}`;
+  }
+
+  // Credit check for total cost
+  let skuHourlyCost = 0;
+  if (matchingSku?.basePrice) {
+    const basePrice = fromBaseUnits(matchingSku.basePrice.amount, matchingSku.basePrice.denom);
+    if (matchingSku.unit === Unit.UNIT_PER_DAY) {
+      skuHourlyCost = basePrice / 24;
+    } else {
+      skuHourlyCost = basePrice;
+    }
+  }
+
+  const totalHourlyCost = skuHourlyCost * entries.length;
+  let creditWarning = '';
+
+  try {
+    const creditAccount = await withTimeout(getCreditAccount(address), undefined, 'Credit check');
+    if (creditAccount?.balances) {
+      let credits = 0;
+      for (const bal of creditAccount.balances) {
+        if (bal.denom === DENOMS.PWR || bal.denom.includes('upwr')) {
+          credits = fromBaseUnits(bal.amount, bal.denom);
+          break;
+        }
+      }
+
+      if (totalHourlyCost > 0 && credits < totalHourlyCost) {
+        return {
+          success: false,
+          error: `Insufficient credits. You have ${Math.round(credits * 100) / 100} credits but need at least ${Math.round(totalHourlyCost * 100) / 100} for 1 hour of ${entries.length} apps.`,
+        };
+      }
+
+      if (totalHourlyCost > 0) {
+        const hoursAffordable = credits / totalHourlyCost;
+        if (hoursAffordable < 24) {
+          creditWarning = ` Warning: only ~${Math.floor(hoursAffordable)}h of credits remaining at this rate.`;
+        }
+      }
+    }
+  } catch (error) {
+    logError('compositeTransactions.executeBatchDeploy.creditCheck', error);
+  }
+
+  const names = resolvedEntries.map((e) => e.app_name);
+  const confirmationMessage = `Deploy ${entries.length} apps (${names.join(', ')}) on ${normalizedSize} tier${priceDisplay ? ` (~${priceDisplay} each)` : ''}?${creditWarning}`;
+
+  return {
+    success: true,
+    requiresConfirmation: true,
+    confirmationMessage,
+    pendingAction: {
+      toolName: 'batch_deploy',
+      args: { entries: resolvedEntries },
+    },
+  };
+}
+
+/**
+ * Execute batch deploy after user confirmation.
+ *
+ * Serializes lease creation + payload upload (which need signing and
+ * sequential account nonces), then parallelizes the polling phase
+ * (which is the slow part and only reads chain/provider state).
+ */
+export async function executeConfirmedBatchDeploy(
+  args: Record<string, unknown>,
+  clientManager: CosmosClientManager,
+  options: ToolExecutorOptions
+): Promise<ToolResult> {
+  const entries = args.entries as SingleDeployEntry[] | undefined;
+  if (!entries || entries.length === 0) {
+    return { success: false, error: 'No entries to deploy' };
+  }
+
+  const { address, appRegistry, signArbitrary, onProgress } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!appRegistry) return { success: false, error: 'App registry not available' };
+  if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
+
+  // Per-app progress state
+  const batchProgress: Array<{ name: string; phase: DeployProgress['phase']; detail?: string }> =
+    entries.map((e) => ({ name: e.app_name, phase: 'creating_lease' as const, detail: 'Waiting...' }));
+
+  const emitProgress = () => {
+    const phases = batchProgress.map((b) => b.phase);
+    let overallPhase: DeployProgress['phase'] = 'creating_lease';
+    if (phases.every((p) => p === 'ready')) {
+      overallPhase = 'ready';
+    } else if (phases.every((p) => p === 'ready' || p === 'failed')) {
+      overallPhase = phases.some((p) => p === 'ready') ? 'ready' : 'failed';
+    } else if (phases.some((p) => p === 'provisioning')) {
+      overallPhase = 'provisioning';
+    } else if (phases.some((p) => p === 'uploading')) {
+      overallPhase = 'uploading';
+    }
+
+    onProgress?.({
+      phase: overallPhase,
+      batch: batchProgress.map((b) => ({ ...b })),
+    });
+  };
+
+  emitProgress();
+
+  // Phase 1 — Sequential: create lease + upload for each app.
+  // cosmosTx and signArbitrary share account sequence numbers and cannot
+  // be called concurrently without nonce collisions.
+  interface PreparedApp {
+    idx: number;
+    name: string;
+    leaseUuid: string;
+    providerUrl: string;
+  }
+  const prepared: PreparedApp[] = [];
+  const failed: string[] = [];
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const name = entry.app_name;
+
+    // Create lease
+    batchProgress[i] = { name, phase: 'creating_lease', detail: 'Creating lease on-chain...' };
+    emitProgress();
+
+    const cmdArgs = ['--meta-hash', entry.payload.hash, `${entry.skuUuid}:1`];
+    const txResult = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
+
+    if (txResult.code !== 0) {
+      batchProgress[i] = { name, phase: 'failed', detail: txResult.rawLog ?? 'Transaction failed' };
+      emitProgress();
+      failed.push(name);
+      continue;
+    }
+
+    const leaseUuid = extractLeaseUuidFromTxResult(txResult);
+    if (!leaseUuid) {
+      batchProgress[i] = { name, phase: 'failed', detail: 'Could not extract lease UUID' };
+      emitProgress();
+      failed.push(name);
+      continue;
+    }
+
+    appRegistry.addApp(address, {
+      name,
+      leaseUuid,
+      size: entry.size,
+      providerUuid: entry.providerUuid,
+      providerUrl: entry.providerUrl,
+      createdAt: Date.now(),
+      status: 'deploying',
+    });
+
+    // Upload payload
+    batchProgress[i] = { name, phase: 'uploading', detail: 'Uploading manifest...' };
+    emitProgress();
+
+    const uploadResult = await uploadPayloadToProvider(
+      entry.providerUrl,
+      leaseUuid,
+      entry.payload.hash,
+      entry.payload.bytes,
+      address,
+      signArbitrary
+    );
+
+    if (!uploadResult.success) {
+      batchProgress[i] = { name, phase: 'failed', detail: `Upload failed: ${uploadResult.error}` };
+      emitProgress();
+      appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+      failed.push(name);
+      continue;
+    }
+
+    prepared.push({ idx: i, name, leaseUuid, providerUrl: entry.providerUrl });
+    batchProgress[i] = { name, phase: 'provisioning', detail: 'Waiting for deployment...' };
+    emitProgress();
+  }
+
+  // Phase 2 — Parallel: poll all successfully uploaded apps for readiness.
+  // Polling only reads state and does not need sequential signing.
+  const deployed: Array<{ name: string; url?: string }> = [];
+
+  if (prepared.length > 0) {
+    const pollResults = await Promise.allSettled(
+      prepared.map(async ({ idx, name, leaseUuid, providerUrl }) => {
+        try {
+          const getAuthToken = async (): Promise<string> => {
+            const ts = Math.floor(Date.now() / 1000);
+            const msg = createSignMessage(address, leaseUuid, ts);
+            const sig: SignResult = await signArbitrary(address, msg);
+            return createAuthToken(address, leaseUuid, ts, sig.pub_key.value, sig.signature);
+          };
+
+          const authToken = await getAuthToken();
+          const POLL_INTERVAL_MS = 3000;
+
+          const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
+            maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
+            intervalMs: POLL_INTERVAL_MS,
+            onProgress: (status) => {
+              batchProgress[idx] = { name, phase: 'provisioning', detail: status.phase || 'Provisioning...' };
+              emitProgress();
+            },
+            getAuthToken,
+            checkChainState: async (): Promise<TerminalChainState | null> => {
+              const lease = await getLease(leaseUuid);
+              if (!lease) return { state: 'closed' };
+              if (lease.state === LeaseState.LEASE_STATE_CLOSED) return { state: 'closed' };
+              if (lease.state === LeaseState.LEASE_STATE_REJECTED) return { state: 'rejected' };
+              if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return { state: 'expired' };
+              return null;
+            },
+          });
+
+          if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+            // Fetch connection info
+            let appUrl: string | undefined;
+            let connection: { host: string; ports?: Record<string, { host_ip: string; host_port: number }> } | undefined;
+            try {
+              const infoTs = Math.floor(Date.now() / 1000);
+              const infoMsg = createSignMessage(address, leaseUuid, infoTs);
+              const infoSig: SignResult = await signArbitrary(address, infoMsg);
+              const infoToken = createAuthToken(address, leaseUuid, infoTs, infoSig.pub_key.value, infoSig.signature);
+              const connResponse = await getLeaseConnectionInfo(providerUrl, leaseUuid, infoToken);
+              if (connResponse.connection) {
+                connection = connResponse.connection;
+                if (connResponse.connection.host) appUrl = connResponse.connection.host;
+              }
+            } catch (error) {
+              logError('executeConfirmedBatchDeploy.connection', error);
+            }
+
+            const connectionUrl = formatConnectionUrl(appUrl, connection);
+
+            appRegistry.updateApp(address, leaseUuid, { status: 'running', url: appUrl, connection });
+            batchProgress[idx] = { name, phase: 'ready', detail: 'App is live!' };
+            emitProgress();
+            return { name, success: true as const, url: connectionUrl || appUrl };
+          }
+
+          if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
+            appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+            batchProgress[idx] = { name, phase: 'failed', detail: fredStatus.error || 'Deployment failed' };
+            emitProgress();
+            return { name, success: false as const };
+          }
+
+          // Non-terminal — fallback
+          const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
+            batchProgress[idx] = { name, phase: p.phase, detail: p.detail };
+            emitProgress();
+          });
+          return { name, success: fbResult.success };
+        } catch (error) {
+          logError('executeConfirmedBatchDeploy.poll', error);
+          const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
+            batchProgress[idx] = { name, phase: p.phase, detail: p.detail };
+            emitProgress();
+          });
+          return { name, success: fbResult.success };
+        }
+      })
+    );
+
+    for (const result of pollResults) {
+      if (result.status === 'fulfilled' && result.value.success) {
+        deployed.push({ name: result.value.name, url: result.value.url });
+      } else {
+        const name = result.status === 'fulfilled' ? result.value.name : 'unknown';
+        if (!failed.includes(name)) failed.push(name);
+      }
+    }
+  }
+
+  // Final progress
+  onProgress?.({
+    phase: failed.length === 0 ? 'ready' : deployed.length > 0 ? 'ready' : 'failed',
+    detail: failed.length === 0
+      ? `All ${deployed.length} apps deployed!`
+      : `${deployed.length} deployed, ${failed.length} failed`,
+    batch: batchProgress.map((b) => ({ ...b })),
+  });
+
+  if (failed.length > 0 && deployed.length === 0) {
+    return { success: false, error: `All deploys failed: ${failed.join(', ')}` };
+  }
+
+  const parts: string[] = [];
+  if (deployed.length > 0) {
+    const lines = deployed.map((d) => d.url ? `${d.name}: [${d.url}](${d.url})` : d.name);
+    parts.push(`Deployed:\n${lines.map((l) => `- ${l}`).join('\n')}`);
+  }
+  if (failed.length > 0) parts.push(`Failed: ${failed.join(', ')}.`);
+
+  return {
+    success: true,
+    data: {
+      deployed,
+      failed,
+      message: parts.join('\n'),
     },
   };
 }

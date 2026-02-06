@@ -17,4 +17,10 @@ export interface DeployProgress {
     | 'failed';
   detail?: string;
   fredStatus?: FredLeaseStatus;
+  /** Per-app progress for batch deploys */
+  batch?: Array<{
+    name: string;
+    phase: DeployProgress['phase'];
+    detail?: string;
+  }>;
 }

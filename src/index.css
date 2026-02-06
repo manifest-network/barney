@@ -2819,6 +2819,17 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--text-secondary);
 }
 
+.confirmation-batch-list {
+  margin: 0;
+  padding: 0 0 0 1.25rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  list-style: disc;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
 .confirmation-actions {
   display: flex;
   justify-content: flex-end;
@@ -7303,6 +7314,25 @@ code.lease-card-mono {
   font-size: 0.6875rem;
   color: var(--text-dim);
   font-family: var(--font-mono);
+}
+
+.progress-card__batch {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.progress-card__batch-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+}
+
+.progress-card__batch-name {
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 6rem;
 }
 
 /* ============================================

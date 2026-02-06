@@ -22,6 +22,7 @@ vi.mock('./compositeTransactions', () => ({
   executeConfirmedFundCredits: vi.fn(),
   executeCosmosTransaction: vi.fn(),
   executeConfirmedCosmosTx: vi.fn(),
+  executeConfirmedBatchDeploy: vi.fn(),
 }));
 
 import {
@@ -41,6 +42,7 @@ import {
   executeConfirmedStopApp,
   executeCosmosTransaction,
   executeConfirmedCosmosTx,
+  executeConfirmedBatchDeploy,
 } from './compositeTransactions';
 
 const CLIENT_MANAGER = {} as CosmosClientManager;
@@ -202,6 +204,17 @@ describe('executeConfirmedTool', () => {
 
     expect(result).toBe(txResult);
     expect(executeConfirmedDeployApp).toHaveBeenCalled();
+  });
+
+  it('routes batch_deploy to confirmed batch executor', async () => {
+    const txResult: ToolResult = { success: true, data: { deployed: ['app1', 'app2'], failed: [], message: 'ok' } };
+    vi.mocked(executeConfirmedBatchDeploy).mockResolvedValue(txResult);
+
+    const options = makeOptions();
+    const result = await executeConfirmedTool('batch_deploy', { entries: [] }, CLIENT_MANAGER, options);
+
+    expect(result).toBe(txResult);
+    expect(executeConfirmedBatchDeploy).toHaveBeenCalled();
   });
 
   it('routes stop_app to confirmed executor', async () => {

@@ -9,6 +9,9 @@ import {
   executeConfirmedFundCredits,
   executeCosmosTransaction,
   executeConfirmedCosmosTx,
+  executeBatchDeploy,
+  executeConfirmedBatchDeploy,
+  type BatchDeployEntry,
 } from './compositeTransactions';
 import type { ToolExecutorOptions, AppRegistryAccess, PayloadAttachment } from './types';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
@@ -21,14 +24,19 @@ vi.mock('../../api/billing', async (importOriginal) => {
   return {
     ...actual,
     getCreditEstimate: vi.fn(),
+    getCreditAccount: vi.fn(),
     getLease: vi.fn(),
   };
 });
 
-vi.mock('../../api/sku', () => ({
-  getProviders: vi.fn(),
-  getSKUs: vi.fn(),
-}));
+vi.mock('../../api/sku', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/sku')>();
+  return {
+    ...actual,
+    getProviders: vi.fn(),
+    getSKUs: vi.fn(),
+  };
+});
 
 vi.mock('../../api/provider-api', () => ({
   createSignMessage: vi.fn().mockReturnValue('sign-msg'),
@@ -65,7 +73,7 @@ vi.mock('../../registry/appRegistry', () => ({
   validateAppName: vi.fn().mockReturnValue(null),
 }));
 
-import { getCreditEstimate, getLease } from '../../api/billing';
+import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision } from '../../api/fred';
@@ -252,7 +260,7 @@ describe('executeConfirmedDeployApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect((result.data as any).url).toBe('1.2.3.4:12345');
+    expect((result.data as any).url).toBe('https://1.2.3.4:12345');
     expect((result.data as any).connection.ports['80/tcp'].host_port).toBe(12345);
     expect(onProgress).toHaveBeenCalled();
     expect(registry.addApp).toHaveBeenCalled();
@@ -526,5 +534,193 @@ describe('executeConfirmedCosmosTx', () => {
 
     expect(result.success).toBe(true);
     expect(cosmosTx).toHaveBeenCalledWith(CLIENT_MANAGER, 'bank', 'send', ['addr', '100umfx'], true);
+  });
+});
+
+// ============================================================================
+// Batch deploy tests
+// ============================================================================
+
+function makeBatchEntry(name: string): BatchDeployEntry {
+  return {
+    app_name: name,
+    payload: {
+      bytes: new Uint8Array([1, 2, 3]),
+      filename: `manifest-${name}.json`,
+      size: 3,
+      hash: 'a'.repeat(64),
+    },
+  };
+}
+
+describe('executeBatchDeploy', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns error without wallet', async () => {
+    const result = await executeBatchDeploy([makeBatchEntry('app1')], makeOptions({ address: undefined }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Wallet not connected');
+  });
+
+  it('returns error for empty entries', async () => {
+    const result = await executeBatchDeploy([], makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No apps to deploy');
+  });
+
+  it('returns error for invalid size', async () => {
+    const result = await executeBatchDeploy([makeBatchEntry('app1')], makeOptions(), 'xxlarge');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid size');
+  });
+
+  it('returns confirmation for valid batch', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+
+    const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
+    const result = await executeBatchDeploy(entries, makeOptions());
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('2 apps');
+    expect(result.confirmationMessage).toContain('app1');
+    expect(result.confirmationMessage).toContain('app2');
+    expect(result.pendingAction?.toolName).toBe('batch_deploy');
+    expect(result.pendingAction?.args.entries).toHaveLength(2);
+  });
+
+  it('returns insufficient credits error when total cost exceeds balance', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1', basePrice: { denom: 'upwr', amount: '1000000' }, unit: 1 } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      balances: [{ denom: 'upwr', amount: '500000' }],
+    } as any);
+
+    const entries = [makeBatchEntry('app1'), makeBatchEntry('app2'), makeBatchEntry('app3')];
+    const result = await executeBatchDeploy(entries, makeOptions());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Insufficient credits');
+  });
+});
+
+describe('executeConfirmedBatchDeploy', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns error for empty entries', async () => {
+    const result = await executeConfirmedBatchDeploy({ entries: [] }, CLIENT_MANAGER, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No entries');
+  });
+
+  it('deploys all apps in parallel and reports results', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: { host: 'https://app.example.com' },
+    });
+
+    const onProgress = vi.fn();
+    const registry = makeRegistry();
+    const entries = [
+      {
+        app_name: 'game1',
+        size: 'micro',
+        skuUuid: 'sku-1',
+        providerUuid: 'p1',
+        providerUrl: 'https://fred.example.com',
+        payload: makePayload(),
+      },
+      {
+        app_name: 'game2',
+        size: 'micro',
+        skuUuid: 'sku-1',
+        providerUuid: 'p1',
+        providerUrl: 'https://fred.example.com',
+        payload: makePayload(),
+      },
+    ];
+
+    const result = await executeConfirmedBatchDeploy(
+      { entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, onProgress })
+    );
+
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.deployed).toHaveLength(2);
+    expect(data.deployed.map((d: any) => d.name)).toContain('game1');
+    expect(data.deployed.map((d: any) => d.name)).toContain('game2');
+    expect(data.failed).toHaveLength(0);
+    expect(onProgress).toHaveBeenCalled();
+    // Verify batch progress was emitted
+    const lastProgressCall = onProgress.mock.calls[onProgress.mock.calls.length - 1][0];
+    expect(lastProgressCall.batch).toBeDefined();
+  });
+
+  it('handles partial failure gracefully', async () => {
+    // First call succeeds, second fails
+    vi.mocked(cosmosTx)
+      .mockResolvedValueOnce({ code: 0, transactionHash: 'hash1', rawLog: '' } as any)
+      .mockResolvedValueOnce({ code: 1, rawLog: 'insufficient funds' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: { host: 'https://app.example.com' },
+    });
+
+    const registry = makeRegistry();
+    const entries = [
+      {
+        app_name: 'game1',
+        size: 'micro',
+        skuUuid: 'sku-1',
+        providerUuid: 'p1',
+        providerUrl: 'https://fred.example.com',
+        payload: makePayload(),
+      },
+      {
+        app_name: 'game2',
+        size: 'micro',
+        skuUuid: 'sku-1',
+        providerUuid: 'p1',
+        providerUrl: 'https://fred.example.com',
+        payload: makePayload(),
+      },
+    ];
+
+    const result = await executeConfirmedBatchDeploy(
+      { entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).deployed.map((d: any) => d.name)).toContain('game1');
+    expect((result.data as any).failed).toContain('game2');
   });
 });

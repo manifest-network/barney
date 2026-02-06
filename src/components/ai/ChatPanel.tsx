@@ -45,6 +45,33 @@ const EXAMPLE_APPS = [
 
 const SUGGESTIONS = ['Deploy an app', 'Check my credits', "What's running?"];
 
+/**
+ * Match user input against an EXAMPLE_APPS label.
+ * First tries exact normalized match, then falls back to token-prefix
+ * matching so "king quest 5" matches "King's Quest 5" (possessives, etc.).
+ */
+function matchExampleApp(input: string): typeof EXAMPLE_APPS[number] | undefined {
+  const normalized = input.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  // Exact normalized match
+  const exact = EXAMPLE_APPS.find(
+    (app) => app.label.toLowerCase().replace(/[^a-z0-9]/g, '') === normalized
+  );
+  if (exact) return exact;
+
+  // Token-prefix: split into words, each input word must be a prefix of
+  // the corresponding label word (or vice versa). Handles possessives
+  // ("king" matches "kings" from "King's") and abbreviations.
+  const inputWords = input.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/);
+  return EXAMPLE_APPS.find((app) => {
+    const labelWords = app.label.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/);
+    if (inputWords.length !== labelWords.length) return false;
+    return inputWords.every((iw, i) =>
+      labelWords[i].startsWith(iw) || iw.startsWith(labelWords[i])
+    );
+  });
+}
+
 export function ChatPanel() {
   const {
     messages,
@@ -58,6 +85,7 @@ export function ChatPanel() {
     cancelAction,
     attachPayload,
     clearPayload,
+    requestBatchDeploy,
   } = useAI();
 
   const [input, setInput] = useState('');
@@ -65,7 +93,6 @@ export function ChatPanel() {
   const [attachError, setAttachError] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const deployQueueRef = useRef<typeof EXAMPLE_APPS>([]);
 
   const { containerRef: messagesContainerRef, endRef: messagesEndRef, handleScroll } = useAutoScroll(messages.length, isStreaming);
 
@@ -88,14 +115,6 @@ export function ChatPanel() {
     return () => document.removeEventListener('keydown', handleGlobalKey);
   }, []);
 
-  // Process queued deploys after each confirmation cycle completes
-  useEffect(() => {
-    if (deployQueueRef.current.length > 0 && !isStreaming && !pendingConfirmation) {
-      const next = deployQueueRef.current.shift()!;
-      deployExample(next);
-    }
-  }, [isStreaming, pendingConfirmation]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const doSubmit = async () => {
     // Allow submit with just an attachment (no text required)
     if ((!input.trim() && !pendingPayload) || isStreaming) return;
@@ -104,6 +123,16 @@ export function ChatPanel() {
     setInput('');
 
     // Match "deploy <example> [and <example> ...]" when no file is already attached
+    // Batch deploy for known example apps.
+    // Currently only matches against EXAMPLE_APPS. To support arbitrary
+    // Docker images (e.g. "deploy foo/bar and baz/qux"), this would need:
+    //   1. A regex to detect Docker image refs (account/repo:tag patterns)
+    //   2. Manifest construction from image names — requires knowing the
+    //      exposed port, which example apps hardcode as 8080/tcp. Arbitrary
+    //      images would need a default port assumption or an LLM step to ask.
+    //   3. Call requestBatchDeploy() with the constructed manifests.
+    // The downstream batch machinery (executeBatchDeploy, deploySingleApp,
+    // ProgressCard batch rendering) is image-agnostic and needs no changes.
     if (!pendingPayload) {
       const deployMatch = message.match(/^deploy\s+(.+)$/i);
       if (deployMatch) {
@@ -114,17 +143,14 @@ export function ChatPanel() {
           .filter(Boolean);
 
         const matched = names
-          .map((name) => {
-            const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return EXAMPLE_APPS.find(
-              (app) => app.label.toLowerCase().replace(/[^a-z0-9]/g, '') === normalized
-            );
-          })
+          .map((name) => matchExampleApp(name))
           .filter((app): app is typeof EXAMPLE_APPS[number] => app != null);
 
-        if (matched.length > 0) {
-          // Queue remaining apps; deploy the first one now
-          deployQueueRef.current = matched.slice(1);
+        if (matched.length > 1) {
+          await requestBatchDeploy(matched, message);
+          return;
+        }
+        if (matched.length === 1) {
           await deployExample(matched[0]);
           return;
         }

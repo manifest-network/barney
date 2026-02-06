@@ -1,11 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ChainProvider } from '@cosmos-kit/react';
-import { wallets as keplrWallets } from '@cosmos-kit/keplr-extension';
-import { wallets as leapWallets } from '@cosmos-kit/leap-extension';
-import { wallets as cosmostationWallets } from '@cosmos-kit/cosmostation-extension';
-import { wallets as ledgerWallets } from '@cosmos-kit/ledger';
-import { wallets as leapSnapWallets } from '@cosmos-kit/leap-metamask-cosmos-snap';
 import { makeWeb3AuthWallets } from '@cosmos-kit/web3auth';
 
 import '@interchain-ui/react/styles';
@@ -52,11 +47,6 @@ const web3AuthWallets = makeWeb3AuthWallets({
 });
 
 const wallets = [
-  ...keplrWallets,
-  ...leapWallets,
-  ...cosmostationWallets,
-  ...ledgerWallets,
-  ...leapSnapWallets,
   ...web3AuthWallets,
 ];
 

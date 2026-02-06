@@ -17,6 +17,16 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     cancelRef.current?.focus({ focusVisible: true } as FocusOptions);
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isExecuting) {
+        onCancel();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onCancel, isExecuting]);
+
   return (
     <div
       className="confirmation-card"
@@ -30,7 +40,16 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
       </div>
       <div className="confirmation-body">
         <p id="confirmation-description" className="confirmation-description">{action.description}</p>
-        {Object.keys(action.args).length > 0 && (
+        {action.args.entries && Array.isArray(action.args.entries) && action.args.entries.length > 1 ? (
+          <div className="confirmation-details">
+            <p className="confirmation-details-title">Apps to deploy:</p>
+            <ul className="confirmation-batch-list">
+              {(action.args.entries as Array<{ app_name: string; size?: string }>).map((entry) => (
+                <li key={entry.app_name}>{entry.app_name} ({entry.size || 'micro'})</li>
+              ))}
+            </ul>
+          </div>
+        ) : Object.keys(action.args).length > 0 && (
           <div className="confirmation-details">
             <p className="confirmation-details-title">Parameters:</p>
             <pre className="confirmation-args">

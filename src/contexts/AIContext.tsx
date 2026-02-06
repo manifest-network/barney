@@ -11,6 +11,7 @@ import type { OllamaMessage, OllamaToolCall, OllamaStreamChunk } from '../api/ol
 import { streamChat, checkOllamaHealth, listModels, type OllamaModel } from '../api/ollama';
 import { AI_TOOLS, getToolCallDescription, isValidToolName } from '../ai/tools';
 import { executeTool, executeConfirmedTool, type ToolResult, type PendingAction, type SignResult, type PayloadAttachment } from '../ai/toolExecutor';
+import { executeBatchDeploy, deriveAppName } from '../ai/toolExecutor/compositeTransactions';
 import { getSystemPrompt } from '../ai/systemPrompt';
 import type { DeployProgress } from '../ai/progress';
 import * as appRegistry from '../registry/appRegistry';
@@ -185,6 +186,7 @@ export interface AIContextType {
   setSignArbitrary: (fn: SignArbitraryFn | undefined) => void;
   attachPayload: (file: File) => Promise<{ error?: string }>;
   clearPayload: () => void;
+  requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
 }
 
 // Validate environment-provided defaults
@@ -1009,6 +1011,94 @@ export function AIProvider({ children }: { children: ReactNode }) {
     }
   }, [pendingConfirmation, settings, toOllamaMessages, updateMessageById, createAssistantMessage, addMessage, getCurrentMessages, scheduleStreamingUpdate, flushPendingUpdate]);
 
+  // Batch deploy: bypass LLM, validate all apps, show single confirmation
+  const requestBatchDeploy = useCallback(async (apps: Array<{ label: string; manifest: object }>, originalMessage?: string) => {
+    if (isStreamingRef.current || !isConnected) return;
+    isStreamingRef.current = true;
+    setIsStreaming(true);
+
+    try {
+      // 1. Add user message (preserve original input if provided)
+      const names = apps.map((a) => a.label);
+      const userMessage: ChatMessage = {
+        id: generateMessageId(),
+        role: 'user',
+        content: originalMessage || `Deploy ${names.join(', ')}`,
+        timestamp: Date.now(),
+      };
+      addMessage(userMessage);
+      setDeployProgress(null);
+
+      // 2. Add tool message (validation in progress)
+      const toolMsgId = generateMessageId();
+      addMessage({
+        id: toolMsgId,
+        role: 'tool',
+        content: 'Validating batch deploy...',
+        toolName: 'batch_deploy',
+        toolDescription: `Deploying ${names.join(', ')}`,
+        timestamp: Date.now(),
+        isStreaming: true,
+      });
+
+      // 3. Create payloads for each app
+      const entries = await Promise.all(apps.map(async (app) => {
+        const filename = `manifest-${app.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}.json`;
+        const blob = new Blob([JSON.stringify(app.manifest, null, 2)], { type: 'application/json' });
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const hashBytes = await sha256(bytes);
+        const hash = toHex(hashBytes);
+        return {
+          app_name: deriveAppName(filename),
+          payload: { bytes, filename, size: blob.size, hash },
+        };
+      }));
+
+      // 4. Run pre-validation
+      const result = await executeBatchDeploy(entries, {
+        clientManager: clientManagerRef.current,
+        address: addressRef.current,
+        signArbitrary: signArbitraryRef.current,
+        onProgress: setDeployProgress,
+        appRegistry: {
+          getApps: appRegistry.getApps,
+          getApp: appRegistry.getApp,
+          findApp: appRegistry.findApp,
+          getAppByLease: appRegistry.getAppByLease,
+          addApp: appRegistry.addApp,
+          updateApp: appRegistry.updateApp,
+        },
+      });
+
+      // 5. Handle result
+      if (result.requiresConfirmation) {
+        setPendingConfirmation({
+          id: generateMessageId(),
+          action: {
+            id: 'batch',
+            toolName: 'batch_deploy',
+            args: result.pendingAction!.args,
+            description: result.confirmationMessage!,
+          },
+          messageId: toolMsgId,
+        });
+        updateMessageById(toolMsgId, { content: result.confirmationMessage!, isStreaming: false });
+      } else {
+        // Validation failed
+        updateMessageById(toolMsgId, {
+          content: `Error: ${result.error}`,
+          error: result.error,
+          isStreaming: false,
+        });
+      }
+    } catch (error) {
+      logError('AIContext.requestBatchDeploy', error);
+    } finally {
+      isStreamingRef.current = false;
+      setIsStreaming(false);
+    }
+  }, [isConnected, addMessage, updateMessageById]);
+
   // Clear deploy progress on wallet change
   const setAddress = useCallback((address: string | undefined) => {
     // Clear cached query results when wallet changes to prevent serving stale data
@@ -1089,6 +1179,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       setSignArbitrary,
       attachPayload,
       clearPayload,
+      requestBatchDeploy,
     }),
     [
       isOpen,
@@ -1111,6 +1202,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       setSignArbitrary,
       attachPayload,
       clearPayload,
+      requestBatchDeploy,
     ]
   );
 
