@@ -576,6 +576,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         appRegistry: {
           getApps: appRegistry.getApps,
           getApp: appRegistry.getApp,
+          findApp: appRegistry.findApp,
           getAppByLease: appRegistry.getAppByLease,
           addApp: appRegistry.addApp,
           updateApp: appRegistry.updateApp,
@@ -910,6 +911,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
           appRegistry: {
             getApps: appRegistry.getApps,
             getApp: appRegistry.getApp,
+            findApp: appRegistry.findApp,
             getAppByLease: appRegistry.getAppByLease,
             addApp: appRegistry.addApp,
             updateApp: appRegistry.updateApp,

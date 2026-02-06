@@ -65,6 +65,10 @@ function makeRegistry(apps: AppEntry[] = []): AppRegistryAccess {
   return {
     getApps: () => [...store],
     getApp: (_addr: string, name: string) => store.find((a) => a.name === name) ?? null,
+    findApp: (_addr: string, name: string) => {
+      const lower = name.toLowerCase();
+      return store.find((a) => a.name.endsWith(`-${lower}`)) ?? store.find((a) => a.name.includes(lower)) ?? null;
+    },
     getAppByLease: (_addr: string, uuid: string) => store.find((a) => a.leaseUuid === uuid) ?? null,
     addApp: (_addr: string, entry: AppEntry) => { store.push(entry); return entry; },
     updateApp: (_addr: string, uuid: string, updates: Partial<Omit<AppEntry, 'leaseUuid'>>) => {

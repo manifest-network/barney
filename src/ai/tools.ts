@@ -14,7 +14,7 @@ export const AI_TOOLS: OllamaTool[] = [
     function: {
       name: 'deploy_app',
       description:
-        'Deploy an app from an attached manifest file. Requires a file attachment. Defaults size to "small" if not specified. Name is derived from filename if omitted.',
+        'Deploy an app from an attached manifest file. Requires a file attachment. Defaults size to "micro" if not specified. Name is derived from filename if omitted.',
       parameters: {
         type: 'object',
         properties: {
@@ -24,8 +24,8 @@ export const AI_TOOLS: OllamaTool[] = [
           },
           size: {
             type: 'string',
-            description: 'Resource tier: small, medium, large, or gpu.',
-            enum: ['small', 'medium', 'large', 'gpu'],
+            description: 'Resource tier: micro, small, medium, or large.',
+            enum: ['micro', 'small', 'medium', 'large'],
           },
         },
         required: [],

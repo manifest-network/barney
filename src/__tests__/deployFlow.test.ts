@@ -91,6 +91,10 @@ function makeInMemoryRegistry(): AppRegistryAccess & { _store: AppEntry[] } {
     _store,
     getApps: () => [..._store],
     getApp: (_addr: string, name: string) => _store.find((a) => a.name === name) ?? null,
+    findApp: (_addr: string, name: string) => {
+      const lower = name.toLowerCase();
+      return _store.find((a) => a.name.endsWith(`-${lower}`)) ?? _store.find((a) => a.name.includes(lower)) ?? null;
+    },
     getAppByLease: (_addr: string, uuid: string) => _store.find((a) => a.leaseUuid === uuid) ?? null,
     addApp: (_addr: string, entry: AppEntry) => { _store.push(entry); return entry; },
     updateApp: (_addr: string, uuid: string, updates: Partial<Omit<AppEntry, 'leaseUuid'>>) => {

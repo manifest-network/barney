@@ -113,9 +113,41 @@ export function getApps(address: string): AppEntry[] {
   return loadApps(address);
 }
 
-/** Get a single app by name. Returns null if not found. */
+/** Get a single app by exact name. Returns null if not found. */
 export function getApp(address: string, name: string): AppEntry | null {
   return loadApps(address).find((a) => a.name === name) ?? null;
+}
+
+/**
+ * Find an app by fuzzy name matching. Tries in order:
+ * 1. Exact match
+ * 2. Suffix match (e.g. "doom" matches "manifest-doom")
+ * 3. Substring match (e.g. "doom" matches "my-doom-app")
+ *
+ * Only matches active apps (running/deploying) first; falls back to all apps.
+ * Returns null if no match or if multiple apps match ambiguously.
+ */
+export function findApp(address: string, name: string): AppEntry | null {
+  const apps = loadApps(address);
+  const lower = name.toLowerCase();
+
+  // Exact match (any status)
+  const exact = apps.find((a) => a.name === lower);
+  if (exact) return exact;
+
+  // Prefer active apps for fuzzy matching
+  const active = apps.filter((a) => a.status === 'running' || a.status === 'deploying');
+  const pool = active.length > 0 ? active : apps;
+
+  // Suffix match: app name ends with "-{input}" or equals input
+  const suffixMatches = pool.filter((a) => a.name.endsWith(`-${lower}`));
+  if (suffixMatches.length === 1) return suffixMatches[0];
+
+  // Substring match
+  const substringMatches = pool.filter((a) => a.name.includes(lower));
+  if (substringMatches.length === 1) return substringMatches[0];
+
+  return null;
 }
 
 /** Get a single app by lease UUID. Returns null if not found. */

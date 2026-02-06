@@ -126,15 +126,27 @@ export async function executeDeployApp(
     name = `app-${Date.now().toString(36)}`;
   }
 
-  // Validate name
-  const nameError = validateAppName(name, address);
+  // Validate name — auto-suffix on collision with running/deploying apps
+  let nameError = validateAppName(name, address);
   if (nameError) {
-    return { success: false, error: nameError };
+    const baseName = name;
+    let suffix = 2;
+    while (nameError && suffix <= 99) {
+      const candidate = `${baseName}-${suffix}`.slice(0, 32);
+      nameError = validateAppName(candidate, address);
+      if (!nameError) {
+        name = candidate;
+      }
+      suffix++;
+    }
+    if (nameError) {
+      return { success: false, error: nameError };
+    }
   }
 
   // Resolve and validate size
   const VALID_SIZE_TIERS = ['micro', 'small', 'medium', 'large'] as const;
-  const size = (args.size as string | undefined)?.toLowerCase() || 'small';
+  const size = (args.size as string | undefined)?.toLowerCase() || 'micro';
   if (!VALID_SIZE_TIERS.includes(size as typeof VALID_SIZE_TIERS[number])) {
     return {
       success: false,
@@ -382,6 +394,16 @@ export async function executeConfirmedDeployApp(
         logError('compositeTransactions.executeConfirmedDeployApp.connection', error);
       }
 
+      // Build a clickable connection URL from host + first port mapping
+      let connectionUrl = appUrl;
+      if (connection?.ports) {
+        const firstPort = Object.values(connection.ports)[0];
+        if (firstPort) {
+          const host = firstPort.host_ip || connection.host || appUrl;
+          connectionUrl = `${host}:${firstPort.host_port}`;
+        }
+      }
+
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
         url: appUrl,
@@ -394,7 +416,7 @@ export async function executeConfirmedDeployApp(
         data: {
           message: `App "${name}" is live!`,
           name,
-          url: appUrl,
+          url: connectionUrl || appUrl,
           connection,
           status: 'running',
         },
@@ -507,20 +529,20 @@ export async function executeStopApp(
     };
   }
 
-  const app = appRegistry.getApp(address, name);
+  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
   if (!app) return { success: false, error: `No app found named "${name}"` };
 
   if (app.status === 'stopped') {
-    return { success: false, error: `App "${name}" is already stopped.` };
+    return { success: false, error: `App "${app.name}" is already stopped.` };
   }
 
   return {
     success: true,
     requiresConfirmation: true,
-    confirmationMessage: `Stop app "${name}"? This will terminate the deployment and stop billing.`,
+    confirmationMessage: `Stop app "${app.name}"? This will terminate the deployment and stop billing.`,
     pendingAction: {
       toolName: 'stop_app',
-      args: { app_name: name, leaseUuid: app.leaseUuid },
+      args: { app_name: app.name, leaseUuid: app.leaseUuid },
     },
   };
 }

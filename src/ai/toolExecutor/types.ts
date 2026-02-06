@@ -68,6 +68,7 @@ export type ToolResult = ToolResultSuccess | ToolResultFailure | ToolResultConfi
 export interface AppRegistryAccess {
   getApps: (address: string) => AppEntry[];
   getApp: (address: string, name: string) => AppEntry | null;
+  findApp: (address: string, name: string) => AppEntry | null;
   getAppByLease: (address: string, leaseUuid: string) => AppEntry | null;
   addApp: (address: string, entry: AppEntry) => AppEntry;
   updateApp: (address: string, leaseUuid: string, updates: Partial<Omit<AppEntry, 'leaseUuid'>>) => AppEntry | null;

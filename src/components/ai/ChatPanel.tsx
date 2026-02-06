@@ -39,6 +39,8 @@ const EXAMPLE_APPS = [
   { label: 'Monkey Island', manifest: GAME_MANIFEST('monkeyisland') },
   { label: 'Battle Chess', manifest: GAME_MANIFEST('battlechess') },
   { label: 'Oregon Trail', manifest: GAME_MANIFEST('oregontrail') },
+  { label: 'Doom', manifest: GAME_MANIFEST('doom') },
+  { label: 'ClassiCube', manifest: GAME_MANIFEST('classicube') },
 ];
 
 const SUGGESTIONS = ['Deploy an app', 'Check my credits', "What's running?"];
@@ -69,6 +71,20 @@ export function ChatPanel() {
   // Focus input when panel opens
   useEffect(() => {
     inputRef.current?.focus();
+  }, []);
+
+  // Press "/" anywhere to focus the chat input (unless already typing somewhere)
+  useEffect(() => {
+    const handleGlobalKey = (e: KeyboardEvent) => {
+      if (e.key === '/' && document.activeElement !== inputRef.current
+          && !(document.activeElement instanceof HTMLInputElement)
+          && !(document.activeElement instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', handleGlobalKey);
+    return () => document.removeEventListener('keydown', handleGlobalKey);
   }, []);
 
   const doSubmit = async () => {

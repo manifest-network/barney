@@ -81,6 +81,10 @@ function makeRegistry(apps: AppEntry[] = []): AppRegistryAccess {
   return {
     getApps: () => [...store],
     getApp: (_addr: string, name: string) => store.find((a) => a.name === name) ?? null,
+    findApp: (_addr: string, name: string) => {
+      const lower = name.toLowerCase();
+      return store.find((a) => a.name.endsWith(`-${lower}`)) ?? store.find((a) => a.name.includes(lower)) ?? null;
+    },
     getAppByLease: (_addr: string, uuid: string) => store.find((a) => a.leaseUuid === uuid) ?? null,
     addApp: vi.fn((_addr: string, entry: AppEntry) => { store.push(entry); return entry; }),
     updateApp: vi.fn((_addr: string, uuid: string, updates: Partial<Omit<AppEntry, 'leaseUuid'>>) => {
@@ -196,7 +200,7 @@ describe('executeDeployApp', () => {
 
   it('returns confirmation with valid input', async () => {
     vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-small', providerUuid: 'p1', price: { denom: 'umfx', amount: '1000000' } } as any,
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1', price: { denom: 'umfx', amount: '1000000' } } as any,
     ]);
     vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
@@ -248,7 +252,7 @@ describe('executeConfirmedDeployApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect((result.data as any).url).toBe('https://app.example.com');
+    expect((result.data as any).url).toBe('1.2.3.4:12345');
     expect((result.data as any).connection.ports['80/tcp'].host_port).toBe(12345);
     expect(onProgress).toHaveBeenCalled();
     expect(registry.addApp).toHaveBeenCalled();

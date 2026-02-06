@@ -96,7 +96,7 @@ export async function executeAppStatus(
   const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
 
-  const app = appRegistry.getApp(address, name);
+  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
   if (!app) return { success: false, error: `No app found named "${name}"` };
 
   // Get chain state
@@ -195,13 +195,23 @@ export async function executeAppStatus(
     }
   }
 
+  // Build a clickable connection URL from host + first port mapping
+  let connectionUrl = appUrl;
+  if (appConnection?.ports) {
+    const firstPort = Object.values(appConnection.ports)[0];
+    if (firstPort) {
+      const host = firstPort.host_ip || appConnection.host || appUrl;
+      connectionUrl = `${host}:${firstPort.host_port}`;
+    }
+  }
+
   return {
     success: true,
     data: {
       name: app.name,
       status: currentStatus,
       size: app.size,
-      url: appUrl,
+      url: connectionUrl || appUrl,
       connection: appConnection,
       chainState,
       fredStatus,

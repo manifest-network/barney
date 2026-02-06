@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   getApps,
   getApp,
+  findApp,
   getAppByLease,
   addApp,
   updateApp,
@@ -189,6 +190,48 @@ describe('appRegistry', () => {
       const app = makeApp({ name: 'renamable' });
       addApp(ADDR_A, app);
       expect(validateAppName('renamable', ADDR_A, app.leaseUuid)).toBeNull();
+    });
+  });
+
+  // --- Fuzzy name matching ---
+
+  describe('findApp', () => {
+    it('returns exact match', () => {
+      addApp(ADDR_A, makeApp({ name: 'manifest-doom' }));
+      expect(findApp(ADDR_A, 'manifest-doom')?.name).toBe('manifest-doom');
+    });
+
+    it('returns suffix match (e.g. "doom" matches "manifest-doom")', () => {
+      addApp(ADDR_A, makeApp({ name: 'manifest-doom' }));
+      expect(findApp(ADDR_A, 'doom')?.name).toBe('manifest-doom');
+    });
+
+    it('returns substring match', () => {
+      addApp(ADDR_A, makeApp({ name: 'my-doom-app' }));
+      expect(findApp(ADDR_A, 'doom')?.name).toBe('my-doom-app');
+    });
+
+    it('returns null when no match', () => {
+      addApp(ADDR_A, makeApp({ name: 'manifest-tetris' }));
+      expect(findApp(ADDR_A, 'doom')).toBeNull();
+    });
+
+    it('returns null on ambiguous match when multiple suffix matches exist', () => {
+      addApp(ADDR_A, makeApp({ name: 'app-doom', leaseUuid: 'uuid-1' }));
+      addApp(ADDR_A, makeApp({ name: 'game-doom', leaseUuid: 'uuid-2' }));
+      expect(findApp(ADDR_A, 'doom')).toBeNull();
+    });
+
+    it('returns null on ambiguous substring match', () => {
+      addApp(ADDR_A, makeApp({ name: 'my-doom-app', leaseUuid: 'uuid-1' }));
+      addApp(ADDR_A, makeApp({ name: 'doom-runner', leaseUuid: 'uuid-2' }));
+      expect(findApp(ADDR_A, 'doom')).toBeNull();
+    });
+
+    it('prefers active apps over stopped ones', () => {
+      addApp(ADDR_A, makeApp({ name: 'manifest-doom', leaseUuid: 'uuid-1', status: 'stopped' }));
+      addApp(ADDR_A, makeApp({ name: 'manifest-doom-2', leaseUuid: 'uuid-2', status: 'running' }));
+      expect(findApp(ADDR_A, 'doom')?.name).toBe('manifest-doom-2');
     });
   });
 

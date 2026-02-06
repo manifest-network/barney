@@ -23,10 +23,10 @@ describe('getSystemPrompt', () => {
 
   it('contains resource tiers', () => {
     const prompt = getSystemPrompt();
+    expect(prompt).toContain('micro');
     expect(prompt).toContain('small');
     expect(prompt).toContain('medium');
     expect(prompt).toContain('large');
-    expect(prompt).toContain('gpu');
   });
 
   it('includes wallet address when provided', () => {

@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useRef, useEffect } from 'react';
 import { AlertTriangle, Check, X, Paperclip } from 'lucide-react';
 import type { PendingAction } from '../../ai/toolExecutor';
 import { formatFileSize } from '../../utils/format';
@@ -11,6 +11,12 @@ interface ConfirmationCardProps {
 }
 
 export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfirm, onCancel, isExecuting }: ConfirmationCardProps) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+
   return (
     <div
       className="confirmation-card"
@@ -50,6 +56,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
       </div>
       <div className="confirmation-actions">
         <button
+          ref={cancelRef}
           type="button"
           onClick={onCancel}
           disabled={isExecuting}
