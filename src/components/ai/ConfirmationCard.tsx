@@ -1,7 +1,8 @@
-import { memo, useRef, useEffect } from 'react';
+import { memo, useRef } from 'react';
 import { AlertTriangle, Check, X, Paperclip } from 'lucide-react';
 import type { PendingAction } from '../../ai/toolExecutor';
 import { formatFileSize } from '../../utils/format';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 interface ConfirmationCardProps {
   action: PendingAction;
@@ -12,27 +13,19 @@ interface ConfirmationCardProps {
 
 export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfirm, onCancel, isExecuting }: ConfirmationCardProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    cancelRef.current?.focus({ focusVisible: true } as FocusOptions);
-  }, []);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isExecuting) {
-        onCancel();
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onCancel, isExecuting]);
+  const trapRef = useFocusTrap(true, {
+    onEscape: () => { if (!isExecuting) onCancel(); },
+    initialFocusRef: cancelRef,
+  });
 
   return (
     <div
+      ref={trapRef}
       className="confirmation-card"
       role="alertdialog"
       aria-labelledby="confirmation-title"
       aria-describedby="confirmation-description"
+      tabIndex={-1}
     >
       <div className="confirmation-header">
         <AlertTriangle className="w-5 h-5 text-warning" />

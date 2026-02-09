@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type FormEvent } from 'react';
+import { useState, useRef, useEffect, useCallback, type FormEvent } from 'react';
 import { Send, Settings, X, Sparkles, Loader, WifiOff, Paperclip } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
 import { useAutoScroll } from '../../hooks/useAutoScroll';
@@ -11,6 +11,13 @@ import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
 
+interface ExampleApp {
+  label: string;
+  manifest: Record<string, unknown>;
+  size?: string;
+  group: 'games' | 'apps';
+}
+
 const GAME_MANIFEST = (game: string) => ({
   image: `docker.io/lifted/demo-games:${game}`,
   ports: { '8080/tcp': {} },
@@ -19,29 +26,33 @@ const GAME_MANIFEST = (game: string) => ({
   tmpfs: ['/var/cache/nginx', '/var/run'],
 });
 
-const EXAMPLE_APPS = [
-  { label: 'Tetris', manifest: GAME_MANIFEST('tetris') },
-  { label: '2048', manifest: GAME_MANIFEST('2048') },
-  { label: 'Pac-Man', manifest: GAME_MANIFEST('pacman') },
-  { label: 'Floppy Bird', manifest: GAME_MANIFEST('floppybird') },
-  { label: 'Hextris', manifest: GAME_MANIFEST('hextris') },
-  { label: 'Clumsy Bird', manifest: GAME_MANIFEST('clumsy-bird') },
-  { label: 'Scorch', manifest: GAME_MANIFEST('scorch') },
-  { label: 'Secret Agent', manifest: GAME_MANIFEST('secretagent') },
-  { label: 'SimCity', manifest: GAME_MANIFEST('simcity') },
-  { label: 'SimCity 2000', manifest: GAME_MANIFEST('simcity2000') },
-  { label: 'Colossal Cave', manifest: GAME_MANIFEST('colossalcave') },
-  { label: 'Civilization', manifest: GAME_MANIFEST('civilization') },
-  { label: 'Space Quest 4', manifest: GAME_MANIFEST('spacequest4') },
-  { label: "King's Quest 5", manifest: GAME_MANIFEST('kingsquest5') },
-  { label: "King's Quest 6", manifest: GAME_MANIFEST('kingsquest6') },
-  { label: "King's Quest 7", manifest: GAME_MANIFEST('kingsquest7') },
-  { label: 'Monkey Island', manifest: GAME_MANIFEST('monkeyisland') },
-  { label: 'Battle Chess', manifest: GAME_MANIFEST('battlechess') },
-  { label: 'Oregon Trail', manifest: GAME_MANIFEST('oregontrail') },
-  { label: 'Doom', manifest: GAME_MANIFEST('doom') },
-  { label: 'ClassiCube', manifest: GAME_MANIFEST('classicube') },
+const EXAMPLE_APPS: ExampleApp[] = [
+  { label: 'Tetris', manifest: GAME_MANIFEST('tetris'), group: 'games' },
+  { label: '2048', manifest: GAME_MANIFEST('2048'), group: 'games' },
+  { label: 'Pac-Man', manifest: GAME_MANIFEST('pacman'), group: 'games' },
+  { label: 'Floppy Bird', manifest: GAME_MANIFEST('floppybird'), group: 'games' },
+  { label: 'Hextris', manifest: GAME_MANIFEST('hextris'), group: 'games' },
+  { label: 'Clumsy Bird', manifest: GAME_MANIFEST('clumsy-bird'), group: 'games' },
+  { label: 'Scorch', manifest: GAME_MANIFEST('scorch'), group: 'games' },
+  { label: 'Secret Agent', manifest: GAME_MANIFEST('secretagent'), group: 'games' },
+  { label: 'SimCity', manifest: GAME_MANIFEST('simcity'), group: 'games' },
+  { label: 'SimCity 2000', manifest: GAME_MANIFEST('simcity2000'), group: 'games' },
+  { label: 'Colossal Cave', manifest: GAME_MANIFEST('colossalcave'), group: 'games' },
+  { label: 'Civilization', manifest: GAME_MANIFEST('civilization'), group: 'games' },
+  { label: 'Space Quest 4', manifest: GAME_MANIFEST('spacequest4'), group: 'games' },
+  { label: "King's Quest 5", manifest: GAME_MANIFEST('kingsquest5'), group: 'games' },
+  { label: "King's Quest 6", manifest: GAME_MANIFEST('kingsquest6'), group: 'games' },
+  { label: "King's Quest 7", manifest: GAME_MANIFEST('kingsquest7'), group: 'games' },
+  { label: 'Monkey Island', manifest: GAME_MANIFEST('monkeyisland'), group: 'games' },
+  { label: 'Battle Chess', manifest: GAME_MANIFEST('battlechess'), group: 'games' },
+  { label: 'Oregon Trail', manifest: GAME_MANIFEST('oregontrail'), group: 'games' },
+  { label: 'Doom', manifest: GAME_MANIFEST('doom'), group: 'games' },
+  { label: 'ClassiCube', manifest: GAME_MANIFEST('classicube'), group: 'games' },
+  { label: 'Redis', manifest: { image: 'redis:latest', ports: { '6379/tcp': {} } }, size: 'small', group: 'apps' },
 ];
+
+const EXAMPLE_GAMES = EXAMPLE_APPS.filter((app) => app.group === 'games');
+const EXAMPLE_SERVICES = EXAMPLE_APPS.filter((app) => app.group === 'apps');
 
 const SUGGESTIONS = ['Deploy an app', 'Check my credits', "What's running?"];
 
@@ -50,7 +61,7 @@ const SUGGESTIONS = ['Deploy an app', 'Check my credits', "What's running?"];
  * First tries exact normalized match, then falls back to token-prefix
  * matching so "king quest 5" matches "King's Quest 5" (possessives, etc.).
  */
-function matchExampleApp(input: string): typeof EXAMPLE_APPS[number] | undefined {
+function matchExampleApp(input: string): ExampleApp | undefined {
   const normalized = input.toLowerCase().replace(/[^a-z0-9]/g, '');
 
   // Exact normalized match
@@ -95,6 +106,28 @@ export function ChatPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { containerRef: messagesContainerRef, endRef: messagesEndRef, handleScroll } = useAutoScroll(messages.length, isStreaming);
+  const scrollWrapperRef = useRef<HTMLDivElement>(null);
+
+  const updateScrollShadows = useCallback(() => {
+    const container = messagesContainerRef.current;
+    const wrapper = scrollWrapperRef.current;
+    if (!container || !wrapper) return;
+    wrapper.dataset.shadowTop = String(container.scrollTop > 0);
+    wrapper.dataset.shadowBottom = String(
+      container.scrollHeight - container.scrollTop - container.clientHeight > 1
+    );
+  }, [messagesContainerRef]);
+
+  const onScroll = useCallback(() => {
+    handleScroll();
+    updateScrollShadows();
+  }, [handleScroll, updateScrollShadows]);
+
+  // Update scroll shadows when content changes
+  useEffect(() => {
+    const raf = requestAnimationFrame(updateScrollShadows);
+    return () => cancelAnimationFrame(raf);
+  }, [messages.length, isStreaming, updateScrollShadows]);
 
   // Focus input when panel opens
   useEffect(() => {
@@ -144,7 +177,7 @@ export function ChatPanel() {
 
         const matched = names
           .map((name) => matchExampleApp(name))
-          .filter((app): app is typeof EXAMPLE_APPS[number] => app != null);
+          .filter((app): app is ExampleApp => app != null);
 
         if (matched.length > 1) {
           await requestBatchDeploy(matched, message);
@@ -200,7 +233,7 @@ export function ChatPanel() {
     e.target.value = '';
   };
 
-  const deployExample = async (app: typeof EXAMPLE_APPS[number]) => {
+  const deployExample = async (app: ExampleApp) => {
     const filename = `manifest-${app.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}.json`;
     const blob = new Blob([JSON.stringify(app.manifest, null, 2)], { type: 'application/json' });
     const file = new File([blob], filename, { type: 'application/json' });
@@ -210,7 +243,8 @@ export function ChatPanel() {
       return;
     }
     try {
-      await sendMessage(`Deploy ${app.label}`);
+      const sizeHint = app.size ? ` using ${app.size} tier` : '';
+      await sendMessage(`Deploy ${app.label}${sizeHint}`);
     } catch (error) {
       logError('ChatPanel.deployExample', error);
     }
@@ -277,10 +311,11 @@ export function ChatPanel() {
       {showSettings && <AISettings onClose={() => setShowSettings(false)} />}
 
       {/* Messages Area */}
+      <div className="chat-messages-scroll-wrapper" ref={scrollWrapperRef}>
       <div
         className="chat-messages"
         ref={messagesContainerRef}
-        onScroll={handleScroll}
+        onScroll={onScroll}
         role="log"
         aria-label="Chat messages"
         aria-live="polite"
@@ -316,18 +351,39 @@ export function ChatPanel() {
             {showExampleApps && (
               <div className="chat-example-apps">
                 <p className="chat-example-apps__label">Or try an example:</p>
-                <div className="chat-example-apps__buttons" role="group" aria-label="Example apps">
-                  {EXAMPLE_APPS.map((app) => (
-                    <button
-                      key={app.label}
-                      type="button"
-                      onClick={() => deployExample(app)}
-                      className="chat-suggestion"
-                      disabled={!isConnected || isStreaming}
-                    >
-                      {app.label}
-                    </button>
-                  ))}
+                <div className="chat-example-apps__groups">
+                  <div className="chat-example-apps__group">
+                    <p className="chat-example-apps__group-label">Games</p>
+                    <div className="chat-example-apps__buttons" role="group" aria-label="Example games">
+                      {EXAMPLE_GAMES.map((app) => (
+                        <button
+                          key={app.label}
+                          type="button"
+                          onClick={() => deployExample(app)}
+                          className="chat-suggestion"
+                          disabled={!isConnected || isStreaming}
+                        >
+                          {app.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="chat-example-apps__group">
+                    <p className="chat-example-apps__group-label">Apps</p>
+                    <div className="chat-example-apps__buttons" role="group" aria-label="Example apps">
+                      {EXAMPLE_SERVICES.map((app) => (
+                        <button
+                          key={app.label}
+                          type="button"
+                          onClick={() => deployExample(app)}
+                          className="chat-suggestion chat-suggestion--app"
+                          disabled={!isConnected || isStreaming}
+                        >
+                          {app.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -347,6 +403,7 @@ export function ChatPanel() {
           </>
         )}
         <div ref={messagesEndRef} />
+      </div>
       </div>
 
       {/* Input Area */}

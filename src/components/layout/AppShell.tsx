@@ -1,15 +1,18 @@
 /**
  * AppShell — top-level router.
  * Shows LandingPage when disconnected, MainLayout when connected.
+ * Transitions between views with a fade + slide animation.
  */
 
-import { useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { useAI } from '../../hooks/useAI';
 import { useManifestMCP } from '../../hooks/useManifestMCP';
 import { LandingPage } from '../landing/LandingPage';
 import { MainLayout } from './MainLayout';
 import { CHAIN_NAME } from '../../config/chain';
+
+const EXIT_DURATION_MS = 150;
 
 export function AppShell() {
   const { setClientManager, setAddress, setSignArbitrary } = useAI();
@@ -39,9 +42,29 @@ export function AppShell() {
     setSignArbitrary(canSign ? wrappedSignArbitrary : undefined);
   }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, wrappedSignArbitrary]);
 
-  if (!isWalletConnected) {
-    return <LandingPage onConnect={() => openView()} isConnecting={isWalletConnecting} />;
-  }
+  // Page transition: defer content swap until exit animation completes
+  const [renderedConnected, setRenderedConnected] = useState(isWalletConnected);
+  const [exiting, setExiting] = useState(false);
 
-  return <MainLayout />;
+  useEffect(() => {
+    if (isWalletConnected === renderedConnected) {
+      setExiting(false);
+      return;
+    }
+    setExiting(true);
+    const timer = setTimeout(() => {
+      setRenderedConnected(isWalletConnected);
+      setExiting(false);
+    }, EXIT_DURATION_MS);
+    return () => clearTimeout(timer);
+  }, [isWalletConnected, renderedConnected]);
+
+  return (
+    <div className={`app-shell__page ${exiting ? 'app-shell__page--exit' : ''}`}>
+      {renderedConnected
+        ? <MainLayout />
+        : <LandingPage onConnect={() => openView()} isConnecting={isWalletConnecting} />
+      }
+    </div>
+  );
 }
