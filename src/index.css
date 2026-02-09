@@ -2566,6 +2566,11 @@ h1, h2, h3, h4, h5, h6 {
   align-self: flex-start;
 }
 
+.message-tool {
+  padding-left: 0.75rem;
+  border-left: 2px solid oklch(0.55 0.15 145 / 0.4);
+}
+
 .message-avatar {
   flex-shrink: 0;
   width: 1.75rem;
@@ -2596,6 +2601,53 @@ h1, h2, h3, h4, h5, h6 {
 .message-content {
   flex: 1;
   min-width: 0;
+}
+
+.message-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-top: 0.125rem;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.message:hover .message-footer,
+.message:focus-within .message-footer {
+  opacity: 1;
+}
+
+.message-user .message-footer {
+  justify-content: flex-end;
+}
+
+.message-timestamp {
+  font-size: 0.6875rem;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.message-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.125rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.message-copy-btn:hover {
+  color: var(--text-secondary);
+  background: var(--panel-bg);
+}
+
+.message-copy-btn:active {
+  transform: scale(0.9);
+  transition: transform 0.07s ease;
 }
 
 .message-tool-name {
@@ -2766,6 +2818,12 @@ h1, h2, h3, h4, h5, h6 {
   padding: 2px 0;
 }
 
+.thinking-label {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin-right: 0.25rem;
+}
+
 .thinking-dot {
   width: 6px;
   height: 6px;
@@ -2774,8 +2832,8 @@ h1, h2, h3, h4, h5, h6 {
   animation: thinkingBounce 1.4s ease-in-out infinite;
 }
 
-.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
-.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+.thinking-dot:nth-of-type(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-of-type(3) { animation-delay: 0.4s; }
 
 @keyframes thinkingBounce {
   0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
@@ -7539,6 +7597,13 @@ code.lease-card-mono {
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.75rem;
+}
+
+.progress-card__elapsed {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
 }
 
 .progress-card__title {

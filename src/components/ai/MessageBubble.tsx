@@ -1,8 +1,14 @@
-import { useState, memo } from 'react';
-import { User, Bot, Wrench, AlertCircle, Brain, ChevronDown, ChevronRight } from 'lucide-react';
+import { useState, memo, useMemo } from 'react';
+import { User, Bot, Wrench, AlertCircle, Brain, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react';
 import type { ChatMessage } from '../../contexts/AIContext';
 import { StreamingText } from './StreamingText';
 import { LogCard } from './LogCard';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+
+function formatTimestamp(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -10,8 +16,10 @@ interface MessageBubbleProps {
 
 export const MessageBubble = memo(function MessageBubble({ message }: MessageBubbleProps) {
   const { role, content, thinking, isStreaming, error, toolName, toolDescription } = message;
+  const timeLabel = useMemo(() => formatTimestamp(message.timestamp), [message.timestamp]);
   const [isThinkingExpanded, setIsThinkingExpanded] = useState(false);
   const [isToolExpanded, setIsToolExpanded] = useState(false);
+  const { copied, copyToClipboard } = useCopyToClipboard();
 
   const isUser = role === 'user';
   const isTool = role === 'tool';
@@ -120,7 +128,8 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
         {!isTool && (content || !hasThinking) && (
           <div className="message-text">
             {isStreaming && !content && !hasThinking ? (
-              <span className="thinking-indicator" aria-label="AI is thinking">
+              <span className="thinking-indicator" aria-label="Barney is thinking">
+                <span className="thinking-label">Barney is thinking</span>
                 <span className="thinking-dot" />
                 <span className="thinking-dot" />
                 <span className="thinking-dot" />
@@ -134,6 +143,25 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
           <div className="message-error" role="alert">
             <AlertCircle className="w-3 h-3" aria-hidden="true" />
             <span>{error}</span>
+          </div>
+        )}
+        {!isTool && (
+          <div className="message-footer">
+            <time className="message-timestamp" dateTime={new Date(message.timestamp).toISOString()}>
+              {timeLabel}
+            </time>
+            {content && !isStreaming && (
+              <button
+                type="button"
+                onClick={() => copyToClipboard(content)}
+                className="message-copy-btn"
+                aria-label={copied ? 'Copied' : 'Copy message'}
+              >
+                {copied
+                  ? <Check className="w-3 h-3" aria-hidden="true" />
+                  : <Copy className="w-3 h-3" aria-hidden="true" />}
+              </button>
+            )}
           </div>
         )}
       </div>

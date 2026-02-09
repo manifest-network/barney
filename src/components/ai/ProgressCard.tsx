@@ -3,9 +3,16 @@
  * Driven by deployProgress from AIContext.
  */
 
-import { memo } from 'react';
+import { memo, useState, useEffect, useRef } from 'react';
 import { CheckCircle, Circle, Loader, AlertCircle } from 'lucide-react';
 import type { DeployProgress } from '../../ai/progress';
+
+function formatElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}m ${s}s`;
+}
 
 interface ProgressCardProps {
   progress: DeployProgress;
@@ -33,6 +40,26 @@ export const ProgressCard = memo(function ProgressCard({ progress }: ProgressCar
   const currentIdx = getPhaseIndex(progress.phase);
   const isFailed = progress.phase === 'failed';
   const isReady = progress.phase === 'ready';
+  const isTerminal = isFailed || isReady;
+
+  const startRef = useRef(Date.now());
+  const [elapsed, setElapsed] = useState(0);
+
+  // Reset timer when a new deploy starts (phase goes non-terminal)
+  const prevTerminalRef = useRef(isTerminal);
+  if (prevTerminalRef.current && !isTerminal) {
+    startRef.current = Date.now();
+  }
+  prevTerminalRef.current = isTerminal;
+
+  useEffect(() => {
+    if (isTerminal) return;
+    setElapsed(0);
+    const id = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [isTerminal]);
 
   return (
     <div
@@ -45,6 +72,9 @@ export const ProgressCard = memo(function ProgressCard({ progress }: ProgressCar
         <span className="progress-card__title">
           {isFailed ? 'Deployment Failed' : isReady ? 'Deployed!' : 'Deploying...'}
         </span>
+        {elapsed > 0 && (
+          <span className="progress-card__elapsed">{formatElapsed(elapsed)}</span>
+        )}
       </div>
 
       {progress.batch ? (
