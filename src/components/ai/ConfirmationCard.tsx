@@ -1,5 +1,5 @@
 import { memo, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Check, X, Paperclip, Copy, CheckCheck } from 'lucide-react';
+import { AlertTriangle, Check, X, Paperclip, Copy, CheckCheck, Eye, EyeOff } from 'lucide-react';
 import type { PendingAction } from '../../ai/toolExecutor';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
@@ -15,6 +15,8 @@ function parseManifestEnv(payload: PendingAction['payload']): Record<string, str
   return null;
 }
 
+const SENSITIVE_PATTERN = /password|secret|token|key|credential/i;
+
 function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
@@ -27,6 +29,29 @@ function CopyButton({ value }: { value: string }) {
     <button type="button" onClick={handleCopy} className="btn-icon" aria-label="Copy to clipboard" title="Copy">
       {copied ? <CheckCheck className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5 text-muted" />}
     </button>
+  );
+}
+
+function SensitiveValue({ envKey, value }: { envKey: string; value: string }) {
+  const isSensitive = SENSITIVE_PATTERN.test(envKey);
+  const [revealed, setRevealed] = useState(!isSensitive);
+
+  return (
+    <span className="flex items-center gap-1">
+      <code className="font-mono text-xs text-primary">{revealed ? value : '\u2022'.repeat(12)}</code>
+      {isSensitive && (
+        <button
+          type="button"
+          onClick={() => setRevealed((r) => !r)}
+          className="btn-icon"
+          aria-label={revealed ? 'Hide value' : 'Reveal value'}
+          title={revealed ? 'Hide' : 'Reveal'}
+        >
+          {revealed ? <EyeOff className="w-3.5 h-3.5 text-muted" /> : <Eye className="w-3.5 h-3.5 text-muted" />}
+        </button>
+      )}
+      <CopyButton value={value} />
+    </span>
   );
 }
 
@@ -94,15 +119,12 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         )}
         {manifestEnv && (
           <div className="confirmation-details">
-            <p className="confirmation-details-title">Generated Credentials:</p>
+            <p className="confirmation-details-title">Environment Variables:</p>
             <div className="confirmation-payload">
               {Object.entries(manifestEnv).map(([key, value]) => (
                 <div key={key} className="flex items-center justify-between gap-2 text-sm">
                   <span className="font-mono text-xs text-dim">{key}</span>
-                  <span className="flex items-center gap-1">
-                    <code className="font-mono text-xs text-primary">{value}</code>
-                    <CopyButton value={value} />
-                  </span>
+                  <SensitiveValue envKey={key} value={value} />
                 </div>
               ))}
             </div>
