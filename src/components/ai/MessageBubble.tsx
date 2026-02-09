@@ -4,6 +4,48 @@ import type { ChatMessage } from '../../contexts/AIContext';
 import { StreamingText } from './StreamingText';
 import { LogCard } from './LogCard';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { useAI } from '../../hooks/useAI';
+
+interface ErrorSuggestion {
+  label: string;
+  message: string;
+}
+
+const ERROR_PATTERNS: Array<{ pattern: RegExp; suggestions: ErrorSuggestion[] }> = [
+  {
+    pattern: /wallet not connected|not connected/i,
+    suggestions: [{ label: 'Connect wallet', message: 'How do I connect my wallet?' }],
+  },
+  {
+    pattern: /insufficient|not enough|credit|balance/i,
+    suggestions: [{ label: 'Check credits', message: 'Check my credits' }],
+  },
+  {
+    pattern: /no app found|not found.*app/i,
+    suggestions: [
+      { label: 'List apps', message: "What's running?" },
+    ],
+  },
+  {
+    pattern: /manifest|payload|invalid.*json|hash.*mismatch/i,
+    suggestions: [{ label: 'Deploy an app', message: 'Deploy an app' }],
+  },
+  {
+    pattern: /timeout|timed out|polling/i,
+    suggestions: [{ label: 'Check status', message: "What's running?" }],
+  },
+  {
+    pattern: /sign|signature|rejected/i,
+    suggestions: [{ label: 'Try again', message: 'Deploy an app' }],
+  },
+];
+
+function getErrorSuggestions(error: string): ErrorSuggestion[] {
+  for (const { pattern, suggestions } of ERROR_PATTERNS) {
+    if (pattern.test(error)) return suggestions;
+  }
+  return [];
+}
 
 function formatTimestamp(ts: number): string {
   const d = new Date(ts);
@@ -20,6 +62,8 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
   const [isThinkingExpanded, setIsThinkingExpanded] = useState(false);
   const [isToolExpanded, setIsToolExpanded] = useState(false);
   const { copied, copyToClipboard } = useCopyToClipboard();
+  const { sendMessage } = useAI();
+  const suggestions = error ? getErrorSuggestions(error) : [];
 
   const isUser = role === 'user';
   const isTool = role === 'tool';
@@ -38,7 +82,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
       try {
         const parsed = JSON.parse(text);
         return (
-          <pre className="message-json">
+          <pre className="message-json" tabIndex={0} aria-label="JSON data">
             {JSON.stringify(parsed, null, 2)}
           </pre>
         );
@@ -143,6 +187,20 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
           <div className="message-error" role="alert">
             <AlertCircle className="w-3 h-3" aria-hidden="true" />
             <span>{error}</span>
+          </div>
+        )}
+        {suggestions.length > 0 && (
+          <div className="message-error-suggestions">
+            {suggestions.map((s) => (
+              <button
+                key={s.label}
+                type="button"
+                onClick={() => sendMessage(s.message)}
+                className="message-error-suggestion"
+              >
+                {s.label}
+              </button>
+            ))}
           </div>
         )}
         {!isTool && (

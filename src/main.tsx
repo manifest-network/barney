@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { ChainProvider } from '@cosmos-kit/react';
 import { makeWeb3AuthWallets } from '@cosmos-kit/web3auth';
 
+import { ThemeProvider } from 'next-themes';
 import '@interchain-ui/react/styles';
 import './index.css';
 import { manifestLocalChain, manifestLocalAssets } from './config/chain';
@@ -57,21 +58,29 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <ChainProvider
-      chains={[manifestLocalChain]}
-      assetLists={[manifestLocalAssets]}
-      wallets={wallets}
-      throwErrors={false}
-      signerOptions={{
-        preferredSignType: () => 'direct',
-      }}
+    <ThemeProvider
+      attribute="data-theme"
+      themes={['dark', 'light', 'retro', 'nord', 'dracula', 'catppuccin']}
+      defaultTheme="dark"
+      enableSystem
+      storageKey="barney-theme"
     >
-      <ToastProvider>
-        <AIProvider>
-          <AppShell />
-          <ToastContainer />
-        </AIProvider>
-      </ToastProvider>
-    </ChainProvider>
+      <ChainProvider
+        chains={[manifestLocalChain]}
+        assetLists={[manifestLocalAssets]}
+        wallets={wallets}
+        throwErrors={false}
+        signerOptions={{
+          preferredSignType: () => 'direct',
+        }}
+      >
+        <ToastProvider>
+          <AIProvider>
+            <AppShell />
+            <ToastContainer />
+          </AIProvider>
+        </ToastProvider>
+      </ChainProvider>
+    </ThemeProvider>
   </StrictMode>
 );

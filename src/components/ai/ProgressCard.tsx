@@ -4,7 +4,7 @@
  */
 
 import { memo, useState, useEffect, useRef } from 'react';
-import { CheckCircle, Circle, Loader, AlertCircle } from 'lucide-react';
+import { CheckCircle, Circle, Loader, AlertCircle, RotateCcw } from 'lucide-react';
 import type { DeployProgress } from '../../ai/progress';
 
 function formatElapsed(seconds: number): string {
@@ -16,6 +16,7 @@ function formatElapsed(seconds: number): string {
 
 interface ProgressCardProps {
   progress: DeployProgress;
+  onRetry?: () => void;
 }
 
 const PHASES = [
@@ -36,7 +37,7 @@ function phaseIcon(phase: string, size: string = 'w-4 h-4') {
   return <Loader className={`${size} text-primary-400 animate-spin`} aria-hidden="true" />;
 }
 
-export const ProgressCard = memo(function ProgressCard({ progress }: ProgressCardProps) {
+export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: ProgressCardProps) {
   const currentIdx = getPhaseIndex(progress.phase);
   const isFailed = progress.phase === 'failed';
   const isReady = progress.phase === 'ready';
@@ -61,12 +62,23 @@ export const ProgressCard = memo(function ProgressCard({ progress }: ProgressCar
     return () => clearInterval(id);
   }, [isTerminal]);
 
+  // Build a concise screen-reader announcement for the current phase
+  const phaseLabel = isFailed
+    ? `Deployment failed${progress.detail ? `: ${progress.detail}` : ''}`
+    : isReady
+      ? 'Deployment complete'
+      : PHASES[currentIdx]?.label ?? 'Deploying';
+
   return (
     <div
       className="progress-card"
       role="status"
       aria-label="Deployment progress"
     >
+      {/* Screen-reader announcement: assertive for terminal, polite for in-progress */}
+      <span className="sr-only" aria-live={isTerminal ? 'assertive' : 'polite'}>
+        {phaseLabel}
+      </span>
       <div className="progress-card__header">
         {phaseIcon(progress.phase, 'w-5 h-5')}
         <span className="progress-card__title">
@@ -118,6 +130,17 @@ export const ProgressCard = memo(function ProgressCard({ progress }: ProgressCar
         <p className="progress-card__substep">
           {progress.fredStatus.phase}
         </p>
+      )}
+
+      {isFailed && onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="progress-card__retry"
+        >
+          <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+          Retry
+        </button>
       )}
     </div>
   );

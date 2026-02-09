@@ -8,11 +8,21 @@ import { Menu, X } from 'lucide-react';
 import { AppsSidebar } from './AppsSidebar';
 import { ChatPanel } from '../ai/ChatPanel';
 import { AIErrorBoundary } from '../ai/AIErrorBoundary';
+import { Modal } from '../ui/Modal';
 
 const SWIPE_THRESHOLD = 80;
 
+const SHORTCUTS = [
+  { keys: ['/'], label: 'Focus chat input' },
+  { keys: ['Enter'], label: 'Send message' },
+  { keys: ['Shift', 'Enter'], label: 'New line' },
+  { keys: ['Esc'], label: 'Close modal / sidebar' },
+  { keys: ['?'], label: 'Show keyboard shortcuts' },
+];
+
 export function MainLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const touchStartX = useRef(0);
@@ -28,6 +38,22 @@ export function MainLayout() {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [sidebarOpen]);
+
+  // Open shortcuts help on "?"
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.key === '?' &&
+        !(e.target instanceof HTMLInputElement) &&
+        !(e.target instanceof HTMLTextAreaElement)
+      ) {
+        e.preventDefault();
+        setShortcutsOpen((prev) => !prev);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Swipe-to-dismiss: track finger, move sidebar in real-time
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
@@ -115,6 +141,22 @@ export function MainLayout() {
           <ChatPanel />
         </AIErrorBoundary>
       </main>
+
+      {/* Keyboard shortcuts help */}
+      <Modal isOpen={shortcutsOpen} onClose={() => setShortcutsOpen(false)} title="Keyboard Shortcuts" size="sm">
+        <dl className="shortcuts-list">
+          {SHORTCUTS.map((s) => (
+            <div key={s.label} className="shortcuts-row">
+              <dt className="shortcuts-label">{s.label}</dt>
+              <dd className="shortcuts-keys">
+                {s.keys.map((k) => (
+                  <kbd key={k} className="shortcuts-kbd">{k}</kbd>
+                ))}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </Modal>
     </div>
   );
 }

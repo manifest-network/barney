@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 
 // Matches http(s):// URLs or bare host:port (IP or hostname with port number)
 const URL_REGEX = /(https?:\/\/[^\s<>)"']+|\b\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}\b)/g;
@@ -36,10 +36,32 @@ interface StreamingTextProps {
 }
 
 export function StreamingText({ text, isStreaming }: StreamingTextProps) {
+  const prevLenRef = useRef(0);
+
+  // Read ref during render (safe), but defer writes to useEffect
+  // so StrictMode double-renders don't clobber the value.
+  const prevLen = isStreaming ? prevLenRef.current : 0;
+
+  useEffect(() => {
+    prevLenRef.current = isStreaming ? text.length : 0;
+  });
+
+  if (isStreaming) {
+    const oldText = text.slice(0, prevLen);
+    const newText = text.slice(prevLen);
+
+    return (
+      <span className="streaming-text">
+        {oldText && linkify(oldText)}
+        {newText && <span className="streaming-chunk">{linkify(newText)}</span>}
+        <span className="streaming-cursor">|</span>
+      </span>
+    );
+  }
+
   return (
     <span className="streaming-text">
       {linkify(text)}
-      {isStreaming && <span className="streaming-cursor">|</span>}
     </span>
   );
 }

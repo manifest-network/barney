@@ -63,7 +63,7 @@ export function LogCard({ appName, logs, truncated }: LogCardProps) {
               <span>{service}</span>
             </button>
             {isExpanded && (
-              <pre className="log-card-content">{logs[service]}</pre>
+              <pre className="log-card-content" tabIndex={0} aria-label={`Logs for ${service}`}>{logs[service]}</pre>
             )}
           </div>
         );

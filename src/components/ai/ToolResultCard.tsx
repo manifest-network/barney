@@ -24,7 +24,7 @@ export function ToolResultCard({ toolName, isExecuting, success, data, error }: 
       </div>
       {error && <div className="tool-result-error">{error}</div>}
       {data !== undefined && (
-        <pre className="tool-result-data">
+        <pre className="tool-result-data" tabIndex={0} aria-label="Tool result data">
           {typeof data === 'string' ? data : JSON.stringify(data, null, 2)}
         </pre>
       )}

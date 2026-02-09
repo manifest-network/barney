@@ -10,46 +10,7 @@ import { MAX_INPUT_LENGTH } from '../../ai/validation';
 import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
-
-interface ExampleApp {
-  label: string;
-  manifest: Record<string, unknown>;
-  size?: string;
-  group: 'games' | 'apps';
-}
-
-const GAME_MANIFEST = (game: string) => ({
-  image: `docker.io/lifted/demo-games:${game}`,
-  ports: { '8080/tcp': {} },
-  env: {},
-  read_only: true,
-  tmpfs: ['/var/cache/nginx', '/var/run'],
-});
-
-const EXAMPLE_APPS: ExampleApp[] = [
-  { label: 'Tetris', manifest: GAME_MANIFEST('tetris'), group: 'games' },
-  { label: '2048', manifest: GAME_MANIFEST('2048'), group: 'games' },
-  { label: 'Pac-Man', manifest: GAME_MANIFEST('pacman'), group: 'games' },
-  { label: 'Floppy Bird', manifest: GAME_MANIFEST('floppybird'), group: 'games' },
-  { label: 'Hextris', manifest: GAME_MANIFEST('hextris'), group: 'games' },
-  { label: 'Clumsy Bird', manifest: GAME_MANIFEST('clumsy-bird'), group: 'games' },
-  { label: 'Scorch', manifest: GAME_MANIFEST('scorch'), group: 'games' },
-  { label: 'Secret Agent', manifest: GAME_MANIFEST('secretagent'), group: 'games' },
-  { label: 'SimCity', manifest: GAME_MANIFEST('simcity'), group: 'games' },
-  { label: 'SimCity 2000', manifest: GAME_MANIFEST('simcity2000'), group: 'games' },
-  { label: 'Colossal Cave', manifest: GAME_MANIFEST('colossalcave'), group: 'games' },
-  { label: 'Civilization', manifest: GAME_MANIFEST('civilization'), group: 'games' },
-  { label: 'Space Quest 4', manifest: GAME_MANIFEST('spacequest4'), group: 'games' },
-  { label: "King's Quest 5", manifest: GAME_MANIFEST('kingsquest5'), group: 'games' },
-  { label: "King's Quest 6", manifest: GAME_MANIFEST('kingsquest6'), group: 'games' },
-  { label: "King's Quest 7", manifest: GAME_MANIFEST('kingsquest7'), group: 'games' },
-  { label: 'Monkey Island', manifest: GAME_MANIFEST('monkeyisland'), group: 'games' },
-  { label: 'Battle Chess', manifest: GAME_MANIFEST('battlechess'), group: 'games' },
-  { label: 'Oregon Trail', manifest: GAME_MANIFEST('oregontrail'), group: 'games' },
-  { label: 'Doom', manifest: GAME_MANIFEST('doom'), group: 'games' },
-  { label: 'ClassiCube', manifest: GAME_MANIFEST('classicube'), group: 'games' },
-  { label: 'Redis', manifest: { image: 'redis:latest', ports: { '6379/tcp': {} } }, size: 'small', group: 'apps' },
-];
+import { EXAMPLE_APPS, buildExampleManifest, type ExampleApp } from '../../config/exampleApps';
 
 const EXAMPLE_GAMES = EXAMPLE_APPS.filter((app) => app.group === 'games');
 const EXAMPLE_SERVICES = EXAMPLE_APPS.filter((app) => app.group === 'apps');
@@ -234,8 +195,9 @@ export function ChatPanel() {
   };
 
   const deployExample = async (app: ExampleApp) => {
+    const manifestJson = buildExampleManifest(app);
     const filename = `manifest-${app.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}.json`;
-    const blob = new Blob([JSON.stringify(app.manifest, null, 2)], { type: 'application/json' });
+    const blob = new Blob([manifestJson], { type: 'application/json' });
     const file = new File([blob], filename, { type: 'application/json' });
     const result = await attachPayload(file);
     if (result.error) {
@@ -355,12 +317,13 @@ export function ChatPanel() {
                   <div className="chat-example-apps__group">
                     <p className="chat-example-apps__group-label">Games</p>
                     <div className="chat-example-apps__buttons" role="group" aria-label="Example games">
-                      {EXAMPLE_GAMES.map((app) => (
+                      {EXAMPLE_GAMES.map((app, i) => (
                         <button
                           key={app.label}
                           type="button"
                           onClick={() => deployExample(app)}
-                          className="chat-suggestion"
+                          className="chat-suggestion chat-example-apps__stagger"
+                          style={{ '--stagger': i } as React.CSSProperties}
                           disabled={!isConnected || isStreaming}
                         >
                           {app.label}
@@ -371,12 +334,13 @@ export function ChatPanel() {
                   <div className="chat-example-apps__group">
                     <p className="chat-example-apps__group-label">Apps</p>
                     <div className="chat-example-apps__buttons" role="group" aria-label="Example apps">
-                      {EXAMPLE_SERVICES.map((app) => (
+                      {EXAMPLE_SERVICES.map((app, i) => (
                         <button
                           key={app.label}
                           type="button"
                           onClick={() => deployExample(app)}
-                          className="chat-suggestion chat-suggestion--app"
+                          className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
+                          style={{ '--stagger': i } as React.CSSProperties}
                           disabled={!isConnected || isStreaming}
                         >
                           {app.label}
@@ -398,7 +362,15 @@ export function ChatPanel() {
             )}
             {/* Deploy Progress */}
             {deployProgress && !pendingConfirmation && (
-              <ProgressCard progress={deployProgress} />
+              <ProgressCard
+                progress={deployProgress}
+                onRetry={deployProgress.phase === 'failed' ? () => {
+                  const lastDeploy = [...messages].reverse().find(
+                    (m) => m.role === 'user' && /deploy\b/i.test(m.content)
+                  );
+                  if (lastDeploy) sendMessage(lastDeploy.content);
+                } : undefined}
+              />
             )}
           </>
         )}

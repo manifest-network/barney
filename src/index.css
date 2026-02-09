@@ -99,6 +99,749 @@
   --gradient-end: oklch(0.45 0.12 240);
 }
 
+/* Light Theme Overrides */
+[data-theme="light"] {
+  --text-primary: oklch(0.15 0.02 260);
+  --text-secondary: oklch(0.30 0.02 260);
+  --text-muted: oklch(0.45 0.02 260);
+  --text-dim: oklch(0.55 0.02 260);
+
+  --panel-bg: oklch(0.98 0.005 260 / 0.80);
+  --panel-bg-solid: oklch(0.97 0.005 260);
+  --panel-border: oklch(0.85 0.01 260 / 0.60);
+  --panel-border-hover: oklch(0.70 0.02 260 / 0.70);
+  --panel-shadow: oklch(0.70 0.01 260 / 0.15);
+
+  --interactive-hover: oklch(0.93 0.01 260);
+  --interactive-active: oklch(0.88 0.01 260);
+
+  --gradient-start: oklch(0.55 0.15 280);
+  --gradient-mid: oklch(0.50 0.18 260);
+  --gradient-end: oklch(0.45 0.12 240);
+
+  --bg-base: oklch(0.95 0.005 260);
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+html[data-theme="light"] body {
+  background: linear-gradient(135deg, oklch(0.96 0.01 260) 0%, oklch(0.93 0.005 260) 100%);
+  background-attachment: fixed;
+}
+
+/* Light overrides for component-level surface colors */
+[data-theme="light"] .main-layout__sidebar,
+[data-theme="light"] .ai-settings,
+[data-theme="light"] .progress-card {
+  background: var(--panel-bg-solid);
+}
+
+[data-theme="light"] .apps-sidebar__wallet,
+[data-theme="light"] .apps-sidebar__credits,
+[data-theme="light"] .confirmation-card {
+  background: oklch(0.99 0.005 260);
+  border-color: var(--panel-border);
+}
+
+[data-theme="light"] .message-user .message-text {
+  color: white;
+}
+
+[data-theme="light"] .message-assistant .message-text {
+  background: var(--panel-bg);
+  border-color: var(--panel-border);
+}
+
+[data-theme="light"] .message-tool .message-text {
+  background: oklch(0.95 0.02 145 / 0.3);
+  border-color: oklch(0.55 0.15 145 / 0.25);
+}
+
+[data-theme="light"] .chat-messages {
+  background: transparent;
+}
+
+[data-theme="light"] .modal {
+  background: oklch(0.99 0.005 260);
+  border-color: var(--panel-border);
+}
+
+[data-theme="light"] .modal-backdrop {
+  background: oklch(0.20 0.02 260 / 0.3);
+}
+
+[data-theme="light"] .toast {
+  background: oklch(0.99 0.005 260);
+  border-color: var(--panel-border);
+}
+
+[data-theme="light"] .shortcuts-kbd {
+  background: oklch(0.94 0.005 260);
+  border-color: oklch(0.85 0.01 260);
+  box-shadow: 0 1px 0 oklch(0.85 0.01 260);
+}
+
+[data-theme="light"] .apps-sidebar__gauge {
+  background: oklch(0.90 0.005 260);
+}
+
+[data-theme="light"] .apps-sidebar__apps-count {
+  background: oklch(0.90 0.01 260);
+}
+
+[data-theme="light"] .apps-sidebar__app-item:hover {
+  background: oklch(0.93 0.01 260);
+}
+
+[data-theme="light"] .chat-input-form {
+  background: var(--panel-bg-solid);
+}
+
+[data-theme="light"] .input,
+[data-theme="light"] .select {
+  background: oklch(0.99 0.005 260);
+  border-color: var(--panel-border);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .message-tool-toggle,
+[data-theme="light"] .message-thinking-toggle {
+  background: oklch(0.94 0.01 260 / 0.8);
+  border-color: oklch(0.85 0.01 260);
+}
+
+[data-theme="light"] .landing-card {
+  background: var(--panel-bg);
+  border-color: var(--panel-border);
+}
+
+/* Retro '80s Theme Overrides */
+[data-theme="retro"] {
+  /* VT323 for body text (readable pixel font), Press Start 2P for headings (decorative) */
+  --font-sans: 'VT323', 'Courier New', monospace;
+  --font-heading: 'Press Start 2P', 'VT323', monospace;
+  --font-mono: 'VT323', 'Courier New', monospace;
+
+  --text-primary: oklch(0.92 0.08 195);
+  --text-secondary: oklch(0.78 0.05 195);
+  --text-muted: oklch(0.60 0.04 290);
+  --text-dim: oklch(0.45 0.03 290);
+
+  --panel-bg: oklch(0.12 0.04 290 / 0.75);
+  --panel-bg-solid: oklch(0.12 0.04 290);
+  --panel-border: oklch(0.35 0.12 330 / 0.50);
+  --panel-border-hover: oklch(0.50 0.16 330 / 0.70);
+  --panel-shadow: oklch(0.20 0.08 330 / 0.40);
+
+  --interactive-hover: oklch(0.18 0.06 290);
+  --interactive-active: oklch(0.22 0.08 290);
+
+  --gradient-start: oklch(0.55 0.20 330);
+  --gradient-mid: oklch(0.40 0.14 290);
+  --gradient-end: oklch(0.50 0.18 195);
+
+  --bg-base: oklch(0.08 0.03 290);
+}
+
+html[data-theme="retro"] {
+  color-scheme: dark;
+  /* VT323 has a small x-height — bump base size so body text is readable */
+  font-size: 118%;
+}
+
+html[data-theme="retro"] body {
+  background: linear-gradient(160deg, oklch(0.10 0.05 290) 0%, oklch(0.06 0.04 310) 50%, oklch(0.08 0.03 270) 100%);
+  background-attachment: fixed;
+}
+
+/* Press Start 2P has an extremely small x-height — scale headings up so they don't
+   look tiny.  The multiplier compensates for the font's metrics vs Plus Jakarta Sans. */
+[data-theme="retro"] h1,
+[data-theme="retro"] h2,
+[data-theme="retro"] h3,
+[data-theme="retro"] h4,
+[data-theme="retro"] h5,
+[data-theme="retro"] h6,
+[data-theme="retro"] .stat-value,
+[data-theme="retro"] .wallet-token-value,
+[data-theme="retro"] .wallet-credit-metric-value,
+[data-theme="retro"] .sidebar-title,
+[data-theme="retro"] .modal-title,
+[data-theme="retro"] .empty-state-title,
+[data-theme="retro"] .section-header-title,
+[data-theme="retro"] .chat-empty-title,
+[data-theme="retro"] .landing-title,
+[data-theme="retro"] .landing-feature-title,
+[data-theme="retro"] .apps-sidebar__credits-amount,
+[data-theme="retro"] .provider-earnings-value,
+[data-theme="retro"] .provider-stat-value,
+[data-theme="retro"] .network-stat-value {
+  font-size-adjust: 0.6;
+  letter-spacing: 0.05em;
+}
+
+[data-theme="retro"] .main-layout__sidebar,
+[data-theme="retro"] .ai-settings,
+[data-theme="retro"] .progress-card {
+  background: var(--panel-bg-solid);
+}
+
+[data-theme="retro"] .apps-sidebar__wallet,
+[data-theme="retro"] .apps-sidebar__credits,
+[data-theme="retro"] .confirmation-card {
+  background: oklch(0.14 0.05 290);
+  border-color: var(--panel-border);
+}
+
+[data-theme="retro"] .message-user .message-text {
+  color: white;
+}
+
+[data-theme="retro"] .message-assistant .message-text {
+  background: var(--panel-bg);
+  border-color: var(--panel-border);
+}
+
+[data-theme="retro"] .message-tool .message-text {
+  background: oklch(0.14 0.06 195 / 0.3);
+  border-color: oklch(0.50 0.18 195 / 0.25);
+}
+
+[data-theme="retro"] .chat-messages {
+  background: transparent;
+}
+
+[data-theme="retro"] .modal {
+  background: oklch(0.12 0.05 290);
+  border-color: var(--panel-border);
+}
+
+[data-theme="retro"] .modal-backdrop {
+  background: oklch(0.05 0.04 290 / 0.6);
+}
+
+[data-theme="retro"] .toast {
+  background: oklch(0.14 0.05 290);
+  border-color: var(--panel-border);
+}
+
+[data-theme="retro"] .shortcuts-kbd {
+  background: oklch(0.16 0.06 290);
+  border-color: oklch(0.30 0.10 330);
+  box-shadow: 0 1px 0 oklch(0.30 0.10 330);
+}
+
+[data-theme="retro"] .apps-sidebar__gauge {
+  background: oklch(0.14 0.04 290);
+}
+
+[data-theme="retro"] .apps-sidebar__apps-count {
+  background: oklch(0.16 0.06 290);
+}
+
+[data-theme="retro"] .apps-sidebar__app-item:hover {
+  background: oklch(0.18 0.06 290);
+}
+
+[data-theme="retro"] .chat-input-form {
+  background: var(--panel-bg-solid);
+}
+
+[data-theme="retro"] .input,
+[data-theme="retro"] .select {
+  background: oklch(0.10 0.04 290);
+  border-color: var(--panel-border);
+  color: var(--text-primary);
+}
+
+[data-theme="retro"] .message-tool-toggle,
+[data-theme="retro"] .message-thinking-toggle {
+  background: oklch(0.16 0.06 290 / 0.8);
+  border-color: oklch(0.30 0.10 330);
+}
+
+[data-theme="retro"] .landing-card {
+  background: var(--panel-bg);
+  border-color: var(--panel-border);
+}
+
+/* --- Retro fun elements --- */
+
+/* CRT scanlines overlay — subtle horizontal lines across the entire viewport */
+html[data-theme="retro"] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    oklch(0 0 0 / 0.04) 2px,
+    oklch(0 0 0 / 0.04) 4px
+  );
+}
+
+/* Neon glow on headings */
+[data-theme="retro"] h1,
+[data-theme="retro"] h2,
+[data-theme="retro"] h3 {
+  text-shadow:
+    0 0 7px oklch(0.70 0.18 195 / 0.6),
+    0 0 20px oklch(0.55 0.20 330 / 0.3);
+}
+
+/* Neon cyan caret in all inputs */
+[data-theme="retro"] input,
+[data-theme="retro"] textarea,
+[data-theme="retro"] select {
+  caret-color: oklch(0.80 0.16 195);
+}
+
+/* Neon border glow on cards */
+[data-theme="retro"] .card:hover,
+[data-theme="retro"] .card-static:hover {
+  box-shadow:
+    0 0 8px oklch(0.55 0.20 330 / 0.3),
+    0 0 24px oklch(0.50 0.18 195 / 0.15);
+}
+
+/* Neon glow on primary buttons */
+[data-theme="retro"] .btn-primary {
+  box-shadow:
+    0 0 8px oklch(0.55 0.20 330 / 0.4),
+    0 0 20px oklch(0.55 0.20 330 / 0.2);
+}
+
+[data-theme="retro"] .btn-primary:hover:not(:disabled) {
+  box-shadow:
+    0 0 12px oklch(0.55 0.20 330 / 0.6),
+    0 0 32px oklch(0.50 0.18 195 / 0.3);
+}
+
+/* Neon glow on user message bubbles */
+[data-theme="retro"] .message-user .message-text {
+  box-shadow:
+    0 0 8px oklch(0.55 0.20 330 / 0.3),
+    0 0 20px oklch(0.50 0.18 195 / 0.1);
+}
+
+/* Neon glow on the toggle switch when active */
+[data-theme="retro"] .toggle.active {
+  box-shadow: 0 0 10px oklch(0.55 0.20 330 / 0.5);
+}
+
+/* Magenta/purple scrollbar */
+[data-theme="retro"] ::-webkit-scrollbar-track {
+  background: oklch(0.08 0.03 290);
+}
+
+[data-theme="retro"] ::-webkit-scrollbar-thumb {
+  background: oklch(0.35 0.12 330);
+}
+
+[data-theme="retro"] ::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.45 0.16 330);
+}
+
+/* Pulsing glow on the connection status dot when connected */
+@keyframes retro-pulse {
+  0%, 100% { box-shadow: 0 0 4px oklch(0.70 0.18 195 / 0.5); }
+  50% { box-shadow: 0 0 12px oklch(0.70 0.18 195 / 0.8), 0 0 24px oklch(0.70 0.18 195 / 0.3); }
+}
+
+[data-theme="retro"] .ai-settings-status.connected {
+  animation: retro-pulse 2s ease-in-out infinite;
+  border-radius: var(--radius-md);
+}
+
+/* Subtle text flicker on the main title — like a neon sign */
+@keyframes retro-flicker {
+  0%, 95%, 100% { opacity: 1; }
+  96% { opacity: 0.85; }
+  97% { opacity: 1; }
+  98% { opacity: 0.90; }
+}
+
+[data-theme="retro"] .landing-title {
+  animation: retro-flicker 4s ease-in-out infinite;
+}
+
+/* Grid background on the landing page — retro perspective grid */
+[data-theme="retro"] .landing-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(oklch(0.50 0.18 195 / 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(0.50 0.18 195 / 0.05) 1px, transparent 1px);
+  background-size: 24px 24px;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+  -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+}
+
+/* Nord Theme Overrides
+   Palette: https://www.nordtheme.com/
+   Polar Night backgrounds, Snow Storm text, Frost accents */
+[data-theme="nord"] {
+  --text-primary: #ECEFF4;
+  --text-secondary: #D8DEE9;
+  --text-muted: #7b88a1;
+  --text-dim: #616E88;
+
+  --panel-bg: #3B4252cc;
+  --panel-bg-solid: #3B4252;
+  --panel-border: #4C566A80;
+  --panel-border-hover: #5E81ACb3;
+  --panel-shadow: #2E344066;
+
+  --interactive-hover: #434C5E;
+  --interactive-active: #4C566A;
+
+  --gradient-start: #5E81AC;
+  --gradient-mid: #81A1C1;
+  --gradient-end: #88C0D0;
+
+  --bg-base: #2E3440;
+}
+
+html[data-theme="nord"] {
+  color-scheme: dark;
+}
+
+html[data-theme="nord"] body {
+  background: linear-gradient(135deg, #2E3440 0%, #272c36 50%, #2E3440 100%);
+  background-attachment: fixed;
+}
+
+[data-theme="nord"] .main-layout__sidebar,
+[data-theme="nord"] .ai-settings,
+[data-theme="nord"] .progress-card {
+  background: var(--panel-bg-solid);
+}
+
+[data-theme="nord"] .apps-sidebar__wallet,
+[data-theme="nord"] .apps-sidebar__credits,
+[data-theme="nord"] .confirmation-card {
+  background: #434C5E;
+  border-color: var(--panel-border);
+}
+
+[data-theme="nord"] .message-user .message-text {
+  color: white;
+}
+
+[data-theme="nord"] .message-assistant .message-text {
+  background: var(--panel-bg);
+  border-color: var(--panel-border);
+}
+
+[data-theme="nord"] .message-tool .message-text {
+  background: #A3BE8C1a;
+  border-color: #A3BE8C40;
+}
+
+[data-theme="nord"] .chat-messages {
+  background: transparent;
+}
+
+[data-theme="nord"] .modal {
+  background: #3B4252;
+  border-color: var(--panel-border);
+}
+
+[data-theme="nord"] .modal-backdrop {
+  background: #2E344099;
+}
+
+[data-theme="nord"] .toast {
+  background: #3B4252;
+  border-color: var(--panel-border);
+}
+
+[data-theme="nord"] .shortcuts-kbd {
+  background: #434C5E;
+  border-color: #4C566A;
+  box-shadow: 0 1px 0 #4C566A;
+}
+
+[data-theme="nord"] .apps-sidebar__gauge {
+  background: #434C5E;
+}
+
+[data-theme="nord"] .apps-sidebar__apps-count {
+  background: #434C5E;
+}
+
+[data-theme="nord"] .apps-sidebar__app-item:hover {
+  background: #434C5E;
+}
+
+[data-theme="nord"] .chat-input-form {
+  background: var(--panel-bg-solid);
+}
+
+[data-theme="nord"] .input,
+[data-theme="nord"] .select {
+  background: #2E3440;
+  border-color: var(--panel-border);
+  color: var(--text-primary);
+}
+
+[data-theme="nord"] .message-tool-toggle,
+[data-theme="nord"] .message-thinking-toggle {
+  background: #434C5Ecc;
+  border-color: #4C566A;
+}
+
+[data-theme="nord"] .landing-card {
+  background: var(--panel-bg);
+  border-color: var(--panel-border);
+}
+
+/* Dracula Theme Overrides
+   Palette: https://draculatheme.com/
+   Dark purple backgrounds, pastel neon accents */
+[data-theme="dracula"] {
+  --text-primary: #F8F8F2;
+  --text-secondary: #E2E6EF;
+  --text-muted: #8893B3;
+  --text-dim: #6272A4;
+
+  --panel-bg: #44475Acc;
+  --panel-bg-solid: #44475A;
+  --panel-border: #6272A480;
+  --panel-border-hover: #BD93F9b3;
+  --panel-shadow: #21222C66;
+
+  --interactive-hover: #44475A;
+  --interactive-active: #515878;
+
+  --gradient-start: #FF79C6;
+  --gradient-mid: #BD93F9;
+  --gradient-end: #8BE9FD;
+
+  --bg-base: #282A36;
+}
+
+html[data-theme="dracula"] {
+  color-scheme: dark;
+}
+
+html[data-theme="dracula"] body {
+  background: linear-gradient(135deg, #282A36 0%, #1e1f29 50%, #282A36 100%);
+  background-attachment: fixed;
+}
+
+[data-theme="dracula"] .main-layout__sidebar,
+[data-theme="dracula"] .ai-settings,
+[data-theme="dracula"] .progress-card {
+  background: var(--panel-bg-solid);
+}
+
+[data-theme="dracula"] .apps-sidebar__wallet,
+[data-theme="dracula"] .apps-sidebar__credits,
+[data-theme="dracula"] .confirmation-card {
+  background: #383a49;
+  border-color: var(--panel-border);
+}
+
+[data-theme="dracula"] .message-user .message-text {
+  color: white;
+}
+
+[data-theme="dracula"] .message-assistant .message-text {
+  background: var(--panel-bg);
+  border-color: var(--panel-border);
+}
+
+[data-theme="dracula"] .message-tool .message-text {
+  background: #50FA7B1a;
+  border-color: #50FA7B40;
+}
+
+[data-theme="dracula"] .chat-messages {
+  background: transparent;
+}
+
+[data-theme="dracula"] .modal {
+  background: #383a49;
+  border-color: var(--panel-border);
+}
+
+[data-theme="dracula"] .modal-backdrop {
+  background: #21222C99;
+}
+
+[data-theme="dracula"] .toast {
+  background: #383a49;
+  border-color: var(--panel-border);
+}
+
+[data-theme="dracula"] .shortcuts-kbd {
+  background: #44475A;
+  border-color: #6272A4;
+  box-shadow: 0 1px 0 #6272A4;
+}
+
+[data-theme="dracula"] .apps-sidebar__gauge {
+  background: #44475A;
+}
+
+[data-theme="dracula"] .apps-sidebar__apps-count {
+  background: #44475A;
+}
+
+[data-theme="dracula"] .apps-sidebar__app-item:hover {
+  background: #44475A;
+}
+
+[data-theme="dracula"] .chat-input-form {
+  background: var(--panel-bg-solid);
+}
+
+[data-theme="dracula"] .input,
+[data-theme="dracula"] .select {
+  background: #282A36;
+  border-color: var(--panel-border);
+  color: var(--text-primary);
+}
+
+[data-theme="dracula"] .message-tool-toggle,
+[data-theme="dracula"] .message-thinking-toggle {
+  background: #44475Acc;
+  border-color: #6272A4;
+}
+
+[data-theme="dracula"] .landing-card {
+  background: var(--panel-bg);
+  border-color: var(--panel-border);
+}
+
+/* Catppuccin Mocha Theme Overrides
+   Palette: https://catppuccin.com/
+   Warm dark backgrounds, pastel accents */
+[data-theme="catppuccin"] {
+  --text-primary: #CDD6F4;
+  --text-secondary: #BAC2DE;
+  --text-muted: #9399B2;
+  --text-dim: #7F849C;
+
+  --panel-bg: #313244cc;
+  --panel-bg-solid: #313244;
+  --panel-border: #45475A80;
+  --panel-border-hover: #CBA6F7b3;
+  --panel-shadow: #11111B66;
+
+  --interactive-hover: #45475A;
+  --interactive-active: #585B70;
+
+  --gradient-start: #F5C2E7;
+  --gradient-mid: #CBA6F7;
+  --gradient-end: #89B4FA;
+
+  --bg-base: #1E1E2E;
+}
+
+html[data-theme="catppuccin"] {
+  color-scheme: dark;
+}
+
+html[data-theme="catppuccin"] body {
+  background: linear-gradient(135deg, #1E1E2E 0%, #181825 50%, #1E1E2E 100%);
+  background-attachment: fixed;
+}
+
+[data-theme="catppuccin"] .main-layout__sidebar,
+[data-theme="catppuccin"] .ai-settings,
+[data-theme="catppuccin"] .progress-card {
+  background: var(--panel-bg-solid);
+}
+
+[data-theme="catppuccin"] .apps-sidebar__wallet,
+[data-theme="catppuccin"] .apps-sidebar__credits,
+[data-theme="catppuccin"] .confirmation-card {
+  background: #262637;
+  border-color: var(--panel-border);
+}
+
+[data-theme="catppuccin"] .message-user .message-text {
+  color: white;
+}
+
+[data-theme="catppuccin"] .message-assistant .message-text {
+  background: var(--panel-bg);
+  border-color: var(--panel-border);
+}
+
+[data-theme="catppuccin"] .message-tool .message-text {
+  background: #A6E3A11a;
+  border-color: #A6E3A140;
+}
+
+[data-theme="catppuccin"] .chat-messages {
+  background: transparent;
+}
+
+[data-theme="catppuccin"] .modal {
+  background: #262637;
+  border-color: var(--panel-border);
+}
+
+[data-theme="catppuccin"] .modal-backdrop {
+  background: #11111B99;
+}
+
+[data-theme="catppuccin"] .toast {
+  background: #262637;
+  border-color: var(--panel-border);
+}
+
+[data-theme="catppuccin"] .shortcuts-kbd {
+  background: #313244;
+  border-color: #45475A;
+  box-shadow: 0 1px 0 #45475A;
+}
+
+[data-theme="catppuccin"] .apps-sidebar__gauge {
+  background: #313244;
+}
+
+[data-theme="catppuccin"] .apps-sidebar__apps-count {
+  background: #313244;
+}
+
+[data-theme="catppuccin"] .apps-sidebar__app-item:hover {
+  background: #45475A;
+}
+
+[data-theme="catppuccin"] .chat-input-form {
+  background: var(--panel-bg-solid);
+}
+
+[data-theme="catppuccin"] .input,
+[data-theme="catppuccin"] .select {
+  background: #1E1E2E;
+  border-color: var(--panel-border);
+  color: var(--text-primary);
+}
+
+[data-theme="catppuccin"] .message-tool-toggle,
+[data-theme="catppuccin"] .message-thinking-toggle {
+  background: #313244cc;
+  border-color: #45475A;
+}
+
+[data-theme="catppuccin"] .landing-card {
+  background: var(--panel-bg);
+  border-color: var(--panel-border);
+}
+
 /* Base Styles */
 html {
   color-scheme: dark;
@@ -2526,6 +3269,22 @@ h1, h2, h3, h4, h5, h6 {
   width: 100%;
 }
 
+.chat-example-apps__stagger {
+  animation: staggerIn 0.3s ease-out both;
+  animation-delay: calc(var(--stagger, 0) * 30ms);
+}
+
+@keyframes staggerIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @media (max-width: 480px) {
   .chat-example-apps__groups {
     flex-direction: column;
@@ -2720,6 +3479,35 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--color-error-400);
 }
 
+.message-error-suggestions {
+  display: flex;
+  gap: 0.375rem;
+  margin-top: 0.375rem;
+}
+
+.message-error-suggestion {
+  padding: 0.25rem 0.625rem;
+  border-radius: var(--radius-full);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.message-error-suggestion:hover {
+  color: var(--color-primary-400);
+  border-color: var(--color-primary-400);
+  background: oklch(0.55 0.15 255 / 0.1);
+}
+
+.message-error-suggestion:active {
+  transform: scale(0.95);
+  transition-duration: 0.07s;
+}
+
 /* AI Error Boundary */
 .ai-error-boundary {
   display: flex;
@@ -2797,6 +3585,15 @@ h1, h2, h3, h4, h5, h6 {
 /* Streaming Cursor */
 .streaming-text {
   display: inline;
+}
+
+.streaming-chunk {
+  animation: chunkFade 0.25s ease-out;
+}
+
+@keyframes chunkFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .streaming-cursor {
@@ -3211,6 +4008,43 @@ h1, h2, h3, h4, h5, h6 {
 
 .ai-settings-row > div {
   flex: 1;
+}
+
+.ai-settings-theme-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.ai-settings-theme-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  border-radius: var(--radius-md);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ai-settings-theme-btn:hover {
+  color: var(--text-secondary);
+  border-color: var(--panel-border-hover);
+}
+
+.ai-settings-theme-btn.active {
+  color: var(--color-primary-400);
+  border-color: var(--color-primary-400);
+  background: oklch(0.55 0.15 255 / 0.1);
+}
+
+.ai-settings-theme-btn:active {
+  transform: scale(0.95);
+  transition-duration: 0.07s;
 }
 
 /* Message Thinking Block */
@@ -7333,6 +8167,69 @@ code.lease-card-mono {
   display: none;
 }
 
+/* Tablet: collapsed icon sidebar, expands on hover */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .main-layout__sidebar {
+    width: 56px;
+    overflow: hidden;
+    transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .main-layout__sidebar:hover {
+    width: 280px;
+  }
+
+  /* Keep inner content at full width so hover reveals it cleanly */
+  .apps-sidebar {
+    width: 280px;
+  }
+
+  /* Hide text when collapsed, reveal on hover */
+  .main-layout__sidebar .apps-sidebar__wallet-details,
+  .main-layout__sidebar .apps-sidebar__disconnect,
+  .main-layout__sidebar .apps-sidebar__credits-amount,
+  .main-layout__sidebar .apps-sidebar__credits-runway,
+  .main-layout__sidebar .apps-sidebar__gauge,
+  .main-layout__sidebar .apps-sidebar__credits-header span,
+  .main-layout__sidebar .apps-sidebar__apps-header span,
+  .main-layout__sidebar .apps-sidebar__apps-empty,
+  .main-layout__sidebar .apps-sidebar__app-name,
+  .main-layout__sidebar .apps-sidebar__app-size,
+  .main-layout__sidebar .apps-sidebar__recent-header span,
+  .main-layout__sidebar .apps-sidebar__recent-name,
+  .main-layout__sidebar .apps-sidebar__recent-time,
+  .main-layout__sidebar .apps-sidebar__recent-redeploy {
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  .main-layout__sidebar:hover .apps-sidebar__wallet-details,
+  .main-layout__sidebar:hover .apps-sidebar__disconnect,
+  .main-layout__sidebar:hover .apps-sidebar__credits-amount,
+  .main-layout__sidebar:hover .apps-sidebar__credits-runway,
+  .main-layout__sidebar:hover .apps-sidebar__gauge,
+  .main-layout__sidebar:hover .apps-sidebar__credits-header span,
+  .main-layout__sidebar:hover .apps-sidebar__apps-header span,
+  .main-layout__sidebar:hover .apps-sidebar__apps-empty,
+  .main-layout__sidebar:hover .apps-sidebar__app-name,
+  .main-layout__sidebar:hover .apps-sidebar__app-size,
+  .main-layout__sidebar:hover .apps-sidebar__recent-header span,
+  .main-layout__sidebar:hover .apps-sidebar__recent-name,
+  .main-layout__sidebar:hover .apps-sidebar__recent-time,
+  .main-layout__sidebar:hover .apps-sidebar__recent-redeploy {
+    opacity: 1;
+  }
+
+  /* Center icons when collapsed */
+  .main-layout__sidebar .apps-sidebar__wallet {
+    justify-content: center;
+  }
+
+  .main-layout__sidebar:hover .apps-sidebar__wallet {
+    justify-content: space-between;
+  }
+}
+
 @media (max-width: 768px) {
   .main-layout__sidebar {
     position: fixed;
@@ -7368,6 +8265,48 @@ code.lease-card-mono {
     opacity: 1;
     pointer-events: auto;
   }
+}
+
+/* Keyboard Shortcuts */
+.shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.shortcuts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.375rem 0;
+}
+
+.shortcuts-keys {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.shortcuts-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-700);
+  border: 1px solid var(--color-surface-600);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  box-shadow: 0 1px 0 var(--color-surface-600);
+}
+
+.shortcuts-label {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
 }
 
 /* ============================================
@@ -7492,6 +8431,10 @@ code.lease-card-mono {
   margin-top: 0.25rem;
 }
 
+.apps-sidebar__burn-rate {
+  color: var(--text-dim);
+}
+
 .apps-sidebar__gauge {
   height: 4px;
   background: var(--color-surface-700);
@@ -7531,6 +8474,16 @@ code.lease-card-mono {
   border-radius: var(--radius-full);
   background: var(--color-surface-700);
   font-size: 0.6875rem;
+}
+
+.apps-sidebar__apps-count--pop {
+  animation: badgePop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes badgePop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.3); }
+  100% { transform: scale(1); }
 }
 
 .apps-sidebar__apps-list {
@@ -7577,6 +8530,77 @@ code.lease-card-mono {
 .apps-sidebar__app-size {
   font-size: 0.6875rem;
   color: var(--text-dim);
+}
+
+/* Recent deploys */
+.apps-sidebar__recent {
+  display: flex;
+  flex-direction: column;
+}
+
+.apps-sidebar__recent-header {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+}
+
+.apps-sidebar__recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.apps-sidebar__recent-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.375rem;
+  border-radius: var(--radius-md);
+  font-size: 0.75rem;
+}
+
+.apps-sidebar__recent-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.apps-sidebar__recent-time {
+  font-size: 0.625rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.apps-sidebar__recent-redeploy {
+  padding: 0.25rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.apps-sidebar__recent-item:hover .apps-sidebar__recent-redeploy {
+  opacity: 1;
+}
+
+.apps-sidebar__recent-redeploy:hover {
+  color: var(--color-primary-400);
+}
+
+.apps-sidebar__recent-redeploy:active {
+  transform: scale(0.9);
+  transition: transform 0.07s ease;
 }
 
 
@@ -7640,6 +8664,32 @@ code.lease-card-mono {
   font-size: 0.6875rem;
   color: var(--text-dim);
   font-family: var(--font-mono);
+}
+
+.progress-card__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.75rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--radius-md);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-primary-400);
+  background: oklch(0.55 0.15 255 / 0.1);
+  border: 1px solid oklch(0.55 0.15 255 / 0.25);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.progress-card__retry:hover {
+  background: oklch(0.55 0.15 255 / 0.2);
+  border-color: var(--color-primary-400);
+}
+
+.progress-card__retry:active {
+  transform: scale(0.95);
+  transition-duration: 0.07s;
 }
 
 .progress-card__batch {

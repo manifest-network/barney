@@ -53,6 +53,27 @@ export function toHex(bytes: Uint8Array): string {
     .join('');
 }
 
+const PASSWORD_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+/**
+ * Generates a cryptographically secure random password.
+ * Uses alphanumeric characters only to avoid shell/env escaping issues.
+ */
+export function generatePassword(length = 16): string {
+  const limit = 256 - (256 % PASSWORD_CHARS.length); // 248 — reject bytes >= limit to eliminate modular bias
+  const result: string[] = [];
+  while (result.length < length) {
+    const bytes = new Uint8Array(length - result.length);
+    crypto.getRandomValues(bytes);
+    for (const b of bytes) {
+      if (b < limit && result.length < length) {
+        result.push(PASSWORD_CHARS[b % PASSWORD_CHARS.length]);
+      }
+    }
+  }
+  return result.join('');
+}
+
 /**
  * Maximum payload size in bytes (5KB).
  */

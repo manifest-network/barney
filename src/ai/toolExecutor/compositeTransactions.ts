@@ -456,7 +456,8 @@ export async function executeConfirmedDeployApp(
     return { success: false, error: 'Lease created but could not extract UUID. Check your leases manually.' };
   }
 
-  // Add to registry
+  // Add to registry (store manifest for re-deploy)
+  const manifestJson = new TextDecoder().decode(payload.bytes);
   appRegistry.addApp(address, {
     name,
     leaseUuid,
@@ -465,6 +466,7 @@ export async function executeConfirmedDeployApp(
     providerUrl,
     createdAt: Date.now(),
     status: 'deploying',
+    manifest: manifestJson,
   });
 
   // Upload payload
@@ -1021,6 +1023,7 @@ export async function executeConfirmedBatchDeploy(
       providerUrl: entry.providerUrl,
       createdAt: Date.now(),
       status: 'deploying',
+      manifest: new TextDecoder().decode(entry.payload.bytes),
     });
 
     // Upload payload

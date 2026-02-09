@@ -19,6 +19,8 @@ export interface AppEntry {
   url?: string;
   connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string> };
   status: AppStatus;
+  /** Original manifest JSON, stored for re-deploy. */
+  manifest?: string;
 }
 
 /** Name validation: lowercase alphanumeric + hyphens, 1-32 chars, no leading/trailing hyphen */
