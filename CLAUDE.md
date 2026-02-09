@@ -55,18 +55,19 @@ The AI assistant uses a 3-layer architecture:
 1. **AIContext** (`src/contexts/AIContext.tsx`) - Manages chat state, streams from Ollama, executes tools
 2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser`
 3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
-   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_balance`, `browse_catalog`, `lease_history`, `cosmos_query`
+   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `cosmos_query`
    - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `cosmos_tx`
 
-### 10 Composite Tools
+### 11 Composite Tools
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `deploy_app(name?, size?)` | TX | Deploy from attached manifest. Defaults: size=small, name from filename |
+| `deploy_app(name?, size?)` | TX | Deploy from attached manifest. Defaults: size=micro, name from filename |
 | `stop_app(name)` | TX | Stop app by name (closes lease on-chain) |
 | `fund_credits(amount)` | TX | Add credits in display units |
 | `list_apps(state?)` | Query | List apps filtered by state (default: running) |
 | `app_status(name)` | Query | Detailed status: registry + chain + fred |
+| `get_logs(name, tail?)` | Query | Container logs for a running app |
 | `get_balance()` | Query | Credits, spending rate, time remaining |
 | `browse_catalog()` | Query | Providers + SKU tiers with health checks |
 | `lease_history(state?, limit?, offset?)` | Query | Paginated on-chain lease history with state filtering |

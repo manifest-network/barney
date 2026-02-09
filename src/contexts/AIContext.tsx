@@ -1029,19 +1029,37 @@ export function AIProvider({ children }: { children: ReactNode }) {
       addMessage(userMessage);
       setDeployProgress(null);
 
-      // 2. Add tool message (validation in progress)
+      // 2. Add synthetic assistant message with tool_calls so the LLM
+      //    sees a well-formed conversation when summarizing after confirmation.
+      //    Without this, the tool result message has no preceding assistant
+      //    tool_calls and the LLM ignores it.
+      const syntheticToolCallId = generateMessageId();
+      addMessage({
+        id: generateMessageId(),
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        toolCalls: [{
+          id: syntheticToolCallId,
+          type: 'function',
+          function: { name: 'batch_deploy', arguments: {} },
+        }],
+      });
+
+      // 3. Add tool message (validation in progress) with matching toolCallId
       const toolMsgId = generateMessageId();
       addMessage({
         id: toolMsgId,
         role: 'tool',
         content: 'Validating batch deploy...',
         toolName: 'batch_deploy',
+        toolCallId: syntheticToolCallId,
         toolDescription: `Deploying ${names.join(', ')}`,
         timestamp: Date.now(),
         isStreaming: true,
       });
 
-      // 3. Create payloads for each app
+      // 4. Create payloads for each app
       const entries = await Promise.all(apps.map(async (app) => {
         const filename = `manifest-${app.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}.json`;
         const blob = new Blob([JSON.stringify(app.manifest, null, 2)], { type: 'application/json' });
@@ -1054,7 +1072,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         };
       }));
 
-      // 4. Run pre-validation
+      // 5. Run pre-validation
       const result = await executeBatchDeploy(entries, {
         clientManager: clientManagerRef.current,
         address: addressRef.current,
@@ -1070,7 +1088,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         },
       });
 
-      // 5. Handle result
+      // 6. Handle result
       if (result.requiresConfirmation) {
         setPendingConfirmation({
           id: generateMessageId(),

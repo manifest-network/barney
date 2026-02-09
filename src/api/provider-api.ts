@@ -110,9 +110,18 @@ export interface PortMapping {
 /**
  * Connection details returned by the provider API.
  */
+export interface InstanceInfo {
+  instance_index: number;
+  container_id: string;
+  image: string;
+  status: string;
+  ports?: Record<string, PortMapping>;
+}
+
 export interface ConnectionDetails {
   host: string;
   ports?: Record<string, PortMapping>;
+  instances?: InstanceInfo[];
   protocol?: string;
   metadata?: Record<string, string>;
 }

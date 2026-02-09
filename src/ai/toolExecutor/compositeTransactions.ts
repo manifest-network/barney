@@ -8,7 +8,7 @@ import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { createSignMessage, createAuthToken, getLeaseConnectionInfo } from '../../api/provider-api';
-import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, type TerminalChainState } from '../../api/fred';
+import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
@@ -22,39 +22,154 @@ import type { ToolResult, ToolExecutorOptions, SignResult, PayloadAttachment } f
 
 /**
  * Build a clickable URL from connection info.
- * Adds http:// prefix if missing, includes port if non-standard (not 80/443).
+ * Adds protocol prefix if missing (https by default, http for localhost).
+ * Includes port if non-standard (not 80/443).
  */
+/**
+ * Extract port number from a port mapping value.
+ * Handles multiple formats the provider API may return:
+ *  - Our typed format:   { host_ip: "0.0.0.0", host_port: 12345 }
+ *  - Docker PascalCase:  { HostIp: "0.0.0.0", HostPort: "12345" }
+ *  - Docker array:       [{ HostIp: "0.0.0.0", HostPort: "12345" }]
+ *  - Plain number:       12345
+ */
+function extractPort(value: unknown): number | undefined {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') { const n = parseInt(value, 10); return isNaN(n) ? undefined : n; }
+
+  // Array — take first element
+  let obj = value;
+  if (Array.isArray(obj)) obj = obj[0];
+
+  if (obj && typeof obj === 'object') {
+    const rec = obj as Record<string, unknown>;
+    // snake_case (our interface)
+    if (rec.host_port != null) {
+      const n = typeof rec.host_port === 'number' ? rec.host_port : parseInt(String(rec.host_port), 10);
+      if (!isNaN(n)) return n;
+    }
+    // PascalCase (Docker native)
+    if (rec.HostPort != null) {
+      const n = typeof rec.HostPort === 'number' ? rec.HostPort : parseInt(String(rec.HostPort), 10);
+      if (!isNaN(n)) return n;
+    }
+  }
+  return undefined;
+}
+
 export function formatConnectionUrl(
   host: string | undefined,
-  connection?: { host: string; ports?: Record<string, { host_ip: string; host_port: number }> }
+  // Accept any shape — the port values may not match our PortMapping interface
+  connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string> }
 ): string | undefined {
   let url = host;
 
+  // Try port mappings — use port number but prefer connection.host (hostname) over host_ip (raw IP)
   if (connection?.ports) {
-    const firstPort = Object.values(connection.ports)[0];
-    if (firstPort) {
-      const h = firstPort.host_ip || connection.host || host;
+    const firstEntry = Object.values(connection.ports)[0];
+    const port = extractPort(firstEntry);
+    if (port != null) {
+      const h = connection.host || host;
       if (!h) return undefined;
-      const port = firstPort.host_port;
-      // Omit port for standard HTTP/HTTPS
+      // Strip any existing protocol from h before appending port
+      const bareHost = h.replace(/^https?:\/\//, '');
       if (port === 80 || port === 443) {
-        url = h;
+        url = bareHost;
       } else {
-        url = `${h}:${port}`;
+        url = `${bareHost}:${port}`;
       }
     }
+  }
+
+  // Fallback: check metadata for a URL hint
+  if (url === host && connection?.metadata?.url) {
+    url = connection.metadata.url;
   }
 
   if (!url) return undefined;
 
   // Add protocol if missing: https by default, http only for localhost/loopback
   if (!/^https?:\/\//i.test(url)) {
-    const hostPart = url.split(':')[0];
+    // Strip protocol-detection to the hostname (before any port)
+    const hostPart = url.replace(/:\d+$/, '');
     const isLocal = hostPart === 'localhost' || hostPart === '127.0.0.1' || hostPart === '::1';
     url = `${isLocal ? 'http' : 'https'}://${url}`;
   }
 
   return url;
+}
+
+/**
+ * Extract URL from fred status data (endpoints or instances).
+ * This data is already available from polling — no extra API call needed.
+ * Returns the first endpoint URL, or constructs one from instance ports + host.
+ */
+export function extractUrlFromFredStatus(
+  fredStatus: FredLeaseStatus,
+  host?: string
+): string | undefined {
+  // endpoints: Record<string, string> — full URLs like "http://host:port"
+  if (fredStatus.endpoints) {
+    const firstEndpoint = Object.values(fredStatus.endpoints)[0];
+    if (firstEndpoint) return firstEndpoint;
+  }
+
+  // instances: ports as Record<string, number> — just port numbers
+  if (fredStatus.instances && host) {
+    for (const instance of fredStatus.instances) {
+      if (instance.ports) {
+        const firstPort = Object.values(instance.ports)[0];
+        if (typeof firstPort === 'number') {
+          return `${host}:${firstPort}`;
+        }
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Resolve the app URL after successful deployment.
+ * Priority: info endpoint (has port mappings) > fred status > connection endpoint.
+ */
+async function resolveAppUrl(
+  providerUrl: string,
+  leaseUuid: string,
+  fredStatus: FredLeaseStatus,
+  address: string,
+  signArbitrary: ToolExecutorOptions['signArbitrary'],
+  logContext: string
+): Promise<{ url?: string; connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string> } }> {
+  // 1. Try connection endpoint (has proper host + port mappings)
+  if (signArbitrary) {
+    try {
+      const ts = Math.floor(Date.now() / 1000);
+      const msg = createSignMessage(address, leaseUuid, ts);
+      const sig: SignResult = await signArbitrary(address, msg);
+      const token = createAuthToken(address, leaseUuid, ts, sig.pub_key.value, sig.signature);
+      const connResponse = await getLeaseConnectionInfo(providerUrl, leaseUuid, token);
+      if (connResponse.connection) {
+        const connection = connResponse.connection;
+        // Ports may be at top level or nested inside instances[0].ports
+        const ports: Record<string, unknown> | undefined =
+          connection.ports ?? connection.instances?.[0]?.ports;
+        const withPorts = { ...connection, ports };
+        const url = formatConnectionUrl(connection.host, withPorts);
+        if (url) return { url, connection: withPorts };
+      }
+    } catch (error) {
+      logError(`${logContext}.connection`, error);
+    }
+  }
+
+  // 2. Fall back to fred status data (endpoints/instances)
+  const fredUrl = extractUrlFromFredStatus(fredStatus);
+  if (fredUrl) {
+    return { url: formatConnectionUrl(fredUrl) || fredUrl };
+  }
+
+  return {};
 }
 
 /**
@@ -410,36 +525,14 @@ export async function executeConfirmedDeployApp(
     });
 
     if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
-      // Fetch connection details from provider API
-      let appUrl: string | undefined;
-      let connection: { host: string; ports?: Record<string, { host_ip: string; host_port: number }> } | undefined;
-      try {
-        const infoTimestamp = Math.floor(Date.now() / 1000);
-        const infoSignMessage = createSignMessage(address, leaseUuid, infoTimestamp);
-        const infoSignResult: SignResult = await signArbitrary(address, infoSignMessage);
-        const infoAuthToken = createAuthToken(
-          address,
-          leaseUuid,
-          infoTimestamp,
-          infoSignResult.pub_key.value,
-          infoSignResult.signature
-        );
-        const connResponse = await getLeaseConnectionInfo(providerUrl, leaseUuid, infoAuthToken);
-        if (connResponse.connection) {
-          connection = connResponse.connection;
-          if (connResponse.connection.host) {
-            appUrl = connResponse.connection.host;
-          }
-        }
-      } catch (error) {
-        logError('compositeTransactions.executeConfirmedDeployApp.connection', error);
-      }
-
-      const connectionUrl = formatConnectionUrl(appUrl, connection);
+      const { url: connectionUrl, connection } = await resolveAppUrl(
+        providerUrl, leaseUuid, fredStatus, address, signArbitrary,
+        'compositeTransactions.executeConfirmedDeployApp'
+      );
 
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
-        url: appUrl,
+        url: connectionUrl,
         connection,
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
@@ -449,7 +542,7 @@ export async function executeConfirmedDeployApp(
         data: {
           message: `App "${name}" is live!`,
           name,
-          url: connectionUrl || appUrl,
+          url: connectionUrl,
           connection,
           status: 'running',
         },
@@ -636,38 +729,17 @@ export async function deploySingleApp(
     });
 
     if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
-      let appUrl: string | undefined;
-      let connection: { host: string; ports?: Record<string, { host_ip: string; host_port: number }> } | undefined;
-      try {
-        const infoTimestamp = Math.floor(Date.now() / 1000);
-        const infoSignMessage = createSignMessage(address, leaseUuid, infoTimestamp);
-        const infoSignResult: SignResult = await signArbitrary(address, infoSignMessage);
-        const infoAuthToken = createAuthToken(
-          address,
-          leaseUuid,
-          infoTimestamp,
-          infoSignResult.pub_key.value,
-          infoSignResult.signature
-        );
-        const connResponse = await getLeaseConnectionInfo(providerUrl, leaseUuid, infoAuthToken);
-        if (connResponse.connection) {
-          connection = connResponse.connection;
-          if (connResponse.connection.host) {
-            appUrl = connResponse.connection.host;
-          }
-        }
-      } catch (error) {
-        logError('deploySingleApp.connection', error);
-      }
+      const { url: connectionUrl, connection } = await resolveAppUrl(
+        providerUrl, leaseUuid, fredStatus, address, signArbitrary,
+        'deploySingleApp'
+      );
 
-      const connectionUrl = formatConnectionUrl(appUrl, connection);
-
-      appRegistry.updateApp(address, leaseUuid, { status: 'running', url: appUrl, connection });
+      appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection });
       onProgress({ phase: 'ready', detail: 'App is live!' });
 
       return {
         success: true,
-        data: { message: `App "${name}" is live!`, name, url: connectionUrl || appUrl, connection, status: 'running' },
+        data: { message: `App "${name}" is live!`, name, url: connectionUrl, connection, status: 'running' },
       };
     }
 
@@ -1014,29 +1086,15 @@ export async function executeConfirmedBatchDeploy(
           });
 
           if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
-            // Fetch connection info
-            let appUrl: string | undefined;
-            let connection: { host: string; ports?: Record<string, { host_ip: string; host_port: number }> } | undefined;
-            try {
-              const infoTs = Math.floor(Date.now() / 1000);
-              const infoMsg = createSignMessage(address, leaseUuid, infoTs);
-              const infoSig: SignResult = await signArbitrary(address, infoMsg);
-              const infoToken = createAuthToken(address, leaseUuid, infoTs, infoSig.pub_key.value, infoSig.signature);
-              const connResponse = await getLeaseConnectionInfo(providerUrl, leaseUuid, infoToken);
-              if (connResponse.connection) {
-                connection = connResponse.connection;
-                if (connResponse.connection.host) appUrl = connResponse.connection.host;
-              }
-            } catch (error) {
-              logError('executeConfirmedBatchDeploy.connection', error);
-            }
+            const { url: connectionUrl, connection } = await resolveAppUrl(
+              providerUrl, leaseUuid, fredStatus, address, signArbitrary,
+              'executeConfirmedBatchDeploy'
+            );
 
-            const connectionUrl = formatConnectionUrl(appUrl, connection);
-
-            appRegistry.updateApp(address, leaseUuid, { status: 'running', url: appUrl, connection });
+            appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection });
             batchProgress[idx] = { name, phase: 'ready', detail: 'App is live!' };
             emitProgress();
-            return { name, success: true as const, url: connectionUrl || appUrl };
+            return { name, success: true as const, url: connectionUrl };
           }
 
           if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
@@ -1088,7 +1146,7 @@ export async function executeConfirmedBatchDeploy(
 
   const parts: string[] = [];
   if (deployed.length > 0) {
-    const lines = deployed.map((d) => d.url ? `${d.name}: [${d.url}](${d.url})` : d.name);
+    const lines = deployed.map((d) => d.url ? `${d.name}: ${d.url}` : d.name);
     parts.push(`Deployed:\n${lines.map((l) => `- ${l}`).join('\n')}`);
   }
   if (failed.length > 0) parts.push(`Failed: ${failed.join(', ')}.`);

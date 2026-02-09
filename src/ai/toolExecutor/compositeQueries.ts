@@ -18,6 +18,7 @@ import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo, createSignMessage, createAuthToken } from '../../api/provider-api';
 import { getLeaseStatus, getLeaseLogs } from '../../api/fred';
+import { formatConnectionUrl } from './compositeTransactions';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
@@ -197,15 +198,8 @@ export async function executeAppStatus(
     }
   }
 
-  // Build a clickable connection URL from host + first port mapping
-  let connectionUrl = appUrl;
-  if (appConnection?.ports) {
-    const firstPort = Object.values(appConnection.ports)[0];
-    if (firstPort) {
-      const host = firstPort.host_ip || appConnection.host || appUrl;
-      connectionUrl = `${host}:${firstPort.host_port}`;
-    }
-  }
+  // Build a clickable connection URL from host + port mappings
+  const connectionUrl = formatConnectionUrl(appUrl, appConnection) || appUrl;
 
   return {
     success: true,

@@ -17,7 +17,7 @@ export interface AppEntry {
   providerUrl: string;
   createdAt: number;
   url?: string;
-  connection?: { host: string; ports?: Record<string, { host_ip: string; host_port: number }> };
+  connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string> };
   status: AppStatus;
 }
 

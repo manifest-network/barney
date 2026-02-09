@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   deriveAppName,
+  formatConnectionUrl,
+  extractUrlFromFredStatus,
   executeDeployApp,
   executeConfirmedDeployApp,
   executeStopApp,
@@ -166,6 +168,107 @@ describe('deriveAppName', () => {
   });
 });
 
+describe('extractUrlFromFredStatus', () => {
+  it('returns first endpoint URL', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      endpoints: { '8080/tcp': 'http://1.2.3.4:32456' },
+    })).toBe('http://1.2.3.4:32456');
+  });
+
+  it('returns undefined when no endpoints', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    })).toBeUndefined();
+  });
+
+  it('returns undefined for empty endpoints', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      endpoints: {},
+    })).toBeUndefined();
+  });
+
+  it('extracts URL from instances ports + host', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': 32456 } }],
+    }, '1.2.3.4')).toBe('1.2.3.4:32456');
+  });
+
+  it('prefers endpoints over instances', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      endpoints: { '8080/tcp': 'http://1.2.3.4:11111' },
+      instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': 22222 } }],
+    }, '1.2.3.4')).toBe('http://1.2.3.4:11111');
+  });
+});
+
+describe('formatConnectionUrl', () => {
+  it('adds https for non-local hosts', () => {
+    expect(formatConnectionUrl('example.com')).toBe('https://example.com');
+  });
+
+  it('adds http for localhost', () => {
+    expect(formatConnectionUrl('localhost:8080')).toBe('http://localhost:8080');
+  });
+
+  it('adds http for 127.0.0.1', () => {
+    expect(formatConnectionUrl('127.0.0.1:12345')).toBe('http://127.0.0.1:12345');
+  });
+
+  it('preserves existing protocol', () => {
+    expect(formatConnectionUrl('https://example.com:443')).toBe('https://example.com:443');
+  });
+
+  it('extracts port from connection.ports with host', () => {
+    expect(formatConnectionUrl('1.2.3.4', {
+      host: '1.2.3.4',
+      ports: { '8080/tcp': { host_ip: '1.2.3.4', host_port: 32456 } },
+    })).toBe('https://1.2.3.4:32456');
+  });
+
+  it('prefers connection.host over host_ip', () => {
+    expect(formatConnectionUrl('fallback', {
+      host: 'https://my-app.example.com',
+      ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 12345 } },
+    })).toBe('https://my-app.example.com:12345');
+  });
+
+  it('omits port for standard 80/443', () => {
+    expect(formatConnectionUrl('example.com', {
+      host: 'example.com',
+      ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 443 } },
+    })).toBe('https://example.com');
+  });
+
+  it('returns undefined when no host', () => {
+    expect(formatConnectionUrl(undefined)).toBeUndefined();
+  });
+
+  it('handles Docker PascalCase port format', () => {
+    expect(formatConnectionUrl('127.0.0.1', {
+      host: '127.0.0.1',
+      ports: { '8080/tcp': { HostIp: '0.0.0.0', HostPort: '32456' } },
+    })).toBe('http://127.0.0.1:32456');
+  });
+
+  it('handles Docker array port format', () => {
+    expect(formatConnectionUrl('127.0.0.1', {
+      host: '127.0.0.1',
+      ports: { '8080/tcp': [{ HostIp: '0.0.0.0', HostPort: '32789' }] },
+    })).toBe('http://127.0.0.1:32789');
+  });
+
+  it('handles plain number port format', () => {
+    expect(formatConnectionUrl('127.0.0.1', {
+      host: '127.0.0.1',
+      ports: { '8080/tcp': 12345 },
+    })).toBe('http://127.0.0.1:12345');
+  });
+});
+
 describe('executeDeployApp', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -231,7 +334,7 @@ describe('executeDeployApp', () => {
 describe('executeConfirmedDeployApp', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('creates lease, uploads, and polls to ready using connection endpoint for URL', async () => {
+  it('creates lease, uploads, and polls to ready — extracts port from instances', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
     vi.mocked(pollLeaseUntilReady).mockResolvedValue({
@@ -242,8 +345,8 @@ describe('executeConfirmedDeployApp', () => {
       tenant: ADDRESS,
       provider_uuid: 'p1',
       connection: {
-        host: 'https://app.example.com',
-        ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 12345 } },
+        host: '127.0.0.1',
+        instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }],
       },
     });
 
@@ -260,8 +363,7 @@ describe('executeConfirmedDeployApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect((result.data as any).url).toBe('https://1.2.3.4:12345');
-    expect((result.data as any).connection.ports['80/tcp'].host_port).toBe(12345);
+    expect((result.data as any).url).toBe('http://127.0.0.1:32456');
     expect(onProgress).toHaveBeenCalled();
     expect(registry.addApp).toHaveBeenCalled();
     expect(getLeaseConnectionInfo).toHaveBeenCalled();
@@ -270,6 +372,55 @@ describe('executeConfirmedDeployApp', () => {
     const pollCall = vi.mocked(pollLeaseUntilReady).mock.calls[0];
     expect(pollCall[3]).toHaveProperty('getAuthToken');
     expect(typeof pollCall[3]!.getAuthToken).toBe('function');
+  });
+
+  it('creates lease, uploads, and polls to ready — extracts port from top-level ports', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: '127.0.0.1',
+        ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+      },
+    });
+
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).url).toBe('http://127.0.0.1:32456');
+  });
+
+  it('falls back to fred status when connection endpoint fails', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      endpoints: { '80/tcp': 'http://1.2.3.4:32456' },
+    });
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('connection endpoint failed'));
+
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).url).toBe('http://1.2.3.4:32456');
   });
 
   it('handles lease creation failure', async () => {
@@ -408,7 +559,7 @@ describe('executeConfirmedDeployApp', () => {
     );
   });
 
-  it('succeeds without URL when connection endpoint fails', async () => {
+  it('succeeds without URL when connection endpoint fails and fred has no endpoints', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
     vi.mocked(pollLeaseUntilReady).mockResolvedValue({
@@ -635,7 +786,7 @@ describe('executeConfirmedBatchDeploy', () => {
       lease_uuid: 'new-lease-uuid',
       tenant: ADDRESS,
       provider_uuid: 'p1',
-      connection: { host: 'https://app.example.com' },
+      connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
     });
 
     const onProgress = vi.fn();
@@ -690,7 +841,7 @@ describe('executeConfirmedBatchDeploy', () => {
       lease_uuid: 'new-lease-uuid',
       tenant: ADDRESS,
       provider_uuid: 'p1',
-      connection: { host: 'https://app.example.com' },
+      connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
     });
 
     const registry = makeRegistry();

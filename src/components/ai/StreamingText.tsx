@@ -10,7 +10,7 @@ function linkify(text: string): ReactNode[] {
 
   for (const match of text.matchAll(URL_REGEX)) {
     const raw = match[0];
-    const index = match.index;
+    const index = match.index ?? 0;
     if (index > lastIndex) {
       parts.push(text.slice(lastIndex, index));
     }
