@@ -143,7 +143,7 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 - **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
 - **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
 - **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs.
-- **Stream timeout**: `processStreamWithTimeout` in AIContext wraps the Ollama async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely.
+- **Stream timeout**: `processStreamWithTimeout` in `src/ai/streamUtils.ts` wraps the Ollama async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely.
 - **Message debouncing**: AIContext debounces rapid message sends via `AI_MESSAGE_DEBOUNCE_MS` (300ms) and aborts in-flight streams when a new message is sent.
 - **Chat persistence**: AIContext persists settings and chat history to localStorage (`barney-ai-settings`, `barney-ai-history`). History is validated and sanitized on load; corrupted data is cleared. Streaming messages are excluded from persistence.
 - **Confirmation timeout**: Pending transaction confirmations auto-cancel after `AI_CONFIRMATION_TIMEOUT_MS` (5 minutes) to prevent stuck UI state.

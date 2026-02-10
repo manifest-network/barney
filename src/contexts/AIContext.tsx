@@ -173,7 +173,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
       pendingPayloadRef.current = attachment;
       setPendingPayload(attachment);
       return {};
-    } catch {
+    } catch (error) {
+      logError('AIContext.attachPayload', error);
       return { error: 'Failed to read file' };
     }
   }, []);
@@ -629,6 +630,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         isStreaming: false,
       });
     } catch (error) {
+      logError('AIContext.confirmAction', error);
       const errorMessage = error instanceof Error && error.message.includes('timeout')
         ? 'The AI server took too long to respond. The transaction may have completed - please check your wallet.'
         : `Error executing transaction: ${error instanceof Error ? error.message : 'Unknown error'}`;
@@ -700,6 +702,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
     isStreamingRef.current = true;
     setIsStreaming(true);
 
+    let toolMsgId: string | undefined;
     try {
       const names = apps.map((a) => a.label);
       const userMessage: ChatMessage = {
@@ -726,7 +729,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         }],
       });
 
-      const toolMsgId = generateMessageId();
+      toolMsgId = generateMessageId();
       addMessage({
         id: toolMsgId,
         role: 'tool',
@@ -780,6 +783,13 @@ export function AIProvider({ children }: { children: ReactNode }) {
       }
     } catch (error) {
       logError('AIContext.requestBatchDeploy', error);
+      if (toolMsgId) {
+        updateMessageById(toolMsgId, {
+          content: `Batch deploy failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          isStreaming: false,
+        });
+      }
     } finally {
       isStreamingRef.current = false;
       setIsStreaming(false);
