@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 
-// Matches http(s):// URLs or bare host:port (IP or hostname with port number)
+// Matches http(s):// URLs or bare IPv4:port (e.g., 192.168.1.1:8080)
 const URL_REGEX = /(https?:\/\/[^\s<>)"']+|\b\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}\b)/g;
 
 /** Split text into plain strings and clickable links. */

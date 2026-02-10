@@ -1,5 +1,4 @@
-import { useRef, useEffect } from 'react';
-import type { RefObject } from 'react';
+import { useRef, useEffect, type RefObject } from 'react';
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',

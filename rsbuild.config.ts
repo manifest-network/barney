@@ -20,10 +20,14 @@ function isValidProxyTarget(target: string): boolean {
     const hostname = url.hostname;
 
     // Block internal hostname patterns (cloud metadata services)
+    // and DNS-to-IP mapping services that can bypass IP-literal checks
     if (/^metadata\./i.test(hostname) ||
         /^instance-data\./i.test(hostname) ||
         hostname.endsWith('.internal') ||
-        hostname.endsWith('.localdomain')) {
+        hostname.endsWith('.localdomain') ||
+        /\.nip\.io$/i.test(hostname) ||
+        /\.xip\.io$/i.test(hostname) ||
+        /\.sslip\.io$/i.test(hostname)) {
       return false;
     }
 

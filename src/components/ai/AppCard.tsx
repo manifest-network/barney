@@ -3,9 +3,8 @@
  * Shows app name, URL, status, cost info with action buttons.
  */
 
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { ExternalLink, Copy, Square, CheckCircle } from 'lucide-react';
-import { useState } from 'react';
 import { COPY_FEEDBACK_DURATION_MS } from '../../config/constants';
 
 interface AppCardProps {

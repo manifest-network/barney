@@ -1,6 +1,6 @@
 import { useState, memo, useMemo } from 'react';
 import { User, Bot, Wrench, AlertCircle, Brain, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react';
-import type { ChatMessage } from '../../contexts/AIContext';
+import type { ChatMessage } from '../../contexts/aiTypes';
 import { StreamingText } from './StreamingText';
 import { LogCard } from './LogCard';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
