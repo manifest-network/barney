@@ -58,6 +58,7 @@ export function ChatPanel() {
     attachPayload,
     clearPayload,
     requestBatchDeploy,
+    retryDeploy,
   } = useAI();
 
   const [input, setInput] = useState('');
@@ -364,12 +365,7 @@ export function ChatPanel() {
             {deployProgress && !pendingConfirmation && (
               <ProgressCard
                 progress={deployProgress}
-                onRetry={deployProgress.phase === 'failed' ? () => {
-                  const lastDeploy = [...messages].reverse().find(
-                    (m) => m.role === 'user' && /deploy\b/i.test(m.content)
-                  );
-                  if (lastDeploy) sendMessage(lastDeploy.content);
-                } : undefined}
+                onRetry={deployProgress.phase === 'failed' ? retryDeploy : undefined}
               />
             )}
           </>

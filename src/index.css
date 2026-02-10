@@ -622,14 +622,12 @@ html[data-theme="retro"] body::after {
   z-index: 1;
 }
 
-[data-theme="retro"] .chat-panel-header,
 [data-theme="retro"] .ai-settings-header,
 [data-theme="retro"] .sidebar-header,
 [data-theme="retro"] .section-header {
   position: relative;
 }
 
-[data-theme="retro"] .chat-panel-header::after,
 [data-theme="retro"] .ai-settings-header::after,
 [data-theme="retro"] .sidebar-header::after,
 [data-theme="retro"] .section-header::after {
@@ -648,12 +646,10 @@ html[data-theme="retro"] body::after {
   pointer-events: none;
 }
 
-[data-theme="retro"] .chat-input-form,
 [data-theme="retro"] .sidebar-footer {
   position: relative;
 }
 
-[data-theme="retro"] .chat-input-form::after,
 [data-theme="retro"] .sidebar-footer::after {
   content: '';
   position: absolute;
@@ -717,11 +713,9 @@ html[data-theme="retro"] body::after {
 /* Accessibility — disable neon animations for reduced motion preference */
 @media (prefers-reduced-motion: reduce) {
   [data-theme="retro"] .main-layout__sidebar::after,
-  [data-theme="retro"] .chat-panel-header::after,
   [data-theme="retro"] .ai-settings-header::after,
   [data-theme="retro"] .sidebar-header::after,
   [data-theme="retro"] .section-header::after,
-  [data-theme="retro"] .chat-input-form::after,
   [data-theme="retro"] .sidebar-footer::after,
   [data-theme="retro"] .chat-panel-title,
   [data-theme="retro"] .landing-title {
@@ -3494,7 +3488,6 @@ h1, h2, h3, h4, h5, h6 {
   align-items: center;
   justify-content: space-between;
   padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--panel-border);
   flex-shrink: 0;
 }
 
@@ -4068,8 +4061,8 @@ h1, h2, h3, h4, h5, h6 {
 /* Input Area */
 .chat-input-form {
   padding: 1rem;
-  border-top: 1px solid var(--panel-border);
   flex-shrink: 0;
+  background: oklch(0.14 0.02 260 / 0.6);
 }
 
 .chat-input-wrapper {
@@ -4086,8 +4079,8 @@ h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-sans);
   font-size: 0.875rem;
   color: var(--text-primary);
-  background: oklch(0.12 0.02 260 / 0.6);
-  border: 1px solid var(--panel-border);
+  background: oklch(0.16 0.02 260 / 0.8);
+  border: 1px solid oklch(0.35 0.03 260 / 0.6);
   border-radius: var(--radius-lg);
   outline: none;
   resize: none;
@@ -4134,7 +4127,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .chat-send-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.6;
   cursor: not-allowed;
 }
 
@@ -4143,9 +4136,9 @@ h1, h2, h3, h4, h5, h6 {
   width: 2.5rem;
   height: 2.5rem;
   border-radius: var(--radius-lg);
-  background: transparent;
-  border: 1px solid var(--panel-border);
-  color: var(--text-muted);
+  background: oklch(0.16 0.02 260 / 0.8);
+  border: 1px solid oklch(0.35 0.03 260 / 0.6);
+  color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;

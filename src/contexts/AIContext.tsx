@@ -69,6 +69,7 @@ export interface AIContextType {
   attachPayload: (file: File) => Promise<{ error?: string }>;
   clearPayload: () => void;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
+  retryDeploy: () => void;
 }
 
 export function AIProvider({ children }: { children: ReactNode }) {
@@ -587,6 +588,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
         action.payload
       );
 
+      // Preserve the payload on deploy progress so retry can restore it
+      if (!result.success && action.payload) {
+        setDeployProgress(prev => prev ? { ...prev, payload: action.payload } : null);
+      }
+
       const resultContent = JSON.stringify({
         success: result.success,
         data: result.data,
@@ -635,6 +641,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
         ? 'The AI server took too long to respond. The transaction may have completed - please check your wallet.'
         : `Error executing transaction: ${error instanceof Error ? error.message : 'Unknown error'}`;
 
+      // Preserve the payload on deploy progress so retry can restore it
+      if (action.payload) {
+        setDeployProgress(prev => prev ? { ...prev, payload: action.payload } : null);
+      }
+
       updateMessageById(messageId, {
         content: errorMessage,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -668,6 +679,28 @@ export function AIProvider({ children }: { children: ReactNode }) {
       return updated;
     });
   }, [pendingConfirmation, setMessages, messagesRef]);
+
+  // --- Retry failed deploy ---
+
+  const retryDeploy = useCallback(() => {
+    if (!deployProgress?.payload || isStreamingRef.current) return;
+
+    // Restore the payload from the failed deploy progress
+    const payload = deployProgress.payload;
+    pendingPayloadRef.current = payload;
+    setPendingPayload(payload);
+
+    // Clear the failed deploy progress
+    setDeployProgress(null);
+
+    // Find the last deploy user message and re-send it
+    const lastDeploy = [...messagesRef.current].reverse().find(
+      (m) => m.role === 'user' && /deploy\b/i.test(m.content)
+    );
+    if (lastDeploy) {
+      sendMessage(lastDeploy.content);
+    }
+  }, [deployProgress, sendMessage, messagesRef]);
 
   // Auto-cancel pending confirmations after timeout to prevent indefinite waiting
   useEffect(() => {
@@ -822,6 +855,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       attachPayload,
       clearPayload,
       requestBatchDeploy,
+      retryDeploy,
     }),
     [
       isOpen,
@@ -845,6 +879,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       attachPayload,
       clearPayload,
       requestBatchDeploy,
+      retryDeploy,
     ]
   );
 
