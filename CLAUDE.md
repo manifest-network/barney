@@ -62,24 +62,28 @@ The AI assistant uses a 3-layer architecture:
 1. **AIContext** (`src/contexts/AIContext.tsx`) - Manages chat state, streams from Ollama, executes tools
 2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser`
 3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
-   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`
-   - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`
+   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`
+   - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`
    - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
    - **Internal**: `batch_deploy` — orchestrates multi-app deploys from the UI (not exposed to AI, used by `requestBatchDeploy` in AIContext)
 
-### 11 Composite Tools
+### 15 Composite Tools
 
 | Tool | Type | Description |
 |------|------|-------------|
 | `deploy_app(app_name?, size?)` | TX | Deploy from attached manifest. Defaults: size=micro, name from filename |
 | `stop_app(app_name)` | TX | Stop app by name (closes lease on-chain) |
 | `fund_credits(amount)` | TX | Add credits in display units |
+| `restart_app(app_name)` | TX | Restart a running app |
+| `update_app(app_name)` | TX | Update app with new manifest (requires file attachment) |
 | `list_apps(state?)` | Query | List apps filtered by state (default: running) |
 | `app_status(app_name)` | Query | Detailed status: registry + chain + fred |
 | `get_logs(app_name, tail?)` | Query | Container logs for a running app |
 | `get_balance()` | Query | Credits, spending rate, time remaining |
 | `browse_catalog()` | Query | Providers + SKU tiers with health checks |
 | `lease_history(state?, limit?, offset?)` | Query | Paginated on-chain lease history with state filtering |
+| `app_diagnostics(app_name)` | Query | Provision diagnostics: status, fail count, last error |
+| `app_releases(app_name)` | Query | Release/version history for an app |
 | `cosmos_query(module, subcommand, args?)` | Query | Raw chain query escape hatch |
 | `cosmos_tx(module, subcommand, args)` | TX | Raw chain TX escape hatch |
 
@@ -102,6 +106,7 @@ Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
 
 `src/ai/progress.ts` defines `DeployProgress` with phases:
 `checking_credits → funding → creating_lease → uploading → provisioning → ready | failed`
+Additional phases for restart/update operations: `restarting`, `updating`
 
 Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored in AIContext as `deployProgress`, and rendered by `ProgressCard`. Batch deploys include a `batch` array with per-app progress.
 

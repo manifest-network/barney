@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getLeaseStatus, pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, getLeaseInfo } from './fred';
+import { getLeaseStatus, pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, getLeaseInfo, restartLease, updateLease, getLeaseReleases } from './fred';
 import { LeaseState } from './billing';
 import { ProviderApiError } from './provider-api';
 
@@ -510,5 +510,225 @@ describe('getLeaseInfo', () => {
 
     const fetchCall = vi.mocked(fetch).mock.calls[0];
     expect(fetchCall[1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
+  });
+});
+
+describe('restartLease', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends POST to restart endpoint', async () => {
+    mockFetchResponse({ status: 'restarting' });
+
+    const result = await restartLease(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(result.status).toBe('restarting');
+
+    const fetchCall = vi.mocked(fetch).mock.calls[0];
+    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/restart`);
+    expect(fetchCall[1]?.method).toBe('POST');
+    expect(fetchCall[1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
+  });
+
+  it('throws ProviderApiError on 409 (wrong state)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        statusText: 'Conflict',
+        text: () => Promise.resolve('lease is not running'),
+      })
+    );
+
+    await expect(restartLease(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
+      ProviderApiError
+    );
+  });
+
+  it('throws ProviderApiError on HTTP error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        text: () => Promise.resolve('server error'),
+      })
+    );
+
+    await expect(restartLease(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
+      ProviderApiError
+    );
+  });
+
+  it('throws ProviderApiError on invalid JSON', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.reject(new Error('invalid json')),
+      })
+    );
+
+    await expect(restartLease(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
+      'invalid JSON'
+    );
+  });
+});
+
+describe('updateLease', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends POST with payload to update endpoint', async () => {
+    mockFetchResponse({ status: 'updating' });
+
+    const payload = btoa('{"image":"nginx:latest"}');
+    const result = await updateLease(PROVIDER_URL, LEASE_UUID, payload, AUTH_TOKEN);
+    expect(result.status).toBe('updating');
+
+    const fetchCall = vi.mocked(fetch).mock.calls[0];
+    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/update`);
+    expect(fetchCall[1]?.method).toBe('POST');
+    expect(fetchCall[1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
+
+    const body = JSON.parse(fetchCall[1]?.body as string);
+    expect(body.payload).toBe(payload);
+  });
+
+  it('throws ProviderApiError on 409', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        statusText: 'Conflict',
+        text: () => Promise.resolve('lease is not running'),
+      })
+    );
+
+    await expect(updateLease(PROVIDER_URL, LEASE_UUID, 'payload', AUTH_TOKEN)).rejects.toThrow(
+      ProviderApiError
+    );
+  });
+
+  it('throws ProviderApiError on HTTP error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        text: () => Promise.resolve('server error'),
+      })
+    );
+
+    await expect(updateLease(PROVIDER_URL, LEASE_UUID, 'payload', AUTH_TOKEN)).rejects.toThrow(
+      ProviderApiError
+    );
+  });
+
+  it('throws ProviderApiError on invalid JSON', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.reject(new Error('invalid json')),
+      })
+    );
+
+    await expect(updateLease(PROVIDER_URL, LEASE_UUID, 'payload', AUTH_TOKEN)).rejects.toThrow(
+      'invalid JSON'
+    );
+  });
+});
+
+describe('getLeaseReleases', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns releases response', async () => {
+    const response = {
+      lease_uuid: LEASE_UUID,
+      tenant: 'manifest1test',
+      provider_uuid: 'provider-uuid',
+      releases: [
+        { version: 1, image: 'nginx:1.0', status: 'active', created_at: '2024-01-01T00:00:00Z' },
+        { version: 2, image: 'nginx:2.0', status: 'superseded', created_at: '2024-01-02T00:00:00Z', error: 'OOM' },
+      ],
+    };
+    mockFetchResponse(response);
+
+    const result = await getLeaseReleases(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(result.releases).toHaveLength(2);
+    expect(result.releases[0].version).toBe(1);
+    expect(result.releases[1].error).toBe('OOM');
+    expect(result.lease_uuid).toBe(LEASE_UUID);
+  });
+
+  it('uses /v1/leases/ path', async () => {
+    mockFetchResponse({ lease_uuid: LEASE_UUID, tenant: '', provider_uuid: '', releases: [] });
+
+    await getLeaseReleases(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+
+    const fetchCall = vi.mocked(fetch).mock.calls[0];
+    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/releases`);
+  });
+
+  it('passes auth header', async () => {
+    mockFetchResponse({ lease_uuid: LEASE_UUID, tenant: '', provider_uuid: '', releases: [] });
+
+    await getLeaseReleases(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+
+    const fetchCall = vi.mocked(fetch).mock.calls[0];
+    expect(fetchCall[1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
+  });
+
+  it('throws ProviderApiError on HTTP error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        text: () => Promise.resolve('not found'),
+      })
+    );
+
+    await expect(getLeaseReleases(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
+      ProviderApiError
+    );
+  });
+
+  it('throws ProviderApiError on invalid JSON', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.reject(new Error('invalid json')),
+      })
+    );
+
+    await expect(getLeaseReleases(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
+      'invalid JSON'
+    );
   });
 });

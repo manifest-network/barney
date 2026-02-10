@@ -97,3 +97,6 @@ export const AI_TOOL_API_TIMEOUT_MS = 15000;
 
 /** Timeout for deploy provisioning polling before giving up (milliseconds) - 5 minutes */
 export const AI_DEPLOY_PROVISION_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** SKU name that supports persistent disk storage (hardcoded until Fred exposes this via API) */
+export const STORAGE_SKU_NAME = 'docker-small';

@@ -7,6 +7,8 @@ import {
   executeBrowseCatalog,
   executeCosmosQuery,
   executeLeaseHistory,
+  executeAppDiagnostics,
+  executeAppReleases,
 } from './compositeQueries';
 import type { ToolExecutorOptions, AppRegistryAccess } from './types';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
@@ -59,6 +61,8 @@ vi.mock('../../api/provider-api', () => ({
 vi.mock('../../api/fred', () => ({
   getLeaseStatus: vi.fn(),
   getLeaseLogs: vi.fn(),
+  getLeaseProvision: vi.fn(),
+  getLeaseReleases: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-browser', () => ({
@@ -84,7 +88,7 @@ import { getLeasesByTenant, getCreditAccount, getCreditEstimate, getLeasesByTena
 import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
-import { getLeaseLogs } from '../../api/fred';
+import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { cosmosQuery } from '@manifest-network/manifest-mcp-browser';
 
 const ADDRESS = 'manifest1abc';
@@ -569,13 +573,15 @@ describe('executeGetLogs', () => {
     );
     expect(result.success).toBe(true);
     const data = result.data as any;
+    // LLM context gets truncated
     expect(data.logs.web.length).toBe(4000);
     expect(data.truncated).toBe(true);
 
-    // displayCard should also reflect truncation
+    // displayCard shows full logs (user sees everything)
     const card = (result as any).displayCard;
     expect(card).toBeDefined();
-    expect(card.data.truncated).toBe(true);
+    expect(card.data.truncated).toBe(false);
+    expect(card.data.logs.web.length).toBe(5000);
   });
 
   it('finds app via fuzzy match', async () => {
@@ -594,5 +600,156 @@ describe('executeGetLogs', () => {
     );
     expect(result.success).toBe(true);
     expect((result.data as any).app_name).toBe('my-cool-app');
+  });
+});
+
+describe('executeAppDiagnostics', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns error without wallet', async () => {
+    const result = await executeAppDiagnostics({ app_name: 'my-app' }, makeOptions({ address: undefined }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Wallet not connected');
+  });
+
+  it('returns error without app registry', async () => {
+    const result = await executeAppDiagnostics({ app_name: 'my-app' }, makeOptions({ appRegistry: undefined }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('App registry not available');
+  });
+
+  it('returns error without app_name', async () => {
+    const result = await executeAppDiagnostics({}, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('App name is required');
+  });
+
+  it('returns error when app not found', async () => {
+    const result = await executeAppDiagnostics({ app_name: 'nonexistent' }, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No app found');
+  });
+
+  it('returns error when app has no provider URL', async () => {
+    const app = makeApp({ providerUrl: undefined, status: 'stopped' });
+    const registry = makeRegistry([app]);
+    const result = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('no provider URL');
+  });
+
+  it('returns provision status for app', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseProvision).mockResolvedValue({
+      status: 'failed',
+      fail_count: 3,
+      last_error: 'OOMKilled',
+    });
+
+    const result = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.app_name).toBe('my-app');
+    expect(data.status).toBe('failed');
+    expect(data.fail_count).toBe(3);
+    expect(data.last_error).toBe('OOMKilled');
+  });
+
+  it('handles getLeaseProvision failure gracefully', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseProvision).mockRejectedValue(new Error('connection refused'));
+
+    const result = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Failed to fetch diagnostics');
+    expect(result.error).toContain('connection refused');
+  });
+});
+
+describe('executeAppReleases', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns error without wallet', async () => {
+    const result = await executeAppReleases({ app_name: 'my-app' }, makeOptions({ address: undefined }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Wallet not connected');
+  });
+
+  it('returns error without app registry', async () => {
+    const result = await executeAppReleases({ app_name: 'my-app' }, makeOptions({ appRegistry: undefined }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('App registry not available');
+  });
+
+  it('returns error without app_name', async () => {
+    const result = await executeAppReleases({}, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('App name is required');
+  });
+
+  it('returns error when app not found', async () => {
+    const result = await executeAppReleases({ app_name: 'nonexistent' }, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No app found');
+  });
+
+  it('returns error when app has no provider URL', async () => {
+    const app = makeApp({ providerUrl: undefined, status: 'stopped' });
+    const registry = makeRegistry([app]);
+    const result = await executeAppReleases(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('no provider URL');
+  });
+
+  it('returns releases for app', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseReleases).mockResolvedValue({
+      lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
+      releases: [
+        { version: 1, image: 'nginx:1.0', status: 'active', created_at: '2024-01-01T00:00:00Z' },
+        { version: 2, image: 'nginx:2.0', status: 'superseded', created_at: '2024-01-02T00:00:00Z' },
+      ],
+    });
+
+    const result = await executeAppReleases(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.app_name).toBe('my-app');
+    expect(data.releases).toHaveLength(2);
+    expect(data.count).toBe(2);
+  });
+
+  it('handles getLeaseReleases failure gracefully', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseReleases).mockRejectedValue(new Error('connection refused'));
+
+    const result = await executeAppReleases(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Failed to fetch releases');
+    expect(result.error).toContain('connection refused');
   });
 });

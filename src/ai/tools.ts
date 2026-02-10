@@ -1,7 +1,7 @@
 /**
  * AI Tool Definitions
  *
- * 11 tools: 3 TX (require confirmation), 6 query, 2 escape hatch.
+ * 15 tools: 5 TX (require confirmation), 8 query, 2 escape hatch.
  * Model does intent classification; code does orchestration.
  */
 
@@ -13,19 +13,42 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'deploy_app',
-      description:
-        'Deploy an app from an attached manifest file. Requires a file attachment. Defaults size to "micro" if not specified. Name is derived from filename if omitted.',
+      description: 'Deploy an app from an attached manifest file, or by specifying a Docker image.',
       parameters: {
         type: 'object',
         properties: {
           app_name: {
             type: 'string',
-            description: 'App name (lowercase, alphanumeric + hyphens, 1-32 chars). Derived from filename if omitted.',
+            description: 'App name. Derived from filename or image if omitted.',
           },
           size: {
             type: 'string',
             description: 'Resource tier: micro, small, medium, or large.',
             enum: ['micro', 'small', 'medium', 'large'],
+          },
+          image: {
+            type: 'string',
+            description: 'Docker image (e.g. "redis:8.4"). Used when no file attached.',
+          },
+          port: {
+            type: 'string',
+            description: 'Port(s) to expose, comma-separated (e.g. "6379"). Defaults to tcp.',
+          },
+          env: {
+            type: 'string',
+            description: 'Env vars as JSON string (e.g. \'{"KEY":"value"}\'). Empty values auto-generate passwords.',
+          },
+          user: {
+            type: 'string',
+            description: 'Container user/UID (e.g. "999:999").',
+          },
+          tmpfs: {
+            type: 'string',
+            description: 'Tmpfs mount paths, comma-separated (e.g. "/var/run/postgresql").',
+          },
+          storage: {
+            type: 'boolean',
+            description: 'Set to true for apps that need persistent disk (databases, etc.).',
           },
         },
         required: [],
@@ -36,7 +59,7 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'stop_app',
-      description: 'Stop a running app by name, or use "all" to stop every running app at once.',
+      description: 'Stop an app by name, or "all" to stop all.',
       parameters: {
         type: 'object',
         properties: {
@@ -53,17 +76,51 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'fund_credits',
-      description:
-        'Add credits to your account. Amount is in display units (e.g., 50 means 50 PWR).',
+      description: 'Add credits to your account.',
       parameters: {
         type: 'object',
         properties: {
           amount: {
             type: 'number',
-            description: 'Amount in display units (e.g., 50 for 50 PWR).',
+            description: 'Amount of credits to add (e.g., 50).',
           },
         },
         required: ['amount'],
+      },
+    },
+  },
+
+  {
+    type: 'function',
+    function: {
+      name: 'restart_app',
+      description: 'Restart a running app.',
+      parameters: {
+        type: 'object',
+        properties: {
+          app_name: {
+            type: 'string',
+            description: 'The name of the app to restart.',
+          },
+        },
+        required: ['app_name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_app',
+      description: 'Update an app with a new manifest file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          app_name: {
+            type: 'string',
+            description: 'The name of the app to update.',
+          },
+        },
+        required: ['app_name'],
       },
     },
   },
@@ -73,7 +130,7 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'list_apps',
-      description: 'List your deployed apps. Can filter by state.',
+      description: 'List deployed apps, optionally filtered by state.',
       parameters: {
         type: 'object',
         properties: {
@@ -91,7 +148,7 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'app_status',
-      description: 'Get detailed status for a specific app by name.',
+      description: 'Get status of a running app.',
       parameters: {
         type: 'object',
         properties: {
@@ -108,7 +165,7 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'get_logs',
-      description: 'Get container logs for a running app by name.',
+      description: 'Get container logs for an app.',
       parameters: {
         type: 'object',
         properties: {
@@ -129,7 +186,7 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'get_balance',
-      description: 'Get your credits, spending rate, and estimated time remaining.',
+      description: 'Get credit balance and spending rate.',
       parameters: {
         type: 'object',
         properties: {},
@@ -141,7 +198,7 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'browse_catalog',
-      description: 'Browse available providers and resource tiers.',
+      description: 'Browse providers and resource tiers.',
       parameters: {
         type: 'object',
         properties: {},
@@ -154,14 +211,13 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'lease_history',
-      description:
-        'List on-chain lease history for the connected wallet. Shows all leases including closed and expired. Supports pagination.',
+      description: 'List past lease history with pagination.',
       parameters: {
         type: 'object',
         properties: {
           state: {
             type: 'string',
-            description: 'Filter by state: all, pending, active, closed, rejected, expired. Default: all.',
+            description: 'Filter by state. Default: all. Note: use "stopped" when speaking to the user, but pass "closed" here.',
             enum: ['all', 'pending', 'active', 'closed', 'rejected', 'expired'],
           },
           limit: {
@@ -178,12 +234,47 @@ export const AI_TOOLS: OllamaTool[] = [
     },
   },
 
+  {
+    type: 'function',
+    function: {
+      name: 'app_diagnostics',
+      description: 'Get error details for a failed app.',
+      parameters: {
+        type: 'object',
+        properties: {
+          app_name: {
+            type: 'string',
+            description: 'The app name to diagnose.',
+          },
+        },
+        required: ['app_name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'app_releases',
+      description: 'Get release history for an app.',
+      parameters: {
+        type: 'object',
+        properties: {
+          app_name: {
+            type: 'string',
+            description: 'The app name to get releases for.',
+          },
+        },
+        required: ['app_name'],
+      },
+    },
+  },
+
   // --- Escape hatch ---
   {
     type: 'function',
     function: {
       name: 'cosmos_query',
-      description: 'Execute any Cosmos SDK query. For advanced queries not covered by other tools.',
+      description: 'Execute a raw Cosmos SDK query.',
       parameters: {
         type: 'object',
         properties: {
@@ -208,7 +299,7 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'cosmos_tx',
-      description: 'Execute any Cosmos SDK transaction. Requires confirmation.',
+      description: 'Execute a raw Cosmos SDK transaction.',
       parameters: {
         type: 'object',
         properties: {
@@ -238,6 +329,8 @@ export const CONFIRMATION_TOOLS = new Set([
   'deploy_app',
   'stop_app',
   'fund_credits',
+  'restart_app',
+  'update_app',
   'cosmos_tx',
 ]);
 
@@ -267,7 +360,8 @@ export function getToolCallDescription(
     case 'deploy_app': {
       const name = args.app_name ? ` "${args.app_name}"` : '';
       const size = args.size ? ` (${args.size})` : '';
-      return `Deploying app${name}${size}...`;
+      const image = !args.app_name && args.image ? ` from ${args.image}` : '';
+      return `Deploying app${name}${image}${size}...`;
     }
     case 'stop_app':
       return args.app_name === 'all' ? 'Stopping all apps...' : `Stopping app "${args.app_name}"...`;
@@ -287,6 +381,14 @@ export function getToolCallDescription(
       return args.state && args.state !== 'all'
         ? `Fetching ${args.state} lease history...`
         : 'Fetching lease history...';
+    case 'restart_app':
+      return `Restarting app "${args.app_name}"...`;
+    case 'update_app':
+      return `Updating app "${args.app_name}"...`;
+    case 'app_diagnostics':
+      return `Fetching diagnostics for "${args.app_name}"...`;
+    case 'app_releases':
+      return `Fetching releases for "${args.app_name}"...`;
     case 'cosmos_query':
       return `Querying ${args.module} ${args.subcommand}...`;
     case 'cosmos_tx':

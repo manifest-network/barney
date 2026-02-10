@@ -360,6 +360,138 @@ export async function getLeaseProvision(
  * @param leaseUuid - The lease UUID
  * @param authToken - Base64-encoded ADR-036 auth token
  */
+/** A single release/version entry for a lease. */
+export interface LeaseRelease {
+  version: number;
+  image: string;
+  status: string;
+  created_at: string;
+  error?: string;
+  manifest?: string;
+}
+
+/** Response from the releases endpoint. */
+export interface LeaseReleasesResponse {
+  lease_uuid: string;
+  tenant: string;
+  provider_uuid: string;
+  releases: LeaseRelease[];
+}
+
+/**
+ * Restart a running lease.
+ *
+ * @param providerApiUrl - The provider's API base URL
+ * @param leaseUuid - The lease UUID
+ * @param authToken - Base64-encoded ADR-036 auth token
+ */
+export async function restartLease(
+  providerApiUrl: string,
+  leaseUuid: string,
+  authToken: string
+): Promise<{ status: string }> {
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
+  const { url, headers } = buildValidatedFredRequest(
+    providerApiUrl,
+    `/v1/leases/${encodedLeaseUuid}/restart`,
+    { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
+  );
+
+  const response = await fetch(url, { method: 'POST', headers });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new ProviderApiError(
+      response.status,
+      `Fred restart error (${response.status}): ${errorText}`
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for restart');
+  }
+}
+
+/**
+ * Update a running lease with a new manifest payload.
+ *
+ * @param providerApiUrl - The provider's API base URL
+ * @param leaseUuid - The lease UUID
+ * @param payload - Base64-encoded manifest content
+ * @param authToken - Base64-encoded ADR-036 auth token
+ */
+export async function updateLease(
+  providerApiUrl: string,
+  leaseUuid: string,
+  payload: string,
+  authToken: string
+): Promise<{ status: string }> {
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
+  const { url, headers } = buildValidatedFredRequest(
+    providerApiUrl,
+    `/v1/leases/${encodedLeaseUuid}/update`,
+    { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
+  );
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ payload }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new ProviderApiError(
+      response.status,
+      `Fred update error (${response.status}): ${errorText}`
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for update');
+  }
+}
+
+/**
+ * Fetch release history for a lease from the provider.
+ *
+ * @param providerApiUrl - The provider's API base URL
+ * @param leaseUuid - The lease UUID
+ * @param authToken - Base64-encoded ADR-036 auth token
+ */
+export async function getLeaseReleases(
+  providerApiUrl: string,
+  leaseUuid: string,
+  authToken: string
+): Promise<LeaseReleasesResponse> {
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
+  const { url, headers } = buildValidatedFredRequest(
+    providerApiUrl,
+    `/v1/leases/${encodedLeaseUuid}/releases`,
+    { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
+  );
+
+  const response = await fetch(url, { method: 'GET', headers });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new ProviderApiError(
+      response.status,
+      `Fred releases error (${response.status}): ${errorText}`
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for releases');
+  }
+}
+
 export async function getLeaseInfo(
   providerApiUrl: string,
   leaseUuid: string,

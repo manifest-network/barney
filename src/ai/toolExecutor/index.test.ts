@@ -11,6 +11,8 @@ vi.mock('./compositeQueries', () => ({
   executeBrowseCatalog: vi.fn(),
   executeCosmosQuery: vi.fn(),
   executeLeaseHistory: vi.fn(),
+  executeAppDiagnostics: vi.fn(),
+  executeAppReleases: vi.fn(),
 }));
 
 vi.mock('./compositeTransactions', () => ({
@@ -23,6 +25,10 @@ vi.mock('./compositeTransactions', () => ({
   executeCosmosTransaction: vi.fn(),
   executeConfirmedCosmosTx: vi.fn(),
   executeConfirmedBatchDeploy: vi.fn(),
+  executeRestartApp: vi.fn(),
+  executeConfirmedRestartApp: vi.fn(),
+  executeUpdateApp: vi.fn(),
+  executeConfirmedUpdateApp: vi.fn(),
 }));
 
 import {
@@ -32,6 +38,8 @@ import {
   executeBrowseCatalog,
   executeCosmosQuery,
   executeLeaseHistory,
+  executeAppDiagnostics,
+  executeAppReleases,
 } from './compositeQueries';
 import {
   executeDeployApp,
@@ -43,6 +51,10 @@ import {
   executeCosmosTransaction,
   executeConfirmedCosmosTx,
   executeConfirmedBatchDeploy,
+  executeRestartApp,
+  executeConfirmedRestartApp,
+  executeUpdateApp,
+  executeConfirmedUpdateApp,
 } from './compositeTransactions';
 
 const CLIENT_MANAGER = {} as CosmosClientManager;
@@ -169,6 +181,48 @@ describe('executeTool', () => {
     expect(result.requiresConfirmation).toBe(true);
   });
 
+  it('routes restart_app to executor', async () => {
+    const confirmResult: ToolResult = {
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Restart app?',
+      pendingAction: { toolName: 'restart_app', args: {} },
+    };
+    vi.mocked(executeRestartApp).mockResolvedValue(confirmResult);
+
+    const result = await executeTool('restart_app', { app_name: 'my-app' }, makeOptions());
+    expect(result.requiresConfirmation).toBe(true);
+  });
+
+  it('routes update_app to executor', async () => {
+    const confirmResult: ToolResult = {
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Update app?',
+      pendingAction: { toolName: 'update_app', args: {} },
+    };
+    vi.mocked(executeUpdateApp).mockResolvedValue(confirmResult);
+
+    const result = await executeTool('update_app', { app_name: 'my-app' }, makeOptions());
+    expect(result.requiresConfirmation).toBe(true);
+  });
+
+  it('routes app_diagnostics to executor', async () => {
+    const queryResult: ToolResult = { success: true, data: { status: 'running', fail_count: 0, last_error: '' } };
+    vi.mocked(executeAppDiagnostics).mockResolvedValue(queryResult);
+
+    const result = await executeTool('app_diagnostics', { app_name: 'my-app' }, makeOptions());
+    expect(result).toBe(queryResult);
+  });
+
+  it('routes app_releases to executor', async () => {
+    const queryResult: ToolResult = { success: true, data: { releases: [], count: 0 } };
+    vi.mocked(executeAppReleases).mockResolvedValue(queryResult);
+
+    const result = await executeTool('app_releases', { app_name: 'my-app' }, makeOptions());
+    expect(result).toBe(queryResult);
+  });
+
   // --- Error handling ---
 
   it('returns unknown tool error for unrecognized tools', async () => {
@@ -245,6 +299,28 @@ describe('executeConfirmedTool', () => {
     const result = await executeConfirmedTool('cosmos_tx', { module: 'bank', subcommand: 'send', args: '[]' }, CLIENT_MANAGER, options);
 
     expect(result).toBe(txResult);
+  });
+
+  it('routes restart_app to confirmed executor', async () => {
+    const txResult: ToolResult = { success: true, data: { message: 'restarted' } };
+    vi.mocked(executeConfirmedRestartApp).mockResolvedValue(txResult);
+
+    const options = makeOptions();
+    const result = await executeConfirmedTool('restart_app', { app_name: 'my-app' }, CLIENT_MANAGER, options);
+
+    expect(result).toBe(txResult);
+    expect(executeConfirmedRestartApp).toHaveBeenCalled();
+  });
+
+  it('routes update_app to confirmed executor', async () => {
+    const txResult: ToolResult = { success: true, data: { message: 'updated' } };
+    vi.mocked(executeConfirmedUpdateApp).mockResolvedValue(txResult);
+
+    const options = makeOptions();
+    const result = await executeConfirmedTool('update_app', { app_name: 'my-app' }, CLIENT_MANAGER, options);
+
+    expect(result).toBe(txResult);
+    expect(executeConfirmedUpdateApp).toHaveBeenCalled();
   });
 
   it('returns error for unknown confirmed tool', async () => {

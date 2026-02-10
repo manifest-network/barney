@@ -50,6 +50,7 @@ describe('getSystemPrompt', () => {
   it('contains behavior rules', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('On file attachment');
+    expect(prompt).toContain('Deploy by image');
     expect(prompt).toContain('Default size');
     expect(prompt).toContain('Be concise');
   });
@@ -57,6 +58,24 @@ describe('getSystemPrompt', () => {
   it('contains file attachment instructions', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('(File attached:');
-    expect(prompt).toContain('immediately call deploy_app()');
+    expect(prompt).toContain('call deploy_app()');
+  });
+
+  it('contains image-based deploy instructions', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('deploy_app(image=');
+    expect(prompt).toContain('redis:8.4');
+    expect(prompt).toContain('postgres:latest');
+  });
+
+  it('instructs to ask user when unsure about image defaults', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('ask the user before deploying');
+  });
+
+  it('contains storage instructions for stateful apps', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('storage=true');
+    expect(prompt).toContain('databases and stateful apps');
   });
 });

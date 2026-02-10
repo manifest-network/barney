@@ -12,6 +12,8 @@ describe('requiresConfirmation', () => {
     expect(requiresConfirmation('deploy_app')).toBe(true);
     expect(requiresConfirmation('stop_app')).toBe(true);
     expect(requiresConfirmation('fund_credits')).toBe(true);
+    expect(requiresConfirmation('restart_app')).toBe(true);
+    expect(requiresConfirmation('update_app')).toBe(true);
     expect(requiresConfirmation('cosmos_tx')).toBe(true);
   });
 
@@ -70,6 +72,18 @@ describe('getToolCallDescription', () => {
     expect(desc).toContain('small');
   });
 
+  it('shows image name in deploy_app when no app_name', () => {
+    const desc = getToolCallDescription('deploy_app', { image: 'redis:8.4' });
+    expect(desc).toContain('redis:8.4');
+    expect(desc).toContain('Deploying');
+  });
+
+  it('prefers app_name over image in deploy_app description', () => {
+    const desc = getToolCallDescription('deploy_app', { app_name: 'my-redis', image: 'redis:8.4' });
+    expect(desc).toContain('my-redis');
+    expect(desc).not.toContain('redis:8.4');
+  });
+
   it('interpolates name in stop_app', () => {
     const desc = getToolCallDescription('stop_app', { app_name: 'my-app' });
     expect(desc).toContain('my-app');
@@ -117,8 +131,34 @@ describe('AI_TOOLS', () => {
     expect(toolNames).toContain('get_logs');
   });
 
-  it('has 11 tools total', () => {
-    expect(AI_TOOLS).toHaveLength(11);
+  it('has 15 tools total', () => {
+    expect(AI_TOOLS).toHaveLength(15);
+  });
+
+  it('includes restart_app tool', () => {
+    const toolNames = AI_TOOLS.map((t) => t.function.name);
+    expect(toolNames).toContain('restart_app');
+  });
+
+  it('includes update_app tool', () => {
+    const toolNames = AI_TOOLS.map((t) => t.function.name);
+    expect(toolNames).toContain('update_app');
+  });
+
+  it('includes storage param in deploy_app', () => {
+    const deployTool = AI_TOOLS.find((t) => t.function.name === 'deploy_app');
+    expect(deployTool?.function.parameters.properties).toHaveProperty('storage');
+    expect(deployTool?.function.parameters.properties.storage.type).toBe('boolean');
+  });
+
+  it('includes app_diagnostics tool', () => {
+    const toolNames = AI_TOOLS.map((t) => t.function.name);
+    expect(toolNames).toContain('app_diagnostics');
+  });
+
+  it('includes app_releases tool', () => {
+    const toolNames = AI_TOOLS.map((t) => t.function.name);
+    expect(toolNames).toContain('app_releases');
   });
 });
 
@@ -126,5 +166,31 @@ describe('getToolCallDescription - get_logs', () => {
   it('interpolates name in get_logs', () => {
     const desc = getToolCallDescription('get_logs', { app_name: 'my-app' });
     expect(desc).toContain('my-app');
+  });
+});
+
+describe('getToolCallDescription - new tools', () => {
+  it('interpolates name in restart_app', () => {
+    const desc = getToolCallDescription('restart_app', { app_name: 'my-api' });
+    expect(desc).toContain('my-api');
+    expect(desc).toContain('Restarting');
+  });
+
+  it('interpolates name in update_app', () => {
+    const desc = getToolCallDescription('update_app', { app_name: 'my-api' });
+    expect(desc).toContain('my-api');
+    expect(desc).toContain('Updating');
+  });
+
+  it('interpolates name in app_diagnostics', () => {
+    const desc = getToolCallDescription('app_diagnostics', { app_name: 'my-api' });
+    expect(desc).toContain('my-api');
+    expect(desc).toContain('diagnostics');
+  });
+
+  it('interpolates name in app_releases', () => {
+    const desc = getToolCallDescription('app_releases', { app_name: 'my-api' });
+    expect(desc).toContain('my-api');
+    expect(desc).toContain('releases');
   });
 });

@@ -14,10 +14,14 @@ export interface DeployProgress {
     | 'creating_lease'
     | 'uploading'
     | 'provisioning'
+    | 'restarting'
+    | 'updating'
     | 'ready'
     | 'failed';
   detail?: string;
   fredStatus?: FredLeaseStatus;
+  /** Operation type — set by executors for restart/update so ProgressCard shows the right UI */
+  operation?: 'deploy' | 'restart' | 'update';
   /** Per-app progress for batch deploys */
   batch?: Array<{
     name: string;

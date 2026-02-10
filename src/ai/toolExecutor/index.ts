@@ -12,6 +12,8 @@ import {
   executeBrowseCatalog,
   executeCosmosQuery,
   executeLeaseHistory,
+  executeAppDiagnostics,
+  executeAppReleases,
 } from './compositeQueries';
 import {
   executeDeployApp,
@@ -23,6 +25,10 @@ import {
   executeCosmosTransaction,
   executeConfirmedCosmosTx,
   executeConfirmedBatchDeploy,
+  executeRestartApp,
+  executeConfirmedRestartApp,
+  executeUpdateApp,
+  executeConfirmedUpdateApp,
 } from './compositeTransactions';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 
@@ -38,6 +44,8 @@ const QUERY_TOOLS = new Set([
   'get_balance',
   'browse_catalog',
   'lease_history',
+  'app_diagnostics',
+  'app_releases',
 ]);
 
 /** TX tools that require user confirmation */
@@ -45,6 +53,8 @@ const TX_TOOLS = new Set([
   'deploy_app',
   'stop_app',
   'fund_credits',
+  'restart_app',
+  'update_app',
 ]);
 
 /**
@@ -74,6 +84,10 @@ export async function executeTool(
           return await executeBrowseCatalog();
         case 'lease_history':
           return await executeLeaseHistory(args, options);
+        case 'app_diagnostics':
+          return await executeAppDiagnostics(args, options);
+        case 'app_releases':
+          return await executeAppReleases(args, options);
         default:
           return { success: false, error: `Unknown query tool: ${toolName}` };
       }
@@ -95,6 +109,10 @@ export async function executeTool(
           return await executeStopApp(args, options);
         case 'fund_credits':
           return executeFundCredits(args, options);
+        case 'restart_app':
+          return await executeRestartApp(args, options);
+        case 'update_app':
+          return await executeUpdateApp(args, options, payload);
         default:
           return { success: false, error: `Unknown TX tool: ${toolName}` };
       }
@@ -148,6 +166,10 @@ export async function executeConfirmedTool(
         return await executeConfirmedFundCredits(args, clientManager);
       case 'cosmos_tx':
         return await executeConfirmedCosmosTx(args, clientManager);
+      case 'restart_app':
+        return await executeConfirmedRestartApp(args, clientManager, options);
+      case 'update_app':
+        return await executeConfirmedUpdateApp(args, clientManager, options, payload);
       default:
         return { success: false, error: `Unknown confirmed tool: ${toolName}` };
     }

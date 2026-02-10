@@ -13,6 +13,10 @@ import {
   executeConfirmedCosmosTx,
   executeBatchDeploy,
   executeConfirmedBatchDeploy,
+  executeRestartApp,
+  executeConfirmedRestartApp,
+  executeUpdateApp,
+  executeConfirmedUpdateApp,
   type BatchDeployEntry,
 } from './compositeTransactions';
 import type { ToolExecutorOptions, AppRegistryAccess, PayloadAttachment } from './types';
@@ -51,6 +55,8 @@ vi.mock('../../api/fred', () => ({
   pollLeaseUntilReady: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
+  restartLease: vi.fn(),
+  updateLease: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-browser', () => ({
@@ -78,7 +84,7 @@ vi.mock('../../registry/appRegistry', () => ({
 import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
-import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision } from '../../api/fred';
+import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
@@ -272,10 +278,10 @@ describe('formatConnectionUrl', () => {
 describe('executeDeployApp', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns error without payload', async () => {
+  it('returns error without payload and without image', async () => {
     const result = await executeDeployApp({}, makeOptions());
     expect(result.success).toBe(false);
-    expect(result.error).toContain('No file attached');
+    expect(result.error).toContain('No file attached and no image specified');
   });
 
   it('returns error without wallet', async () => {
@@ -328,6 +334,141 @@ describe('executeDeployApp', () => {
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
     expect(result.confirmationMessage).toContain('docker-compose');
+  });
+
+  it('builds manifest from image when no payload', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'redis:8.4', port: '6379' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('redis');
+    expect(result.pendingAction?.args._generatedManifest).toBeDefined();
+    expect(result.pendingAction?.args.app_name).toBe('redis');
+  });
+
+  it('derives app name from image when app_name not specified', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'docker.io/library/postgres:18', port: '5432' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.pendingAction?.args.app_name).toBe('postgres');
+  });
+
+  it('returns error for invalid env JSON', async () => {
+    const result = await executeDeployApp(
+      { image: 'redis:8.4', env: 'not-json' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid env JSON');
+  });
+
+  it('upgrades to storage SKU when storage=true and size is micro', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'postgres:latest', port: '5432', storage: true },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('upgraded for storage');
+    expect(result.confirmationMessage).toContain('small');
+    expect(resolveSkuItems).toHaveBeenCalledWith(
+      [{ sku_name: 'docker-small', quantity: 1 }],
+      expect.anything()
+    );
+  });
+
+  it('does not upgrade when storage=true and size is already small', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'postgres:latest', port: '5432', storage: true, size: 'small' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.confirmationMessage).not.toContain('upgraded for storage');
+  });
+
+  it('does not upgrade when storage is not set', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'nginx:latest', port: '80' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.confirmationMessage).not.toContain('upgraded for storage');
+    expect(resolveSkuItems).toHaveBeenCalledWith(
+      [{ sku_name: 'docker-micro', quantity: 1 }],
+      expect.anything()
+    );
+  });
+
+  it('prefers file attachment over image when both present', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'redis:8.4' },
+      makeOptions(),
+      makePayload()  // file takes precedence
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    // Should use filename-derived name, not image-derived
+    expect(result.confirmationMessage).toContain('docker-compose');
+    expect(result.pendingAction?.args._generatedManifest).toBeUndefined();
   });
 });
 
@@ -578,6 +719,47 @@ describe('executeConfirmedDeployApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
     expect((result.data as any).url).toBeUndefined();
+  });
+
+  it('reconstructs payload from _generatedManifest when no payload provided', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: '127.0.0.1',
+        ports: { '6379/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+      },
+    });
+
+    const registry = makeRegistry();
+    const manifestJson = JSON.stringify({ image: 'redis:8.4', ports: { '6379/tcp': {} } }, null, 2);
+    const result = await executeConfirmedDeployApp(
+      {
+        app_name: 'redis',
+        size: 'micro',
+        skuUuid: 'sku-1',
+        providerUuid: 'p1',
+        providerUrl: 'https://fred.example.com',
+        _generatedManifest: manifestJson,
+      },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+      // No payload argument
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('running');
+    // Verify the manifest was uploaded
+    expect(uploadPayloadToProvider).toHaveBeenCalled();
+    const uploadCall = vi.mocked(uploadPayloadToProvider).mock.calls[0];
+    // The hash should be consistent
+    expect(uploadCall[2]).toHaveLength(64);
   });
 });
 
@@ -873,5 +1055,273 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).deployed.map((d: any) => d.name)).toContain('game1');
     expect((result.data as any).failed).toContain('game2');
+  });
+});
+
+// ============================================================================
+// restart_app tests
+// ============================================================================
+
+describe('executeRestartApp', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns error without wallet', async () => {
+    const result = await executeRestartApp({ app_name: 'my-app' }, makeOptions({ address: undefined }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Wallet not connected');
+  });
+
+  it('returns error when app not found', async () => {
+    const result = await executeRestartApp({ app_name: 'ghost' }, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No app found');
+  });
+
+  it('returns error when app is not running', async () => {
+    const app = makeApp({ status: 'stopped' });
+    const result = await executeRestartApp(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not running');
+  });
+
+  it('returns error when app has no provider URL', async () => {
+    const app = makeApp({ providerUrl: undefined });
+    const result = await executeRestartApp(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('no provider URL');
+  });
+
+  it('returns confirmation for running app', async () => {
+    const app = makeApp();
+    const result = await executeRestartApp(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('Restart');
+    expect(result.pendingAction?.toolName).toBe('restart_app');
+  });
+});
+
+describe('executeConfirmedRestartApp', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('restarts app and polls to ready', async () => {
+    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: '127.0.0.1',
+        ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+      },
+    });
+
+    const onProgress = vi.fn();
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, onProgress })
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('running');
+    expect(restartLease).toHaveBeenCalled();
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'restarting' }));
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+  });
+
+  it('handles 409 error from restart endpoint', async () => {
+    vi.mocked(restartLease).mockRejectedValue(new Error('Fred restart error (409): lease is not running'));
+
+    const onProgress = vi.fn();
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, onProgress })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not in a restartable state');
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'failed' }));
+  });
+
+  it('handles poll failure (non-active state)', async () => {
+    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_CLOSED,
+      error: 'container crashed',
+    });
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('container crashed');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+  });
+});
+
+// ============================================================================
+// update_app tests
+// ============================================================================
+
+describe('executeUpdateApp', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns error without payload', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No file attached');
+  });
+
+  it('returns error when app is stopped', async () => {
+    const app = makeApp({ status: 'stopped' });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]) }),
+      makePayload()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('cannot be updated');
+  });
+
+  it('allows updating running apps', async () => {
+    const app = makeApp({ status: 'running' });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]) }),
+      makePayload()
+    );
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.toolName).toBe('update_app');
+  });
+
+  it('allows updating failed apps', async () => {
+    const app = makeApp({ status: 'failed' });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]) }),
+      makePayload()
+    );
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+  });
+});
+
+describe('executeConfirmedUpdateApp', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('updates app and polls to ready', async () => {
+    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: '127.0.0.1',
+        ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+      },
+    });
+
+    const onProgress = vi.fn();
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, onProgress }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('running');
+    expect(updateLease).toHaveBeenCalled();
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'updating' }));
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+    // Registry should have updated manifest
+    expect(registry.updateApp).toHaveBeenCalledWith(
+      ADDRESS,
+      app.leaseUuid,
+      expect.objectContaining({ manifest: expect.any(String) })
+    );
+  });
+
+  it('handles 409 error from update endpoint', async () => {
+    vi.mocked(updateLease).mockRejectedValue(new Error('Fred update error (409): lease is not running'));
+
+    const onProgress = vi.fn();
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, onProgress }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not in an updatable state');
+  });
+
+  it('handles poll failure (non-active state)', async () => {
+    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_CLOSED,
+      error: 'container crashed',
+    });
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('container crashed');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+  });
+
+  it('returns error without payload', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Payload missing');
   });
 });

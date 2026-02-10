@@ -8,15 +8,17 @@ import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { createSignMessage, createAuthToken, getLeaseConnectionInfo } from '../../api/provider-api';
-import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
+import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
-import { AI_DEPLOY_PROVISION_TIMEOUT_MS } from '../../config/constants';
+import { AI_DEPLOY_PROVISION_TIMEOUT_MS, STORAGE_SKU_NAME } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 import { validateAppName } from '../../registry/appRegistry';
+import { buildManifest } from '../manifest';
+import { sha256, toHex } from '../../utils/hash';
 import type { DeployProgress } from '../progress';
 import type { ToolResult, ToolExecutorOptions, SignResult, PayloadAttachment } from './types';
 
@@ -267,8 +269,44 @@ export async function executeDeployApp(
   const { address, appRegistry } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
+
+  // Image-based deploy: build manifest from args when no file is attached
+  if (!payload && args.image) {
+    let env: Record<string, string> | undefined;
+    if (typeof args.env === 'string' && args.env) {
+      try {
+        env = JSON.parse(args.env);
+        if (typeof env !== 'object' || env === null || Array.isArray(env)) {
+          return { success: false, error: 'env must be a JSON object (e.g. \'{"KEY":"value"}\').' };
+        }
+      } catch {
+        return { success: false, error: 'Invalid env JSON string. Expected format: \'{"KEY":"value"}\'.' };
+      }
+    }
+
+    let manifestResult;
+    try {
+      manifestResult = await buildManifest({
+        image: args.image as string,
+        port: args.port as string | undefined,
+        env,
+        user: args.user as string | undefined,
+        tmpfs: args.tmpfs as string | undefined,
+      });
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to build manifest' };
+    }
+
+    payload = manifestResult.payload;
+    if (!args.app_name) {
+      args.app_name = manifestResult.derivedAppName;
+    }
+    // Store generated manifest JSON for the confirmation round-trip
+    args._generatedManifest = manifestResult.json;
+  }
+
   if (!payload) {
-    return { success: false, error: 'No file attached. Please attach a JSON manifest file to deploy an app.' };
+    return { success: false, error: 'No file attached and no image specified. Attach a manifest file or specify a Docker image (e.g. deploy_app(image="redis:8.4")).' };
   }
 
   // Resolve name
@@ -307,7 +345,14 @@ export async function executeDeployApp(
       error: `Invalid size "${size}". Valid tiers: ${VALID_SIZE_TIERS.join(', ')}.`,
     };
   }
-  const skuName = `docker-${size}`;
+  let skuName = `docker-${size}`;
+  let storageUpgrade = false;
+
+  // Auto-upgrade to storage-capable SKU when storage is requested
+  if (args.storage === true && skuName !== STORAGE_SKU_NAME) {
+    skuName = STORAGE_SKU_NAME;
+    storageUpgrade = true;
+  }
 
   // Find matching SKU
   let allSKUs;
@@ -403,7 +448,7 @@ export async function executeDeployApp(
   return {
     success: true,
     requiresConfirmation: true,
-    confirmationMessage: `Deploy "${name}" on ${size} tier${priceDisplay ? ` (~${priceDisplay})` : ''}?${creditWarning}`,
+    confirmationMessage: `Deploy "${name}" on ${storageUpgrade ? 'small' : size} tier${storageUpgrade ? ' (upgraded for storage)' : ''}${priceDisplay ? ` (~${priceDisplay})` : ''}?${creditWarning}`,
     pendingAction: {
       toolName: 'deploy_app',
       args: {
@@ -412,6 +457,7 @@ export async function executeDeployApp(
         skuUuid,
         providerUuid: provider.uuid,
         providerUrl: provider.apiUrl,
+        ...(args._generatedManifest ? { _generatedManifest: args._generatedManifest } : {}),
       },
     },
   };
@@ -429,6 +475,15 @@ export async function executeConfirmedDeployApp(
   const { address, appRegistry, signArbitrary, onProgress, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
+
+  // Reconstruct payload from stored manifest JSON (image-based deploy)
+  if (!payload && typeof args._generatedManifest === 'string') {
+    const json = args._generatedManifest;
+    const bytes = new TextEncoder().encode(json);
+    const hash = toHex(await sha256(json));
+    payload = { bytes, filename: 'manifest.json', size: bytes.length, hash };
+  }
+
   if (!payload) return { success: false, error: 'Payload missing' };
   if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
 
@@ -1425,4 +1480,299 @@ export async function executeConfirmedCosmosTx(
       transactionHash: result.transactionHash,
     },
   };
+}
+
+// ============================================================================
+// restart_app
+// ============================================================================
+
+/**
+ * Pre-validation for restart_app. Returns confirmation result or error.
+ */
+export async function executeRestartApp(
+  args: Record<string, unknown>,
+  options: ToolExecutorOptions
+): Promise<ToolResult> {
+  const { address, appRegistry } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!appRegistry) return { success: false, error: 'App registry not available' };
+
+  const name = args.app_name as string;
+  if (!name) return { success: false, error: 'App name is required' };
+
+  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
+  if (!app) return { success: false, error: `No app found named "${name}"` };
+
+  if (app.status !== 'running') {
+    return { success: false, error: `App "${app.name}" is not running (status: ${app.status}). Only running apps can be restarted.` };
+  }
+
+  if (!app.providerUrl) {
+    return { success: false, error: `App "${app.name}" has no provider URL.` };
+  }
+
+  return {
+    success: true,
+    requiresConfirmation: true,
+    confirmationMessage: `Restart app "${app.name}"? The app will be briefly unavailable during restart.`,
+    pendingAction: {
+      toolName: 'restart_app',
+      args: {
+        app_name: app.name,
+        leaseUuid: app.leaseUuid,
+        providerUrl: app.providerUrl,
+      },
+    },
+  };
+}
+
+/**
+ * Execute restart_app after user confirmation.
+ */
+export async function executeConfirmedRestartApp(
+  args: Record<string, unknown>,
+  _clientManager: CosmosClientManager,
+  options: ToolExecutorOptions
+): Promise<ToolResult> {
+  const { address, appRegistry, signArbitrary, onProgress, signal } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!appRegistry) return { success: false, error: 'App registry not available' };
+  if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
+
+  const name = args.app_name as string;
+  const leaseUuid = args.leaseUuid as string;
+  const providerUrl = args.providerUrl as string;
+
+  onProgress?.({ phase: 'restarting', detail: 'Restarting app...', operation: 'restart' });
+
+  // Mint auth token and call restart
+  const getAuthToken = async (): Promise<string> => {
+    const ts = Math.floor(Date.now() / 1000);
+    const msg = createSignMessage(address, leaseUuid, ts);
+    const sig: SignResult = await signArbitrary(address, msg);
+    return createAuthToken(address, leaseUuid, ts, sig.pub_key.value, sig.signature);
+  };
+
+  try {
+    const authToken = await getAuthToken();
+    await restartLease(providerUrl, leaseUuid, authToken);
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    // 409 = lease is not in the right state
+    if (errorMsg.includes('409')) {
+      onProgress?.({ phase: 'failed', detail: 'App is not in a restartable state', operation: 'restart' });
+      return { success: false, error: `Cannot restart "${name}": app is not in a restartable state.` };
+    }
+    onProgress?.({ phase: 'failed', detail: `Restart failed: ${errorMsg}`, operation: 'restart' });
+    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    return { success: false, error: `Restart failed: ${errorMsg}` };
+  }
+
+  // Poll for readiness
+  onProgress?.({ phase: 'provisioning', detail: 'Waiting for app to come back up...', operation: 'restart' });
+
+  try {
+    const authToken = await getAuthToken();
+    const POLL_INTERVAL_MS = 3000;
+    const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
+      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
+      intervalMs: POLL_INTERVAL_MS,
+      abortSignal: signal,
+      onProgress: (status) => {
+        onProgress?.({
+          phase: 'provisioning',
+          detail: status.phase || 'Restarting...',
+          fredStatus: status,
+          operation: 'restart',
+        });
+      },
+      getAuthToken,
+    });
+
+    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+      const { url: connectionUrl, connection } = await resolveAppUrl(
+        providerUrl, leaseUuid, fredStatus, address, signArbitrary,
+        'compositeTransactions.executeConfirmedRestartApp'
+      );
+
+      appRegistry.updateApp(address, leaseUuid, {
+        status: 'running',
+        url: connectionUrl,
+        connection,
+      });
+      onProgress?.({ phase: 'ready', detail: 'App restarted!', operation: 'restart' });
+
+      return {
+        success: true,
+        data: {
+          message: `App "${name}" has been restarted.`,
+          name,
+          url: connectionUrl,
+          status: 'running',
+        },
+      };
+    }
+
+    // Non-active terminal state
+    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    onProgress?.({ phase: 'failed', detail: fredStatus.error || 'Restart failed', operation: 'restart' });
+    return { success: false, error: `Restart failed: ${fredStatus.error || 'App did not come back up'}` };
+  } catch (error) {
+    logError('compositeTransactions.executeConfirmedRestartApp.polling', error);
+    onProgress?.({ phase: 'failed', detail: 'Restart polling failed', operation: 'restart' });
+    return { success: false, error: `Restart may still be in progress. Use app_status("${name}") to check.` };
+  }
+}
+
+// ============================================================================
+// update_app
+// ============================================================================
+
+/**
+ * Pre-validation for update_app. Returns confirmation result or error.
+ */
+export async function executeUpdateApp(
+  args: Record<string, unknown>,
+  options: ToolExecutorOptions,
+  payload?: PayloadAttachment
+): Promise<ToolResult> {
+  const { address, appRegistry } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!appRegistry) return { success: false, error: 'App registry not available' };
+  if (!payload) {
+    return { success: false, error: 'No file attached. Please attach a new manifest file to update the app.' };
+  }
+
+  const name = args.app_name as string;
+  if (!name) return { success: false, error: 'App name is required' };
+
+  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
+  if (!app) return { success: false, error: `No app found named "${name}"` };
+
+  if (app.status !== 'running' && app.status !== 'failed') {
+    return { success: false, error: `App "${app.name}" cannot be updated (status: ${app.status}). Only running or failed apps can be updated.` };
+  }
+
+  if (!app.providerUrl) {
+    return { success: false, error: `App "${app.name}" has no provider URL.` };
+  }
+
+  return {
+    success: true,
+    requiresConfirmation: true,
+    confirmationMessage: `Update app "${app.name}" with new manifest?`,
+    pendingAction: {
+      toolName: 'update_app',
+      args: {
+        app_name: app.name,
+        leaseUuid: app.leaseUuid,
+        providerUrl: app.providerUrl,
+      },
+    },
+  };
+}
+
+/**
+ * Execute update_app after user confirmation.
+ */
+export async function executeConfirmedUpdateApp(
+  args: Record<string, unknown>,
+  _clientManager: CosmosClientManager,
+  options: ToolExecutorOptions,
+  payload?: PayloadAttachment
+): Promise<ToolResult> {
+  const { address, appRegistry, signArbitrary, onProgress, signal } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!appRegistry) return { success: false, error: 'App registry not available' };
+  if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
+  if (!payload) return { success: false, error: 'Payload missing' };
+
+  const name = args.app_name as string;
+  const leaseUuid = args.leaseUuid as string;
+  const providerUrl = args.providerUrl as string;
+
+  onProgress?.({ phase: 'updating', detail: 'Updating app with new manifest...', operation: 'update' });
+
+  // Mint auth token and call update
+  const getAuthToken = async (): Promise<string> => {
+    const ts = Math.floor(Date.now() / 1000);
+    const msg = createSignMessage(address, leaseUuid, ts);
+    const sig: SignResult = await signArbitrary(address, msg);
+    return createAuthToken(address, leaseUuid, ts, sig.pub_key.value, sig.signature);
+  };
+
+  try {
+    const authToken = await getAuthToken();
+    // Base64-encode the payload for the update API
+    const base64Payload = btoa(String.fromCharCode(...payload.bytes));
+    await updateLease(providerUrl, leaseUuid, base64Payload, authToken);
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    if (errorMsg.includes('409')) {
+      onProgress?.({ phase: 'failed', detail: 'App is not in an updatable state', operation: 'update' });
+      return { success: false, error: `Cannot update "${name}": app is not in an updatable state.` };
+    }
+    onProgress?.({ phase: 'failed', detail: `Update failed: ${errorMsg}`, operation: 'update' });
+    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    return { success: false, error: `Update failed: ${errorMsg}` };
+  }
+
+  // Update registry with new manifest content
+  const manifestJson = new TextDecoder().decode(payload.bytes);
+  appRegistry.updateApp(address, leaseUuid, { manifest: manifestJson });
+
+  // Poll for readiness
+  onProgress?.({ phase: 'provisioning', detail: 'Waiting for app to come back up...', operation: 'update' });
+
+  try {
+    const authToken = await getAuthToken();
+    const POLL_INTERVAL_MS = 3000;
+    const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
+      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
+      intervalMs: POLL_INTERVAL_MS,
+      abortSignal: signal,
+      onProgress: (status) => {
+        onProgress?.({
+          phase: 'provisioning',
+          detail: status.phase || 'Updating...',
+          fredStatus: status,
+          operation: 'update',
+        });
+      },
+      getAuthToken,
+    });
+
+    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+      const { url: connectionUrl, connection } = await resolveAppUrl(
+        providerUrl, leaseUuid, fredStatus, address, signArbitrary,
+        'compositeTransactions.executeConfirmedUpdateApp'
+      );
+
+      appRegistry.updateApp(address, leaseUuid, {
+        status: 'running',
+        url: connectionUrl,
+        connection,
+      });
+      onProgress?.({ phase: 'ready', detail: 'App updated!', operation: 'update' });
+
+      return {
+        success: true,
+        data: {
+          message: `App "${name}" has been updated.`,
+          name,
+          url: connectionUrl,
+          status: 'running',
+        },
+      };
+    }
+
+    // Non-active terminal state
+    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    onProgress?.({ phase: 'failed', detail: fredStatus.error || 'Update failed', operation: 'update' });
+    return { success: false, error: `Update failed: ${fredStatus.error || 'App did not come back up'}` };
+  } catch (error) {
+    logError('compositeTransactions.executeConfirmedUpdateApp.polling', error);
+    onProgress?.({ phase: 'failed', detail: 'Update polling failed', operation: 'update' });
+    return { success: false, error: `Update may still be in progress. Use app_status("${name}") to check.` };
+  }
 }

@@ -43,11 +43,14 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
   const isReady = progress.phase === 'ready';
   const isTerminal = isFailed || isReady;
 
+  // Derive operation type from progress.operation (set by executors) or phase
+  const operation = progress.operation ?? 'deploy';
+  const isSimpleOperation = operation === 'restart' || operation === 'update';
+
   const startRef = useRef(0);
   const [elapsed, setElapsed] = useState(0);
 
-  // Reset timer when a new deploy starts (isTerminal becomes false).
-  // Date.now() is called inside callbacks (not synchronously in effect body) to satisfy purity rules.
+  // Reset timer when a new operation starts (isTerminal becomes false).
   useEffect(() => {
     if (isTerminal) return;
     startRef.current = Date.now();
@@ -57,12 +60,26 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
     return () => { clearTimeout(resetId); clearInterval(id); };
   }, [isTerminal]);
 
+  // Contextual titles based on operation type
+  const titles = {
+    restart: { active: 'Restarting...', ready: 'Restarted!', failed: 'Restart Failed' },
+    update: { active: 'Updating...', ready: 'Updated!', failed: 'Update Failed' },
+    deploy: { active: 'Deploying...', ready: 'Deployed!', failed: 'Deployment Failed' },
+  };
+  const title = isFailed
+    ? titles[operation].failed
+    : isReady
+      ? titles[operation].ready
+      : titles[operation].active;
+
   // Build a concise screen-reader announcement for the current phase
   const phaseLabel = isFailed
-    ? `Deployment failed${progress.detail ? `: ${progress.detail}` : ''}`
+    ? `${titles[operation].failed}${progress.detail ? `: ${progress.detail}` : ''}`
     : isReady
-      ? 'Deployment complete'
-      : PHASES[currentIdx]?.label ?? 'Deploying';
+      ? titles[operation].ready
+      : isSimpleOperation
+        ? titles[operation].active
+        : PHASES[currentIdx]?.label ?? 'Deploying';
 
   return (
     <div
@@ -77,7 +94,7 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
       <div className="progress-card__header">
         {phaseIcon(progress.phase, 'w-5 h-5')}
         <span className="progress-card__title">
-          {isFailed ? 'Deployment Failed' : isReady ? 'Deployed!' : 'Deploying...'}
+          {title}
         </span>
         {elapsed > 0 && (
           <span className="progress-card__elapsed">{formatElapsed(elapsed)}</span>
@@ -93,6 +110,21 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
               <span className="text-muted">{app.detail || app.phase}</span>
             </div>
           ))}
+        </div>
+      ) : isSimpleOperation ? (
+        <div className="progress-card__steps">
+          <div className="progress-card__step">
+            {isReady ? (
+              <CheckCircle className="w-4 h-4 text-success-400" aria-hidden="true" />
+            ) : isFailed ? (
+              <AlertCircle className="w-4 h-4 text-error-400" aria-hidden="true" />
+            ) : (
+              <Loader className="w-4 h-4 text-primary-400 animate-spin" aria-hidden="true" />
+            )}
+            <span className={`progress-card__step-label ${isReady ? 'text-success-400' : isFailed ? 'text-error-400' : 'text-primary'}`}>
+              {progress.detail || titles[operation].active}
+            </span>
+          </div>
         </div>
       ) : (
         <div className="progress-card__steps">
@@ -117,7 +149,7 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
         </div>
       )}
 
-      {progress.detail && (
+      {progress.detail && !isSimpleOperation && (
         <p className="progress-card__detail">{progress.detail}</p>
       )}
 

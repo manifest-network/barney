@@ -327,7 +327,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         if (result.requiresConfirmation) {
           // Capture pending payload at confirmation time for deploy_app/create_lease
           const toolName = result.pendingAction?.toolName || toolCall.function.name;
-          const actionPayload = (toolName === 'deploy_app' || toolName === 'create_lease')
+          const actionPayload = (toolName === 'deploy_app' || toolName === 'create_lease' || toolName === 'update_app')
             ? pendingPayloadRef.current ?? undefined
             : undefined;
 
