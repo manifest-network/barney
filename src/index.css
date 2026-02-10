@@ -485,6 +485,60 @@ html[data-theme="retro"] body::after {
   -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
 }
 
+/* Neon separators — magenta-to-cyan gradient line with glow */
+[data-theme="retro"] .main-layout__sidebar {
+  border-right: 1px solid transparent;
+  border-image: linear-gradient(180deg, oklch(0.55 0.20 330), oklch(0.40 0.14 290), oklch(0.50 0.18 195)) 1;
+  box-shadow: 1px 0 8px oklch(0.55 0.20 330 / 0.3);
+}
+
+[data-theme="retro"] .chat-panel--fullscreen {
+  border-left: 1px solid transparent;
+  border-image: linear-gradient(180deg, oklch(0.50 0.18 195), oklch(0.40 0.14 290), oklch(0.55 0.20 330)) 1;
+  box-shadow: -1px 0 8px oklch(0.50 0.18 195 / 0.3);
+}
+
+[data-theme="retro"] .chat-panel-header,
+[data-theme="retro"] .ai-settings-header,
+[data-theme="retro"] .sidebar-header,
+[data-theme="retro"] .section-header {
+  border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, oklch(0.55 0.20 330), oklch(0.40 0.14 290), oklch(0.50 0.18 195)) 1;
+  box-shadow: 0 1px 6px oklch(0.55 0.20 330 / 0.2);
+}
+
+[data-theme="retro"] .chat-input-form,
+[data-theme="retro"] .sidebar-footer {
+  border-top: 1px solid transparent;
+  border-image: linear-gradient(90deg, oklch(0.50 0.18 195), oklch(0.40 0.14 290), oklch(0.55 0.20 330)) 1;
+  box-shadow: 0 -1px 6px oklch(0.50 0.18 195 / 0.2);
+}
+
+[data-theme="retro"] .ai-settings {
+  border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, oklch(0.55 0.20 330 / 0.6), oklch(0.50 0.18 195 / 0.6)) 1;
+}
+
+/* Cyan left-border on tool messages */
+[data-theme="retro"] .message-tool {
+  border-left-color: oklch(0.50 0.18 195);
+}
+
+/* Neon vertical separators (lease cards, provider cards, etc.) */
+[data-theme="retro"] .lease-card-separator,
+[data-theme="retro"] .provider-lease-separator,
+[data-theme="retro"] .network-credit-separator,
+[data-theme="retro"] .catalog-sku-separator {
+  background: linear-gradient(180deg, oklch(0.55 0.20 330 / 0.6), oklch(0.50 0.18 195 / 0.6));
+  box-shadow: 0 0 4px oklch(0.55 0.20 330 / 0.3);
+}
+
+/* Neon active tab indicator */
+[data-theme="retro"] .nav-tab.active {
+  border-bottom-color: oklch(0.55 0.20 330);
+  text-shadow: 0 0 6px oklch(0.55 0.20 330 / 0.5);
+}
+
 /* Nord Theme Overrides
    Palette: https://www.nordtheme.com/
    Polar Night backgrounds, Snow Storm text, Frost accents */

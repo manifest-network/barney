@@ -11,6 +11,8 @@ npm run lint         # ESLint
 npm test             # Run all tests (Vitest)
 npm run test:watch   # Tests in watch mode
 npm run test:coverage # Tests with coverage report
+npm run preview      # Preview production build locally
+npm run postinstall  # Apply patches (runs automatically after npm install)
 ```
 
 Run a single test file:
@@ -37,13 +39,13 @@ ChainProvider (cosmos-kit wallet abstraction)
               ├─ LandingPage (when not connected)
               └─ MainLayout (when connected)
                   ├─ AppsSidebar (wallet, credits, running apps)
-                  └─ ChatPanel (full-height chat interface)
-                      ├─ MessageList
-                      │   ├─ MessageBubble
-                      │   ├─ ProgressCard (during deploy)
-                      │   ├─ AppCard (deploy success)
-                      │   └─ ConfirmationCard
-                      └─ ChatInput
+                  └─ ChatPanel (monolithic: messages, input, settings)
+                      ├─ MessageBubble (per-message rendering)
+                      ├─ ProgressCard (during deploy)
+                      ├─ AppCard (deploy success)
+                      ├─ ConfirmationCard (TX approval)
+                      ├─ ToolResultCard / LogCard
+                      └─ AISettings (inline settings panel)
 ```
 
 `AppShell` (`src/components/layout/AppShell.tsx`) is the top-level router. It syncs wallet state (clientManager, address, signArbitrary) from cosmos-kit into AIContext — replacing the old `AIAssistant` component.
@@ -55,8 +57,10 @@ The AI assistant uses a 3-layer architecture:
 1. **AIContext** (`src/contexts/AIContext.tsx`) - Manages chat state, streams from Ollama, executes tools
 2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser`
 3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
-   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `cosmos_query`
-   - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `cosmos_tx`
+   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`
+   - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`
+   - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
+   - **Internal**: `batch_deploy` — orchestrates multi-app deploys from the UI (not exposed to AI, used by `requestBatchDeploy` in AIContext)
 
 ### 11 Composite Tools
 
@@ -82,19 +86,19 @@ Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`.
 
 ```
 Key: barney-apps-{address}
-AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, status }
+AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, connection?, manifest?, status }
 ```
 
-Functions: `getApps`, `getApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `validateAppName`.
+Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `validateAppName`.
 
 Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
 
 ### Deploy Progress
 
 `src/ai/progress.ts` defines `DeployProgress` with phases:
-`checking_credits → creating_lease → uploading → provisioning → ready | failed`
+`checking_credits → funding → creating_lease → uploading → provisioning → ready | failed`
 
-Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored in AIContext as `deployProgress`, and rendered by `ProgressCard`.
+Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored in AIContext as `deployProgress`, and rendered by `ProgressCard`. Batch deploys include a `batch` array with per-app progress.
 
 ### Fred API Client
 
@@ -127,6 +131,7 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 | `config.ts` | API endpoints, denom metadata, price formatting |
 | `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
 | `queryClient.ts` | LCD query client factory (cached singleton) |
+| `index.ts` | Barrel re-exports for API modules |
 
 ## Key Patterns
 
@@ -144,10 +149,20 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 - **Confirmation timeout**: Pending transaction confirmations auto-cancel after `AI_CONFIRMATION_TIMEOUT_MS` (5 minutes) to prevent stuck UI state.
 - **App registry scoping**: Registry is per-wallet in localStorage. `AppShell` syncs wallet changes and clears deploy progress on disconnect.
 
+### Example Apps
+
+`src/config/exampleApps.ts` — Pre-defined app/game manifests for one-click deploys from ChatPanel.
+
+- `EXAMPLE_APPS` array with `group: 'games' | 'apps'` classification
+- `findExampleByAppName(appName)` — Reverse-lookup by registry name
+- `buildExampleManifest(app)` — JSON with envFactory expansion (e.g., Postgres password generation)
+- ChatPanel uses these for deploy buttons; `AppsSidebar` uses them as re-deploy fallback
+
 ## Chain Configuration
 
 Defined in `src/config/chain.ts`:
-- Chain: `manifestlocal` (manifest-ledger-beta)
+- Chain name: `manifestlocal` (used for cosmos-kit / chain registry lookups)
+- Chain ID: `manifest-ledger-beta`
 - Denoms: `umfx` (native), `factory/.../upwr` (PWR factory token) - both 6 decimals
 - Endpoints default to localhost (26657 RPC, 1317 REST)
 

@@ -1242,7 +1242,7 @@ export async function executeConfirmedStopApp(
 
     for (const entry of entries) {
       const result = await cosmosTx(clientManager, 'billing', 'close-lease', [entry.leaseUuid], true);
-      if (result.code === 0) {
+      if (result.code === 0 || result.rawLog?.includes('lease not active')) {
         appRegistry.updateApp(address, entry.leaseUuid, { status: 'stopped' });
         stopped.push(entry.app_name);
       } else {
@@ -1276,6 +1276,18 @@ export async function executeConfirmedStopApp(
   const result = await cosmosTx(clientManager, 'billing', 'close-lease', [leaseUuid], true);
 
   if (result.code !== 0) {
+    // If the lease is already not active on-chain, treat as successfully stopped
+    if (result.rawLog?.includes('lease not active')) {
+      appRegistry.updateApp(address, leaseUuid, { status: 'stopped' });
+      return {
+        success: true,
+        data: {
+          message: `App "${name}" has been stopped (lease was already inactive).`,
+          app_name: name,
+          status: 'stopped',
+        },
+      };
+    }
     return { success: false, error: result.rawLog ?? 'Failed to stop app' };
   }
 

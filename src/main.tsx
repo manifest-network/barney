@@ -11,6 +11,7 @@ import { ToastProvider } from './contexts/ToastContext';
 import { ToastContainer } from './components/ui/Toast';
 import { AIProvider } from './contexts/AIContext';
 import { AppShell } from './components/layout/AppShell';
+import { ErrorBoundary } from './components/ui/ErrorBoundary';
 
 // Web3Auth configuration
 const WEB3AUTH_CLIENT_ID = import.meta.env.PUBLIC_WEB3AUTH_CLIENT_ID || 'YOUR_WEB3AUTH_CLIENT_ID';
@@ -58,29 +59,31 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <ThemeProvider
-      attribute="data-theme"
-      themes={['dark', 'light', 'retro', 'nord', 'dracula', 'catppuccin']}
-      defaultTheme="dark"
-      enableSystem
-      storageKey="barney-theme"
-    >
-      <ChainProvider
-        chains={[manifestLocalChain]}
-        assetLists={[manifestLocalAssets]}
-        wallets={wallets}
-        throwErrors={false}
-        signerOptions={{
-          preferredSignType: () => 'direct',
-        }}
+    <ErrorBoundary>
+      <ThemeProvider
+        attribute="data-theme"
+        themes={['dark', 'light', 'retro', 'nord', 'dracula', 'catppuccin']}
+        defaultTheme="dark"
+        enableSystem
+        storageKey="barney-theme"
       >
-        <ToastProvider>
-          <AIProvider>
-            <AppShell />
-            <ToastContainer />
-          </AIProvider>
-        </ToastProvider>
-      </ChainProvider>
-    </ThemeProvider>
+        <ChainProvider
+          chains={[manifestLocalChain]}
+          assetLists={[manifestLocalAssets]}
+          wallets={wallets}
+          throwErrors={false}
+          signerOptions={{
+            preferredSignType: () => 'direct',
+          }}
+        >
+          <ToastProvider>
+            <AIProvider>
+              <AppShell />
+              <ToastContainer />
+            </AIProvider>
+          </ToastProvider>
+        </ChainProvider>
+      </ThemeProvider>
+    </ErrorBoundary>
   </StrictMode>
 );
