@@ -43,8 +43,8 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   { label: 'Oregon Trail', manifest: GAME_MANIFEST('oregontrail'), group: 'games' },
   { label: 'Doom', manifest: GAME_MANIFEST('doom'), group: 'games' },
   { label: 'ClassiCube', manifest: GAME_MANIFEST('classicube'), group: 'games' },
-  { label: 'Redis', manifest: { image: 'redis:latest', ports: { '6379/tcp': {} } }, size: 'small', group: 'apps' },
-  { label: 'Postgres', manifest: { image: 'postgres:latest', ports: { '5432/tcp': {} } }, envFactory: () => ({ POSTGRES_PASSWORD: generatePassword() }), size: 'small', group: 'apps' },
+  { label: 'Redis 8.4', manifest: { image: 'redis:8.4', ports: { '6379/tcp': {} } }, size: 'small', group: 'apps' },
+  { label: 'Postgres 18', manifest: { image: 'postgres:18', ports: { '5432/tcp': {} }, user: '999:999', tmpfs: ['/var/run/postgresql'] }, envFactory: () => ({ POSTGRES_PASSWORD: generatePassword() }), size: 'small', group: 'apps' },
 ];
 
 /**
