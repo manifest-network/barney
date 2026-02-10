@@ -31,14 +31,15 @@ function isValidProxyTarget(target: string): boolean {
       return false;
     }
 
-    // Resolve hostname to IP for range checks.
+    // Check IP literals for dangerous ranges (no DNS resolution — hostname bypass
+    // is mitigated by the nip.io/xip.io/sslip.io blocks above).
     // Strip brackets for IPv6 literals (new URL() returns [::1] for IPv6).
     const cleanHostname = hostname.replace(/^\[|\]$/g, '');
     if (ipaddr.isValid(cleanHostname)) {
       const addr = ipaddr.parse(cleanHostname);
       const range = addr.range();
 
-      // Block dangerous ranges; allow loopback + private for dev
+      // Block dangerous ranges; allow loopback + IPv4 private for dev
       const blocked = new Set([
         'linkLocal',       // 169.254.x.x — cloud metadata
         'ipv4Mapped',      // ::ffff:0:0/96 — could map to any blocked IPv4
