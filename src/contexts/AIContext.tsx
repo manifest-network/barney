@@ -254,8 +254,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
         return cachedResult;
       }
 
-      // Clear deploy progress on new tool call
-      setDeployProgress(null);
+      // Clear stale deploy progress, but preserve active deploys
+      setDeployProgress(prev => {
+        if (!prev || prev.phase === 'ready' || prev.phase === 'failed') return null;
+        return prev;
+      });
 
       const result = await executeTool(toolCall.function.name, sanitizedArgs, {
         clientManager: clientManagerRef.current,
@@ -430,7 +433,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
       addMessage(userMessage);
       setIsStreaming(true);
-      setDeployProgress(null);
+      // Clear stale deploy progress, but preserve active deploys
+      setDeployProgress(prev => {
+        if (!prev || prev.phase === 'ready' || prev.phase === 'failed') return null;
+        return prev;
+      });
 
       abortControllerRef.current = new AbortController();
 
@@ -584,6 +591,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
           signArbitrary,
           onProgress: setDeployProgress,
           appRegistry: getAppRegistryAccess(),
+          signal: abortControllerRef.current?.signal,
         },
         action.payload
       );

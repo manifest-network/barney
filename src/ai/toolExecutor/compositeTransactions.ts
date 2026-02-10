@@ -426,7 +426,7 @@ export async function executeConfirmedDeployApp(
   options: ToolExecutorOptions,
   payload?: PayloadAttachment
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary, onProgress } = options;
+  const { address, appRegistry, signArbitrary, onProgress, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!payload) return { success: false, error: 'Payload missing' };
@@ -507,6 +507,7 @@ export async function executeConfirmedDeployApp(
     const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
       maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
       intervalMs: POLL_INTERVAL_MS,
+      abortSignal: signal,
       onProgress: (status) => {
         onProgress?.({
           phase: 'provisioning',
@@ -642,7 +643,7 @@ export async function deploySingleApp(
   options: ToolExecutorOptions,
   onProgress: (progress: { phase: DeployProgress['phase']; detail?: string }) => void
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary } = options;
+  const { address, appRegistry, signArbitrary, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
@@ -716,6 +717,7 @@ export async function deploySingleApp(
     const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
       maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
       intervalMs: POLL_INTERVAL_MS,
+      abortSignal: signal,
       onProgress: (status) => {
         onProgress({ phase: 'provisioning', detail: status.phase || 'Provisioning...' });
       },
@@ -947,7 +949,7 @@ export async function executeConfirmedBatchDeploy(
     return { success: false, error: 'No entries to deploy' };
   }
 
-  const { address, appRegistry, signArbitrary, onProgress } = options;
+  const { address, appRegistry, signArbitrary, onProgress, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
@@ -1073,6 +1075,7 @@ export async function executeConfirmedBatchDeploy(
           const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
             maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
             intervalMs: POLL_INTERVAL_MS,
+            abortSignal: signal,
             onProgress: (status) => {
               batchProgress[idx] = { name, phase: 'provisioning', detail: status.phase || 'Provisioning...' };
               emitProgress();

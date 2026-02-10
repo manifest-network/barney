@@ -74,6 +74,8 @@ export async function executeTool(
           return await executeBrowseCatalog();
         case 'lease_history':
           return await executeLeaseHistory(args, options);
+        default:
+          return { success: false, error: `Unknown query tool: ${toolName}` };
       }
     } catch (error) {
       return {
@@ -93,6 +95,8 @@ export async function executeTool(
           return await executeStopApp(args, options);
         case 'fund_credits':
           return executeFundCredits(args, options);
+        default:
+          return { success: false, error: `Unknown TX tool: ${toolName}` };
       }
     } catch (error) {
       return {

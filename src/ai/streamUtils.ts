@@ -37,28 +37,35 @@ async function* withTimeout<T>(
   generator: AsyncGenerator<T>,
   timeoutMs: number
 ): AsyncGenerator<T> {
-  while (true) {
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    while (true) {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-    try {
-      const result = await Promise.race([
-        generator.next(),
-        new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(
-            () => reject(new Error('Stream timeout: no response received')),
-            timeoutMs
-          );
-        }),
-      ]);
+      try {
+        const result = await Promise.race([
+          generator.next(),
+          new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(
+              () => reject(new Error('Stream timeout: no response received')),
+              timeoutMs
+            );
+          }),
+        ]);
 
-      if (result.done) break;
-      yield result.value;
-    } finally {
-      // Clear the timeout to avoid accumulating orphan timers
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
+        if (result.done) break;
+        yield result.value;
+      } finally {
+        // Clear the timeout to avoid accumulating orphan timers
+        if (timeoutId !== undefined) {
+          clearTimeout(timeoutId);
+        }
       }
     }
+  } finally {
+    // Ensure the underlying generator is cleaned up on early exit (timeout, break, return)
+    // Without this, a timeout rejection exits withTimeout but leaves the inner generator open,
+    // potentially leaking HTTP connections.
+    await generator.return(undefined as T);
   }
 }
 

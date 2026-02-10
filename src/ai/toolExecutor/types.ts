@@ -82,6 +82,7 @@ export interface ToolExecutorOptions {
   onConfirmationRequired?: (action: PendingAction) => void;
   onProgress?: (progress: DeployProgress) => void;
   appRegistry?: AppRegistryAccess;
+  signal?: AbortSignal;
 }
 
 export interface PendingAction {
