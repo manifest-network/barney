@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ChainProvider } from '@cosmos-kit/react';
+import { wallets as keplrWallets } from '@cosmos-kit/keplr-extension';
 import { makeWeb3AuthWallets } from '@cosmos-kit/web3auth';
 
 import { ThemeProvider } from 'next-themes';
@@ -49,6 +50,7 @@ const web3AuthWallets = makeWeb3AuthWallets({
 });
 
 const wallets = [
+  ...keplrWallets,
   ...web3AuthWallets,
 ];
 
