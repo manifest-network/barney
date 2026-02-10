@@ -1,5 +1,5 @@
 import { logError } from '../utils/errors';
-import { AI_MAX_RETRIES, AI_RETRY_BASE_DELAY_MS } from '../config/constants';
+import { AI_MAX_RETRIES, AI_RETRY_BASE_DELAY_MS, AI_TOOL_API_TIMEOUT_MS } from '../config/constants';
 
 /**
  * Checks if an error is transient and should be retried.
@@ -64,4 +64,31 @@ export async function withRetry<T>(
   }
 
   throw lastError;
+}
+
+/**
+ * Wraps a promise with a timeout. Rejects with a TimeoutError if the
+ * promise does not settle within the given duration.
+ */
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number = AI_TOOL_API_TIMEOUT_MS,
+  label = 'Operation'
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms
+    );
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
 }

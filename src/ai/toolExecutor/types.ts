@@ -3,6 +3,8 @@
  */
 
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
+import type { DeployProgress } from '../progress';
+import type { AppEntry } from '../../registry/appRegistry';
 
 export interface SignResult {
   pub_key: { type: string; value: string };
@@ -23,6 +25,7 @@ interface ToolResultSuccess {
   success: true;
   requiresConfirmation?: false;
   data: unknown;
+  displayCard?: { type: string; data: unknown };
   error?: never;
   confirmationMessage?: never;
   pendingAction?: never;
@@ -63,11 +66,23 @@ interface ToolResultConfirmation {
  */
 export type ToolResult = ToolResultSuccess | ToolResultFailure | ToolResultConfirmation;
 
+export interface AppRegistryAccess {
+  getApps: (address: string) => AppEntry[];
+  getApp: (address: string, name: string) => AppEntry | null;
+  findApp: (address: string, name: string) => AppEntry | null;
+  getAppByLease: (address: string, leaseUuid: string) => AppEntry | null;
+  addApp: (address: string, entry: AppEntry) => AppEntry;
+  updateApp: (address: string, leaseUuid: string, updates: Partial<Omit<AppEntry, 'leaseUuid'>>) => AppEntry | null;
+}
+
 export interface ToolExecutorOptions {
   clientManager: CosmosClientManager | null;
   address: string | undefined;
   signArbitrary?: (address: string, data: string) => Promise<SignResult>;
   onConfirmationRequired?: (action: PendingAction) => void;
+  onProgress?: (progress: DeployProgress) => void;
+  appRegistry?: AppRegistryAccess;
+  signal?: AbortSignal;
 }
 
 export interface PendingAction {

@@ -11,6 +11,8 @@ npm run lint         # ESLint
 npm test             # Run all tests (Vitest)
 npm run test:watch   # Tests in watch mode
 npm run test:coverage # Tests with coverage report
+npm run preview      # Preview production build locally
+npm run postinstall  # Apply patches (runs automatically after npm install)
 ```
 
 Run a single test file:
@@ -23,17 +25,35 @@ Run tests matching a pattern:
 npx vitest run -t "validateFile"
 ```
 
+Tests use Vitest with `happy-dom` (not jsdom). Coverage uses the `v8` provider. See `vitest.config.ts`.
+
 ## Architecture
 
-### Context Hierarchy
+### UI Layout
+
+Chat-primary deployment platform:
 
 ```
-ChainProvider (cosmos-kit wallet abstraction)
-  └─ ToastProvider (toast notifications)
-      └─ AutoRefreshProvider (10s polling, pauses when tab hidden)
-          └─ AIProvider (chat state, tool execution, Ollama streaming)
-              └─ App (tab routing based on user role)
+ErrorBoundary
+  └─ ThemeProvider (next-themes)
+      └─ ChainProvider (cosmos-kit wallet abstraction)
+          └─ ToastProvider (toast notifications)
+              ├─ AIProvider (chat state, tool execution, Ollama streaming)
+              │   └─ AppShell
+              │       ├─ LandingPage (when not connected)
+              │       └─ MainLayout (when connected)
+              │           ├─ AppsSidebar (wallet, credits, running apps)
+              │           └─ ChatPanel (monolithic: messages, input, settings)
+              │               ├─ MessageBubble (per-message rendering)
+              │               ├─ ProgressCard (during deploy)
+              │               ├─ AppCard (deploy success)
+              │               ├─ ConfirmationCard (TX approval)
+              │               ├─ ToolResultCard / LogCard
+              │               └─ AISettings (inline settings panel)
+              └─ ToastContainer (toast rendering)
 ```
+
+`AppShell` (`src/components/layout/AppShell.tsx`) is the top-level router. It syncs wallet state (clientManager, address, signArbitrary) from cosmos-kit into AIContext — replacing the old `AIAssistant` component.
 
 ### AI Tool Execution Flow
 
@@ -41,24 +61,69 @@ The AI assistant uses a 3-layer architecture:
 
 1. **AIContext** (`src/contexts/AIContext.tsx`) - Manages chat state, streams from Ollama, executes tools
 2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser`
-3. **Tool Executor** (`src/ai/toolExecutor/`) - Bifurcated execution:
-   - **Query tools**: Execute immediately (balances, leases, providers)
-   - **Transaction tools**: Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts
+3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
+   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`
+   - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`
+   - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
+   - **Internal**: `batch_deploy` — orchestrates multi-app deploys from the UI (not exposed to AI, used by `requestBatchDeploy` in AIContext)
 
-Tool definitions are in `src/ai/tools.ts`. The system prompt is dynamically generated from blockchain module documentation.
+### 11 Composite Tools
 
-### Dual Transaction Paths
+| Tool | Type | Description |
+|------|------|-------------|
+| `deploy_app(app_name?, size?)` | TX | Deploy from attached manifest. Defaults: size=micro, name from filename |
+| `stop_app(app_name)` | TX | Stop app by name (closes lease on-chain) |
+| `fund_credits(amount)` | TX | Add credits in display units |
+| `list_apps(state?)` | Query | List apps filtered by state (default: running) |
+| `app_status(app_name)` | Query | Detailed status: registry + chain + fred |
+| `get_logs(app_name, tail?)` | Query | Container logs for a running app |
+| `get_balance()` | Query | Credits, spending rate, time remaining |
+| `browse_catalog()` | Query | Providers + SKU tiers with health checks |
+| `lease_history(state?, limit?, offset?)` | Query | Paginated on-chain lease history with state filtering |
+| `cosmos_query(module, subcommand, args?)` | Query | Raw chain query escape hatch |
+| `cosmos_tx(module, subcommand, args)` | TX | Raw chain TX escape hatch |
 
-UI components and AI tools use separate transaction paths that both leverage manifestjs internally:
+Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`.
 
-- **UI components** use `src/api/tx.ts` via `signAndBroadcast()` (cosmos-kit signer + manifestjs `getSigningLiftedinitClient`)
-- **AI tool executor** uses `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (an MCP server that also uses manifestjs internally)
+### App Registry
+
+`src/registry/appRegistry.ts` — localStorage-backed name→lease mapping, scoped per wallet address.
+
+```
+Key: barney-apps-{address}
+AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, connection?, manifest?, status }
+```
+
+Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `validateAppName`.
+
+Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
+
+### Deploy Progress
+
+`src/ai/progress.ts` defines `DeployProgress` with phases:
+`checking_credits → funding → creating_lease → uploading → provisioning → ready | failed`
+
+Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored in AIContext as `deployProgress`, and rendered by `ProgressCard`. Batch deploys include a `batch` array with per-app progress.
+
+### Fred API Client
+
+`src/api/fred.ts` — Polls provider's `/status/{uuid}` endpoint for deployment status. Follows `provider-api.ts` patterns (SSRF validation, dev CORS proxy, ADR-036 auth).
+
+- `getLeaseStatus()` — Single fetch
+- `pollLeaseUntilReady()` — Polling loop with configurable interval, max attempts, abort signal
+- `getLeaseLogs()` — Fetch container logs for a running lease
+- `getLeaseProvision()` — Fetch provision status
+- `getLeaseInfo()` — Fetch connection details (ports, URLs)
+
+### Transaction Path
+
+AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP server that uses manifestjs internally).
 
 ### Wallet Integration
 
-- cosmos-kit provides wallet abstraction (Keplr, Leap, Leap MetaMask Cosmos Snap, Cosmostation, Ledger, Web3Auth)
+- cosmos-kit provides wallet abstraction (currently only Web3Auth is enabled in `src/main.tsx`; Keplr, Leap, Cosmostation, Ledger packages are installed but not imported)
 - `CosmosClientManager` singleton wraps the signer for MCP operations
-- `signArbitrary` used for ADR-036 off-chain authentication (payload uploads to providers)
+- `signArbitrary` used for ADR-036 off-chain authentication (payload uploads to providers, fred status queries)
 
 ### API Layer (`src/api/`)
 
@@ -69,42 +134,96 @@ UI components and AI tools use separate transaction paths that both leverage man
 | `bank.ts` | Cosmos SDK bank queries |
 | `tx.ts` | Transaction utilities and message builders |
 | `provider-api.ts` | Payload upload with ADR-036 auth |
+| `fred.ts` | Fred deployment status polling |
 | `ollama.ts` | LLM streaming with retry/backoff |
 | `config.ts` | API endpoints, denom metadata, price formatting |
 | `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
 | `queryClient.ts` | LCD query client factory (cached singleton) |
+| `index.ts` | Barrel re-exports for API modules |
 
-### Tab Components
+### Hooks (`src/hooks/`)
 
-Tabs register a fetch function with `AutoRefreshContext` on mount via `useAutoRefreshTab()`. Data flows:
-```
-Tab mounts → registers fetch → polls every 10s → local state → render
-```
+AIContext delegates to extracted hooks to keep the provider manageable:
 
-**Important:** AutoRefreshContext uses a "last one wins" model — only one fetch function is active at a time. When a new tab mounts and registers its fetch, the previous tab's fetch is replaced. This assumes only one tab is mounted at a time (tabs unmount on switch via conditional rendering in `App.tsx`).
+| Hook | Purpose |
+|------|---------|
+| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser` |
+| `useMessageManager` | Message CRUD with synchronous ref mirror — updates `messagesRef` before `setMessages` so rapid async calls always read consistent state |
+| `useStreamingUpdates` | RAF-throttled message updates during LLM streaming — batches rapid content chunks into one state update per animation frame |
+| `useToolCache` | Query tool result cache (10s TTL, 50 max, FIFO eviction), scoped per wallet address |
+| `useChatPersistence` | localStorage-backed settings + history with lazy initializers to avoid save/load race conditions |
+| `useAutoScroll` | MutationObserver-based auto-scroll that respects user scroll position |
+| `useFocusTrap` | Keyboard focus trapping for modals/overlays with Escape support |
 
-Tabs are conditionally rendered based on `isProvider` and `isAdmin` roles checked in `App.tsx`. Each tab lives in its own subdirectory under `src/components/tabs/` (e.g., `tabs/leases/`, `tabs/catalog/`) with a barrel `index.ts` export. **Exception:** `WalletTab` does not use `useAutoRefreshTab` since it has no polling data.
+### Utility Modules (`src/utils/`)
+
+| Module | Purpose |
+|--------|---------|
+| `errors.ts` | `logError()` — structured error logging (use instead of raw `console.error`) |
+| `hash.ts` | `sha256()`, `toHex()` — hashing and hex encoding; `MAX_PAYLOAD_SIZE` (5KB) |
+| `format.ts` | Amount conversion (`toBaseUnits`, `fromBaseUnits`), date/duration formatting, UUID validation |
+| `fileValidation.ts` | Upload validation: size limits, allowed extensions (`.yaml`, `.yml`, `.json`, `.txt`), MIME type checks |
+| `pricing.ts` | BigInt-based cost calculations (`formatCostPerHour`, `calculateEstimatedCost`) to avoid integer overflow |
+| `leaseState.ts` | Lease state display helpers — badge classes, labels, colors, filter mapping |
+| `address.ts` | Bech32 address validation (`isValidBech32Address`) and truncation (`truncateAddress`) |
+| `url.ts` | URL validation with SSRF protection (`parseHttpUrl`, `isUrlSsrfSafe`) |
+| `cn.ts` | Class name combiner (clsx-style): `cn('foo', condition && 'bar')` |
+
+### Constants (`src/config/constants.ts`)
+
+All tunable timeouts, cache sizes, and limits are centralized here. Key values:
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `AI_STREAM_TIMEOUT_MS` | 30s | Per-chunk stream timeout |
+| `AI_CONFIRMATION_TIMEOUT_MS` | 5min | Auto-cancel pending TX confirmations |
+| `AI_DEPLOY_PROVISION_TIMEOUT_MS` | 5min | Max polling time for deploy readiness |
+| `AI_MESSAGE_DEBOUNCE_MS` | 300ms | Debounce rapid message sends |
+| `AI_MAX_TOOL_ITERATIONS` | 10 | Max tool calls per message (prevents loops) |
+| `AI_MAX_MESSAGES` | 200 | Chat history memory limit |
+| `AI_TOOL_CACHE_TTL_MS` | 10s | Query result cache lifetime |
+| `AI_TOOL_CACHE_MAX_SIZE` | 50 | Max cached query results |
+| `MAX_PAYLOAD_SIZE` | 5KB | Maximum file upload size (in `hash.ts`) |
+
+## Styling
+
+- Tailwind v4 with inline `@theme` configuration in `src/index.css` (no separate `tailwind.config` file)
+- Custom Manifest design system using OKLCH color space
+- Fonts: Plus Jakarta Sans (headings/body), IBM Plex Mono (code)
+- Use `cn()` from `src/utils/cn.ts` for conditional class names
+- No CSS modules or styled-components — pure Tailwind utility classes
 
 ## Key Patterns
 
 - **Refs for async access**: AIContext uses refs (`clientManagerRef`, `addressRef`, `signArbitraryRef`) to avoid stale closures in streaming callbacks
 - **SSRF protection**: `src/ai/validation.ts` uses `ipaddr.js` to block private/internal addresses (DEV mode allows localhost for Ollama)
 - **Error utilities**: Use `logError()` from `src/utils/errors.ts` instead of raw `console.error`
-- **Transaction handling**: Use `useTxHandler()` hook from `src/hooks/useTxHandler.ts` for standardized transaction execution with toast notifications
 - **Retry logic**: Use `withRetry()` from `src/api/utils.ts` for transient network error recovery with exponential backoff
 - **Tool result caching**: Query tool results cached for 10s in AIContext to reduce redundant API calls (max 50 entries, FIFO eviction). Cache is scoped per wallet address and cleared on wallet change.
 - **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
 - **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
-- **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs.
-- **Stream timeout**: `processStreamWithTimeout` in AIContext wraps the Ollama async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely.
+- **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs. The rsbuild proxy (`rsbuild.config.ts`) has its own SSRF validation layer (`isValidProxyTarget`) separate from runtime validation, blocking cloud metadata endpoints, dangerous IP ranges, and embedded credentials.
+- **Stream timeout**: `processStreamWithTimeout` in `src/ai/streamUtils.ts` wraps the Ollama async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely. The inner `withTimeout` generator ensures cleanup of the underlying generator via `finally` block.
+- **Tool-call leak stripping**: `stripToolCallLeaks()` in `src/ai/streamUtils.ts` filters raw `[TOOL_CALLS]` markers that some Ollama models emit as literal text instead of structured tool_calls.
 - **Message debouncing**: AIContext debounces rapid message sends via `AI_MESSAGE_DEBOUNCE_MS` (300ms) and aborts in-flight streams when a new message is sent.
 - **Chat persistence**: AIContext persists settings and chat history to localStorage (`barney-ai-settings`, `barney-ai-history`). History is validated and sanitized on load; corrupted data is cleared. Streaming messages are excluded from persistence.
 - **Confirmation timeout**: Pending transaction confirmations auto-cancel after `AI_CONFIRMATION_TIMEOUT_MS` (5 minutes) to prevent stuck UI state.
+- **App registry scoping**: Registry is per-wallet in localStorage. `AppShell` syncs wallet changes and clears deploy progress on disconnect.
+
+### Example Apps
+
+`src/config/exampleApps.ts` — Pre-defined app/game manifests for one-click deploys from ChatPanel.
+
+- `EXAMPLE_APPS` array with `group: 'games' | 'apps'` classification
+- `findExampleByAppName(appName)` — Reverse-lookup by registry name
+- `buildExampleManifest(app)` — JSON with envFactory expansion (e.g., Postgres password generation)
+- ChatPanel uses these for deploy buttons; `AppsSidebar` uses them as re-deploy fallback
 
 ## Chain Configuration
 
 Defined in `src/config/chain.ts`:
-- Chain: `manifestlocal` (manifest-ledger-beta)
+- Chain name: `manifestlocal` (used for cosmos-kit / chain registry lookups)
+- Chain ID: `manifest-ledger-beta`
 - Denoms: `umfx` (native), `factory/.../upwr` (PWR factory token) - both 6 decimals
 - Endpoints default to localhost (26657 RPC, 1317 REST)
 

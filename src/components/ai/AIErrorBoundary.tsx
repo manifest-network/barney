@@ -49,7 +49,7 @@ export class AIErrorBoundary extends Component<Props, State> {
             {this.state.error && (
               <details className="ai-error-details">
                 <summary>Error details</summary>
-                <pre>{this.state.error.message}</pre>
+                <pre tabIndex={0} aria-label="Error details">{this.state.error.message}</pre>
               </details>
             )}
             <button

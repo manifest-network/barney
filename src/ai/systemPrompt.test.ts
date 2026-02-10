@@ -1,102 +1,62 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-vi.mock('@manifest-network/manifest-mcp-browser', () => ({
-  getAvailableModules: vi.fn(),
-  getModuleSubcommands: vi.fn(),
-}));
-
-import { getAvailableModules, getModuleSubcommands } from '@manifest-network/manifest-mcp-browser';
+import { describe, it, expect } from 'vitest';
 import { getSystemPrompt } from './systemPrompt';
 
-const mockGetAvailableModules = vi.mocked(getAvailableModules);
-const mockGetModuleSubcommands = vi.mocked(getModuleSubcommands);
-
 describe('getSystemPrompt', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    // Reset the cached doc between tests by re-importing
-    vi.resetModules();
-
-    mockGetAvailableModules.mockReturnValue({
-      queryModules: [{ name: 'bank', description: 'Bank module' }],
-      txModules: [{ name: 'billing', description: 'Billing module' }],
-    } as any);
-
-    mockGetModuleSubcommands.mockReturnValue([
-      { name: 'balances', description: 'Query balances', args: '["address"]' },
-    ] as any);
-  });
-
-  it('contains AI assistant identity', async () => {
-    const { getSystemPrompt: fresh } = await import('./systemPrompt');
-    const prompt = fresh('manifest1abc');
+  it('contains AI assistant identity', () => {
+    const prompt = getSystemPrompt();
     expect(prompt).toContain('Barney');
+    expect(prompt).toContain('deployment assistant');
   });
 
-  it('contains tool documentation sections', async () => {
-    const { getSystemPrompt: fresh } = await import('./systemPrompt');
-    const prompt = fresh();
+  it('contains tool names', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('deploy_app');
+    expect(prompt).toContain('stop_app');
+    expect(prompt).toContain('fund_credits');
+    expect(prompt).toContain('list_apps');
+    expect(prompt).toContain('app_status');
     expect(prompt).toContain('get_balance');
-    expect(prompt).toContain('get_leases');
-    expect(prompt).toContain('create_lease');
+    expect(prompt).toContain('browse_catalog');
     expect(prompt).toContain('cosmos_query');
+    expect(prompt).toContain('cosmos_tx');
   });
 
-  it('contains cosmos operations documentation from modules', async () => {
-    const { getSystemPrompt: fresh } = await import('./systemPrompt');
-    const prompt = fresh();
-    expect(prompt).toContain('Query Modules');
-    expect(prompt).toContain('Transaction Modules');
-    expect(prompt).toContain('bank');
-    expect(prompt).toContain('billing');
-    expect(prompt).toContain('balances');
+  it('contains resource tiers', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('micro');
+    expect(prompt).toContain('small');
+    expect(prompt).toContain('medium');
+    expect(prompt).toContain('large');
   });
 
-  it('includes wallet address when provided', async () => {
-    const { getSystemPrompt: fresh } = await import('./systemPrompt');
-    const prompt = fresh('manifest1xyz');
+  it('includes wallet address when provided', () => {
+    const prompt = getSystemPrompt('manifest1xyz');
     expect(prompt).toContain('manifest1xyz');
-    expect(prompt).toContain('Connected wallet address');
+    expect(prompt).toContain('Wallet');
   });
 
-  it('shows no-wallet message when address is undefined', async () => {
-    const { getSystemPrompt: fresh } = await import('./systemPrompt');
-    const prompt = fresh();
+  it('shows no-wallet message when address is undefined', () => {
+    const prompt = getSystemPrompt();
     expect(prompt).toContain('No wallet connected');
   });
 
-  it('caches cosmos operations doc on subsequent calls', async () => {
-    const { getSystemPrompt: fresh } = await import('./systemPrompt');
-    fresh();
-    fresh();
-    // getAvailableModules should only be called once due to caching
-    expect(mockGetAvailableModules).toHaveBeenCalledTimes(1);
+  it('contains vocabulary rules', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('Vocabulary');
+    expect(prompt).toContain('"apps" not "leases"');
+    expect(prompt).toContain('"credits" not "PWR"');
   });
 
-  it('handles getModuleSubcommands throwing gracefully', async () => {
-    mockGetModuleSubcommands.mockImplementation(() => {
-      throw new Error('not available');
-    });
-
-    const { getSystemPrompt: fresh } = await import('./systemPrompt');
-    const prompt = fresh();
-    // Should still contain the module names even if subcommands fail
-    expect(prompt).toContain('bank');
-    expect(prompt).toContain('billing');
+  it('contains behavior rules', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('On file attachment');
+    expect(prompt).toContain('Default size');
+    expect(prompt).toContain('Be concise');
   });
 
-  it('contains token denomination info', async () => {
-    const { getSystemPrompt: fresh } = await import('./systemPrompt');
-    const prompt = fresh();
-    expect(prompt).toContain('umfx');
-    expect(prompt).toContain('MFX');
-  });
-
-  it('contains lease state documentation', async () => {
-    const { getSystemPrompt: fresh } = await import('./systemPrompt');
-    const prompt = fresh();
-    expect(prompt).toContain('PENDING');
-    expect(prompt).toContain('ACTIVE');
-    expect(prompt).toContain('CLOSED');
+  it('contains file attachment instructions', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('(File attached:');
+    expect(prompt).toContain('immediately call deploy_app()');
   });
 });

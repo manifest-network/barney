@@ -4,21 +4,20 @@ import {
   isValidToolName,
   getToolCallDescription,
   AI_TOOLS,
-  CONFIRMATION_REQUIRED_TOOLS,
+  CONFIRMATION_TOOLS,
 } from './tools';
 
 describe('requiresConfirmation', () => {
-  it('returns true for all 5 transaction tools', () => {
-    expect(requiresConfirmation('create_lease')).toBe(true);
-    expect(requiresConfirmation('close_lease')).toBe(true);
-    expect(requiresConfirmation('fund_credit')).toBe(true);
+  it('returns true for all TX tools', () => {
+    expect(requiresConfirmation('deploy_app')).toBe(true);
+    expect(requiresConfirmation('stop_app')).toBe(true);
+    expect(requiresConfirmation('fund_credits')).toBe(true);
     expect(requiresConfirmation('cosmos_tx')).toBe(true);
-    expect(requiresConfirmation('upload_payload')).toBe(true);
   });
 
   it('returns false for all query tools', () => {
     const queryTools = AI_TOOLS.map((t) => t.function.name).filter(
-      (name) => !CONFIRMATION_REQUIRED_TOOLS.has(name)
+      (name) => !CONFIRMATION_TOOLS.has(name)
     );
     for (const tool of queryTools) {
       expect(requiresConfirmation(tool)).toBe(false);
@@ -44,9 +43,8 @@ describe('isValidToolName', () => {
   });
 
   it('returns false for case variations', () => {
-    expect(isValidToolName('Get_Balance')).toBe(false);
+    expect(isValidToolName('Deploy_App')).toBe(false);
     expect(isValidToolName('GET_BALANCE')).toBe(false);
-    expect(isValidToolName('Get_Leases')).toBe(false);
   });
 
   it('returns false for non-string input', () => {
@@ -66,42 +64,67 @@ describe('getToolCallDescription', () => {
     }
   });
 
-  it('interpolates state in get_leases', () => {
-    const desc = getToolCallDescription('get_leases', { state: 'active' });
-    expect(desc).toContain('active');
+  it('interpolates name in deploy_app', () => {
+    const desc = getToolCallDescription('deploy_app', { app_name: 'my-app', size: 'small' });
+    expect(desc).toContain('my-app');
+    expect(desc).toContain('small');
   });
 
-  it('interpolates provider_uuid in get_skus', () => {
-    const uuid = '019beb87-09de-7000-beef-ae733e73ff23';
-    const desc = getToolCallDescription('get_skus', { provider_uuid: uuid });
-    expect(desc).toContain(uuid);
+  it('interpolates name in stop_app', () => {
+    const desc = getToolCallDescription('stop_app', { app_name: 'my-app' });
+    expect(desc).toContain('my-app');
   });
 
-  it('interpolates amount in fund_credit', () => {
-    const desc = getToolCallDescription('fund_credit', { amount: '1000000umfx' });
-    expect(desc).toContain('1000000umfx');
+  it('interpolates amount in fund_credits', () => {
+    const desc = getToolCallDescription('fund_credits', { amount: 50 });
+    expect(desc).toContain('50');
   });
 
-  it('interpolates lease_uuid in close_lease', () => {
-    const uuid = '019beb87-09de-7000-beef-ae733e73ff23';
-    const desc = getToolCallDescription('close_lease', { lease_uuid: uuid });
-    expect(desc).toContain(uuid);
+  it('interpolates state in list_apps', () => {
+    const desc = getToolCallDescription('list_apps', { state: 'stopped' });
+    expect(desc).toContain('stopped');
   });
 
-  it('handles missing args without crash for get_leases', () => {
-    const desc = getToolCallDescription('get_leases', {});
-    expect(desc).toBeTruthy();
-    expect(desc).not.toContain('undefined');
+  it('interpolates name in app_status', () => {
+    const desc = getToolCallDescription('app_status', { app_name: 'my-app' });
+    expect(desc).toContain('my-app');
   });
 
-  it('handles missing args without crash for get_skus', () => {
-    const desc = getToolCallDescription('get_skus', {});
-    expect(desc).toBeTruthy();
-    expect(desc).not.toContain('undefined');
+  it('interpolates state in lease_history', () => {
+    const desc = getToolCallDescription('lease_history', { state: 'closed' });
+    expect(desc).toContain('closed');
+  });
+
+  it('returns default description for lease_history without state', () => {
+    const desc = getToolCallDescription('lease_history', {});
+    expect(desc).toContain('lease history');
   });
 
   it('returns fallback for unknown tool names', () => {
     const desc = getToolCallDescription('unknown_tool', {});
     expect(desc).toContain('unknown_tool');
+  });
+});
+
+describe('AI_TOOLS', () => {
+  it('includes lease_history tool', () => {
+    const toolNames = AI_TOOLS.map((t) => t.function.name);
+    expect(toolNames).toContain('lease_history');
+  });
+
+  it('includes get_logs tool', () => {
+    const toolNames = AI_TOOLS.map((t) => t.function.name);
+    expect(toolNames).toContain('get_logs');
+  });
+
+  it('has 11 tools total', () => {
+    expect(AI_TOOLS).toHaveLength(11);
+  });
+});
+
+describe('getToolCallDescription - get_logs', () => {
+  it('interpolates name in get_logs', () => {
+    const desc = getToolCallDescription('get_logs', { app_name: 'my-app' });
+    expect(desc).toContain('my-app');
   });
 });

@@ -4,7 +4,7 @@
  */
 
 import { logError } from '../utils/errors';
-import { HEALTH_CHECK_TIMEOUT_MS } from '../config/constants';
+import { HEALTH_CHECK_TIMEOUT_MS, AI_STREAM_TIMEOUT_MS } from '../config/constants';
 import { withRetry } from './utils';
 
 export interface OllamaMessage {
@@ -150,6 +150,17 @@ export async function* streamChat(
     body.think = true;
   }
 
+  // Create a combined signal: user-cancellation + connection timeout.
+  // The timeout only guards the initial fetch (getting response headers).
+  // Once headers arrive, we clear the timeout and rely on the per-chunk
+  // timeout in processStreamWithTimeout for the streaming body.
+  let fetchTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  const fetchAbort = new AbortController();
+  const onExternalAbort = () => fetchAbort.abort();
+  signal?.addEventListener('abort', onExternalAbort, { once: true });
+
+  fetchTimeoutId = setTimeout(() => fetchAbort.abort(), AI_STREAM_TIMEOUT_MS);
+
   try {
     const response = await fetch(apiUrl, {
       method: 'POST',
@@ -157,8 +168,12 @@ export async function* streamChat(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
-      signal,
+      signal: fetchAbort.signal,
     });
+
+    // Got headers — clear the connection timeout
+    clearTimeout(fetchTimeoutId);
+    fetchTimeoutId = undefined;
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -258,13 +273,24 @@ export async function* streamChat(
     yield { type: 'done' };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      yield { type: 'done' };
+      // Distinguish user-initiated abort from connection timeout
+      if (signal?.aborted) {
+        yield { type: 'done' };
+      } else {
+        yield { type: 'error', error: 'Connection to Ollama timed out. Is the model loaded?' };
+      }
       return;
     }
     yield {
       type: 'error',
       error: error instanceof Error ? error.message : 'Unknown error',
     };
+  } finally {
+    if (fetchTimeoutId !== undefined) clearTimeout(fetchTimeoutId);
+    signal?.removeEventListener('abort', onExternalAbort);
+    // Ensure the connection is fully torn down even if the generator is
+    // abandoned mid-stream (e.g., consumer threw or called .return()).
+    fetchAbort.abort();
   }
 }
 

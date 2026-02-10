@@ -24,7 +24,11 @@ export function toBytes(data: string | Uint8Array): Uint8Array {
  * @returns The hash as a Uint8Array
  */
 export async function sha256(data: string | Uint8Array): Promise<Uint8Array> {
-  const hashBuffer = await crypto.subtle.digest('SHA-256', toBytes(data));
+  const bytes = toBytes(data);
+  // TS 5.9 parameterizes Uint8Array with buffer type; crypto.subtle.digest
+  // requires ArrayBuffer (not SharedArrayBuffer). toBytes always returns a
+  // fresh Uint8Array backed by ArrayBuffer, so the assertion is safe.
+  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes as Uint8Array<ArrayBuffer>);
   return new Uint8Array(hashBuffer);
 }
 
@@ -47,6 +51,27 @@ export function toHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+const PASSWORD_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+/**
+ * Generates a cryptographically secure random password.
+ * Uses alphanumeric characters only to avoid shell/env escaping issues.
+ */
+export function generatePassword(length = 16): string {
+  const limit = 256 - (256 % PASSWORD_CHARS.length); // 248 — reject bytes >= limit to eliminate modular bias
+  const result: string[] = [];
+  while (result.length < length) {
+    const bytes = new Uint8Array(length - result.length);
+    crypto.getRandomValues(bytes);
+    for (const b of bytes) {
+      if (b < limit && result.length < length) {
+        result.push(PASSWORD_CHARS[b % PASSWORD_CHARS.length]);
+      }
+    }
+  }
+  return result.join('');
 }
 
 /**

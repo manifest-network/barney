@@ -5,6 +5,7 @@ import {
   toHex,
   validatePayloadSize,
   getPayloadSize,
+  generatePassword,
   MAX_PAYLOAD_SIZE,
 } from './hash';
 
@@ -99,5 +100,26 @@ describe('getPayloadSize', () => {
   it('handles UTF-8 encoding', () => {
     // "é" is 2 bytes in UTF-8
     expect(getPayloadSize('é')).toBe(2);
+  });
+});
+
+describe('generatePassword', () => {
+  it('returns default length of 16', () => {
+    expect(generatePassword()).toHaveLength(16);
+  });
+
+  it('respects custom length', () => {
+    expect(generatePassword(8)).toHaveLength(8);
+    expect(generatePassword(32)).toHaveLength(32);
+  });
+
+  it('contains only alphanumeric characters', () => {
+    const password = generatePassword(100);
+    expect(password).toMatch(/^[A-Za-z0-9]+$/);
+  });
+
+  it('generates unique values across calls', () => {
+    const passwords = new Set(Array.from({ length: 20 }, () => generatePassword()));
+    expect(passwords.size).toBe(20);
   });
 });

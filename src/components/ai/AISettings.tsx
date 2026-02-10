@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Settings, RefreshCw, Trash2, X, Check, Wifi, WifiOff, Brain } from 'lucide-react';
+import { Settings, RefreshCw, Trash2, X, Check, Wifi, WifiOff, Brain, Sun, Moon, Monitor, Sparkles, Snowflake, Ghost, Coffee } from 'lucide-react';
+import { useTheme } from 'next-themes';
 import { useAI } from '../../hooks/useAI';
 import { validateEndpointUrl } from '../../ai/validation';
 
@@ -18,6 +19,7 @@ export function AISettings({ onClose }: AISettingsProps) {
     messages,
   } = useAI();
 
+  const { theme, setTheme } = useTheme();
   const [localEndpoint, setLocalEndpoint] = useState(settings.ollamaEndpoint);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -172,6 +174,33 @@ export function AISettings({ onClose }: AISettingsProps) {
             >
               <span className="toggle-knob" />
             </button>
+          </div>
+        </div>
+
+        {/* Theme */}
+        <div className="ai-settings-section">
+          <label id="theme-picker-label" className="ai-settings-label">Theme</label>
+          <div className="ai-settings-theme-picker" role="group" aria-labelledby="theme-picker-label">
+            {([
+              { value: 'dark', icon: Moon, label: 'Dark' },
+              { value: 'light', icon: Sun, label: 'Light' },
+              { value: 'retro', icon: Sparkles, label: 'Retro' },
+              { value: 'nord', icon: Snowflake, label: 'Nord' },
+              { value: 'dracula', icon: Ghost, label: 'Dracula' },
+              { value: 'catppuccin', icon: Coffee, label: 'Catppuccin' },
+              { value: 'system', icon: Monitor, label: 'System' },
+            ] as const).map(({ value, icon: Icon, label }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setTheme(value)}
+                className={`ai-settings-theme-btn ${theme === value ? 'active' : ''}`}
+                aria-pressed={theme === value}
+              >
+                <Icon className="w-3.5 h-3.5" aria-hidden="true" />
+                {label}
+              </button>
+            ))}
           </div>
         </div>
 

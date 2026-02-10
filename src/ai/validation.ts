@@ -282,10 +282,6 @@ export function validateChatHistory(data: unknown): ChatMessage[] {
 // Tool Argument Validation
 // ============================================================================
 
-// Re-export VALID_TOOL_NAMES and isValidToolName from tools.ts for backwards compatibility
-// This ensures a single source of truth for valid tool names
-export { VALID_TOOL_NAMES, isValidToolName } from './tools';
-
 /**
  * Sanitize tool arguments - ensure they're a valid object
  */

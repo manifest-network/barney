@@ -7,137 +7,39 @@ import {
   type ReactNode,
 } from 'react';
 import { AIContext } from './aiContextValue';
-import type { OllamaMessage, OllamaToolCall, OllamaStreamChunk } from '../api/ollama';
+import type { OllamaMessage, OllamaToolCall } from '../api/ollama';
 import { streamChat, checkOllamaHealth, listModels, type OllamaModel } from '../api/ollama';
-import { AI_TOOLS, getToolCallDescription } from '../ai/tools';
-import { executeTool, executeConfirmedTool, type ToolResult, type PendingAction, type SignResult, type PayloadAttachment } from '../ai/toolExecutor';
+import { AI_TOOLS, getToolCallDescription, isValidToolName } from '../ai/tools';
+import { executeTool, executeConfirmedTool, type ToolResult, type SignResult, type PayloadAttachment } from '../ai/toolExecutor';
+import { executeBatchDeploy, deriveAppName } from '../ai/toolExecutor/compositeTransactions';
 import { getSystemPrompt } from '../ai/systemPrompt';
-import {
-  validateSettings,
-  validateChatHistory,
-  validateEndpointUrl,
-  validateUserInput,
-  isValidToolName,
-  sanitizeToolArgs,
-  type AISettings,
-} from '../ai/validation';
+import type { DeployProgress } from '../ai/progress';
+import * as appRegistry from '../registry/appRegistry';
+import { validateUserInput, sanitizeToolArgs } from '../ai/validation';
 import { logError } from '../utils/errors';
 import { validateFile } from '../utils/fileValidation';
 import { sha256, toHex } from '../utils/hash';
 import {
-  AI_MAX_MESSAGES,
   AI_MAX_TOOL_ITERATIONS,
   AI_STREAM_TIMEOUT_MS,
   AI_MESSAGE_DEBOUNCE_MS,
   AI_HEALTH_CHECK_INTERVAL_MS,
   AI_CONFIRMATION_TIMEOUT_MS,
-  AI_TOOL_CACHE_TTL_MS,
-  AI_TOOL_CACHE_MAX_SIZE,
 } from '../config/constants';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 
-/**
- * Result of processing a stream to completion
- */
-interface StreamResult {
-  content: string;
-  thinking: string;
-  toolCalls: OllamaToolCall[];
-  error?: string;
-}
+import { processStreamWithTimeout } from '../ai/streamUtils';
+import type { StreamResult } from '../ai/streamUtils';
+import { useChatPersistence, type AISettings } from '../hooks/useChatPersistence';
+import { useMessageManager, generateMessageId } from '../hooks/useMessageManager';
+import { useStreamingUpdates } from '../hooks/useStreamingUpdates';
+import { useToolCache } from '../hooks/useToolCache';
 
-/**
- * Process stream chunks with timeout protection
- * Throws TimeoutError if no chunk received within timeout period
- */
-async function processStreamWithTimeout(
-  stream: AsyncGenerator<OllamaStreamChunk>,
-  onChunk: (content: string, thinking: string) => void,
-  timeoutMs: number = AI_STREAM_TIMEOUT_MS
-): Promise<StreamResult> {
-  let accumulatedContent = '';
-  let accumulatedThinking = '';
-  const toolCalls: OllamaToolCall[] = [];
-
-  for await (const chunk of withTimeout(stream, timeoutMs)) {
-    if (chunk.type === 'thinking' && chunk.content) {
-      accumulatedThinking += chunk.content;
-      onChunk(accumulatedContent, accumulatedThinking);
-    } else if (chunk.type === 'content' && chunk.content) {
-      accumulatedContent += chunk.content;
-      onChunk(accumulatedContent, accumulatedThinking);
-    } else if (chunk.type === 'tool_call' && chunk.toolCall) {
-      toolCalls.push(chunk.toolCall);
-    } else if (chunk.type === 'error') {
-      return {
-        content: accumulatedContent,
-        thinking: accumulatedThinking,
-        toolCalls,
-        error: chunk.error,
-      };
-    }
-  }
-
-  return { content: accumulatedContent, thinking: accumulatedThinking, toolCalls };
-}
-
-/**
- * Wrap an async generator with timeout protection per iteration
- */
-async function* withTimeout<T>(
-  generator: AsyncGenerator<T>,
-  timeoutMs: number
-): AsyncGenerator<T> {
-  while (true) {
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-
-    try {
-      const result = await Promise.race([
-        generator.next(),
-        new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(
-            () => reject(new Error('Stream timeout: no response received')),
-            timeoutMs
-          );
-        }),
-      ]);
-
-      if (result.done) break;
-      yield result.value;
-    } finally {
-      // Clear the timeout to avoid accumulating orphan timers
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-      }
-    }
-  }
-}
-
-// Storage keys
-const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
-const STORAGE_KEY_HISTORY = 'barney-ai-history';
-
+// Re-export types for backward compatibility
+export type { ChatMessage, PendingConfirmation } from './aiTypes';
 export type { AISettings };
 
-export interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'tool';
-  content: string;
-  thinking?: string;
-  timestamp: number;
-  toolCalls?: OllamaToolCall[];
-  toolCallId?: string;
-  toolName?: string;
-  toolDescription?: string;
-  isStreaming?: boolean;
-  error?: string;
-}
-
-export interface PendingConfirmation {
-  id: string;
-  action: PendingAction;
-  messageId: string;
-}
+import type { ChatMessage, PendingConfirmation } from './aiTypes';
 
 type SignArbitraryFn = (address: string, data: string) => Promise<SignResult>;
 
@@ -151,6 +53,7 @@ export interface AIContextType {
   availableModels: OllamaModel[];
   pendingConfirmation: PendingConfirmation | null;
   pendingPayload: PayloadAttachment | null;
+  deployProgress: DeployProgress | null;
 
   // Actions
   setIsOpen: (open: boolean) => void;
@@ -165,102 +68,36 @@ export interface AIContextType {
   setSignArbitrary: (fn: SignArbitraryFn | undefined) => void;
   attachPayload: (file: File) => Promise<{ error?: string }>;
   clearPayload: () => void;
+  requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
+  retryDeploy: () => void;
 }
 
-// Validate environment-provided defaults
-const envEndpoint = validateEndpointUrl(import.meta.env.PUBLIC_OLLAMA_URL || '');
-const defaultSettings: AISettings = {
-  ollamaEndpoint: envEndpoint || 'http://localhost:11434',
-  model: import.meta.env.PUBLIC_OLLAMA_MODEL || 'llama3.2',
-  saveHistory: true,
-  enableThinking: false,
-};
-
-
 export function AIProvider({ children }: { children: ReactNode }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
-  const [settings, setSettings] = useState<AISettings>(defaultSettings);
-  const [availableModels, setAvailableModels] = useState<OllamaModel[]>([]);
-  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
-  const [pendingPayload, setPendingPayload] = useState<PayloadAttachment | null>(null);
-  const pendingPayloadRef = useRef<PayloadAttachment | null>(null);
-
-  // Refs for client, address, and signing (to avoid re-renders)
+  // --- Refs (defined first so hooks can reference them) ---
   const clientManagerRef = useRef<CosmosClientManager | null>(null);
   const addressRef = useRef<string | undefined>(undefined);
   const signArbitraryRef = useRef<SignArbitraryFn | undefined>(undefined);
   const abortControllerRef = useRef<AbortController | null>(null);
-  // Ref to track streaming state synchronously (prevents race conditions with rapid messages)
   const isStreamingRef = useRef(false);
-  // Ref for throttling streaming updates (reduces re-renders during streaming)
-  const pendingUpdateRef = useRef<{
-    messageId: string;
-    content: string;
-    thinking: string;
-  } | null>(null);
-  const rafIdRef = useRef<number | null>(null);
-  // Ref to track last message timestamp for debouncing rapid sends
   const lastMessageTimeRef = useRef<number>(0);
-  // Ref to track current messages for synchronous access in async operations
-  const messagesRef = useRef<ChatMessage[]>([]);
-  // Cache for query tool results to reduce redundant API calls
-  const toolCacheRef = useRef<Map<string, { result: ToolResult; timestamp: number }>>(new Map());
+  const pendingPayloadRef = useRef<PayloadAttachment | null>(null);
 
-  // Load settings and history from localStorage with validation
-  useEffect(() => {
-    try {
-      const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
-      if (savedSettings) {
-        const parsed = JSON.parse(savedSettings);
-        // Validate and sanitize settings from localStorage
-        const validated = validateSettings(parsed);
-        setSettings({ ...defaultSettings, ...validated });
-      }
+  // --- Extracted hooks ---
+  const { settings, updateSettings, messages, setMessages, clearHistory: clearHistoryBase } = useChatPersistence();
+  const { messagesRef, addMessage, updateMessageById, getCurrentMessages, createAssistantMessage } = useMessageManager(messages, setMessages);
+  const { scheduleStreamingUpdate, flushPendingUpdate } = useStreamingUpdates(setMessages, messagesRef);
+  const { getToolCacheKey, getCachedToolResult, cacheToolResult, clearCache: clearToolCache } = useToolCache(addressRef);
 
-      const savedHistory = localStorage.getItem(STORAGE_KEY_HISTORY);
-      if (savedHistory) {
-        const parsed = JSON.parse(savedHistory);
-        // Validate and sanitize chat history from localStorage
-        const validated = validateChatHistory(parsed) as ChatMessage[];
-        setMessages(validated);
-      }
-    } catch (error) {
-      logError('AIContext.loadSettings', error);
-      // On parse error, clear potentially corrupted data
-      localStorage.removeItem(STORAGE_KEY_SETTINGS);
-      localStorage.removeItem(STORAGE_KEY_HISTORY);
-    }
-  }, []);
+  // --- Local state ---
+  const [isOpen, setIsOpen] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [availableModels, setAvailableModels] = useState<OllamaModel[]>([]);
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
+  const [pendingPayload, setPendingPayload] = useState<PayloadAttachment | null>(null);
+  const [deployProgress, setDeployProgress] = useState<DeployProgress | null>(null);
 
-  // Save settings to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
-    } catch (error) {
-      logError('AIContext.saveSettings', error);
-    }
-  }, [settings]);
-
-  // Save history to localStorage (if enabled)
-  useEffect(() => {
-    if (settings.saveHistory) {
-      try {
-        // Only save non-streaming messages
-        const toSave = messages.filter((m) => !m.isStreaming);
-        localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(toSave));
-      } catch (error) {
-        logError('AIContext.saveHistory', error);
-      }
-    }
-  }, [messages, settings.saveHistory]);
-
-  // Keep messagesRef in sync with messages state for synchronous access
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
+  // --- Effects ---
 
   // Check Ollama connection
   useEffect(() => {
@@ -274,16 +111,12 @@ export function AIProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(interval);
   }, [settings.ollamaEndpoint]);
 
-  // Cleanup abort controller and RAF on unmount
+  // Cleanup abort controller on unmount
   useEffect(() => {
     return () => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
         abortControllerRef.current = null;
-      }
-      if (rafIdRef.current) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
       }
     };
   }, []);
@@ -298,21 +131,26 @@ export function AIProvider({ children }: { children: ReactNode }) {
     refreshModels();
   }, [refreshModels]);
 
+  // --- Wallet setters ---
+
   const setClientManager = useCallback((manager: CosmosClientManager | null) => {
     clientManagerRef.current = manager;
-  }, []);
-
-  const setAddress = useCallback((address: string | undefined) => {
-    // Clear cached query results when wallet changes to prevent serving stale data
-    if (address !== addressRef.current) {
-      toolCacheRef.current.clear();
-    }
-    addressRef.current = address;
   }, []);
 
   const setSignArbitrary = useCallback((fn: SignArbitraryFn | undefined) => {
     signArbitraryRef.current = fn;
   }, []);
+
+  const setAddress = useCallback((address: string | undefined) => {
+    // Clear cached query results when wallet changes to prevent serving stale data
+    if (address !== addressRef.current) {
+      clearToolCache();
+      setDeployProgress(null);
+    }
+    addressRef.current = address;
+  }, [clearToolCache]);
+
+  // --- Payload attachment ---
 
   const attachPayload = useCallback(async (file: File): Promise<{ error?: string }> => {
     const validation = validateFile(file);
@@ -336,7 +174,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
       pendingPayloadRef.current = attachment;
       setPendingPayload(attachment);
       return {};
-    } catch {
+    } catch (error) {
+      logError('AIContext.attachPayload', error);
       return { error: 'Failed to read file' };
     }
   }, []);
@@ -346,141 +185,16 @@ export function AIProvider({ children }: { children: ReactNode }) {
     setPendingPayload(null);
   }, []);
 
-  const updateSettings = useCallback((newSettings: Partial<AISettings>) => {
-    setSettings((prev) => {
-      const updated = { ...prev };
-
-      // Validate endpoint URL if provided
-      if (newSettings.ollamaEndpoint !== undefined) {
-        const validatedUrl = validateEndpointUrl(newSettings.ollamaEndpoint);
-        if (validatedUrl) {
-          updated.ollamaEndpoint = validatedUrl;
-        }
-        // If invalid, keep the previous value
-      }
-
-      // Validate and copy other settings
-      if (typeof newSettings.model === 'string' && newSettings.model.length > 0) {
-        updated.model = newSettings.model;
-      }
-      if (typeof newSettings.saveHistory === 'boolean') {
-        updated.saveHistory = newSettings.saveHistory;
-      }
-      if (typeof newSettings.enableThinking === 'boolean') {
-        updated.enableThinking = newSettings.enableThinking;
-      }
-
-      return updated;
-    });
-  }, []);
+  // --- History (wraps extracted hook + clears tool cache) ---
 
   const clearHistory = useCallback(() => {
     messagesRef.current = [];
-    setMessages([]);
-    localStorage.removeItem(STORAGE_KEY_HISTORY);
-    // Clear tool cache when history is cleared
-    toolCacheRef.current.clear();
-  }, []);
+    clearHistoryBase();
+    clearToolCache();
+  }, [messagesRef, clearHistoryBase, clearToolCache]);
 
-  // Generate a unique message ID
-  const generateMessageId = () => `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  // --- Ollama message conversion ---
 
-  // Trim messages to AI_MAX_MESSAGES limit (keeps most recent)
-  const trimMessages = useCallback((msgs: ChatMessage[]): ChatMessage[] => {
-    if (msgs.length <= AI_MAX_MESSAGES) return msgs;
-    // Keep the most recent messages
-    return msgs.slice(-AI_MAX_MESSAGES);
-  }, []);
-
-  // Helper to update a message by ID
-  // Updates ref synchronously BEFORE setMessages to avoid race conditions
-  const updateMessageById = useCallback(
-    (messageId: string, updates: Partial<ChatMessage>) => {
-      const updated = messagesRef.current.map((m) => (m.id === messageId ? { ...m, ...updates } : m));
-      messagesRef.current = updated;
-      setMessages(updated);
-    },
-    []
-  );
-
-  // Helper to add a new message
-  // Updates ref synchronously BEFORE setMessages to avoid race conditions
-  const addMessage = useCallback(
-    (message: ChatMessage) => {
-      const updated = trimMessages([...messagesRef.current, message]);
-      messagesRef.current = updated;
-      setMessages(updated);
-    },
-    [trimMessages]
-  );
-
-  // Helper to create an assistant message
-  const createAssistantMessage = useCallback((): ChatMessage => {
-    return {
-      id: generateMessageId(),
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-      isStreaming: true,
-    };
-  }, []);
-
-  // Helper to get current messages (excluding a specific message ID)
-  // Uses ref for synchronous access without setState anti-pattern
-  const getCurrentMessages = useCallback(
-    (excludeId?: string): ChatMessage[] => {
-      const current = messagesRef.current;
-      return excludeId ? current.filter((m) => m.id !== excludeId) : current;
-    },
-    []
-  );
-
-  // Flush any pending streaming update immediately
-  const flushPendingUpdate = useCallback(() => {
-    if (rafIdRef.current) {
-      cancelAnimationFrame(rafIdRef.current);
-      rafIdRef.current = null;
-    }
-    const pending = pendingUpdateRef.current;
-    if (pending) {
-      setMessages((prev) => {
-        const updated = prev.map((m) =>
-          m.id === pending.messageId
-            ? { ...m, content: pending.content, thinking: pending.thinking || undefined }
-            : m
-        );
-        messagesRef.current = updated;
-        return updated;
-      });
-      pendingUpdateRef.current = null;
-    }
-  }, []);
-
-  // Schedule a throttled update for streaming content (once per animation frame)
-  const scheduleStreamingUpdate = useCallback((messageId: string, content: string, thinking: string) => {
-    pendingUpdateRef.current = { messageId, content, thinking };
-
-    if (!rafIdRef.current) {
-      rafIdRef.current = requestAnimationFrame(() => {
-        rafIdRef.current = null;
-        const pending = pendingUpdateRef.current;
-        if (pending) {
-          setMessages((prev) => {
-            const updated = prev.map((m) =>
-              m.id === pending.messageId
-                ? { ...m, content: pending.content, thinking: pending.thinking || undefined }
-                : m
-            );
-            messagesRef.current = updated;
-            return updated;
-          });
-          pendingUpdateRef.current = null;
-        }
-      });
-    }
-  }, []);
-
-  // Convert chat messages to Ollama format
   const toOllamaMessages = useCallback((msgs: ChatMessage[]): OllamaMessage[] => {
     const systemMessage: OllamaMessage = {
       role: 'system',
@@ -507,35 +221,22 @@ export function AIProvider({ children }: { children: ReactNode }) {
     return [systemMessage, ...conversationMessages];
   }, []);
 
-  // Generate cache key for tool calls (includes address to prevent cross-wallet stale hits)
-  const getToolCacheKey = useCallback((toolName: string, args: Record<string, unknown>): string => {
-    const addr = addressRef.current ?? '';
-    // Sort keys for consistent cache key regardless of arg order
-    const sortedArgs = Object.keys(args).sort().reduce((acc, key) => {
-      acc[key] = args[key];
-      return acc;
-    }, {} as Record<string, unknown>);
-    return `${addr}:${toolName}:${JSON.stringify(sortedArgs)}`;
-  }, []);
+  // --- App registry access (shared by tool execution callbacks) ---
 
-  // Check if cached result is still valid
-  const getCachedToolResult = useCallback((cacheKey: string): ToolResult | null => {
-    const cached = toolCacheRef.current.get(cacheKey);
-    if (!cached) return null;
+  const getAppRegistryAccess = useCallback(() => ({
+    getApps: appRegistry.getApps,
+    getApp: appRegistry.getApp,
+    findApp: appRegistry.findApp,
+    getAppByLease: appRegistry.getAppByLease,
+    addApp: appRegistry.addApp,
+    updateApp: appRegistry.updateApp,
+  }), []);
 
-    const isExpired = Date.now() - cached.timestamp > AI_TOOL_CACHE_TTL_MS;
-    if (isExpired) {
-      toolCacheRef.current.delete(cacheKey);
-      return null;
-    }
+  // --- Tool execution ---
 
-    return cached.result;
-  }, []);
-
-  // Handle tool execution with validation and caching
   const handleToolCall = useCallback(
     async (toolCall: OllamaToolCall): Promise<ToolResult> => {
-      // Validate tool name
+      // Validate tool name against composite tools
       if (!isValidToolName(toolCall.function.name)) {
         return {
           success: false,
@@ -553,35 +254,33 @@ export function AIProvider({ children }: { children: ReactNode }) {
         return cachedResult;
       }
 
+      // Clear stale deploy progress, but preserve active deploys
+      setDeployProgress(prev => {
+        if (!prev || prev.phase === 'ready' || prev.phase === 'failed') return null;
+        return prev;
+      });
+
       const result = await executeTool(toolCall.function.name, sanitizedArgs, {
         clientManager: clientManagerRef.current,
         address: addressRef.current,
-      });
+        signArbitrary: signArbitraryRef.current,
+        onProgress: setDeployProgress,
+        appRegistry: getAppRegistryAccess(),
+        signal: abortControllerRef.current?.signal,
+      }, pendingPayloadRef.current ?? undefined);
 
       // Cache successful query results (not confirmations or failures)
-      // Transaction tools return requiresConfirmation=true, so they won't be cached
       if (result.success && !result.requiresConfirmation) {
-        // Evict oldest entries if cache is full
-        if (toolCacheRef.current.size >= AI_TOOL_CACHE_MAX_SIZE) {
-          const entries = Array.from(toolCacheRef.current.entries());
-          entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
-          // Remove oldest 10% of entries
-          const toRemove = Math.max(1, Math.floor(AI_TOOL_CACHE_MAX_SIZE * 0.1));
-          for (let i = 0; i < toRemove; i++) {
-            toolCacheRef.current.delete(entries[i][0]);
-          }
-        }
-        toolCacheRef.current.set(cacheKey, { result, timestamp: Date.now() });
+        cacheToolResult(cacheKey, result);
       }
 
       return result;
     },
-    [getToolCacheKey, getCachedToolResult]
+    [getToolCacheKey, getCachedToolResult, cacheToolResult, getAppRegistryAccess]
   );
 
-  // Execute a single tool call and update UI
   const executeAndDisplayToolCall = useCallback(
-    async (toolCall: OllamaToolCall): Promise<{ result: ToolResult; messageId: string }> => {
+    async (toolCall: OllamaToolCall) => {
       const toolDescription = getToolCallDescription(
         toolCall.function.name,
         toolCall.function.arguments
@@ -600,14 +299,12 @@ export function AIProvider({ children }: { children: ReactNode }) {
         isStreaming: true,
       });
 
-      // Execute the tool
       const result = await handleToolCall(toolCall);
       return { result, messageId: toolMessageId };
     },
     [handleToolCall, addMessage]
   );
 
-  // Process tool calls and return whether to continue the loop
   const processToolCalls = useCallback(
     async (
       toolCalls: OllamaToolCall[],
@@ -623,13 +320,16 @@ export function AIProvider({ children }: { children: ReactNode }) {
       });
 
       // Execute each tool call
+      let hasDisplayCard = false;
       for (const toolCall of toolCalls) {
         const { result, messageId: toolMessageId } = await executeAndDisplayToolCall(toolCall);
 
         if (result.requiresConfirmation) {
-          // Capture pending payload at confirmation time for create_lease
+          // Capture pending payload at confirmation time for deploy_app/create_lease
           const toolName = result.pendingAction?.toolName || toolCall.function.name;
-          const actionPayload = toolName === 'create_lease' ? pendingPayloadRef.current ?? undefined : undefined;
+          const actionPayload = (toolName === 'deploy_app' || toolName === 'create_lease')
+            ? pendingPayloadRef.current ?? undefined
+            : undefined;
 
           // Set pending confirmation and stop the loop
           setPendingConfirmation({
@@ -653,15 +353,29 @@ export function AIProvider({ children }: { children: ReactNode }) {
         }
 
         // Update tool message with result
-        const resultContent = result.success
-          ? JSON.stringify(result.data, null, 2)
-          : `Error: ${result.error}`;
+        if (result.success && result.displayCard) {
+          hasDisplayCard = true;
+          updateMessageById(toolMessageId, {
+            content: '',
+            card: result.displayCard,
+            isStreaming: false,
+          });
+        } else {
+          const resultContent = result.success
+            ? JSON.stringify(result.data, null, 2)
+            : `Error: ${result.error}`;
 
-        updateMessageById(toolMessageId, {
-          content: resultContent,
-          error: result.success ? undefined : result.error,
-          isStreaming: false,
-        });
+          updateMessageById(toolMessageId, {
+            content: resultContent,
+            error: result.success ? undefined : result.error,
+            isStreaming: false,
+          });
+        }
+      }
+
+      // Skip LLM round-trip when results were rendered directly as cards
+      if (hasDisplayCard) {
+        return { shouldContinue: false };
       }
 
       // Create new assistant message for next iteration
@@ -672,11 +386,22 @@ export function AIProvider({ children }: { children: ReactNode }) {
     [updateMessageById, executeAndDisplayToolCall, createAssistantMessage, addMessage]
   );
 
-  // Send a message
+  // --- Send message ---
+
   const sendMessage = useCallback(
     async (content: string) => {
+      // Build effective content: include attachment info so the model knows about the file
+      const payload = pendingPayloadRef.current;
+      let effectiveContent = content;
+      if (payload) {
+        const attachNote = `(File attached: ${payload.filename})`;
+        effectiveContent = content.trim()
+          ? `${content.trim()} ${attachNote}`
+          : `Deploy this ${attachNote}`;
+      }
+
       // Validate user input
-      const validatedInput = validateUserInput(content);
+      const validatedInput = validateUserInput(effectiveContent);
       if (!validatedInput) return;
 
       // Don't send if not connected to Ollama
@@ -709,6 +434,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
       addMessage(userMessage);
       setIsStreaming(true);
+      // Clear stale deploy progress, but preserve active deploys
+      setDeployProgress(prev => {
+        if (!prev || prev.phase === 'ready' || prev.phase === 'failed') return null;
+        return prev;
+      });
 
       abortControllerRef.current = new AbortController();
 
@@ -717,14 +447,12 @@ export function AIProvider({ children }: { children: ReactNode }) {
       let currentAssistantMessageId = initialAssistantMessage.id;
 
       try {
-        // Add initial assistant message
         addMessage(initialAssistantMessage);
 
         // Tool call loop - continues until no more tool calls or max iterations
         while (iteration < AI_MAX_TOOL_ITERATIONS) {
           iteration++;
 
-          // Get current messages for the API call
           const currentMessages = getCurrentMessages(currentAssistantMessageId);
           const ollamaMessages = toOllamaMessages(currentMessages);
 
@@ -737,15 +465,25 @@ export function AIProvider({ children }: { children: ReactNode }) {
             signal: abortControllerRef.current?.signal,
           });
 
-          // Process stream with timeout protection
-          const streamResult = await processStreamWithTimeout(
-            stream,
-            (content, thinking) => {
-              scheduleStreamingUpdate(currentAssistantMessageId, content, thinking);
-            }
-          );
+          // Process stream with timeout protection.
+          // Two layers: per-chunk timeout inside processStreamWithTimeout,
+          // plus an overall timeout here as a safety net.
+          let totalTimeoutId: ReturnType<typeof setTimeout> | undefined;
+          const streamResult = await Promise.race([
+            processStreamWithTimeout(
+              stream,
+              (content, thinking) => {
+                scheduleStreamingUpdate(currentAssistantMessageId, content, thinking);
+              }
+            ).finally(() => { if (totalTimeoutId) clearTimeout(totalTimeoutId); }),
+            new Promise<never>((_, reject) => {
+              totalTimeoutId = setTimeout(
+                () => reject(new Error('Stream timeout: no response received')),
+                AI_STREAM_TIMEOUT_MS * 2
+              );
+            }),
+          ]);
 
-          // Flush any pending throttled updates before finalizing
           flushPendingUpdate();
 
           // Handle stream error
@@ -761,10 +499,13 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
           // If no tool calls, we're done
           if (streamResult.toolCalls.length === 0) {
+            const finalContent = streamResult.content.trim() ||
+              'I received your message but couldn\'t generate a response. This may indicate the model doesn\'t support tool calling. Please check that your Ollama model supports function calling (e.g., llama3.1, mistral-nemo, qwen2.5).';
             updateMessageById(currentAssistantMessageId, {
-              content: streamResult.content,
+              content: finalContent,
               thinking: streamResult.thinking || undefined,
               isStreaming: false,
+              error: streamResult.content.trim() ? undefined : 'empty_response',
             });
             break;
           }
@@ -803,7 +544,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
       } finally {
         isStreamingRef.current = false;
         setIsStreaming(false);
-        // Abort any ongoing fetch to prevent connection leaks
         abortControllerRef.current?.abort();
         abortControllerRef.current = null;
       }
@@ -811,12 +551,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
     [isConnected, settings, toOllamaMessages, addMessage, createAssistantMessage, getCurrentMessages, updateMessageById, processToolCalls, scheduleStreamingUpdate, flushPendingUpdate]
   );
 
-  // Confirm a pending action
+  // --- Confirmation flow ---
+
   const confirmAction = useCallback(async () => {
-    // Guard against concurrent executions (UI also disables buttons, but this is defensive)
     if (!pendingConfirmation || isStreamingRef.current) return;
 
-    // Check if wallet is connected - if not, show error and clear pending state
     if (!clientManagerRef.current) {
       const { messageId } = pendingConfirmation;
       setPendingConfirmation(null);
@@ -838,20 +577,31 @@ export function AIProvider({ children }: { children: ReactNode }) {
     isStreamingRef.current = true;
     setIsStreaming(true);
 
-    // Set up abort controller for the follow-up stream
     abortControllerRef.current = new AbortController();
 
     try {
+      setDeployProgress(null);
+
       const result = await executeConfirmedTool(
         action.toolName,
         action.args,
         clientManager,
-        address,
-        signArbitrary,
+        {
+          clientManager,
+          address,
+          signArbitrary,
+          onProgress: setDeployProgress,
+          appRegistry: getAppRegistryAccess(),
+          signal: abortControllerRef.current?.signal,
+        },
         action.payload
       );
 
-      // Keep tool message as structured JSON for the assistant to interpret
+      // Preserve the payload on deploy progress so retry can restore it
+      if (!result.success && action.payload) {
+        setDeployProgress(prev => prev ? { ...prev, payload: action.payload } : null);
+      }
+
       const resultContent = JSON.stringify({
         success: result.success,
         data: result.data,
@@ -870,7 +620,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
       const updatedMessages = getCurrentMessages(newAssistantMessage.id);
 
-      // Don't pass tools - we just want the assistant to summarize the result, not make more tool calls
+      // Don't pass tools - we just want the assistant to summarize the result
       const stream = streamChat({
         endpoint: settings.ollamaEndpoint,
         model: settings.model,
@@ -879,7 +629,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
         signal: abortControllerRef.current?.signal,
       });
 
-      // Process stream with timeout protection
       const streamResult = await processStreamWithTimeout(
         stream,
         (content, thinking) => {
@@ -887,7 +636,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
         }
       );
 
-      // Flush any pending throttled updates before finalizing
       flushPendingUpdate();
 
       updateMessageById(newAssistantMessage.id, {
@@ -897,9 +645,15 @@ export function AIProvider({ children }: { children: ReactNode }) {
         isStreaming: false,
       });
     } catch (error) {
+      logError('AIContext.confirmAction', error);
       const errorMessage = error instanceof Error && error.message.includes('timeout')
         ? 'The AI server took too long to respond. The transaction may have completed - please check your wallet.'
         : `Error executing transaction: ${error instanceof Error ? error.message : 'Unknown error'}`;
+
+      // Preserve the payload on deploy progress so retry can restore it
+      if (action.payload) {
+        setDeployProgress(prev => prev ? { ...prev, payload: action.payload } : null);
+      }
 
       updateMessageById(messageId, {
         content: errorMessage,
@@ -909,22 +663,18 @@ export function AIProvider({ children }: { children: ReactNode }) {
     } finally {
       isStreamingRef.current = false;
       setIsStreaming(false);
-      // Abort any ongoing fetch to prevent connection leaks
       abortControllerRef.current?.abort();
       abortControllerRef.current = null;
-      // Clear payload attachment after execution
       pendingPayloadRef.current = null;
       setPendingPayload(null);
     }
-  }, [pendingConfirmation, settings, toOllamaMessages, updateMessageById, createAssistantMessage, addMessage, getCurrentMessages, scheduleStreamingUpdate, flushPendingUpdate]);
+  }, [pendingConfirmation, settings, toOllamaMessages, updateMessageById, createAssistantMessage, addMessage, getCurrentMessages, scheduleStreamingUpdate, flushPendingUpdate, getAppRegistryAccess]);
 
-  // Cancel a pending action
   const cancelAction = useCallback(() => {
     if (!pendingConfirmation) return;
 
     const { messageId } = pendingConfirmation;
     setPendingConfirmation(null);
-    // Clear payload attachment on cancel
     pendingPayloadRef.current = null;
     setPendingPayload(null);
 
@@ -937,7 +687,29 @@ export function AIProvider({ children }: { children: ReactNode }) {
       messagesRef.current = updated;
       return updated;
     });
-  }, [pendingConfirmation]);
+  }, [pendingConfirmation, setMessages, messagesRef]);
+
+  // --- Retry failed deploy ---
+
+  const retryDeploy = useCallback(() => {
+    if (!deployProgress?.payload || isStreamingRef.current) return;
+
+    // Restore the payload from the failed deploy progress
+    const payload = deployProgress.payload;
+    pendingPayloadRef.current = payload;
+    setPendingPayload(payload);
+
+    // Clear the failed deploy progress
+    setDeployProgress(null);
+
+    // Find the last deploy user message and re-send it
+    const lastDeploy = [...messagesRef.current].reverse().find(
+      (m) => m.role === 'user' && /deploy\b/i.test(m.content)
+    );
+    if (lastDeploy) {
+      sendMessage(lastDeploy.content);
+    }
+  }, [deployProgress, sendMessage, messagesRef]);
 
   // Auto-cancel pending confirmations after timeout to prevent indefinite waiting
   useEffect(() => {
@@ -963,7 +735,110 @@ export function AIProvider({ children }: { children: ReactNode }) {
     }, AI_CONFIRMATION_TIMEOUT_MS);
 
     return () => clearTimeout(timeoutId);
-  }, [pendingConfirmation]);
+  }, [pendingConfirmation, setMessages, messagesRef]);
+
+  // --- Batch deploy ---
+
+  const requestBatchDeploy = useCallback(async (apps: Array<{ label: string; manifest: object }>, originalMessage?: string) => {
+    if (isStreamingRef.current || !isConnected) return;
+    isStreamingRef.current = true;
+    setIsStreaming(true);
+
+    let toolMsgId: string | undefined;
+    try {
+      const names = apps.map((a) => a.label);
+      const userMessage: ChatMessage = {
+        id: generateMessageId(),
+        role: 'user',
+        content: originalMessage || `Deploy ${names.join(', ')}`,
+        timestamp: Date.now(),
+      };
+      addMessage(userMessage);
+      setDeployProgress(null);
+
+      // Add synthetic assistant message with tool_calls so the LLM
+      // sees a well-formed conversation when summarizing after confirmation.
+      const syntheticToolCallId = generateMessageId();
+      addMessage({
+        id: generateMessageId(),
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        toolCalls: [{
+          id: syntheticToolCallId,
+          type: 'function',
+          function: { name: 'batch_deploy', arguments: {} },
+        }],
+      });
+
+      toolMsgId = generateMessageId();
+      addMessage({
+        id: toolMsgId,
+        role: 'tool',
+        content: 'Validating batch deploy...',
+        toolName: 'batch_deploy',
+        toolCallId: syntheticToolCallId,
+        toolDescription: `Deploying ${names.join(', ')}`,
+        timestamp: Date.now(),
+        isStreaming: true,
+      });
+
+      // Create payloads for each app
+      const entries = await Promise.all(apps.map(async (app) => {
+        const filename = `manifest-${app.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}.json`;
+        const blob = new Blob([JSON.stringify(app.manifest, null, 2)], { type: 'application/json' });
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const hashBytes = await sha256(bytes);
+        const hash = toHex(hashBytes);
+        return {
+          app_name: deriveAppName(filename),
+          payload: { bytes, filename, size: blob.size, hash },
+        };
+      }));
+
+      const result = await executeBatchDeploy(entries, {
+        clientManager: clientManagerRef.current,
+        address: addressRef.current,
+        signArbitrary: signArbitraryRef.current,
+        onProgress: setDeployProgress,
+        appRegistry: getAppRegistryAccess(),
+      });
+
+      if (result.requiresConfirmation) {
+        setPendingConfirmation({
+          id: generateMessageId(),
+          action: {
+            id: 'batch',
+            toolName: 'batch_deploy',
+            args: result.pendingAction!.args,
+            description: result.confirmationMessage!,
+          },
+          messageId: toolMsgId,
+        });
+        updateMessageById(toolMsgId, { content: result.confirmationMessage!, isStreaming: false });
+      } else {
+        updateMessageById(toolMsgId, {
+          content: `Error: ${result.error}`,
+          error: result.error,
+          isStreaming: false,
+        });
+      }
+    } catch (error) {
+      logError('AIContext.requestBatchDeploy', error);
+      if (toolMsgId) {
+        updateMessageById(toolMsgId, {
+          content: `Batch deploy failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          isStreaming: false,
+        });
+      }
+    } finally {
+      isStreamingRef.current = false;
+      setIsStreaming(false);
+    }
+  }, [isConnected, addMessage, updateMessageById, getAppRegistryAccess]);
+
+  // --- Context value ---
 
   const value = useMemo(
     () => ({
@@ -975,6 +850,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       availableModels,
       pendingConfirmation,
       pendingPayload,
+      deployProgress,
       setIsOpen,
       sendMessage,
       updateSettings,
@@ -987,6 +863,8 @@ export function AIProvider({ children }: { children: ReactNode }) {
       setSignArbitrary,
       attachPayload,
       clearPayload,
+      requestBatchDeploy,
+      retryDeploy,
     }),
     [
       isOpen,
@@ -997,6 +875,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       availableModels,
       pendingConfirmation,
       pendingPayload,
+      deployProgress,
       sendMessage,
       updateSettings,
       clearHistory,
@@ -1008,9 +887,10 @@ export function AIProvider({ children }: { children: ReactNode }) {
       setSignArbitrary,
       attachPayload,
       clearPayload,
+      requestBatchDeploy,
+      retryDeploy,
     ]
   );
 
   return <AIContext.Provider value={value}>{children}</AIContext.Provider>;
 }
-

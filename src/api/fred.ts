@@ -1,0 +1,390 @@
+/**
+ * Fred API client for polling lease deployment status.
+ *
+ * Fred is the provider-side service that manages container deployments.
+ * Its `/status/{uuid}` endpoint returns deployment progress and readiness.
+ *
+ * Follows the same patterns as provider-api.ts:
+ * - SSRF validation via parseHttpUrl + isUrlSsrfSafe
+ * - Dev CORS proxy via buildProviderFetchArgs
+ * - ADR-036 auth tokens
+ * - ProviderApiError for typed HTTP failures
+ */
+
+import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
+import { ProviderApiError } from './provider-api';
+import { LeaseState, leaseStateFromString } from './billing';
+import { logError } from '../utils/errors';
+
+export interface FredLeaseStatus {
+  state: LeaseState;
+  phase?: string;
+  steps?: Record<string, string>;
+  instances?: Array<{ name: string; status: string; ports?: Record<string, number> }>;
+  endpoints?: Record<string, string>;
+  error?: string;
+  fail_count?: number;
+  created_at?: string;
+}
+
+/** Terminal lease states — polling should stop when fred reports one of these. */
+const TERMINAL_STATES = new Set<LeaseState>([
+  LeaseState.LEASE_STATE_ACTIVE,
+  LeaseState.LEASE_STATE_CLOSED,
+  LeaseState.LEASE_STATE_REJECTED,
+  LeaseState.LEASE_STATE_EXPIRED,
+]);
+
+/**
+ * Parse a raw fred response into a FredLeaseStatus.
+ * Fred returns `state: 'LEASE_STATE_ACTIVE'` (chain-style enum string).
+ */
+function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
+  let state = LeaseState.LEASE_STATE_PENDING;
+  if (typeof raw.state === 'string' && raw.state) {
+    try {
+      const parsed = leaseStateFromString(raw.state);
+      if (parsed !== LeaseState.UNRECOGNIZED) {
+        state = parsed;
+      }
+    } catch {
+      // Unknown state string — default to pending
+    }
+  }
+
+  return {
+    ...raw,
+    state,
+  } as FredLeaseStatus;
+}
+
+/**
+ * Validates and normalizes a provider API URL.
+ * Prevents SSRF by blocking private/internal addresses (except localhost in dev).
+ */
+function validateProviderUrl(url: string): URL {
+  const parsed = parseHttpUrl(url);
+  if (!parsed) {
+    throw new Error(`Invalid provider API URL: ${url || '(empty)'}`);
+  }
+  if (!isUrlSsrfSafe(parsed)) {
+    throw new Error('Provider API URL cannot point to private/internal addresses');
+  }
+  return parsed;
+}
+
+function normalizeBaseUrl(validated: URL): string {
+  return validated.origin + validated.pathname.replace(/\/$/, '');
+}
+
+/**
+ * Build fetch URL and headers, routing through dev CORS proxy when needed.
+ */
+function buildFredFetchArgs(
+  baseUrl: string,
+  path: string,
+  extraHeaders?: Record<string, string>
+): { url: string; headers: Record<string, string> } {
+  const headers: Record<string, string> = { ...extraHeaders };
+
+  if (import.meta.env.DEV) {
+    headers['X-Proxy-Target'] = baseUrl;
+    return { url: `/proxy-provider${path}`, headers };
+  }
+
+  return { url: `${baseUrl}${path}`, headers };
+}
+
+/**
+ * Validate, normalize, and build fetch args in one step.
+ */
+function buildValidatedFredRequest(
+  providerApiUrl: string,
+  path: string,
+  extraHeaders?: Record<string, string>
+): { url: string; headers: Record<string, string> } {
+  const validatedUrl = validateProviderUrl(providerApiUrl);
+  const baseUrl = normalizeBaseUrl(validatedUrl);
+  return buildFredFetchArgs(baseUrl, path, extraHeaders);
+}
+
+/**
+ * Fetch the current deployment status for a lease from fred.
+ *
+ * @param providerApiUrl - The provider's API base URL (fred)
+ * @param leaseUuid - The lease UUID to check
+ * @param authToken - Base64-encoded ADR-036 auth token
+ */
+export async function getLeaseStatus(
+  providerApiUrl: string,
+  leaseUuid: string,
+  authToken: string
+): Promise<FredLeaseStatus> {
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
+  const { url, headers } = buildValidatedFredRequest(
+    providerApiUrl,
+    `/v1/leases/${encodedLeaseUuid}/status`,
+    { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
+  );
+
+  const response = await fetch(url, { method: 'GET', headers });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new ProviderApiError(
+      response.status,
+      `Fred status error (${response.status}): ${errorText}`
+    );
+  }
+
+  try {
+    const raw = await response.json();
+    return parseFredResponse(raw);
+  } catch {
+    throw new ProviderApiError(response.status, 'Fred returned invalid JSON');
+  }
+}
+
+/** Chain lease states that indicate the lease is no longer viable */
+export interface TerminalChainState {
+  state: 'closed' | 'rejected' | 'expired';
+}
+
+/** Response from the logs endpoint. */
+export interface LeaseLogsResponse {
+  lease_uuid: string;
+  tenant: string;
+  provider_uuid: string;
+  /** Container logs keyed by service/container name. */
+  logs: Record<string, string>;
+}
+
+/** Provision status from the provider. */
+export interface LeaseProvision {
+  status: string;
+  fail_count: number;
+  last_error: string;
+}
+
+/** Connection details from the provider. */
+export interface LeaseInfo {
+  host: string;
+  ports?: Record<string, unknown>;
+}
+
+export interface PollOptions {
+  intervalMs?: number;
+  maxAttempts?: number;
+  onProgress?: (status: FredLeaseStatus) => void;
+  abortSignal?: AbortSignal;
+  /**
+   * Optional callback to check chain state during polling.
+   * If it returns a terminal state, polling stops with a 'failed' status.
+   */
+  checkChainState?: () => Promise<TerminalChainState | null>;
+  /** Optional callback to mint a fresh auth token for each poll request. */
+  getAuthToken?: () => Promise<string>;
+}
+
+/**
+ * Poll fred's status endpoint until the lease is ready or failed.
+ *
+ * Returns on `ready` or `failed` status.
+ * On max attempts reached, returns the last status (caller decides next action).
+ *
+ * @param providerApiUrl - Fred's API base URL
+ * @param leaseUuid - The lease UUID
+ * @param authToken - ADR-036 auth token
+ * @param opts - Polling options
+ */
+export async function pollLeaseUntilReady(
+  providerApiUrl: string,
+  leaseUuid: string,
+  authToken: string,
+  opts: PollOptions = {}
+): Promise<FredLeaseStatus> {
+  const intervalMs = opts.intervalMs ?? 3000;
+  const maxAttempts = opts.maxAttempts ?? 60;
+
+  let lastStatus: FredLeaseStatus = {
+    state: LeaseState.LEASE_STATE_PENDING,
+    phase: 'starting',
+  };
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (opts.abortSignal?.aborted) {
+      return lastStatus;
+    }
+
+    // Check chain state first — lease may be rejected/closed before fred knows
+    if (opts.checkChainState) {
+      try {
+        const chainState = await opts.checkChainState();
+        if (chainState) {
+          const stateMap: Record<string, LeaseState> = {
+            closed: LeaseState.LEASE_STATE_CLOSED,
+            rejected: LeaseState.LEASE_STATE_REJECTED,
+            expired: LeaseState.LEASE_STATE_EXPIRED,
+          };
+          lastStatus = {
+            state: stateMap[chainState.state] ?? LeaseState.LEASE_STATE_CLOSED,
+            phase: 'chain_rejected',
+            error: `Lease ${chainState.state} on chain`,
+          };
+          opts.onProgress?.(lastStatus);
+          return lastStatus;
+        }
+      } catch (error) {
+        // Log but continue — chain check failure shouldn't stop polling
+        logError('fred.pollLeaseUntilReady.checkChainState', error);
+      }
+    }
+
+    try {
+      const currentToken = opts.getAuthToken ? await opts.getAuthToken() : authToken;
+      lastStatus = await getLeaseStatus(providerApiUrl, leaseUuid, currentToken);
+      opts.onProgress?.(lastStatus);
+
+      if (TERMINAL_STATES.has(lastStatus.state)) {
+        return lastStatus;
+      }
+    } catch (error) {
+      // Log but continue polling — transient errors shouldn't abort the loop
+      logError('fred.pollLeaseUntilReady', error);
+    }
+
+    // Wait before next attempt (unless last iteration)
+    if (attempt < maxAttempts - 1) {
+      await new Promise<void>((resolve, reject) => {
+        const timeoutId = setTimeout(resolve, intervalMs);
+        if (opts.abortSignal) {
+          const onAbort = () => {
+            clearTimeout(timeoutId);
+            reject(new DOMException('Aborted', 'AbortError'));
+          };
+          if (opts.abortSignal.aborted) {
+            clearTimeout(timeoutId);
+            resolve();
+            return;
+          }
+          opts.abortSignal.addEventListener('abort', onAbort, { once: true });
+        }
+      }).catch(() => {
+        // AbortError — return last status
+        return;
+      });
+    }
+  }
+
+  return lastStatus;
+}
+
+/**
+ * Fetch container logs for a lease from the provider.
+ *
+ * @param providerApiUrl - The provider's API base URL
+ * @param leaseUuid - The lease UUID
+ * @param authToken - Base64-encoded ADR-036 auth token
+ * @param tail - Number of log lines to return (default 100)
+ */
+export async function getLeaseLogs(
+  providerApiUrl: string,
+  leaseUuid: string,
+  authToken: string,
+  tail = 100
+): Promise<LeaseLogsResponse> {
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
+  const { url, headers } = buildValidatedFredRequest(
+    providerApiUrl,
+    `/v1/leases/${encodedLeaseUuid}/logs?tail=${tail}`,
+    { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
+  );
+
+  const response = await fetch(url, { method: 'GET', headers });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new ProviderApiError(
+      response.status,
+      `Fred logs error (${response.status}): ${errorText}`
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for logs');
+  }
+}
+
+/**
+ * Fetch provision status for a lease from the provider.
+ *
+ * @param providerApiUrl - The provider's API base URL
+ * @param leaseUuid - The lease UUID
+ * @param authToken - Base64-encoded ADR-036 auth token
+ */
+export async function getLeaseProvision(
+  providerApiUrl: string,
+  leaseUuid: string,
+  authToken: string
+): Promise<LeaseProvision> {
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
+  const { url, headers } = buildValidatedFredRequest(
+    providerApiUrl,
+    `/v1/leases/${encodedLeaseUuid}/provision`,
+    { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
+  );
+
+  const response = await fetch(url, { method: 'GET', headers });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new ProviderApiError(
+      response.status,
+      `Fred provision error (${response.status}): ${errorText}`
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for provision');
+  }
+}
+
+/**
+ * Fetch connection details (host, ports) for a lease from the provider.
+ *
+ * @param providerApiUrl - The provider's API base URL
+ * @param leaseUuid - The lease UUID
+ * @param authToken - Base64-encoded ADR-036 auth token
+ */
+export async function getLeaseInfo(
+  providerApiUrl: string,
+  leaseUuid: string,
+  authToken: string
+): Promise<LeaseInfo> {
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
+  const { url, headers } = buildValidatedFredRequest(
+    providerApiUrl,
+    `/info/${encodedLeaseUuid}`,
+    { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
+  );
+
+  const response = await fetch(url, { method: 'GET', headers });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new ProviderApiError(
+      response.status,
+      `Fred info error (${response.status}): ${errorText}`
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for info');
+  }
+}

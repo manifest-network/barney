@@ -25,6 +25,20 @@ describe('toBaseUnits', () => {
     expect(toBaseUnits(0, 'umfx')).toBe('0');
   });
 
+  it('returns "0" for NaN', () => {
+    expect(toBaseUnits(NaN, 'umfx')).toBe('0');
+  });
+
+  it('returns "0" for Infinity', () => {
+    expect(toBaseUnits(Infinity, 'umfx')).toBe('0');
+    expect(toBaseUnits(-Infinity, 'umfx')).toBe('0');
+  });
+
+  it('returns "0" for negative amounts', () => {
+    expect(toBaseUnits(-1, 'umfx')).toBe('0');
+    expect(toBaseUnits(-0.5, 'umfx')).toBe('0');
+  });
+
   it('handles zero exponent (no decimal point in toFixed output)', () => {
     // getDenomMetadata returns exponent 6 for all known/unknown denoms,
     // so toFixed(0) never occurs with current config. But exercise the

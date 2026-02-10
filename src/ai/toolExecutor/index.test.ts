@@ -1,140 +1,191 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { executeTool, executeConfirmedTool } from './index';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
-import type { ToolResult, SignResult } from './types';
+import type { ToolResult, ToolExecutorOptions } from './types';
 
-vi.mock('../tools', () => ({
-  requiresConfirmation: vi.fn(),
+vi.mock('./compositeQueries', () => ({
+  executeListApps: vi.fn(),
+  executeAppStatus: vi.fn(),
+  executeGetBalance: vi.fn(),
+  executeGetLogs: vi.fn(),
+  executeBrowseCatalog: vi.fn(),
+  executeCosmosQuery: vi.fn(),
+  executeLeaseHistory: vi.fn(),
 }));
 
-vi.mock('./validation', () => ({
-  validateConfirmationToolArgs: vi.fn(),
-  getConfirmationMessage: vi.fn(),
+vi.mock('./compositeTransactions', () => ({
+  executeDeployApp: vi.fn(),
+  executeConfirmedDeployApp: vi.fn(),
+  executeStopApp: vi.fn(),
+  executeConfirmedStopApp: vi.fn(),
+  executeFundCredits: vi.fn(),
+  executeConfirmedFundCredits: vi.fn(),
+  executeCosmosTransaction: vi.fn(),
+  executeConfirmedCosmosTx: vi.fn(),
+  executeConfirmedBatchDeploy: vi.fn(),
 }));
 
-vi.mock('./queries', () => ({
-  executeQuery: vi.fn(),
-}));
-
-vi.mock('./transactions', () => ({
-  executeTransaction: vi.fn(),
-}));
-
-import { requiresConfirmation } from '../tools';
-import { validateConfirmationToolArgs, getConfirmationMessage } from './validation';
-import { executeQuery } from './queries';
-import { executeTransaction } from './transactions';
-
-const mockRequiresConfirmation = vi.mocked(requiresConfirmation);
-const mockValidateArgs = vi.mocked(validateConfirmationToolArgs);
-const mockGetConfirmationMessage = vi.mocked(getConfirmationMessage);
-const mockExecuteQuery = vi.mocked(executeQuery);
-const mockExecuteTransaction = vi.mocked(executeTransaction);
+import {
+  executeGetBalance,
+  executeGetLogs,
+  executeListApps,
+  executeBrowseCatalog,
+  executeCosmosQuery,
+  executeLeaseHistory,
+} from './compositeQueries';
+import {
+  executeDeployApp,
+  executeConfirmedDeployApp,
+  executeFundCredits,
+  executeConfirmedFundCredits,
+  executeStopApp,
+  executeConfirmedStopApp,
+  executeCosmosTransaction,
+  executeConfirmedCosmosTx,
+  executeConfirmedBatchDeploy,
+} from './compositeTransactions';
 
 const CLIENT_MANAGER = {} as CosmosClientManager;
 const ADDRESS = 'manifest1abc';
+
+function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutorOptions {
+  return {
+    clientManager: CLIENT_MANAGER,
+    address: ADDRESS,
+    ...overrides,
+  };
+}
 
 describe('executeTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  // --- Confirmation-required tools ---
-
-  it('returns confirmation for confirmation-required tools with valid args', async () => {
-    mockRequiresConfirmation.mockReturnValue(true);
-    mockValidateArgs.mockReturnValue(null);
-    mockGetConfirmationMessage.mockReturnValue('Fund 1000umfx?');
-
-    const args = { amount: '1000umfx' };
-    const result = await executeTool('fund_credit', args, {
-      clientManager: CLIENT_MANAGER,
-      address: ADDRESS,
-    });
-
-    expect(result).toEqual({
-      success: true,
-      requiresConfirmation: true,
-      confirmationMessage: 'Fund 1000umfx?',
-      pendingAction: { toolName: 'fund_credit', args },
-    });
-    expect(mockExecuteQuery).not.toHaveBeenCalled();
-  });
-
-  it('returns validation error for confirmation-required tools with invalid args', async () => {
-    mockRequiresConfirmation.mockReturnValue(true);
-    mockValidateArgs.mockReturnValue('Missing required argument: amount.');
-
-    const result = await executeTool('fund_credit', {}, {
-      clientManager: CLIENT_MANAGER,
-      address: ADDRESS,
-    });
-
-    expect(result).toEqual({
-      success: false,
-      error: 'Missing required argument: amount.',
-    });
-    expect(mockGetConfirmationMessage).not.toHaveBeenCalled();
-  });
-
   // --- Query tools ---
 
-  it('delegates to executeQuery for non-confirmation tools', async () => {
-    mockRequiresConfirmation.mockReturnValue(false);
-    const queryResult: ToolResult = { success: true, data: { balances: [] } };
-    mockExecuteQuery.mockResolvedValue(queryResult);
+  it('routes get_balance to executor', async () => {
+    const queryResult: ToolResult = { success: true, data: { credits: 100 } };
+    vi.mocked(executeGetBalance).mockResolvedValue(queryResult);
 
-    const result = await executeTool('get_balance', {}, {
-      clientManager: CLIENT_MANAGER,
-      address: ADDRESS,
-    });
-
+    const result = await executeTool('get_balance', {}, makeOptions());
     expect(result).toBe(queryResult);
-    expect(mockExecuteQuery).toHaveBeenCalledWith('get_balance', {}, CLIENT_MANAGER, ADDRESS);
+    expect(executeGetBalance).toHaveBeenCalled();
   });
 
-  it('returns unknown tool error when executeQuery returns null', async () => {
-    mockRequiresConfirmation.mockReturnValue(false);
-    mockExecuteQuery.mockResolvedValue(null);
+  it('routes list_apps to executor', async () => {
+    const queryResult: ToolResult = { success: true, data: { apps: [], count: 0 } };
+    vi.mocked(executeListApps).mockResolvedValue(queryResult);
 
-    const result = await executeTool('nonexistent', {}, {
-      clientManager: CLIENT_MANAGER,
-      address: ADDRESS,
-    });
+    const result = await executeTool('list_apps', {}, makeOptions());
+    expect(result).toBe(queryResult);
+  });
 
+  it('routes browse_catalog to executor', async () => {
+    const queryResult: ToolResult = { success: true, data: { providers: [], tiers: {} } };
+    vi.mocked(executeBrowseCatalog).mockResolvedValue(queryResult);
+
+    const result = await executeTool('browse_catalog', {}, makeOptions());
+    expect(result).toBe(queryResult);
+  });
+
+  it('routes get_logs to executor', async () => {
+    const queryResult: ToolResult = { success: true, data: { app_name: 'my-app', logs: {}, truncated: false } };
+    vi.mocked(executeGetLogs).mockResolvedValue(queryResult);
+
+    const result = await executeTool('get_logs', { app_name: 'my-app' }, makeOptions());
+    expect(result).toBe(queryResult);
+    expect(executeGetLogs).toHaveBeenCalledWith({ app_name: 'my-app' }, expect.any(Object));
+  });
+
+  it('routes lease_history to executor', async () => {
+    const queryResult: ToolResult = { success: true, data: { leases: [], count: 0, total: 0 } };
+    vi.mocked(executeLeaseHistory).mockResolvedValue(queryResult);
+
+    const result = await executeTool('lease_history', { state: 'active' }, makeOptions());
+    expect(result).toBe(queryResult);
+    expect(executeLeaseHistory).toHaveBeenCalledWith({ state: 'active' }, expect.any(Object));
+  });
+
+  it('routes cosmos_query to executor', async () => {
+    const queryResult: ToolResult = { success: true, data: { params: {} } };
+    vi.mocked(executeCosmosQuery).mockResolvedValue(queryResult);
+
+    const result = await executeTool('cosmos_query', { module: 'bank', subcommand: 'params' }, makeOptions());
+    expect(result).toBe(queryResult);
+    expect(executeCosmosQuery).toHaveBeenCalledWith({ module: 'bank', subcommand: 'params' }, CLIENT_MANAGER);
+  });
+
+  // --- TX tools ---
+
+  it('routes deploy_app to executor', async () => {
+    const confirmResult: ToolResult = {
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Deploy test-app?',
+      pendingAction: { toolName: 'deploy_app', args: {} },
+    };
+    vi.mocked(executeDeployApp).mockResolvedValue(confirmResult);
+
+    const result = await executeTool('deploy_app', {}, makeOptions());
+    expect(result.requiresConfirmation).toBe(true);
+  });
+
+  it('routes stop_app to executor', async () => {
+    const confirmResult: ToolResult = {
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Stop app?',
+      pendingAction: { toolName: 'stop_app', args: {} },
+    };
+    vi.mocked(executeStopApp).mockResolvedValue(confirmResult);
+
+    const result = await executeTool('stop_app', { name: 'test' }, makeOptions());
+    expect(result.requiresConfirmation).toBe(true);
+  });
+
+  it('routes fund_credits to executor', async () => {
+    const confirmResult: ToolResult = {
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Add 50 credits?',
+      pendingAction: { toolName: 'fund_credits', args: { amount: 50 } },
+    };
+    vi.mocked(executeFundCredits).mockReturnValue(confirmResult);
+
+    const result = await executeTool('fund_credits', { amount: 50 }, makeOptions());
+    expect(result.requiresConfirmation).toBe(true);
+  });
+
+  it('routes cosmos_tx to executor', async () => {
+    const confirmResult: ToolResult = {
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Execute bank send?',
+      pendingAction: { toolName: 'cosmos_tx', args: {} },
+    };
+    vi.mocked(executeCosmosTransaction).mockReturnValue(confirmResult);
+
+    const result = await executeTool('cosmos_tx', { module: 'bank', subcommand: 'send', args: '[]' }, makeOptions());
+    expect(result.requiresConfirmation).toBe(true);
+  });
+
+  // --- Error handling ---
+
+  it('returns unknown tool error for unrecognized tools', async () => {
+    const result = await executeTool('nonexistent', {}, makeOptions());
     expect(result).toEqual({
       success: false,
       error: 'Unknown tool: nonexistent',
     });
   });
 
-  it('catches and wraps errors thrown by executeQuery', async () => {
-    mockRequiresConfirmation.mockReturnValue(false);
-    mockExecuteQuery.mockRejectedValue(new Error('network failure'));
+  it('catches errors from query tools', async () => {
+    vi.mocked(executeGetBalance).mockRejectedValue(new Error('network failure'));
 
-    const result = await executeTool('get_balance', {}, {
-      clientManager: CLIENT_MANAGER,
-      address: ADDRESS,
-    });
-
+    const result = await executeTool('get_balance', {}, makeOptions());
     expect(result).toEqual({
       success: false,
       error: 'network failure',
-    });
-  });
-
-  it('handles non-Error throws from executeQuery', async () => {
-    mockRequiresConfirmation.mockReturnValue(false);
-    mockExecuteQuery.mockRejectedValue('string error');
-
-    const result = await executeTool('get_balance', {}, {
-      clientManager: CLIENT_MANAGER,
-      address: ADDRESS,
-    });
-
-    expect(result).toEqual({
-      success: false,
-      error: 'Unknown error',
     });
   });
 });
@@ -144,51 +195,73 @@ describe('executeConfirmedTool', () => {
     vi.clearAllMocks();
   });
 
-  it('delegates to executeTransaction and returns result', async () => {
-    const txResult: ToolResult = { success: true, data: { message: 'done' } };
-    mockExecuteTransaction.mockResolvedValue(txResult);
+  it('routes deploy_app to confirmed executor', async () => {
+    const txResult: ToolResult = { success: true, data: { message: 'deployed' } };
+    vi.mocked(executeConfirmedDeployApp).mockResolvedValue(txResult);
 
-    const result = await executeConfirmedTool('fund_credit', { amount: '1000umfx' }, CLIENT_MANAGER, ADDRESS);
+    const options = makeOptions();
+    const result = await executeConfirmedTool('deploy_app', {}, CLIENT_MANAGER, options);
 
     expect(result).toBe(txResult);
-    expect(mockExecuteTransaction).toHaveBeenCalledWith(
-      'fund_credit', { amount: '1000umfx' }, CLIENT_MANAGER, ADDRESS, undefined, undefined,
-    );
+    expect(executeConfirmedDeployApp).toHaveBeenCalled();
   });
 
-  it('passes signArbitrary and payload through', async () => {
-    const txResult: ToolResult = { success: true, data: { message: 'uploaded' } };
-    mockExecuteTransaction.mockResolvedValue(txResult);
+  it('routes batch_deploy to confirmed batch executor', async () => {
+    const txResult: ToolResult = { success: true, data: { deployed: ['app1', 'app2'], failed: [], message: 'ok' } };
+    vi.mocked(executeConfirmedBatchDeploy).mockResolvedValue(txResult);
 
-    const signArbitrary = vi.fn<(address: string, data: string) => Promise<SignResult>>();
-    const payload = { bytes: new Uint8Array([1]), size: 1, hash: 'a'.repeat(64) };
+    const options = makeOptions();
+    const result = await executeConfirmedTool('batch_deploy', { entries: [] }, CLIENT_MANAGER, options);
 
-    await executeConfirmedTool('upload_payload', {}, CLIENT_MANAGER, ADDRESS, signArbitrary, payload);
-
-    expect(mockExecuteTransaction).toHaveBeenCalledWith(
-      'upload_payload', {}, CLIENT_MANAGER, ADDRESS, signArbitrary, payload,
-    );
+    expect(result).toBe(txResult);
+    expect(executeConfirmedBatchDeploy).toHaveBeenCalled();
   });
 
-  it('catches and wraps errors thrown by executeTransaction', async () => {
-    mockExecuteTransaction.mockRejectedValue(new Error('tx broadcast failed'));
+  it('routes stop_app to confirmed executor', async () => {
+    const txResult: ToolResult = { success: true, data: { message: 'stopped' } };
+    vi.mocked(executeConfirmedStopApp).mockResolvedValue(txResult);
 
-    const result = await executeConfirmedTool('fund_credit', {}, CLIENT_MANAGER);
+    const options = makeOptions();
+    const result = await executeConfirmedTool('stop_app', { name: 'test' }, CLIENT_MANAGER, options);
 
+    expect(result).toBe(txResult);
+  });
+
+  it('routes fund_credits to confirmed executor', async () => {
+    const txResult: ToolResult = { success: true, data: { message: 'funded' } };
+    vi.mocked(executeConfirmedFundCredits).mockResolvedValue(txResult);
+
+    const options = makeOptions();
+    const result = await executeConfirmedTool('fund_credits', { amount: 50 }, CLIENT_MANAGER, options);
+
+    expect(result).toBe(txResult);
+  });
+
+  it('routes cosmos_tx to confirmed executor', async () => {
+    const txResult: ToolResult = { success: true, data: { message: 'tx done' } };
+    vi.mocked(executeConfirmedCosmosTx).mockResolvedValue(txResult);
+
+    const options = makeOptions();
+    const result = await executeConfirmedTool('cosmos_tx', { module: 'bank', subcommand: 'send', args: '[]' }, CLIENT_MANAGER, options);
+
+    expect(result).toBe(txResult);
+  });
+
+  it('returns error for unknown confirmed tool', async () => {
+    const result = await executeConfirmedTool('nonexistent', {}, CLIENT_MANAGER, makeOptions());
     expect(result).toEqual({
       success: false,
-      error: 'tx broadcast failed',
+      error: 'Unknown confirmed tool: nonexistent',
     });
   });
 
-  it('handles non-Error throws from executeTransaction', async () => {
-    mockExecuteTransaction.mockRejectedValue(42);
+  it('catches and wraps errors', async () => {
+    vi.mocked(executeConfirmedFundCredits).mockRejectedValue(new Error('tx failed'));
 
-    const result = await executeConfirmedTool('fund_credit', {}, CLIENT_MANAGER);
-
+    const result = await executeConfirmedTool('fund_credits', {}, CLIENT_MANAGER, makeOptions());
     expect(result).toEqual({
       success: false,
-      error: 'Unknown error',
+      error: 'tx failed',
     });
   });
 });

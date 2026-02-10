@@ -18,6 +18,9 @@ import type { Unit } from '../api/sku';
  * @returns Base unit amount as string, suitable for blockchain transactions
  */
 export function toBaseUnits(amount: number, denom: string): string {
+  if (!Number.isFinite(amount) || amount < 0) {
+    return '0';
+  }
   const { exponent } = getDenomMetadata(denom);
   // Round to the token's decimal precision first, then shift the decimal point
   // via string manipulation to avoid floating-point errors from multiplication.

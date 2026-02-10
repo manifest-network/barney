@@ -3,6 +3,7 @@ import {
   createSignMessage,
   createLeaseDataSignMessage,
   createAuthToken,
+  validateAuthTimestamp,
   isValidMetaHash,
   ProviderApiError,
   getProviderHealth,
@@ -32,42 +33,51 @@ describe('createLeaseDataSignMessage', () => {
 
 describe('createAuthToken', () => {
   it('returns a base64-encoded JSON string', () => {
-    const token = createAuthToken('manifest1abc', 'uuid-123', 1700000000, 'pubkey==', 'sig==');
+    const now = Math.floor(Date.now() / 1000);
+    const token = createAuthToken('manifest1abc', 'uuid-123', now, 'pubkey==', 'sig==');
     const decoded = JSON.parse(atob(token));
 
     expect(decoded).toEqual({
       tenant: 'manifest1abc',
       lease_uuid: 'uuid-123',
-      timestamp: 1700000000,
+      timestamp: now,
       pub_key: 'pubkey==',
       signature: 'sig==',
     });
   });
 
   it('produces valid base64', () => {
-    const token = createAuthToken('t', 'l', 0, 'p', 's');
+    const now = Math.floor(Date.now() / 1000);
+    const token = createAuthToken('t', 'l', now, 'p', 's');
     expect(() => atob(token)).not.toThrow();
+  });
+
+  it('throws when timestamp is expired', () => {
+    const staleTimestamp = Math.floor(Date.now() / 1000) - 400;
+    expect(() => createAuthToken('t', 'l', staleTimestamp, 'p', 's')).toThrow('expired');
   });
 });
 
 describe('createAuthToken with metaHashHex', () => {
   it('includes meta_hash in the token when provided', () => {
+    const now = Math.floor(Date.now() / 1000);
     const hash = 'b'.repeat(64);
-    const token = createAuthToken('manifest1abc', 'uuid-789', 1700000000, 'pubkey==', 'sig==', hash);
+    const token = createAuthToken('manifest1abc', 'uuid-789', now, 'pubkey==', 'sig==', hash);
     const decoded = JSON.parse(atob(token));
 
     expect(decoded).toEqual({
       tenant: 'manifest1abc',
       lease_uuid: 'uuid-789',
       meta_hash: hash,
-      timestamp: 1700000000,
+      timestamp: now,
       pub_key: 'pubkey==',
       signature: 'sig==',
     });
   });
 
   it('omits meta_hash from token when not provided', () => {
-    const token = createAuthToken('manifest1abc', 'uuid-123', 1700000000, 'pubkey==', 'sig==');
+    const now = Math.floor(Date.now() / 1000);
+    const token = createAuthToken('manifest1abc', 'uuid-123', now, 'pubkey==', 'sig==');
     const decoded = JSON.parse(atob(token));
 
     expect(decoded).not.toHaveProperty('meta_hash');
@@ -116,6 +126,56 @@ describe('ProviderApiError', () => {
     const error = new ProviderApiError(500, 'Internal');
     expect(error).toBeInstanceOf(Error);
     expect(error).toBeInstanceOf(ProviderApiError);
+  });
+});
+
+describe('validateAuthTimestamp', () => {
+  it('accepts current timestamp', () => {
+    const now = Math.floor(Date.now() / 1000);
+    expect(() => validateAuthTimestamp(now)).not.toThrow();
+  });
+
+  it('accepts timestamp 4 minutes ago', () => {
+    const fourMinAgo = Math.floor(Date.now() / 1000) - 240;
+    expect(() => validateAuthTimestamp(fourMinAgo)).not.toThrow();
+  });
+
+  it('rejects timestamp 6 minutes ago', () => {
+    const sixMinAgo = Math.floor(Date.now() / 1000) - 360;
+    expect(() => validateAuthTimestamp(sixMinAgo)).toThrow('expired');
+  });
+
+  it('rejects timestamp 2 minutes in the future', () => {
+    const twoMinFuture = Math.floor(Date.now() / 1000) + 120;
+    expect(() => validateAuthTimestamp(twoMinFuture)).toThrow('future');
+  });
+
+  it('rejects NaN', () => {
+    expect(() => validateAuthTimestamp(NaN)).toThrow('finite number');
+  });
+
+  it('rejects Infinity', () => {
+    expect(() => validateAuthTimestamp(Infinity)).toThrow('finite number');
+  });
+
+  it('accepts timestamp exactly 300 seconds ago', () => {
+    const exactLimit = Math.floor(Date.now() / 1000) - 300;
+    expect(() => validateAuthTimestamp(exactLimit)).not.toThrow();
+  });
+
+  it('rejects timestamp 301 seconds ago', () => {
+    const justPast = Math.floor(Date.now() / 1000) - 301;
+    expect(() => validateAuthTimestamp(justPast)).toThrow('expired');
+  });
+
+  it('accepts timestamp exactly 60 seconds in the future', () => {
+    const exactFuture = Math.floor(Date.now() / 1000) + 60;
+    expect(() => validateAuthTimestamp(exactFuture)).not.toThrow();
+  });
+
+  it('rejects timestamp 61 seconds in the future', () => {
+    const justFuture = Math.floor(Date.now() / 1000) + 61;
+    expect(() => validateAuthTimestamp(justFuture)).toThrow('future');
   });
 });
 

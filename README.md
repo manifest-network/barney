@@ -1,113 +1,101 @@
 # Barney
 
-A React-based dApp for managing cloud compute resources on the Manifest blockchain. Barney provides a user-friendly interface for leasing compute resources from providers, managing credit accounts, and interacting with the billing system.
-
-## Features
-
-- **Wallet Integration**: Connect with Keplr, Leap, Leap MetaMask Cosmos Snap, Cosmostation, Ledger, or Web3Auth
-- **Credit Management**: Fund and monitor your credit account for compute leases
-- **Lease Management**: Create, monitor, and close compute resource leases
-- **Provider Catalog**: Browse available compute providers and their SKUs
-- **AI Assistant**: Natural language interface for blockchain operations (powered by Ollama)
-- **Provider Dashboard**: For compute providers to manage their offerings
+Chat-primary deployment platform for [Manifest Network](https://www.manifestai.com/). Deploy and manage applications on-chain through a conversational AI interface powered by a local Ollama LLM.
 
 ## Prerequisites
 
-- Node.js 18+ or 20+
-- npm 9+
-- [Ollama](https://ollama.ai/) (optional, for AI assistant features)
+- Node.js >= 20
+- npm >= 10
+- [Ollama](https://ollama.ai/) running locally with a model pulled (default: `llama3.2`)
+- A Manifest Network node (RPC + REST endpoints)
 
-## Installation
+## Quick Start
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd barney
-
-# Install dependencies
 npm install
-```
-
-## Development
-
-```bash
-# Start development server
 npm run dev
-
-# Run linting
-npm run lint
-
-# Run tests
-npm test
-
-# Run tests in watch mode
-npm run test:watch
-
-# Run tests with coverage
-npm run test:coverage
-
-# Build for production
-npm run build
-
-# Preview production build
-npm run preview
 ```
+
+The dev server starts at `http://localhost:3000`.
 
 ## Environment Variables
 
 Create a `.env.local` file in the project root:
 
 ```env
-# Blockchain endpoints (optional, defaults shown)
+# Blockchain endpoints (defaults shown)
 PUBLIC_REST_URL=http://localhost:1317
 PUBLIC_RPC_URL=http://localhost:26657
 
-# Web3Auth social login (optional - get a client ID at https://dashboard.web3auth.io)
-PUBLIC_WEB3AUTH_CLIENT_ID=your_web3auth_client_id_here
-PUBLIC_WEB3AUTH_NETWORK=sapphire_devnet
-
-# Ollama AI settings (optional)
+# Ollama AI settings
 PUBLIC_OLLAMA_URL=http://localhost:11434
 PUBLIC_OLLAMA_MODEL=llama3.2
 
+# Web3Auth social login (get a client ID at https://dashboard.web3auth.io)
+PUBLIC_WEB3AUTH_CLIENT_ID=your_client_id
+PUBLIC_WEB3AUTH_NETWORK=sapphire_devnet
+
 # Custom PWR token denom (optional, defaults to local factory address)
 # PUBLIC_PWR_DENOM=factory/manifest1.../upwr
+```
+
+## Scripts
+
+```bash
+npm run dev            # Start development server (Rsbuild)
+npm run build          # Type check + production build
+npm run lint           # ESLint
+npm test               # Run all tests (Vitest)
+npm run test:watch     # Tests in watch mode
+npm run test:coverage  # Tests with coverage report
+npm run preview        # Preview production build locally
+```
+
+Run a single test file:
+
+```bash
+npx vitest run src/utils/hash.test.ts
 ```
 
 ## Project Structure
 
 ```
 src/
-├── api/              # Blockchain API clients (billing, SKU, bank)
-├── ai/               # AI assistant (tools, validation, prompts)
-│   └── toolExecutor/ # Tool execution for AI operations
-├── components/       # React components
-│   ├── tabs/         # Main tab views (Wallet, Leases, Catalog, Provider)
-│   ├── ai/           # AI assistant components
-│   └── ui/           # Reusable UI components
-├── config/           # Chain configuration and constants
-├── contexts/         # React contexts (AI, AutoRefresh)
-├── hooks/            # Custom React hooks
-└── utils/            # Utility functions (format, hash, address, etc.)
+  ai/              # LLM integration: tools, system prompt, streaming, validation
+    toolExecutor/  # Tool dispatch (queries, transactions, escape hatches)
+  api/             # Chain + provider API clients (billing, bank, SKU, fred)
+  components/
+    ai/            # Chat UI: messages, cards, settings
+    landing/       # Landing page (pre-connect)
+    layout/        # AppShell, MainLayout, sidebar
+    ui/            # Reusable UI components
+  config/          # Chain config, constants, example apps
+  contexts/        # AIContext (chat state + tool execution), ToastContext
+  hooks/           # Custom hooks (persistence, MCP bridge, polling)
+  registry/        # App registry (localStorage-backed name→lease mapping)
+  styles/          # Global CSS with Tailwind v4 theme
+  utils/           # Formatting, hashing, error helpers
 ```
+
+See [CLAUDE.md](./CLAUDE.md) for detailed architecture, tool definitions, and codebase patterns.
 
 ## Architecture
 
-### Blockchain Integration
+### How It Works
 
-- Uses `@cosmos-kit/react` for wallet management
-- `@manifest-network/manifestjs` for Manifest-specific message types
-- `@manifest-network/manifest-mcp-browser` for MCP (Model Context Protocol) integration
+1. **Connect** a wallet via Web3Auth social login
+2. **Chat** with the AI assistant to deploy, manage, and monitor apps
+3. The AI calls 11 composite tools that map to on-chain transactions and queries
+4. Transaction tools require explicit user confirmation before broadcasting
+5. Deploy progress is tracked in real-time through provider status polling
 
-### AI Assistant
+### AI Tool Execution
 
-The AI assistant uses Ollama locally and can:
-- Query balances and credit accounts
-- List and filter leases
-- Create and manage leases
-- Execute arbitrary Cosmos SDK queries and transactions
+Three-layer architecture:
 
-All transactions require user confirmation before execution.
+- **AIContext** — manages chat state, streams from Ollama, executes tools
+- **useManifestMCP** — bridges cosmos-kit with the MCP browser client
+- **Tool Executor** — dispatches to composite executors for queries and transactions
 
 ### Security
 
@@ -116,38 +104,34 @@ All transactions require user confirmation before execution.
 - **Transaction Confirmation**: AI-initiated transactions require explicit user approval
 - **ADR-036 Signatures**: Off-chain authentication for provider API interactions
 
+## Tech Stack
+
+- **React 19** with TypeScript 5.9
+- **Rsbuild** — bundler (Rspack-based)
+- **Tailwind CSS v4** — utility-first styling with OKLCH color theme
+- **cosmos-kit** — Cosmos wallet abstraction (Web3Auth social login)
+- **manifestjs** — Manifest chain client library
+- **Ollama** — local LLM inference with tool calling
+- **Vitest** + happy-dom — test runner
+- **Lucide React** — icons
+
 ## Testing
 
-Tests are written with Vitest and use happy-dom for DOM simulation:
-
 ```bash
-# Run all tests
-npm test
-
-# Run with coverage report
-npm run test:coverage
+npm test                # Run all tests
+npm run test:coverage   # With coverage report
 ```
 
-Coverage reports are generated in the `coverage/` directory.
+Coverage reports are generated in the `coverage/` directory. Tests use happy-dom for DOM simulation and run via Vitest.
 
 ## Build
 
 ```bash
-# Type check and build
 npm run build
 ```
 
 Production builds are output to `dist/`.
 
-## Tech Stack
-
-- **Framework**: React 19
-- **Language**: TypeScript 5.9
-- **Build Tool**: Rsbuild
-- **Styling**: Tailwind CSS 4
-- **Testing**: Vitest
-- **Blockchain**: Cosmos SDK / Manifest Network
-
 ## License
 
-Private - All rights reserved
+Private — All rights reserved
