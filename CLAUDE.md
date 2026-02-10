@@ -25,6 +25,8 @@ Run tests matching a pattern:
 npx vitest run -t "validateFile"
 ```
 
+Tests use Vitest with `happy-dom` (not jsdom). Coverage uses the `v8` provider. See `vitest.config.ts`.
+
 ## Architecture
 
 ### UI Layout
@@ -139,6 +141,58 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 | `queryClient.ts` | LCD query client factory (cached singleton) |
 | `index.ts` | Barrel re-exports for API modules |
 
+### Hooks (`src/hooks/`)
+
+AIContext delegates to extracted hooks to keep the provider manageable:
+
+| Hook | Purpose |
+|------|---------|
+| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser` |
+| `useMessageManager` | Message CRUD with synchronous ref mirror — updates `messagesRef` before `setMessages` so rapid async calls always read consistent state |
+| `useStreamingUpdates` | RAF-throttled message updates during LLM streaming — batches rapid content chunks into one state update per animation frame |
+| `useToolCache` | Query tool result cache (10s TTL, 50 max, FIFO eviction), scoped per wallet address |
+| `useChatPersistence` | localStorage-backed settings + history with lazy initializers to avoid save/load race conditions |
+| `useAutoScroll` | MutationObserver-based auto-scroll that respects user scroll position |
+| `useFocusTrap` | Keyboard focus trapping for modals/overlays with Escape support |
+
+### Utility Modules (`src/utils/`)
+
+| Module | Purpose |
+|--------|---------|
+| `errors.ts` | `logError()` — structured error logging (use instead of raw `console.error`) |
+| `hash.ts` | `sha256()`, `toHex()` — hashing and hex encoding; `MAX_PAYLOAD_SIZE` (5KB) |
+| `format.ts` | Amount conversion (`toBaseUnits`, `fromBaseUnits`), date/duration formatting, UUID validation |
+| `fileValidation.ts` | Upload validation: size limits, allowed extensions (`.yaml`, `.yml`, `.json`, `.txt`), MIME type checks |
+| `pricing.ts` | BigInt-based cost calculations (`formatCostPerHour`, `calculateEstimatedCost`) to avoid integer overflow |
+| `leaseState.ts` | Lease state display helpers — badge classes, labels, colors, filter mapping |
+| `address.ts` | Bech32 address validation (`isValidBech32Address`) and truncation (`truncateAddress`) |
+| `url.ts` | URL validation with SSRF protection (`parseHttpUrl`, `isUrlSsrfSafe`) |
+| `cn.ts` | Class name combiner (clsx-style): `cn('foo', condition && 'bar')` |
+
+### Constants (`src/config/constants.ts`)
+
+All tunable timeouts, cache sizes, and limits are centralized here. Key values:
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `AI_STREAM_TIMEOUT_MS` | 30s | Per-chunk stream timeout |
+| `AI_CONFIRMATION_TIMEOUT_MS` | 5min | Auto-cancel pending TX confirmations |
+| `AI_DEPLOY_PROVISION_TIMEOUT_MS` | 5min | Max polling time for deploy readiness |
+| `AI_MESSAGE_DEBOUNCE_MS` | 300ms | Debounce rapid message sends |
+| `AI_MAX_TOOL_ITERATIONS` | 10 | Max tool calls per message (prevents loops) |
+| `AI_MAX_MESSAGES` | 200 | Chat history memory limit |
+| `AI_TOOL_CACHE_TTL_MS` | 10s | Query result cache lifetime |
+| `AI_TOOL_CACHE_MAX_SIZE` | 50 | Max cached query results |
+| `MAX_PAYLOAD_SIZE` | 5KB | Maximum file upload size (in `hash.ts`) |
+
+## Styling
+
+- Tailwind v4 with inline `@theme` configuration in `src/index.css` (no separate `tailwind.config` file)
+- Custom Manifest design system using OKLCH color space
+- Fonts: Plus Jakarta Sans (headings/body), IBM Plex Mono (code)
+- Use `cn()` from `src/utils/cn.ts` for conditional class names
+- No CSS modules or styled-components — pure Tailwind utility classes
+
 ## Key Patterns
 
 - **Refs for async access**: AIContext uses refs (`clientManagerRef`, `addressRef`, `signArbitraryRef`) to avoid stale closures in streaming callbacks
@@ -148,7 +202,7 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 - **Tool result caching**: Query tool results cached for 10s in AIContext to reduce redundant API calls (max 50 entries, FIFO eviction). Cache is scoped per wallet address and cleared on wallet change.
 - **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
 - **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
-- **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs.
+- **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs. The rsbuild proxy (`rsbuild.config.ts`) has its own SSRF validation layer (`isValidProxyTarget`) separate from runtime validation, blocking cloud metadata endpoints, dangerous IP ranges, and embedded credentials.
 - **Stream timeout**: `processStreamWithTimeout` in `src/ai/streamUtils.ts` wraps the Ollama async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely. The inner `withTimeout` generator ensures cleanup of the underlying generator via `finally` block.
 - **Tool-call leak stripping**: `stripToolCallLeaks()` in `src/ai/streamUtils.ts` filters raw `[TOOL_CALLS]` markers that some Ollama models emit as literal text instead of structured tool_calls.
 - **Message debouncing**: AIContext debounces rapid message sends via `AI_MESSAGE_DEBOUNCE_MS` (300ms) and aborts in-flight streams when a new message is sent.
