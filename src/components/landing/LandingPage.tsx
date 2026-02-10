@@ -54,7 +54,7 @@ export function LandingPage({ onConnect, isConnecting }: LandingPageProps) {
         <p className="landing-hint">
           {isConnecting
             ? 'Reconnecting to your previous session...'
-            : 'Sign in with Google or connect a Cosmos wallet'}
+            : 'Sign in with Google'}
         </p>
       </div>
 

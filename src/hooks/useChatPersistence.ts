@@ -74,6 +74,7 @@ export function useChatPersistence() {
         // Only save non-streaming messages; strip card data to avoid persisting large logs
         const toSave = messages
           .filter((m) => !m.isStreaming)
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Intentionally stripping card data from persisted messages
           .map(({ card, ...rest }) => rest);
         localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(toSave));
       } catch (error) {

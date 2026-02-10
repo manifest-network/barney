@@ -25,7 +25,7 @@ export interface StreamResult {
 export function stripToolCallLeaks(text: string): string {
   return text
     .replace(/\[TOOL_CALLS\][\s\S]*?\[TOOL_CALLS\]/g, '')
-    .replace(/\[TOOL_CALLS\]\s*[\[{][\s\S]*?[\]}]\s*/g, '')
+    .replace(/\[TOOL_CALLS\]\s*[[{][\s\S]*?[\]}]\s*/g, '')
     .replace(/\[TOOL_CALLS\]/g, '')
     .trim();
 }

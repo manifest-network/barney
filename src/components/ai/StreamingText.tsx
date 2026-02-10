@@ -38,8 +38,9 @@ interface StreamingTextProps {
 export function StreamingText({ text, isStreaming }: StreamingTextProps) {
   const prevLenRef = useRef(0);
 
-  // Read ref during render (safe), but defer writes to useEffect
-  // so StrictMode double-renders don't clobber the value.
+  // Read ref during render to determine which portion of text is "new" for animation.
+  // Writes are deferred to useEffect so StrictMode double-renders don't clobber the value.
+  // eslint-disable-next-line react-hooks/refs -- Intentional: reading previous-render value
   const prevLen = isStreaming ? prevLenRef.current : 0;
 
   useEffect(() => {

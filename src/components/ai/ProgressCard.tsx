@@ -43,23 +43,18 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
   const isReady = progress.phase === 'ready';
   const isTerminal = isFailed || isReady;
 
-  const startRef = useRef(Date.now());
+  const startRef = useRef(0);
   const [elapsed, setElapsed] = useState(0);
 
-  // Reset timer when a new deploy starts (phase goes non-terminal)
-  const prevTerminalRef = useRef(isTerminal);
-  if (prevTerminalRef.current && !isTerminal) {
-    startRef.current = Date.now();
-  }
-  prevTerminalRef.current = isTerminal;
-
+  // Reset timer when a new deploy starts (isTerminal becomes false).
+  // Date.now() is called inside callbacks (not synchronously in effect body) to satisfy purity rules.
   useEffect(() => {
     if (isTerminal) return;
-    setElapsed(0);
-    const id = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
-    }, 1000);
-    return () => clearInterval(id);
+    startRef.current = Date.now();
+    const tick = () => setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+    const resetId = setTimeout(tick, 0);
+    const id = setInterval(tick, 1000);
+    return () => { clearTimeout(resetId); clearInterval(id); };
   }, [isTerminal]);
 
   // Build a concise screen-reader announcement for the current phase

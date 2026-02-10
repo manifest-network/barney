@@ -10,7 +10,7 @@ import { AIContext } from './aiContextValue';
 import type { OllamaMessage, OllamaToolCall } from '../api/ollama';
 import { streamChat, checkOllamaHealth, listModels, type OllamaModel } from '../api/ollama';
 import { AI_TOOLS, getToolCallDescription, isValidToolName } from '../ai/tools';
-import { executeTool, executeConfirmedTool, type SignResult, type PayloadAttachment } from '../ai/toolExecutor';
+import { executeTool, executeConfirmedTool, type ToolResult, type SignResult, type PayloadAttachment } from '../ai/toolExecutor';
 import { executeBatchDeploy, deriveAppName } from '../ai/toolExecutor/compositeTransactions';
 import { getSystemPrompt } from '../ai/systemPrompt';
 import type { DeployProgress } from '../ai/progress';
@@ -235,7 +235,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
   // --- Tool execution ---
 
   const handleToolCall = useCallback(
-    async (toolCall: OllamaToolCall) => {
+    async (toolCall: OllamaToolCall): Promise<ToolResult> => {
       // Validate tool name against composite tools
       if (!isValidToolName(toolCall.function.name)) {
         return {

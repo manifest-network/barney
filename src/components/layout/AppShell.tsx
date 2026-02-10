@@ -42,19 +42,15 @@ export function AppShell() {
     setSignArbitrary(canSign ? wrappedSignArbitrary : undefined);
   }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, wrappedSignArbitrary]);
 
-  // Page transition: defer content swap until exit animation completes
+  // Page transition: defer content swap until exit animation completes.
+  // `exiting` is derived (not state) so we avoid calling setState in the effect body.
   const [renderedConnected, setRenderedConnected] = useState(isWalletConnected);
-  const [exiting, setExiting] = useState(false);
+  const exiting = isWalletConnected !== renderedConnected;
 
   useEffect(() => {
-    if (isWalletConnected === renderedConnected) {
-      setExiting(false);
-      return;
-    }
-    setExiting(true);
+    if (isWalletConnected === renderedConnected) return;
     const timer = setTimeout(() => {
       setRenderedConnected(isWalletConnected);
-      setExiting(false);
     }, EXIT_DURATION_MS);
     return () => clearTimeout(timer);
   }, [isWalletConnected, renderedConnected]);
