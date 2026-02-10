@@ -266,6 +266,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         signArbitrary: signArbitraryRef.current,
         onProgress: setDeployProgress,
         appRegistry: getAppRegistryAccess(),
+        signal: abortControllerRef.current?.signal,
       }, pendingPayloadRef.current ?? undefined);
 
       // Cache successful query results (not confirmations or failures)
