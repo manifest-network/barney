@@ -32,20 +32,23 @@ npx vitest run -t "validateFile"
 Chat-primary deployment platform:
 
 ```
-ChainProvider (cosmos-kit wallet abstraction)
-  └─ ToastProvider (toast notifications)
-      └─ AIProvider (chat state, tool execution, Ollama streaming)
-          └─ AppShell
-              ├─ LandingPage (when not connected)
-              └─ MainLayout (when connected)
-                  ├─ AppsSidebar (wallet, credits, running apps)
-                  └─ ChatPanel (monolithic: messages, input, settings)
-                      ├─ MessageBubble (per-message rendering)
-                      ├─ ProgressCard (during deploy)
-                      ├─ AppCard (deploy success)
-                      ├─ ConfirmationCard (TX approval)
-                      ├─ ToolResultCard / LogCard
-                      └─ AISettings (inline settings panel)
+ErrorBoundary
+  └─ ThemeProvider (next-themes)
+      └─ ChainProvider (cosmos-kit wallet abstraction)
+          └─ ToastProvider (toast notifications)
+              ├─ AIProvider (chat state, tool execution, Ollama streaming)
+              │   └─ AppShell
+              │       ├─ LandingPage (when not connected)
+              │       └─ MainLayout (when connected)
+              │           ├─ AppsSidebar (wallet, credits, running apps)
+              │           └─ ChatPanel (monolithic: messages, input, settings)
+              │               ├─ MessageBubble (per-message rendering)
+              │               ├─ ProgressCard (during deploy)
+              │               ├─ AppCard (deploy success)
+              │               ├─ ConfirmationCard (TX approval)
+              │               ├─ ToolResultCard / LogCard
+              │               └─ AISettings (inline settings panel)
+              └─ ToastContainer (toast rendering)
 ```
 
 `AppShell` (`src/components/layout/AppShell.tsx`) is the top-level router. It syncs wallet state (clientManager, address, signArbitrary) from cosmos-kit into AIContext — replacing the old `AIAssistant` component.
@@ -66,12 +69,12 @@ The AI assistant uses a 3-layer architecture:
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `deploy_app(name?, size?)` | TX | Deploy from attached manifest. Defaults: size=micro, name from filename |
-| `stop_app(name)` | TX | Stop app by name (closes lease on-chain) |
+| `deploy_app(app_name?, size?)` | TX | Deploy from attached manifest. Defaults: size=micro, name from filename |
+| `stop_app(app_name)` | TX | Stop app by name (closes lease on-chain) |
 | `fund_credits(amount)` | TX | Add credits in display units |
 | `list_apps(state?)` | Query | List apps filtered by state (default: running) |
-| `app_status(name)` | Query | Detailed status: registry + chain + fred |
-| `get_logs(name, tail?)` | Query | Container logs for a running app |
+| `app_status(app_name)` | Query | Detailed status: registry + chain + fred |
+| `get_logs(app_name, tail?)` | Query | Container logs for a running app |
 | `get_balance()` | Query | Credits, spending rate, time remaining |
 | `browse_catalog()` | Query | Providers + SKU tiers with health checks |
 | `lease_history(state?, limit?, offset?)` | Query | Paginated on-chain lease history with state filtering |
@@ -106,6 +109,9 @@ Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored 
 
 - `getLeaseStatus()` — Single fetch
 - `pollLeaseUntilReady()` — Polling loop with configurable interval, max attempts, abort signal
+- `getLeaseLogs()` — Fetch container logs for a running lease
+- `getLeaseProvision()` — Fetch provision status
+- `getLeaseInfo()` — Fetch connection details (ports, URLs)
 
 ### Transaction Path
 
@@ -113,7 +119,7 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 
 ### Wallet Integration
 
-- cosmos-kit provides wallet abstraction (Keplr, Leap, Leap MetaMask Cosmos Snap, Cosmostation, Ledger, Web3Auth)
+- cosmos-kit provides wallet abstraction (currently only Web3Auth is enabled in `src/main.tsx`; Keplr, Leap, Cosmostation, Ledger packages are installed but not imported)
 - `CosmosClientManager` singleton wraps the signer for MCP operations
 - `signArbitrary` used for ADR-036 off-chain authentication (payload uploads to providers, fred status queries)
 
@@ -143,7 +149,8 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 - **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
 - **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
 - **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs.
-- **Stream timeout**: `processStreamWithTimeout` in `src/ai/streamUtils.ts` wraps the Ollama async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely.
+- **Stream timeout**: `processStreamWithTimeout` in `src/ai/streamUtils.ts` wraps the Ollama async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely. The inner `withTimeout` generator ensures cleanup of the underlying generator via `finally` block.
+- **Tool-call leak stripping**: `stripToolCallLeaks()` in `src/ai/streamUtils.ts` filters raw `[TOOL_CALLS]` markers that some Ollama models emit as literal text instead of structured tool_calls.
 - **Message debouncing**: AIContext debounces rapid message sends via `AI_MESSAGE_DEBOUNCE_MS` (300ms) and aborts in-flight streams when a new message is sent.
 - **Chat persistence**: AIContext persists settings and chat history to localStorage (`barney-ai-settings`, `barney-ai-history`). History is validated and sanitized on load; corrupted data is cleared. Streaming messages are excluded from persistence.
 - **Confirmation timeout**: Pending transaction confirmations auto-cancel after `AI_CONFIRMATION_TIMEOUT_MS` (5 minutes) to prevent stuck UI state.
