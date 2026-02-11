@@ -162,3 +162,57 @@ export async function buildManifest(opts: BuildManifestOptions): Promise<BuildMa
     derivedAppName,
   };
 }
+
+/**
+ * Merge old manifest fields as defaults into a new manifest.
+ * Preserves env vars, ports, user, and tmpfs from the old manifest
+ * unless the new manifest explicitly overrides them.
+ *
+ * - env: old vars carry forward; new values override
+ * - ports: old ports carry forward; new ports override
+ * - user: old value used if new manifest doesn't specify one
+ * - tmpfs: old value used if new manifest doesn't specify one
+ * - image: always from new manifest
+ */
+export function mergeManifest(
+  newManifest: Record<string, unknown>,
+  oldManifestJson: string
+): Record<string, unknown> {
+  let oldManifest: Record<string, unknown>;
+  try {
+    oldManifest = JSON.parse(oldManifestJson);
+    if (typeof oldManifest !== 'object' || oldManifest === null || Array.isArray(oldManifest)) {
+      return newManifest;
+    }
+  } catch {
+    return newManifest;
+  }
+
+  const merged = { ...newManifest };
+
+  // env: old vars carry forward, new values override
+  const oldEnv = oldManifest.env;
+  const newEnv = newManifest.env;
+  if (oldEnv && typeof oldEnv === 'object' && !Array.isArray(oldEnv)) {
+    merged.env = { ...(oldEnv as Record<string, string>), ...(newEnv as Record<string, string> | undefined) };
+  }
+
+  // ports: old ports carry forward, new ports override
+  const oldPorts = oldManifest.ports;
+  const newPorts = newManifest.ports;
+  if (oldPorts && typeof oldPorts === 'object' && !Array.isArray(oldPorts)) {
+    merged.ports = { ...(oldPorts as Record<string, unknown>), ...(newPorts as Record<string, unknown> | undefined) };
+  }
+
+  // user: old value used if new manifest doesn't specify one
+  if (newManifest.user === undefined && oldManifest.user !== undefined) {
+    merged.user = oldManifest.user;
+  }
+
+  // tmpfs: old value used if new manifest doesn't specify one
+  if (newManifest.tmpfs === undefined && oldManifest.tmpfs !== undefined) {
+    merged.tmpfs = oldManifest.tmpfs;
+  }
+
+  return merged;
+}

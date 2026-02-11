@@ -4,6 +4,7 @@ export const HELP_TEXT = `## Quick Reference
 | Command | Description |
 |---------|-------------|
 | \`/help\` | Show this help message |
+| \`/clear\` | Clear chat history |
 
 ### What I can do
 - **Deploy** apps from a manifest file or the built-in catalog

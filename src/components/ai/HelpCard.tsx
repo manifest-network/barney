@@ -1,4 +1,4 @@
-import { HelpCircle, Rocket, Terminal, Keyboard, Layers } from 'lucide-react';
+import { HelpCircle, Rocket, Terminal, Keyboard, Layers, SlashSquare } from 'lucide-react';
 
 const CAPABILITIES = [
   'Deploy apps from a manifest file or the built-in catalog',
@@ -39,6 +39,24 @@ export function HelpCard() {
       <div className="help-card__header">
         <HelpCircle className="w-5 h-5 text-primary-400" aria-hidden="true" />
         <span className="help-card__title">Quick Reference</span>
+      </div>
+
+      {/* Commands */}
+      <div className="help-card__section">
+        <div className="help-card__section-header">
+          <SlashSquare className="w-3.5 h-3.5" aria-hidden="true" />
+          <span>Commands</span>
+        </div>
+        <div className="help-card__shortcuts">
+          <div className="help-card__shortcut">
+            <kbd className="help-card__kbd">/help</kbd>
+            <span>Show this reference</span>
+          </div>
+          <div className="help-card__shortcut">
+            <kbd className="help-card__kbd">/clear</kbd>
+            <span>Clear chat history</span>
+          </div>
+        </div>
       </div>
 
       {/* Capabilities */}

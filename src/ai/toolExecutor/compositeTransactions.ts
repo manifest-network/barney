@@ -17,7 +17,7 @@ import { AI_DEPLOY_PROVISION_TIMEOUT_MS, STORAGE_SKU_NAME } from '../../config/c
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 import { validateAppName } from '../../registry/appRegistry';
-import { buildManifest } from '../manifest';
+import { buildManifest, mergeManifest } from '../manifest';
 import { sha256, toHex } from '../../utils/hash';
 import type { DeployProgress } from '../progress';
 import type { ToolResult, ToolExecutorOptions, SignResult, PayloadAttachment } from './types';
@@ -1694,6 +1694,30 @@ export async function executeUpdateApp(
 
   if (!app.providerUrl) {
     return { success: false, error: `App "${app.name}" has no provider URL.` };
+  }
+
+  // Merge old manifest values (env, ports, user, tmpfs) as defaults
+  if (app.manifest) {
+    try {
+      const currentJson = typeof args._generatedManifest === 'string'
+        ? args._generatedManifest
+        : new TextDecoder().decode(payload.bytes);
+
+      const currentManifest = JSON.parse(currentJson);
+      const merged = mergeManifest(currentManifest, app.manifest);
+      const mergedJson = JSON.stringify(merged, null, 2);
+
+      if (mergedJson !== currentJson) {
+        const bytes = new TextEncoder().encode(mergedJson);
+        const hash = toHex(await sha256(mergedJson));
+        payload = { bytes, filename: payload.filename, size: bytes.length, hash };
+        args._generatedManifest = mergedJson;
+      }
+    } catch (error) {
+      // Merge is best-effort — proceed with original manifest if it fails
+      // (e.g., YAML payloads or invalid old manifest)
+      logError('compositeTransactions.executeUpdateApp.mergeManifest', error);
+    }
   }
 
   return {

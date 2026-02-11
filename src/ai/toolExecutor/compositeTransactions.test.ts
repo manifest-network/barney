@@ -1263,6 +1263,111 @@ describe('executeUpdateApp', () => {
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
   });
+
+  it('merges old env vars into image-based update manifest', async () => {
+    const oldManifest = JSON.stringify({
+      image: 'postgres:18',
+      env: { POSTGRES_PASSWORD: 'secret123', POSTGRES_USER: 'admin' },
+      ports: { '5432/tcp': {} },
+      user: '999:999',
+      tmpfs: ['/var/run/postgresql'],
+    });
+    const app = makeApp({ manifest: oldManifest });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'postgres:19', port: '5432' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.pendingAction?.args._generatedManifest).toBeDefined();
+    const merged = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(merged.image).toBe('postgres:19');
+    expect(merged.env.POSTGRES_PASSWORD).toBe('secret123');
+    expect(merged.env.POSTGRES_USER).toBe('admin');
+    expect(merged.user).toBe('999:999');
+    expect(merged.tmpfs).toEqual(['/var/run/postgresql']);
+  });
+
+  it('merges old env vars into file-based update payload', async () => {
+    const oldManifest = JSON.stringify({
+      image: 'postgres:18',
+      env: { POSTGRES_PASSWORD: 'secret123' },
+      user: '999:999',
+    });
+    const newManifest = JSON.stringify({ image: 'postgres:19' }, null, 2);
+    const payload: PayloadAttachment = {
+      bytes: new TextEncoder().encode(newManifest),
+      filename: 'manifest.json',
+      size: newManifest.length,
+      hash: 'b'.repeat(64),
+    };
+    const app = makeApp({ manifest: oldManifest });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]) }),
+      payload
+    );
+
+    expect(result.success).toBe(true);
+    // The _generatedManifest should contain the merged result
+    expect(result.pendingAction?.args._generatedManifest).toBeDefined();
+    const merged = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(merged.image).toBe('postgres:19');
+    expect(merged.env.POSTGRES_PASSWORD).toBe('secret123');
+    expect(merged.user).toBe('999:999');
+  });
+
+  it('new env vars override old ones during update merge', async () => {
+    const oldManifest = JSON.stringify({
+      image: 'postgres:18',
+      env: { POSTGRES_PASSWORD: 'oldpass', POSTGRES_DB: 'olddb' },
+    });
+    const app = makeApp({ manifest: oldManifest });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'postgres:19', env: '{"POSTGRES_DB":"newdb"}' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const merged = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(merged.env.POSTGRES_PASSWORD).toBe('oldpass');
+    expect(merged.env.POSTGRES_DB).toBe('newdb');
+  });
+
+  it('preserves YAML payload when merge cannot parse it', async () => {
+    const yamlContent = 'image: nginx:latest\nports:\n  80/tcp: {}';
+    const yamlBytes = new TextEncoder().encode(yamlContent);
+    const payload: PayloadAttachment = {
+      bytes: yamlBytes,
+      filename: 'manifest.yaml',
+      size: yamlBytes.length,
+      hash: 'c'.repeat(64),
+    };
+    const oldManifest = JSON.stringify({ image: 'nginx:1.24', env: { KEY: 'val' } });
+    const app = makeApp({ manifest: oldManifest });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]) }),
+      payload
+    );
+
+    expect(result.success).toBe(true);
+    // _generatedManifest should NOT be set since YAML can't be parsed/merged
+    expect(result.pendingAction?.args._generatedManifest).toBeUndefined();
+  });
+
+  it('skips merge when app has no old manifest', async () => {
+    const app = makeApp({ manifest: undefined });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'redis:8', port: '6379' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.image).toBe('redis:8');
+    expect(manifest.env).toBeUndefined();
+  });
 });
 
 describe('executeConfirmedUpdateApp', () => {

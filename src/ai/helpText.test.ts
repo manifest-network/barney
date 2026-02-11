@@ -10,6 +10,7 @@ describe('HELP_TEXT', () => {
   it('contains key sections', () => {
     expect(HELP_TEXT).toContain('Commands');
     expect(HELP_TEXT).toContain('/help');
+    expect(HELP_TEXT).toContain('/clear');
     expect(HELP_TEXT).toContain('Example prompts');
     expect(HELP_TEXT).toContain('Keyboard shortcuts');
     expect(HELP_TEXT).toContain('Resource tiers');

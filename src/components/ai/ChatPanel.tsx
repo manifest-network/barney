@@ -62,6 +62,7 @@ export function ChatPanel() {
     requestBatchDeploy,
     retryDeploy,
     addLocalMessage,
+    clearHistory,
   } = useAI();
 
   const [input, setInput] = useState('');
@@ -125,9 +126,13 @@ export function ChatPanel() {
     setInput('');
     resetHistory();
 
-    // Handle /help command locally (no LLM round-trip)
+    // Handle local commands (no LLM round-trip)
     if (message.toLowerCase() === '/help') {
       addLocalMessage(HELP_TEXT, { type: 'help', data: null });
+      return;
+    }
+    if (message.toLowerCase() === '/clear') {
+      clearHistory();
       return;
     }
 
@@ -490,7 +495,7 @@ export function ChatPanel() {
               {input.length.toLocaleString()} / {MAX_INPUT_LENGTH.toLocaleString()} characters
             </span>
           ) : (
-            'Enter to send \u00b7 Shift+Enter for new line \u00b7 \u2191\u2193 history \u00b7 /help for commands'
+            'Enter to send \u00b7 Shift+Enter for new line \u00b7 \u2191\u2193 history \u00b7 /help \u00b7 /clear'
           )}
         </p>
       </form>
