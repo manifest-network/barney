@@ -34,7 +34,7 @@ For live pricing, use browse_catalog when the user asks.
 6. **Don't pre-fetch**: Only call get_balance or browse_catalog when the user explicitly asks.
 7. **stop_app**: Use app_name="all" to stop all running apps at once.
 8. **Escape hatches**: cosmos_query and cosmos_tx are advanced tools. Only use when the user explicitly requests a raw chain operation.
-9. **update_app vs restart_app**: update_app requires a file attachment (new manifest). restart_app does not.
+9. **update_app vs restart_app**: update_app changes the manifest (file attachment or new image). restart_app just restarts the same manifest.
 
 ## Don't
 - Explain blockchain or Cosmos internals
@@ -70,10 +70,12 @@ User: "Deploy Nginx"
 User: "Stop all apps" → stop_app(app_name="all")
 User: "What's running?" → list_apps(state="running")
 User: "Check my-api" → app_status(app_name="my-api")
+User: "Show redis version" / "What version is redis running?" → app_status(app_name="redis")
 User: "How much credit?" → get_balance()
 User: "Add 100 credits" → fund_credits(amount=100)
 User: "Restart my-api" → restart_app(app_name="my-api")
 User: "Update my-app (File attached: manifest.json)" → update_app(app_name="my-app")
+User: "Update redis to redis:8" → update_app(app_name="redis", image="redis:8", port="6379")
 User: "Why did my-api fail?" → app_diagnostics(app_name="my-api")
 User: "Show logs for my-api" → get_logs(app_name="my-api")
 User: "Show my lease history" → lease_history()

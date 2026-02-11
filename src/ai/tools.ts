@@ -111,13 +111,33 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'update_app',
-      description: 'Update an app with a new manifest file.',
+      description: 'Update an app with a new manifest file, or by specifying a new Docker image.',
       parameters: {
         type: 'object',
         properties: {
           app_name: {
             type: 'string',
             description: 'The name of the app to update.',
+          },
+          image: {
+            type: 'string',
+            description: 'New Docker image to update to (e.g. "redis:8"). Used when no file attached.',
+          },
+          port: {
+            type: 'string',
+            description: 'Port(s) to expose, comma-separated. Only needed with image.',
+          },
+          env: {
+            type: 'string',
+            description: 'Env vars as JSON string. Only needed with image.',
+          },
+          user: {
+            type: 'string',
+            description: 'Container user/UID. Only needed with image.',
+          },
+          tmpfs: {
+            type: 'string',
+            description: 'Tmpfs mount paths, comma-separated. Only needed with image.',
           },
         },
         required: ['app_name'],

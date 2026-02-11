@@ -72,13 +72,23 @@ export async function executeListApps(
   return {
     success: true,
     data: {
-      apps: apps.map((a) => ({
-        name: a.name,
-        status: a.status,
-        size: a.size,
-        url: a.url,
-        created: new Date(a.createdAt).toISOString(),
-      })),
+      apps: apps.map((a) => {
+        let image: string | undefined;
+        if (a.manifest) {
+          try {
+            const manifest = JSON.parse(a.manifest);
+            if (typeof manifest.image === 'string') image = manifest.image;
+          } catch { /* ignore */ }
+        }
+        return {
+          name: a.name,
+          status: a.status,
+          size: a.size,
+          image,
+          url: a.url,
+          created: new Date(a.createdAt).toISOString(),
+        };
+      }),
       count: apps.length,
     },
   };
@@ -201,12 +211,26 @@ export async function executeAppStatus(
   // Build a clickable connection URL from host + port mappings
   const connectionUrl = formatConnectionUrl(appUrl, appConnection) || appUrl;
 
+  // Extract image from stored manifest
+  let image: string | undefined;
+  if (app.manifest) {
+    try {
+      const manifest = JSON.parse(app.manifest);
+      if (typeof manifest.image === 'string') {
+        image = manifest.image;
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
   return {
     success: true,
     data: {
       name: app.name,
       status: currentStatus,
       size: app.size,
+      image,
       url: connectionUrl || appUrl,
       connection: appConnection,
       chainState,

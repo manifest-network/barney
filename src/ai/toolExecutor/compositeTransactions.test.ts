@@ -407,6 +407,8 @@ describe('executeDeployApp', () => {
       [{ sku_name: 'docker-small', quantity: 1 }],
       expect.anything()
     );
+    // Size stored in pendingAction should reflect the upgrade
+    expect(result.pendingAction?.args.size).toBe('small');
   });
 
   it('does not upgrade when storage=true and size is already small', async () => {
@@ -1189,14 +1191,38 @@ describe('executeConfirmedRestartApp', () => {
 describe('executeUpdateApp', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns error without payload', async () => {
+  it('returns error without payload and without image', async () => {
     const app = makeApp();
     const result = await executeUpdateApp(
       { app_name: 'my-app' },
       makeOptions({ appRegistry: makeRegistry([app]) })
     );
     expect(result.success).toBe(false);
-    expect(result.error).toContain('No file attached');
+    expect(result.error).toContain('No file attached and no image specified');
+  });
+
+  it('builds manifest from image when no payload', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'redis:8', port: '6379' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('redis:8');
+    expect(result.pendingAction?.args._generatedManifest).toBeDefined();
+  });
+
+  it('prefers file attachment over image in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'redis:8' },
+      makeOptions({ appRegistry: makeRegistry([app]) }),
+      makePayload()
+    );
+    expect(result.success).toBe(true);
+    expect(result.pendingAction?.args._generatedManifest).toBeUndefined();
+    expect(result.confirmationMessage).toContain('new manifest');
   });
 
   it('returns error when app is stopped', async () => {
@@ -1323,5 +1349,39 @@ describe('executeConfirmedUpdateApp', () => {
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Payload missing');
+  });
+
+  it('reconstructs payload from _generatedManifest when no payload provided', async () => {
+    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: '127.0.0.1',
+        ports: { '6379/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+      },
+    });
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const manifestJson = JSON.stringify({ image: 'redis:8', ports: { '6379/tcp': {} } }, null, 2);
+    const result = await executeConfirmedUpdateApp(
+      {
+        app_name: app.name,
+        leaseUuid: app.leaseUuid,
+        providerUrl: app.providerUrl,
+        _generatedManifest: manifestJson,
+      },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('running');
+    expect(updateLease).toHaveBeenCalled();
   });
 });

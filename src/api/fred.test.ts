@@ -315,6 +315,100 @@ describe('pollLeaseUntilReady', () => {
     // Should return initial status immediately since already aborted
     expect(result.state).toBe(LeaseState.LEASE_STATE_PENDING);
   });
+
+  it('stops polling on ACTIVE + ready provision_status', async () => {
+    const active = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'ready' });
+    mockFetchSequence([{ data: active }]);
+
+    const result = await pollLeaseUntilReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
+      intervalMs: 100,
+      maxAttempts: 5,
+    });
+
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
+    expect(result.provision_status).toBe('ready');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues polling on ACTIVE + updating provision_status', async () => {
+    const updating = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'updating' });
+    const ready = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'ready' });
+
+    mockFetchSequence([
+      { data: updating },
+      { data: updating },
+      { data: ready },
+    ]);
+
+    const onProgress = vi.fn();
+
+    const resultPromise = pollLeaseUntilReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
+      intervalMs: 100,
+      maxAttempts: 5,
+      onProgress,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(100);
+
+    const result = await resultPromise;
+
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
+    expect(result.provision_status).toBe('ready');
+    expect(onProgress).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('continues polling on ACTIVE + restarting provision_status', async () => {
+    const restarting = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'restarting' });
+    const ready = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'ready' });
+
+    mockFetchSequence([
+      { data: restarting },
+      { data: ready },
+    ]);
+
+    const resultPromise = pollLeaseUntilReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
+      intervalMs: 100,
+      maxAttempts: 5,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    const result = await resultPromise;
+
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
+    expect(result.provision_status).toBe('ready');
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops polling on ACTIVE without provision_status (backwards compat)', async () => {
+    const active = fredResponse('LEASE_STATE_ACTIVE');
+    mockFetchSequence([{ data: active }]);
+
+    const result = await pollLeaseUntilReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
+      intervalMs: 100,
+      maxAttempts: 5,
+    });
+
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
+    expect(result.provision_status).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops polling on ACTIVE + failed provision_status', async () => {
+    const failed = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'failed' });
+    mockFetchSequence([{ data: failed }]);
+
+    const result = await pollLeaseUntilReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
+      intervalMs: 100,
+      maxAttempts: 5,
+    });
+
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
+    expect(result.provision_status).toBe('failed');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('getLeaseLogs', () => {

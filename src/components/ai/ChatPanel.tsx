@@ -91,10 +91,13 @@ export function ChatPanel() {
     return () => cancelAnimationFrame(raf);
   }, [messages.length, isStreaming, updateScrollShadows]);
 
-  // Focus input when panel opens
+  // Focus input when panel opens and re-focus when streaming ends
+  // (the textarea is disabled during streaming, which drops focus)
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    if (!isStreaming) {
+      inputRef.current?.focus();
+    }
+  }, [isStreaming]);
 
   // Press "/" anywhere to focus the chat input (unless already typing somewhere)
   useEffect(() => {

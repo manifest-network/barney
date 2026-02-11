@@ -18,6 +18,7 @@ import { logError } from '../utils/errors';
 
 export interface FredLeaseStatus {
   state: LeaseState;
+  provision_status?: string;
   phase?: string;
   steps?: Record<string, string>;
   instances?: Array<{ name: string; status: string; ports?: Record<string, number> }>;
@@ -27,13 +28,15 @@ export interface FredLeaseStatus {
   created_at?: string;
 }
 
-/** Terminal lease states — polling should stop when fred reports one of these. */
+/** Negative terminal lease states — polling should always stop for these. */
 const TERMINAL_STATES = new Set<LeaseState>([
-  LeaseState.LEASE_STATE_ACTIVE,
   LeaseState.LEASE_STATE_CLOSED,
   LeaseState.LEASE_STATE_REJECTED,
   LeaseState.LEASE_STATE_EXPIRED,
 ]);
+
+/** Provision states that indicate the backend is still working — keep polling. */
+const TRANSIENT_PROVISION_STATES = new Set(['provisioning', 'updating', 'restarting']);
 
 /**
  * Parse a raw fred response into a FredLeaseStatus.
@@ -245,7 +248,14 @@ export async function pollLeaseUntilReady(
       lastStatus = await getLeaseStatus(providerApiUrl, leaseUuid, currentToken);
       opts.onProgress?.(lastStatus);
 
+      // Negative terminal states (closed/rejected/expired) — always stop
       if (TERMINAL_STATES.has(lastStatus.state)) {
+        return lastStatus;
+      }
+
+      // Active + stable provision — stop (ready, failed, or no provision_status)
+      if (lastStatus.state === LeaseState.LEASE_STATE_ACTIVE &&
+          !TRANSIENT_PROVISION_STATES.has(lastStatus.provision_status ?? '')) {
         return lastStatus;
       }
     } catch (error) {

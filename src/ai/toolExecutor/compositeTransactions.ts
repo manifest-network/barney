@@ -338,7 +338,7 @@ export async function executeDeployApp(
 
   // Resolve and validate size
   const VALID_SIZE_TIERS = ['micro', 'small', 'medium', 'large'] as const;
-  const size = (args.size as string | undefined)?.toLowerCase() || 'micro';
+  let size = (args.size as string | undefined)?.toLowerCase() || 'micro';
   if (!VALID_SIZE_TIERS.includes(size as typeof VALID_SIZE_TIERS[number])) {
     return {
       success: false,
@@ -351,6 +351,7 @@ export async function executeDeployApp(
   // Auto-upgrade to storage-capable SKU when storage is requested
   if (args.storage === true && skuName !== STORAGE_SKU_NAME) {
     skuName = STORAGE_SKU_NAME;
+    size = STORAGE_SKU_NAME.replace('docker-', '');
     storageUpgrade = true;
   }
 
@@ -1581,7 +1582,7 @@ export async function executeConfirmedRestartApp(
       onProgress: (status) => {
         onProgress?.({
           phase: 'provisioning',
-          detail: status.phase || 'Restarting...',
+          detail: status.phase || 'Waiting for restart...',
           fredStatus: status,
           operation: 'restart',
         });
@@ -1600,7 +1601,7 @@ export async function executeConfirmedRestartApp(
         url: connectionUrl,
         connection,
       });
-      onProgress?.({ phase: 'ready', detail: 'App restarted!', operation: 'restart' });
+      onProgress?.({ phase: 'ready', operation: 'restart' });
 
       return {
         success: true,
@@ -1639,8 +1640,40 @@ export async function executeUpdateApp(
   const { address, appRegistry } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
+
+  // Image-based update: build manifest from args when no file is attached
+  if (!payload && args.image) {
+    let env: Record<string, string> | undefined;
+    if (typeof args.env === 'string' && args.env) {
+      try {
+        env = JSON.parse(args.env);
+        if (typeof env !== 'object' || env === null || Array.isArray(env)) {
+          return { success: false, error: 'env must be a JSON object (e.g. \'{"KEY":"value"}\').' };
+        }
+      } catch {
+        return { success: false, error: 'Invalid env JSON string. Expected format: \'{"KEY":"value"}\'.' };
+      }
+    }
+
+    let manifestResult;
+    try {
+      manifestResult = await buildManifest({
+        image: args.image as string,
+        port: args.port as string | undefined,
+        env,
+        user: args.user as string | undefined,
+        tmpfs: args.tmpfs as string | undefined,
+      });
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to build manifest' };
+    }
+
+    payload = manifestResult.payload;
+    args._generatedManifest = manifestResult.json;
+  }
+
   if (!payload) {
-    return { success: false, error: 'No file attached. Please attach a new manifest file to update the app.' };
+    return { success: false, error: 'No file attached and no image specified. Attach a manifest file or specify a Docker image (e.g. update_app(app_name="my-app", image="redis:8")).' };
   }
 
   const name = args.app_name as string;
@@ -1660,13 +1693,14 @@ export async function executeUpdateApp(
   return {
     success: true,
     requiresConfirmation: true,
-    confirmationMessage: `Update app "${app.name}" with new manifest?`,
+    confirmationMessage: `Update app "${app.name}" with ${args._generatedManifest ? `image ${args.image}` : 'new manifest'}?`,
     pendingAction: {
       toolName: 'update_app',
       args: {
         app_name: app.name,
         leaseUuid: app.leaseUuid,
         providerUrl: app.providerUrl,
+        ...(args._generatedManifest ? { _generatedManifest: args._generatedManifest } : {}),
       },
     },
   };
@@ -1685,6 +1719,15 @@ export async function executeConfirmedUpdateApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
+
+  // Reconstruct payload from stored manifest JSON (image-based update)
+  if (!payload && typeof args._generatedManifest === 'string') {
+    const json = args._generatedManifest;
+    const bytes = new TextEncoder().encode(json);
+    const hash = toHex(await sha256(json));
+    payload = { bytes, filename: 'manifest.json', size: bytes.length, hash };
+  }
+
   if (!payload) return { success: false, error: 'Payload missing' };
 
   const name = args.app_name as string;
@@ -1721,6 +1764,12 @@ export async function executeConfirmedUpdateApp(
   const manifestJson = new TextDecoder().decode(payload.bytes);
   appRegistry.updateApp(address, leaseUuid, { manifest: manifestJson });
 
+  // Save existing URL — port mappings don't change on update, so the
+  // previous URL is a reliable fallback if the provider doesn't return
+  // port info during re-provisioning.
+  const existingApp = appRegistry.getApp(address, name);
+  const previousUrl = existingApp?.url;
+
   // Poll for readiness
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for app to come back up...', operation: 'update' });
 
@@ -1734,7 +1783,7 @@ export async function executeConfirmedUpdateApp(
       onProgress: (status) => {
         onProgress?.({
           phase: 'provisioning',
-          detail: status.phase || 'Updating...',
+          detail: status.phase || 'Waiting for update...',
           fredStatus: status,
           operation: 'update',
         });
@@ -1748,19 +1797,23 @@ export async function executeConfirmedUpdateApp(
         'compositeTransactions.executeConfirmedUpdateApp'
       );
 
+      // If resolved URL lost port info, fall back to the previous URL
+      const hasPort = connectionUrl != null && /:\d+/.test(connectionUrl.replace(/^https?:\/\//, ''));
+      const finalUrl = (hasPort ? connectionUrl : previousUrl) ?? connectionUrl;
+
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
-        url: connectionUrl,
+        url: finalUrl,
         connection,
       });
-      onProgress?.({ phase: 'ready', detail: 'App updated!', operation: 'update' });
+      onProgress?.({ phase: 'ready', operation: 'update' });
 
       return {
         success: true,
         data: {
           message: `App "${name}" has been updated.`,
           name,
-          url: connectionUrl,
+          url: finalUrl,
           status: 'running',
         },
       };
