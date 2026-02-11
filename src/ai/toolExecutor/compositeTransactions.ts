@@ -8,12 +8,12 @@ import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { createSignMessage, createAuthToken, getLeaseConnectionInfo, ProviderApiError } from '../../api/provider-api';
-import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
+import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
-import { AI_DEPLOY_PROVISION_TIMEOUT_MS, STORAGE_SKU_NAME } from '../../config/constants';
+import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
@@ -24,11 +24,17 @@ import type { ToolResult, ToolExecutorOptions, SignResult, PayloadAttachment } f
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([
+  // Linker injection
   'PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT',
   'LD_PROFILE', 'LD_DEBUG', 'LD_DYNAMIC_WEAK',
   'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH',
+  // Shell initialization / auto-exec
+  'BASH_ENV', 'ENV', 'PROMPT_COMMAND', 'SHELLOPTS', 'BASHOPTS', 'CDPATH',
+  // Language runtime injection
   'PYTHONPATH', 'NODE_OPTIONS', 'NODE_PATH',
   'PERL5LIB', 'RUBYLIB', 'CLASSPATH',
+  'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS',
+  // Proxy / infrastructure
   'http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY',
   'DOCKER_HOST', 'KUBECONFIG',
 ]);
@@ -589,10 +595,9 @@ export async function executeConfirmedDeployApp(
 
     const authToken = await getAuthToken();
 
-    const POLL_INTERVAL_MS = 3000;
-    const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
-      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
-      intervalMs: POLL_INTERVAL_MS,
+    const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
+      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+      intervalMs: FRED_POLL_INTERVAL_MS,
       abortSignal: signal,
       onProgress: (status) => {
         onProgress?.({
@@ -799,10 +804,9 @@ export async function deploySingleApp(
 
     const authToken = await getAuthToken();
 
-    const POLL_INTERVAL_MS = 3000;
-    const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
-      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
-      intervalMs: POLL_INTERVAL_MS,
+    const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
+      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+      intervalMs: FRED_POLL_INTERVAL_MS,
       abortSignal: signal,
       onProgress: (status) => {
         onProgress({ phase: 'provisioning', detail: status.phase || 'Provisioning...' });
@@ -1156,11 +1160,10 @@ export async function executeConfirmedBatchDeploy(
           };
 
           const authToken = await getAuthToken();
-          const POLL_INTERVAL_MS = 3000;
 
-          const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
-            maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
-            intervalMs: POLL_INTERVAL_MS,
+          const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
+            maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+            intervalMs: FRED_POLL_INTERVAL_MS,
             abortSignal: signal,
             onProgress: (status) => {
               batchProgress[idx] = { name, phase: 'provisioning', detail: status.phase || 'Provisioning...' };
@@ -1623,10 +1626,9 @@ export async function executeConfirmedRestartApp(
 
   try {
     const authToken = await getAuthToken();
-    const POLL_INTERVAL_MS = 3000;
-    const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
-      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
-      intervalMs: POLL_INTERVAL_MS,
+    const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
+      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+      intervalMs: FRED_POLL_INTERVAL_MS,
       abortSignal: signal,
       onProgress: (status) => {
         onProgress?.({
@@ -1857,10 +1859,9 @@ export async function executeConfirmedUpdateApp(
 
   try {
     const authToken = await getAuthToken();
-    const POLL_INTERVAL_MS = 3000;
-    const fredStatus = await pollLeaseUntilReady(providerUrl, leaseUuid, authToken, {
-      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / POLL_INTERVAL_MS),
-      intervalMs: POLL_INTERVAL_MS,
+    const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
+      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+      intervalMs: FRED_POLL_INTERVAL_MS,
       abortSignal: signal,
       onProgress: (status) => {
         onProgress?.({
@@ -1889,7 +1890,6 @@ export async function executeConfirmedUpdateApp(
         return {
           success: false,
           error: `Update failed: ${fredStatus.error}. The previous deployment has been restored and is still running.`,
-          data: { name, url: previousUrl, status: 'running' },
         };
       }
 

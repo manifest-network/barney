@@ -51,7 +51,7 @@ vi.mock('../api/provider-api', () => ({
 
 vi.mock('../api/fred', () => ({
   getLeaseStatus: vi.fn(),
-  pollLeaseUntilReady: vi.fn(),
+  waitForLeaseReady: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
 }));
@@ -75,7 +75,7 @@ import { getLeasesByTenant, getCreditAccount, getCreditEstimate, getLease } from
 import { getAllBalances } from '../api/bank';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
-import { pollLeaseUntilReady } from '../api/fred';
+import { waitForLeaseReady } from '../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from '../ai/toolExecutor/utils';
 
@@ -171,7 +171,7 @@ describe('Deploy Flow Integration', () => {
     } as Awaited<ReturnType<typeof cosmosTx>>);
     vi.mocked(extractLeaseUuidFromTxResult).mockReturnValue(LEASE_UUID);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'uploaded' } });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({

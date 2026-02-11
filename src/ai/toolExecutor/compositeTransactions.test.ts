@@ -57,7 +57,7 @@ vi.mock('../../api/provider-api', async (importOriginal) => {
 });
 
 vi.mock('../../api/fred', () => ({
-  pollLeaseUntilReady: vi.fn(),
+  waitForLeaseReady: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
   restartLease: vi.fn(),
@@ -93,7 +93,7 @@ vi.mock('../../registry/appRegistry', async (importOriginal) => {
 import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
-import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
+import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
@@ -394,6 +394,42 @@ describe('executeDeployApp', () => {
     expect(result.error).toContain('Invalid env JSON');
   });
 
+  it('rejects blocked env variable names', async () => {
+    const blockedVars = [
+      'LD_PRELOAD', 'PATH', 'BASH_ENV', 'ENV', 'PROMPT_COMMAND',
+      'NODE_OPTIONS', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS',
+      'DOCKER_HOST', 'SHELLOPTS', 'BASHOPTS', 'CDPATH',
+    ];
+    for (const name of blockedVars) {
+      const result = await executeDeployApp(
+        { image: 'redis:8.4', env: JSON.stringify({ [name]: 'value' }) },
+        makeOptions()
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Blocked env variable');
+      expect(result.error).toContain(name);
+    }
+  });
+
+  it('allows non-blocked env variable names', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'redis:8.4', env: '{"REDIS_PASSWORD":"secret","MY_VAR":"hello"}' },
+      makeOptions()
+    );
+    // Should not fail with blocked env error
+    if (!result.success) {
+      expect(result.error).not.toContain('Blocked env variable');
+    }
+  });
+
   it('upgrades to storage SKU when storage=true and size is micro', async () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
@@ -489,7 +525,7 @@ describe('executeConfirmedDeployApp', () => {
   it('creates lease, uploads, and polls to ready — extracts port from instances', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -520,8 +556,8 @@ describe('executeConfirmedDeployApp', () => {
     expect(registry.addApp).toHaveBeenCalled();
     expect(getLeaseConnectionInfo).toHaveBeenCalled();
 
-    // Verify pollLeaseUntilReady receives getAuthToken callback for token refresh
-    const pollCall = vi.mocked(pollLeaseUntilReady).mock.calls[0];
+    // Verify waitForLeaseReady receives getAuthToken callback for token refresh
+    const pollCall = vi.mocked(waitForLeaseReady).mock.calls[0];
     expect(pollCall[3]).toHaveProperty('getAuthToken');
     expect(typeof pollCall[3]!.getAuthToken).toBe('function');
   });
@@ -529,7 +565,7 @@ describe('executeConfirmedDeployApp', () => {
   it('creates lease, uploads, and polls to ready — extracts port from top-level ports', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -557,7 +593,7 @@ describe('executeConfirmedDeployApp', () => {
   it('falls back to fred status when connection endpoint fails', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
       endpoints: { '80/tcp': 'http://1.2.3.4:32456' },
     });
@@ -611,7 +647,7 @@ describe('executeConfirmedDeployApp', () => {
   it('includes logs and provision last_error in failure message', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
       error: 'container crashed',
     });
@@ -644,7 +680,7 @@ describe('executeConfirmedDeployApp', () => {
   it('still reports failure when log/provision fetch fails', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_REJECTED,
       error: 'rejected by provider',
     });
@@ -666,7 +702,7 @@ describe('executeConfirmedDeployApp', () => {
   it('falls back to chain state when polling throws', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(pollLeaseUntilReady).mockRejectedValue(new Error('polling timeout'));
+    vi.mocked(waitForLeaseReady).mockRejectedValue(new Error('polling timeout'));
 
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
 
@@ -686,8 +722,8 @@ describe('executeConfirmedDeployApp', () => {
   it('calls onProgress with failed phase when provisioning times out and chain is not active', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    // pollLeaseUntilReady returns PENDING (non-terminal) — simulates timeout exhaustion
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    // waitForLeaseReady returns PENDING (non-terminal) — simulates timeout exhaustion
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_PENDING,
     });
     // Chain state is also not ACTIVE
@@ -714,7 +750,7 @@ describe('executeConfirmedDeployApp', () => {
   it('succeeds without URL when connection endpoint fails and fred has no endpoints', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('404 not found'));
@@ -735,7 +771,7 @@ describe('executeConfirmedDeployApp', () => {
   it('reconstructs payload from _generatedManifest when no payload provided', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -972,7 +1008,7 @@ describe('executeConfirmedBatchDeploy', () => {
   it('deploys all apps in parallel and reports results', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -1027,7 +1063,7 @@ describe('executeConfirmedBatchDeploy', () => {
       .mockResolvedValueOnce({ code: 0, transactionHash: 'hash1', rawLog: '' } as any)
       .mockResolvedValueOnce({ code: 1, rawLog: 'insufficient funds' } as any);
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -1126,7 +1162,7 @@ describe('executeConfirmedRestartApp', () => {
 
   it('restarts app and polls to ready', async () => {
     vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -1174,7 +1210,7 @@ describe('executeConfirmedRestartApp', () => {
 
   it('handles poll failure (non-active state)', async () => {
     vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
       error: 'container crashed',
     });
@@ -1379,7 +1415,7 @@ describe('executeConfirmedUpdateApp', () => {
 
   it('updates app and polls to ready', async () => {
     vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -1434,7 +1470,7 @@ describe('executeConfirmedUpdateApp', () => {
 
   it('handles poll failure (non-active state)', async () => {
     vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
       error: 'container crashed',
     });
@@ -1467,7 +1503,7 @@ describe('executeConfirmedUpdateApp', () => {
 
   it('reconstructs payload from _generatedManifest when no payload provided', async () => {
     vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
-    vi.mocked(pollLeaseUntilReady).mockResolvedValue({
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
