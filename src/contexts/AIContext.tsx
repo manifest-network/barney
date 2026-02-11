@@ -61,7 +61,7 @@ export interface AIContextType {
   updateSettings: (settings: Partial<AISettings>) => void;
   clearHistory: () => void;
   refreshModels: (endpoint?: string) => Promise<void>;
-  confirmAction: () => Promise<void>;
+  confirmAction: (editedManifestJson?: string) => Promise<void>;
   cancelAction: () => void;
   setClientManager: (manager: CosmosClientManager | null) => void;
   setAddress: (address: string | undefined) => void;
@@ -70,6 +70,7 @@ export interface AIContextType {
   clearPayload: () => void;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
   retryDeploy: () => void;
+  addLocalMessage: (content: string, card?: { type: string; data: unknown }) => void;
 }
 
 export function AIProvider({ children }: { children: ReactNode }) {
@@ -553,7 +554,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
   // --- Confirmation flow ---
 
-  const confirmAction = useCallback(async () => {
+  const confirmAction = useCallback(async (editedManifestJson?: string) => {
     if (!pendingConfirmation || isStreamingRef.current) return;
 
     if (!clientManagerRef.current) {
@@ -572,7 +573,17 @@ export function AIProvider({ children }: { children: ReactNode }) {
     const address = addressRef.current;
     const signArbitrary = signArbitraryRef.current;
 
-    const { action, messageId } = pendingConfirmation;
+    const { messageId } = pendingConfirmation;
+
+    // Clone action to avoid mutating React state; apply user edits if present
+    let confirmedArgs = pendingConfirmation.action.args;
+    let confirmedPayload = pendingConfirmation.action.payload;
+    if (editedManifestJson && confirmedArgs._generatedManifest) {
+      confirmedArgs = { ...confirmedArgs, _generatedManifest: editedManifestJson };
+      confirmedPayload = undefined; // force executor to reconstruct from edited JSON
+    }
+    const action = { ...pendingConfirmation.action, args: confirmedArgs, payload: confirmedPayload };
+
     setPendingConfirmation(null);
     isStreamingRef.current = true;
     setIsStreaming(true);
@@ -710,6 +721,18 @@ export function AIProvider({ children }: { children: ReactNode }) {
       sendMessage(lastDeploy.content);
     }
   }, [deployProgress, sendMessage, messagesRef]);
+
+  // --- Local message injection (no LLM round-trip) ---
+
+  const addLocalMessage = useCallback((content: string, card?: { type: string; data: unknown }) => {
+    addMessage({
+      id: generateMessageId(),
+      role: 'assistant',
+      content,
+      timestamp: Date.now(),
+      card,
+    });
+  }, [addMessage]);
 
   // Auto-cancel pending confirmations after timeout to prevent indefinite waiting
   useEffect(() => {
@@ -865,6 +888,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       clearPayload,
       requestBatchDeploy,
       retryDeploy,
+      addLocalMessage,
     }),
     [
       isOpen,
@@ -889,6 +913,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       clearPayload,
       requestBatchDeploy,
       retryDeploy,
+      addLocalMessage,
     ]
   );
 

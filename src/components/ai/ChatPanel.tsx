@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback, type FormEvent } from 'react';
-import { Send, Settings, X, Sparkles, Loader, WifiOff, Paperclip } from 'lucide-react';
+import { Send, Settings, X, Sparkles, Loader, WifiOff, Paperclip, HelpCircle } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
 import { useAutoScroll } from '../../hooks/useAutoScroll';
+import { useInputHistory } from '../../hooks/useInputHistory';
 import { MessageBubble } from './MessageBubble';
 import { ConfirmationCard } from './ConfirmationCard';
 import { ProgressCard } from './ProgressCard';
@@ -11,6 +12,7 @@ import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { EXAMPLE_APPS, buildExampleManifest, type ExampleApp } from '../../config/exampleApps';
+import { HELP_TEXT } from '../../ai/helpText';
 
 const EXAMPLE_GAMES = EXAMPLE_APPS.filter((app) => app.group === 'games');
 const EXAMPLE_SERVICES = EXAMPLE_APPS.filter((app) => app.group === 'apps');
@@ -59,6 +61,7 @@ export function ChatPanel() {
     clearPayload,
     requestBatchDeploy,
     retryDeploy,
+    addLocalMessage,
   } = useAI();
 
   const [input, setInput] = useState('');
@@ -67,6 +70,7 @@ export function ChatPanel() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const { navigateUp, navigateDown, reset: resetHistory } = useInputHistory(messages);
   const { containerRef: messagesContainerRef, endRef: messagesEndRef, handleScroll } = useAutoScroll(messages.length, isStreaming);
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
 
@@ -119,6 +123,13 @@ export function ChatPanel() {
 
     const message = input.trim();
     setInput('');
+    resetHistory();
+
+    // Handle /help command locally (no LLM round-trip)
+    if (message.toLowerCase() === '/help') {
+      addLocalMessage(HELP_TEXT, { type: 'help', data: null });
+      return;
+    }
 
     // Match "deploy <example> [and <example> ...]" when no file is already attached
     // Batch deploy for known example apps.
@@ -163,11 +174,31 @@ export function ChatPanel() {
     doSubmit();
   };
 
-  // Handle Enter to submit (Shift+Enter for new line)
+  // Handle Enter to submit, arrow keys for history navigation
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       doSubmit();
+      return;
+    }
+
+    const el = e.currentTarget;
+
+    if (e.key === 'ArrowUp' && el.selectionStart === 0) {
+      const value = navigateUp(input);
+      if (value !== null) {
+        e.preventDefault();
+        setInput(value);
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowDown' && el.selectionStart === input.length) {
+      const value = navigateDown();
+      if (value !== null) {
+        e.preventDefault();
+        setInput(value);
+      }
     }
   };
 
@@ -177,6 +208,7 @@ export function ChatPanel() {
     // Enforce max length
     if (value.length <= MAX_INPUT_LENGTH) {
       setInput(value);
+      resetHistory();
     }
     // Reset height to auto to get the correct scrollHeight
     e.target.style.height = 'auto';
@@ -261,6 +293,14 @@ export function ChatPanel() {
           )}
         </div>
         <div className="chat-panel-actions">
+          <button
+            type="button"
+            onClick={() => addLocalMessage(HELP_TEXT, { type: 'help', data: null })}
+            className="chat-panel-btn"
+            aria-label="Show help"
+          >
+            <HelpCircle className="w-4 h-4" aria-hidden="true" />
+          </button>
           <button
             type="button"
             onClick={() => setShowSettings(!showSettings)}
@@ -450,7 +490,7 @@ export function ChatPanel() {
               {input.length.toLocaleString()} / {MAX_INPUT_LENGTH.toLocaleString()} characters
             </span>
           ) : (
-            'Enter to send \u00b7 Shift+Enter for new line \u00b7 / to focus'
+            'Enter to send \u00b7 Shift+Enter for new line \u00b7 \u2191\u2193 history \u00b7 /help for commands'
           )}
         </p>
       </form>

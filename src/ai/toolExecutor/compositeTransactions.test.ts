@@ -23,6 +23,7 @@ import type { ToolExecutorOptions, AppRegistryAccess, PayloadAttachment } from '
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import type { AppEntry } from '../../registry/appRegistry';
 import { LeaseState } from '../../api/billing';
+import { ProviderApiError } from '../../api/provider-api';
 
 // Mock external modules
 vi.mock('../../api/billing', async (importOriginal) => {
@@ -44,12 +45,16 @@ vi.mock('../../api/sku', async (importOriginal) => {
   };
 });
 
-vi.mock('../../api/provider-api', () => ({
-  createSignMessage: vi.fn().mockReturnValue('sign-msg'),
-  createAuthToken: vi.fn().mockReturnValue('auth-token'),
-  createLeaseDataSignMessage: vi.fn().mockReturnValue('lease-data-sign-msg'),
-  getLeaseConnectionInfo: vi.fn(),
-}));
+vi.mock('../../api/provider-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/provider-api')>();
+  return {
+    ...actual,
+    createSignMessage: vi.fn().mockReturnValue('sign-msg'),
+    createAuthToken: vi.fn().mockReturnValue('auth-token'),
+    createLeaseDataSignMessage: vi.fn().mockReturnValue('lease-data-sign-msg'),
+    getLeaseConnectionInfo: vi.fn(),
+  };
+});
 
 vi.mock('../../api/fred', () => ({
   pollLeaseUntilReady: vi.fn(),
@@ -1147,7 +1152,7 @@ describe('executeConfirmedRestartApp', () => {
   });
 
   it('handles 409 error from restart endpoint', async () => {
-    vi.mocked(restartLease).mockRejectedValue(new Error('Fred restart error (409): lease is not running'));
+    vi.mocked(restartLease).mockRejectedValue(new ProviderApiError(409, 'lease is not running'));
 
     const onProgress = vi.fn();
     const app = makeApp();
@@ -1302,7 +1307,7 @@ describe('executeConfirmedUpdateApp', () => {
   });
 
   it('handles 409 error from update endpoint', async () => {
-    vi.mocked(updateLease).mockRejectedValue(new Error('Fred update error (409): lease is not running'));
+    vi.mocked(updateLease).mockRejectedValue(new ProviderApiError(409, 'lease is not running'));
 
     const onProgress = vi.fn();
     const app = makeApp();

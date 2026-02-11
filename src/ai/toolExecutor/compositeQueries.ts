@@ -78,7 +78,9 @@ export async function executeListApps(
           try {
             const manifest = JSON.parse(a.manifest);
             if (typeof manifest.image === 'string') image = manifest.image;
-          } catch { /* ignore */ }
+          } catch (error) {
+            logError('compositeQueries.executeListApps.parseManifest', error);
+          }
         }
         return {
           name: a.name,
@@ -219,8 +221,8 @@ export async function executeAppStatus(
       if (typeof manifest.image === 'string') {
         image = manifest.image;
       }
-    } catch {
-      // Ignore parse errors
+    } catch (error) {
+      logError('compositeQueries.executeAppStatus.parseManifest', error);
     }
   }
 
@@ -328,8 +330,8 @@ export async function executeBrowseCatalog(): Promise<ToolResult> {
         try {
           const health = await getProviderHealth(p.apiUrl);
           healthy = health?.status === 'healthy';
-        } catch {
-          // offline
+        } catch (error) {
+          logError(`compositeQueries.executeBrowseCatalog.healthCheck[${p.uuid}]`, error);
         }
       }
       return {
@@ -427,17 +429,25 @@ export async function executeGetLogs(
 
   const tail = typeof args.tail === 'number' && args.tail > 0 ? Math.floor(args.tail) : 100;
 
-  // Mint auth token (same pattern as app_status)
-  const timestamp = Math.floor(Date.now() / 1000);
-  const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
-  const signResult: SignResult = await signArbitrary(address, signMessage);
-  const authToken = createAuthToken(
-    address,
-    app.leaseUuid,
-    timestamp,
-    signResult.pub_key.value,
-    signResult.signature
-  );
+  let authToken: string;
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
+    const signResult: SignResult = await signArbitrary(address, signMessage);
+    authToken = createAuthToken(
+      address,
+      app.leaseUuid,
+      timestamp,
+      signResult.pub_key.value,
+      signResult.signature
+    );
+  } catch (error) {
+    logError('compositeQueries.executeGetLogs.sign', error);
+    return {
+      success: false,
+      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+    };
+  }
 
   let logsResponse;
   try {
@@ -566,16 +576,25 @@ export async function executeAppDiagnostics(
     return { success: false, error: 'Signing not available' };
   }
 
-  const timestamp = Math.floor(Date.now() / 1000);
-  const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
-  const signResult: SignResult = await signArbitrary(address, signMessage);
-  const authToken = createAuthToken(
-    address,
-    app.leaseUuid,
-    timestamp,
-    signResult.pub_key.value,
-    signResult.signature
-  );
+  let authToken: string;
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
+    const signResult: SignResult = await signArbitrary(address, signMessage);
+    authToken = createAuthToken(
+      address,
+      app.leaseUuid,
+      timestamp,
+      signResult.pub_key.value,
+      signResult.signature
+    );
+  } catch (error) {
+    logError('compositeQueries.executeAppDiagnostics.sign', error);
+    return {
+      success: false,
+      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+    };
+  }
 
   try {
     const provision = await getLeaseProvision(app.providerUrl, app.leaseUuid, authToken);
@@ -621,16 +640,25 @@ export async function executeAppReleases(
     return { success: false, error: 'Signing not available' };
   }
 
-  const timestamp = Math.floor(Date.now() / 1000);
-  const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
-  const signResult: SignResult = await signArbitrary(address, signMessage);
-  const authToken = createAuthToken(
-    address,
-    app.leaseUuid,
-    timestamp,
-    signResult.pub_key.value,
-    signResult.signature
-  );
+  let authToken: string;
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
+    const signResult: SignResult = await signArbitrary(address, signMessage);
+    authToken = createAuthToken(
+      address,
+      app.leaseUuid,
+      timestamp,
+      signResult.pub_key.value,
+      signResult.signature
+    );
+  } catch (error) {
+    logError('compositeQueries.executeAppReleases.sign', error);
+    return {
+      success: false,
+      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+    };
+  }
 
   try {
     const releasesResponse = await getLeaseReleases(app.providerUrl, app.leaseUuid, authToken);

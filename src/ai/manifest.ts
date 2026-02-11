@@ -58,16 +58,32 @@ export function deriveAppNameFromImage(image: string): string {
  */
 export function normalizePorts(port: string): Record<string, Record<string, never>> {
   const result: Record<string, Record<string, never>> = {};
+  const VALID_PROTOCOLS = new Set(['tcp', 'udp']);
 
   for (const raw of port.split(',')) {
     const trimmed = raw.trim();
     if (!trimmed) continue;
 
+    let portStr: string;
+    let protocol: string;
     if (trimmed.includes('/')) {
-      result[trimmed] = {};
+      const slashIdx = trimmed.indexOf('/');
+      portStr = trimmed.slice(0, slashIdx);
+      protocol = trimmed.slice(slashIdx + 1);
     } else {
-      result[`${trimmed}/tcp`] = {};
+      portStr = trimmed;
+      protocol = 'tcp';
     }
+
+    const portNum = parseInt(portStr, 10);
+    if (isNaN(portNum) || portNum < 1 || portNum > 65535 || String(portNum) !== portStr) {
+      throw new Error(`Invalid port: "${portStr}". Port must be a number between 1 and 65535.`);
+    }
+    if (!VALID_PROTOCOLS.has(protocol)) {
+      throw new Error(`Invalid protocol: "${protocol}". Must be "tcp" or "udp".`);
+    }
+
+    result[`${portNum}/${protocol}`] = {};
   }
 
   return result;

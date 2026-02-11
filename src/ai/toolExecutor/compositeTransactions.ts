@@ -7,7 +7,7 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
-import { createSignMessage, createAuthToken, getLeaseConnectionInfo } from '../../api/provider-api';
+import { createSignMessage, createAuthToken, getLeaseConnectionInfo, ProviderApiError } from '../../api/provider-api';
 import { pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
@@ -279,7 +279,8 @@ export async function executeDeployApp(
         if (typeof env !== 'object' || env === null || Array.isArray(env)) {
           return { success: false, error: 'env must be a JSON object (e.g. \'{"KEY":"value"}\').' };
         }
-      } catch {
+      } catch (error) {
+        logError('compositeTransactions.executeDeployApp.parseEnv', error);
         return { success: false, error: 'Invalid env JSON string. Expected format: \'{"KEY":"value"}\'.' };
       }
     }
@@ -294,6 +295,7 @@ export async function executeDeployApp(
         tmpfs: args.tmpfs as string | undefined,
       });
     } catch (error) {
+      logError('compositeTransactions.executeDeployApp.buildManifest', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to build manifest' };
     }
 
@@ -1558,12 +1560,14 @@ export async function executeConfirmedRestartApp(
     const authToken = await getAuthToken();
     await restartLease(providerUrl, leaseUuid, authToken);
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    // 409 = lease is not in the right state
-    if (errorMsg.includes('409')) {
+    logError('compositeTransactions.executeConfirmedRestartApp', error);
+    // 409 = lease is not in the right state for restart; don't mark as failed
+    // because the app may still be running — only the restart was rejected.
+    if (error instanceof ProviderApiError && error.status === 409) {
       onProgress?.({ phase: 'failed', detail: 'App is not in a restartable state', operation: 'restart' });
       return { success: false, error: `Cannot restart "${name}": app is not in a restartable state.` };
     }
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     onProgress?.({ phase: 'failed', detail: `Restart failed: ${errorMsg}`, operation: 'restart' });
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     return { success: false, error: `Restart failed: ${errorMsg}` };
@@ -1650,7 +1654,8 @@ export async function executeUpdateApp(
         if (typeof env !== 'object' || env === null || Array.isArray(env)) {
           return { success: false, error: 'env must be a JSON object (e.g. \'{"KEY":"value"}\').' };
         }
-      } catch {
+      } catch (error) {
+        logError('compositeTransactions.executeUpdateApp.parseEnv', error);
         return { success: false, error: 'Invalid env JSON string. Expected format: \'{"KEY":"value"}\'.' };
       }
     }
@@ -1665,6 +1670,7 @@ export async function executeUpdateApp(
         tmpfs: args.tmpfs as string | undefined,
       });
     } catch (error) {
+      logError('compositeTransactions.executeUpdateApp.buildManifest', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to build manifest' };
     }
 
@@ -1747,14 +1753,17 @@ export async function executeConfirmedUpdateApp(
   try {
     const authToken = await getAuthToken();
     // Base64-encode the payload for the update API
-    const base64Payload = btoa(String.fromCharCode(...payload.bytes));
+    const base64Payload = btoa(Array.from(payload.bytes, (b) => String.fromCharCode(b)).join(''));
     await updateLease(providerUrl, leaseUuid, base64Payload, authToken);
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    if (errorMsg.includes('409')) {
+    logError('compositeTransactions.executeConfirmedUpdateApp', error);
+    // 409 = lease is not in the right state for update; don't mark as failed
+    // because the app may still be running — only the update was rejected.
+    if (error instanceof ProviderApiError && error.status === 409) {
       onProgress?.({ phase: 'failed', detail: 'App is not in an updatable state', operation: 'update' });
       return { success: false, error: `Cannot update "${name}": app is not in an updatable state.` };
     }
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     onProgress?.({ phase: 'failed', detail: `Update failed: ${errorMsg}`, operation: 'update' });
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     return { success: false, error: `Update failed: ${errorMsg}` };
@@ -1767,7 +1776,7 @@ export async function executeConfirmedUpdateApp(
   // Save existing URL — port mappings don't change on update, so the
   // previous URL is a reliable fallback if the provider doesn't return
   // port info during re-provisioning.
-  const existingApp = appRegistry.getApp(address, name);
+  const existingApp = appRegistry.getAppByLease(address, leaseUuid);
   const previousUrl = existingApp?.url;
 
   // Poll for readiness

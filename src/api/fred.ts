@@ -50,8 +50,8 @@ function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
       if (parsed !== LeaseState.UNRECOGNIZED) {
         state = parsed;
       }
-    } catch {
-      // Unknown state string — default to pending
+    } catch (error) {
+      logError(`fred.parseFredResponse: unrecognized state "${raw.state}"`, error);
     }
   }
 

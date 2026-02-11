@@ -1,9 +1,11 @@
-import { memo, useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useRef, useState, useCallback } from 'react';
 import { AlertTriangle, Check, X, Paperclip, Copy, CheckCheck, Eye, EyeOff } from 'lucide-react';
 import type { PendingAction } from '../../ai/toolExecutor';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { ManifestEditor } from './ManifestEditor';
+import { parseEditableManifest, serializeManifest, type ManifestFields } from './manifestEditorUtils';
 
 function parseManifestEnv(payload: PendingAction['payload']): Record<string, string> | null {
   if (!payload?.bytes) return null;
@@ -57,7 +59,7 @@ function SensitiveValue({ envKey, value }: { envKey: string; value: string }) {
 
 interface ConfirmationCardProps {
   action: PendingAction;
-  onConfirm: () => void;
+  onConfirm: (editedManifestJson?: string) => void;
   onCancel: () => void;
   isExecuting?: boolean;
 }
@@ -68,7 +70,34 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     onEscape: () => { if (!isExecuting) onCancel(); },
     initialFocusRef: cancelRef,
   });
-  const manifestEnv = useMemo(() => parseManifestEnv(action.payload), [action.payload]);
+
+  const initialManifest = useMemo(() => parseEditableManifest(action), [action]);
+  const [editedManifest, setEditedManifest] = useState<ManifestFields | null>(initialManifest);
+  const isEditable = initialManifest !== null;
+
+  const manifestEnv = useMemo(() => {
+    if (isEditable) return null; // ManifestEditor handles env display for editable manifests
+    return parseManifestEnv(action.payload);
+  }, [action.payload, isEditable]);
+
+  const handleConfirm = useCallback(() => {
+    if (editedManifest) {
+      onConfirm(serializeManifest(editedManifest));
+    } else {
+      onConfirm();
+    }
+  }, [editedManifest, onConfirm]);
+
+  // Filter out internal args for display
+  const displayArgs = useMemo(() => {
+    const filtered: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(action.args)) {
+      if (k !== '_generatedManifest') {
+        filtered[k] = v;
+      }
+    }
+    return filtered;
+  }, [action.args]);
 
   return (
     <div
@@ -85,50 +114,59 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
       </div>
       <div className="confirmation-body">
         <p id="confirmation-description" className="confirmation-description">{action.description}</p>
-        {action.args.entries && Array.isArray(action.args.entries) && action.args.entries.length > 1 ? (
+
+        {isEditable && editedManifest ? (
           <div className="confirmation-details">
-            <p className="confirmation-details-title">Apps to deploy:</p>
-            <ul className="confirmation-batch-list">
-              {(action.args.entries as Array<{ app_name: string; size?: string }>).map((entry) => (
-                <li key={entry.app_name}>{entry.app_name} ({entry.size || 'micro'})</li>
-              ))}
-            </ul>
+            <ManifestEditor manifest={editedManifest} onChange={setEditedManifest} />
           </div>
-        ) : Object.keys(action.args).length > 0 && (
-          <div className="confirmation-details">
-            <p className="confirmation-details-title">Parameters:</p>
-            <pre className="confirmation-args" tabIndex={0} aria-label="Transaction parameters">
-              {JSON.stringify(action.args, null, 2)}
-            </pre>
-          </div>
-        )}
-        {action.payload && (
-          <div className="confirmation-details">
-            <p className="confirmation-details-title">Attached Payload:</p>
-            <div className="confirmation-payload">
-              <div className="flex items-center gap-1.5 text-sm text-primary">
-                <Paperclip className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>{action.payload.filename || 'payload'}</span>
-                <span className="text-muted">{formatFileSize(action.payload.size)}</span>
+        ) : (
+          <>
+            {action.args.entries && Array.isArray(action.args.entries) && action.args.entries.length > 1 ? (
+              <div className="confirmation-details">
+                <p className="confirmation-details-title">Apps to deploy:</p>
+                <ul className="confirmation-batch-list">
+                  {(action.args.entries as Array<{ app_name: string; size?: string }>).map((entry) => (
+                    <li key={entry.app_name}>{entry.app_name} ({entry.size || 'micro'})</li>
+                  ))}
+                </ul>
               </div>
-              <div className="mt-1 font-mono text-xs text-dim break-all">
-                SHA-256: {action.payload.hash.slice(0, 16)}...
+            ) : Object.keys(displayArgs).length > 0 && (
+              <div className="confirmation-details">
+                <p className="confirmation-details-title">Parameters:</p>
+                <pre className="confirmation-args" tabIndex={0} aria-label="Transaction parameters">
+                  {JSON.stringify(displayArgs, null, 2)}
+                </pre>
               </div>
-            </div>
-          </div>
-        )}
-        {manifestEnv && (
-          <div className="confirmation-details">
-            <p className="confirmation-details-title">Environment Variables:</p>
-            <div className="confirmation-payload">
-              {Object.entries(manifestEnv).map(([key, value]) => (
-                <div key={key} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="font-mono text-xs text-dim">{key}</span>
-                  <SensitiveValue envKey={key} value={value} />
+            )}
+            {action.payload && (
+              <div className="confirmation-details">
+                <p className="confirmation-details-title">Attached Payload:</p>
+                <div className="confirmation-payload">
+                  <div className="flex items-center gap-1.5 text-sm text-primary">
+                    <Paperclip className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>{action.payload.filename || 'payload'}</span>
+                    <span className="text-muted">{formatFileSize(action.payload.size)}</span>
+                  </div>
+                  <div className="mt-1 font-mono text-xs text-dim break-all">
+                    SHA-256: {action.payload.hash.slice(0, 16)}...
+                  </div>
                 </div>
-              ))}
-            </div>
-          </div>
+              </div>
+            )}
+            {manifestEnv && (
+              <div className="confirmation-details">
+                <p className="confirmation-details-title">Environment Variables:</p>
+                <div className="confirmation-payload">
+                  {Object.entries(manifestEnv).map(([key, value]) => (
+                    <div key={key} className="flex items-center justify-between gap-2 text-sm">
+                      <span className="font-mono text-xs text-dim">{key}</span>
+                      <SensitiveValue envKey={key} value={value} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
       <div className="confirmation-actions">
@@ -144,7 +182,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         </button>
         <button
           type="button"
-          onClick={onConfirm}
+          onClick={handleConfirm}
           disabled={isExecuting}
           className="btn btn-success btn-sm"
         >
