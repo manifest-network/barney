@@ -26,10 +26,10 @@ export const HELP_TEXT = `## Quick Reference
 ### Resource tiers
 | Tier | CPU | Memory | Storage |
 |------|-----|--------|---------|
-| micro | 0.5 | 512 Mi | 512 Mi |
-| small | 1 | 1 Gi | 1 Gi |
-| medium | 2 | 2 Gi | 2 Gi |
-| large | 4 | 4 Gi | 4 Gi |
+| micro | 0.25 vCPU | 256 MB | 512 MB |
+| small | 0.5 vCPU | 512 MB | 1 GB |
+| medium | 1 vCPU | 1 GB | 2 GB |
+| large | 2 vCPU | 2 GB | 4 GB |
 
 ### Keyboard shortcuts
 | Key | Action |

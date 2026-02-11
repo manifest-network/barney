@@ -16,11 +16,34 @@ import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, STORAGE_SKU_NAME } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
-import { validateAppName } from '../../registry/appRegistry';
+import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { buildManifest, mergeManifest } from '../manifest';
 import { sha256, toHex } from '../../utils/hash';
 import type { DeployProgress } from '../progress';
 import type { ToolResult, ToolExecutorOptions, SignResult, PayloadAttachment } from './types';
+
+/** Env var names that could compromise the container runtime or host. */
+const BLOCKED_ENV_NAMES = new Set([
+  'PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT',
+  'LD_PROFILE', 'LD_DEBUG', 'LD_DYNAMIC_WEAK',
+  'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH',
+  'PYTHONPATH', 'NODE_OPTIONS', 'NODE_PATH',
+  'PERL5LIB', 'RUBYLIB', 'CLASSPATH',
+  'http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY',
+  'DOCKER_HOST', 'KUBECONFIG',
+]);
+
+/**
+ * Validate env var names against the blocklist.
+ * Returns an error string if any blocked names are found, null otherwise.
+ */
+function validateEnvNames(env: Record<string, string>): string | null {
+  const blocked = Object.keys(env).filter((k) => BLOCKED_ENV_NAMES.has(k));
+  if (blocked.length > 0) {
+    return `Blocked env variable(s): ${blocked.join(', ')}. These variables could compromise the runtime environment.`;
+  }
+  return null;
+}
 
 /**
  * Build a clickable URL from connection info.
@@ -285,6 +308,11 @@ export async function executeDeployApp(
       }
     }
 
+    if (env) {
+      const envError = validateEnvNames(env);
+      if (envError) return { success: false, error: envError };
+    }
+
     let manifestResult;
     try {
       manifestResult = await buildManifest({
@@ -514,7 +542,7 @@ export async function executeConfirmedDeployApp(
     return { success: false, error: 'Lease created but could not extract UUID. Check your leases manually.' };
   }
 
-  // Add to registry (store manifest for re-deploy)
+  // Add to registry (store manifest for re-deploy, secrets stripped)
   const manifestJson = new TextDecoder().decode(payload.bytes);
   appRegistry.addApp(address, {
     name,
@@ -524,7 +552,7 @@ export async function executeConfirmedDeployApp(
     providerUrl,
     createdAt: Date.now(),
     status: 'deploying',
-    manifest: manifestJson,
+    manifest: sanitizeManifestForStorage(manifestJson),
   });
 
   // Upload payload
@@ -1083,7 +1111,7 @@ export async function executeConfirmedBatchDeploy(
       providerUrl: entry.providerUrl,
       createdAt: Date.now(),
       status: 'deploying',
-      manifest: new TextDecoder().decode(entry.payload.bytes),
+      manifest: sanitizeManifestForStorage(new TextDecoder().decode(entry.payload.bytes)),
     });
 
     // Upload payload
@@ -1428,8 +1456,17 @@ export async function executeConfirmedFundCredits(
 // cosmos_tx (escape hatch)
 // ============================================================================
 
+/** Allowed module+subcommand pairs for the cosmos_tx escape hatch. */
+const ALLOWED_TX_COMMANDS: Record<string, Set<string>> = {
+  billing: new Set(['create-lease', 'close-lease', 'fund-credit', 'withdraw-credit']),
+  bank: new Set(['send']),
+  staking: new Set(['delegate', 'redelegate', 'unbond']),
+  gov: new Set(['vote', 'submit-proposal']),
+};
+
 /**
  * Pre-validation for cosmos_tx. Returns confirmation result or error.
+ * Restricted to an allowlist of safe module+subcommand pairs.
  */
 export function executeCosmosTransaction(
   args: Record<string, unknown>,
@@ -1442,6 +1479,14 @@ export function executeCosmosTransaction(
   const subcommand = args.subcommand as string;
   if (!module) return { success: false, error: 'module is required' };
   if (!subcommand) return { success: false, error: 'subcommand is required' };
+
+  const allowedSubs = ALLOWED_TX_COMMANDS[module];
+  if (!allowedSubs || !allowedSubs.has(subcommand)) {
+    const allowed = Object.entries(ALLOWED_TX_COMMANDS)
+      .map(([m, subs]) => `${m}: ${[...subs].join(', ')}`)
+      .join('; ');
+    return { success: false, error: `"${module} ${subcommand}" is not allowed. Allowed transactions: ${allowed}` };
+  }
 
   const parseResult = parseJsonStringArray(args.args);
   if (parseResult.error) {
@@ -1660,6 +1705,11 @@ export async function executeUpdateApp(
       }
     }
 
+    if (env) {
+      const envError = validateEnvNames(env);
+      if (envError) return { success: false, error: envError };
+    }
+
     let manifestResult;
     try {
       manifestResult = await buildManifest({
@@ -1793,15 +1843,14 @@ export async function executeConfirmedUpdateApp(
     return { success: false, error: `Update failed: ${errorMsg}` };
   }
 
-  // Update registry with new manifest content
-  const manifestJson = new TextDecoder().decode(payload.bytes);
-  appRegistry.updateApp(address, leaseUuid, { manifest: manifestJson });
-
-  // Save existing URL — port mappings don't change on update, so the
-  // previous URL is a reliable fallback if the provider doesn't return
-  // port info during re-provisioning.
+  // Snapshot existing app state before overwriting — needed for rollback detection.
   const existingApp = appRegistry.getAppByLease(address, leaseUuid);
   const previousUrl = existingApp?.url;
+  const previousManifest = existingApp?.manifest;
+
+  // Update registry with new manifest content (secrets stripped)
+  const manifestJson = new TextDecoder().decode(payload.bytes);
+  appRegistry.updateApp(address, leaseUuid, { manifest: sanitizeManifestForStorage(manifestJson) });
 
   // Poll for readiness
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for app to come back up...', operation: 'update' });
@@ -1825,6 +1874,25 @@ export async function executeConfirmedUpdateApp(
     });
 
     if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+      // Rollback detection: provision is ready but error is set — the update
+      // failed and the old deployment was automatically restored.
+      if (fredStatus.error) {
+        // Revert the manifest in the registry to the previous version
+        if (previousManifest) {
+          appRegistry.updateApp(address, leaseUuid, { manifest: previousManifest });
+        }
+        onProgress?.({
+          phase: 'failed',
+          detail: `Update failed, previous version restored: ${fredStatus.error}`,
+          operation: 'update',
+        });
+        return {
+          success: false,
+          error: `Update failed: ${fredStatus.error}. The previous deployment has been restored and is still running.`,
+          data: { name, url: previousUrl, status: 'running' },
+        };
+      }
+
       const { url: connectionUrl, connection } = await resolveAppUrl(
         providerUrl, leaseUuid, fredStatus, address, signArbitrary,
         'compositeTransactions.executeConfirmedUpdateApp'

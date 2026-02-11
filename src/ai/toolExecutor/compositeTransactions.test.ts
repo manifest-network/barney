@@ -82,9 +82,13 @@ vi.mock('./transactions', () => ({
   resolveSkuItems: vi.fn(),
 }));
 
-vi.mock('../../registry/appRegistry', () => ({
-  validateAppName: vi.fn().mockReturnValue(null),
-}));
+vi.mock('../../registry/appRegistry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../registry/appRegistry')>();
+  return {
+    ...actual,
+    validateAppName: vi.fn().mockReturnValue(null),
+  };
+});
 
 import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';

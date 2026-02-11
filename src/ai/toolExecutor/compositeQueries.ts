@@ -371,8 +371,20 @@ export async function executeBrowseCatalog(): Promise<ToolResult> {
   };
 }
 
+/** Allowed module+subcommand pairs for the cosmos_query escape hatch. */
+const ALLOWED_QUERY_COMMANDS: Record<string, Set<string>> = {
+  bank: new Set(['balances', 'balance', 'total-supply', 'denom-metadata', 'params']),
+  billing: new Set(['leases', 'lease', 'credit-accounts', 'credit-account', 'params']),
+  sku: new Set(['skus', 'sku', 'params']),
+  provider: new Set(['providers', 'provider', 'params']),
+  staking: new Set(['validators', 'delegation', 'delegations', 'params']),
+  gov: new Set(['proposals', 'proposal', 'params']),
+  auth: new Set(['account', 'accounts', 'params']),
+};
+
 /**
  * Execute cosmos_query (pass-through to MCP).
+ * Restricted to an allowlist of safe module+subcommand pairs.
  */
 export async function executeCosmosQuery(
   args: Record<string, unknown>,
@@ -389,6 +401,14 @@ export async function executeCosmosQuery(
   }
   if (typeof subcommand !== 'string' || !subcommand) {
     return { success: false, error: 'subcommand is required' };
+  }
+
+  const allowedSubs = ALLOWED_QUERY_COMMANDS[module];
+  if (!allowedSubs || !allowedSubs.has(subcommand)) {
+    const allowed = Object.entries(ALLOWED_QUERY_COMMANDS)
+      .map(([m, subs]) => `${m}: ${[...subs].join(', ')}`)
+      .join('; ');
+    return { success: false, error: `"${module} ${subcommand}" is not allowed. Allowed queries: ${allowed}` };
   }
 
   const parseResult = parseJsonStringArray(args.args);

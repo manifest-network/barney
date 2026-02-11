@@ -26,6 +26,36 @@ export interface AppEntry {
 /** Name validation: lowercase alphanumeric + hyphens, 1-32 chars, no leading/trailing hyphen */
 const APP_NAME_REGEX = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
 
+/** Pattern matching env var names that likely contain secrets */
+const SENSITIVE_ENV_PATTERN = /password|secret|token|key|credential|api[_-]?key/i;
+
+/**
+ * Sanitize a manifest JSON string for localStorage storage.
+ * Replaces sensitive env var values with empty strings to avoid persisting secrets.
+ * Empty values trigger auto-generation (via generatePassword) on re-deploy.
+ */
+export function sanitizeManifestForStorage(manifestJson: string): string {
+  try {
+    const manifest: unknown = JSON.parse(manifestJson);
+    if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+      return manifestJson;
+    }
+
+    const obj = manifest as Record<string, unknown>;
+    if (obj.env && typeof obj.env === 'object' && !Array.isArray(obj.env)) {
+      const sanitizedEnv: Record<string, string> = {};
+      for (const [key, value] of Object.entries(obj.env as Record<string, string>)) {
+        sanitizedEnv[key] = SENSITIVE_ENV_PATTERN.test(key) ? '' : String(value);
+      }
+      obj.env = sanitizedEnv;
+    }
+
+    return JSON.stringify(obj, null, 2);
+  } catch {
+    return manifestJson;
+  }
+}
+
 function storageKey(address: string): string {
   return `barney-apps-${address}`;
 }

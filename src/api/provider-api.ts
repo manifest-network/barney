@@ -146,12 +146,12 @@ export interface AuthToken {
   meta_hash?: string;
 }
 
-const MAX_AUTH_TOKEN_AGE_SECONDS = 300;
-const MAX_AUTH_TOKEN_FUTURE_SECONDS = 60;
+const MAX_AUTH_TOKEN_AGE_SECONDS = 60;
+const MAX_AUTH_TOKEN_FUTURE_SECONDS = 10;
 
 /**
  * Validates that a timestamp is recent enough for auth token use.
- * Rejects timestamps older than 5 minutes or more than 60 seconds in the future.
+ * Rejects timestamps older than 60 seconds or more than 10 seconds in the future.
  */
 export function validateAuthTimestamp(timestamp: number): void {
   if (!Number.isFinite(timestamp)) {
