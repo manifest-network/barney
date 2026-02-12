@@ -18,6 +18,7 @@ import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { buildManifest, mergeManifest } from '../manifest';
+import { findKnownImage } from '../knownImages';
 import { sha256, toHex } from '../../utils/hash';
 import type { DeployProgress } from '../progress';
 import type { ToolResult, ToolExecutorOptions, SignResult, PayloadAttachment } from './types';
@@ -319,6 +320,17 @@ export async function executeDeployApp(
       if (envError) return { success: false, error: envError };
     }
 
+    // Known image safety net: merge defaults for port, env, user, tmpfs, storage
+    const knownConfig = findKnownImage(args.image as string);
+    if (knownConfig) {
+      if (!args.port && knownConfig.port) args.port = knownConfig.port;
+      if (!env && knownConfig.env) env = { ...knownConfig.env };
+      else if (knownConfig.env) env = { ...knownConfig.env, ...env };
+      if (!args.user && knownConfig.user) args.user = knownConfig.user;
+      if (!args.tmpfs && knownConfig.tmpfs) args.tmpfs = knownConfig.tmpfs;
+      if (args.storage === undefined && knownConfig.storage) args.storage = knownConfig.storage;
+    }
+
     let manifestResult;
     try {
       manifestResult = await buildManifest({
@@ -480,6 +492,7 @@ export async function executeDeployApp(
     }
   } catch (error) {
     logError('compositeTransactions.executeDeployApp.creditCheck', error);
+    creditWarning = ' Warning: could not verify credit balance — proceed with caution.';
   }
 
   return {
@@ -550,16 +563,21 @@ export async function executeConfirmedDeployApp(
 
   // Add to registry (store manifest for re-deploy, secrets stripped)
   const manifestJson = new TextDecoder().decode(payload.bytes);
-  appRegistry.addApp(address, {
-    name,
-    leaseUuid,
-    size,
-    providerUuid,
-    providerUrl,
-    createdAt: Date.now(),
-    status: 'deploying',
-    manifest: sanitizeManifestForStorage(manifestJson),
-  });
+  try {
+    appRegistry.addApp(address, {
+      name,
+      leaseUuid,
+      size,
+      providerUuid,
+      providerUrl,
+      createdAt: Date.now(),
+      status: 'deploying',
+      manifest: sanitizeManifestForStorage(manifestJson),
+    });
+  } catch (error) {
+    // Lease already created on-chain — log but don't abort the deploy flow
+    logError('compositeTransactions.executeConfirmedDeployApp.addApp', error);
+  }
 
   // Upload payload
   onProgress?.({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
@@ -760,15 +778,20 @@ export async function deploySingleApp(
   }
 
   // Add to registry
-  appRegistry.addApp(address, {
-    name,
-    leaseUuid,
-    size,
-    providerUuid,
-    providerUrl,
-    createdAt: Date.now(),
-    status: 'deploying',
-  });
+  try {
+    appRegistry.addApp(address, {
+      name,
+      leaseUuid,
+      size,
+      providerUuid,
+      providerUrl,
+      createdAt: Date.now(),
+      status: 'deploying',
+    });
+  } catch (error) {
+    // Lease already created on-chain — log but don't abort the deploy flow
+    logError('compositeTransactions.deploySingleApp.addApp', error);
+  }
 
   // Upload payload
   onProgress({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
@@ -1006,6 +1029,7 @@ export async function executeBatchDeploy(
     }
   } catch (error) {
     logError('compositeTransactions.executeBatchDeploy.creditCheck', error);
+    creditWarning = ' Warning: could not verify credit balance — proceed with caution.';
   }
 
   const names = resolvedEntries.map((e) => e.app_name);
@@ -1107,16 +1131,21 @@ export async function executeConfirmedBatchDeploy(
       continue;
     }
 
-    appRegistry.addApp(address, {
-      name,
-      leaseUuid,
-      size: entry.size,
-      providerUuid: entry.providerUuid,
-      providerUrl: entry.providerUrl,
-      createdAt: Date.now(),
-      status: 'deploying',
-      manifest: sanitizeManifestForStorage(new TextDecoder().decode(entry.payload.bytes)),
-    });
+    try {
+      appRegistry.addApp(address, {
+        name,
+        leaseUuid,
+        size: entry.size,
+        providerUuid: entry.providerUuid,
+        providerUrl: entry.providerUrl,
+        createdAt: Date.now(),
+        status: 'deploying',
+        manifest: sanitizeManifestForStorage(new TextDecoder().decode(entry.payload.bytes)),
+      });
+    } catch (error) {
+      // Lease already created on-chain — log but don't abort the batch
+      logError('compositeTransactions.executeConfirmedBatchDeploy.addApp', error);
+    }
 
     // Upload payload
     batchProgress[i] = { name, phase: 'uploading', detail: 'Uploading manifest...' };
@@ -1710,6 +1739,15 @@ export async function executeUpdateApp(
     if (env) {
       const envError = validateEnvNames(env);
       if (envError) return { success: false, error: envError };
+    }
+
+    // Known image safety net: merge defaults for port, user, tmpfs.
+    // Env defaults are skipped for updates — the old manifest merge handles env carry-forward.
+    const knownConfig = findKnownImage(args.image as string);
+    if (knownConfig) {
+      if (!args.port && knownConfig.port) args.port = knownConfig.port;
+      if (!args.user && knownConfig.user) args.user = knownConfig.user;
+      if (!args.tmpfs && knownConfig.tmpfs) args.tmpfs = knownConfig.tmpfs;
     }
 
     let manifestResult;

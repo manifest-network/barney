@@ -111,15 +111,11 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
             </div>
           ))}
         </div>
-      ) : isSimpleOperation && !isReady ? (
+      ) : isSimpleOperation && !isReady && !isFailed ? (
         <div className="progress-card__steps">
           <div className="progress-card__step">
-            {isFailed ? (
-              <AlertCircle className="w-4 h-4 text-error-400" aria-hidden="true" />
-            ) : (
-              <Loader className="w-4 h-4 text-primary-400 animate-spin" aria-hidden="true" />
-            )}
-            <span className={`progress-card__step-label ${isFailed ? 'text-error-400' : 'text-primary'}`}>
+            <Loader className="w-4 h-4 text-primary-400 animate-spin" aria-hidden="true" />
+            <span className="progress-card__step-label text-primary">
               {progress.detail || titles[operation].active}
             </span>
           </div>
@@ -147,7 +143,7 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
         </div>
       )}
 
-      {progress.detail && !isSimpleOperation && (
+      {progress.detail && !isSimpleOperation && !isFailed && (
         <p className="progress-card__detail">{progress.detail}</p>
       )}
 

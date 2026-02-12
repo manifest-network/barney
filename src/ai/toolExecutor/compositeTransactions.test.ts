@@ -496,6 +496,80 @@ describe('executeDeployApp', () => {
     );
   });
 
+  it('applies known image defaults when model omits args', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    // Deploy neo4j with NO args except image — defaults should fill in
+    const result = await executeDeployApp(
+      { image: 'neo4j:5' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args._generatedManifest).toBeDefined();
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    // Should have known defaults filled in
+    expect(manifest.ports).toEqual({ '7474/tcp': {}, '7687/tcp': {} });
+    // NEO4J_AUTH should be neo4j/<generated password>
+    expect(manifest.env.NEO4J_AUTH).toMatch(/^neo4j\/[A-Za-z0-9]{16}$/);
+    // Storage upgrade should be triggered
+    expect(result.confirmationMessage).toContain('upgraded for storage');
+  });
+
+  it('model-provided values override known image defaults', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    // Model provides custom port and env — should override known defaults
+    const result = await executeDeployApp(
+      { image: 'postgres:16', port: '5433', env: '{"POSTGRES_PASSWORD":"custom-pass"}' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    // Model's port wins
+    expect(manifest.ports).toEqual({ '5433/tcp': {} });
+    // Model's env wins
+    expect(manifest.env.POSTGRES_PASSWORD).toBe('custom-pass');
+    // Known user/tmpfs still applied (model didn't provide them)
+    expect(manifest.user).toBe('999:999');
+    expect(manifest.tmpfs).toEqual(['/var/run/postgresql']);
+  });
+
+  it('does not apply defaults for unknown images', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'my-custom-image:v3', port: '3000' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.ports).toEqual({ '3000/tcp': {} });
+    expect(manifest.env).toBeUndefined();
+    expect(manifest.user).toBeUndefined();
+  });
+
   it('prefers file attachment over image when both present', async () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
@@ -1394,6 +1468,23 @@ describe('executeUpdateApp', () => {
     expect(result.success).toBe(true);
     // _generatedManifest should NOT be set since YAML can't be parsed/merged
     expect(result.pendingAction?.args._generatedManifest).toBeUndefined();
+  });
+
+  it('applies known image defaults for port/user/tmpfs in update (not env)', async () => {
+    const app = makeApp({ manifest: undefined });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'postgres:19' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    // Port, user, tmpfs defaults are applied
+    expect(manifest.ports).toEqual({ '5432/tcp': {} });
+    expect(manifest.user).toBe('999:999');
+    expect(manifest.tmpfs).toEqual(['/var/run/postgresql']);
+    // Env defaults are NOT applied for updates (old manifest merge handles env)
+    expect(manifest.env).toBeUndefined();
   });
 
   it('skips merge when app has no old manifest', async () => {

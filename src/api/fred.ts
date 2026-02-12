@@ -61,10 +61,22 @@ function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
     }
   }
 
-  return {
-    ...raw,
-    state,
-  } as FredLeaseStatus;
+  // Explicitly extract known fields to prevent injection of unexpected properties
+  // from untrusted provider responses.
+  const result: FredLeaseStatus = { state };
+  if (typeof raw.provision_status === 'string') result.provision_status = raw.provision_status;
+  if (typeof raw.phase === 'string') result.phase = raw.phase;
+  if (raw.steps && typeof raw.steps === 'object' && !Array.isArray(raw.steps)) {
+    result.steps = raw.steps as Record<string, string>;
+  }
+  if (Array.isArray(raw.instances)) result.instances = raw.instances as FredLeaseStatus['instances'];
+  if (raw.endpoints && typeof raw.endpoints === 'object' && !Array.isArray(raw.endpoints)) {
+    result.endpoints = raw.endpoints as Record<string, string>;
+  }
+  if (typeof raw.error === 'string') result.error = raw.error;
+  if (typeof raw.fail_count === 'number') result.fail_count = raw.fail_count;
+  if (typeof raw.created_at === 'string') result.created_at = raw.created_at;
+  return result;
 }
 
 /**

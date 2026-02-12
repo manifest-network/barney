@@ -123,7 +123,7 @@ export async function buildManifest(opts: BuildManifestOptions): Promise<BuildMa
   if (opts.env && Object.keys(opts.env).length > 0) {
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(opts.env)) {
-      env[key] = value === '' ? generatePassword() : value;
+      env[key] = value === '' ? generatePassword() : value.endsWith('/') ? value + generatePassword() : value;
     }
     manifest.env = env;
   }

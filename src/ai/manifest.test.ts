@@ -115,6 +115,17 @@ describe('buildManifest', () => {
     expect(parsed.env.POSTGRES_DB).toBe('mydb');
   });
 
+  it('appends generated password to env values ending with "/"', async () => {
+    const result = await buildManifest({
+      image: 'neo4j:latest',
+      env: { NEO4J_AUTH: 'neo4j/' },
+    });
+    const parsed = JSON.parse(result.json);
+
+    expect(parsed.env.NEO4J_AUTH).toMatch(/^neo4j\/[A-Za-z0-9]{16}$/);
+    expect(parsed.env.NEO4J_AUTH.length).toBe(5 + 1 + 16); // "neo4j" + "/" + 16-char password
+  });
+
   it('preserves non-empty env values', async () => {
     const result = await buildManifest({
       image: 'redis:8.4',

@@ -51,8 +51,10 @@ export function sanitizeManifestForStorage(manifestJson: string): string {
     }
 
     return JSON.stringify(obj, null, 2);
-  } catch {
-    return manifestJson;
+  } catch (error) {
+    logError('appRegistry.sanitizeManifestForStorage', error);
+    // Return empty manifest rather than unsanitized input that may contain secrets
+    return '{}';
   }
 }
 
@@ -98,11 +100,13 @@ function loadApps(address: string): AppEntry[] {
   }
 }
 
-function saveApps(address: string, apps: AppEntry[]): void {
+function saveApps(address: string, apps: AppEntry[]): boolean {
   try {
     localStorage.setItem(storageKey(address), JSON.stringify(apps));
+    return true;
   } catch (error) {
     logError('appRegistry.saveApps', error);
+    return false;
   }
 }
 
@@ -190,6 +194,7 @@ export function getAppByLease(address: string, leaseUuid: string): AppEntry | nu
 /**
  * Add a new app entry. Returns the added entry.
  * Removes any existing stopped/failed app with the same name (allows name reuse).
+ * Throws if localStorage write fails (callers should surface this to the user).
  */
 export function addApp(address: string, entry: AppEntry): AppEntry {
   let apps = loadApps(address);
@@ -200,7 +205,9 @@ export function addApp(address: string, entry: AppEntry): AppEntry {
       (a.status !== 'stopped' && a.status !== 'failed')
   );
   apps.push(entry);
-  saveApps(address, apps);
+  if (!saveApps(address, apps)) {
+    throw new Error('Failed to save app to local registry (localStorage may be full). The lease was created on-chain but may not appear in the sidebar.');
+  }
   return entry;
 }
 
@@ -215,7 +222,9 @@ export function updateApp(
   if (idx === -1) return null;
 
   apps[idx] = { ...apps[idx], ...updates };
-  saveApps(address, apps);
+  if (!saveApps(address, apps)) {
+    logError('appRegistry.updateApp', new Error('localStorage write failed — update may not persist across page reload'));
+  }
   return apps[idx];
 }
 

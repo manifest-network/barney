@@ -49,6 +49,8 @@ const BLOCKED_IP_RANGES = new Set([
 
 /**
  * Hostname patterns that indicate internal/private infrastructure.
+ * Includes DNS-to-IP mapping services (nip.io, xip.io, sslip.io) that can
+ * resolve to private IPs, enabling DNS rebinding attacks.
  */
 const INTERNAL_HOSTNAME_PATTERNS = [
   /^localhost$/i,
@@ -58,6 +60,9 @@ const INTERNAL_HOSTNAME_PATTERNS = [
   /\.localdomain$/i,
   /^metadata\./i,
   /^instance-data\./i,
+  /\.nip\.io$/i,  // Blocks ALL subdomains — acceptable since these services
+  /\.xip\.io$/i,  // are primarily used for local dev, and the DNS rebinding
+  /\.sslip\.io$/i, // risk outweighs false positives for Ollama/provider URLs.
 ];
 
 /**
@@ -283,24 +288,39 @@ export function validateChatHistory(data: unknown): ChatMessage[] {
 // ============================================================================
 
 /**
- * Sanitize tool arguments - ensure they're a valid object
+ * Recursively sanitize a value, stripping prototype-pollution keys from any
+ * nested objects.  Primitives and arrays are passed through (arrays have their
+ * elements sanitized).
+ */
+function sanitizeValue(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(sanitizeValue);
+  }
+
+  const sanitized: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      continue;
+    }
+    sanitized[key] = sanitizeValue((value as Record<string, unknown>)[key]);
+  }
+  return sanitized;
+}
+
+/**
+ * Sanitize tool arguments - ensure they're a valid object with no
+ * prototype-pollution vectors at any nesting depth.
  */
 export function sanitizeToolArgs(args: unknown): Record<string, unknown> {
   if (typeof args !== 'object' || args === null || Array.isArray(args)) {
     return {};
   }
 
-  // Ensure all values are safe (no prototype pollution)
-  const sanitized: Record<string, unknown> = {};
-  for (const key of Object.keys(args)) {
-    // Skip prototype-pollution vectors
-    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
-      continue;
-    }
-    sanitized[key] = (args as Record<string, unknown>)[key];
-  }
-
-  return sanitized;
+  return sanitizeValue(args) as Record<string, unknown>;
 }
 
 // ============================================================================
