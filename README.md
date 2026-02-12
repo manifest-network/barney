@@ -85,7 +85,7 @@ See [CLAUDE.md](./CLAUDE.md) for detailed architecture, tool definitions, and co
 
 1. **Connect** a wallet via Web3Auth social login
 2. **Chat** with the AI assistant to deploy, manage, and monitor apps
-3. The AI calls 11 composite tools that map to on-chain transactions and queries
+3. The AI calls 15 composite tools that map to on-chain transactions and queries
 4. Transaction tools require explicit user confirmation before broadcasting
 5. Deploy progress is tracked in real-time through provider status polling
 

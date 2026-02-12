@@ -7,7 +7,8 @@
 
 import { logError } from '../utils/errors';
 
-export type AppStatus = 'deploying' | 'running' | 'stopped' | 'failed';
+export const APP_STATUSES = ['deploying', 'running', 'stopped', 'failed'] as const;
+export type AppStatus = (typeof APP_STATUSES)[number];
 
 export interface AppEntry {
   name: string;
@@ -22,6 +23,9 @@ export interface AppEntry {
   /** Original manifest JSON, stored for re-deploy. */
   manifest?: string;
 }
+
+/** Runtime set derived from APP_STATUSES for O(1) validation at the localStorage boundary */
+const VALID_STATUSES: Set<string> = new Set(APP_STATUSES);
 
 /** Name validation: lowercase alphanumeric + hyphens, 1-32 chars, no leading/trailing hyphen */
 const APP_NAME_REGEX = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
@@ -86,7 +90,7 @@ function loadApps(address: string): AppEntry[] {
         typeof (entry as AppEntry).providerUuid === 'string' &&
         typeof (entry as AppEntry).providerUrl === 'string' &&
         typeof (entry as AppEntry).createdAt === 'number' &&
-        typeof (entry as AppEntry).status === 'string'
+        VALID_STATUSES.has((entry as AppEntry).status)
     );
     // If we dropped entries, persist the cleaned list
     if (valid.length !== parsed.length) {
@@ -233,7 +237,9 @@ export function removeApp(address: string, leaseUuid: string): boolean {
   const apps = loadApps(address);
   const filtered = apps.filter((a) => a.leaseUuid !== leaseUuid);
   if (filtered.length === apps.length) return false;
-  saveApps(address, filtered);
+  if (!saveApps(address, filtered)) {
+    logError('appRegistry.removeApp', new Error('localStorage write failed — removal may not persist across page reload'));
+  }
   return true;
 }
 
@@ -262,6 +268,8 @@ export function reconcileWithChain(
   }
 
   if (changed) {
-    saveApps(address, apps);
+    if (!saveApps(address, apps)) {
+      logError('appRegistry.reconcileWithChain', new Error('localStorage write failed — reconciliation may not persist across page reload'));
+    }
   }
 }

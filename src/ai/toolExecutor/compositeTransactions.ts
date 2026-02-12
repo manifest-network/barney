@@ -407,7 +407,8 @@ export async function executeDeployApp(
   let allSKUs;
   try {
     allSKUs = await withTimeout(getSKUs(true), undefined, 'Fetch tiers');
-  } catch {
+  } catch (error) {
+    logError('compositeTransactions.deploy.fetchSKUs', error);
     return { success: false, error: 'Failed to fetch available tiers. Please try again.' };
   }
 
@@ -429,7 +430,8 @@ export async function executeDeployApp(
   let providers;
   try {
     providers = await withTimeout(getProviders(true), undefined, 'Fetch providers');
-  } catch {
+  } catch (error) {
+    logError('compositeTransactions.deploy.fetchProviders', error);
     return { success: false, error: 'Failed to fetch providers. Please try again.' };
   }
 
@@ -915,7 +917,8 @@ export async function executeBatchDeploy(
   let allSKUs;
   try {
     allSKUs = await withTimeout(getSKUs(true), undefined, 'Fetch tiers');
-  } catch {
+  } catch (error) {
+    logError('compositeTransactions.update.fetchSKUs', error);
     return { success: false, error: 'Failed to fetch available tiers. Please try again.' };
   }
 
@@ -930,7 +933,8 @@ export async function executeBatchDeploy(
   let providers;
   try {
     providers = await withTimeout(getProviders(true), undefined, 'Fetch providers');
-  } catch {
+  } catch (error) {
+    logError('compositeTransactions.update.fetchProviders', error);
     return { success: false, error: 'Failed to fetch providers. Please try again.' };
   }
 

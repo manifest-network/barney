@@ -5,6 +5,7 @@
  */
 
 import { sha256, toHex, generatePassword, validatePayloadSize } from '../utils/hash';
+import { logError } from '../utils/errors';
 import type { PayloadAttachment } from './toolExecutor/types';
 
 /**
@@ -184,7 +185,8 @@ export function mergeManifest(
     if (typeof oldManifest !== 'object' || oldManifest === null || Array.isArray(oldManifest)) {
       return newManifest;
     }
-  } catch {
+  } catch (error) {
+    logError('manifest.mergeManifest.parseOld', error);
     return newManifest;
   }
 

@@ -5,6 +5,7 @@
 
 import { logError } from '../utils/errors';
 import { HEALTH_CHECK_TIMEOUT_MS, AI_STREAM_TIMEOUT_MS } from '../config/constants';
+import { isUrlSsrfSafe } from '../utils/url';
 import { withRetry } from './utils';
 
 export interface OllamaMessage {
@@ -75,6 +76,9 @@ function buildOllamaUrl(endpoint: string, path: string): string | null {
   try {
     const url = new URL(path, endpoint);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return null;
+    }
+    if (!isUrlSsrfSafe(url)) {
       return null;
     }
     return url.href;

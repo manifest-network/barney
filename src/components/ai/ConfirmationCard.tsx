@@ -13,7 +13,9 @@ function parseManifestEnv(payload: PendingAction['payload']): Record<string, str
     const text = new TextDecoder().decode(payload.bytes);
     const manifest = JSON.parse(text) as { env?: Record<string, string> };
     if (manifest.env && Object.keys(manifest.env).length > 0) return manifest.env;
-  } catch { /* ignore parse errors */ }
+  } catch (error) {
+    logError('ConfirmationCard.parseManifestEnv', error);
+  }
   return null;
 }
 

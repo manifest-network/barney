@@ -231,6 +231,7 @@ export async function pollLeaseUntilReady(
     state: LeaseState.LEASE_STATE_PENDING,
     phase: 'starting',
   };
+  let consecutiveFailures = 0;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (opts.abortSignal?.aborted) {
@@ -264,6 +265,7 @@ export async function pollLeaseUntilReady(
     try {
       const currentToken = opts.getAuthToken ? await opts.getAuthToken() : authToken;
       lastStatus = await getLeaseStatus(providerApiUrl, leaseUuid, currentToken);
+      consecutiveFailures = 0;
       opts.onProgress?.(lastStatus);
 
       // Negative terminal states (closed/rejected/expired) — always stop
@@ -277,8 +279,17 @@ export async function pollLeaseUntilReady(
         return lastStatus;
       }
     } catch (error) {
-      // Log but continue polling — transient errors shouldn't abort the loop
+      consecutiveFailures++;
       logError('fred.pollLeaseUntilReady', error);
+      // Surface persistent failures to the UI so the user isn't left wondering
+      if (consecutiveFailures >= 3) {
+        const msg = error instanceof Error ? error.message : 'unknown error';
+        opts.onProgress?.({
+          ...lastStatus,
+          phase: 'retrying',
+          error: `Provider unreachable (${msg}), retrying...`,
+        });
+      }
     }
 
     // Wait before next attempt (unless last iteration)

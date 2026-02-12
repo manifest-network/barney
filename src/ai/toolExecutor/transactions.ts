@@ -7,6 +7,7 @@ import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getLease } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { isValidUUID, parseJsonStringArray } from '../../utils/format';
+import { logError } from '../../utils/errors';
 import { toHex } from '../../utils/hash';
 import type { ToolResult, SignResult, PayloadAttachment } from './types';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, computePayloadHash } from './utils';
@@ -185,7 +186,8 @@ async function executeCreateLease(
   if (needsNameResolution) {
     try {
       allSKUs = await getSKUs();
-    } catch {
+    } catch (error) {
+      logError('transactions.resolveSkuItems.fetchSKUs', error);
       return { success: false, error: 'Failed to fetch SKU list for name resolution.' };
     }
   }

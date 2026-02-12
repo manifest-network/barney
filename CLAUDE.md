@@ -57,7 +57,7 @@ ErrorBoundary
                   └─ ToastContainer (toast rendering)
 ```
 
-`AppShell` (`src/components/layout/AppShell.tsx`) is the top-level router. It syncs wallet state (clientManager, address, signArbitrary) from cosmos-kit into AIContext — replacing the old `AIAssistant` component.
+`AppShell` (`src/components/layout/AppShell.tsx`) is the top-level router. It syncs wallet state (clientManager, address, signArbitrary) from cosmos-kit into AIContext.
 
 ### AI Tool Execution Flow
 
@@ -91,7 +91,7 @@ The AI assistant uses a 3-layer architecture:
 | `cosmos_query(module, subcommand, args?)` | Query | Raw chain query escape hatch |
 | `cosmos_tx(module, subcommand, args)` | TX | Raw chain TX escape hatch |
 
-Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`.
+Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`. Manifest generation: `src/ai/manifest.ts`. Known Docker images: `src/ai/knownImages.ts`.
 
 ### App Registry
 
@@ -100,6 +100,7 @@ Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`.
 ```
 Key: barney-apps-{address}
 AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, connection?, manifest?, status }
+AppStatus: 'deploying' | 'running' | 'stopped' | 'failed'
 ```
 
 Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `validateAppName`.
@@ -120,6 +121,9 @@ Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored 
 
 - `getLeaseStatus()` — Single fetch
 - `pollLeaseUntilReady()` — Polling loop with configurable interval, max attempts, abort signal
+- `waitForLeaseReady()` — SSE-based wait with polling fallback for deploy readiness
+- `subscribeLeaseEvents()` — SSE event stream subscription for real-time lease updates
+- `parseSSEStream()` — Async generator that parses SSE response streams
 - `getLeaseLogs()` — Fetch container logs for a running lease
 - `getLeaseProvision()` — Fetch provision status
 - `getLeaseInfo()` — Fetch connection details (ports, URLs)
@@ -172,6 +176,9 @@ AIContext delegates to extracted hooks to keep the provider manageable:
 | `useTxHandler` | Transaction submission handler with cosmos-kit integration and toast notifications |
 | `useLeaseItems` | Manages lease item state in forms (add/remove/update SKU items) |
 | `useBatchSelection` | Manages batch selection state for bulk operations |
+| `useToolExecution` | Tool call dispatch, caching, and display — handles tool result rendering and confirmation flow handoff |
+| `useConfirmationFlow` | TX confirmation, cancellation, and timeout — owns `pendingConfirmation` state |
+| `useBatchDeploy` | Multi-app deploy orchestration from the UI (creates payloads, executes batch, sets confirmation) |
 | `useCopyToClipboard` | Clipboard copy with feedback state |
 
 ### Utility Modules (`src/utils/`)
