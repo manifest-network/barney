@@ -64,7 +64,7 @@ describe('getSystemPrompt', () => {
   it('contains image-based deploy instructions', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('deploy_app(image=');
-    expect(prompt).toContain('postgres:latest');
+    expect(prompt).toContain('image="postgres:17"');
   });
 
   it('instructs to ask user for unlisted images', () => {
