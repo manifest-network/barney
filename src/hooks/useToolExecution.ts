@@ -9,14 +9,14 @@ import type { OllamaToolCall } from '../api/ollama';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import { getToolCallDescription, isValidToolName } from '../ai/tools';
 import { executeTool, type ToolResult, type PayloadAttachment } from '../ai/toolExecutor';
-import type { AppRegistryAccess } from '../ai/toolExecutor/types';
+import type { AppRegistryAccess, SignResult } from '../ai/toolExecutor/types';
 import type { DeployProgress } from '../ai/progress';
 import type { StreamResult } from '../ai/streamUtils';
 import { sanitizeToolArgs } from '../ai/validation';
 import type { ChatMessage, PendingConfirmation } from '../contexts/aiTypes';
 import { generateMessageId } from './useMessageManager';
 
-type SignArbitraryFn = (address: string, data: string) => Promise<{ pub_key: { type: string; value: string }; signature: string }>;
+type SignArbitraryFn = (address: string, data: string) => Promise<SignResult>;
 
 export interface UseToolExecutionDeps {
   getToolCacheKey: (name: string, args: Record<string, unknown>) => string;

@@ -94,7 +94,9 @@ function loadApps(address: string): AppEntry[] {
     );
     // If we dropped entries, persist the cleaned list
     if (valid.length !== parsed.length) {
-      saveApps(address, valid);
+      if (!saveApps(address, valid)) {
+        logError('appRegistry.loadApps', new Error(`Failed to persist cleaned registry (dropped ${parsed.length - valid.length} invalid entries)`));
+      }
     }
     return valid;
   } catch (error) {
