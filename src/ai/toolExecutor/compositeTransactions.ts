@@ -1921,17 +1921,20 @@ export async function executeConfirmedUpdateApp(
       // failed and the old deployment was automatically restored.
       if (fredStatus.error) {
         // Revert the manifest in the registry to the previous version
-        if (previousManifest) {
-          appRegistry.updateApp(address, leaseUuid, { manifest: previousManifest });
-        }
+        // and restore 'running' status — the old container is still active.
+        appRegistry.updateApp(address, leaseUuid, {
+          status: 'running',
+          ...(previousManifest ? { manifest: previousManifest } : {}),
+        });
         onProgress?.({
           phase: 'failed',
-          detail: `Update failed, previous version restored: ${fredStatus.error}`,
+          detail: 'Update failed, previous version restored.',
           operation: 'update',
         });
         return {
           success: false,
-          error: `Update failed: ${fredStatus.error}. The previous deployment has been restored and is still running.`,
+          error: 'Update failed, previous version restored.',
+          data: { containerLogs: fredStatus.error },
         };
       }
 

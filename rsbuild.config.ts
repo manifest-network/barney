@@ -1,3 +1,4 @@
+import type http from 'node:http';
 import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginNodePolyfill } from '@rsbuild/plugin-node-polyfill';
@@ -91,6 +92,17 @@ export default defineConfig({
             return target;
           }
           return 'https://localhost:8080';
+        },
+        // SSE: disable buffering/compression so event-stream chunks flush immediately
+        onProxyRes: (proxyRes: http.IncomingMessage, req: http.IncomingMessage, res: http.ServerResponse) => {
+          if (req.headers.accept === 'text/event-stream') {
+            res.setHeader('X-Accel-Buffering', 'no');
+            res.setHeader('Cache-Control', 'no-cache, no-transform');
+            res.setHeader('Connection', 'keep-alive');
+            // Prevent dev server from applying gzip to the proxied SSE stream
+            delete proxyRes.headers['content-encoding'];
+            proxyRes.headers['cache-control'] = 'no-cache, no-transform';
+          }
         },
       },
     },

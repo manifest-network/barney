@@ -111,15 +111,19 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
             </div>
           ))}
         </div>
-      ) : isSimpleOperation && !isReady && !isFailed ? (
-        <div className="progress-card__steps">
-          <div className="progress-card__step">
-            <Loader className="w-4 h-4 text-primary-400 animate-spin" aria-hidden="true" />
-            <span className="progress-card__step-label text-primary">
-              {progress.detail || titles[operation].active}
-            </span>
+      ) : isSimpleOperation && !isReady ? (
+        !isFailed ? (
+          <div className="progress-card__steps">
+            <div className="progress-card__step">
+              <Loader className="w-4 h-4 text-primary-400 animate-spin" aria-hidden="true" />
+              <span className="progress-card__step-label text-primary">
+                {progress.detail || titles[operation].active}
+              </span>
+            </div>
           </div>
-        </div>
+        ) : progress.detail ? (
+          <p className="progress-card__detail text-error-400">{progress.detail}</p>
+        ) : null
       ) : (
         <div className="progress-card__steps">
           {PHASES.map((phase, idx) => {
@@ -145,6 +149,10 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
 
       {progress.detail && !isSimpleOperation && !isFailed && (
         <p className="progress-card__detail">{progress.detail}</p>
+      )}
+
+      {isFailed && !isSimpleOperation && progress.detail && (
+        <p className="progress-card__detail text-error-400">{progress.detail}</p>
       )}
 
       {progress.fredStatus?.phase && (
