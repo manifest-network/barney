@@ -13,7 +13,7 @@ export function useStreamingUpdates(
   const pendingUpdateRef = useRef<{
     messageId: string;
     content: string;
-    thinking: string;
+    thinking?: string;
   } | null>(null);
   const rafIdRef = useRef<number | null>(null);
 
@@ -49,7 +49,7 @@ export function useStreamingUpdates(
   }, [setMessages, messagesRef]);
 
   // Schedule a throttled update for streaming content (once per animation frame)
-  const scheduleStreamingUpdate = useCallback((messageId: string, content: string, thinking: string) => {
+  const scheduleStreamingUpdate = useCallback((messageId: string, content: string, thinking?: string) => {
     pendingUpdateRef.current = { messageId, content, thinking };
 
     if (!rafIdRef.current) {

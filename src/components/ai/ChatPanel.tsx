@@ -176,14 +176,14 @@ export function ChatPanel() {
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    doSubmit();
+    doSubmit().catch((error) => logError('ChatPanel.handleSubmit', error));
   };
 
   // Handle Enter to submit, arrow keys for history navigation
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      doSubmit();
+      doSubmit().catch((error) => logError('ChatPanel.handleKeyDown', error));
       return;
     }
 

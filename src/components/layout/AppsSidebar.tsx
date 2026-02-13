@@ -52,8 +52,6 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const refresh = useCallback(async () => {
     if (!address) return;
 
-    const apps = getApps(address);
-
     // Reconcile registry with on-chain lease state
     try {
       const [activeLeases, pendingLeases] = await Promise.all([

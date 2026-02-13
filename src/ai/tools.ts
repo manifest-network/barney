@@ -300,7 +300,7 @@ export const AI_TOOLS: OllamaTool[] = [
         properties: {
           module: {
             type: 'string',
-            description: 'The module name (bank, staking, distribution, gov, auth, billing, sku)',
+            description: 'The module name (bank, staking, gov, auth, billing, sku, provider)',
           },
           subcommand: {
             type: 'string',
@@ -325,7 +325,7 @@ export const AI_TOOLS: OllamaTool[] = [
         properties: {
           module: {
             type: 'string',
-            description: 'The module name (bank, staking, distribution, gov, billing, sku, manifest)',
+            description: 'The module name (bank, staking, gov, billing)',
           },
           subcommand: {
             type: 'string',

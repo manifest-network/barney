@@ -7,7 +7,10 @@ let clientPromise: Promise<LCDQueryClient> | null = null;
 
 export function getQueryClient(): Promise<LCDQueryClient> {
   if (!clientPromise) {
-    clientPromise = createLCDClient({ restEndpoint: REST_URL });
+    clientPromise = createLCDClient({ restEndpoint: REST_URL }).catch((error) => {
+      clientPromise = null;
+      throw error;
+    });
   }
   return clientPromise;
 }

@@ -55,6 +55,8 @@ function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
       const parsed = leaseStateFromString(raw.state);
       if (parsed !== LeaseState.UNRECOGNIZED) {
         state = parsed;
+      } else {
+        logError(`fred.parseFredResponse: unrecognized state "${raw.state}"`, new Error(`leaseStateFromString returned UNRECOGNIZED`));
       }
     } catch (error) {
       logError(`fred.parseFredResponse: unrecognized state "${raw.state}"`, error);
@@ -224,7 +226,7 @@ export async function pollLeaseUntilReady(
   authToken: string,
   opts: PollOptions = {}
 ): Promise<FredLeaseStatus> {
-  const intervalMs = opts.intervalMs ?? 3000;
+  const intervalMs = opts.intervalMs ?? FRED_POLL_INTERVAL_MS;
   const maxAttempts = opts.maxAttempts ?? 60;
 
   let lastStatus: FredLeaseStatus = {
@@ -357,9 +359,11 @@ function buildFredWsUrl(
     return `${wsBase}/proxy-provider${path}?token=${encodeURIComponent(authToken)}&target=${encodeURIComponent(baseUrl)}`;
   }
 
-  // Production: connect directly to Fred
+  // Production: connect directly to Fred — use URL constructor to avoid injection
   const wsProtocol = validatedUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${wsProtocol}//${validatedUrl.host}${validatedUrl.pathname.replace(/\/$/, '')}${path}?token=${encodeURIComponent(authToken)}`;
+  const wsUrl = new URL(`${wsProtocol}//${validatedUrl.host}${validatedUrl.pathname.replace(/\/$/, '')}${path}`);
+  wsUrl.searchParams.set('token', authToken);
+  return wsUrl.toString();
 }
 
 /**
@@ -745,13 +749,6 @@ export async function getLeaseProvision(
   }
 }
 
-/**
- * Fetch connection details (host, ports) for a lease from the provider.
- *
- * @param providerApiUrl - The provider's API base URL
- * @param leaseUuid - The lease UUID
- * @param authToken - Base64-encoded ADR-036 auth token
- */
 /** A single release/version entry for a lease. */
 export interface LeaseRelease {
   version: number;

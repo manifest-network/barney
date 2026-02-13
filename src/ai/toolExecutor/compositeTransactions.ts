@@ -32,12 +32,17 @@ const BLOCKED_ENV_NAMES = new Set([
   // Shell initialization / auto-exec
   'BASH_ENV', 'ENV', 'PROMPT_COMMAND', 'SHELLOPTS', 'BASHOPTS', 'CDPATH',
   // Language runtime injection
-  'PYTHONPATH', 'NODE_OPTIONS', 'NODE_PATH',
-  'PERL5LIB', 'RUBYLIB', 'CLASSPATH',
+  'PYTHONPATH', 'PYTHONSTARTUP', 'NODE_OPTIONS', 'NODE_PATH',
+  'PERL5LIB', 'PERL5OPT', 'RUBYLIB', 'CLASSPATH',
   'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS',
+  // Git command injection
+  'GIT_SSH_COMMAND', 'GIT_PROXY_COMMAND', 'GIT_SSH',
+  // glibc / DNS hijacking
+  'GCONV_PATH', 'HOSTALIASES',
   // Proxy / infrastructure
   'http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY',
-  'DOCKER_HOST', 'KUBECONFIG',
+  'DOCKER_HOST', 'DOCKER_CONFIG', 'KUBECONFIG',
+  'BUILDKIT_HOST', 'COMPOSE_FILE',
 ]);
 
 /**
@@ -52,11 +57,6 @@ function validateEnvNames(env: Record<string, string>): string | null {
   return null;
 }
 
-/**
- * Build a clickable URL from connection info.
- * Adds protocol prefix if missing (https by default, http for localhost).
- * Includes port if non-standard (not 80/443).
- */
 /**
  * Extract port number from a port mapping value.
  * Handles multiple formats the provider API may return:
@@ -1943,9 +1943,8 @@ export async function executeConfirmedUpdateApp(
           return {
             success: false,
             error: rollbackOk
-              ? 'Update failed, previous version restored.'
-              : `Update failed and rollback failed. Use app_status("${name}") to check.`,
-            data: { containerLogs: provision.last_error },
+              ? `Update failed, previous version restored. Last error: ${provision.last_error}`
+              : `Update failed and rollback failed. Last error: ${provision.last_error}. Use app_status("${name}") to check.`,
           };
         }
       } catch (error) {
