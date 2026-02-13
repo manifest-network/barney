@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createElement, useRef, useState } from 'react';
+import { createElement, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 import { useConfirmationFlow, type UseConfirmationFlowDeps } from './useConfirmationFlow';
@@ -99,6 +99,7 @@ describe('useConfirmationFlow', () => {
 
     // Set a pending confirmation
     const pending: PendingConfirmation = {
+      id: 'pending-1',
       messageId: 'msg-1',
       action: {
         id: 'action-1',
@@ -128,6 +129,7 @@ describe('useConfirmationFlow', () => {
     });
 
     const pending: PendingConfirmation = {
+      id: 'pending-2',
       messageId: 'msg-2',
       action: {
         id: 'action-2',
