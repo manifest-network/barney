@@ -29,7 +29,7 @@ export interface FredLeaseStatus {
   steps?: Record<string, string>;
   instances?: Array<{ name: string; status: string; ports?: Record<string, number> }>;
   endpoints?: Record<string, string>;
-  error?: string;
+  last_error?: string;
   fail_count?: number;
   created_at?: string;
 }
@@ -75,7 +75,7 @@ function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
   if (raw.endpoints && typeof raw.endpoints === 'object' && !Array.isArray(raw.endpoints)) {
     result.endpoints = raw.endpoints as Record<string, string>;
   }
-  if (typeof raw.error === 'string') result.error = raw.error;
+  if (typeof raw.last_error === 'string') result.last_error = raw.last_error;
   if (typeof raw.fail_count === 'number') result.fail_count = raw.fail_count;
   if (typeof raw.created_at === 'string') result.created_at = raw.created_at;
   return result;
@@ -253,7 +253,7 @@ export async function pollLeaseUntilReady(
           lastStatus = {
             state: stateMap[chainState.state] ?? LeaseState.LEASE_STATE_CLOSED,
             phase: 'chain_rejected',
-            error: `Lease ${chainState.state} on chain`,
+            last_error: `Lease ${chainState.state} on chain`,
           };
           opts.onProgress?.(lastStatus);
           return lastStatus;
@@ -289,7 +289,7 @@ export async function pollLeaseUntilReady(
         opts.onProgress?.({
           ...lastStatus,
           phase: 'retrying',
-          error: `Provider unreachable (${msg}), retrying...`,
+          last_error: `Provider unreachable (${msg}), retrying...`,
         });
       }
     }
@@ -334,7 +334,7 @@ const PERMANENT_WS_CLOSE_CODES = new Set([1008, 4001, 4003]);
 export interface FredWSEvent {
   lease_uuid: string;
   status: string; // 'provisioning' | 'ready' | 'failed' | 'restarting' | 'updating'
-  error?: string;
+  last_error?: string;
   timestamp: string; // RFC3339
 }
 
@@ -475,7 +475,7 @@ function mapWSEventToStatus(event: FredWSEvent): FredLeaseStatus {
     state: LeaseState.LEASE_STATE_ACTIVE,
     provision_status: event.status,
     phase: event.status,
-    error: event.error,
+    last_error: event.last_error,
   };
 }
 
@@ -563,7 +563,7 @@ async function waitViaWS(
           lastStatus = {
             state: stateMap[chainState.state] ?? LeaseState.LEASE_STATE_CLOSED,
             phase: 'chain_rejected',
-            error: `Lease ${chainState.state} on chain`,
+            last_error: `Lease ${chainState.state} on chain`,
           };
           opts.onProgress?.(lastStatus);
           return lastStatus;

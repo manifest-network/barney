@@ -60,7 +60,6 @@ export function ChatPanel() {
     attachPayload,
     clearPayload,
     requestBatchDeploy,
-    retryDeploy,
     addLocalMessage,
     clearHistory,
   } = useAI();
@@ -411,10 +410,7 @@ export function ChatPanel() {
             )}
             {/* Deploy Progress */}
             {deployProgress && !pendingConfirmation && (
-              <ProgressCard
-                progress={deployProgress}
-                onRetry={deployProgress.phase === 'failed' ? retryDeploy : undefined}
-              />
+              <ProgressCard progress={deployProgress} />
             )}
           </>
         )}

@@ -9249,31 +9249,6 @@ code.lease-card-mono {
   font-family: var(--font-mono);
 }
 
-.progress-card__retry {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-  margin-top: 0.75rem;
-  padding: 0.375rem 0.75rem;
-  border-radius: var(--radius-md);
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--color-primary-400);
-  background: oklch(0.55 0.15 255 / 0.1);
-  border: 1px solid oklch(0.55 0.15 255 / 0.25);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.progress-card__retry:hover {
-  background: oklch(0.55 0.15 255 / 0.2);
-  border-color: var(--color-primary-400);
-}
-
-.progress-card__retry:active {
-  transform: scale(0.95);
-  transition-duration: 0.07s;
-}
 
 .progress-card__batch {
   display: flex;

@@ -165,7 +165,7 @@ describe('pollLeaseUntilReady', () => {
   });
 
   it('returns immediately when state is CLOSED', async () => {
-    const closed = fredResponse('LEASE_STATE_CLOSED', { error: 'container crashed' });
+    const closed = fredResponse('LEASE_STATE_CLOSED', { last_error: 'container crashed' });
     mockFetchSequence([{ data: closed }]);
 
     const result = await pollLeaseUntilReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
@@ -174,7 +174,7 @@ describe('pollLeaseUntilReady', () => {
     });
 
     expect(result.state).toBe(LeaseState.LEASE_STATE_CLOSED);
-    expect(result.error).toBe('container crashed');
+    expect(result.last_error).toBe('container crashed');
   });
 
   it('polls until active after pending', async () => {

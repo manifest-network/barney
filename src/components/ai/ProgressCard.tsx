@@ -4,7 +4,7 @@
  */
 
 import { memo, useState, useEffect, useRef } from 'react';
-import { CheckCircle, Circle, Loader, AlertCircle, RotateCcw } from 'lucide-react';
+import { CheckCircle, Circle, Loader, AlertCircle } from 'lucide-react';
 import type { DeployProgress } from '../../ai/progress';
 
 function formatElapsed(seconds: number): string {
@@ -16,7 +16,6 @@ function formatElapsed(seconds: number): string {
 
 interface ProgressCardProps {
   progress: DeployProgress;
-  onRetry?: () => void;
 }
 
 const PHASES = [
@@ -37,7 +36,7 @@ function phaseIcon(phase: string, size: string = 'w-4 h-4') {
   return <Loader className={`${size} text-primary-400 animate-spin`} aria-hidden="true" />;
 }
 
-export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: ProgressCardProps) {
+export const ProgressCard = memo(function ProgressCard({ progress }: ProgressCardProps) {
   const currentIdx = getPhaseIndex(progress.phase);
   const isFailed = progress.phase === 'failed';
   const isReady = progress.phase === 'ready';
@@ -94,7 +93,7 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
       <div className="progress-card__header">
         {phaseIcon(progress.phase, 'w-5 h-5')}
         <span className="progress-card__title">
-          {title}
+          {isSimpleOperation && !isTerminal && progress.detail ? progress.detail : title}
         </span>
         {elapsed > 0 && (
           <span className="progress-card__elapsed">{formatElapsed(elapsed)}</span>
@@ -112,16 +111,7 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
           ))}
         </div>
       ) : isSimpleOperation && !isReady ? (
-        !isFailed ? (
-          <div className="progress-card__steps">
-            <div className="progress-card__step">
-              <Loader className="w-4 h-4 text-primary-400 animate-spin" aria-hidden="true" />
-              <span className="progress-card__step-label text-primary">
-                {progress.detail || titles[operation].active}
-              </span>
-            </div>
-          </div>
-        ) : progress.detail ? (
+        isFailed && progress.detail ? (
           <p className="progress-card__detail text-error-400">{progress.detail}</p>
         ) : null
       ) : (
@@ -161,16 +151,6 @@ export const ProgressCard = memo(function ProgressCard({ progress, onRetry }: Pr
         </p>
       )}
 
-      {isFailed && onRetry && (
-        <button
-          type="button"
-          onClick={onRetry}
-          className="progress-card__retry"
-        >
-          <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-          Retry
-        </button>
-      )}
     </div>
   );
 });

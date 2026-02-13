@@ -108,9 +108,14 @@ export function useConfirmationFlow(deps: UseConfirmationFlowDeps) {
         action.payload
       );
 
-      // Preserve the payload on deploy progress so retry can restore it
-      if (!result.success && action.payload) {
-        setDeployProgress(prev => prev ? { ...prev, payload: action.payload } : null);
+      // For simple operations (restart/update), clear progress on failure
+      // so only the inline error card + LLM summary are shown.
+      // For deploys, preserve progress so the phase stepper remains visible.
+      if (!result.success) {
+        const isSimple = action.toolName === 'restart_app' || action.toolName === 'update_app';
+        if (isSimple) {
+          setDeployProgress(null);
+        }
       }
 
       const resultContent = JSON.stringify({
@@ -160,11 +165,6 @@ export function useConfirmationFlow(deps: UseConfirmationFlowDeps) {
       const errorMessage = error instanceof Error && error.message.includes('timeout')
         ? 'The AI server took too long to respond. The transaction may have completed - please check your wallet.'
         : `Error executing transaction: ${error instanceof Error ? error.message : 'Unknown error'}`;
-
-      // Preserve the payload on deploy progress so retry can restore it
-      if (action.payload) {
-        setDeployProgress(prev => prev ? { ...prev, payload: action.payload } : null);
-      }
 
       updateMessageById(messageId, {
         content: errorMessage,

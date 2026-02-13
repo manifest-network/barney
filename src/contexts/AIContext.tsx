@@ -69,7 +69,6 @@ export interface AIContextType {
   attachPayload: (file: File) => Promise<{ error?: string }>;
   clearPayload: () => void;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
-  retryDeploy: () => void;
   addLocalMessage: (content: string, card?: { type: string; data: unknown }) => void;
 }
 
@@ -411,24 +410,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
     [isConnected, settings, toOllamaMessages, addMessage, createAssistantMessage, getCurrentMessages, updateMessageById, processToolCalls, scheduleStreamingUpdate, flushPendingUpdate]
   );
 
-  // --- Retry failed deploy ---
-
-  const retryDeploy = useCallback(() => {
-    if (!deployProgress?.payload || isStreamingRef.current) return;
-
-    const payload = deployProgress.payload;
-    pendingPayloadRef.current = payload;
-    setPendingPayload(payload);
-    setDeployProgress(null);
-
-    const lastDeploy = [...messagesRef.current].reverse().find(
-      (m) => m.role === 'user' && /deploy\b/i.test(m.content)
-    );
-    if (lastDeploy) {
-      sendMessage(lastDeploy.content);
-    }
-  }, [deployProgress, sendMessage, messagesRef]);
-
   // --- Local message injection ---
 
   const addLocalMessage = useCallback((content: string, card?: { type: string; data: unknown }) => {
@@ -467,7 +448,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
       attachPayload,
       clearPayload,
       requestBatchDeploy,
-      retryDeploy,
       addLocalMessage,
     }),
     [
@@ -492,7 +472,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
       attachPayload,
       clearPayload,
       requestBatchDeploy,
-      retryDeploy,
       addLocalMessage,
     ]
   );

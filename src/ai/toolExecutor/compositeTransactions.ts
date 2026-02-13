@@ -665,12 +665,12 @@ export async function executeConfirmedDeployApp(
 
     if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
       appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-      onProgress?.({ phase: 'failed', detail: fredStatus.error || 'Deployment failed' });
+      onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' });
 
       const diagnostics = await fetchFailureLogs(providerUrl, leaseUuid, address, signArbitrary);
       const errorMsg = diagnostics
-        ? `Deployment failed: ${fredStatus.error || 'Unknown error'}\n\n${diagnostics}`
-        : `Deployment failed: ${fredStatus.error || 'Unknown error'}`;
+        ? `Deployment failed: ${fredStatus.last_error || 'Unknown error'}\n\n${diagnostics}`
+        : `Deployment failed: ${fredStatus.last_error || 'Unknown error'}`;
 
       return {
         success: false,
@@ -864,12 +864,12 @@ export async function deploySingleApp(
 
     if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
       appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-      onProgress({ phase: 'failed', detail: fredStatus.error || 'Deployment failed' });
+      onProgress({ phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' });
 
       const diagnostics = await fetchFailureLogs(providerUrl, leaseUuid, address, signArbitrary);
       const errorMsg = diagnostics
-        ? `Deployment failed: ${fredStatus.error || 'Unknown error'}\n\n${diagnostics}`
-        : `Deployment failed: ${fredStatus.error || 'Unknown error'}`;
+        ? `Deployment failed: ${fredStatus.last_error || 'Unknown error'}\n\n${diagnostics}`
+        : `Deployment failed: ${fredStatus.last_error || 'Unknown error'}`;
 
       return { success: false, error: errorMsg };
     }
@@ -1227,7 +1227,7 @@ export async function executeConfirmedBatchDeploy(
 
           if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
             appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-            batchProgress[idx] = { name, phase: 'failed', detail: fredStatus.error || 'Deployment failed' };
+            batchProgress[idx] = { name, phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' };
             emitProgress();
             return { name, success: false as const };
           }
@@ -1700,8 +1700,8 @@ export async function executeConfirmedRestartApp(
 
     // Non-active terminal state
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-    onProgress?.({ phase: 'failed', detail: fredStatus.error || 'Restart failed', operation: 'restart' });
-    return { success: false, error: `Restart failed: ${fredStatus.error || 'App did not come back up'}` };
+    onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Restart failed', operation: 'restart' });
+    return { success: false, error: `Restart failed: ${fredStatus.last_error || 'App did not come back up'}` };
   } catch (error) {
     logError('compositeTransactions.executeConfirmedRestartApp.polling', error);
     onProgress?.({ phase: 'failed', detail: 'Restart polling failed', operation: 'restart' });
@@ -1981,8 +1981,8 @@ export async function executeConfirmedUpdateApp(
 
     // Non-active terminal state
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-    onProgress?.({ phase: 'failed', detail: fredStatus.error || 'Update failed', operation: 'update' });
-    return { success: false, error: `Update failed: ${fredStatus.error || 'App did not come back up'}` };
+    onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Update failed', operation: 'update' });
+    return { success: false, error: `Update failed: ${fredStatus.last_error || 'App did not come back up'}` };
   } catch (error) {
     logError('compositeTransactions.executeConfirmedUpdateApp.polling', error);
     onProgress?.({ phase: 'failed', detail: 'Update polling failed', operation: 'update' });

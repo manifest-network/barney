@@ -723,7 +723,7 @@ describe('executeConfirmedDeployApp', () => {
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
-      error: 'container crashed',
+      last_error: 'container crashed',
     });
     vi.mocked(getLeaseProvision).mockResolvedValue({
       status: 'failed',
@@ -756,7 +756,7 @@ describe('executeConfirmedDeployApp', () => {
     vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_REJECTED,
-      error: 'rejected by provider',
+      last_error: 'rejected by provider',
     });
     vi.mocked(getLeaseProvision).mockRejectedValue(new Error('network error'));
     vi.mocked(getLeaseLogs).mockRejectedValue(new Error('network error'));
@@ -1286,7 +1286,7 @@ describe('executeConfirmedRestartApp', () => {
     vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
-      error: 'container crashed',
+      last_error: 'container crashed',
     });
 
     const app = makeApp();
@@ -1563,7 +1563,7 @@ describe('executeConfirmedUpdateApp', () => {
     vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
-      error: 'container crashed',
+      last_error: 'container crashed',
     });
 
     const app = makeApp();
