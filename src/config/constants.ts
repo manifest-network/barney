@@ -99,21 +99,21 @@ export const AI_TOOL_API_TIMEOUT_MS = 15000;
 export const AI_DEPLOY_PROVISION_TIMEOUT_MS = 5 * 60 * 1000;
 
 // ============================================
-// Fred SSE / Polling Constants
+// Fred WebSocket / Polling Constants
 // ============================================
 
 /** Default polling interval for Fred status checks (milliseconds) */
 export const FRED_POLL_INTERVAL_MS = 3000;
 
-/** Delay before reconnecting after an SSE connection drop (milliseconds) */
-export const SSE_RECONNECT_DELAY_MS = 2000;
+/** Delay before reconnecting after a WebSocket connection drop (milliseconds) */
+export const WS_RECONNECT_DELAY_MS = 1000;
 
-/** Maximum number of SSE reconnection attempts before falling back to polling */
-export const SSE_MAX_RECONNECT_ATTEMPTS = 3;
+/** Maximum number of WebSocket reconnection attempts before falling back to polling */
+export const WS_MAX_RECONNECT_ATTEMPTS = 2;
 
-/** Timeout for SSE keepalive — if no data received within this window, reconnect (milliseconds).
- * Fred sends keepalive comments every 30s, so 45s gives comfortable headroom. */
-export const SSE_KEEPALIVE_TIMEOUT_MS = 45_000;
+/** Timeout for WebSocket liveness — if no data received within this window, reconnect (milliseconds).
+ * Fred sends ping frames every 30s, so 45s gives comfortable headroom. */
+export const WS_LIVENESS_TIMEOUT_MS = 45_000;
 
 /** SKU name that supports persistent disk storage (hardcoded until Fred exposes this via API) */
 export const STORAGE_SKU_NAME = 'docker-small';

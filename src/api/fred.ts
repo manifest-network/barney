@@ -17,9 +17,9 @@ import { LeaseState, leaseStateFromString } from './billing';
 import { logError } from '../utils/errors';
 import {
   FRED_POLL_INTERVAL_MS,
-  SSE_RECONNECT_DELAY_MS,
-  SSE_MAX_RECONNECT_ATTEMPTS,
-  SSE_KEEPALIVE_TIMEOUT_MS,
+  WS_RECONNECT_DELAY_MS,
+  WS_MAX_RECONNECT_ATTEMPTS,
+  WS_LIVENESS_TIMEOUT_MS,
 } from '../config/constants';
 
 export interface FredLeaseStatus {
@@ -41,7 +41,7 @@ const TERMINAL_STATES = new Set<LeaseState>([
   LeaseState.LEASE_STATE_EXPIRED,
 ]);
 
-/** Provision states that indicate the backend is still working — keep polling. */
+/** Provision states that indicate the backend is still working — keep waiting. */
 const TRANSIENT_PROVISION_STATES = new Set(['provisioning', 'updating', 'restarting']);
 
 /**
@@ -319,139 +319,154 @@ export async function pollLeaseUntilReady(
 }
 
 // ============================================================================
-// SSE (Server-Sent Events) — real-time lease status streaming
+// WebSocket — real-time lease status streaming
 // ============================================================================
 
-/** Wire format for SSE events from Fred's /v1/leases/{uuid}/events endpoint. */
-export interface FredSSEEvent {
+/**
+ * WebSocket close codes that indicate permanent failure — reconnection is pointless.
+ * 4001/4003 = custom auth failure codes from Fred; 1008 = policy violation (RFC 6455).
+ */
+const PERMANENT_WS_CLOSE_CODES = new Set([1008, 4001, 4003]);
+
+/** Wire format for events from Fred's /v1/leases/{uuid}/events WebSocket endpoint. */
+export interface FredWSEvent {
   lease_uuid: string;
   status: string; // 'provisioning' | 'ready' | 'failed' | 'restarting' | 'updating'
   error?: string;
   timestamp: string; // RFC3339
 }
 
-/** Handle returned by subscribeLeaseEvents. */
-export interface SSESubscription {
-  events: AsyncGenerator<FredSSEEvent>;
-  close: () => void;
-}
-
 /**
- * Parse a ReadableStream of SSE frames into typed events.
- *
- * SSE protocol: events are delimited by `\n\n`. Each event has lines like:
- *   `data: {"lease_uuid":"...","status":"ready"}`
- * Lines starting with `:` are comments (keepalives) and are ignored.
+ * Build a WebSocket URL for Fred's events endpoint, routing through the
+ * dev proxy when needed. The proxy upgrades the connection via `ws: true`.
  */
-export async function* parseSSEStream(
-  body: ReadableStream<Uint8Array>,
-  abortSignal?: AbortSignal
-): AsyncGenerator<FredSSEEvent> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+function buildFredWsUrl(
+  providerApiUrl: string,
+  leaseUuid: string,
+  authToken: string
+): string {
+  const validatedUrl = validateProviderUrl(providerApiUrl);
+  const baseUrl = normalizeBaseUrl(validatedUrl);
+  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
+  const path = `/v1/leases/${encodedLeaseUuid}/events`;
 
-  try {
-    while (true) {
-      if (abortSignal?.aborted) return;
-
-      const { done, value } = await reader.read();
-      if (done) return;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      // Process complete events (delimited by double newline)
-      let boundary: number;
-      while ((boundary = buffer.indexOf('\n\n')) !== -1) {
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-
-        // Extract data lines, skip comments (: prefix) and other fields
-        const lines = frame.split('\n');
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const jsonStr = line.slice(6);
-            try {
-              const event: FredSSEEvent = JSON.parse(jsonStr);
-              yield event;
-            } catch (error) {
-              logError('fred.parseSSEStream: invalid JSON in SSE data', error);
-            }
-          }
-          // Lines starting with ':' are comments (keepalives) — skip
-          // Other field types (event:, id:, retry:) are ignored
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
+  if (import.meta.env.DEV) {
+    // Through the rsbuild dev proxy (ws: true handles WebSocket upgrade).
+    // Auth is passed as a query param since WebSocket doesn't support custom headers.
+    const wsBase = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+    return `${wsBase}/proxy-provider${path}?token=${encodeURIComponent(authToken)}&target=${encodeURIComponent(baseUrl)}`;
   }
+
+  // Production: connect directly to Fred
+  const wsProtocol = validatedUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${wsProtocol}//${validatedUrl.host}${validatedUrl.pathname.replace(/\/$/, '')}${path}?token=${encodeURIComponent(authToken)}`;
 }
 
 /**
- * Subscribe to real-time lease events via SSE.
+ * Connect to Fred's lease events WebSocket endpoint.
  *
- * Uses fetch() + ReadableStream instead of EventSource because the latter
- * does not support custom Authorization headers.
+ * Returns a promise that resolves once the connection is open, yielding
+ * a handle with an async event iterator and a close function.
  *
- * @throws {ProviderApiError} on non-200 responses (501 = SSE not enabled)
+ * @throws {ProviderApiError} if the connection fails or is rejected
  */
-export async function subscribeLeaseEvents(
+export function connectLeaseEvents(
   providerApiUrl: string,
   leaseUuid: string,
   authToken: string,
   abortSignal?: AbortSignal
-): Promise<SSESubscription> {
-  const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  const { url, headers } = buildValidatedFredRequest(
-    providerApiUrl,
-    `/v1/leases/${encodedLeaseUuid}/events`,
-    { Authorization: `Bearer ${authToken}`, Accept: 'text/event-stream' }
-  );
+): Promise<{ events: AsyncGenerator<FredWSEvent>; close: () => void }> {
+  const wsUrl = buildFredWsUrl(providerApiUrl, leaseUuid, authToken);
 
-  // Link caller's signal to an internal controller so close() also aborts
-  const controller = new AbortController();
-  if (abortSignal) {
-    if (abortSignal.aborted) {
-      controller.abort();
-    } else {
-      abortSignal.addEventListener('abort', () => controller.abort(), { once: true });
+  return new Promise((resolve, reject) => {
+    if (abortSignal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
     }
-  }
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers,
-    signal: controller.signal,
+    const ws = new WebSocket(wsUrl);
+    const eventQueue: FredWSEvent[] = [];
+    let resolveWaiter: (() => void) | null = null;
+    let opened = false;
+    let closed = false;
+    let closeError: Error | undefined;
+
+    const cleanup = () => {
+      closed = true;
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
+      // Wake up any pending iterator read
+      resolveWaiter?.();
+    };
+
+    if (abortSignal) {
+      abortSignal.addEventListener('abort', cleanup, { once: true });
+    }
+
+    ws.onopen = () => {
+      opened = true;
+      resolve({
+        events: (async function* () {
+          while (true) {
+            if (eventQueue.length > 0) {
+              yield eventQueue.shift()!;
+              continue;
+            }
+            if (closed) {
+              // Propagate permanent close errors so waitViaWS can detect them
+              if (closeError) throw closeError;
+              return;
+            }
+            // Wait for next message or close
+            await new Promise<void>((r) => { resolveWaiter = r; });
+            resolveWaiter = null;
+          }
+        })(),
+        close: cleanup,
+      });
+    };
+
+    ws.onmessage = (msg) => {
+      try {
+        const event: FredWSEvent = JSON.parse(msg.data);
+        eventQueue.push(event);
+        resolveWaiter?.();
+      } catch (error) {
+        logError('fred.connectLeaseEvents: invalid JSON in WS message', error);
+      }
+    };
+
+    ws.onerror = () => {
+      // onerror fires before onclose; stash a generic error for onclose to use
+      closeError = new Error('WebSocket connection error');
+    };
+
+    ws.onclose = (event) => {
+      closed = true;
+
+      // Stash permanent close codes so the generator can throw them
+      if (PERMANENT_WS_CLOSE_CODES.has(event.code)) {
+        closeError = new ProviderApiError(event.code, `Fred WS closed: ${event.reason || 'auth/policy failure'}`);
+      }
+
+      resolveWaiter?.();
+
+      // If we never opened, reject the connect promise
+      if (!opened) {
+        const detail = event.reason || closeError?.message || 'connection failed';
+        reject(new ProviderApiError(event.code, `Fred WS error: ${detail}`));
+      }
+    };
   });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => response.statusText);
-    throw new ProviderApiError(
-      response.status,
-      `Fred SSE error (${response.status}): ${errorText}`
-    );
-  }
-
-  if (!response.body) {
-    throw new ProviderApiError(0, 'Fred SSE response has no body');
-  }
-
-  return {
-    events: parseSSEStream(response.body, controller.signal),
-    close: () => controller.abort(),
-  };
 }
 
 /**
- * Map an SSE event to the existing FredLeaseStatus shape.
- * This lets callers see identical data regardless of SSE vs polling.
- *
- * State is always ACTIVE because Fred's SSE endpoint only emits events for
- * leases the provider is actively managing. Chain-level terminal states
- * (closed/rejected/expired) are detected separately via `checkChainState`.
+ * Map a WS event to the existing FredLeaseStatus shape.
+ * State is always ACTIVE because Fred only emits events for active leases.
+ * Chain-level terminal states are detected separately via `checkChainState`.
  */
-function mapSSEEventToStatus(event: FredSSEEvent): FredLeaseStatus {
+function mapWSEventToStatus(event: FredWSEvent): FredLeaseStatus {
   return {
     state: LeaseState.LEASE_STATE_ACTIVE,
     provision_status: event.status,
@@ -461,18 +476,17 @@ function mapSSEEventToStatus(event: FredSSEEvent): FredLeaseStatus {
 }
 
 export interface WaitForLeaseReadyOptions extends PollOptions {
-  /** Skip SSE and go straight to polling. */
-  disableSSE?: boolean;
+  /** Skip WebSocket and go straight to polling. */
+  disableWS?: boolean;
 }
 
 /**
- * Wait for a lease to reach a terminal state using SSE with polling fallback.
+ * Wait for a lease to reach a terminal state using WebSocket with polling fallback.
  *
- * Tries SSE first via Fred's `/v1/leases/{uuid}/events` endpoint.
+ * Tries WebSocket first via Fred's `/v1/leases/{uuid}/events` endpoint.
  * Falls back to polling if:
- *   - Fred returns 501 (broker not enabled)
- *   - SSE connection fails for other reasons
- *   - Caller sets `disableSSE: true`
+ *   - WebSocket connection fails (e.g., 501 broker not enabled)
+ *   - Caller sets `disableWS: true`
  *
  * On abort (signal), propagates immediately with no fallback.
  */
@@ -482,13 +496,12 @@ export async function waitForLeaseReady(
   authToken: string,
   opts: WaitForLeaseReadyOptions = {}
 ): Promise<FredLeaseStatus> {
-  // Skip SSE if explicitly disabled
-  if (opts.disableSSE) {
+  if (opts.disableWS) {
     return pollLeaseUntilReady(providerApiUrl, leaseUuid, authToken, opts);
   }
 
   try {
-    return await waitViaSSE(providerApiUrl, leaseUuid, authToken, opts);
+    return await waitViaWS(providerApiUrl, leaseUuid, authToken, opts);
   } catch (error) {
     // Abort — propagate immediately, no fallback
     if (error instanceof DOMException && error.name === 'AbortError') {
@@ -498,25 +511,21 @@ export async function waitForLeaseReady(
       return { state: LeaseState.LEASE_STATE_PENDING, phase: 'aborted' };
     }
 
-    // 501 = SSE not enabled (broker nil) — expected fallback
-    if (error instanceof ProviderApiError && error.status === 501) {
-      logError('fred.waitForLeaseReady: SSE not available (501), falling back to polling', error);
-    } else {
-      logError('fred.waitForLeaseReady: SSE failed, falling back to polling', error);
-    }
+    // WS unavailable — fall back to polling.
+    logError('fred.waitForLeaseReady: WS failed, falling back to polling', error);
 
     return pollLeaseUntilReady(providerApiUrl, leaseUuid, authToken, opts);
   }
 }
 
 /**
- * Internal: wait for lease readiness via SSE with reconnection support.
+ * Internal: wait for lease readiness via WebSocket with reconnection support.
  *
- * Reconnects up to SSE_MAX_RECONNECT_ATTEMPTS times on connection drops.
+ * Reconnects up to WS_MAX_RECONNECT_ATTEMPTS times on connection drops.
  * Mints a fresh auth token before each connection (tokens have 30s TTL).
  * Respects the overall timeout derived from maxAttempts * intervalMs.
  */
-async function waitViaSSE(
+async function waitViaWS(
   providerApiUrl: string,
   leaseUuid: string,
   _authToken: string,
@@ -531,8 +540,9 @@ async function waitViaSSE(
     state: LeaseState.LEASE_STATE_PENDING,
     phase: 'connecting',
   };
+  let everConnected = false;
 
-  for (let attempt = 0; attempt < SSE_MAX_RECONNECT_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < WS_MAX_RECONNECT_ATTEMPTS; attempt++) {
     if (opts.abortSignal?.aborted) return lastStatus;
     if (Date.now() >= deadline) break;
 
@@ -555,104 +565,110 @@ async function waitViaSSE(
           return lastStatus;
         }
       } catch (error) {
-        logError('fred.waitViaSSE.checkChainState', error);
+        logError('fred.waitViaWS.checkChainState', error);
       }
     }
 
     // Mint fresh token for this connection
     const token = opts.getAuthToken ? await opts.getAuthToken() : _authToken;
 
-    let subscription: SSESubscription | undefined;
+    let conn: { events: AsyncGenerator<FredWSEvent>; close: () => void } | undefined;
     try {
-      subscription = await subscribeLeaseEvents(
+      conn = await connectLeaseEvents(
         providerApiUrl,
         leaseUuid,
         token,
         opts.abortSignal
       );
+      everConnected = true;
 
-      // Keepalive timeout: triggers reconnection if no *data events* arrive
-      // within the window. Note: SSE keepalive comments (`: keepalive\n\n`)
-      // are consumed by parseSSEStream but don't yield events, so this timer
-      // tracks data liveness, not connection liveness. If provisioning goes
-      // quiet for >45s with only keepalives, we'll reconnect and eventually
-      // fall back to polling — acceptable since polling handles long provisions.
-      let keepaliveTimer: ReturnType<typeof setTimeout> | undefined;
-      const resetKeepalive = () => {
-        if (keepaliveTimer) clearTimeout(keepaliveTimer);
-        keepaliveTimer = setTimeout(() => {
-          subscription?.close();
-        }, SSE_KEEPALIVE_TIMEOUT_MS);
+      // Liveness timeout: triggers reconnection if no data events arrive
+      // within the window. Fred sends WebSocket ping frames every 30s which
+      // keep the connection alive at the protocol level, but this timer
+      // tracks application-level data liveness.
+      let livenessTimer: ReturnType<typeof setTimeout> | undefined;
+      const resetLiveness = () => {
+        if (livenessTimer) clearTimeout(livenessTimer);
+        livenessTimer = setTimeout(() => {
+          conn?.close();
+        }, WS_LIVENESS_TIMEOUT_MS);
       };
 
-      resetKeepalive();
+      resetLiveness();
 
       try {
-        for await (const event of subscription.events) {
+        for await (const event of conn.events) {
           if (opts.abortSignal?.aborted) {
-            if (keepaliveTimer) clearTimeout(keepaliveTimer);
-            subscription.close();
+            if (livenessTimer) clearTimeout(livenessTimer);
+            conn.close();
             return lastStatus;
           }
           if (Date.now() >= deadline) {
-            if (keepaliveTimer) clearTimeout(keepaliveTimer);
+            if (livenessTimer) clearTimeout(livenessTimer);
             break;
           }
 
-          resetKeepalive();
+          resetLiveness();
 
-          const status = mapSSEEventToStatus(event);
+          const status = mapWSEventToStatus(event);
           lastStatus = status;
           opts.onProgress?.(status);
 
-          // Terminal chain states (defence-in-depth — SSE events currently
-          // only fire for active leases, so this won't match today, but
-          // guards against future Fred changes)
+          // Terminal chain states (defence-in-depth)
           if (TERMINAL_STATES.has(status.state)) {
-            if (keepaliveTimer) clearTimeout(keepaliveTimer);
-            subscription.close();
+            if (livenessTimer) clearTimeout(livenessTimer);
+            conn.close();
             return status;
           }
 
           // Active + non-transient provision = done (ready, failed, etc.)
-          // Caller inspects provision_status to distinguish success/failure.
           if (
             status.state === LeaseState.LEASE_STATE_ACTIVE &&
             !TRANSIENT_PROVISION_STATES.has(status.provision_status ?? '')
           ) {
-            if (keepaliveTimer) clearTimeout(keepaliveTimer);
-            subscription.close();
+            if (livenessTimer) clearTimeout(livenessTimer);
+            conn.close();
             return status;
           }
         }
 
-        // Stream ended normally — close and break out of reconnect loop
-        if (keepaliveTimer) clearTimeout(keepaliveTimer);
-        subscription.close();
+        // Stream ended normally
+        if (livenessTimer) clearTimeout(livenessTimer);
+        conn.close();
       } catch (error) {
-        if (keepaliveTimer) clearTimeout(keepaliveTimer);
-        subscription.close();
+        if (livenessTimer) clearTimeout(livenessTimer);
+        conn.close();
 
-        // Abort — rethrow to let caller propagate
         if (error instanceof DOMException && error.name === 'AbortError') throw error;
         if (opts.abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-        logError(`fred.waitViaSSE: connection dropped (attempt ${attempt + 1})`, error);
+        // Permanent close codes (auth failure, policy violation) — don't retry
+        if (error instanceof ProviderApiError && PERMANENT_WS_CLOSE_CODES.has(error.status)) throw error;
+
+        logError(`fred.waitViaWS: connection dropped (attempt ${attempt + 1})`, error);
       }
     } catch (error) {
-      // subscribeLeaseEvents threw — could be 501, network error, etc.
-      subscription?.close();
-      throw error;
+      conn?.close();
+
+      if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      if (opts.abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+      // Permanent close codes — don't retry
+      if (error instanceof ProviderApiError && PERMANENT_WS_CLOSE_CODES.has(error.status)) throw error;
+
+      // Never connected — WS is unavailable. Fall back to polling immediately.
+      if (!everConnected) throw error;
+
+      logError(`fred.waitViaWS: reconnect failed (attempt ${attempt + 1})`, error);
     }
 
     // Wait before reconnecting
-    if (attempt < SSE_MAX_RECONNECT_ATTEMPTS - 1 && Date.now() < deadline) {
-      await new Promise<void>((resolve) => setTimeout(resolve, SSE_RECONNECT_DELAY_MS));
+    if (attempt < WS_MAX_RECONNECT_ATTEMPTS - 1 && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, WS_RECONNECT_DELAY_MS));
     }
   }
 
-  // Exhausted reconnect attempts — throw so waitForLeaseReady falls back to polling
-  throw new Error('SSE reconnect attempts exhausted');
+  throw new Error('WebSocket reconnect attempts exhausted');
 }
 
 /**

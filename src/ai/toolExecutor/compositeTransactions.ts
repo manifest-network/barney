@@ -1917,25 +1917,40 @@ export async function executeConfirmedUpdateApp(
     });
 
     if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
-      // Rollback detection: provision is ready but error is set — the update
-      // failed and the old deployment was automatically restored.
-      if (fredStatus.error) {
-        // Revert the manifest in the registry to the previous version
-        // and restore 'running' status — the old container is still active.
-        appRegistry.updateApp(address, leaseUuid, {
-          status: 'running',
-          ...(previousManifest ? { manifest: previousManifest } : {}),
-        });
-        onProgress?.({
-          phase: 'failed',
-          detail: 'Update failed, previous version restored.',
-          operation: 'update',
-        });
-        return {
-          success: false,
-          error: 'Update failed, previous version restored.',
-          data: { containerLogs: fredStatus.error },
-        };
+      // Rollback detection: check /provision for last_error.
+      // Fred settles the rollback before emitting the terminal WS event or
+      // transitioning provision out of a transient state, so by the time we
+      // reach here the provision endpoint is authoritative:
+      //   - Rollback OK:     provision.status="ready",  provision.last_error="<why>"
+      //   - Rollback failed: provision.status="failed",  provision.last_error="<why>"
+      //   - Update OK:       provision.status="ready",  provision.last_error=""
+      try {
+        const provisionToken = await getAuthToken();
+        const provision = await getLeaseProvision(providerUrl, leaseUuid, provisionToken);
+        if (provision.last_error) {
+          const rollbackOk = provision.status === 'ready';
+          appRegistry.updateApp(address, leaseUuid, {
+            status: rollbackOk ? 'running' : 'failed',
+            ...(previousManifest ? { manifest: previousManifest } : {}),
+          });
+          onProgress?.({
+            phase: 'failed',
+            detail: rollbackOk
+              ? 'Update failed, previous version restored.'
+              : 'Update failed and rollback failed.',
+            operation: 'update',
+          });
+          return {
+            success: false,
+            error: rollbackOk
+              ? 'Update failed, previous version restored.'
+              : `Update failed and rollback failed. Use app_status("${name}") to check.`,
+            data: { containerLogs: provision.last_error },
+          };
+        }
+      } catch (error) {
+        // Provision check is best-effort — if it fails, proceed with the success path.
+        logError('compositeTransactions.executeConfirmedUpdateApp.provisionCheck', error);
       }
 
       const { url: connectionUrl, connection } = await resolveAppUrl(

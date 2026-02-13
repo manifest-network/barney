@@ -275,13 +275,22 @@ describe('appRegistry', () => {
       expect(getApp(ADDR_A, app.name)?.status).toBe('stopped');
     });
 
-    it('does not change failed apps', () => {
+    it('keeps failed apps as failed when lease is not active', () => {
       const app = makeApp({ status: 'failed' });
       addApp(ADDR_A, app);
 
       reconcileWithChain(ADDR_A, new Set());
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('failed');
+    });
+
+    it('restores failed apps to running when lease is still active', () => {
+      const app = makeApp({ status: 'failed' });
+      addApp(ADDR_A, app);
+
+      reconcileWithChain(ADDR_A, new Set([app.leaseUuid]));
+
+      expect(getApp(ADDR_A, app.name)?.status).toBe('running');
     });
   });
 

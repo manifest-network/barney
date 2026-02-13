@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getLeaseStatus, pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, getLeaseInfo, restartLease, updateLease, getLeaseReleases, parseSSEStream, subscribeLeaseEvents, waitForLeaseReady } from './fred';
+import { getLeaseStatus, pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, getLeaseInfo, restartLease, updateLease, getLeaseReleases, connectLeaseEvents, waitForLeaseReady } from './fred';
 import { LeaseState } from './billing';
 import { ProviderApiError } from './provider-api';
 
@@ -828,199 +828,103 @@ describe('getLeaseReleases', () => {
 });
 
 // ============================================================================
-// SSE tests
+// WebSocket tests
 // ============================================================================
 
-/** Helper: create a ReadableStream from an array of string chunks. */
-function createSSEStream(chunks: string[]): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-  let index = 0;
-  return new ReadableStream({
-    pull(controller) {
-      if (index < chunks.length) {
-        controller.enqueue(encoder.encode(chunks[index]));
-        index++;
-      } else {
-        controller.close();
-      }
-    },
-  });
+/** Helper: create a mock WebSocket that emits events from an array. */
+function createMockWebSocket(events: unknown[], shouldFail = false) {
+  return class MockWebSocket {
+    static OPEN = 1;
+    static CONNECTING = 0;
+    readyState = 1;
+    onopen: ((ev: unknown) => void) | null = null;
+    onmessage: ((ev: { data: string }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    onclose: ((ev: { code: number; reason: string }) => void) | null = null;
+
+    constructor() {
+      // Simulate async open/error
+      setTimeout(() => {
+        if (shouldFail) {
+          this.readyState = 0;
+          this.onerror?.();
+          this.onclose?.({ code: 1006, reason: 'connection failed' });
+          return;
+        }
+        this.onopen?.({});
+        // Send events
+        for (const event of events) {
+          this.onmessage?.({ data: JSON.stringify(event) });
+        }
+        // Close after sending events
+        this.readyState = 3;
+        this.onclose?.({ code: 1000, reason: '' });
+      }, 0);
+    }
+
+    close() {
+      this.readyState = 3;
+    }
+  };
 }
 
-describe('parseSSEStream', () => {
-  it('yields a single data event', async () => {
-    const event = { lease_uuid: LEASE_UUID, status: 'ready', timestamp: '2024-01-01T00:00:00Z' };
-    const stream = createSSEStream([`data: ${JSON.stringify(event)}\n\n`]);
-
-    const events: unknown[] = [];
-    for await (const e of parseSSEStream(stream)) {
-      events.push(e);
-    }
-
-    expect(events).toHaveLength(1);
-    expect(events[0]).toEqual(event);
-  });
-
-  it('ignores keepalive comments', async () => {
-    const stream = createSSEStream([': keepalive\n\n']);
-
-    const events: unknown[] = [];
-    for await (const e of parseSSEStream(stream)) {
-      events.push(e);
-    }
-
-    expect(events).toHaveLength(0);
-  });
-
-  it('handles chunked delivery (data split across reads)', async () => {
-    const event = { lease_uuid: LEASE_UUID, status: 'provisioning', timestamp: '2024-01-01T00:00:00Z' };
-    const full = `data: ${JSON.stringify(event)}\n\n`;
-    // Split in the middle of the JSON
-    const mid = Math.floor(full.length / 2);
-    const stream = createSSEStream([full.slice(0, mid), full.slice(mid)]);
-
-    const events: unknown[] = [];
-    for await (const e of parseSSEStream(stream)) {
-      events.push(e);
-    }
-
-    expect(events).toHaveLength(1);
-    expect(events[0]).toEqual(event);
-  });
-
-  it('yields multiple events from one chunk', async () => {
-    const event1 = { lease_uuid: LEASE_UUID, status: 'provisioning', timestamp: '2024-01-01T00:00:00Z' };
-    const event2 = { lease_uuid: LEASE_UUID, status: 'ready', timestamp: '2024-01-01T00:00:01Z' };
-    const stream = createSSEStream([
-      `data: ${JSON.stringify(event1)}\n\ndata: ${JSON.stringify(event2)}\n\n`,
-    ]);
-
-    const events: unknown[] = [];
-    for await (const e of parseSSEStream(stream)) {
-      events.push(e);
-    }
-
-    expect(events).toHaveLength(2);
-    expect(events[0]).toEqual(event1);
-    expect(events[1]).toEqual(event2);
-  });
-
-  it('skips invalid JSON but yields valid events', async () => {
-    const validEvent = { lease_uuid: LEASE_UUID, status: 'ready', timestamp: '2024-01-01T00:00:00Z' };
-    const stream = createSSEStream([
-      `data: {invalid json}\n\ndata: ${JSON.stringify(validEvent)}\n\n`,
-    ]);
-
-    const events: unknown[] = [];
-    for await (const e of parseSSEStream(stream)) {
-      events.push(e);
-    }
-
-    expect(events).toHaveLength(1);
-    expect(events[0]).toEqual(validEvent);
-  });
-});
-
-describe('subscribeLeaseEvents', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
+describe('connectLeaseEvents', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('throws ProviderApiError on 501 response', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 501,
-        statusText: 'Not Implemented',
-        text: () => Promise.resolve('SSE broker not enabled'),
-      })
-    );
+  it('rejects when WebSocket connection fails', async () => {
+    vi.stubGlobal('WebSocket', createMockWebSocket([], true));
 
-    await expect(subscribeLeaseEvents(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
+    await expect(connectLeaseEvents(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
       ProviderApiError
     );
-
-    try {
-      await subscribeLeaseEvents(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    } catch (error) {
-      expect((error as ProviderApiError).status).toBe(501);
-    }
   });
 
-  it('returns SSESubscription on 200 response', async () => {
+  it('yields events from WebSocket messages', async () => {
     const event = { lease_uuid: LEASE_UUID, status: 'ready', timestamp: '2024-01-01T00:00:00Z' };
-    const stream = createSSEStream([`data: ${JSON.stringify(event)}\n\n`]);
+    vi.stubGlobal('WebSocket', createMockWebSocket([event]));
 
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        body: stream,
-      })
-    );
+    const conn = await connectLeaseEvents(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(conn).toHaveProperty('events');
+    expect(conn).toHaveProperty('close');
 
-    const subscription = await subscribeLeaseEvents(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(subscription).toHaveProperty('events');
-    expect(subscription).toHaveProperty('close');
-    expect(typeof subscription.close).toBe('function');
-
-    // Consume the events
     const events: unknown[] = [];
-    for await (const e of subscription.events) {
+    for await (const e of conn.events) {
       events.push(e);
     }
     expect(events).toHaveLength(1);
+    expect(events[0]).toEqual(event);
   });
 
-  it('sends correct Authorization and Accept headers', async () => {
-    const stream = createSSEStream([]);
+  it('yields multiple events', async () => {
+    const event1 = { lease_uuid: LEASE_UUID, status: 'provisioning', timestamp: '2024-01-01T00:00:00Z' };
+    const event2 = { lease_uuid: LEASE_UUID, status: 'ready', timestamp: '2024-01-01T00:00:01Z' };
+    vi.stubGlobal('WebSocket', createMockWebSocket([event1, event2]));
 
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        body: stream,
-      })
-    );
-
-    await subscribeLeaseEvents(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
-    expect(fetchCall[1]?.headers).toHaveProperty('Accept', 'text/event-stream');
+    const conn = await connectLeaseEvents(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    const events: unknown[] = [];
+    for await (const e of conn.events) {
+      events.push(e);
+    }
+    expect(events).toHaveLength(2);
+    expect(events[0]).toEqual(event1);
+    expect(events[1]).toEqual(event2);
   });
 });
 
 describe('waitForLeaseReady', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.useFakeTimers();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    vi.useRealTimers();
   });
 
-  it('returns immediately when SSE delivers a ready event', async () => {
+  it('returns immediately when WS delivers a ready event', async () => {
     const readyEvent = { lease_uuid: LEASE_UUID, status: 'ready', timestamp: '2024-01-01T00:00:00Z' };
-    const stream = createSSEStream([`data: ${JSON.stringify(readyEvent)}\n\n`]);
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        body: stream,
-      })
-    );
+    vi.stubGlobal('WebSocket', createMockWebSocket([readyEvent]));
 
     const result = await waitForLeaseReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
       intervalMs: 100,
@@ -1031,53 +935,34 @@ describe('waitForLeaseReady', () => {
     expect(result.provision_status).toBe('ready');
   });
 
-  it('falls back to polling when SSE returns 501', async () => {
-    const mockFn = vi.fn();
+  it('falls back to polling when WS connection fails', async () => {
+    vi.stubGlobal('WebSocket', createMockWebSocket([], true));
 
-    // First call: SSE endpoint returns 501
-    mockFn.mockResolvedValueOnce({
-      ok: false,
-      status: 501,
-      statusText: 'Not Implemented',
-      text: () => Promise.resolve('SSE broker not enabled'),
-    });
-
-    // Second call: polling returns active
-    const active = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'ready' });
-    mockFn.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      json: () => Promise.resolve(active),
-      text: () => Promise.resolve(JSON.stringify(active)),
-    });
-
-    vi.stubGlobal('fetch', mockFn);
-
-    const result = await waitForLeaseReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
-      intervalMs: 100,
-      maxAttempts: 5,
-    });
-
-    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
-    expect(result.provision_status).toBe('ready');
-    // Should have made 2 fetch calls: 1 SSE attempt + 1 polling
-    expect(mockFn).toHaveBeenCalledTimes(2);
-  });
-
-  it('skips SSE when disableSSE is true', async () => {
     const active = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'ready' });
     mockFetchSequence([{ data: active }]);
 
     const result = await waitForLeaseReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
       intervalMs: 100,
       maxAttempts: 5,
-      disableSSE: true,
     });
 
     expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
     expect(result.provision_status).toBe('ready');
-    // Only 1 fetch call (polling), no SSE attempt
+  });
+
+  it('skips WS when disableWS is true', async () => {
+    const active = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'ready' });
+    mockFetchSequence([{ data: active }]);
+
+    const result = await waitForLeaseReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
+      intervalMs: 100,
+      maxAttempts: 5,
+      disableWS: true,
+    });
+
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
+    expect(result.provision_status).toBe('ready');
+    // Only 1 fetch call (polling), no WS attempt
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

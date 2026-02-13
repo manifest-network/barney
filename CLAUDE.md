@@ -121,9 +121,8 @@ Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored 
 
 - `getLeaseStatus()` — Single fetch
 - `pollLeaseUntilReady()` — Polling loop with configurable interval, max attempts, abort signal
-- `waitForLeaseReady()` — SSE-based wait with polling fallback for deploy readiness
-- `subscribeLeaseEvents()` — SSE event stream subscription for real-time lease updates
-- `parseSSEStream()` — Async generator that parses SSE response streams
+- `waitForLeaseReady()` — WebSocket-based wait with polling fallback for deploy readiness
+- `connectLeaseEvents()` — WebSocket connection to Fred's `/v1/leases/{uuid}/events` endpoint for real-time lease updates
 - `getLeaseLogs()` — Fetch container logs for a running lease
 - `getLeaseProvision()` — Fetch provision status
 - `getLeaseInfo()` — Fetch connection details (ports, URLs)
@@ -150,7 +149,7 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 | `bank.ts` | Cosmos SDK bank queries |
 | `tx.ts` | Transaction signing client and message builders for all Manifest modules (billing, SKU, provider management) |
 | `provider-api.ts` | Payload upload with ADR-036 auth |
-| `fred.ts` | Fred deployment status polling |
+| `fred.ts` | Fred deployment status polling + WebSocket streaming |
 | `ollama.ts` | LLM streaming with retry/backoff |
 | `config.ts` | API endpoints, denom metadata, price formatting |
 | `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
@@ -211,6 +210,9 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `AI_TOOL_CACHE_TTL_MS` | 10s | Query result cache lifetime |
 | `AI_TOOL_CACHE_MAX_SIZE` | 50 | Max cached query results |
 | `MAX_PAYLOAD_SIZE` | 5KB | Maximum file upload size (in `hash.ts`) |
+| `WS_RECONNECT_DELAY_MS` | 1s | Delay before WebSocket reconnect attempt |
+| `WS_MAX_RECONNECT_ATTEMPTS` | 2 | Max reconnects before falling back to polling |
+| `WS_LIVENESS_TIMEOUT_MS` | 45s | WebSocket data liveness timeout (Fred pings every 30s) |
 
 ## Styling
 

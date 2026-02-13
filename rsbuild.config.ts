@@ -1,9 +1,7 @@
-import type http from 'node:http';
 import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginNodePolyfill } from '@rsbuild/plugin-node-polyfill';
 import * as ipaddr from 'ipaddr.js';
-
 /**
  * Validate that a proxy target is a safe HTTP(S) URL.
  * Blocks non-HTTP protocols, credentials in URLs, cloud metadata endpoints,
@@ -84,6 +82,7 @@ export default defineConfig({
         target: 'https://localhost:8080', // Default, overridden by router
         changeOrigin: true,
         secure: false,
+        ws: true,
         pathRewrite: { '^/proxy-provider': '' },
         router: (req) => {
           // Dynamic target from X-Proxy-Target header (set by buildProviderFetchArgs)
@@ -91,18 +90,14 @@ export default defineConfig({
           if (target && typeof target === 'string' && isValidProxyTarget(target)) {
             return target;
           }
-          return 'https://localhost:8080';
-        },
-        // SSE: disable buffering/compression so event-stream chunks flush immediately
-        onProxyRes: (proxyRes: http.IncomingMessage, req: http.IncomingMessage, res: http.ServerResponse) => {
-          if (req.headers.accept === 'text/event-stream') {
-            res.setHeader('X-Accel-Buffering', 'no');
-            res.setHeader('Cache-Control', 'no-cache, no-transform');
-            res.setHeader('Connection', 'keep-alive');
-            // Prevent dev server from applying gzip to the proxied SSE stream
-            delete proxyRes.headers['content-encoding'];
-            proxyRes.headers['cache-control'] = 'no-cache, no-transform';
+          // Fallback: check `target` query param for WebSocket connections
+          // (browser WebSocket API cannot set custom headers)
+          const url = new URL(req.url || '', 'http://localhost');
+          const qTarget = url.searchParams.get('target');
+          if (qTarget && isValidProxyTarget(qTarget)) {
+            return qTarget;
           }
+          return 'https://localhost:8080';
         },
       },
     },

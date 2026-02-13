@@ -266,6 +266,15 @@ export function reconcileWithChain(
     ) {
       app.status = 'stopped';
       changed = true;
+    } else if (
+      app.status === 'failed' &&
+      activeLeaseUuids.has(app.leaseUuid)
+    ) {
+      // Lease is still active on-chain — restore to running.
+      // Covers false failures from transient issues (e.g. SSE/polling
+      // errors during restart/update).
+      app.status = 'running';
+      changed = true;
     }
   }
 
