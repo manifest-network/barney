@@ -11,6 +11,7 @@ export interface ExampleApp {
   envFactory?: () => Record<string, string>;
   size?: string;
   group: 'games' | 'apps';
+  category?: string;
 }
 
 const GAME_MANIFEST = (game: string) => ({
@@ -20,6 +21,22 @@ const GAME_MANIFEST = (game: string) => ({
   read_only: true,
   tmpfs: ['/var/cache/nginx', '/var/run'],
 });
+
+const SERVICE_MANIFEST = (
+  image: string,
+  ports: string[],
+  opts?: { env?: Record<string, string>; user?: string; tmpfs?: string[] },
+) => {
+  const portMap: Record<string, Record<string, never>> = {};
+  for (const p of ports) portMap[`${p}/tcp`] = {};
+  return {
+    image,
+    ports: portMap,
+    ...(opts?.env ? { env: opts.env } : {}),
+    ...(opts?.user ? { user: opts.user } : {}),
+    ...(opts?.tmpfs ? { tmpfs: opts.tmpfs } : {}),
+  };
+};
 
 export const EXAMPLE_APPS: ExampleApp[] = [
   { label: 'Tetris', manifest: GAME_MANIFEST('tetris'), group: 'games' },
@@ -43,8 +60,37 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   { label: 'Oregon Trail', manifest: GAME_MANIFEST('oregontrail'), group: 'games' },
   { label: 'Doom', manifest: GAME_MANIFEST('doom'), group: 'games' },
   { label: 'ClassiCube', manifest: GAME_MANIFEST('classicube'), group: 'games' },
-  { label: 'Redis 8.4', manifest: { image: 'redis:8.4', ports: { '6379/tcp': {} } }, size: 'small', group: 'apps' },
-  { label: 'Postgres 18', manifest: { image: 'postgres:18', ports: { '5432/tcp': {} }, user: '999:999', tmpfs: ['/var/run/postgresql'] }, envFactory: () => ({ POSTGRES_PASSWORD: generatePassword() }), size: 'small', group: 'apps' },
+  // --- Databases ---
+  { label: 'Postgres 18', manifest: SERVICE_MANIFEST('postgres:18', ['5432'], { user: '999:999', tmpfs: ['/var/run/postgresql'] }), envFactory: () => ({ POSTGRES_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
+  { label: 'MySQL 9', manifest: SERVICE_MANIFEST('mysql:9', ['3306'], { tmpfs: ['/var/run/mysqld'] }), envFactory: () => ({ MYSQL_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
+  { label: 'MariaDB 12', manifest: SERVICE_MANIFEST('mariadb:12', ['3306'], { tmpfs: ['/run/mysqld'] }), envFactory: () => ({ MARIADB_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
+  { label: 'MongoDB 8', manifest: SERVICE_MANIFEST('mongo:8', ['27017']), envFactory: () => ({ MONGO_INITDB_ROOT_USERNAME: 'admin', MONGO_INITDB_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
+  { label: 'Neo4j 5', manifest: SERVICE_MANIFEST('neo4j:5', ['7474', '7687']), envFactory: () => ({ NEO4J_AUTH: `neo4j/${generatePassword()}` }), size: 'small', group: 'apps', category: 'Databases' },
+  { label: 'Redis 8.4', manifest: SERVICE_MANIFEST('redis:8.4', ['6379']), size: 'micro', group: 'apps', category: 'Databases' },
+  { label: 'Memcached 1.6', manifest: SERVICE_MANIFEST('memcached:1.6', ['11211']), size: 'micro', group: 'apps', category: 'Databases' },
+  { label: 'ClickHouse 25', manifest: SERVICE_MANIFEST('clickhouse/clickhouse-server:25.12', ['8123', '9000']), size: 'small', group: 'apps', category: 'Databases' },
+  { label: 'InfluxDB 2', manifest: SERVICE_MANIFEST('influxdb:2', ['8086']), size: 'small', group: 'apps', category: 'Databases' },
+
+  // --- Messaging ---
+  { label: 'RabbitMQ 4', manifest: SERVICE_MANIFEST('rabbitmq:4-management', ['5672', '15672']), envFactory: () => ({ RABBITMQ_DEFAULT_USER: 'guest', RABBITMQ_DEFAULT_PASS: generatePassword() }), size: 'small', group: 'apps', category: 'Messaging' },
+  { label: 'NATS 2', manifest: SERVICE_MANIFEST('nats:2', ['4222', '8222']), size: 'micro', group: 'apps', category: 'Messaging' },
+
+  // --- Web Servers ---
+  { label: 'Nginx 1', manifest: SERVICE_MANIFEST('nginx:1', ['80']), size: 'micro', group: 'apps', category: 'Web Servers' },
+  { label: 'Apache 2.4', manifest: SERVICE_MANIFEST('httpd:2.4', ['80']), size: 'micro', group: 'apps', category: 'Web Servers' },
+  { label: 'Caddy 2', manifest: SERVICE_MANIFEST('caddy:2', ['80', '443']), size: 'micro', group: 'apps', category: 'Web Servers' },
+
+  // --- Search & Storage ---
+  { label: 'Elasticsearch 8', manifest: SERVICE_MANIFEST('elasticsearch:8', ['9200', '9300'], { env: { 'discovery.type': 'single-node' } }), size: 'small', group: 'apps', category: 'Search & Storage' },
+  { label: 'MinIO', manifest: SERVICE_MANIFEST('minio/minio', ['9000', '9001']), envFactory: () => ({ MINIO_ROOT_USER: 'minioadmin', MINIO_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Search & Storage' },
+
+  // --- Monitoring ---
+  { label: 'Grafana 11', manifest: SERVICE_MANIFEST('grafana/grafana:11', ['3000']), size: 'micro', group: 'apps', category: 'Monitoring' },
+  { label: 'Prometheus 3', manifest: SERVICE_MANIFEST('prom/prometheus:v3', ['9090']), size: 'micro', group: 'apps', category: 'Monitoring' },
+
+  // --- Tools ---
+  { label: 'Adminer 5', manifest: SERVICE_MANIFEST('adminer:5', ['8080']), size: 'micro', group: 'apps', category: 'Tools' },
+  { label: 'Registry 2', manifest: SERVICE_MANIFEST('registry:2', ['5000']), size: 'micro', group: 'apps', category: 'Tools' },
 ];
 
 /**

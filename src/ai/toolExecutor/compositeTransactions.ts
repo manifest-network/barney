@@ -638,7 +638,7 @@ export async function executeConfirmedDeployApp(
       },
     });
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
       const { url: connectionUrl, connection } = await resolveAppUrl(
         providerUrl, leaseUuid, fredStatus, address, signArbitrary,
         'compositeTransactions.executeConfirmedDeployApp'
@@ -663,7 +663,12 @@ export async function executeConfirmedDeployApp(
       };
     }
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
+    if (
+      fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
+      fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
+      fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
+      fredStatus.provision_status === 'failed'
+    ) {
       appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
       onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' });
 
@@ -847,7 +852,7 @@ export async function deploySingleApp(
       },
     });
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
       const { url: connectionUrl, connection } = await resolveAppUrl(
         providerUrl, leaseUuid, fredStatus, address, signArbitrary,
         'deploySingleApp'
@@ -862,7 +867,12 @@ export async function deploySingleApp(
       };
     }
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
+    if (
+      fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
+      fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
+      fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
+      fredStatus.provision_status === 'failed'
+    ) {
       appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
       onProgress({ phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' });
 
@@ -1213,7 +1223,7 @@ export async function executeConfirmedBatchDeploy(
             },
           });
 
-          if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+          if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
             const { url: connectionUrl, connection } = await resolveAppUrl(
               providerUrl, leaseUuid, fredStatus, address, signArbitrary,
               'executeConfirmedBatchDeploy'
@@ -1225,7 +1235,12 @@ export async function executeConfirmedBatchDeploy(
             return { name, success: true as const, url: connectionUrl };
           }
 
-          if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
+          if (
+            fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
+            fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
+            fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
+            fredStatus.provision_status === 'failed'
+          ) {
             appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
             batchProgress[idx] = { name, phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' };
             emitProgress();
@@ -1674,7 +1689,7 @@ export async function executeConfirmedRestartApp(
       getAuthToken,
     });
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
       const { url: connectionUrl, connection } = await resolveAppUrl(
         providerUrl, leaseUuid, fredStatus, address, signArbitrary,
         'compositeTransactions.executeConfirmedRestartApp'
@@ -1698,7 +1713,7 @@ export async function executeConfirmedRestartApp(
       };
     }
 
-    // Non-active terminal state
+    // Non-active terminal state or failed provision
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Restart failed', operation: 'restart' });
     return { success: false, error: `Restart failed: ${fredStatus.last_error || 'App did not come back up'}` };
@@ -1916,7 +1931,7 @@ export async function executeConfirmedUpdateApp(
       getAuthToken,
     });
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
       // Rollback detection: check /provision for last_error.
       // Fred settles the rollback before emitting the terminal WS event or
       // transitioning provision out of a transient state, so by the time we
@@ -1979,7 +1994,7 @@ export async function executeConfirmedUpdateApp(
       };
     }
 
-    // Non-active terminal state
+    // Non-active terminal state or failed provision
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Update failed', operation: 'update' });
     return { success: false, error: `Update failed: ${fredStatus.last_error || 'App did not come back up'}` };

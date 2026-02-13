@@ -191,6 +191,7 @@ export function useConfirmationFlow(deps: UseConfirmationFlowDeps) {
     setPendingConfirmation(null);
     pendingPayloadRef.current = null;
     setPendingPayload(null);
+    setDeployProgress(null);
 
     setMessages((prev) => {
       const updated = prev.map((m) =>
@@ -201,7 +202,7 @@ export function useConfirmationFlow(deps: UseConfirmationFlowDeps) {
       messagesRef.current = updated;
       return updated;
     });
-  }, [pendingConfirmation, setMessages, messagesRef, pendingPayloadRef, setPendingPayload]);
+  }, [pendingConfirmation, setMessages, messagesRef, pendingPayloadRef, setPendingPayload, setDeployProgress]);
 
   // Auto-cancel pending confirmations after timeout
   useEffect(() => {
@@ -212,6 +213,7 @@ export function useConfirmationFlow(deps: UseConfirmationFlowDeps) {
       setPendingConfirmation(null);
       pendingPayloadRef.current = null;
       setPendingPayload(null);
+      setDeployProgress(null);
 
       setMessages((prev) => {
         const updated = prev.map((m) =>
@@ -227,7 +229,7 @@ export function useConfirmationFlow(deps: UseConfirmationFlowDeps) {
     }, AI_CONFIRMATION_TIMEOUT_MS);
 
     return () => clearTimeout(timeoutId);
-  }, [pendingConfirmation, setMessages, messagesRef, pendingPayloadRef, setPendingPayload]);
+  }, [pendingConfirmation, setMessages, messagesRef, pendingPayloadRef, setPendingPayload, setDeployProgress]);
 
   return { pendingConfirmation, setPendingConfirmation, confirmAction, cancelAction };
 }

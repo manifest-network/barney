@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type FormEvent } from 'react';
-import { Send, Settings, X, Sparkles, Loader, WifiOff, Paperclip, HelpCircle } from 'lucide-react';
+import { Send, Settings, X, Sparkles, WifiOff, Paperclip, HelpCircle, Square } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
 import { useAutoScroll } from '../../hooks/useAutoScroll';
 import { useInputHistory } from '../../hooks/useInputHistory';
@@ -15,7 +15,19 @@ import { EXAMPLE_APPS, buildExampleManifest, type ExampleApp } from '../../confi
 import { HELP_TEXT } from '../../ai/helpText';
 
 const EXAMPLE_GAMES = EXAMPLE_APPS.filter((app) => app.group === 'games');
-const EXAMPLE_SERVICES = EXAMPLE_APPS.filter((app) => app.group === 'apps');
+
+/** Group service apps by category, preserving insertion order. */
+const SERVICE_CATEGORIES: [string, ExampleApp[]][] = (() => {
+  const map = new Map<string, ExampleApp[]>();
+  for (const app of EXAMPLE_APPS) {
+    if (app.group !== 'apps') continue;
+    const cat = app.category ?? 'Other';
+    let list = map.get(cat);
+    if (!list) { list = []; map.set(cat, list); }
+    list.push(app);
+  }
+  return [...map.entries()];
+})();
 
 const SUGGESTIONS = ['Deploy an app', 'Check my credits', "What's running?"];
 
@@ -62,6 +74,7 @@ export function ChatPanel() {
     requestBatchDeploy,
     addLocalMessage,
     clearHistory,
+    stopStreaming,
   } = useAI();
 
   const [input, setInput] = useState('');
@@ -104,8 +117,14 @@ export function ChatPanel() {
   }, [isStreaming]);
 
   // Press "/" anywhere to focus the chat input (unless already typing somewhere)
+  // Press Escape to stop streaming
   useEffect(() => {
     const handleGlobalKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isStreaming) {
+        e.preventDefault();
+        stopStreaming();
+        return;
+      }
       if (e.key === '/' && document.activeElement !== inputRef.current
           && !(document.activeElement instanceof HTMLInputElement)
           && !(document.activeElement instanceof HTMLTextAreaElement)) {
@@ -115,11 +134,12 @@ export function ChatPanel() {
     };
     document.addEventListener('keydown', handleGlobalKey);
     return () => document.removeEventListener('keydown', handleGlobalKey);
-  }, []);
+  }, [isStreaming, stopStreaming]);
 
   const doSubmit = async () => {
     // Allow submit with just an attachment (no text required)
-    if ((!input.trim() && !pendingPayload) || isStreaming) return;
+    if (!input.trim() && !pendingPayload) return;
+    if (isStreaming) return;
 
     const message = input.trim();
     setInput('');
@@ -381,20 +401,25 @@ export function ChatPanel() {
                   </div>
                   <div className="chat-example-apps__group">
                     <p className="chat-example-apps__group-label">Apps</p>
-                    <div className="chat-example-apps__buttons" role="group" aria-label="Example apps">
-                      {EXAMPLE_SERVICES.map((app, i) => (
-                        <button
-                          key={app.label}
-                          type="button"
-                          onClick={() => deployExample(app)}
-                          className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
-                          style={{ '--stagger': i } as React.CSSProperties}
-                          disabled={!isConnected || isStreaming}
-                        >
-                          {app.label}
-                        </button>
-                      ))}
-                    </div>
+                    {SERVICE_CATEGORIES.map(([category, apps]) => (
+                      <div key={category} className="chat-example-apps__subcategory">
+                        <p className="chat-example-apps__subcategory-label">{category}</p>
+                        <div className="chat-example-apps__buttons" role="group" aria-label={`${category} apps`}>
+                          {apps.map((app, i) => (
+                            <button
+                              key={app.label}
+                              type="button"
+                              onClick={() => deployExample(app)}
+                              className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
+                              style={{ '--stagger': i } as React.CSSProperties}
+                              disabled={!isConnected || isStreaming}
+                            >
+                              {app.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -433,7 +458,7 @@ export function ChatPanel() {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={!isConnected || isStreaming}
+            disabled={!isConnected}
             className="chat-attach-btn"
             aria-label="Attach payload file"
             title="Attach deployment payload"
@@ -446,25 +471,32 @@ export function ChatPanel() {
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             placeholder={isConnected ? "Ask me anything..." : "Connecting to Ollama..."}
-            disabled={!isConnected || isStreaming}
+            disabled={!isConnected}
             className="chat-input"
             rows={1}
             maxLength={MAX_INPUT_LENGTH}
             aria-label="Message input"
             aria-describedby="chat-input-hint"
           />
-          <button
-            type="submit"
-            disabled={(!input.trim() && !pendingPayload) || !isConnected || isStreaming}
-            className="chat-send-btn"
-            aria-label={isStreaming ? "Sending message..." : "Send message"}
-          >
-            {isStreaming ? (
-              <Loader className="w-4 h-4 animate-spin" aria-hidden="true" />
-            ) : (
+          {isStreaming ? (
+            <button
+              type="button"
+              onClick={stopStreaming}
+              className="chat-send-btn chat-send-btn--stop"
+              aria-label="Stop generating"
+            >
+              <Square className="w-4 h-4" aria-hidden="true" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={(!input.trim() && !pendingPayload) || !isConnected}
+              className="chat-send-btn"
+              aria-label="Send message"
+            >
               <Send className="w-4 h-4" aria-hidden="true" />
-            )}
-          </button>
+            </button>
+          )}
         </div>
         {pendingPayload && (
           <div className="chat-attachment-chip" role="status">
@@ -491,7 +523,7 @@ export function ChatPanel() {
               {input.length.toLocaleString()} / {MAX_INPUT_LENGTH.toLocaleString()} characters
             </span>
           ) : (
-            'Enter to send \u00b7 Shift+Enter for new line \u00b7 \u2191\u2193 history \u00b7 /help \u00b7 /clear'
+            'Enter to send \u00b7 Shift+Enter for new line \u00b7 Esc to stop \u00b7 \u2191\u2193 history \u00b7 /help \u00b7 /clear'
           )}
         </p>
       </form>
