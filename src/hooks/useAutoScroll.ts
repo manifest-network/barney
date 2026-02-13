@@ -65,5 +65,11 @@ export function useAutoScroll(itemCount: number, isStreaming?: boolean) {
     };
   }, [isStreaming]);
 
-  return { containerRef, endRef, handleScroll };
+  const scrollToBottom = useCallback(() => {
+    if (!userScrolledUpRef.current) {
+      endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, []);
+
+  return { containerRef, endRef, handleScroll, scrollToBottom };
 }

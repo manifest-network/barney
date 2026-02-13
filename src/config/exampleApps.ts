@@ -9,6 +9,8 @@ export interface ExampleApp {
   label: string;
   manifest: Record<string, unknown>;
   envFactory?: () => Record<string, string>;
+  /** Builds the complete manifest dynamically (overrides manifest + envFactory when present). */
+  manifestFactory?: () => Record<string, unknown>;
   size?: string;
   group: 'games' | 'apps';
   category?: string;
@@ -25,7 +27,7 @@ const GAME_MANIFEST = (game: string) => ({
 const SERVICE_MANIFEST = (
   image: string,
   ports: string[],
-  opts?: { env?: Record<string, string>; user?: string; tmpfs?: string[] },
+  opts?: { env?: Record<string, string>; user?: string; tmpfs?: string[]; command?: string[]; args?: string[] },
 ) => {
   const portMap: Record<string, Record<string, never>> = {};
   for (const p of ports) portMap[`${p}/tcp`] = {};
@@ -35,6 +37,8 @@ const SERVICE_MANIFEST = (
     ...(opts?.env ? { env: opts.env } : {}),
     ...(opts?.user ? { user: opts.user } : {}),
     ...(opts?.tmpfs ? { tmpfs: opts.tmpfs } : {}),
+    ...(opts?.command ? { command: opts.command } : {}),
+    ...(opts?.args ? { args: opts.args } : {}),
   };
 };
 
@@ -65,7 +69,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   { label: 'MySQL 9', manifest: SERVICE_MANIFEST('mysql:9', ['3306'], { tmpfs: ['/var/run/mysqld'] }), envFactory: () => ({ MYSQL_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
   { label: 'MariaDB 12', manifest: SERVICE_MANIFEST('mariadb:12', ['3306'], { tmpfs: ['/run/mysqld'] }), envFactory: () => ({ MARIADB_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
   { label: 'MongoDB 8', manifest: SERVICE_MANIFEST('mongo:8', ['27017']), envFactory: () => ({ MONGO_INITDB_ROOT_USERNAME: 'admin', MONGO_INITDB_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
-  { label: 'Neo4j 5', manifest: SERVICE_MANIFEST('neo4j:5', ['7474', '7687']), envFactory: () => ({ NEO4J_AUTH: `neo4j/${generatePassword()}` }), size: 'small', group: 'apps', category: 'Databases' },
+  { label: 'Neo4j 2026.01', manifest: SERVICE_MANIFEST('neo4j:2026.01', ['7474', '7687']), envFactory: () => ({ NEO4J_AUTH: `neo4j/${generatePassword()}` }), size: 'small', group: 'apps', category: 'Databases' },
   { label: 'Redis 8.4', manifest: SERVICE_MANIFEST('redis:8.4', ['6379']), size: 'micro', group: 'apps', category: 'Databases' },
   { label: 'Memcached 1.6', manifest: SERVICE_MANIFEST('memcached:1.6', ['11211']), size: 'micro', group: 'apps', category: 'Databases' },
   { label: 'ClickHouse 25', manifest: SERVICE_MANIFEST('clickhouse/clickhouse-server:25.12', ['8123', '9000']), size: 'small', group: 'apps', category: 'Databases' },
@@ -90,6 +94,16 @@ export const EXAMPLE_APPS: ExampleApp[] = [
 
   // --- Tools ---
   { label: 'Adminer 5', manifest: SERVICE_MANIFEST('adminer:5', ['8080']), size: 'micro', group: 'apps', category: 'Tools' },
+  { label: 'OpenClaw', manifest: SERVICE_MANIFEST('ghcr.io/openclaw/openclaw:2026.2.12', ['18789'], { command: ['/bin/sh', '-c'], args: ['mkdir -p /home/node/.openclaw && echo \'{"gateway":{"controlUi":{"enabled":true,"allowInsecureAuth":true}},"models":{"providers":{"ollama":{"baseUrl":"http://172.17.0.1:11434/v1","apiKey":"ollama-local","api":"openai-completions","models":[{"id":"qwen3-coder:30b","name":"Qwen3 Coder 30B","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":131072,"maxTokens":16000}]}}},"agents":{"defaults":{"model":{"primary":"ollama/qwen3-coder:30b"}}}}\' > /home/node/.openclaw/openclaw.json && exec docker-entrypoint.sh node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789'] }), manifestFactory: () => {
+    const token = generatePassword();
+    return {
+      ...SERVICE_MANIFEST('ghcr.io/openclaw/openclaw:2026.2.12', ['18789'], {
+        command: ['/bin/sh', '-c'],
+        args: [`mkdir -p /home/node/.openclaw && echo '{"gateway":{"controlUi":{"enabled":true,"allowInsecureAuth":true}},"models":{"providers":{"ollama":{"baseUrl":"http://172.17.0.1:11434/v1","apiKey":"ollama-local","api":"openai-completions","models":[{"id":"qwen3-coder:30b","name":"Qwen3 Coder 30B","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":131072,"maxTokens":16000}]}}},"agents":{"defaults":{"model":{"primary":"ollama/qwen3-coder:30b"}}}}' > /home/node/.openclaw/openclaw.json && exec docker-entrypoint.sh node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789 --token ${token}`],
+      }),
+      env: { OPENCLAW_GATEWAY_TOKEN: token, OLLAMA_HOST: '172.17.0.1' },
+    };
+  }, size: 'large', group: 'apps', category: 'Tools' },
   { label: 'Registry 2', manifest: SERVICE_MANIFEST('registry:2', ['5000']), size: 'micro', group: 'apps', category: 'Tools' },
 ];
 
@@ -114,6 +128,9 @@ export function findExampleByAppName(appName: string): ExampleApp | undefined {
  * Build manifest JSON for an example app, calling envFactory if present.
  */
 export function buildExampleManifest(app: ExampleApp): string {
+  if (app.manifestFactory) {
+    return JSON.stringify(app.manifestFactory(), null, 2);
+  }
   const manifest = app.envFactory
     ? { ...app.manifest, env: { ...(app.manifest.env as Record<string, string> | undefined), ...app.envFactory() } }
     : app.manifest;

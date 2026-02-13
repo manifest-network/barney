@@ -16,6 +16,10 @@ export interface KnownImageConfig {
   user?: string;
   /** Tmpfs mount path(s), comma-separated */
   tmpfs?: string;
+  /** Container entrypoint override */
+  command?: string[];
+  /** Container CMD override */
+  args?: string[];
   /** Whether the image needs persistent storage */
   storage?: boolean;
   /** Alternative names that should resolve to this config */
@@ -52,6 +56,9 @@ export const KNOWN_IMAGES: readonly KnownImageConfig[] = [
   // --- Monitoring ---
   { image: 'grafana', port: '3000', aliases: ['grafana/grafana'] },
   { image: 'prometheus', port: '9090', aliases: ['prom/prometheus'] },
+
+  // --- AI Tools ---
+  { image: 'openclaw', port: '18789', env: { OPENCLAW_GATEWAY_TOKEN: '', OLLAMA_HOST: '172.17.0.1' }, command: ['/bin/sh', '-c'], args: ['mkdir -p /home/node/.openclaw && echo \'{"gateway":{"controlUi":{"enabled":true,"allowInsecureAuth":true}},"models":{"providers":{"ollama":{"baseUrl":"http://172.17.0.1:11434/v1","apiKey":"ollama-local","api":"openai-completions","models":[{"id":"qwen3-coder:30b","name":"Qwen3 Coder 30B","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":131072,"maxTokens":16000}]}}},"agents":{"defaults":{"model":{"primary":"ollama/qwen3-coder:30b"}}}}\' > /home/node/.openclaw/openclaw.json && exec docker-entrypoint.sh node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789'], aliases: ['ghcr.io/openclaw/openclaw'] },
 
   // --- Admin Tools ---
   { image: 'adminer', port: '8080' },
@@ -131,6 +138,8 @@ export function generateImageReferenceForPrompt(): string {
     }
     if (cfg.user) parts.push(`user="${cfg.user}"`);
     if (cfg.tmpfs) parts.push(`tmpfs="${cfg.tmpfs}"`);
+    if (cfg.command) parts.push(`command=${JSON.stringify(cfg.command)}`);
+    if (cfg.args) parts.push(`args=${JSON.stringify(cfg.args)}`);
     if (cfg.storage) parts.push('storage=true');
     if (cfg.aliases?.length) parts.push(`(aka ${cfg.aliases.join(', ')})`);
     return parts.join(' ');

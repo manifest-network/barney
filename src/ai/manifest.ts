@@ -102,6 +102,8 @@ export interface BuildManifestOptions {
   env?: Record<string, string>;
   user?: string;
   tmpfs?: string;
+  command?: string[];
+  args?: string[];
 }
 
 /**
@@ -140,6 +142,16 @@ export async function buildManifest(opts: BuildManifestOptions): Promise<BuildMa
     if (paths.length > 0) {
       manifest.tmpfs = paths;
     }
+  }
+
+  // Command (entrypoint override)
+  if (opts.command && opts.command.length > 0) {
+    manifest.command = opts.command;
+  }
+
+  // Args (CMD override)
+  if (opts.args && opts.args.length > 0) {
+    manifest.args = opts.args;
   }
 
   const json = JSON.stringify(manifest, null, 2);
@@ -214,6 +226,16 @@ export function mergeManifest(
   // tmpfs: old value used if new manifest doesn't specify one
   if (newManifest.tmpfs === undefined && oldManifest.tmpfs !== undefined) {
     merged.tmpfs = oldManifest.tmpfs;
+  }
+
+  // command: old value used if new manifest doesn't specify one
+  if (newManifest.command === undefined && oldManifest.command !== undefined) {
+    merged.command = oldManifest.command;
+  }
+
+  // args: old value used if new manifest doesn't specify one
+  if (newManifest.args === undefined && oldManifest.args !== undefined) {
+    merged.args = oldManifest.args;
   }
 
   return merged;

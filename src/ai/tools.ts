@@ -46,6 +46,14 @@ export const AI_TOOLS: OllamaTool[] = [
             type: 'string',
             description: 'Tmpfs mount paths, comma-separated (e.g. "/var/run/postgresql").',
           },
+          command: {
+            type: 'string',
+            description: 'JSON array for container entrypoint override, e.g. \'["sh", "-c"]\'.',
+          },
+          args: {
+            type: 'string',
+            description: 'JSON array for container command/args override, e.g. \'["echo hello"]\'.',
+          },
           storage: {
             type: 'boolean',
             description: 'Set to true for apps that need persistent disk (databases, etc.).',
@@ -138,6 +146,14 @@ export const AI_TOOLS: OllamaTool[] = [
           tmpfs: {
             type: 'string',
             description: 'Tmpfs mount paths, comma-separated. Only needed with image.',
+          },
+          command: {
+            type: 'string',
+            description: 'JSON array for container entrypoint override. Only needed with image.',
+          },
+          args: {
+            type: 'string',
+            description: 'JSON array for container command/args override. Only needed with image.',
           },
         },
         required: ['app_name'],

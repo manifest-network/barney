@@ -84,7 +84,7 @@ export function ChatPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { navigateUp, navigateDown, reset: resetHistory } = useInputHistory(messages);
-  const { containerRef: messagesContainerRef, endRef: messagesEndRef, handleScroll } = useAutoScroll(messages.length, isStreaming);
+  const { containerRef: messagesContainerRef, endRef: messagesEndRef, handleScroll, scrollToBottom } = useAutoScroll(messages.length, isStreaming);
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
 
   const updateScrollShadows = useCallback(() => {
@@ -293,6 +293,13 @@ export function ChatPanel() {
     && messages.length >= 2
     && (userTriggered || aiTriggered)
     && lastMsg?.role === 'assistant';
+
+  // Scroll to bottom when non-message elements appear (example apps, confirmation, progress)
+  useEffect(() => {
+    if (showExampleApps || pendingConfirmation || deployProgress) {
+      scrollToBottom();
+    }
+  }, [showExampleApps, pendingConfirmation, deployProgress, scrollToBottom]);
 
   return (
     <div

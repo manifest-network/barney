@@ -8733,6 +8733,7 @@ code.lease-card-mono {
   flex-shrink: 0;
   border-right: 1px solid var(--panel-border);
   background: var(--panel-bg-solid);
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -9168,6 +9169,7 @@ code.lease-card-mono {
   padding: 0.25rem 0.375rem;
   border-radius: var(--radius-md);
   font-size: 0.75rem;
+  min-width: 0;
 }
 
 .apps-sidebar__recent-name {
