@@ -5,7 +5,6 @@
  */
 
 import type { FredLeaseStatus } from '../api/fred';
-import type { PayloadAttachment } from './toolExecutor';
 
 export interface DeployProgress {
   phase:
@@ -28,6 +27,4 @@ export interface DeployProgress {
     phase: DeployProgress['phase'];
     detail?: string;
   }>;
-  /** Original manifest payload preserved on failure for retry */
-  payload?: PayloadAttachment;
 }
