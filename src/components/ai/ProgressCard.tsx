@@ -110,7 +110,7 @@ export const ProgressCard = memo(function ProgressCard({ progress }: ProgressCar
             </div>
           ))}
         </div>
-      ) : isSimpleOperation && !isReady ? (
+      ) : isSimpleOperation ? (
         isFailed && progress.detail ? (
           <p className="progress-card__detail text-error-400">{progress.detail}</p>
         ) : null

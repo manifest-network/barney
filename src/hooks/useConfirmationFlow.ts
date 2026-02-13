@@ -124,9 +124,12 @@ export function useConfirmationFlow(deps: UseConfirmationFlowDeps) {
         error: result.error,
       }, null, 2);
 
+      // Keep the tool error out of the tool result bubble — it will be shown
+      // as an error card on the LLM summary message instead.
+      const toolError = result.success ? undefined : result.error;
+
       updateMessageById(messageId, {
         content: resultContent,
-        error: result.success ? undefined : result.error,
         isStreaming: false,
       });
 
@@ -157,7 +160,7 @@ export function useConfirmationFlow(deps: UseConfirmationFlowDeps) {
       updateMessageById(newAssistantMessage.id, {
         content: streamResult.error ? `Error: ${streamResult.error}` : streamResult.content,
         thinking: streamResult.thinking || undefined,
-        error: streamResult.error,
+        error: streamResult.error || toolError,
         isStreaming: false,
       });
     } catch (error) {
