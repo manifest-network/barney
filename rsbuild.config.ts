@@ -2,7 +2,6 @@ import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginNodePolyfill } from '@rsbuild/plugin-node-polyfill';
 import * as ipaddr from 'ipaddr.js';
-
 /**
  * Validate that a proxy target is a safe HTTP(S) URL.
  * Blocks non-HTTP protocols, credentials in URLs, cloud metadata endpoints,
@@ -83,12 +82,20 @@ export default defineConfig({
         target: 'https://localhost:8080', // Default, overridden by router
         changeOrigin: true,
         secure: false,
+        ws: true,
         pathRewrite: { '^/proxy-provider': '' },
         router: (req) => {
           // Dynamic target from X-Proxy-Target header (set by buildProviderFetchArgs)
           const target = req.headers['x-proxy-target'];
           if (target && typeof target === 'string' && isValidProxyTarget(target)) {
             return target;
+          }
+          // Fallback: check `target` query param for WebSocket connections
+          // (browser WebSocket API cannot set custom headers)
+          const url = new URL(req.url || '', 'http://localhost');
+          const qTarget = url.searchParams.get('target');
+          if (qTarget && isValidProxyTarget(qTarget)) {
+            return qTarget;
           }
           return 'https://localhost:8080';
         },

@@ -3,6 +3,7 @@ import { User, Bot, Wrench, AlertCircle, Brain, ChevronDown, ChevronRight, Copy,
 import type { ChatMessage } from '../../contexts/aiTypes';
 import { StreamingText } from './StreamingText';
 import { LogCard } from './LogCard';
+import { HelpCard } from './HelpCard';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useAI } from '../../hooks/useAI';
 
@@ -69,9 +70,10 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
   const isTool = role === 'tool';
   const isAssistant = role === 'assistant';
   const hasThinking = isAssistant && thinking && thinking.length > 0;
+  const hasHelpCard = isAssistant && message.card?.type === 'help';
 
   // Skip empty assistant messages (tool call with no text)
-  if (isAssistant && !content && !hasThinking && !error && !isStreaming) {
+  if (isAssistant && !content && !hasThinking && !error && !isStreaming && !hasHelpCard) {
     return null;
   }
 
@@ -168,8 +170,10 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
             )}
           </div>
         )}
+        {/* Help card (rendered instead of message-text) */}
+        {hasHelpCard && <HelpCard />}
         {/* Main content (not for tool messages - those are in collapsible block) */}
-        {!isTool && (content || !hasThinking) && (
+        {!isTool && !hasHelpCard && (content || !hasThinking) && (
           <div className="message-text">
             {isStreaming && !content && !hasThinking ? (
               <span className="thinking-indicator" aria-label="Barney is thinking">

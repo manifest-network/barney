@@ -7,15 +7,14 @@ import {
   type ReactNode,
 } from 'react';
 import { AIContext } from './aiContextValue';
-import type { OllamaMessage, OllamaToolCall } from '../api/ollama';
+import type { OllamaMessage } from '../api/ollama';
 import { streamChat, checkOllamaHealth, listModels, type OllamaModel } from '../api/ollama';
-import { AI_TOOLS, getToolCallDescription, isValidToolName } from '../ai/tools';
-import { executeTool, executeConfirmedTool, type ToolResult, type SignResult, type PayloadAttachment } from '../ai/toolExecutor';
-import { executeBatchDeploy, deriveAppName } from '../ai/toolExecutor/compositeTransactions';
+import { AI_TOOLS } from '../ai/tools';
+import { type SignResult, type PayloadAttachment } from '../ai/toolExecutor';
 import { getSystemPrompt } from '../ai/systemPrompt';
 import type { DeployProgress } from '../ai/progress';
 import * as appRegistry from '../registry/appRegistry';
-import { validateUserInput, sanitizeToolArgs } from '../ai/validation';
+import { validateUserInput } from '../ai/validation';
 import { logError } from '../utils/errors';
 import { validateFile } from '../utils/fileValidation';
 import { sha256, toHex } from '../utils/hash';
@@ -24,22 +23,23 @@ import {
   AI_STREAM_TIMEOUT_MS,
   AI_MESSAGE_DEBOUNCE_MS,
   AI_HEALTH_CHECK_INTERVAL_MS,
-  AI_CONFIRMATION_TIMEOUT_MS,
 } from '../config/constants';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 
 import { processStreamWithTimeout } from '../ai/streamUtils';
-import type { StreamResult } from '../ai/streamUtils';
 import { useChatPersistence, type AISettings } from '../hooks/useChatPersistence';
 import { useMessageManager, generateMessageId } from '../hooks/useMessageManager';
 import { useStreamingUpdates } from '../hooks/useStreamingUpdates';
 import { useToolCache } from '../hooks/useToolCache';
+import { useToolExecution } from '../hooks/useToolExecution';
+import { useConfirmationFlow } from '../hooks/useConfirmationFlow';
+import { useBatchDeploy } from '../hooks/useBatchDeploy';
 
 // Re-export types for backward compatibility
 export type { ChatMessage, PendingConfirmation } from './aiTypes';
 export type { AISettings };
 
-import type { ChatMessage, PendingConfirmation } from './aiTypes';
+import type { ChatMessage } from './aiTypes';
 
 type SignArbitraryFn = (address: string, data: string) => Promise<SignResult>;
 
@@ -51,7 +51,7 @@ export interface AIContextType {
   isConnected: boolean;
   settings: AISettings;
   availableModels: OllamaModel[];
-  pendingConfirmation: PendingConfirmation | null;
+  pendingConfirmation: ReturnType<typeof useConfirmationFlow>['pendingConfirmation'];
   pendingPayload: PayloadAttachment | null;
   deployProgress: DeployProgress | null;
 
@@ -61,7 +61,7 @@ export interface AIContextType {
   updateSettings: (settings: Partial<AISettings>) => void;
   clearHistory: () => void;
   refreshModels: (endpoint?: string) => Promise<void>;
-  confirmAction: () => Promise<void>;
+  confirmAction: (editedManifestJson?: string) => Promise<void>;
   cancelAction: () => void;
   setClientManager: (manager: CosmosClientManager | null) => void;
   setAddress: (address: string | undefined) => void;
@@ -69,11 +69,11 @@ export interface AIContextType {
   attachPayload: (file: File) => Promise<{ error?: string }>;
   clearPayload: () => void;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
-  retryDeploy: () => void;
+  addLocalMessage: (content: string, card?: { type: string; data: unknown }) => void;
 }
 
 export function AIProvider({ children }: { children: ReactNode }) {
-  // --- Refs (defined first so hooks can reference them) ---
+  // --- Refs ---
   const clientManagerRef = useRef<CosmosClientManager | null>(null);
   const addressRef = useRef<string | undefined>(undefined);
   const signArbitraryRef = useRef<SignArbitraryFn | undefined>(undefined);
@@ -93,9 +93,80 @@ export function AIProvider({ children }: { children: ReactNode }) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [availableModels, setAvailableModels] = useState<OllamaModel[]>([]);
-  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [pendingPayload, setPendingPayload] = useState<PayloadAttachment | null>(null);
   const [deployProgress, setDeployProgress] = useState<DeployProgress | null>(null);
+
+  // --- App registry access (shared by extracted hooks) ---
+
+  const getAppRegistryAccess = useCallback(() => ({
+    getApps: appRegistry.getApps,
+    getApp: appRegistry.getApp,
+    findApp: appRegistry.findApp,
+    getAppByLease: appRegistry.getAppByLease,
+    addApp: appRegistry.addApp,
+    updateApp: appRegistry.updateApp,
+  }), []);
+
+  // --- Ollama message conversion ---
+
+  const toOllamaMessages = useCallback((msgs: ChatMessage[]): OllamaMessage[] => {
+    const systemMessage: OllamaMessage = {
+      role: 'system',
+      content: getSystemPrompt(addressRef.current),
+    };
+
+    const conversationMessages: OllamaMessage[] = msgs
+      .filter((m) => !m.isStreaming)
+      .map((m) => {
+        if (m.role === 'tool') {
+          return {
+            role: 'tool' as const,
+            content: m.content,
+            tool_call_id: m.toolCallId,
+          };
+        }
+        return {
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          tool_calls: m.toolCalls,
+        };
+      });
+
+    return [systemMessage, ...conversationMessages];
+  }, []);
+
+  // --- Confirmation flow (owns pendingConfirmation state) ---
+
+  const { pendingConfirmation, setPendingConfirmation, confirmAction, cancelAction } = useConfirmationFlow({
+    isStreamingRef, abortControllerRef,
+    clientManagerRef, addressRef, signArbitraryRef,
+    pendingPayloadRef, setPendingPayload,
+    setIsStreaming, setDeployProgress,
+    messagesRef, setMessages,
+    updateMessageById, createAssistantMessage, addMessage, getCurrentMessages,
+    scheduleStreamingUpdate, flushPendingUpdate,
+    settings, toOllamaMessages, getAppRegistryAccess,
+  });
+
+  // --- Tool execution ---
+
+  const { processToolCalls } = useToolExecution({
+    getToolCacheKey, getCachedToolResult, cacheToolResult,
+    addMessage, updateMessageById, createAssistantMessage,
+    clientManagerRef, addressRef, signArbitraryRef, abortControllerRef, pendingPayloadRef,
+    setDeployProgress, setPendingConfirmation,
+    getAppRegistryAccess,
+  });
+
+  // --- Batch deploy ---
+
+  const { requestBatchDeploy } = useBatchDeploy({
+    isStreamingRef, setIsStreaming, isConnected,
+    clientManagerRef, addressRef, signArbitraryRef,
+    addMessage, updateMessageById,
+    setDeployProgress, setPendingConfirmation,
+    getAppRegistryAccess,
+  });
 
   // --- Effects ---
 
@@ -142,7 +213,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setAddress = useCallback((address: string | undefined) => {
-    // Clear cached query results when wallet changes to prevent serving stale data
     if (address !== addressRef.current) {
       clearToolCache();
       setDeployProgress(null);
@@ -185,7 +255,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
     setPendingPayload(null);
   }, []);
 
-  // --- History (wraps extracted hook + clears tool cache) ---
+  // --- History ---
 
   const clearHistory = useCallback(() => {
     messagesRef.current = [];
@@ -193,204 +263,10 @@ export function AIProvider({ children }: { children: ReactNode }) {
     clearToolCache();
   }, [messagesRef, clearHistoryBase, clearToolCache]);
 
-  // --- Ollama message conversion ---
-
-  const toOllamaMessages = useCallback((msgs: ChatMessage[]): OllamaMessage[] => {
-    const systemMessage: OllamaMessage = {
-      role: 'system',
-      content: getSystemPrompt(addressRef.current),
-    };
-
-    const conversationMessages: OllamaMessage[] = msgs
-      .filter((m) => !m.isStreaming)
-      .map((m) => {
-        if (m.role === 'tool') {
-          return {
-            role: 'tool' as const,
-            content: m.content,
-            tool_call_id: m.toolCallId,
-          };
-        }
-        return {
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-          tool_calls: m.toolCalls,
-        };
-      });
-
-    return [systemMessage, ...conversationMessages];
-  }, []);
-
-  // --- App registry access (shared by tool execution callbacks) ---
-
-  const getAppRegistryAccess = useCallback(() => ({
-    getApps: appRegistry.getApps,
-    getApp: appRegistry.getApp,
-    findApp: appRegistry.findApp,
-    getAppByLease: appRegistry.getAppByLease,
-    addApp: appRegistry.addApp,
-    updateApp: appRegistry.updateApp,
-  }), []);
-
-  // --- Tool execution ---
-
-  const handleToolCall = useCallback(
-    async (toolCall: OllamaToolCall): Promise<ToolResult> => {
-      // Validate tool name against composite tools
-      if (!isValidToolName(toolCall.function.name)) {
-        return {
-          success: false,
-          error: `Unknown tool: ${toolCall.function.name}`,
-        };
-      }
-
-      // Sanitize arguments
-      const sanitizedArgs = sanitizeToolArgs(toolCall.function.arguments);
-
-      // Check cache for query tools (only query tools are cacheable)
-      const cacheKey = getToolCacheKey(toolCall.function.name, sanitizedArgs);
-      const cachedResult = getCachedToolResult(cacheKey);
-      if (cachedResult) {
-        return cachedResult;
-      }
-
-      // Clear stale deploy progress, but preserve active deploys
-      setDeployProgress(prev => {
-        if (!prev || prev.phase === 'ready' || prev.phase === 'failed') return null;
-        return prev;
-      });
-
-      const result = await executeTool(toolCall.function.name, sanitizedArgs, {
-        clientManager: clientManagerRef.current,
-        address: addressRef.current,
-        signArbitrary: signArbitraryRef.current,
-        onProgress: setDeployProgress,
-        appRegistry: getAppRegistryAccess(),
-        signal: abortControllerRef.current?.signal,
-      }, pendingPayloadRef.current ?? undefined);
-
-      // Cache successful query results (not confirmations or failures)
-      if (result.success && !result.requiresConfirmation) {
-        cacheToolResult(cacheKey, result);
-      }
-
-      return result;
-    },
-    [getToolCacheKey, getCachedToolResult, cacheToolResult, getAppRegistryAccess]
-  );
-
-  const executeAndDisplayToolCall = useCallback(
-    async (toolCall: OllamaToolCall) => {
-      const toolDescription = getToolCallDescription(
-        toolCall.function.name,
-        toolCall.function.arguments
-      );
-
-      // Add a message showing tool execution
-      const toolMessageId = generateMessageId();
-      addMessage({
-        id: toolMessageId,
-        role: 'tool',
-        content: toolDescription,
-        toolDescription,
-        timestamp: Date.now(),
-        toolCallId: toolCall.id,
-        toolName: toolCall.function.name,
-        isStreaming: true,
-      });
-
-      const result = await handleToolCall(toolCall);
-      return { result, messageId: toolMessageId };
-    },
-    [handleToolCall, addMessage]
-  );
-
-  const processToolCalls = useCallback(
-    async (
-      toolCalls: OllamaToolCall[],
-      currentAssistantMessageId: string,
-      streamResult: StreamResult
-    ): Promise<{ shouldContinue: boolean; nextAssistantMessageId?: string }> => {
-      // Update assistant message with tool calls
-      updateMessageById(currentAssistantMessageId, {
-        content: streamResult.content,
-        thinking: streamResult.thinking || undefined,
-        toolCalls,
-        isStreaming: false,
-      });
-
-      // Execute each tool call
-      let hasDisplayCard = false;
-      for (const toolCall of toolCalls) {
-        const { result, messageId: toolMessageId } = await executeAndDisplayToolCall(toolCall);
-
-        if (result.requiresConfirmation) {
-          // Capture pending payload at confirmation time for deploy_app/create_lease
-          const toolName = result.pendingAction?.toolName || toolCall.function.name;
-          const actionPayload = (toolName === 'deploy_app' || toolName === 'create_lease')
-            ? pendingPayloadRef.current ?? undefined
-            : undefined;
-
-          // Set pending confirmation and stop the loop
-          setPendingConfirmation({
-            id: generateMessageId(),
-            action: {
-              id: toolCall.id,
-              toolName,
-              args: result.pendingAction?.args || {},
-              description: result.confirmationMessage || 'Confirm action?',
-              payload: actionPayload,
-            },
-            messageId: toolMessageId,
-          });
-
-          updateMessageById(toolMessageId, {
-            content: result.confirmationMessage || 'Awaiting confirmation...',
-            isStreaming: false,
-          });
-
-          return { shouldContinue: false };
-        }
-
-        // Update tool message with result
-        if (result.success && result.displayCard) {
-          hasDisplayCard = true;
-          updateMessageById(toolMessageId, {
-            content: '',
-            card: result.displayCard,
-            isStreaming: false,
-          });
-        } else {
-          const resultContent = result.success
-            ? JSON.stringify(result.data, null, 2)
-            : `Error: ${result.error}`;
-
-          updateMessageById(toolMessageId, {
-            content: resultContent,
-            error: result.success ? undefined : result.error,
-            isStreaming: false,
-          });
-        }
-      }
-
-      // Skip LLM round-trip when results were rendered directly as cards
-      if (hasDisplayCard) {
-        return { shouldContinue: false };
-      }
-
-      // Create new assistant message for next iteration
-      const newMessage = createAssistantMessage();
-      addMessage(newMessage);
-      return { shouldContinue: true, nextAssistantMessageId: newMessage.id };
-    },
-    [updateMessageById, executeAndDisplayToolCall, createAssistantMessage, addMessage]
-  );
-
   // --- Send message ---
 
   const sendMessage = useCallback(
     async (content: string) => {
-      // Build effective content: include attachment info so the model knows about the file
       const payload = pendingPayloadRef.current;
       let effectiveContent = content;
       if (payload) {
@@ -400,27 +276,19 @@ export function AIProvider({ children }: { children: ReactNode }) {
           : `Deploy this ${attachNote}`;
       }
 
-      // Validate user input
       const validatedInput = validateUserInput(effectiveContent);
       if (!validatedInput) return;
-
-      // Don't send if not connected to Ollama
       if (!isConnected) return;
-
-      // Use ref for synchronous check to prevent race conditions with rapid messages
       if (isStreamingRef.current) return;
 
-      // Debounce rapid message sends
+      // Simple timestamp guard — intentionally not extracted to a useDebounce hook
+      // since this is the only debounce site in the codebase.
       const now = Date.now();
-      if (now - lastMessageTimeRef.current < AI_MESSAGE_DEBOUNCE_MS) {
-        return;
-      }
+      if (now - lastMessageTimeRef.current < AI_MESSAGE_DEBOUNCE_MS) return;
       lastMessageTimeRef.current = now;
 
-      // Mark as streaming synchronously before any async operations
       isStreamingRef.current = true;
 
-      // Cancel any ongoing stream
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
@@ -434,7 +302,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
       addMessage(userMessage);
       setIsStreaming(true);
-      // Clear stale deploy progress, but preserve active deploys
       setDeployProgress(prev => {
         if (!prev || prev.phase === 'ready' || prev.phase === 'failed') return null;
         return prev;
@@ -449,7 +316,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
       try {
         addMessage(initialAssistantMessage);
 
-        // Tool call loop - continues until no more tool calls or max iterations
         while (iteration < AI_MAX_TOOL_ITERATIONS) {
           iteration++;
 
@@ -465,9 +331,9 @@ export function AIProvider({ children }: { children: ReactNode }) {
             signal: abortControllerRef.current?.signal,
           });
 
-          // Process stream with timeout protection.
-          // Two layers: per-chunk timeout inside processStreamWithTimeout,
-          // plus an overall timeout here as a safety net.
+          // Two-layer timeout (intentionally not consolidated):
+          //  1. processStreamWithTimeout: per-chunk timeout catches hung connections mid-stream
+          //  2. Outer safety net (AI_STREAM_TIMEOUT_MS * 2): catches streams that never start
           let totalTimeoutId: ReturnType<typeof setTimeout> | undefined;
           const streamResult = await Promise.race([
             processStreamWithTimeout(
@@ -486,7 +352,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
           flushPendingUpdate();
 
-          // Handle stream error
           if (streamResult.error) {
             updateMessageById(currentAssistantMessageId, {
               content: streamResult.content,
@@ -497,7 +362,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
             return;
           }
 
-          // If no tool calls, we're done
           if (streamResult.toolCalls.length === 0) {
             const finalContent = streamResult.content.trim() ||
               'I received your message but couldn\'t generate a response. This may indicate the model doesn\'t support tool calling. Please check that your Ollama model supports function calling (e.g., llama3.1, mistral-nemo, qwen2.5).';
@@ -510,21 +374,16 @@ export function AIProvider({ children }: { children: ReactNode }) {
             break;
           }
 
-          // Process tool calls
           const { shouldContinue, nextAssistantMessageId } = await processToolCalls(
             streamResult.toolCalls,
             currentAssistantMessageId,
             streamResult
           );
 
-          if (!shouldContinue) {
-            return; // Pending confirmation or error
-          }
-
+          if (!shouldContinue) return;
           currentAssistantMessageId = nextAssistantMessageId!;
         }
 
-        // If we hit max iterations, finalize the message with error indicator
         if (iteration >= AI_MAX_TOOL_ITERATIONS) {
           updateMessageById(currentAssistantMessageId, {
             content: 'I reached the maximum number of tool calls for this request. This usually happens when a task requires more steps than expected. Please try breaking your request into smaller parts.',
@@ -551,292 +410,17 @@ export function AIProvider({ children }: { children: ReactNode }) {
     [isConnected, settings, toOllamaMessages, addMessage, createAssistantMessage, getCurrentMessages, updateMessageById, processToolCalls, scheduleStreamingUpdate, flushPendingUpdate]
   );
 
-  // --- Confirmation flow ---
+  // --- Local message injection ---
 
-  const confirmAction = useCallback(async () => {
-    if (!pendingConfirmation || isStreamingRef.current) return;
-
-    if (!clientManagerRef.current) {
-      const { messageId } = pendingConfirmation;
-      setPendingConfirmation(null);
-      updateMessageById(messageId, {
-        content: 'Wallet disconnected. Please reconnect your wallet and try again.',
-        error: 'wallet_disconnected',
-        isStreaming: false,
-      });
-      return;
-    }
-
-    // Capture refs at the start to prevent race conditions if wallet disconnects mid-execution
-    const clientManager = clientManagerRef.current;
-    const address = addressRef.current;
-    const signArbitrary = signArbitraryRef.current;
-
-    const { action, messageId } = pendingConfirmation;
-    setPendingConfirmation(null);
-    isStreamingRef.current = true;
-    setIsStreaming(true);
-
-    abortControllerRef.current = new AbortController();
-
-    try {
-      setDeployProgress(null);
-
-      const result = await executeConfirmedTool(
-        action.toolName,
-        action.args,
-        clientManager,
-        {
-          clientManager,
-          address,
-          signArbitrary,
-          onProgress: setDeployProgress,
-          appRegistry: getAppRegistryAccess(),
-          signal: abortControllerRef.current?.signal,
-        },
-        action.payload
-      );
-
-      // Preserve the payload on deploy progress so retry can restore it
-      if (!result.success && action.payload) {
-        setDeployProgress(prev => prev ? { ...prev, payload: action.payload } : null);
-      }
-
-      const resultContent = JSON.stringify({
-        success: result.success,
-        data: result.data,
-        error: result.error,
-      }, null, 2);
-
-      updateMessageById(messageId, {
-        content: resultContent,
-        error: result.success ? undefined : result.error,
-        isStreaming: false,
-      });
-
-      // Continue conversation to summarize result
-      const newAssistantMessage = createAssistantMessage();
-      addMessage(newAssistantMessage);
-
-      const updatedMessages = getCurrentMessages(newAssistantMessage.id);
-
-      // Don't pass tools - we just want the assistant to summarize the result
-      const stream = streamChat({
-        endpoint: settings.ollamaEndpoint,
-        model: settings.model,
-        messages: toOllamaMessages(updatedMessages),
-        think: settings.enableThinking,
-        signal: abortControllerRef.current?.signal,
-      });
-
-      const streamResult = await processStreamWithTimeout(
-        stream,
-        (content, thinking) => {
-          scheduleStreamingUpdate(newAssistantMessage.id, content, thinking);
-        }
-      );
-
-      flushPendingUpdate();
-
-      updateMessageById(newAssistantMessage.id, {
-        content: streamResult.error ? `Error: ${streamResult.error}` : streamResult.content,
-        thinking: streamResult.thinking || undefined,
-        error: streamResult.error,
-        isStreaming: false,
-      });
-    } catch (error) {
-      logError('AIContext.confirmAction', error);
-      const errorMessage = error instanceof Error && error.message.includes('timeout')
-        ? 'The AI server took too long to respond. The transaction may have completed - please check your wallet.'
-        : `Error executing transaction: ${error instanceof Error ? error.message : 'Unknown error'}`;
-
-      // Preserve the payload on deploy progress so retry can restore it
-      if (action.payload) {
-        setDeployProgress(prev => prev ? { ...prev, payload: action.payload } : null);
-      }
-
-      updateMessageById(messageId, {
-        content: errorMessage,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        isStreaming: false,
-      });
-    } finally {
-      isStreamingRef.current = false;
-      setIsStreaming(false);
-      abortControllerRef.current?.abort();
-      abortControllerRef.current = null;
-      pendingPayloadRef.current = null;
-      setPendingPayload(null);
-    }
-  }, [pendingConfirmation, settings, toOllamaMessages, updateMessageById, createAssistantMessage, addMessage, getCurrentMessages, scheduleStreamingUpdate, flushPendingUpdate, getAppRegistryAccess]);
-
-  const cancelAction = useCallback(() => {
-    if (!pendingConfirmation) return;
-
-    const { messageId } = pendingConfirmation;
-    setPendingConfirmation(null);
-    pendingPayloadRef.current = null;
-    setPendingPayload(null);
-
-    setMessages((prev) => {
-      const updated = prev.map((m) =>
-        m.id === messageId
-          ? { ...m, content: 'Action cancelled by user.', isStreaming: false }
-          : m
-      );
-      messagesRef.current = updated;
-      return updated;
+  const addLocalMessage = useCallback((content: string, card?: { type: string; data: unknown }) => {
+    addMessage({
+      id: generateMessageId(),
+      role: 'assistant',
+      content,
+      timestamp: Date.now(),
+      card,
     });
-  }, [pendingConfirmation, setMessages, messagesRef]);
-
-  // --- Retry failed deploy ---
-
-  const retryDeploy = useCallback(() => {
-    if (!deployProgress?.payload || isStreamingRef.current) return;
-
-    // Restore the payload from the failed deploy progress
-    const payload = deployProgress.payload;
-    pendingPayloadRef.current = payload;
-    setPendingPayload(payload);
-
-    // Clear the failed deploy progress
-    setDeployProgress(null);
-
-    // Find the last deploy user message and re-send it
-    const lastDeploy = [...messagesRef.current].reverse().find(
-      (m) => m.role === 'user' && /deploy\b/i.test(m.content)
-    );
-    if (lastDeploy) {
-      sendMessage(lastDeploy.content);
-    }
-  }, [deployProgress, sendMessage, messagesRef]);
-
-  // Auto-cancel pending confirmations after timeout to prevent indefinite waiting
-  useEffect(() => {
-    if (!pendingConfirmation) return;
-
-    const timeoutId = setTimeout(() => {
-      const { messageId } = pendingConfirmation;
-      setPendingConfirmation(null);
-      pendingPayloadRef.current = null;
-      setPendingPayload(null);
-
-      setMessages((prev) => {
-        const updated = prev.map((m) =>
-          m.id === messageId
-            ? { ...m, content: `Action timed out - confirmation not received within ${AI_CONFIRMATION_TIMEOUT_MS / 60000} minutes.`, isStreaming: false, error: 'timeout' }
-            : m
-        );
-        messagesRef.current = updated;
-        return updated;
-      });
-
-      logError('AIContext.confirmationTimeout', new Error('Pending confirmation timed out'));
-    }, AI_CONFIRMATION_TIMEOUT_MS);
-
-    return () => clearTimeout(timeoutId);
-  }, [pendingConfirmation, setMessages, messagesRef]);
-
-  // --- Batch deploy ---
-
-  const requestBatchDeploy = useCallback(async (apps: Array<{ label: string; manifest: object }>, originalMessage?: string) => {
-    if (isStreamingRef.current || !isConnected) return;
-    isStreamingRef.current = true;
-    setIsStreaming(true);
-
-    let toolMsgId: string | undefined;
-    try {
-      const names = apps.map((a) => a.label);
-      const userMessage: ChatMessage = {
-        id: generateMessageId(),
-        role: 'user',
-        content: originalMessage || `Deploy ${names.join(', ')}`,
-        timestamp: Date.now(),
-      };
-      addMessage(userMessage);
-      setDeployProgress(null);
-
-      // Add synthetic assistant message with tool_calls so the LLM
-      // sees a well-formed conversation when summarizing after confirmation.
-      const syntheticToolCallId = generateMessageId();
-      addMessage({
-        id: generateMessageId(),
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        toolCalls: [{
-          id: syntheticToolCallId,
-          type: 'function',
-          function: { name: 'batch_deploy', arguments: {} },
-        }],
-      });
-
-      toolMsgId = generateMessageId();
-      addMessage({
-        id: toolMsgId,
-        role: 'tool',
-        content: 'Validating batch deploy...',
-        toolName: 'batch_deploy',
-        toolCallId: syntheticToolCallId,
-        toolDescription: `Deploying ${names.join(', ')}`,
-        timestamp: Date.now(),
-        isStreaming: true,
-      });
-
-      // Create payloads for each app
-      const entries = await Promise.all(apps.map(async (app) => {
-        const filename = `manifest-${app.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}.json`;
-        const blob = new Blob([JSON.stringify(app.manifest, null, 2)], { type: 'application/json' });
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        const hashBytes = await sha256(bytes);
-        const hash = toHex(hashBytes);
-        return {
-          app_name: deriveAppName(filename),
-          payload: { bytes, filename, size: blob.size, hash },
-        };
-      }));
-
-      const result = await executeBatchDeploy(entries, {
-        clientManager: clientManagerRef.current,
-        address: addressRef.current,
-        signArbitrary: signArbitraryRef.current,
-        onProgress: setDeployProgress,
-        appRegistry: getAppRegistryAccess(),
-      });
-
-      if (result.requiresConfirmation) {
-        setPendingConfirmation({
-          id: generateMessageId(),
-          action: {
-            id: 'batch',
-            toolName: 'batch_deploy',
-            args: result.pendingAction!.args,
-            description: result.confirmationMessage!,
-          },
-          messageId: toolMsgId,
-        });
-        updateMessageById(toolMsgId, { content: result.confirmationMessage!, isStreaming: false });
-      } else {
-        updateMessageById(toolMsgId, {
-          content: `Error: ${result.error}`,
-          error: result.error,
-          isStreaming: false,
-        });
-      }
-    } catch (error) {
-      logError('AIContext.requestBatchDeploy', error);
-      if (toolMsgId) {
-        updateMessageById(toolMsgId, {
-          content: `Batch deploy failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          error: error instanceof Error ? error.message : 'Unknown error',
-          isStreaming: false,
-        });
-      }
-    } finally {
-      isStreamingRef.current = false;
-      setIsStreaming(false);
-    }
-  }, [isConnected, addMessage, updateMessageById, getAppRegistryAccess]);
+  }, [addMessage]);
 
   // --- Context value ---
 
@@ -864,7 +448,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       attachPayload,
       clearPayload,
       requestBatchDeploy,
-      retryDeploy,
+      addLocalMessage,
     }),
     [
       isOpen,
@@ -888,7 +472,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       attachPayload,
       clearPayload,
       requestBatchDeploy,
-      retryDeploy,
+      addLocalMessage,
     ]
   );
 

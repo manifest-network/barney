@@ -71,11 +71,12 @@ export function useChatPersistence() {
   useEffect(() => {
     if (settings.saveHistory) {
       try {
-        // Only save non-streaming messages; strip card data to avoid persisting large logs
+        // Only save non-streaming messages; strip card and toolCalls to avoid
+        // persisting large logs and sensitive tool arguments (e.g. env vars, addresses)
         const toSave = messages
           .filter((m) => !m.isStreaming)
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Intentionally stripping card data from persisted messages
-          .map(({ card, ...rest }) => rest);
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Intentionally stripping card/toolCalls from persisted messages
+          .map(({ card, toolCalls, ...rest }) => rest);
         localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(toSave));
       } catch (error) {
         logError('AIContext.saveHistory', error);

@@ -50,6 +50,7 @@ describe('getSystemPrompt', () => {
   it('contains behavior rules', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('On file attachment');
+    expect(prompt).toContain('Deploy by image');
     expect(prompt).toContain('Default size');
     expect(prompt).toContain('Be concise');
   });
@@ -57,6 +58,32 @@ describe('getSystemPrompt', () => {
   it('contains file attachment instructions', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('(File attached:');
-    expect(prompt).toContain('immediately call deploy_app()');
+    expect(prompt).toContain('call deploy_app()');
+  });
+
+  it('contains image-based deploy instructions', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('deploy_app(image=');
+    expect(prompt).toContain('image="postgres:17"');
+  });
+
+  it('instructs to ask user for unlisted images', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('ask the user for port and env before deploying');
+  });
+
+  it('contains Known Images section', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('## Known Images');
+    expect(prompt).toContain('postgres: port=5432');
+    expect(prompt).toContain('neo4j: port=7474,7687');
+    expect(prompt).toContain('redis: port=6379');
+    expect(prompt).toContain('nginx: port=80');
+    expect(prompt).toContain('POSTGRES_PASSWORD=""');
+  });
+
+  it('contains storage instructions for stateful apps', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('storage=true');
   });
 });

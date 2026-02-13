@@ -129,6 +129,14 @@ describe('isPrivateHost (SSRF protection via ipaddr.js)', () => {
     // (they'll fail at DNS resolution)
     expect(isPrivateHost('not-an-ip')).toBe(false);
   });
+
+  it('blocks DNS-to-IP mapping services (DNS rebinding prevention)', () => {
+    expect(isPrivateHost('10.0.0.1.nip.io')).toBe(true);
+    expect(isPrivateHost('192.168.1.1.nip.io')).toBe(true);
+    expect(isPrivateHost('app.10.0.0.1.xip.io')).toBe(true);
+    expect(isPrivateHost('10.0.0.1.sslip.io')).toBe(true);
+    expect(isPrivateHost('ANYTHING.NIP.IO')).toBe(true);
+  });
 });
 
 describe('validateSettings', () => {
@@ -264,6 +272,67 @@ describe('sanitizeToolArgs', () => {
     expect(Object.prototype.hasOwnProperty.call(result, 'constructor')).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(result, 'prototype')).toBe(false);
     expect(result.normalKey).toBe('safe');
+  });
+
+  it('strips prototype pollution vectors from nested objects', () => {
+    const args = {
+      env: {
+        SAFE: 'value',
+        __proto__: { polluted: true },
+        nested: {
+          constructor: 'bad',
+          ok: 'fine',
+        },
+      },
+    };
+    const result = sanitizeToolArgs(args);
+    const env = result.env as Record<string, unknown>;
+    expect(env.SAFE).toBe('value');
+    expect(Object.prototype.hasOwnProperty.call(env, '__proto__')).toBe(false);
+    const nested = env.nested as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(nested, 'constructor')).toBe(false);
+    expect(nested.ok).toBe('fine');
+  });
+
+  it('sanitizes arrays recursively', () => {
+    const args = {
+      items: [
+        { __proto__: { bad: true }, name: 'ok' },
+        'plain-string',
+        42,
+      ],
+    };
+    const result = sanitizeToolArgs(args);
+    const items = result.items as unknown[];
+    expect(items).toHaveLength(3);
+    expect(Object.prototype.hasOwnProperty.call(items[0], '__proto__')).toBe(false);
+    expect((items[0] as Record<string, unknown>).name).toBe('ok');
+    expect(items[1]).toBe('plain-string');
+    expect(items[2]).toBe(42);
+  });
+
+  it('handles deeply nested pollution attempts', () => {
+    const args = {
+      a: { b: { c: { d: { prototype: 'evil', value: 1 } } } },
+    };
+    const result = sanitizeToolArgs(args);
+    const deep = ((result.a as any).b as any).c.d as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(deep, 'prototype')).toBe(false);
+    expect(deep.value).toBe(1);
+  });
+
+  it('preserves null and primitive values in nested objects', () => {
+    const args = {
+      a: null,
+      b: { c: null, d: 0, e: false, f: '' },
+    };
+    const result = sanitizeToolArgs(args);
+    expect(result.a).toBeNull();
+    const b = result.b as Record<string, unknown>;
+    expect(b.c).toBeNull();
+    expect(b.d).toBe(0);
+    expect(b.e).toBe(false);
+    expect(b.f).toBe('');
   });
 });
 

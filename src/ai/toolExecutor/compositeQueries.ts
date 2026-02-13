@@ -17,7 +17,7 @@ import {
 import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo, createSignMessage, createAuthToken } from '../../api/provider-api';
-import { getLeaseStatus, getLeaseLogs } from '../../api/fred';
+import { getLeaseStatus, getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { formatConnectionUrl } from './compositeTransactions';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
@@ -72,13 +72,25 @@ export async function executeListApps(
   return {
     success: true,
     data: {
-      apps: apps.map((a) => ({
-        name: a.name,
-        status: a.status,
-        size: a.size,
-        url: a.url,
-        created: new Date(a.createdAt).toISOString(),
-      })),
+      apps: apps.map((a) => {
+        let image: string | undefined;
+        if (a.manifest) {
+          try {
+            const manifest = JSON.parse(a.manifest);
+            if (typeof manifest.image === 'string') image = manifest.image;
+          } catch (error) {
+            logError('compositeQueries.executeListApps.parseManifest', error);
+          }
+        }
+        return {
+          name: a.name,
+          status: a.status,
+          size: a.size,
+          image,
+          url: a.url,
+          created: new Date(a.createdAt).toISOString(),
+        };
+      }),
       count: apps.length,
     },
   };
@@ -201,12 +213,26 @@ export async function executeAppStatus(
   // Build a clickable connection URL from host + port mappings
   const connectionUrl = formatConnectionUrl(appUrl, appConnection) || appUrl;
 
+  // Extract image from stored manifest
+  let image: string | undefined;
+  if (app.manifest) {
+    try {
+      const manifest = JSON.parse(app.manifest);
+      if (typeof manifest.image === 'string') {
+        image = manifest.image;
+      }
+    } catch (error) {
+      logError('compositeQueries.executeAppStatus.parseManifest', error);
+    }
+  }
+
   return {
     success: true,
     data: {
       name: app.name,
       status: currentStatus,
       size: app.size,
+      image,
       url: connectionUrl || appUrl,
       connection: appConnection,
       chainState,
@@ -304,8 +330,8 @@ export async function executeBrowseCatalog(): Promise<ToolResult> {
         try {
           const health = await getProviderHealth(p.apiUrl);
           healthy = health?.status === 'healthy';
-        } catch {
-          // offline
+        } catch (error) {
+          logError(`compositeQueries.executeBrowseCatalog.healthCheck[${p.uuid}]`, error);
         }
       }
       return {
@@ -345,8 +371,20 @@ export async function executeBrowseCatalog(): Promise<ToolResult> {
   };
 }
 
+/** Allowed module+subcommand pairs for the cosmos_query escape hatch. */
+const ALLOWED_QUERY_COMMANDS: Record<string, Set<string>> = {
+  bank: new Set(['balances', 'balance', 'total-supply', 'denom-metadata', 'params']),
+  billing: new Set(['leases', 'lease', 'credit-accounts', 'credit-account', 'params']),
+  sku: new Set(['skus', 'sku', 'params']),
+  provider: new Set(['providers', 'provider', 'params']),
+  staking: new Set(['validators', 'delegation', 'delegations', 'params']),
+  gov: new Set(['proposals', 'proposal', 'params']),
+  auth: new Set(['account', 'accounts', 'params']),
+};
+
 /**
  * Execute cosmos_query (pass-through to MCP).
+ * Restricted to an allowlist of safe module+subcommand pairs.
  */
 export async function executeCosmosQuery(
   args: Record<string, unknown>,
@@ -363,6 +401,14 @@ export async function executeCosmosQuery(
   }
   if (typeof subcommand !== 'string' || !subcommand) {
     return { success: false, error: 'subcommand is required' };
+  }
+
+  const allowedSubs = ALLOWED_QUERY_COMMANDS[module];
+  if (!allowedSubs || !allowedSubs.has(subcommand)) {
+    const allowed = Object.entries(ALLOWED_QUERY_COMMANDS)
+      .map(([m, subs]) => `${m}: ${[...subs].join(', ')}`)
+      .join('; ');
+    return { success: false, error: `"${module} ${subcommand}" is not allowed. Allowed queries: ${allowed}` };
   }
 
   const parseResult = parseJsonStringArray(args.args);
@@ -403,17 +449,25 @@ export async function executeGetLogs(
 
   const tail = typeof args.tail === 'number' && args.tail > 0 ? Math.floor(args.tail) : 100;
 
-  // Mint auth token (same pattern as app_status)
-  const timestamp = Math.floor(Date.now() / 1000);
-  const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
-  const signResult: SignResult = await signArbitrary(address, signMessage);
-  const authToken = createAuthToken(
-    address,
-    app.leaseUuid,
-    timestamp,
-    signResult.pub_key.value,
-    signResult.signature
-  );
+  let authToken: string;
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
+    const signResult: SignResult = await signArbitrary(address, signMessage);
+    authToken = createAuthToken(
+      address,
+      app.leaseUuid,
+      timestamp,
+      signResult.pub_key.value,
+      signResult.signature
+    );
+  } catch (error) {
+    logError('compositeQueries.executeGetLogs.sign', error);
+    return {
+      success: false,
+      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+    };
+  }
 
   let logsResponse;
   try {
@@ -426,22 +480,25 @@ export async function executeGetLogs(
     };
   }
 
-  // Truncate if total log text exceeds limit
-  const logs: Record<string, string> = {};
+  // Full logs for the UI display card
+  const fullLogs = logsResponse.logs;
+
+  // Truncated logs for the LLM context (avoid bloating the conversation)
+  const llmLogs: Record<string, string> = {};
   let totalChars = 0;
   let truncated = false;
-  for (const [service, text] of Object.entries(logsResponse.logs)) {
+  for (const [service, text] of Object.entries(fullLogs)) {
     if (totalChars >= MAX_LOG_CHARS) {
       truncated = true;
       break;
     }
     const remaining = MAX_LOG_CHARS - totalChars;
     if (text.length > remaining) {
-      logs[service] = text.slice(text.length - remaining);
+      llmLogs[service] = text.slice(text.length - remaining);
       totalChars += remaining;
       truncated = true;
     } else {
-      logs[service] = text;
+      llmLogs[service] = text;
       totalChars += text.length;
     }
   }
@@ -450,15 +507,15 @@ export async function executeGetLogs(
     success: true,
     data: {
       app_name: app.name,
-      logs,
+      logs: llmLogs,
       truncated,
     },
     displayCard: {
       type: 'logs',
       data: {
         app_name: app.name,
-        logs,
-        truncated,
+        logs: fullLogs,
+        truncated: false,
       },
     },
   };
@@ -513,4 +570,131 @@ export async function executeLeaseHistory(
       hasMore: total !== undefined ? offset + leases.length < total : leases.length === limit,
     },
   };
+}
+
+/**
+ * Execute app_diagnostics: Fetch provision status for an app.
+ */
+export async function executeAppDiagnostics(
+  args: Record<string, unknown>,
+  options: ToolExecutorOptions
+): Promise<ToolResult> {
+  const { address, appRegistry, signArbitrary } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!appRegistry) return { success: false, error: 'App registry not available' };
+
+  const name = args.app_name as string;
+  if (!name) return { success: false, error: 'App name is required' };
+
+  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
+  if (!app) return { success: false, error: `No app found named "${name}"` };
+
+  if (!app.providerUrl) {
+    return { success: false, error: `App "${app.name}" has no provider URL (it may be stopped)` };
+  }
+  if (!signArbitrary) {
+    return { success: false, error: 'Signing not available' };
+  }
+
+  let authToken: string;
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
+    const signResult: SignResult = await signArbitrary(address, signMessage);
+    authToken = createAuthToken(
+      address,
+      app.leaseUuid,
+      timestamp,
+      signResult.pub_key.value,
+      signResult.signature
+    );
+  } catch (error) {
+    logError('compositeQueries.executeAppDiagnostics.sign', error);
+    return {
+      success: false,
+      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+    };
+  }
+
+  try {
+    const provision = await getLeaseProvision(app.providerUrl, app.leaseUuid, authToken);
+    return {
+      success: true,
+      data: {
+        app_name: app.name,
+        status: provision.status,
+        fail_count: provision.fail_count,
+        last_error: provision.last_error,
+      },
+    };
+  } catch (error) {
+    logError('compositeQueries.executeAppDiagnostics', error);
+    return {
+      success: false,
+      error: `Failed to fetch diagnostics for "${app.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+    };
+  }
+}
+
+/**
+ * Execute app_releases: Fetch release history for an app.
+ */
+export async function executeAppReleases(
+  args: Record<string, unknown>,
+  options: ToolExecutorOptions
+): Promise<ToolResult> {
+  const { address, appRegistry, signArbitrary } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!appRegistry) return { success: false, error: 'App registry not available' };
+
+  const name = args.app_name as string;
+  if (!name) return { success: false, error: 'App name is required' };
+
+  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
+  if (!app) return { success: false, error: `No app found named "${name}"` };
+
+  if (!app.providerUrl) {
+    return { success: false, error: `App "${app.name}" has no provider URL (it may be stopped)` };
+  }
+  if (!signArbitrary) {
+    return { success: false, error: 'Signing not available' };
+  }
+
+  let authToken: string;
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
+    const signResult: SignResult = await signArbitrary(address, signMessage);
+    authToken = createAuthToken(
+      address,
+      app.leaseUuid,
+      timestamp,
+      signResult.pub_key.value,
+      signResult.signature
+    );
+  } catch (error) {
+    logError('compositeQueries.executeAppReleases.sign', error);
+    return {
+      success: false,
+      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+    };
+  }
+
+  try {
+    const releasesResponse = await getLeaseReleases(app.providerUrl, app.leaseUuid, authToken);
+    return {
+      success: true,
+      data: {
+        app_name: app.name,
+        releases: releasesResponse.releases,
+        count: releasesResponse.releases.length,
+      },
+    };
+  } catch (error) {
+    logError('compositeQueries.executeAppReleases', error);
+    return {
+      success: false,
+      error: `Failed to fetch releases for "${app.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+    };
+  }
 }

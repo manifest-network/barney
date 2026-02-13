@@ -38,22 +38,26 @@ ErrorBoundary
   └─ ThemeProvider (next-themes)
       └─ ChainProvider (cosmos-kit wallet abstraction)
           └─ ToastProvider (toast notifications)
-              ├─ AIProvider (chat state, tool execution, Ollama streaming)
-              │   └─ AppShell
-              │       ├─ LandingPage (when not connected)
-              │       └─ MainLayout (when connected)
-              │           ├─ AppsSidebar (wallet, credits, running apps)
-              │           └─ ChatPanel (monolithic: messages, input, settings)
-              │               ├─ MessageBubble (per-message rendering)
-              │               ├─ ProgressCard (during deploy)
-              │               ├─ AppCard (deploy success)
-              │               ├─ ConfirmationCard (TX approval)
-              │               ├─ ToolResultCard / LogCard
-              │               └─ AISettings (inline settings panel)
-              └─ ToastContainer (toast rendering)
+              └─ AIProvider (chat state, tool execution, Ollama streaming)
+                  ├─ AppShell
+                  │   ├─ LandingPage (when not connected)
+                  │   └─ MainLayout (when connected)
+                  │       ├─ AppsSidebar (wallet, credits, running apps)
+                  │       └─ AIErrorBoundary
+                  │           └─ ChatPanel (monolithic: messages, input, settings)
+                  │               ├─ MessageBubble (per-message rendering)
+                  │               │   └─ StreamingText (typewriter effect)
+                  │               ├─ ProgressCard (during deploy)
+                  │               ├─ AppCard (deploy success)
+                  │               ├─ ConfirmationCard (TX approval)
+                  │               │   └─ ManifestEditor (inline manifest editing)
+                  │               ├─ ToolResultCard / LogCard
+                  │               ├─ HelpCard (/help display)
+                  │               └─ AISettings (inline settings panel)
+                  └─ ToastContainer (toast rendering)
 ```
 
-`AppShell` (`src/components/layout/AppShell.tsx`) is the top-level router. It syncs wallet state (clientManager, address, signArbitrary) from cosmos-kit into AIContext — replacing the old `AIAssistant` component.
+`AppShell` (`src/components/layout/AppShell.tsx`) is the top-level router. It syncs wallet state (clientManager, address, signArbitrary) from cosmos-kit into AIContext.
 
 ### AI Tool Execution Flow
 
@@ -62,28 +66,32 @@ The AI assistant uses a 3-layer architecture:
 1. **AIContext** (`src/contexts/AIContext.tsx`) - Manages chat state, streams from Ollama, executes tools
 2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser`
 3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
-   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`
-   - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`
+   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`
+   - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`
    - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
    - **Internal**: `batch_deploy` — orchestrates multi-app deploys from the UI (not exposed to AI, used by `requestBatchDeploy` in AIContext)
 
-### 11 Composite Tools
+### 15 Composite Tools
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `deploy_app(app_name?, size?)` | TX | Deploy from attached manifest. Defaults: size=micro, name from filename |
-| `stop_app(app_name)` | TX | Stop app by name (closes lease on-chain) |
+| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, storage?)` | TX | Deploy from attached manifest or Docker image. Defaults: size=micro, name from filename/image |
+| `stop_app(app_name)` | TX | Stop app by name, or "all" to stop all running apps |
 | `fund_credits(amount)` | TX | Add credits in display units |
+| `restart_app(app_name)` | TX | Restart a running app |
+| `update_app(app_name, image?, port?, env?, user?, tmpfs?)` | TX | Update app with new manifest (file attachment or Docker image) |
 | `list_apps(state?)` | Query | List apps filtered by state (default: running) |
 | `app_status(app_name)` | Query | Detailed status: registry + chain + fred |
 | `get_logs(app_name, tail?)` | Query | Container logs for a running app |
 | `get_balance()` | Query | Credits, spending rate, time remaining |
 | `browse_catalog()` | Query | Providers + SKU tiers with health checks |
 | `lease_history(state?, limit?, offset?)` | Query | Paginated on-chain lease history with state filtering |
+| `app_diagnostics(app_name)` | Query | Provision diagnostics: status, fail count, last error |
+| `app_releases(app_name)` | Query | Release/version history for an app |
 | `cosmos_query(module, subcommand, args?)` | Query | Raw chain query escape hatch |
 | `cosmos_tx(module, subcommand, args)` | TX | Raw chain TX escape hatch |
 
-Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`.
+Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`. Manifest generation: `src/ai/manifest.ts`. Known Docker images: `src/ai/knownImages.ts`.
 
 ### App Registry
 
@@ -92,6 +100,7 @@ Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`.
 ```
 Key: barney-apps-{address}
 AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, connection?, manifest?, status }
+AppStatus: 'deploying' | 'running' | 'stopped' | 'failed'
 ```
 
 Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `validateAppName`.
@@ -102,6 +111,7 @@ Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
 
 `src/ai/progress.ts` defines `DeployProgress` with phases:
 `checking_credits → funding → creating_lease → uploading → provisioning → ready | failed`
+Additional phases for restart/update operations: `restarting`, `updating`
 
 Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored in AIContext as `deployProgress`, and rendered by `ProgressCard`. Batch deploys include a `batch` array with per-app progress.
 
@@ -111,9 +121,14 @@ Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored 
 
 - `getLeaseStatus()` — Single fetch
 - `pollLeaseUntilReady()` — Polling loop with configurable interval, max attempts, abort signal
+- `waitForLeaseReady()` — WebSocket-based wait with polling fallback for deploy readiness
+- `connectLeaseEvents()` — WebSocket connection to Fred's `/v1/leases/{uuid}/events` endpoint for real-time lease updates
 - `getLeaseLogs()` — Fetch container logs for a running lease
 - `getLeaseProvision()` — Fetch provision status
 - `getLeaseInfo()` — Fetch connection details (ports, URLs)
+- `restartLease()` — Restart a running lease
+- `updateLease()` — Update a lease with a new manifest payload
+- `getLeaseReleases()` — Fetch release/version history for a lease
 
 ### Transaction Path
 
@@ -121,7 +136,7 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 
 ### Wallet Integration
 
-- cosmos-kit provides wallet abstraction (currently only Web3Auth is enabled in `src/main.tsx`; Keplr, Leap, Cosmostation, Ledger packages are installed but not imported)
+- cosmos-kit provides wallet abstraction (Web3Auth and Keplr are enabled in `src/main.tsx`; Leap, Cosmostation, Ledger packages are installed but not imported)
 - `CosmosClientManager` singleton wraps the signer for MCP operations
 - `signArbitrary` used for ADR-036 off-chain authentication (payload uploads to providers, fred status queries)
 
@@ -132,9 +147,9 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 | `billing.ts` | Leases, credit accounts (custom Manifest module) |
 | `sku.ts` | Provider catalog, SKU definitions |
 | `bank.ts` | Cosmos SDK bank queries |
-| `tx.ts` | Transaction utilities and message builders |
+| `tx.ts` | Transaction signing client and message builders for all Manifest modules (billing, SKU, provider management) |
 | `provider-api.ts` | Payload upload with ADR-036 auth |
-| `fred.ts` | Fred deployment status polling |
+| `fred.ts` | Fred deployment status polling + WebSocket streaming |
 | `ollama.ts` | LLM streaming with retry/backoff |
 | `config.ts` | API endpoints, denom metadata, price formatting |
 | `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
@@ -154,19 +169,30 @@ AIContext delegates to extracted hooks to keep the provider manageable:
 | `useChatPersistence` | localStorage-backed settings + history with lazy initializers to avoid save/load race conditions |
 | `useAutoScroll` | MutationObserver-based auto-scroll that respects user scroll position |
 | `useFocusTrap` | Keyboard focus trapping for modals/overlays with Escape support |
+| `useInputHistory` | Arrow-key navigation through past chat inputs |
+| `useAI` | Context consumer hook for AIContext |
+| `useToast` | Context consumer hook for ToastContext |
+| `useTxHandler` | Transaction submission handler with cosmos-kit integration and toast notifications |
+| `useLeaseItems` | Manages lease item state in forms (add/remove/update SKU items) |
+| `useBatchSelection` | Manages batch selection state for bulk operations |
+| `useToolExecution` | Tool call dispatch, caching, and display — handles tool result rendering and confirmation flow handoff |
+| `useConfirmationFlow` | TX confirmation, cancellation, and timeout — owns `pendingConfirmation` state |
+| `useBatchDeploy` | Multi-app deploy orchestration from the UI (creates payloads, executes batch, sets confirmation) |
+| `useCopyToClipboard` | Clipboard copy with feedback state |
 
 ### Utility Modules (`src/utils/`)
 
 | Module | Purpose |
 |--------|---------|
 | `errors.ts` | `logError()` — structured error logging (use instead of raw `console.error`) |
-| `hash.ts` | `sha256()`, `toHex()` — hashing and hex encoding; `MAX_PAYLOAD_SIZE` (5KB) |
+| `hash.ts` | `sha256()`, `toHex()`, `generatePassword()` — hashing, hex encoding, password generation; `MAX_PAYLOAD_SIZE` (5KB) |
 | `format.ts` | Amount conversion (`toBaseUnits`, `fromBaseUnits`), date/duration formatting, UUID validation |
 | `fileValidation.ts` | Upload validation: size limits, allowed extensions (`.yaml`, `.yml`, `.json`, `.txt`), MIME type checks |
 | `pricing.ts` | BigInt-based cost calculations (`formatCostPerHour`, `calculateEstimatedCost`) to avoid integer overflow |
 | `leaseState.ts` | Lease state display helpers — badge classes, labels, colors, filter mapping |
 | `address.ts` | Bech32 address validation (`isValidBech32Address`) and truncation (`truncateAddress`) |
 | `url.ts` | URL validation with SSRF protection (`parseHttpUrl`, `isUrlSsrfSafe`) |
+| `tx.ts` | Transaction event parsing utilities (extract attribute values from TX events) |
 | `cn.ts` | Class name combiner (clsx-style): `cn('foo', condition && 'bar')` |
 
 ### Constants (`src/config/constants.ts`)
@@ -184,6 +210,9 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `AI_TOOL_CACHE_TTL_MS` | 10s | Query result cache lifetime |
 | `AI_TOOL_CACHE_MAX_SIZE` | 50 | Max cached query results |
 | `MAX_PAYLOAD_SIZE` | 5KB | Maximum file upload size (in `hash.ts`) |
+| `WS_RECONNECT_DELAY_MS` | 1s | Delay before WebSocket reconnect attempt |
+| `WS_MAX_RECONNECT_ATTEMPTS` | 2 | Max reconnects before falling back to polling |
+| `WS_LIVENESS_TIMEOUT_MS` | 45s | WebSocket data liveness timeout (Fred pings every 30s) |
 
 ## Styling
 
@@ -196,7 +225,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 ## Key Patterns
 
 - **Refs for async access**: AIContext uses refs (`clientManagerRef`, `addressRef`, `signArbitraryRef`) to avoid stale closures in streaming callbacks
-- **SSRF protection**: `src/ai/validation.ts` uses `ipaddr.js` to block private/internal addresses (DEV mode allows localhost for Ollama)
+- **SSRF protection**: `src/utils/url.ts` provides `parseHttpUrl` and `isUrlSsrfSafe` used across the codebase; `src/ai/validation.ts` adds `isPrivateHost()` with `ipaddr.js` for Ollama endpoint validation (DEV mode allows localhost)
 - **Error utilities**: Use `logError()` from `src/utils/errors.ts` instead of raw `console.error`
 - **Retry logic**: Use `withRetry()` from `src/api/utils.ts` for transient network error recovery with exponential backoff
 - **Tool result caching**: Query tool results cached for 10s in AIContext to reduce redundant API calls (max 50 entries, FIFO eviction). Cache is scoped per wallet address and cleared on wallet change.

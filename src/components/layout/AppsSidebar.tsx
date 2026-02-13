@@ -6,7 +6,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { LogOut, Circle, Zap, History, RotateCcw } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
-import { getApps, updateApp, type AppEntry } from '../../registry/appRegistry';
+import { getApps, reconcileWithChain, type AppEntry } from '../../registry/appRegistry';
 import { getCreditEstimate, getLeasesByTenant, LeaseState } from '../../api/billing';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits } from '../../utils/format';
@@ -52,9 +52,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const refresh = useCallback(async () => {
     if (!address) return;
 
-    const apps = getApps(address);
-
-    // Reconcile: mark apps as stopped if lease is no longer active/pending
+    // Reconcile registry with on-chain lease state
     try {
       const [activeLeases, pendingLeases] = await Promise.all([
         getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE),
@@ -64,21 +62,13 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
         ...activeLeases.map((l) => l.uuid),
         ...pendingLeases.map((l) => l.uuid),
       ]);
-
-      for (const app of apps) {
-        if (
-          (app.status === 'running' || app.status === 'deploying') &&
-          !activeUuids.has(app.leaseUuid)
-        ) {
-          updateApp(address, app.leaseUuid, { status: 'stopped' });
-          app.status = 'stopped';
-        }
-      }
+      reconcileWithChain(address, activeUuids);
     } catch (error) {
       logError('AppsSidebar.refresh.reconcile', error);
     }
 
-    setApps(apps);
+    // Re-read after reconciliation
+    setApps(getApps(address));
 
     try {
       const estimate = await getCreditEstimate(address);

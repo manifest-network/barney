@@ -7,7 +7,8 @@
 
 import { logError } from '../utils/errors';
 
-export type AppStatus = 'deploying' | 'running' | 'stopped' | 'failed';
+export const APP_STATUSES = ['deploying', 'running', 'stopped', 'failed'] as const;
+export type AppStatus = (typeof APP_STATUSES)[number];
 
 export interface AppEntry {
   name: string;
@@ -23,8 +24,43 @@ export interface AppEntry {
   manifest?: string;
 }
 
+/** Runtime set derived from APP_STATUSES for O(1) validation at the localStorage boundary */
+const VALID_STATUSES: Set<string> = new Set(APP_STATUSES);
+
 /** Name validation: lowercase alphanumeric + hyphens, 1-32 chars, no leading/trailing hyphen */
 const APP_NAME_REGEX = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
+
+/** Pattern matching env var names that likely contain secrets */
+const SENSITIVE_ENV_PATTERN = /password|secret|token|key|credential|api[_-]?key/i;
+
+/**
+ * Sanitize a manifest JSON string for localStorage storage.
+ * Replaces sensitive env var values with empty strings to avoid persisting secrets.
+ * Empty values trigger auto-generation (via generatePassword) on re-deploy.
+ */
+export function sanitizeManifestForStorage(manifestJson: string): string {
+  try {
+    const manifest: unknown = JSON.parse(manifestJson);
+    if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+      return manifestJson;
+    }
+
+    const obj = manifest as Record<string, unknown>;
+    if (obj.env && typeof obj.env === 'object' && !Array.isArray(obj.env)) {
+      const sanitizedEnv: Record<string, string> = {};
+      for (const [key, value] of Object.entries(obj.env as Record<string, string>)) {
+        sanitizedEnv[key] = SENSITIVE_ENV_PATTERN.test(key) ? '' : String(value);
+      }
+      obj.env = sanitizedEnv;
+    }
+
+    return JSON.stringify(obj, null, 2);
+  } catch (error) {
+    logError('appRegistry.sanitizeManifestForStorage', error);
+    // Return empty manifest rather than unsanitized input that may contain secrets
+    return '{}';
+  }
+}
 
 function storageKey(address: string): string {
   return `barney-apps-${address}`;
@@ -54,11 +90,13 @@ function loadApps(address: string): AppEntry[] {
         typeof (entry as AppEntry).providerUuid === 'string' &&
         typeof (entry as AppEntry).providerUrl === 'string' &&
         typeof (entry as AppEntry).createdAt === 'number' &&
-        typeof (entry as AppEntry).status === 'string'
+        VALID_STATUSES.has((entry as AppEntry).status)
     );
     // If we dropped entries, persist the cleaned list
     if (valid.length !== parsed.length) {
-      saveApps(address, valid);
+      if (!saveApps(address, valid)) {
+        logError('appRegistry.loadApps', new Error(`Failed to persist cleaned registry (dropped ${parsed.length - valid.length} invalid entries)`));
+      }
     }
     return valid;
   } catch (error) {
@@ -68,11 +106,13 @@ function loadApps(address: string): AppEntry[] {
   }
 }
 
-function saveApps(address: string, apps: AppEntry[]): void {
+function saveApps(address: string, apps: AppEntry[]): boolean {
   try {
     localStorage.setItem(storageKey(address), JSON.stringify(apps));
+    return true;
   } catch (error) {
     logError('appRegistry.saveApps', error);
+    return false;
   }
 }
 
@@ -160,6 +200,7 @@ export function getAppByLease(address: string, leaseUuid: string): AppEntry | nu
 /**
  * Add a new app entry. Returns the added entry.
  * Removes any existing stopped/failed app with the same name (allows name reuse).
+ * Throws if localStorage write fails (callers should surface this to the user).
  */
 export function addApp(address: string, entry: AppEntry): AppEntry {
   let apps = loadApps(address);
@@ -170,7 +211,9 @@ export function addApp(address: string, entry: AppEntry): AppEntry {
       (a.status !== 'stopped' && a.status !== 'failed')
   );
   apps.push(entry);
-  saveApps(address, apps);
+  if (!saveApps(address, apps)) {
+    throw new Error('Failed to save app to local registry (localStorage may be full). The lease was created on-chain but may not appear in the sidebar.');
+  }
   return entry;
 }
 
@@ -185,7 +228,9 @@ export function updateApp(
   if (idx === -1) return null;
 
   apps[idx] = { ...apps[idx], ...updates };
-  saveApps(address, apps);
+  if (!saveApps(address, apps)) {
+    logError('appRegistry.updateApp', new Error('localStorage write failed — update may not persist across page reload'));
+  }
   return apps[idx];
 }
 
@@ -194,7 +239,9 @@ export function removeApp(address: string, leaseUuid: string): boolean {
   const apps = loadApps(address);
   const filtered = apps.filter((a) => a.leaseUuid !== leaseUuid);
   if (filtered.length === apps.length) return false;
-  saveApps(address, filtered);
+  if (!saveApps(address, filtered)) {
+    logError('appRegistry.removeApp', new Error('localStorage write failed — removal may not persist across page reload'));
+  }
   return true;
 }
 
@@ -219,10 +266,21 @@ export function reconcileWithChain(
     ) {
       app.status = 'stopped';
       changed = true;
+    } else if (
+      app.status === 'failed' &&
+      activeLeaseUuids.has(app.leaseUuid)
+    ) {
+      // Lease is still active on-chain — restore to running.
+      // Covers false failures from transient issues (e.g. WebSocket/polling
+      // errors during restart/update).
+      app.status = 'running';
+      changed = true;
     }
   }
 
   if (changed) {
-    saveApps(address, apps);
+    if (!saveApps(address, apps)) {
+      logError('appRegistry.reconcileWithChain', new Error('localStorage write failed — reconciliation may not persist across page reload'));
+    }
   }
 }

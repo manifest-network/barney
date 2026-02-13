@@ -135,19 +135,19 @@ describe('validateAuthTimestamp', () => {
     expect(() => validateAuthTimestamp(now)).not.toThrow();
   });
 
-  it('accepts timestamp 4 minutes ago', () => {
-    const fourMinAgo = Math.floor(Date.now() / 1000) - 240;
-    expect(() => validateAuthTimestamp(fourMinAgo)).not.toThrow();
+  it('accepts timestamp 30 seconds ago', () => {
+    const thirtySecAgo = Math.floor(Date.now() / 1000) - 30;
+    expect(() => validateAuthTimestamp(thirtySecAgo)).not.toThrow();
   });
 
-  it('rejects timestamp 6 minutes ago', () => {
-    const sixMinAgo = Math.floor(Date.now() / 1000) - 360;
-    expect(() => validateAuthTimestamp(sixMinAgo)).toThrow('expired');
+  it('rejects timestamp 90 seconds ago', () => {
+    const ninetySecAgo = Math.floor(Date.now() / 1000) - 90;
+    expect(() => validateAuthTimestamp(ninetySecAgo)).toThrow('expired');
   });
 
-  it('rejects timestamp 2 minutes in the future', () => {
-    const twoMinFuture = Math.floor(Date.now() / 1000) + 120;
-    expect(() => validateAuthTimestamp(twoMinFuture)).toThrow('future');
+  it('rejects timestamp 15 seconds in the future', () => {
+    const fifteenSecFuture = Math.floor(Date.now() / 1000) + 15;
+    expect(() => validateAuthTimestamp(fifteenSecFuture)).toThrow('future');
   });
 
   it('rejects NaN', () => {
@@ -158,23 +158,23 @@ describe('validateAuthTimestamp', () => {
     expect(() => validateAuthTimestamp(Infinity)).toThrow('finite number');
   });
 
-  it('accepts timestamp exactly 300 seconds ago', () => {
-    const exactLimit = Math.floor(Date.now() / 1000) - 300;
+  it('accepts timestamp exactly 60 seconds ago', () => {
+    const exactLimit = Math.floor(Date.now() / 1000) - 60;
     expect(() => validateAuthTimestamp(exactLimit)).not.toThrow();
   });
 
-  it('rejects timestamp 301 seconds ago', () => {
-    const justPast = Math.floor(Date.now() / 1000) - 301;
+  it('rejects timestamp 61 seconds ago', () => {
+    const justPast = Math.floor(Date.now() / 1000) - 61;
     expect(() => validateAuthTimestamp(justPast)).toThrow('expired');
   });
 
-  it('accepts timestamp exactly 60 seconds in the future', () => {
-    const exactFuture = Math.floor(Date.now() / 1000) + 60;
+  it('accepts timestamp exactly 10 seconds in the future', () => {
+    const exactFuture = Math.floor(Date.now() / 1000) + 10;
     expect(() => validateAuthTimestamp(exactFuture)).not.toThrow();
   });
 
-  it('rejects timestamp 61 seconds in the future', () => {
-    const justFuture = Math.floor(Date.now() / 1000) + 61;
+  it('rejects timestamp 11 seconds in the future', () => {
+    const justFuture = Math.floor(Date.now() / 1000) + 11;
     expect(() => validateAuthTimestamp(justFuture)).toThrow('future');
   });
 });

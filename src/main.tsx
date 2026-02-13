@@ -13,14 +13,16 @@ import { ToastContainer } from './components/ui/Toast';
 import { AIProvider } from './contexts/AIContext';
 import { AppShell } from './components/layout/AppShell';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
+import { logError } from './utils/errors';
 
 // Web3Auth configuration
 const WEB3AUTH_CLIENT_ID = import.meta.env.PUBLIC_WEB3AUTH_CLIENT_ID || 'YOUR_WEB3AUTH_CLIENT_ID';
 
 if (WEB3AUTH_CLIENT_ID === 'YOUR_WEB3AUTH_CLIENT_ID' && import.meta.env.DEV) {
-  console.warn(
-    'Web3Auth client ID is not configured. Social login (Google) will not work.\n' +
-    'Set PUBLIC_WEB3AUTH_CLIENT_ID in your .env.local file.\n' +
+  logError(
+    'main.web3auth',
+    'Web3Auth client ID is not configured. Social login (Google) will not work. ' +
+    'Set PUBLIC_WEB3AUTH_CLIENT_ID in your .env.local file. ' +
     'Get a client ID at https://dashboard.web3auth.io'
   );
 }
