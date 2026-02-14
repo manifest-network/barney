@@ -13,6 +13,7 @@ import { ToastContainer } from './components/ui/Toast';
 import { AIProvider } from './contexts/AIContext';
 import { AppShell } from './components/layout/AppShell';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
+import { MatrixRain } from './components/ui/MatrixRain';
 import { logError } from './utils/errors';
 
 // Web3Auth configuration
@@ -66,11 +67,12 @@ createRoot(rootElement).render(
     <ErrorBoundary>
       <ThemeProvider
         attribute="data-theme"
-        themes={['dark', 'light', 'retro', 'nord', 'dracula', 'catppuccin']}
+        themes={['dark', 'light', 'retro', 'nord', 'dracula', 'catppuccin', 'matrix']}
         defaultTheme="dark"
         enableSystem
         storageKey="barney-theme"
       >
+        <MatrixRain />
         <ChainProvider
           chains={[manifestLocalChain]}
           assetLists={[manifestLocalAssets]}
