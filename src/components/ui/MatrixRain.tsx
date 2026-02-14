@@ -38,6 +38,27 @@ export function MatrixRain() {
     let lastFrame = 0;
     const frameInterval = 1000 / FPS;
 
+    let columns: Column[] = [];
+
+    const initColumns = (width: number, height: number) => {
+      const newCount = Math.ceil(width / COLUMN_GAP);
+      const oldCount = columns.length;
+
+      if (newCount > oldCount) {
+        // Add new columns for the wider area
+        for (let i = oldCount; i < newCount; i++) {
+          columns.push({
+            x: i * COLUMN_GAP,
+            y: Math.random() * -height,
+            speed: 0.6 + Math.random() * 0.8,
+          });
+        }
+      } else if (newCount < oldCount) {
+        // Remove excess columns
+        columns.length = newCount;
+      }
+    };
+
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
       canvas.width = window.innerWidth * dpr;
@@ -45,18 +66,11 @@ export function MatrixRain() {
       canvas.style.width = `${window.innerWidth}px`;
       canvas.style.height = `${window.innerHeight}px`;
       ctx.scale(dpr, dpr);
+      initColumns(window.innerWidth, window.innerHeight);
     };
 
     resize();
     window.addEventListener('resize', resize);
-
-    // Initialize columns
-    const colCount = Math.ceil(window.innerWidth / COLUMN_GAP);
-    const columns: Column[] = Array.from({ length: colCount }, (_, i) => ({
-      x: i * COLUMN_GAP,
-      y: Math.random() * -window.innerHeight, // stagger start
-      speed: 0.6 + Math.random() * 0.8, // rows per tick
-    }));
 
     const draw = (now: number) => {
       animId = requestAnimationFrame(draw);
