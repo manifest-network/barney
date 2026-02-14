@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Settings, RefreshCw, Trash2, X, Check, Wifi, WifiOff, Brain, Sun, Moon, Monitor, Sparkles, Snowflake, Ghost, Coffee } from 'lucide-react';
+import { Settings, RefreshCw, Trash2, X, Check, Wifi, WifiOff, Brain, Sun, Moon, Monitor, Sparkles, Snowflake, Ghost, Coffee, Binary } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useAI } from '../../hooks/useAI';
 import { validateEndpointUrl } from '../../ai/validation';
@@ -188,6 +188,7 @@ export function AISettings({ onClose }: AISettingsProps) {
               { value: 'nord', icon: Snowflake, label: 'Nord' },
               { value: 'dracula', icon: Ghost, label: 'Dracula' },
               { value: 'catppuccin', icon: Coffee, label: 'Catppuccin' },
+              { value: 'matrix', icon: Binary, label: 'Matrix' },
               { value: 'system', icon: Monitor, label: 'System' },
             ] as const).map(({ value, icon: Icon, label }) => (
               <button
