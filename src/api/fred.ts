@@ -467,8 +467,10 @@ export function connectLeaseEvents(
 
 /**
  * Map a WS event to the existing FredLeaseStatus shape.
- * State is always ACTIVE because Fred only emits events for active leases.
- * Chain-level terminal states are detected separately via `checkChainState`.
+ *
+ * WS events don't carry a chain-level lease state — only a provision status.
+ * We default to ACTIVE, but chain-level terminal states (rejected, closed,
+ * expired) are detected separately via `checkChainState` in the WS loop.
  */
 function mapWSEventToStatus(event: FredWSEvent): FredLeaseStatus {
   return {
@@ -630,6 +632,34 @@ async function waitViaWS(
             status.state === LeaseState.LEASE_STATE_ACTIVE &&
             !TRANSIENT_PROVISION_STATES.has(status.provision_status ?? '')
           ) {
+            // Final chain state verification: WS events always report ACTIVE
+            // (mapWSEventToStatus hardcodes it), so verify the lease hasn't
+            // been rejected/closed on chain before declaring success.
+            if (opts.checkChainState) {
+              try {
+                const chainState = await opts.checkChainState();
+                if (chainState) {
+                  const stateMap: Record<string, LeaseState> = {
+                    closed: LeaseState.LEASE_STATE_CLOSED,
+                    rejected: LeaseState.LEASE_STATE_REJECTED,
+                    expired: LeaseState.LEASE_STATE_EXPIRED,
+                  };
+                  const terminalStatus: FredLeaseStatus = {
+                    state: stateMap[chainState.state] ?? LeaseState.LEASE_STATE_CLOSED,
+                    provision_status: 'failed',
+                    phase: 'chain_rejected',
+                    last_error: `Lease ${chainState.state} on chain`,
+                  };
+                  if (livenessTimer) clearTimeout(livenessTimer);
+                  conn.close();
+                  opts.onProgress?.(terminalStatus);
+                  return terminalStatus;
+                }
+              } catch (error) {
+                logError('fred.waitViaWS.finalChainCheck', error);
+              }
+            }
+
             if (livenessTimer) clearTimeout(livenessTimer);
             conn.close();
             return status;

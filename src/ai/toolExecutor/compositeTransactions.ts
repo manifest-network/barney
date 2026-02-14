@@ -19,7 +19,7 @@ import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { buildManifest, mergeManifest } from '../manifest';
 import { findKnownImage } from '../knownImages';
-import { sha256, toHex } from '../../utils/hash';
+import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { DeployProgress } from '../progress';
 import type { ToolResult, ToolExecutorOptions, SignResult, PayloadAttachment } from './types';
 
@@ -320,7 +320,32 @@ export async function executeDeployApp(
       if (envError) return { success: false, error: envError };
     }
 
-    // Known image safety net: merge defaults for port, env, user, tmpfs, storage
+    // Parse command/args JSON arrays
+    let command: string[] | undefined;
+    if (typeof args.command === 'string' && args.command) {
+      try {
+        command = JSON.parse(args.command);
+        if (!Array.isArray(command) || !command.every((s) => typeof s === 'string')) {
+          return { success: false, error: 'command must be a JSON array of strings (e.g. \'["sh", "-c"]\').' };
+        }
+      } catch {
+        return { success: false, error: 'Invalid command JSON. Expected a JSON array of strings (e.g. \'["sh", "-c"]\').' };
+      }
+    }
+
+    let cmdArgs: string[] | undefined;
+    if (typeof args.args === 'string' && args.args) {
+      try {
+        cmdArgs = JSON.parse(args.args);
+        if (!Array.isArray(cmdArgs) || !cmdArgs.every((s) => typeof s === 'string')) {
+          return { success: false, error: 'args must be a JSON array of strings (e.g. \'["echo hello"]\').' };
+        }
+      } catch {
+        return { success: false, error: 'Invalid args JSON. Expected a JSON array of strings (e.g. \'["echo hello"]\').' };
+      }
+    }
+
+    // Known image safety net: merge defaults for port, env, user, tmpfs, storage, command, args
     const knownConfig = findKnownImage(args.image as string);
     if (knownConfig) {
       if (!args.port && knownConfig.port) args.port = knownConfig.port;
@@ -328,7 +353,22 @@ export async function executeDeployApp(
       else if (knownConfig.env) env = { ...knownConfig.env, ...env };
       if (!args.user && knownConfig.user) args.user = knownConfig.user;
       if (!args.tmpfs && knownConfig.tmpfs) args.tmpfs = knownConfig.tmpfs;
+      if (!command && knownConfig.command) command = [...knownConfig.command];
+      if (!cmdArgs && knownConfig.args) cmdArgs = [...knownConfig.args];
       if (args.storage === undefined && knownConfig.storage) args.storage = knownConfig.storage;
+    }
+
+    // Pre-generate env passwords so the same value can be shared with args
+    if (env) {
+      for (const key of Object.keys(env)) {
+        if (env[key] === '') env[key] = generatePassword();
+        else if (env[key].endsWith('/')) env[key] += generatePassword();
+      }
+    }
+
+    // Append --token to the shell command string for openclaw
+    if (env?.OPENCLAW_GATEWAY_TOKEN && cmdArgs?.length === 1 && command?.[0] === '/bin/sh') {
+      cmdArgs[0] += ` --token ${env.OPENCLAW_GATEWAY_TOKEN}`;
     }
 
     let manifestResult;
@@ -339,6 +379,8 @@ export async function executeDeployApp(
         env,
         user: args.user as string | undefined,
         tmpfs: args.tmpfs as string | undefined,
+        command,
+        args: cmdArgs,
       });
     } catch (error) {
       logError('compositeTransactions.executeDeployApp.buildManifest', error);
@@ -638,7 +680,7 @@ export async function executeConfirmedDeployApp(
       },
     });
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
       const { url: connectionUrl, connection } = await resolveAppUrl(
         providerUrl, leaseUuid, fredStatus, address, signArbitrary,
         'compositeTransactions.executeConfirmedDeployApp'
@@ -663,7 +705,12 @@ export async function executeConfirmedDeployApp(
       };
     }
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
+    if (
+      fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
+      fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
+      fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
+      fredStatus.provision_status === 'failed'
+    ) {
       appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
       onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' });
 
@@ -847,7 +894,7 @@ export async function deploySingleApp(
       },
     });
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
       const { url: connectionUrl, connection } = await resolveAppUrl(
         providerUrl, leaseUuid, fredStatus, address, signArbitrary,
         'deploySingleApp'
@@ -862,7 +909,12 @@ export async function deploySingleApp(
       };
     }
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
+    if (
+      fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
+      fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
+      fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
+      fredStatus.provision_status === 'failed'
+    ) {
       appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
       onProgress({ phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' });
 
@@ -1213,7 +1265,7 @@ export async function executeConfirmedBatchDeploy(
             },
           });
 
-          if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+          if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
             const { url: connectionUrl, connection } = await resolveAppUrl(
               providerUrl, leaseUuid, fredStatus, address, signArbitrary,
               'executeConfirmedBatchDeploy'
@@ -1225,7 +1277,12 @@ export async function executeConfirmedBatchDeploy(
             return { name, success: true as const, url: connectionUrl };
           }
 
-          if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
+          if (
+            fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
+            fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
+            fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
+            fredStatus.provision_status === 'failed'
+          ) {
             appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
             batchProgress[idx] = { name, phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' };
             emitProgress();
@@ -1674,7 +1731,7 @@ export async function executeConfirmedRestartApp(
       getAuthToken,
     });
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
       const { url: connectionUrl, connection } = await resolveAppUrl(
         providerUrl, leaseUuid, fredStatus, address, signArbitrary,
         'compositeTransactions.executeConfirmedRestartApp'
@@ -1698,7 +1755,7 @@ export async function executeConfirmedRestartApp(
       };
     }
 
-    // Non-active terminal state
+    // Non-active terminal state or failed provision
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Restart failed', operation: 'restart' });
     return { success: false, error: `Restart failed: ${fredStatus.last_error || 'App did not come back up'}` };
@@ -1745,13 +1802,53 @@ export async function executeUpdateApp(
       if (envError) return { success: false, error: envError };
     }
 
-    // Known image safety net: merge defaults for port, user, tmpfs.
+    // Parse command/args JSON arrays
+    let command: string[] | undefined;
+    if (typeof args.command === 'string' && args.command) {
+      try {
+        command = JSON.parse(args.command);
+        if (!Array.isArray(command) || !command.every((s) => typeof s === 'string')) {
+          return { success: false, error: 'command must be a JSON array of strings (e.g. \'["sh", "-c"]\').' };
+        }
+      } catch {
+        return { success: false, error: 'Invalid command JSON. Expected a JSON array of strings (e.g. \'["sh", "-c"]\').' };
+      }
+    }
+
+    let cmdArgs: string[] | undefined;
+    if (typeof args.args === 'string' && args.args) {
+      try {
+        cmdArgs = JSON.parse(args.args);
+        if (!Array.isArray(cmdArgs) || !cmdArgs.every((s) => typeof s === 'string')) {
+          return { success: false, error: 'args must be a JSON array of strings (e.g. \'["echo hello"]\').' };
+        }
+      } catch {
+        return { success: false, error: 'Invalid args JSON. Expected a JSON array of strings (e.g. \'["echo hello"]\').' };
+      }
+    }
+
+    // Known image safety net: merge defaults for port, user, tmpfs, command, args.
     // Env defaults are skipped for updates — the old manifest merge handles env carry-forward.
     const knownConfig = findKnownImage(args.image as string);
     if (knownConfig) {
       if (!args.port && knownConfig.port) args.port = knownConfig.port;
       if (!args.user && knownConfig.user) args.user = knownConfig.user;
       if (!args.tmpfs && knownConfig.tmpfs) args.tmpfs = knownConfig.tmpfs;
+      if (!command && knownConfig.command) command = [...knownConfig.command];
+      if (!cmdArgs && knownConfig.args) cmdArgs = [...knownConfig.args];
+    }
+
+    // Pre-generate env passwords so the same value can be shared with args
+    if (env) {
+      for (const key of Object.keys(env)) {
+        if (env[key] === '') env[key] = generatePassword();
+        else if (env[key].endsWith('/')) env[key] += generatePassword();
+      }
+    }
+
+    // Append --token to the shell command string for openclaw
+    if (env?.OPENCLAW_GATEWAY_TOKEN && cmdArgs?.length === 1 && command?.[0] === '/bin/sh') {
+      cmdArgs[0] += ` --token ${env.OPENCLAW_GATEWAY_TOKEN}`;
     }
 
     let manifestResult;
@@ -1762,6 +1859,8 @@ export async function executeUpdateApp(
         env,
         user: args.user as string | undefined,
         tmpfs: args.tmpfs as string | undefined,
+        command,
+        args: cmdArgs,
       });
     } catch (error) {
       logError('compositeTransactions.executeUpdateApp.buildManifest', error);
@@ -1916,7 +2015,7 @@ export async function executeConfirmedUpdateApp(
       getAuthToken,
     });
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
       // Rollback detection: check /provision for last_error.
       // Fred settles the rollback before emitting the terminal WS event or
       // transitioning provision out of a transient state, so by the time we
@@ -1979,7 +2078,7 @@ export async function executeConfirmedUpdateApp(
       };
     }
 
-    // Non-active terminal state
+    // Non-active terminal state or failed provision
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Update failed', operation: 'update' });
     return { success: false, error: `Update failed: ${fredStatus.last_error || 'App did not come back up'}` };

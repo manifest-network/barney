@@ -70,6 +70,7 @@ export interface AIContextType {
   clearPayload: () => void;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
   addLocalMessage: (content: string, card?: { type: string; data: unknown }) => void;
+  stopStreaming: () => void;
 }
 
 export function AIProvider({ children }: { children: ReactNode }) {
@@ -410,6 +411,12 @@ export function AIProvider({ children }: { children: ReactNode }) {
     [isConnected, settings, toOllamaMessages, addMessage, createAssistantMessage, getCurrentMessages, updateMessageById, processToolCalls, scheduleStreamingUpdate, flushPendingUpdate]
   );
 
+  // --- Stop streaming ---
+
+  const stopStreaming = useCallback(() => {
+    abortControllerRef.current?.abort();
+  }, []);
+
   // --- Local message injection ---
 
   const addLocalMessage = useCallback((content: string, card?: { type: string; data: unknown }) => {
@@ -449,6 +456,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       clearPayload,
       requestBatchDeploy,
       addLocalMessage,
+      stopStreaming,
     }),
     [
       isOpen,
@@ -473,6 +481,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       clearPayload,
       requestBatchDeploy,
       addLocalMessage,
+      stopStreaming,
     ]
   );
 

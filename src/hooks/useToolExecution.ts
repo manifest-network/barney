@@ -154,7 +154,7 @@ export function useToolExecution(deps: UseToolExecutionDeps) {
         if (result.success && result.displayCard) {
           hasDisplayCard = true;
           updateMessageById(toolMessageId, {
-            content: '',
+            content: JSON.stringify(result.data, null, 2),
             card: result.displayCard,
             isStreaming: false,
           });
