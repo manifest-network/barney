@@ -50,10 +50,10 @@ const DEFAULTS: RuntimeConfig = {
 };
 
 export function getConfigValue(key: RuntimeConfigKey): string {
-  const runtimeVal = window.__RUNTIME_CONFIG__?.[key];
+  const runtimeVal = window.__RUNTIME_CONFIG__?.[key]?.trim();
   if (runtimeVal && runtimeVal.length > 0) return runtimeVal;
 
-  const envVal = BUILD_ENV[key];
+  const envVal = BUILD_ENV[key]?.trim();
   if (envVal && envVal.length > 0) return envVal;
 
   return DEFAULTS[key];

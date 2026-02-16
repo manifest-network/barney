@@ -30,9 +30,17 @@ describe('getConfigValue', () => {
     expect(getConfigValue('PUBLIC_OLLAMA_MODEL')).toBe('llama3.2');
     expect(getConfigValue('PUBLIC_WEB3AUTH_CLIENT_ID')).toBe('YOUR_WEB3AUTH_CLIENT_ID');
     expect(getConfigValue('PUBLIC_WEB3AUTH_NETWORK')).toBe('sapphire_devnet');
+    expect(getConfigValue('PUBLIC_PWR_DENOM')).toBe(
+      'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr'
+    );
   });
 
-  it('returns runtime value even when undefined config object', () => {
+  it('skips whitespace-only values and falls through to default', () => {
+    window.__RUNTIME_CONFIG__ = { PUBLIC_REST_URL: '   ' };
+    expect(getConfigValue('PUBLIC_REST_URL')).toBe('http://localhost:1317');
+  });
+
+  it('falls back to defaults when __RUNTIME_CONFIG__ is undefined', () => {
     window.__RUNTIME_CONFIG__ = undefined;
     // Should still return defaults
     expect(getConfigValue('PUBLIC_REST_URL')).toBe('http://localhost:1317');
