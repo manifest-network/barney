@@ -9,6 +9,7 @@ import {
   validateEndpointUrl,
   type AISettings,
 } from '../ai/validation';
+import { runtimeConfig } from '../config/runtimeConfig';
 import { logError } from '../utils/errors';
 import type { ChatMessage } from '../contexts/aiTypes';
 
@@ -16,10 +17,10 @@ const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const STORAGE_KEY_HISTORY = 'barney-ai-history';
 
 // Validate environment-provided defaults
-const envEndpoint = validateEndpointUrl(import.meta.env.PUBLIC_OLLAMA_URL || '');
+const envEndpoint = validateEndpointUrl(runtimeConfig.PUBLIC_OLLAMA_URL);
 const defaultSettings: AISettings = {
   ollamaEndpoint: envEndpoint || 'http://localhost:11434',
-  model: import.meta.env.PUBLIC_OLLAMA_MODEL || 'llama3.2',
+  model: runtimeConfig.PUBLIC_OLLAMA_MODEL,
   saveHistory: true,
   enableThinking: false,
 };
