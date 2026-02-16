@@ -20,6 +20,16 @@ The dev server starts at `http://localhost:3000`.
 
 ## Environment Variables
 
+Environment variables are resolved via a 3-tier fallback (see `src/config/runtimeConfig.ts`):
+
+1. **`window.__RUNTIME_CONFIG__`** — injected at container startup via `docker/env.sh` (production)
+2. **`import.meta.env`** — inlined at build time by Rsbuild from `.env` / `.env.local` files (development)
+3. **Hardcoded defaults** — safe localhost values for local development
+
+This means a single production build artifact can be reconfigured per environment without rebuilding.
+
+### Development
+
 Create a `.env.local` file in the project root:
 
 ```env
@@ -38,6 +48,29 @@ PUBLIC_WEB3AUTH_NETWORK=sapphire_devnet
 # Custom PWR token denom (optional, defaults to local factory address)
 # PUBLIC_PWR_DENOM=factory/manifest1.../upwr
 ```
+
+### Production (Docker)
+
+Set standard environment variables on the container. The `docker/env.sh` entrypoint uses `envsubst` to generate `/usr/share/nginx/html/config.js` from `docker/config.js.template` before starting nginx. Any unset variable falls through to the hardcoded default.
+
+```bash
+docker run -e PUBLIC_REST_URL=https://rest.example.com \
+           -e PUBLIC_RPC_URL=https://rpc.example.com \
+           -e PUBLIC_WEB3AUTH_CLIENT_ID=your_id \
+           your-image
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PUBLIC_REST_URL` | `http://localhost:1317` | Blockchain LCD/REST endpoint |
+| `PUBLIC_RPC_URL` | `http://localhost:26657` | Blockchain RPC endpoint |
+| `PUBLIC_OLLAMA_URL` | `http://localhost:11434` | Ollama LLM endpoint |
+| `PUBLIC_OLLAMA_MODEL` | `llama3.2` | Default Ollama model |
+| `PUBLIC_WEB3AUTH_CLIENT_ID` | `YOUR_WEB3AUTH_CLIENT_ID` | Web3Auth client ID ([dashboard](https://dashboard.web3auth.io)) |
+| `PUBLIC_WEB3AUTH_NETWORK` | `sapphire_devnet` | Web3Auth network (`sapphire_devnet`, `sapphire_mainnet`) |
+| `PUBLIC_PWR_DENOM` | Factory address | PWR token denom |
+
+Built-in flags `import.meta.env.DEV` / `import.meta.env.PROD` remain build-time only and are unaffected.
 
 ## Scripts
 
