@@ -281,6 +281,7 @@ export async function getProviderHealth(
     });
 
     if (!response.ok) {
+      logError('provider-api.getProviderHealth.http', new Error(`Provider health check returned ${response.status}`));
       return null;
     }
 
@@ -293,6 +294,7 @@ export async function getProviderHealth(
       !('status' in data) ||
       (data.status !== 'healthy' && data.status !== 'unhealthy')
     ) {
+      logError('provider-api.getProviderHealth.shape', new Error('Provider returned unexpected health response shape'));
       return null;
     }
 

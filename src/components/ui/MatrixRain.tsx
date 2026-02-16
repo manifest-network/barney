@@ -38,7 +38,7 @@ export function MatrixRain() {
     let lastFrame = 0;
     const frameInterval = 1000 / FPS;
 
-    let columns: Column[] = [];
+    const columns: Column[] = [];
 
     const initColumns = (width: number, height: number) => {
       const newCount = Math.ceil(width / COLUMN_GAP);

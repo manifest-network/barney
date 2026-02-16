@@ -75,11 +75,11 @@ The AI assistant uses a 3-layer architecture:
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, storage?)` | TX | Deploy from attached manifest or Docker image. Defaults: size=micro, name from filename/image |
+| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, storage?)` | TX | Deploy from attached manifest or Docker image. Defaults: size=micro, name from filename/image |
 | `stop_app(app_name)` | TX | Stop app by name, or "all" to stop all running apps |
 | `fund_credits(amount)` | TX | Add credits in display units |
 | `restart_app(app_name)` | TX | Restart a running app |
-| `update_app(app_name, image?, port?, env?, user?, tmpfs?)` | TX | Update app with new manifest (file attachment or Docker image) |
+| `update_app(app_name, image?, port?, env?, user?, tmpfs?, command?, args?)` | TX | Update app with new manifest (file attachment or Docker image) |
 | `list_apps(state?)` | Query | List apps filtered by state (default: running) |
 | `app_status(app_name)` | Query | Detailed status: registry + chain + fred |
 | `get_logs(app_name, tail?)` | Query | Container logs for a running app |
@@ -209,10 +209,15 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `AI_MAX_MESSAGES` | 200 | Chat history memory limit |
 | `AI_TOOL_CACHE_TTL_MS` | 10s | Query result cache lifetime |
 | `AI_TOOL_CACHE_MAX_SIZE` | 50 | Max cached query results |
+| `AI_MAX_RETRIES` | 3 | Max retry attempts for transient network errors |
+| `AI_RETRY_BASE_DELAY_MS` | 1s | Base delay for exponential backoff |
+| `AI_TOOL_API_TIMEOUT_MS` | 15s | Timeout for blockchain API calls during tool execution |
 | `MAX_PAYLOAD_SIZE` | 5KB | Maximum file upload size (in `hash.ts`) |
+| `FRED_POLL_INTERVAL_MS` | 3s | Default polling interval for Fred status checks |
 | `WS_RECONNECT_DELAY_MS` | 1s | Delay before WebSocket reconnect attempt |
 | `WS_MAX_RECONNECT_ATTEMPTS` | 2 | Max reconnects before falling back to polling |
 | `WS_LIVENESS_TIMEOUT_MS` | 45s | WebSocket data liveness timeout (Fred pings every 30s) |
+| `STORAGE_SKU_NAME` | 'docker-small' | SKU name that supports persistent disk storage |
 
 ## Styling
 

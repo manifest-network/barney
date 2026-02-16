@@ -572,13 +572,13 @@ describe('getLeaseInfo', () => {
     expect(result.ports).toEqual({ http: 80, https: 443 });
   });
 
-  it('uses /info/ path', async () => {
+  it('uses /v1/leases/ info path', async () => {
     mockFetchResponse({ host: 'https://app.example.com' });
 
     await getLeaseInfo(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
 
     const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain(`/info/${LEASE_UUID}`);
+    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/info`);
   });
 
   it('throws ProviderApiError on 404', async () => {

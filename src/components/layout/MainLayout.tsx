@@ -8,6 +8,7 @@ import { Menu, X } from 'lucide-react';
 import { AppsSidebar } from './AppsSidebar';
 import { ChatPanel } from '../ai/ChatPanel';
 import { AIErrorBoundary } from '../ai/AIErrorBoundary';
+import { ErrorBoundary } from '../ui/ErrorBoundary';
 import { Modal } from '../ui/Modal';
 
 const SWIPE_THRESHOLD = 80;
@@ -124,7 +125,9 @@ export function MainLayout() {
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchEnd}
       >
-        <AppsSidebar onClose={() => setSidebarOpen(false)} />
+        <ErrorBoundary>
+          <AppsSidebar onClose={() => setSidebarOpen(false)} />
+        </ErrorBoundary>
       </aside>
 
       {/* Mobile backdrop (always rendered for animated transitions) */}

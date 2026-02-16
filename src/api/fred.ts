@@ -71,7 +71,15 @@ function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
   if (raw.steps && typeof raw.steps === 'object' && !Array.isArray(raw.steps)) {
     result.steps = raw.steps as Record<string, string>;
   }
-  if (Array.isArray(raw.instances)) result.instances = raw.instances as FredLeaseStatus['instances'];
+  if (Array.isArray(raw.instances)) {
+    result.instances = raw.instances.filter(
+      (i): i is { name: string; status: string; ports?: Record<string, number> } =>
+        i != null &&
+        typeof i === 'object' &&
+        typeof i.name === 'string' &&
+        typeof i.status === 'string'
+    );
+  }
   if (raw.endpoints && typeof raw.endpoints === 'object' && !Array.isArray(raw.endpoints)) {
     result.endpoints = raw.endpoints as Record<string, string>;
   }
@@ -317,6 +325,7 @@ export async function pollLeaseUntilReady(
     }
   }
 
+  logError('fred.pollLeaseUntilReady', new Error(`Polling exhausted after ${maxAttempts} attempts (last state: ${lastStatus.state}, provision: ${lastStatus.provision_status ?? 'none'})`));
   return lastStatus;
 }
 
@@ -433,7 +442,17 @@ export function connectLeaseEvents(
 
     ws.onmessage = (msg) => {
       try {
-        const event: FredWSEvent = JSON.parse(msg.data);
+        const parsed: unknown = JSON.parse(msg.data);
+        if (
+          !parsed ||
+          typeof parsed !== 'object' ||
+          typeof (parsed as Record<string, unknown>).status !== 'string' ||
+          typeof (parsed as Record<string, unknown>).lease_uuid !== 'string'
+        ) {
+          logError('fred.connectLeaseEvents: unexpected WS message shape', new Error(JSON.stringify(parsed).slice(0, 200)));
+          return;
+        }
+        const event = parsed as FredWSEvent;
         eventQueue.push(event);
         resolveWaiter?.();
       } catch (error) {
@@ -919,7 +938,7 @@ export async function getLeaseInfo(
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
   const { url, headers } = buildValidatedFredRequest(
     providerApiUrl,
-    `/info/${encodedLeaseUuid}`,
+    `/v1/leases/${encodedLeaseUuid}/info`,
     { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
   );
 

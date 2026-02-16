@@ -12,8 +12,7 @@ function isTransientError(error: Error): boolean {
     message.includes('econnrefused') ||
     message.includes('timeout') ||
     message.includes('failed to fetch') ||
-    message.includes('load failed') ||
-    error.name === 'TypeError' // Often indicates network issues
+    message.includes('load failed')
   );
 }
 
