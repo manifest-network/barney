@@ -172,6 +172,20 @@ describe('getLeaseStatus', () => {
     const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
     expect(result.services!.web.instances).toHaveLength(1);
   });
+
+  it('includes services with missing instances array (early provisioning)', async () => {
+    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE', {
+      services: {
+        web: { instances: [{ name: 'web-0', status: 'running' }] },
+        db: {},
+      },
+    }));
+
+    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(result.services).toBeDefined();
+    expect(result.services!.web.instances).toHaveLength(1);
+    expect(result.services!.db.instances).toHaveLength(0);
+  });
 });
 
 describe('pollLeaseUntilReady', () => {

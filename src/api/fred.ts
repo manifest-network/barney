@@ -22,8 +22,14 @@ import {
   WS_LIVENESS_TIMEOUT_MS,
 } from '../config/constants';
 
+export interface FredInstanceInfo {
+  name: string;
+  status: string;
+  ports?: Record<string, number>;
+}
+
 export interface FredServiceStatus {
-  instances: Array<{ name: string; status: string; ports?: Record<string, number> }>;
+  instances: FredInstanceInfo[];
 }
 
 export interface FredLeaseStatus {
@@ -31,7 +37,7 @@ export interface FredLeaseStatus {
   provision_status?: string;
   phase?: string;
   steps?: Record<string, string>;
-  instances?: Array<{ name: string; status: string; ports?: Record<string, number> }>;
+  instances?: FredInstanceInfo[];
   endpoints?: Record<string, string>;
   last_error?: string;
   fail_count?: number;
@@ -79,7 +85,7 @@ function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
   }
   if (Array.isArray(raw.instances)) {
     result.instances = raw.instances.filter(
-      (i): i is { name: string; status: string; ports?: Record<string, number> } =>
+      (i): i is FredInstanceInfo =>
         i != null &&
         typeof i === 'object' &&
         typeof i.name === 'string' &&
@@ -99,17 +105,17 @@ function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
     for (const [name, value] of Object.entries(raw.services as Record<string, unknown>)) {
       if (value && typeof value === 'object' && !Array.isArray(value)) {
         const svc = value as Record<string, unknown>;
-        if (Array.isArray(svc.instances)) {
-          services[name] = {
-            instances: svc.instances.filter(
-              (i): i is { name: string; status: string; ports?: Record<string, number> } =>
-                i != null &&
-                typeof i === 'object' &&
-                typeof i.name === 'string' &&
-                typeof i.status === 'string'
-            ),
-          };
-        }
+        services[name] = {
+          instances: Array.isArray(svc.instances)
+            ? svc.instances.filter(
+                (i): i is { name: string; status: string; ports?: Record<string, number> } =>
+                  i != null &&
+                  typeof i === 'object' &&
+                  typeof i.name === 'string' &&
+                  typeof i.status === 'string'
+              )
+            : [],
+        };
       }
     }
     if (Object.keys(services).length > 0) result.services = services;

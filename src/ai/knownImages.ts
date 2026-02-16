@@ -127,6 +127,8 @@ export interface KnownStackServiceConfig {
   env?: Record<string, string>;
   user?: string;
   tmpfs?: string;
+  command?: string[];
+  args?: string[];
   description: string;
 }
 

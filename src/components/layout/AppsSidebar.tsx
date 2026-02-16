@@ -240,7 +240,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                         const count = Object.keys(m.services).length;
                         if (count > 1) return <span className="apps-sidebar__app-size">{count} svcs</span>;
                       }
-                    } catch { /* ignore parse errors */ }
+                    } catch (error) { logError('AppsSidebar.parseManifest', error); }
                   }
                   return <span className="apps-sidebar__app-size">{app.size}</span>;
                 })()}

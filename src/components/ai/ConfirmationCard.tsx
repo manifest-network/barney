@@ -33,6 +33,7 @@ function parseStackManifest(action: PendingAction): Record<string, StackServiceS
     if (!parsed.services || typeof parsed.services !== 'object' || Array.isArray(parsed.services)) return null;
     const result: Record<string, StackServiceSummary> = {};
     for (const [name, svc] of Object.entries(parsed.services as Record<string, Record<string, unknown>>)) {
+      if (!svc || typeof svc !== 'object') continue;
       result[name] = {
         image: (svc.image as string) || 'unknown',
         ports: svc.ports ? Object.keys(svc.ports as Record<string, unknown>) : [],
@@ -40,7 +41,8 @@ function parseStackManifest(action: PendingAction): Record<string, StackServiceS
       };
     }
     return Object.keys(result).length > 0 ? result : null;
-  } catch {
+  } catch (error) {
+    logError('ConfirmationCard.parseStackManifest', error);
     return null;
   }
 }

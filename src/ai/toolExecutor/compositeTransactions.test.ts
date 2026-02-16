@@ -4,6 +4,7 @@ import {
   formatConnectionUrl,
   extractUrlFromFredStatus,
   formatLeaseItems,
+  parseAndValidateStackServices,
   executeDeployApp,
   executeConfirmedDeployApp,
   executeStopApp,
@@ -303,6 +304,88 @@ describe('formatLeaseItems', () => {
 
   it('handles single service name', () => {
     expect(formatLeaseItems('sku-123', ['web'])).toEqual(['sku-123:1:web']);
+  });
+
+  it('throws on non-string service name', () => {
+    expect(() => formatLeaseItems('sku-123', [123 as unknown as string])).toThrow('Invalid service name');
+  });
+
+  it('throws on empty string service name', () => {
+    expect(() => formatLeaseItems('sku-123', [''])).toThrow('Invalid service name');
+  });
+});
+
+describe('parseAndValidateStackServices', () => {
+  it('parses valid services JSON', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', port: '80' }, db: { image: 'postgres' } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.serviceNames).toEqual(['web', 'db']);
+      expect(result.services.web.image).toBe('nginx');
+      expect(result.services.db.image).toBe('postgres');
+    }
+  });
+
+  it('returns error for invalid JSON', () => {
+    const result = parseAndValidateStackServices('not-json', false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('Invalid services JSON');
+  });
+
+  it('returns error for empty services', () => {
+    const result = parseAndValidateStackServices('{}', false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('at least one service');
+  });
+
+  it('returns error for invalid service name', () => {
+    const json = JSON.stringify({ 'Bad Name': { image: 'nginx' } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('Invalid service name');
+  });
+
+  it('returns error for missing image', () => {
+    const json = JSON.stringify({ web: { port: '80' } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('requires an "image"');
+  });
+
+  it('returns error for non-string env value', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', env: { PORT: 80 } } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('must have a string value');
+  });
+
+  it('applies env defaults when applyEnvDefaults is true', () => {
+    const json = JSON.stringify({ db: { image: 'postgres' } });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.db.env).toBeDefined();
+      expect(result.services.db.env!.POSTGRES_PASSWORD).toBeDefined();
+    }
+  });
+
+  it('skips env defaults when applyEnvDefaults is false', () => {
+    const json = JSON.stringify({ db: { image: 'postgres' } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.db.env).toBeUndefined();
+    }
+  });
+
+  it('sets needsStorage when known image requires storage', () => {
+    const json = JSON.stringify({ db: { image: 'postgres' } });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.needsStorage).toBe(true);
+    }
   });
 });
 
@@ -674,6 +757,54 @@ describe('executeDeployApp', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('mutually exclusive');
+  });
+
+  it('uses shared password for all auto-generated env vars in stack', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const services = JSON.stringify({
+      web: { image: 'wordpress', env: { WORDPRESS_DB_PASSWORD: '' } },
+      db: { image: 'postgres', env: { POSTGRES_PASSWORD: '' } },
+    });
+    const result = await executeDeployApp(
+      { app_name: 'stack-wp', services },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    // Both passwords should be the same (shared password)
+    expect(manifest.services.web.env.WORDPRESS_DB_PASSWORD).toBeDefined();
+    expect(manifest.services.web.env.WORDPRESS_DB_PASSWORD).toBe(manifest.services.db.env.POSTGRES_PASSWORD);
+    // And not empty
+    expect(manifest.services.web.env.WORDPRESS_DB_PASSWORD.length).toBeGreaterThan(0);
+  });
+
+  it('rejects non-string env values in stack deploy', async () => {
+    const services = JSON.stringify({
+      web: { image: 'nginx', env: { PORT: 80 } },
+    });
+    const result = await executeDeployApp(
+      { app_name: 'bad-stack', services },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('must have a string value');
+  });
+
+  it('rejects non-string env values in single-service deploy', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', env: '{"PORT": 80}' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('must have a string value');
   });
 });
 
@@ -1582,6 +1713,91 @@ describe('executeUpdateApp', () => {
     const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
     expect(manifest.image).toBe('redis:8');
     expect(manifest.env).toBeUndefined();
+  });
+
+  it('returns confirmation for stack update with services param', async () => {
+    const app = makeApp();
+    const services = JSON.stringify({
+      web: { image: 'nginx:2', port: '80' },
+      db: { image: 'postgres:19', port: '5432' },
+    });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', services },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('stack');
+    expect(result.confirmationMessage).toContain('2 services');
+    expect(result.pendingAction?.args._isStack).toBe(true);
+    expect(result.pendingAction?.args._generatedManifest).toBeDefined();
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.services.web.image).toBe('nginx:2');
+    expect(manifest.services.db.image).toBe('postgres:19');
+  });
+
+  it('returns error for invalid services JSON in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', services: 'not-json' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid services JSON');
+  });
+
+  it('returns error when both services and image are provided in update', async () => {
+    const app = makeApp();
+    const services = JSON.stringify({ web: { image: 'nginx' } });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', services, image: 'redis' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('mutually exclusive');
+  });
+
+  it('skips env defaults for stack updates (uses applyEnvDefaults=false)', async () => {
+    const app = makeApp();
+    const services = JSON.stringify({
+      db: { image: 'postgres:19' },
+    });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', services },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    // Env defaults should NOT be applied for updates
+    expect(manifest.services.db.env).toBeUndefined();
+    // Port defaults should still be applied
+    expect(manifest.services.db.ports).toEqual({ '5432/tcp': {} });
+  });
+
+  it('rejects non-string env values in stack services', async () => {
+    const app = makeApp();
+    const services = JSON.stringify({
+      web: { image: 'nginx', env: { PORT: 80 } },
+    });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', services },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('must have a string value');
+    expect(result.error).toContain('PORT');
+  });
+
+  it('rejects non-string env values in single-service image update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', env: '{"PORT": 80}' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('must have a string value');
   });
 });
 

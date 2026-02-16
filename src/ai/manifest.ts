@@ -251,17 +251,9 @@ export function mergeManifest(
 
 /**
  * Configuration for a single service within a stack.
- * Same fields as single-service BuildManifestOptions.
+ * Identical to BuildManifestOptions — shared type to avoid duplication.
  */
-export interface ServiceConfig {
-  image: string;
-  port?: string;
-  env?: Record<string, string>;
-  user?: string;
-  tmpfs?: string;
-  command?: string[];
-  args?: string[];
-}
+export type ServiceConfig = BuildManifestOptions;
 
 export interface StackManifestOptions {
   services: Record<string, ServiceConfig>;
