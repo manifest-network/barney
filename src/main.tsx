@@ -8,6 +8,7 @@ import { ThemeProvider } from 'next-themes';
 import '@interchain-ui/react/styles';
 import './index.css';
 import { manifestLocalChain, manifestLocalAssets } from './config/chain';
+import { runtimeConfig } from './config/runtimeConfig';
 import { ToastProvider } from './contexts/ToastContext';
 import { ToastContainer } from './components/ui/Toast';
 import { AIProvider } from './contexts/AIContext';
@@ -17,7 +18,7 @@ import { MatrixRain } from './components/ui/MatrixRain';
 import { logError } from './utils/errors';
 
 // Web3Auth configuration
-const WEB3AUTH_CLIENT_ID = import.meta.env.PUBLIC_WEB3AUTH_CLIENT_ID || 'YOUR_WEB3AUTH_CLIENT_ID';
+const WEB3AUTH_CLIENT_ID = runtimeConfig.PUBLIC_WEB3AUTH_CLIENT_ID;
 
 if (WEB3AUTH_CLIENT_ID === 'YOUR_WEB3AUTH_CLIENT_ID' && import.meta.env.DEV) {
   logError(
@@ -31,9 +32,9 @@ if (WEB3AUTH_CLIENT_ID === 'YOUR_WEB3AUTH_CLIENT_ID' && import.meta.env.DEV) {
 const validNetworks = ['sapphire_devnet', 'sapphire_mainnet', 'testnet', 'mainnet'] as const;
 type Web3AuthNetwork = (typeof validNetworks)[number];
 
-const networkEnvValue = import.meta.env.PUBLIC_WEB3AUTH_NETWORK;
+const networkEnvValue = runtimeConfig.PUBLIC_WEB3AUTH_NETWORK;
 const WEB3AUTH_NETWORK: Web3AuthNetwork =
-  networkEnvValue && validNetworks.includes(networkEnvValue as Web3AuthNetwork)
+  validNetworks.includes(networkEnvValue as Web3AuthNetwork)
     ? (networkEnvValue as Web3AuthNetwork)
     : 'sapphire_devnet';
 

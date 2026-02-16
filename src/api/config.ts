@@ -1,12 +1,13 @@
 import { liftedinit } from '@manifest-network/manifestjs';
+import { runtimeConfig } from '../config/runtimeConfig';
 
-// API endpoints - use environment variables with localhost defaults for development
-export const REST_URL = import.meta.env.PUBLIC_REST_URL || 'http://localhost:1317';
-export const RPC_ENDPOINT = import.meta.env.PUBLIC_RPC_URL || 'http://localhost:26657';
+// API endpoints - resolved at startup via runtimeConfig (runtime → env → defaults)
+export const REST_URL = runtimeConfig.PUBLIC_REST_URL;
+export const RPC_ENDPOINT = runtimeConfig.PUBLIC_RPC_URL;
 
 export const DENOMS = {
   MFX: 'umfx',
-  PWR: import.meta.env.PUBLIC_PWR_DENOM || 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr',
+  PWR: runtimeConfig.PUBLIC_PWR_DENOM,
 } as const;
 
 export const DENOM_METADATA: Record<string, { symbol: string; exponent: number }> = {
