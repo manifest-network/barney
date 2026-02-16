@@ -40,7 +40,7 @@ describe('getConfigValue', () => {
     expect(getConfigValue('PUBLIC_REST_URL')).toBe('http://localhost:1317');
   });
 
-  it('falls back to defaults when __RUNTIME_CONFIG__ is undefined', () => {
+  it('falls back to defaults when __RUNTIME_CONFIG__ is undefined or missing', () => {
     window.__RUNTIME_CONFIG__ = undefined;
     // Should still return defaults
     expect(getConfigValue('PUBLIC_REST_URL')).toBe('http://localhost:1317');
