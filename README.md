@@ -67,7 +67,7 @@ docker run -e PUBLIC_REST_URL=https://rest.example.com \
 | `PUBLIC_OLLAMA_URL` | `http://localhost:11434` | Ollama LLM endpoint |
 | `PUBLIC_OLLAMA_MODEL` | `llama3.2` | Default Ollama model |
 | `PUBLIC_WEB3AUTH_CLIENT_ID` | `YOUR_WEB3AUTH_CLIENT_ID` | Web3Auth client ID ([dashboard](https://dashboard.web3auth.io)) |
-| `PUBLIC_WEB3AUTH_NETWORK` | `sapphire_devnet` | Web3Auth network (`sapphire_devnet`, `sapphire_mainnet`) |
+| `PUBLIC_WEB3AUTH_NETWORK` | `sapphire_devnet` | Web3Auth network (`sapphire_devnet`, `sapphire_mainnet`, `testnet`, `mainnet`) |
 | `PUBLIC_PWR_DENOM` | Factory address | PWR token denom |
 
 Built-in flags `import.meta.env.DEV` / `import.meta.env.PROD` remain build-time only and are unaffected.
