@@ -77,7 +77,15 @@ export async function executeListApps(
         if (a.manifest) {
           try {
             const manifest = JSON.parse(a.manifest);
-            if (typeof manifest.image === 'string') image = manifest.image;
+            if (typeof manifest.image === 'string') {
+              image = manifest.image;
+            } else if (manifest.services && typeof manifest.services === 'object') {
+              // Stack: join service images (e.g. "nginx + postgres")
+              const images = Object.values(manifest.services as Record<string, Record<string, unknown>>)
+                .map((svc) => typeof svc.image === 'string' ? svc.image : null)
+                .filter(Boolean);
+              if (images.length > 0) image = images.join(' + ');
+            }
           } catch (error) {
             logError('compositeQueries.executeListApps.parseManifest', error);
           }
@@ -213,13 +221,20 @@ export async function executeAppStatus(
   // Build a clickable connection URL from host + port mappings
   const connectionUrl = formatConnectionUrl(appUrl, appConnection) || appUrl;
 
-  // Extract image from stored manifest
+  // Extract image from stored manifest (single-service or stack)
   let image: string | undefined;
+  let serviceImages: Record<string, string> | undefined;
   if (app.manifest) {
     try {
       const manifest = JSON.parse(app.manifest);
       if (typeof manifest.image === 'string') {
         image = manifest.image;
+      } else if (manifest.services && typeof manifest.services === 'object') {
+        serviceImages = {};
+        for (const [svcName, svcConfig] of Object.entries(manifest.services as Record<string, Record<string, unknown>>)) {
+          if (typeof svcConfig.image === 'string') serviceImages[svcName] = svcConfig.image;
+        }
+        image = Object.values(serviceImages).join(' + ');
       }
     } catch (error) {
       logError('compositeQueries.executeAppStatus.parseManifest', error);
@@ -233,8 +248,10 @@ export async function executeAppStatus(
       status: currentStatus,
       size: app.size,
       image,
+      ...(serviceImages ? { serviceImages } : {}),
       url: connectionUrl || appUrl,
       connection: appConnection,
+      ...(fredStatus?.services ? { services: fredStatus.services } : {}),
       chainState,
       fredStatus,
       created: new Date(app.createdAt).toISOString(),

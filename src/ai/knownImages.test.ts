@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findKnownImage, generateImageReferenceForPrompt, KNOWN_IMAGES } from './knownImages';
+import { findKnownImage, findKnownStack, generateImageReferenceForPrompt, generateStackReferenceForPrompt, KNOWN_IMAGES, KNOWN_STACKS } from './knownImages';
 
 describe('findKnownImage', () => {
   it('matches exact image name', () => {
@@ -137,5 +137,70 @@ describe('generateImageReferenceForPrompt', () => {
     const ref = generateImageReferenceForPrompt();
     const lines = ref.split('\n');
     expect(lines.length).toBe(KNOWN_IMAGES.length);
+  });
+});
+
+describe('findKnownStack', () => {
+  it('matches exact stack name', () => {
+    const stack = findKnownStack('wordpress');
+    expect(stack).toBeDefined();
+    expect(stack!.name).toBe('wordpress');
+    expect(Object.keys(stack!.services)).toContain('web');
+    expect(Object.keys(stack!.services)).toContain('db');
+  });
+
+  it('matches by alias', () => {
+    const stack = findKnownStack('wp');
+    expect(stack).toBeDefined();
+    expect(stack!.name).toBe('wordpress');
+  });
+
+  it('is case-insensitive', () => {
+    const stack = findKnownStack('WordPress');
+    expect(stack).toBeDefined();
+    expect(stack!.name).toBe('wordpress');
+  });
+
+  it('returns undefined for unknown stack', () => {
+    expect(findKnownStack('nonexistent')).toBeUndefined();
+  });
+
+  it('finds ghost stack', () => {
+    const stack = findKnownStack('ghost');
+    expect(stack).toBeDefined();
+    expect(stack!.services.web.image).toBe('ghost');
+    expect(stack!.services.db.image).toBe('mysql');
+  });
+
+  it('finds adminer-postgres by alias', () => {
+    const stack = findKnownStack('pgadmin');
+    expect(stack).toBeDefined();
+    expect(stack!.name).toBe('adminer-postgres');
+  });
+});
+
+describe('generateStackReferenceForPrompt', () => {
+  it('includes all known stacks', () => {
+    const ref = generateStackReferenceForPrompt();
+    for (const stack of KNOWN_STACKS) {
+      expect(ref).toContain(stack.name);
+    }
+  });
+
+  it('includes service names and images', () => {
+    const ref = generateStackReferenceForPrompt();
+    expect(ref).toContain('web(wordpress)');
+    expect(ref).toContain('db(mysql)');
+  });
+
+  it('includes aliases', () => {
+    const ref = generateStackReferenceForPrompt();
+    expect(ref).toContain('(aka wp)');
+  });
+
+  it('produces one line per stack', () => {
+    const ref = generateStackReferenceForPrompt();
+    const lines = ref.split('\n');
+    expect(lines.length).toBe(KNOWN_STACKS.length);
   });
 });

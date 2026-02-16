@@ -138,6 +138,40 @@ describe('getLeaseStatus', () => {
       'Invalid provider API URL'
     );
   });
+
+  it('parses stack services field from fred response', async () => {
+    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE', {
+      services: {
+        web: { instances: [{ name: 'web-0', status: 'running', ports: { '80/tcp': 32456 } }] },
+        db: { instances: [{ name: 'db-0', status: 'running' }] },
+      },
+    }));
+
+    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(result.services).toBeDefined();
+    expect(Object.keys(result.services!)).toEqual(['web', 'db']);
+    expect(result.services!.web.instances).toHaveLength(1);
+    expect(result.services!.web.instances[0].name).toBe('web-0');
+    expect(result.services!.db.instances).toHaveLength(1);
+  });
+
+  it('omits services when none present', async () => {
+    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE'));
+
+    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(result.services).toBeUndefined();
+  });
+
+  it('filters invalid instances in services', async () => {
+    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE', {
+      services: {
+        web: { instances: [{ name: 'web-0', status: 'running' }, 'invalid', null] },
+      },
+    }));
+
+    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(result.services!.web.instances).toHaveLength(1);
+  });
 });
 
 describe('pollLeaseUntilReady', () => {

@@ -231,7 +231,19 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                   aria-hidden="true"
                 />
                 <span className="apps-sidebar__app-name">{app.name}</span>
-                <span className="apps-sidebar__app-size">{app.size}</span>
+                {(() => {
+                  // Show service count badge for stack deployments
+                  if (app.manifest) {
+                    try {
+                      const m = JSON.parse(app.manifest);
+                      if (m.services && typeof m.services === 'object' && !Array.isArray(m.services)) {
+                        const count = Object.keys(m.services).length;
+                        if (count > 1) return <span className="apps-sidebar__app-size">{count} svcs</span>;
+                      }
+                    } catch { /* ignore parse errors */ }
+                  }
+                  return <span className="apps-sidebar__app-size">{app.size}</span>;
+                })()}
               </button>
             ))
           )}

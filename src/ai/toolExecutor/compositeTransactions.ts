@@ -17,7 +17,7 @@ import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
-import { buildManifest, mergeManifest } from '../manifest';
+import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, type ServiceConfig } from '../manifest';
 import { findKnownImage } from '../knownImages';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { DeployProgress } from '../progress';
@@ -55,6 +55,18 @@ function validateEnvNames(env: Record<string, string>): string | null {
     return `Blocked env variable(s): ${blocked.join(', ')}. These variables could compromise the runtime environment.`;
   }
   return null;
+}
+
+/**
+ * Format lease items for create-lease command.
+ * Single-service: ['sku-uuid:1']
+ * Stack (multi-service): ['sku-uuid:1:web', 'sku-uuid:1:db', ...]
+ */
+export function formatLeaseItems(skuUuid: string, serviceNames?: string[]): string[] {
+  if (!serviceNames || serviceNames.length === 0) {
+    return [`${skuUuid}:1`];
+  }
+  return serviceNames.map(name => `${skuUuid}:1:${name}`);
 }
 
 /**
@@ -300,6 +312,107 @@ export async function executeDeployApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
+  // Stack-based deploy: build stack manifest from services param
+  if (!payload && typeof args.services === 'string' && args.services) {
+    if (args.image) {
+      return { success: false, error: '"image" and "services" are mutually exclusive. Use "image" for single-service or "services" for multi-service stack.' };
+    }
+
+    let parsedServices: Record<string, Record<string, unknown>>;
+    try {
+      parsedServices = JSON.parse(args.services as string);
+      if (typeof parsedServices !== 'object' || parsedServices === null || Array.isArray(parsedServices)) {
+        return { success: false, error: 'services must be a JSON object mapping service names to configs.' };
+      }
+    } catch (error) {
+      logError('compositeTransactions.executeDeployApp.parseServices', error);
+      return { success: false, error: 'Invalid services JSON. Expected format: \'{"web":{"image":"nginx","port":"80"},"db":{"image":"postgres","port":"5432"}}\'.' };
+    }
+
+    const serviceNames = Object.keys(parsedServices);
+    if (serviceNames.length === 0) {
+      return { success: false, error: 'services must contain at least one service.' };
+    }
+
+    // Validate service names and build typed configs
+    const stackServices: Record<string, ServiceConfig> = {};
+
+    for (const [svcName, svcRaw] of Object.entries(parsedServices)) {
+      const nameError = validateServiceName(svcName);
+      if (nameError) return { success: false, error: `Invalid service name "${svcName}": ${nameError}` };
+
+      if (typeof svcRaw !== 'object' || svcRaw === null || Array.isArray(svcRaw)) {
+        return { success: false, error: `Service "${svcName}" config must be an object.` };
+      }
+
+      const cfg = svcRaw as Record<string, unknown>;
+      if (typeof cfg.image !== 'string' || !cfg.image) {
+        return { success: false, error: `Service "${svcName}" requires an "image" field.` };
+      }
+
+      let env: Record<string, string> | undefined;
+      if (cfg.env && typeof cfg.env === 'object' && !Array.isArray(cfg.env)) {
+        env = cfg.env as Record<string, string>;
+        const envError = validateEnvNames(env);
+        if (envError) return { success: false, error: `Service "${svcName}": ${envError}` };
+      }
+
+      let command: string[] | undefined;
+      if (cfg.command) {
+        if (!Array.isArray(cfg.command) || !(cfg.command as unknown[]).every((s) => typeof s === 'string')) {
+          return { success: false, error: `Service "${svcName}": command must be an array of strings.` };
+        }
+        command = cfg.command as string[];
+      }
+
+      let svcArgs: string[] | undefined;
+      if (cfg.args) {
+        if (!Array.isArray(cfg.args) || !(cfg.args as unknown[]).every((s) => typeof s === 'string')) {
+          return { success: false, error: `Service "${svcName}": args must be an array of strings.` };
+        }
+        svcArgs = cfg.args as string[];
+      }
+
+      // Known image safety net per service
+      const knownConfig = findKnownImage(cfg.image as string);
+      if (knownConfig) {
+        if (!cfg.port && knownConfig.port) cfg.port = knownConfig.port;
+        if (!env && knownConfig.env) env = { ...knownConfig.env };
+        else if (knownConfig.env) env = { ...knownConfig.env, ...env };
+        if (!cfg.user && knownConfig.user) cfg.user = knownConfig.user;
+        if (!cfg.tmpfs && knownConfig.tmpfs) cfg.tmpfs = knownConfig.tmpfs;
+        if (!command && knownConfig.command) command = [...knownConfig.command];
+        if (!svcArgs && knownConfig.args) svcArgs = [...knownConfig.args];
+        if (knownConfig.storage && args.storage === undefined) args.storage = true;
+      }
+
+      stackServices[svcName] = {
+        image: cfg.image as string,
+        port: cfg.port as string | undefined,
+        env,
+        user: cfg.user as string | undefined,
+        tmpfs: cfg.tmpfs as string | undefined,
+        command,
+        args: svcArgs,
+      };
+    }
+
+    let manifestResult;
+    try {
+      manifestResult = await buildStackManifest({ services: stackServices });
+    } catch (error) {
+      logError('compositeTransactions.executeDeployApp.buildStackManifest', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to build stack manifest' };
+    }
+
+    payload = manifestResult.payload;
+    if (!args.app_name) {
+      args.app_name = manifestResult.derivedAppName;
+    }
+    args._generatedManifest = manifestResult.json;
+    args._serviceNames = serviceNames;
+  }
+
   // Image-based deploy: build manifest from args when no file is attached
   if (!payload && args.image) {
     let env: Record<string, string> | undefined;
@@ -504,6 +617,9 @@ export async function executeDeployApp(
     priceDisplay = `${Math.round(basePrice * 100) / 100} ${symbol}${unitLabel}`;
   }
 
+  // Stack deploys multiply cost by service count
+  const serviceCount = Array.isArray(args._serviceNames) ? (args._serviceNames as string[]).length : 1;
+
   // Check credits - verify user can afford at least 1 hour of this SKU
   let creditWarning = '';
   try {
@@ -518,17 +634,18 @@ export async function executeDeployApp(
         }
       }
 
-      // Check if user can afford at least 1 hour of this SKU
-      if (skuHourlyCost > 0 && credits < skuHourlyCost) {
+      // Check if user can afford at least 1 hour (multiplied by service count for stacks)
+      const totalHourlyCost = skuHourlyCost * serviceCount;
+      if (totalHourlyCost > 0 && credits < totalHourlyCost) {
         return {
           success: false,
-          error: `Insufficient credits. You have ${Math.round(credits * 100) / 100} credits but need at least ${Math.round(skuHourlyCost * 100) / 100} for 1 hour. Selected: ${size} tier on ${provider.uuid} (${priceDisplay}). Use fund_credits to add more credits.`,
+          error: `Insufficient credits. You have ${Math.round(credits * 100) / 100} credits but need at least ${Math.round(totalHourlyCost * 100) / 100} for 1 hour${serviceCount > 1 ? ` (${serviceCount} services)` : ''}. Selected: ${size} tier on ${provider.uuid} (${priceDisplay}). Use fund_credits to add more credits.`,
         };
       }
 
       // Warn if less than 24 hours of runway for this SKU
-      if (skuHourlyCost > 0) {
-        const hoursAffordable = credits / skuHourlyCost;
+      if (totalHourlyCost > 0) {
+        const hoursAffordable = credits / totalHourlyCost;
         if (hoursAffordable < 24) {
           creditWarning = ` Warning: only ~${Math.floor(hoursAffordable)}h of credits remaining at this rate.`;
         }
@@ -539,10 +656,15 @@ export async function executeDeployApp(
     creditWarning = ' Warning: could not verify credit balance — proceed with caution.';
   }
 
+  const stackInfo = serviceCount > 1 ? ` (${serviceCount} services)` : '';
+  const priceInfo = priceDisplay
+    ? ` (~${priceDisplay}${serviceCount > 1 ? ` × ${serviceCount}` : ''})`
+    : '';
+
   return {
     success: true,
     requiresConfirmation: true,
-    confirmationMessage: `Deploy "${name}" on ${storageUpgrade ? 'small' : size} tier${storageUpgrade ? ' (upgraded for storage)' : ''}${priceDisplay ? ` (~${priceDisplay})` : ''}?${creditWarning}`,
+    confirmationMessage: `Deploy "${name}"${stackInfo} on ${storageUpgrade ? 'small' : size} tier${storageUpgrade ? ' (upgraded for storage)' : ''}${priceInfo}?${creditWarning}`,
     pendingAction: {
       toolName: 'deploy_app',
       args: {
@@ -552,6 +674,7 @@ export async function executeDeployApp(
         providerUuid: provider.uuid,
         providerUrl: provider.apiUrl,
         ...(args._generatedManifest ? { _generatedManifest: args._generatedManifest } : {}),
+        ...(args._serviceNames ? { _serviceNames: args._serviceNames } : {}),
       },
     },
   };
@@ -591,7 +714,9 @@ export async function executeConfirmedDeployApp(
   // Create lease
   onProgress?.({ phase: 'creating_lease', detail: 'Creating lease on-chain...' });
 
-  const cmdArgs = ['--meta-hash', metaHashHex, `${skuUuid}:1`];
+  const serviceNames = args._serviceNames as string[] | undefined;
+  const leaseItems = formatLeaseItems(skuUuid, serviceNames);
+  const cmdArgs = ['--meta-hash', metaHashHex, ...leaseItems];
   const result = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
 
   if (result.code !== 0) {
@@ -812,7 +937,7 @@ export async function deploySingleApp(
   // Create lease
   onProgress({ phase: 'creating_lease', detail: 'Creating lease on-chain...' });
 
-  const cmdArgs = ['--meta-hash', metaHashHex, `${skuUuid}:1`];
+  const cmdArgs = ['--meta-hash', metaHashHex, ...formatLeaseItems(skuUuid)];
   const result = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
 
   if (result.code !== 0) {
@@ -1169,7 +1294,7 @@ export async function executeConfirmedBatchDeploy(
     batchProgress[i] = { name, phase: 'creating_lease', detail: 'Creating lease on-chain...' };
     emitProgress();
 
-    const cmdArgs = ['--meta-hash', entry.payload.hash, `${entry.skuUuid}:1`];
+    const cmdArgs = ['--meta-hash', entry.payload.hash, ...formatLeaseItems(entry.skuUuid)];
     const txResult = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
 
     if (txResult.code !== 0) {
@@ -1782,6 +1907,100 @@ export async function executeUpdateApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
+  // Stack-based update: build stack manifest from services param
+  if (!payload && typeof args.services === 'string' && args.services) {
+    if (args.image) {
+      return { success: false, error: '"image" and "services" are mutually exclusive.' };
+    }
+
+    let parsedServices: Record<string, Record<string, unknown>>;
+    try {
+      parsedServices = JSON.parse(args.services as string);
+      if (typeof parsedServices !== 'object' || parsedServices === null || Array.isArray(parsedServices)) {
+        return { success: false, error: 'services must be a JSON object mapping service names to configs.' };
+      }
+    } catch (error) {
+      logError('compositeTransactions.executeUpdateApp.parseServices', error);
+      return { success: false, error: 'Invalid services JSON.' };
+    }
+
+    const serviceNames = Object.keys(parsedServices);
+    if (serviceNames.length === 0) {
+      return { success: false, error: 'services must contain at least one service.' };
+    }
+
+    const stackServices: Record<string, ServiceConfig> = {};
+
+    for (const [svcName, svcRaw] of Object.entries(parsedServices)) {
+      const nameError = validateServiceName(svcName);
+      if (nameError) return { success: false, error: `Invalid service name "${svcName}": ${nameError}` };
+
+      if (typeof svcRaw !== 'object' || svcRaw === null || Array.isArray(svcRaw)) {
+        return { success: false, error: `Service "${svcName}" config must be an object.` };
+      }
+
+      const cfg = svcRaw as Record<string, unknown>;
+      if (typeof cfg.image !== 'string' || !cfg.image) {
+        return { success: false, error: `Service "${svcName}" requires an "image" field.` };
+      }
+
+      let env: Record<string, string> | undefined;
+      if (cfg.env && typeof cfg.env === 'object' && !Array.isArray(cfg.env)) {
+        env = cfg.env as Record<string, string>;
+        const envError = validateEnvNames(env);
+        if (envError) return { success: false, error: `Service "${svcName}": ${envError}` };
+      }
+
+      let command: string[] | undefined;
+      if (cfg.command) {
+        if (!Array.isArray(cfg.command) || !(cfg.command as unknown[]).every((s) => typeof s === 'string')) {
+          return { success: false, error: `Service "${svcName}": command must be an array of strings.` };
+        }
+        command = cfg.command as string[];
+      }
+
+      let svcArgs: string[] | undefined;
+      if (cfg.args) {
+        if (!Array.isArray(cfg.args) || !(cfg.args as unknown[]).every((s) => typeof s === 'string')) {
+          return { success: false, error: `Service "${svcName}": args must be an array of strings.` };
+        }
+        svcArgs = cfg.args as string[];
+      }
+
+      // Known image defaults for port, user, tmpfs, command, args (env skipped for updates)
+      const knownConfig = findKnownImage(cfg.image as string);
+      if (knownConfig) {
+        if (!cfg.port && knownConfig.port) cfg.port = knownConfig.port;
+        if (!cfg.user && knownConfig.user) cfg.user = knownConfig.user;
+        if (!cfg.tmpfs && knownConfig.tmpfs) cfg.tmpfs = knownConfig.tmpfs;
+        if (!command && knownConfig.command) command = [...knownConfig.command];
+        if (!svcArgs && knownConfig.args) svcArgs = [...knownConfig.args];
+      }
+
+      stackServices[svcName] = {
+        image: cfg.image as string,
+        port: cfg.port as string | undefined,
+        env,
+        user: cfg.user as string | undefined,
+        tmpfs: cfg.tmpfs as string | undefined,
+        command,
+        args: svcArgs,
+      };
+    }
+
+    let manifestResult;
+    try {
+      manifestResult = await buildStackManifest({ services: stackServices });
+    } catch (error) {
+      logError('compositeTransactions.executeUpdateApp.buildStackManifest', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to build stack manifest' };
+    }
+
+    payload = manifestResult.payload;
+    args._generatedManifest = manifestResult.json;
+    args._isStack = true;
+  }
+
   // Image-based update: build manifest from args when no file is attached
   if (!payload && args.image) {
     let env: Record<string, string> | undefined;
@@ -1890,7 +2109,8 @@ export async function executeUpdateApp(
   }
 
   // Merge old manifest values (env, ports, user, tmpfs) as defaults
-  if (app.manifest) {
+  // Stack updates use full manifest replacement — no partial merge
+  if (app.manifest && !args._isStack) {
     try {
       const currentJson = typeof args._generatedManifest === 'string'
         ? args._generatedManifest

@@ -13,7 +13,7 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'deploy_app',
-      description: 'Deploy an app from an attached manifest file, or by specifying a Docker image.',
+      description: 'Deploy an app from an attached manifest file, a Docker image, or a service stack. For stacks (multi-service deploys like app+database), use the "services" parameter instead of "image".',
       parameters: {
         type: 'object',
         properties: {
@@ -23,40 +23,44 @@ export const AI_TOOLS: OllamaTool[] = [
           },
           size: {
             type: 'string',
-            description: 'Resource tier: micro, small, medium, or large.',
+            description: 'Resource tier: micro, small, medium, or large. Applies to all services in a stack.',
             enum: ['micro', 'small', 'medium', 'large'],
           },
           image: {
             type: 'string',
-            description: 'Docker image (e.g. "redis:8.4"). Used when no file attached.',
+            description: 'Docker image (e.g. "redis:8.4"). Used for single-service deploy when no file attached. Mutually exclusive with "services".',
           },
           port: {
             type: 'string',
-            description: 'Port(s) to expose, comma-separated (e.g. "6379"). Defaults to tcp.',
+            description: 'Port(s) to expose, comma-separated (e.g. "6379"). Defaults to tcp. Only with "image".',
           },
           env: {
             type: 'string',
-            description: 'Env vars as JSON string (e.g. \'{"KEY":"value"}\'). Empty values auto-generate passwords.',
+            description: 'Env vars as JSON string (e.g. \'{"KEY":"value"}\'). Empty values auto-generate passwords. Only with "image".',
           },
           user: {
             type: 'string',
-            description: 'Container user/UID (e.g. "999:999").',
+            description: 'Container user/UID (e.g. "999:999"). Only with "image".',
           },
           tmpfs: {
             type: 'string',
-            description: 'Tmpfs mount paths, comma-separated (e.g. "/var/run/postgresql").',
+            description: 'Tmpfs mount paths, comma-separated (e.g. "/var/run/postgresql"). Only with "image".',
           },
           command: {
             type: 'string',
-            description: 'JSON array for container entrypoint override, e.g. \'["sh", "-c"]\'.',
+            description: 'JSON array for container entrypoint override, e.g. \'["sh", "-c"]\'. Only with "image".',
           },
           args: {
             type: 'string',
-            description: 'JSON array for container command/args override, e.g. \'["echo hello"]\'.',
+            description: 'JSON array for container command/args override, e.g. \'["echo hello"]\'. Only with "image".',
           },
           storage: {
             type: 'boolean',
             description: 'Set to true for apps that need persistent disk (databases, etc.).',
+          },
+          services: {
+            type: 'string',
+            description: 'JSON object for multi-service stack deploys. Mutually exclusive with "image". Format: \'{"web":{"image":"nginx","port":"80"},"db":{"image":"postgres","port":"5432","env":{"POSTGRES_PASSWORD":""}}}\'.',
           },
         },
         required: [],
@@ -119,7 +123,7 @@ export const AI_TOOLS: OllamaTool[] = [
     type: 'function',
     function: {
       name: 'update_app',
-      description: 'Update an app with a new manifest file, or by specifying a new Docker image.',
+      description: 'Update an app with a new manifest file, a new Docker image, or a new service stack definition.',
       parameters: {
         type: 'object',
         properties: {
@@ -129,7 +133,7 @@ export const AI_TOOLS: OllamaTool[] = [
           },
           image: {
             type: 'string',
-            description: 'New Docker image to update to (e.g. "redis:8"). Used when no file attached.',
+            description: 'New Docker image to update to (e.g. "redis:8"). Used when no file attached. Mutually exclusive with "services".',
           },
           port: {
             type: 'string',
@@ -154,6 +158,10 @@ export const AI_TOOLS: OllamaTool[] = [
           args: {
             type: 'string',
             description: 'JSON array for container command/args override. Only needed with image.',
+          },
+          services: {
+            type: 'string',
+            description: 'JSON object for multi-service stack updates. Mutually exclusive with "image". Same format as deploy_app services.',
           },
         },
         required: ['app_name'],
@@ -396,6 +404,9 @@ export function getToolCallDescription(
     case 'deploy_app': {
       const name = args.app_name ? ` "${args.app_name}"` : '';
       const size = args.size ? ` (${args.size})` : '';
+      if (args.services) {
+        return `Deploying stack${name}${size}...`;
+      }
       const image = !args.app_name && args.image ? ` from ${args.image}` : '';
       return `Deploying app${name}${image}${size}...`;
     }
@@ -420,7 +431,7 @@ export function getToolCallDescription(
     case 'restart_app':
       return `Restarting app "${args.app_name}"...`;
     case 'update_app':
-      return `Updating app "${args.app_name}"...`;
+      return args.services ? `Updating stack "${args.app_name}"...` : `Updating app "${args.app_name}"...`;
     case 'app_diagnostics':
       return `Fetching diagnostics for "${args.app_name}"...`;
     case 'app_releases':

@@ -4,7 +4,7 @@
  * minimal redundancy, prompt-injection guard.
  */
 
-import { generateImageReferenceForPrompt } from './knownImages';
+import { generateImageReferenceForPrompt, generateStackReferenceForPrompt } from './knownImages';
 
 export function getSystemPrompt(address?: string): string {
   return `You are Barney, a deployment assistant for the Manifest Network. Always respond in English.
@@ -50,6 +50,14 @@ For live pricing, use browse_catalog when the user asks.
 ## Known Images
 ${generateImageReferenceForPrompt()}
 
+## Service Stacks
+Deploy multi-service apps using the services parameter (mutually exclusive with image).
+Services communicate via DNS using their service name as hostname (e.g., "db:3306").
+All services in a stack share the same tier/size. Each service counts toward credits separately.
+
+Known stacks:
+${generateStackReferenceForPrompt()}
+
 ## Examples
 
 User: "Deploy an app" / "show games" / "example apps"
@@ -90,6 +98,15 @@ User: "Show logs for my-api" → get_logs(app_name="my-api")
 User: "Show my lease history" → lease_history()
 User: "Show releases for my-app" → app_releases(app_name="my-app")
 User: "What are the prices?" → browse_catalog()
+
+User: "Deploy WordPress with MySQL"
+→ deploy_app(app_name="wordpress", services='{"web":{"image":"wordpress","port":"80","env":{"WORDPRESS_DB_HOST":"db:3306","WORDPRESS_DB_USER":"wordpress","WORDPRESS_DB_PASSWORD":"","WORDPRESS_DB_NAME":"wordpress"}},"db":{"image":"mysql","port":"3306","env":{"MYSQL_DATABASE":"wordpress","MYSQL_USER":"wordpress","MYSQL_PASSWORD":"","MYSQL_ROOT_PASSWORD":""}}}')
+
+User: "Deploy Ghost blog"
+→ deploy_app(app_name="ghost", services='{"web":{"image":"ghost","port":"2368","env":{"database__client":"mysql","database__connection__host":"db","database__connection__user":"ghost","database__connection__password":"","database__connection__database":"ghost"}},"db":{"image":"mysql","port":"3306","env":{"MYSQL_DATABASE":"ghost","MYSQL_USER":"ghost","MYSQL_PASSWORD":"","MYSQL_ROOT_PASSWORD":""}}}')
+
+User: "Deploy nginx with postgres"
+→ deploy_app(app_name="nginx-postgres", services='{"web":{"image":"nginx","port":"80"},"db":{"image":"postgres","port":"5432","env":{"POSTGRES_PASSWORD":""},"user":"999:999","tmpfs":"/var/run/postgresql"}}')
 
 ${address ? `## Session\nWallet: ${address}` : '## Session\nNo wallet connected. Ask the user to sign in to deploy apps.'}
 `;

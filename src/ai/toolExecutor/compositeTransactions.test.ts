@@ -3,6 +3,7 @@ import {
   deriveAppName,
   formatConnectionUrl,
   extractUrlFromFredStatus,
+  formatLeaseItems,
   executeDeployApp,
   executeConfirmedDeployApp,
   executeStopApp,
@@ -281,6 +282,27 @@ describe('formatConnectionUrl', () => {
       host: '127.0.0.1',
       ports: { '8080/tcp': 12345 },
     })).toBe('http://127.0.0.1:12345');
+  });
+});
+
+describe('formatLeaseItems', () => {
+  it('returns single item without service names', () => {
+    expect(formatLeaseItems('sku-123')).toEqual(['sku-123:1']);
+  });
+
+  it('returns single item for empty array', () => {
+    expect(formatLeaseItems('sku-123', [])).toEqual(['sku-123:1']);
+  });
+
+  it('returns items with service name suffixes', () => {
+    expect(formatLeaseItems('sku-123', ['web', 'db'])).toEqual([
+      'sku-123:1:web',
+      'sku-123:1:db',
+    ]);
+  });
+
+  it('handles single service name', () => {
+    expect(formatLeaseItems('sku-123', ['web'])).toEqual(['sku-123:1:web']);
   });
 });
 
@@ -590,6 +612,68 @@ describe('executeDeployApp', () => {
     // Should use filename-derived name, not image-derived
     expect(result.confirmationMessage).toContain('docker-compose');
     expect(result.pendingAction?.args._generatedManifest).toBeUndefined();
+  });
+
+  it('returns confirmation for stack deploy with services param', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const services = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+      db: { image: 'postgres', port: '5432', env: { POSTGRES_PASSWORD: '' } },
+    });
+    const result = await executeDeployApp(
+      { app_name: 'my-stack', services },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args._generatedManifest).toBeDefined();
+    expect(result.pendingAction?.args._serviceNames).toEqual(['web', 'db']);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.services).toBeDefined();
+    expect(manifest.services.web.image).toBe('nginx');
+    expect(manifest.services.db.image).toBe('postgres');
+  });
+
+  it('returns error for invalid services JSON', async () => {
+    const result = await executeDeployApp(
+      { app_name: 'bad-stack', services: 'not-json' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid services JSON');
+  });
+
+  it('returns error for invalid service name in stack', async () => {
+    const services = JSON.stringify({
+      'Invalid Name': { image: 'nginx' },
+    });
+    const result = await executeDeployApp(
+      { app_name: 'bad-stack', services },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid service name');
+  });
+
+  it('returns error when both services and image are provided', async () => {
+    const services = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+    });
+    const result = await executeDeployApp(
+      { app_name: 'my-stack', services, image: 'redis' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('mutually exclusive');
   });
 });
 

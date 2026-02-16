@@ -26,6 +26,10 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
 
   try {
     const parsed = JSON.parse(json) as Record<string, unknown>;
+    // Stack manifests are not editable in v1 — shown as read-only summary
+    if (parsed.services && typeof parsed.services === 'object' && !Array.isArray(parsed.services)) {
+      return null;
+    }
     return {
       image: (parsed.image as string) || '',
       ports: (parsed.ports as Record<string, Record<string, never>>) || {},

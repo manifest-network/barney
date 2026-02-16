@@ -22,6 +22,10 @@ import {
   WS_LIVENESS_TIMEOUT_MS,
 } from '../config/constants';
 
+export interface FredServiceStatus {
+  instances: Array<{ name: string; status: string; ports?: Record<string, number> }>;
+}
+
 export interface FredLeaseStatus {
   state: LeaseState;
   provision_status?: string;
@@ -32,6 +36,8 @@ export interface FredLeaseStatus {
   last_error?: string;
   fail_count?: number;
   created_at?: string;
+  /** Per-service status for stack (multi-service) deployments. */
+  services?: Record<string, FredServiceStatus>;
 }
 
 /** Negative terminal lease states — polling should always stop for these. */
@@ -86,6 +92,29 @@ function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
   if (typeof raw.last_error === 'string') result.last_error = raw.last_error;
   if (typeof raw.fail_count === 'number') result.fail_count = raw.fail_count;
   if (typeof raw.created_at === 'string') result.created_at = raw.created_at;
+
+  // Stack (multi-service) status: { services: { "web": { instances: [...] }, "db": { instances: [...] } } }
+  if (raw.services && typeof raw.services === 'object' && !Array.isArray(raw.services)) {
+    const services: Record<string, FredServiceStatus> = {};
+    for (const [name, value] of Object.entries(raw.services as Record<string, unknown>)) {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const svc = value as Record<string, unknown>;
+        if (Array.isArray(svc.instances)) {
+          services[name] = {
+            instances: svc.instances.filter(
+              (i): i is { name: string; status: string; ports?: Record<string, number> } =>
+                i != null &&
+                typeof i === 'object' &&
+                typeof i.name === 'string' &&
+                typeof i.status === 'string'
+            ),
+          };
+        }
+      }
+    }
+    if (Object.keys(services).length > 0) result.services = services;
+  }
+
   return result;
 }
 

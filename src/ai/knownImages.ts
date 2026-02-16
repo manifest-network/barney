@@ -121,6 +121,93 @@ export function findKnownImage(imageRef: string): KnownImageConfig | undefined {
   return undefined;
 }
 
+export interface KnownStackServiceConfig {
+  image: string;
+  port: string;
+  env?: Record<string, string>;
+  user?: string;
+  tmpfs?: string;
+  description: string;
+}
+
+export interface KnownStackConfig {
+  /** Stack name, e.g. "wordpress" */
+  name: string;
+  /** Services keyed by DNS name */
+  services: Record<string, KnownStackServiceConfig>;
+  /** Alternative names that should resolve to this stack */
+  aliases?: string[];
+}
+
+export const KNOWN_STACKS: readonly KnownStackConfig[] = [
+  {
+    name: 'wordpress',
+    services: {
+      web: {
+        image: 'wordpress',
+        port: '80',
+        env: { WORDPRESS_DB_HOST: 'db:3306', WORDPRESS_DB_USER: 'wordpress', WORDPRESS_DB_PASSWORD: '', WORDPRESS_DB_NAME: 'wordpress' },
+        description: 'WordPress CMS',
+      },
+      db: {
+        image: 'mysql',
+        port: '3306',
+        env: { MYSQL_DATABASE: 'wordpress', MYSQL_USER: 'wordpress', MYSQL_PASSWORD: '', MYSQL_ROOT_PASSWORD: '' },
+        description: 'MySQL database',
+      },
+    },
+    aliases: ['wp'],
+  },
+  {
+    name: 'ghost',
+    services: {
+      web: {
+        image: 'ghost',
+        port: '2368',
+        env: { 'database__client': 'mysql', 'database__connection__host': 'db', 'database__connection__user': 'ghost', 'database__connection__password': '', 'database__connection__database': 'ghost' },
+        description: 'Ghost publishing platform',
+      },
+      db: {
+        image: 'mysql',
+        port: '3306',
+        env: { MYSQL_DATABASE: 'ghost', MYSQL_USER: 'ghost', MYSQL_PASSWORD: '', MYSQL_ROOT_PASSWORD: '' },
+        description: 'MySQL database',
+      },
+    },
+  },
+  {
+    name: 'adminer-postgres',
+    services: {
+      adminer: {
+        image: 'adminer',
+        port: '8080',
+        description: 'Database management UI',
+      },
+      db: {
+        image: 'postgres',
+        port: '5432',
+        env: { POSTGRES_PASSWORD: '' },
+        user: '999:999',
+        tmpfs: '/var/run/postgresql',
+        description: 'PostgreSQL database',
+      },
+    },
+    aliases: ['pgadmin'],
+  },
+];
+
+/**
+ * Find a known stack config by name or alias.
+ */
+export function findKnownStack(name: string): KnownStackConfig | undefined {
+  const normalized = name.toLowerCase();
+  for (const stack of KNOWN_STACKS) {
+    if (normalized === stack.name) return stack;
+    if (stack.aliases?.includes(normalized)) return stack;
+  }
+  return undefined;
+}
+
 /**
  * Generate a compact image reference table for the system prompt.
  * One line per image, showing port, env, and flags.
@@ -143,6 +230,21 @@ export function generateImageReferenceForPrompt(): string {
     if (cfg.storage) parts.push('storage=true');
     if (cfg.aliases?.length) parts.push(`(aka ${cfg.aliases.join(', ')})`);
     return parts.join(' ');
+  });
+  return lines.join('\n');
+}
+
+/**
+ * Generate a compact stack reference table for the system prompt.
+ * One line per stack showing service names and images.
+ */
+export function generateStackReferenceForPrompt(): string {
+  const lines = KNOWN_STACKS.map((stack) => {
+    const svcs = Object.entries(stack.services)
+      .map(([name, cfg]) => `${name}(${cfg.image})`)
+      .join(' + ');
+    const aliases = stack.aliases?.length ? ` (aka ${stack.aliases.join(', ')})` : '';
+    return `${stack.name}: ${svcs}${aliases}`;
   });
   return lines.join('\n');
 }

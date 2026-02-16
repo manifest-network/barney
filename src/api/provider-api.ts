@@ -118,12 +118,20 @@ export interface InstanceInfo {
   ports?: Record<string, PortMapping>;
 }
 
+export interface ServiceConnectionDetails {
+  host?: string;
+  ports?: Record<string, PortMapping>;
+  instances?: InstanceInfo[];
+}
+
 export interface ConnectionDetails {
   host: string;
   ports?: Record<string, PortMapping>;
   instances?: InstanceInfo[];
   protocol?: string;
   metadata?: Record<string, string>;
+  /** Per-service connection details for stack (multi-service) deployments. */
+  services?: Record<string, ServiceConnectionDetails>;
 }
 
 /**

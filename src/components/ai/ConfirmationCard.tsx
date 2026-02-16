@@ -19,6 +19,35 @@ function parseManifestEnv(payload: PendingAction['payload']): Record<string, str
   return null;
 }
 
+interface StackServiceSummary {
+  image: string;
+  ports: string[];
+  envCount: number;
+}
+
+function parseStackManifest(action: PendingAction): Record<string, StackServiceSummary> | null {
+  const json = action.args._generatedManifest;
+  if (typeof json !== 'string') return null;
+  try {
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    if (!parsed.services || typeof parsed.services !== 'object' || Array.isArray(parsed.services)) return null;
+    const result: Record<string, StackServiceSummary> = {};
+    for (const [name, svc] of Object.entries(parsed.services as Record<string, Record<string, unknown>>)) {
+      result[name] = {
+        image: (svc.image as string) || 'unknown',
+        ports: svc.ports ? Object.keys(svc.ports as Record<string, unknown>) : [],
+        envCount: svc.env ? Object.keys(svc.env as Record<string, unknown>).length : 0,
+      };
+    }
+    return Object.keys(result).length > 0 ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Internal args that should not be shown in the confirmation parameters. */
+const INTERNAL_ARGS = new Set(['_generatedManifest', '_serviceNames', '_isStack']);
+
 const SENSITIVE_PATTERN = /password|secret|token|key|credential/i;
 
 function CopyButton({ value }: { value: string }) {
@@ -82,6 +111,11 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     return parseManifestEnv(action.payload);
   }, [action.payload, isEditable]);
 
+  const stackServices = useMemo(() => {
+    if (isEditable) return null;
+    return parseStackManifest(action);
+  }, [action, isEditable]);
+
   const handleConfirm = useCallback(() => {
     if (editedManifest) {
       onConfirm(serializeManifest(editedManifest));
@@ -94,7 +128,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   const displayArgs = useMemo(() => {
     const filtered: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(action.args)) {
-      if (k !== '_generatedManifest') {
+      if (!INTERNAL_ARGS.has(k)) {
         filtered[k] = v;
       }
     }
@@ -123,7 +157,27 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           </div>
         ) : (
           <>
-            {action.args.entries && Array.isArray(action.args.entries) && action.args.entries.length > 1 ? (
+            {stackServices ? (
+              <div className="confirmation-details">
+                <p className="confirmation-details-title">Services ({Object.keys(stackServices).length}):</p>
+                <div className="confirmation-payload">
+                  {Object.entries(stackServices).map(([name, svc]) => (
+                    <div key={name} className="flex items-start gap-2 text-sm py-1">
+                      <code className="font-mono text-xs text-primary font-semibold whitespace-nowrap">{name}</code>
+                      <div className="text-dim text-xs">
+                        <span>{svc.image}</span>
+                        {svc.ports.length > 0 && (
+                          <span className="text-muted"> · {svc.ports.join(', ')}</span>
+                        )}
+                        {svc.envCount > 0 && (
+                          <span className="text-muted"> · {svc.envCount} env var{svc.envCount !== 1 ? 's' : ''}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : action.args.entries && Array.isArray(action.args.entries) && action.args.entries.length > 1 ? (
               <div className="confirmation-details">
                 <p className="confirmation-details-title">Apps to deploy:</p>
                 <ul className="confirmation-batch-list">

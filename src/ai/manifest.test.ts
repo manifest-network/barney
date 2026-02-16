@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { deriveAppNameFromImage, normalizePorts, buildManifest, mergeManifest } from './manifest';
+import {
+  deriveAppNameFromImage,
+  normalizePorts,
+  buildManifest,
+  mergeManifest,
+  buildStackManifest,
+  isStackManifest,
+  parseStackManifest,
+  validateServiceName,
+  getServiceNames,
+} from './manifest';
 
 describe('deriveAppNameFromImage', () => {
   it('extracts name from simple image:tag', () => {
@@ -335,5 +345,154 @@ describe('mergeManifest', () => {
     expect(merged.ports).toEqual({ '5432/tcp': {} });
     expect(merged.user).toBe('999:999');
     expect(merged.tmpfs).toEqual(['/var/run/postgresql']);
+  });
+});
+
+// ============================================================================
+// Stack manifest tests
+// ============================================================================
+
+describe('validateServiceName', () => {
+  it('accepts valid DNS labels', () => {
+    expect(validateServiceName('web')).toBeNull();
+    expect(validateServiceName('db')).toBeNull();
+    expect(validateServiceName('my-service')).toBeNull();
+    expect(validateServiceName('a')).toBeNull();
+    expect(validateServiceName('a'.repeat(63))).toBeNull();
+  });
+
+  it('rejects empty name', () => {
+    expect(validateServiceName('')).toContain('required');
+  });
+
+  it('rejects names over 63 chars', () => {
+    expect(validateServiceName('a'.repeat(64))).toContain('63');
+  });
+
+  it('rejects uppercase', () => {
+    expect(validateServiceName('Web')).toContain('DNS label');
+  });
+
+  it('rejects leading hyphen', () => {
+    expect(validateServiceName('-web')).toContain('DNS label');
+  });
+
+  it('rejects trailing hyphen', () => {
+    expect(validateServiceName('web-')).toContain('DNS label');
+  });
+
+  it('rejects underscores', () => {
+    expect(validateServiceName('my_service')).toContain('DNS label');
+  });
+
+  it('rejects dots', () => {
+    expect(validateServiceName('my.service')).toContain('DNS label');
+  });
+});
+
+describe('buildStackManifest', () => {
+  it('builds a multi-service manifest', async () => {
+    const result = await buildStackManifest({
+      services: {
+        web: { image: 'nginx:latest', port: '80' },
+        db: { image: 'postgres:18', port: '5432', env: { POSTGRES_PASSWORD: 'test' } },
+      },
+    });
+
+    const parsed = JSON.parse(result.json);
+    expect(parsed.services).toBeDefined();
+    expect(parsed.services.web.image).toBe('nginx:latest');
+    expect(parsed.services.web.ports).toEqual({ '80/tcp': {} });
+    expect(parsed.services.db.image).toBe('postgres:18');
+    expect(parsed.services.db.env.POSTGRES_PASSWORD).toBe('test');
+    expect(result.payload.hash).toHaveLength(64);
+    expect(result.payload.filename).toBe('nginx-stack.json');
+  });
+
+  it('auto-generates passwords for empty env values', async () => {
+    const result = await buildStackManifest({
+      services: {
+        db: { image: 'postgres:18', env: { POSTGRES_PASSWORD: '' } },
+      },
+    });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.services.db.env.POSTGRES_PASSWORD).toHaveLength(16);
+    expect(parsed.services.db.env.POSTGRES_PASSWORD).toMatch(/^[A-Za-z0-9]+$/);
+  });
+
+  it('throws on empty services', async () => {
+    await expect(buildStackManifest({ services: {} })).rejects.toThrow('at least one service');
+  });
+
+  it('throws on invalid service name', async () => {
+    await expect(
+      buildStackManifest({ services: { 'Invalid Name': { image: 'nginx' } } })
+    ).rejects.toThrow('Invalid service name');
+  });
+
+  it('includes user and tmpfs per service', async () => {
+    const result = await buildStackManifest({
+      services: {
+        db: { image: 'postgres:18', user: '999:999', tmpfs: '/var/run/postgresql' },
+      },
+    });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.services.db.user).toBe('999:999');
+    expect(parsed.services.db.tmpfs).toEqual(['/var/run/postgresql']);
+  });
+});
+
+describe('isStackManifest', () => {
+  it('returns true for stack manifest', () => {
+    expect(isStackManifest({ services: { web: { image: 'nginx' } } })).toBe(true);
+  });
+
+  it('returns false for single-service manifest', () => {
+    expect(isStackManifest({ image: 'nginx', ports: {} })).toBe(false);
+  });
+
+  it('returns false for empty services', () => {
+    expect(isStackManifest({ services: {} })).toBe(false);
+  });
+
+  it('returns false for non-object', () => {
+    expect(isStackManifest(null)).toBe(false);
+    expect(isStackManifest('string')).toBe(false);
+    expect(isStackManifest(42)).toBe(false);
+  });
+
+  it('returns false for array services', () => {
+    expect(isStackManifest({ services: ['web'] })).toBe(false);
+  });
+});
+
+describe('parseStackManifest', () => {
+  it('parses valid stack JSON', () => {
+    const json = JSON.stringify({ services: { web: { image: 'nginx' }, db: { image: 'postgres' } } });
+    const result = parseStackManifest(json);
+    expect(result).not.toBeNull();
+    expect(Object.keys(result!.services)).toEqual(['web', 'db']);
+  });
+
+  it('returns null for single-service JSON', () => {
+    expect(parseStackManifest(JSON.stringify({ image: 'nginx' }))).toBeNull();
+  });
+
+  it('returns null for invalid JSON', () => {
+    expect(parseStackManifest('not json')).toBeNull();
+  });
+});
+
+describe('getServiceNames', () => {
+  it('returns service names from stack manifest', () => {
+    expect(getServiceNames({ services: { web: {}, db: {} } })).toEqual(['web', 'db']);
+  });
+
+  it('returns empty array for single-service manifest', () => {
+    expect(getServiceNames({ image: 'nginx' })).toEqual([]);
+  });
+
+  it('returns empty array for non-object', () => {
+    expect(getServiceNames(null)).toEqual([]);
   });
 });

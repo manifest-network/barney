@@ -9,6 +9,7 @@ import {
   removeApp,
   reconcileWithChain,
   validateAppName,
+  sanitizeManifestForStorage,
   type AppEntry,
 } from './appRegistry';
 
@@ -321,5 +322,44 @@ describe('appRegistry', () => {
       expect(apps).toHaveLength(1);
       expect(apps[0].name).toBe('my-app');
     });
+  });
+});
+
+describe('sanitizeManifestForStorage', () => {
+  it('sanitizes sensitive env vars in single-service manifest', () => {
+    const manifest = JSON.stringify({
+      image: 'postgres:18',
+      env: { POSTGRES_PASSWORD: 'secret123', POSTGRES_DB: 'mydb' },
+    });
+    const result = JSON.parse(sanitizeManifestForStorage(manifest));
+    expect(result.env.POSTGRES_PASSWORD).toBe('');
+    expect(result.env.POSTGRES_DB).toBe('mydb');
+  });
+
+  it('sanitizes sensitive env vars in stack manifest', () => {
+    const manifest = JSON.stringify({
+      services: {
+        web: { image: 'wordpress', env: { WORDPRESS_DB_PASSWORD: 'secret' } },
+        db: { image: 'mysql', env: { MYSQL_ROOT_PASSWORD: 'root_pass', MYSQL_DATABASE: 'mydb' } },
+      },
+    });
+    const result = JSON.parse(sanitizeManifestForStorage(manifest));
+    expect(result.services.web.env.WORDPRESS_DB_PASSWORD).toBe('');
+    expect(result.services.db.env.MYSQL_ROOT_PASSWORD).toBe('');
+    expect(result.services.db.env.MYSQL_DATABASE).toBe('mydb');
+  });
+
+  it('returns empty JSON for invalid input', () => {
+    expect(sanitizeManifestForStorage('not json')).toBe('{}');
+  });
+
+  it('preserves non-sensitive values in stack manifest', () => {
+    const manifest = JSON.stringify({
+      services: {
+        web: { image: 'nginx', env: { PORT: '80' } },
+      },
+    });
+    const result = JSON.parse(sanitizeManifestForStorage(manifest));
+    expect(result.services.web.env.PORT).toBe('80');
   });
 });

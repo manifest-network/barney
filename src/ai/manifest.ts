@@ -2,6 +2,10 @@
  * Manifest builder for image-based deploys.
  * Builds a provider-compatible manifest JSON from a Docker image reference,
  * computes its SHA-256 hash, and returns a PayloadAttachment.
+ *
+ * Supports both single-service and stack (multi-service) manifests.
+ * Stack manifests use the `{ "services": { ... } }` format, where each
+ * service is a named container with its own image, ports, env, etc.
  */
 
 import { sha256, toHex, generatePassword, validatePayloadSize } from '../utils/hash';
@@ -239,4 +243,159 @@ export function mergeManifest(
   }
 
   return merged;
+}
+
+// ============================================================================
+// Stack (multi-service) manifests
+// ============================================================================
+
+/**
+ * Configuration for a single service within a stack.
+ * Same fields as single-service BuildManifestOptions.
+ */
+export interface ServiceConfig {
+  image: string;
+  port?: string;
+  env?: Record<string, string>;
+  user?: string;
+  tmpfs?: string;
+  command?: string[];
+  args?: string[];
+}
+
+export interface StackManifestOptions {
+  services: Record<string, ServiceConfig>;
+}
+
+/**
+ * RFC 1123 DNS label validation for service names.
+ * 1-63 chars, lowercase alphanumeric + hyphens, no leading/trailing hyphen.
+ * Returns null if valid, or an error string describing the issue.
+ */
+export function validateServiceName(name: string): string | null {
+  if (!name) return 'Service name is required.';
+  if (name.length > 63) return 'Service name must be 63 characters or fewer.';
+  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(name)) {
+    return 'Service name must be a valid DNS label: lowercase alphanumeric with hyphens, no leading/trailing hyphen.';
+  }
+  return null;
+}
+
+/**
+ * Build a single service manifest object (used internally by buildStackManifest).
+ * Auto-generates passwords for empty env values, same as buildManifest.
+ */
+function buildServiceManifestObject(cfg: ServiceConfig): Record<string, unknown> {
+  const svc: Record<string, unknown> = { image: cfg.image };
+
+  if (cfg.port) {
+    svc.ports = normalizePorts(cfg.port);
+  }
+
+  if (cfg.env && Object.keys(cfg.env).length > 0) {
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(cfg.env)) {
+      env[key] = value === '' ? generatePassword() : value.endsWith('/') ? value + generatePassword() : value;
+    }
+    svc.env = env;
+  }
+
+  if (cfg.user) svc.user = cfg.user;
+  if (cfg.tmpfs) {
+    const paths = cfg.tmpfs.split(',').map((p) => p.trim()).filter(Boolean);
+    if (paths.length > 0) svc.tmpfs = paths;
+  }
+  if (cfg.command && cfg.command.length > 0) svc.command = cfg.command;
+  if (cfg.args && cfg.args.length > 0) svc.args = cfg.args;
+
+  return svc;
+}
+
+/**
+ * Build a stack manifest JSON from multiple service configs, compute its hash,
+ * and return a PayloadAttachment ready for the deploy flow.
+ *
+ * The resulting manifest format: `{ "services": { "web": {...}, "db": {...} } }`
+ */
+export async function buildStackManifest(opts: StackManifestOptions): Promise<BuildManifestResult> {
+  const serviceNames = Object.keys(opts.services);
+  if (serviceNames.length === 0) {
+    throw new Error('Stack manifest requires at least one service.');
+  }
+
+  // Validate all service names
+  for (const name of serviceNames) {
+    const error = validateServiceName(name);
+    if (error) throw new Error(`Invalid service name "${name}": ${error}`);
+  }
+
+  const services: Record<string, Record<string, unknown>> = {};
+  for (const [name, cfg] of Object.entries(opts.services)) {
+    services[name] = buildServiceManifestObject(cfg);
+  }
+
+  const manifest = { services };
+  const json = JSON.stringify(manifest, null, 2);
+
+  if (!validatePayloadSize(json)) {
+    throw new Error('Generated stack manifest exceeds maximum payload size (5KB)');
+  }
+
+  const bytes = new TextEncoder().encode(json);
+  const hash = toHex(await sha256(json));
+
+  // Derive app name from the first service's image
+  const firstService = opts.services[serviceNames[0]];
+  const derivedAppName = deriveAppNameFromImage(firstService.image);
+
+  return {
+    payload: {
+      bytes,
+      filename: `${derivedAppName}-stack.json`,
+      size: bytes.length,
+      hash,
+    },
+    json,
+    derivedAppName,
+  };
+}
+
+/**
+ * Check if a manifest is a stack manifest (has `services` key with object value).
+ */
+export function isStackManifest(manifest: unknown): boolean {
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+    return false;
+  }
+  const obj = manifest as Record<string, unknown>;
+  return (
+    typeof obj.services === 'object' &&
+    obj.services !== null &&
+    !Array.isArray(obj.services) &&
+    Object.keys(obj.services as Record<string, unknown>).length > 0
+  );
+}
+
+/**
+ * Parse a stack manifest JSON string. Returns a typed result or null if invalid.
+ */
+export function parseStackManifest(json: string): { services: Record<string, Record<string, unknown>> } | null {
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!isStackManifest(parsed)) return null;
+    return parsed as { services: Record<string, Record<string, unknown>> };
+  } catch (error) {
+    logError('manifest.parseStackManifest', error);
+    return null;
+  }
+}
+
+/**
+ * Extract service names from a stack manifest.
+ * Returns empty array for non-stack manifests.
+ */
+export function getServiceNames(manifest: unknown): string[] {
+  if (!isStackManifest(manifest)) return [];
+  const obj = manifest as { services: Record<string, unknown> };
+  return Object.keys(obj.services);
 }
