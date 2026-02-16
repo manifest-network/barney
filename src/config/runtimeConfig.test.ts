@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getConfigValue } from './runtimeConfig';
+import { getConfigValue, runtimeConfig } from './runtimeConfig';
 
 describe('getConfigValue', () => {
   let originalConfig: typeof window.__RUNTIME_CONFIG__;
@@ -44,5 +44,19 @@ describe('getConfigValue', () => {
     window.__RUNTIME_CONFIG__ = undefined;
     // Should still return defaults
     expect(getConfigValue('PUBLIC_REST_URL')).toBe('http://localhost:1317');
+  });
+});
+
+describe('runtimeConfig', () => {
+  it('exports all 7 keys as non-empty strings', () => {
+    expect(Object.keys(runtimeConfig)).toHaveLength(7);
+    for (const value of Object.values(runtimeConfig)) {
+      expect(typeof value).toBe('string');
+      expect(value.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('is frozen', () => {
+    expect(Object.isFrozen(runtimeConfig)).toBe(true);
   });
 });
