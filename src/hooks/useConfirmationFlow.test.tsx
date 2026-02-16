@@ -26,7 +26,7 @@ const hookResultRef = { current: null as ReturnType<typeof useConfirmationFlow> 
 let setDeployProgressSpy: ReturnType<typeof vi.fn>;
 
 function TestComponent({ deps }: { deps: Omit<UseConfirmationFlowDeps, 'setDeployProgress'> }) {
-  const result = useConfirmationFlow({ ...deps, setDeployProgress: setDeployProgressSpy });
+  const result = useConfirmationFlow({ ...deps, setDeployProgress: setDeployProgressSpy as UseConfirmationFlowDeps['setDeployProgress'] });
   useEffect(() => { hookResultRef.current = result; });
   return null;
 }
