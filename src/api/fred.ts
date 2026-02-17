@@ -13,7 +13,7 @@
 
 import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
 import { ProviderApiError } from './provider-api';
-import { LeaseState, leaseStateFromString } from './billing';
+import { LeaseState, leaseStateFromString, leaseStateToString } from './billing';
 import { logError } from '../utils/errors';
 import {
   FRED_POLL_INTERVAL_MS,
@@ -360,7 +360,7 @@ export async function pollLeaseUntilReady(
     }
   }
 
-  logError('fred.pollLeaseUntilReady', new Error(`Polling exhausted after ${maxAttempts} attempts (last state: ${lastStatus.state}, provision: ${lastStatus.provision_status ?? 'none'})`));
+  logError('fred.pollLeaseUntilReady', new Error(`Polling exhausted after ${maxAttempts} attempts (last state: ${leaseStateToString(lastStatus.state)}, provision: ${lastStatus.provision_status ?? 'none'})`));
   return lastStatus;
 }
 
