@@ -245,7 +245,8 @@ export async function executeAppStatus(
         for (const [svcName, svcConfig] of Object.entries(manifest.services as Record<string, Record<string, unknown>>)) {
           if (typeof svcConfig.image === 'string') serviceImages[svcName] = svcConfig.image;
         }
-        image = Object.values(serviceImages).join(' + ');
+        const imgs = Object.values(serviceImages);
+        if (imgs.length > 0) image = imgs.join(' + ');
       }
     } catch (error) {
       logError('compositeQueries.executeAppStatus.parseManifest', error);
