@@ -3,6 +3,7 @@ import {
   deriveAppName,
   formatConnectionUrl,
   extractUrlFromFredStatus,
+  extractPrimaryServicePorts,
   formatLeaseItems,
   parseAndValidateStackServices,
   executeDeployApp,
@@ -219,6 +220,78 @@ describe('extractUrlFromFredStatus', () => {
       endpoints: { '8080/tcp': 'http://1.2.3.4:11111' },
       instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': 22222 } }],
     }, '1.2.3.4')).toBe('http://1.2.3.4:11111');
+  });
+
+  it('extracts URL from stack services using primary service priority', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      services: {
+        db: { instances: [{ name: 'db-0', status: 'running', ports: { '5432/tcp': 32100 } }] },
+        web: { instances: [{ name: 'web-0', status: 'running', ports: { '80/tcp': 32200 } }] },
+      },
+    }, '1.2.3.4')).toBe('1.2.3.4:32200');
+  });
+
+  it('falls back to non-backend service in stack when no primary name', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      services: {
+        db: { instances: [{ name: 'db-0', status: 'running', ports: { '5432/tcp': 32100 } }] },
+        api: { instances: [{ name: 'api-0', status: 'running', ports: { '3000/tcp': 32300 } }] },
+      },
+    }, '1.2.3.4')).toBe('1.2.3.4:32300');
+  });
+});
+
+describe('extractPrimaryServicePorts', () => {
+  it('returns undefined for empty services', () => {
+    expect(extractPrimaryServicePorts({})).toBeUndefined();
+  });
+
+  it('prefers service named "web"', () => {
+    const result = extractPrimaryServicePorts({
+      db: { instances: [{ ports: { '5432/tcp': 32100 } }] },
+      web: { instances: [{ ports: { '80/tcp': 32200 } }] },
+    });
+    expect(result).toEqual({ serviceName: 'web', ports: { '80/tcp': 32200 } });
+  });
+
+  it('prefers service named "app"', () => {
+    const result = extractPrimaryServicePorts({
+      redis: { instances: [{ ports: { '6379/tcp': 32300 } }] },
+      app: { instances: [{ ports: { '3000/tcp': 32400 } }] },
+    });
+    expect(result).toEqual({ serviceName: 'app', ports: { '3000/tcp': 32400 } });
+  });
+
+  it('prefers non-backend service over backend', () => {
+    const result = extractPrimaryServicePorts({
+      postgres: { instances: [{ ports: { '5432/tcp': 32100 } }] },
+      api: { instances: [{ ports: { '8080/tcp': 32200 } }] },
+    });
+    expect(result).toEqual({ serviceName: 'api', ports: { '8080/tcp': 32200 } });
+  });
+
+  it('falls back to backend service if no other option', () => {
+    const result = extractPrimaryServicePorts({
+      db: { instances: [{ ports: { '5432/tcp': 32100 } }] },
+    });
+    expect(result).toEqual({ serviceName: 'db', ports: { '5432/tcp': 32100 } });
+  });
+
+  it('handles top-level service ports', () => {
+    const result = extractPrimaryServicePorts({
+      web: { ports: { '80/tcp': 32200 } },
+    });
+    expect(result).toEqual({ serviceName: 'web', ports: { '80/tcp': 32200 } });
+  });
+
+  it('skips services with empty ports', () => {
+    const result = extractPrimaryServicePorts({
+      web: { ports: {} },
+      api: { instances: [{ ports: { '3000/tcp': 32300 } }] },
+    });
+    expect(result).toEqual({ serviceName: 'api', ports: { '3000/tcp': 32300 } });
   });
 });
 
@@ -1096,6 +1169,38 @@ describe('executeConfirmedDeployApp', () => {
     const uploadCall = vi.mocked(uploadPayloadToProvider).mock.calls[0];
     // The hash should be consistent
     expect(uploadCall[2]).toHaveLength(64);
+  });
+
+  it('resolves URL from services-only connection response (stack deploy)', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: '1.2.3.4',
+        services: {
+          db: { instances: [{ instance_index: 0, container_id: 'db1', image: 'postgres', status: 'running', ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32100 } } }] },
+          web: { instances: [{ instance_index: 0, container_id: 'web1', image: 'nginx', status: 'running', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32200 } } }] },
+        },
+      },
+    });
+
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      { name: 'my-stack', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).url).toBe('https://1.2.3.4:32200');
+    expect((result.data as any).status).toBe('running');
   });
 });
 

@@ -18,7 +18,7 @@ export interface AppEntry {
   providerUrl: string;
   createdAt: number;
   url?: string;
-  connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string> };
+  connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string>; services?: Record<string, unknown> };
   status: AppStatus;
   /** Original manifest JSON, stored for re-deploy. */
   manifest?: string;

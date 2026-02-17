@@ -18,7 +18,7 @@ import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo, createSignMessage, createAuthToken } from '../../api/provider-api';
 import { getLeaseStatus, getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import { formatConnectionUrl } from './compositeTransactions';
+import { formatConnectionUrl, extractPrimaryServicePorts } from './compositeTransactions';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
@@ -193,9 +193,20 @@ export async function executeAppStatus(
             );
             const connResponse = await getLeaseConnectionInfo(app.providerUrl, app.leaseUuid, infoAuthToken);
             if (connResponse.connection) {
-              appConnection = connResponse.connection;
-              if (connResponse.connection.host) {
-                appUrl = connResponse.connection.host;
+              const conn = connResponse.connection;
+              // Stack deployments: extract primary service ports when no top-level ports
+              if (!conn.ports && !conn.instances?.[0]?.ports && conn.services) {
+                const primary = extractPrimaryServicePorts(conn.services);
+                if (primary) {
+                  appConnection = { ...conn, ports: primary.ports };
+                } else {
+                  appConnection = conn;
+                }
+              } else {
+                appConnection = conn;
+              }
+              if (conn.host) {
+                appUrl = conn.host;
               }
             }
           } catch (error) {

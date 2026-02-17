@@ -181,6 +181,53 @@ export function parseAndValidateStackServices(
   return { services: stackServices, serviceNames, needsStorage };
 }
 
+/** Service names that indicate a primary (user-facing) service in a stack. */
+const PRIMARY_SERVICE_NAMES = new Set(['web', 'app', 'frontend', 'ui']);
+
+/** Service names that indicate a backend service — deprioritized when resolving primary ports. */
+const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mysql', 'redis', 'mongo']);
+
+/**
+ * Extract the "primary" service's ports from a stack services map.
+ * Priority:
+ *  1. Service named web/app/frontend/ui
+ *  2. First non-backend service with ports (skip db, postgres, redis, etc.)
+ *  3. Any service with ports
+ */
+export function extractPrimaryServicePorts(
+  services: Record<string, { ports?: Record<string, unknown>; instances?: { ports?: Record<string, unknown> }[] }>
+): { serviceName: string; ports: Record<string, unknown> } | undefined {
+  const entries = Object.entries(services);
+  if (entries.length === 0) return undefined;
+
+  const getPorts = (svc: { ports?: Record<string, unknown>; instances?: { ports?: Record<string, unknown> }[] }): Record<string, unknown> | undefined =>
+    svc.ports ?? svc.instances?.[0]?.ports;
+
+  // 1. Named primary service
+  for (const [name, svc] of entries) {
+    if (PRIMARY_SERVICE_NAMES.has(name)) {
+      const ports = getPorts(svc);
+      if (ports && Object.keys(ports).length > 0) return { serviceName: name, ports };
+    }
+  }
+
+  // 2. First non-backend service with ports
+  for (const [name, svc] of entries) {
+    if (!BACKEND_SERVICE_NAMES.has(name)) {
+      const ports = getPorts(svc);
+      if (ports && Object.keys(ports).length > 0) return { serviceName: name, ports };
+    }
+  }
+
+  // 3. Any service with ports
+  for (const [name, svc] of entries) {
+    const ports = getPorts(svc);
+    if (ports && Object.keys(ports).length > 0) return { serviceName: name, ports };
+  }
+
+  return undefined;
+}
+
 /**
  * Extract port number from a port mapping value.
  * Handles multiple formats the provider API may return:
@@ -282,6 +329,17 @@ export function extractUrlFromFredStatus(
     }
   }
 
+  // Stack services: extract primary service port
+  if (fredStatus.services && host) {
+    const primary = extractPrimaryServicePorts(fredStatus.services);
+    if (primary) {
+      const firstPort = Object.values(primary.ports)[0];
+      if (typeof firstPort === 'number') {
+        return `${host}:${firstPort}`;
+      }
+    }
+  }
+
   return undefined;
 }
 
@@ -296,7 +354,7 @@ async function resolveAppUrl(
   address: string,
   signArbitrary: ToolExecutorOptions['signArbitrary'],
   logContext: string
-): Promise<{ url?: string; connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string> } }> {
+): Promise<{ url?: string; connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string>; services?: Record<string, unknown> } }> {
   // 1. Try connection endpoint (has proper host + port mappings)
   if (signArbitrary) {
     try {
@@ -308,8 +366,15 @@ async function resolveAppUrl(
       if (connResponse.connection) {
         const connection = connResponse.connection;
         // Ports may be at top level or nested inside instances[0].ports
-        const ports: Record<string, unknown> | undefined =
+        let ports: Record<string, unknown> | undefined =
           connection.ports ?? connection.instances?.[0]?.ports;
+
+        // Stack deployments: ports nested under services.<name>.instances[0].ports
+        if (!ports && connection.services) {
+          const primary = extractPrimaryServicePorts(connection.services);
+          if (primary) ports = primary.ports;
+        }
+
         const withPorts = { ...connection, ports };
         const url = formatConnectionUrl(connection.host, withPorts);
         if (url) return { url, connection: withPorts };
