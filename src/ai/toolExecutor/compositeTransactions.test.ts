@@ -460,6 +460,85 @@ describe('parseAndValidateStackServices', () => {
       expect(result.needsStorage).toBe(true);
     }
   });
+
+  it('extracts health_check from service config', () => {
+    const json = JSON.stringify({
+      web: { image: 'nginx', health_check: { test: ['CMD-SHELL', 'curl -f http://localhost'], interval: '30s' } },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.web.health_check).toEqual({
+        test: ['CMD-SHELL', 'curl -f http://localhost'],
+        interval: '30s',
+      });
+    }
+  });
+
+  it('applies known image health_check defaults', () => {
+    const json = JSON.stringify({ db: { image: 'postgres' } });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.db.health_check).toBeDefined();
+      expect(result.services.db.health_check!.test[0]).toBe('CMD-SHELL');
+    }
+  });
+
+  it('returns error for invalid health_check.test', () => {
+    const json = JSON.stringify({
+      web: { image: 'nginx', health_check: { test: 'not-an-array' } },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('health_check.test must be an array');
+  });
+
+  it('extracts stop_grace_period, init, expose, labels from service config', () => {
+    const json = JSON.stringify({
+      web: {
+        image: 'nginx',
+        stop_grace_period: '30s',
+        init: true,
+        expose: '3000,9090',
+        labels: { app: 'myapp' },
+      },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.web.stop_grace_period).toBe('30s');
+      expect(result.services.web.init).toBe(true);
+      expect(result.services.web.expose).toBe('3000,9090');
+      expect(result.services.web.labels).toEqual({ app: 'myapp' });
+    }
+  });
+
+  it('applies known stack depends_on defaults for matching stacks', () => {
+    const json = JSON.stringify({
+      web: { image: 'wordpress', port: '80' },
+      db: { image: 'mysql', port: '3306' },
+    });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.web.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+    }
+  });
+
+  it('does not apply known stack depends_on for non-matching stacks', () => {
+    const json = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+      db: { image: 'postgres', port: '5432' },
+      cache: { image: 'redis', port: '6379' },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      // 3-service stack should not match any known 2-service stack
+      expect(result.services.web.depends_on).toBeUndefined();
+    }
+  });
 });
 
 describe('executeDeployApp', () => {
@@ -878,6 +957,107 @@ describe('executeDeployApp', () => {
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('must have a string value');
+  });
+
+  it('parses health_check JSON and includes it in generated manifest', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      {
+        image: 'nginx',
+        port: '80',
+        health_check: '{"test":["CMD-SHELL","curl -f http://localhost"],"interval":"30s","timeout":"5s","retries":3}',
+      },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction?.args._generatedManifest as string);
+    expect(manifest.health_check.test).toEqual(['CMD-SHELL', 'curl -f http://localhost']);
+    expect(manifest.health_check.interval).toBe('30s');
+  });
+
+  it('returns error for invalid health_check JSON', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', health_check: 'not-json' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid health_check JSON');
+  });
+
+  it('returns error for health_check with invalid test field', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', health_check: '{"test":"not-an-array"}' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('health_check.test must be an array');
+  });
+
+  it('passes stop_grace_period, init, expose, labels through to manifest', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      {
+        image: 'nginx',
+        port: '80',
+        stop_grace_period: '30s',
+        init: true,
+        expose: '3000,9090',
+        labels: '{"app":"myapp"}',
+      },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction?.args._generatedManifest as string);
+    expect(manifest.stop_grace_period).toBe('30s');
+    expect(manifest.init).toBe(true);
+    expect(manifest.expose).toEqual(['3000', '9090']);
+    expect(manifest.labels).toEqual({ app: 'myapp' });
+  });
+
+  it('returns error for invalid labels JSON', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', labels: 'not-json' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid labels JSON');
+  });
+
+  it('applies known image health_check default for postgres deploy', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'postgres:18' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction?.args._generatedManifest as string);
+    expect(manifest.health_check).toBeDefined();
+    expect(manifest.health_check.test[0]).toBe('CMD-SHELL');
+    expect(manifest.health_check.test[1]).toContain('pg_isready');
   });
 });
 

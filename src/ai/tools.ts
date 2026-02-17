@@ -62,6 +62,26 @@ export const AI_TOOLS: OllamaTool[] = [
             type: 'string',
             description: 'JSON object for multi-service stack deploys. Mutually exclusive with "image". Format: \'{"web":{"image":"nginx","port":"80"},"db":{"image":"postgres","port":"5432","env":{"POSTGRES_PASSWORD":""}}}\'.',
           },
+          health_check: {
+            type: 'string',
+            description: 'Health check config as JSON (e.g. \'{"test":["CMD-SHELL","curl -f http://localhost/health"],"interval":"30s","timeout":"5s","retries":3,"start_period":"10s"}\').',
+          },
+          stop_grace_period: {
+            type: 'string',
+            description: 'Grace period before SIGKILL after SIGTERM (e.g. "30s"). Range: 1s-120s.',
+          },
+          init: {
+            type: 'boolean',
+            description: 'Run init process (tini) as PID 1 for zombie reaping.',
+          },
+          expose: {
+            type: 'string',
+            description: 'Inter-service ports to document, comma-separated (e.g. "3000,9090"). Does not create host bindings.',
+          },
+          labels: {
+            type: 'string',
+            description: 'Container labels as JSON (e.g. \'{"app":"myapp"}\').',
+          },
         },
         required: [],
       },
@@ -162,6 +182,26 @@ export const AI_TOOLS: OllamaTool[] = [
           services: {
             type: 'string',
             description: 'JSON object for multi-service stack updates. Mutually exclusive with "image". Same format as deploy_app services.',
+          },
+          health_check: {
+            type: 'string',
+            description: 'Health check config as JSON (e.g. \'{"test":["CMD-SHELL","curl -f http://localhost/health"],"interval":"30s","timeout":"5s","retries":3,"start_period":"10s"}\').',
+          },
+          stop_grace_period: {
+            type: 'string',
+            description: 'Grace period before SIGKILL after SIGTERM (e.g. "30s"). Range: 1s-120s.',
+          },
+          init: {
+            type: 'boolean',
+            description: 'Run init process (tini) as PID 1 for zombie reaping.',
+          },
+          expose: {
+            type: 'string',
+            description: 'Inter-service ports to document, comma-separated (e.g. "3000,9090"). Does not create host bindings.',
+          },
+          labels: {
+            type: 'string',
+            description: 'Container labels as JSON (e.g. \'{"app":"myapp"}\').',
           },
         },
         required: ['app_name'],

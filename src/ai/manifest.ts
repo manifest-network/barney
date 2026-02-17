@@ -100,6 +100,14 @@ export interface BuildManifestResult {
   derivedAppName: string;
 }
 
+export interface HealthCheckConfig {
+  test: string[];
+  interval?: string;
+  timeout?: string;
+  retries?: number;
+  start_period?: string;
+}
+
 export interface BuildManifestOptions {
   image: string;
   port?: string;
@@ -108,6 +116,12 @@ export interface BuildManifestOptions {
   tmpfs?: string;
   command?: string[];
   args?: string[];
+  health_check?: HealthCheckConfig;
+  stop_grace_period?: string;
+  init?: boolean;
+  expose?: string;
+  labels?: Record<string, string>;
+  depends_on?: Record<string, { condition: string }>;
 }
 
 /**
@@ -156,6 +170,39 @@ export async function buildManifest(opts: BuildManifestOptions): Promise<BuildMa
   // Args (CMD override)
   if (opts.args && opts.args.length > 0) {
     manifest.args = opts.args;
+  }
+
+  // Health check
+  if (opts.health_check) {
+    manifest.health_check = opts.health_check;
+  }
+
+  // Stop grace period
+  if (opts.stop_grace_period) {
+    manifest.stop_grace_period = opts.stop_grace_period;
+  }
+
+  // Init (tini as PID 1)
+  if (opts.init !== undefined) {
+    manifest.init = opts.init;
+  }
+
+  // Expose (inter-service ports)
+  if (opts.expose) {
+    const ports = opts.expose.split(',').map((p) => p.trim()).filter(Boolean);
+    if (ports.length > 0) {
+      manifest.expose = ports;
+    }
+  }
+
+  // Labels
+  if (opts.labels && Object.keys(opts.labels).length > 0) {
+    manifest.labels = opts.labels;
+  }
+
+  // Depends-on (service startup ordering)
+  if (opts.depends_on && Object.keys(opts.depends_on).length > 0) {
+    manifest.depends_on = opts.depends_on;
   }
 
   const json = JSON.stringify(manifest, null, 2);
@@ -242,6 +289,38 @@ export function mergeManifest(
     merged.args = oldManifest.args;
   }
 
+  // health_check: old value used if new manifest doesn't specify one
+  if (newManifest.health_check === undefined && oldManifest.health_check !== undefined) {
+    merged.health_check = oldManifest.health_check;
+  }
+
+  // stop_grace_period: old value used if new manifest doesn't specify one
+  if (newManifest.stop_grace_period === undefined && oldManifest.stop_grace_period !== undefined) {
+    merged.stop_grace_period = oldManifest.stop_grace_period;
+  }
+
+  // init: old value used if new manifest doesn't specify one
+  if (newManifest.init === undefined && oldManifest.init !== undefined) {
+    merged.init = oldManifest.init;
+  }
+
+  // expose: old value used if new manifest doesn't specify one
+  if (newManifest.expose === undefined && oldManifest.expose !== undefined) {
+    merged.expose = oldManifest.expose;
+  }
+
+  // labels: old labels carry forward, new labels override
+  const oldLabels = oldManifest.labels;
+  const newLabels = newManifest.labels;
+  if (oldLabels && typeof oldLabels === 'object' && !Array.isArray(oldLabels)) {
+    merged.labels = { ...(oldLabels as Record<string, string>), ...(newLabels as Record<string, string> | undefined) };
+  }
+
+  // depends_on: old value used if new manifest doesn't specify one
+  if (newManifest.depends_on === undefined && oldManifest.depends_on !== undefined) {
+    merged.depends_on = oldManifest.depends_on;
+  }
+
   return merged;
 }
 
@@ -299,6 +378,15 @@ function buildServiceManifestObject(cfg: ServiceConfig): Record<string, unknown>
   }
   if (cfg.command && cfg.command.length > 0) svc.command = cfg.command;
   if (cfg.args && cfg.args.length > 0) svc.args = cfg.args;
+  if (cfg.health_check) svc.health_check = cfg.health_check;
+  if (cfg.stop_grace_period) svc.stop_grace_period = cfg.stop_grace_period;
+  if (cfg.init !== undefined) svc.init = cfg.init;
+  if (cfg.expose) {
+    const ports = cfg.expose.split(',').map((p) => p.trim()).filter(Boolean);
+    if (ports.length > 0) svc.expose = ports;
+  }
+  if (cfg.labels && Object.keys(cfg.labels).length > 0) svc.labels = cfg.labels;
+  if (cfg.depends_on && Object.keys(cfg.depends_on).length > 0) svc.depends_on = cfg.depends_on;
 
   return svc;
 }

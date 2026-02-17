@@ -5,6 +5,8 @@
  * 2. Tool executor — safety net to merge known defaults when the model omits args
  */
 
+import type { HealthCheckConfig } from './manifest';
+
 export interface KnownImageConfig {
   /** Canonical image name (without tag), e.g. "postgres" */
   image: string;
@@ -24,16 +26,26 @@ export interface KnownImageConfig {
   storage?: boolean;
   /** Alternative names that should resolve to this config */
   aliases?: string[];
+  /** Container health check configuration */
+  health_check?: HealthCheckConfig;
+  /** Grace period before SIGKILL after SIGTERM */
+  stop_grace_period?: string;
+  /** Run init process (tini) as PID 1 */
+  init?: boolean;
+  /** Inter-service ports to document, comma-separated */
+  expose?: string;
+  /** Container labels */
+  labels?: Record<string, string>;
 }
 
 export const KNOWN_IMAGES: readonly KnownImageConfig[] = [
   // --- Databases ---
-  { image: 'postgres', port: '5432', env: { POSTGRES_PASSWORD: '' }, user: '999:999', tmpfs: '/var/run/postgresql', storage: true, aliases: ['postgresql'] },
-  { image: 'mysql', port: '3306', env: { MYSQL_ROOT_PASSWORD: '' }, storage: true },
-  { image: 'mariadb', port: '3306', env: { MARIADB_ROOT_PASSWORD: '' }, storage: true },
+  { image: 'postgres', port: '5432', env: { POSTGRES_PASSWORD: '' }, user: '999:999', tmpfs: '/var/run/postgresql', storage: true, aliases: ['postgresql'], health_check: { test: ['CMD-SHELL', 'pg_isready -U postgres'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' } },
+  { image: 'mysql', port: '3306', env: { MYSQL_ROOT_PASSWORD: '' }, tmpfs: '/var/run/mysqld', storage: true, health_check: { test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' } },
+  { image: 'mariadb', port: '3306', env: { MARIADB_ROOT_PASSWORD: '' }, storage: true, health_check: { test: ['CMD-SHELL', 'mariadb-admin ping -h 127.0.0.1'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' } },
   { image: 'mongo', port: '27017', env: { MONGO_INITDB_ROOT_USERNAME: 'admin', MONGO_INITDB_ROOT_PASSWORD: '' }, storage: true, aliases: ['mongodb'] },
   { image: 'neo4j', port: '7474,7687', env: { NEO4J_AUTH: 'neo4j/' }, storage: true },
-  { image: 'redis', port: '6379', aliases: ['valkey'] },
+  { image: 'redis', port: '6379', aliases: ['valkey'], health_check: { test: ['CMD', 'redis-cli', 'ping'], interval: '10s', timeout: '3s', retries: 3, start_period: '5s' } },
   { image: 'memcached', port: '11211' },
   { image: 'clickhouse-server', port: '8123,9000', aliases: ['clickhouse/clickhouse-server', 'clickhouse'] },
   { image: 'influxdb', port: '8086', storage: true },
@@ -41,6 +53,10 @@ export const KNOWN_IMAGES: readonly KnownImageConfig[] = [
   // --- Message Brokers ---
   { image: 'rabbitmq', port: '5672,15672', env: { RABBITMQ_DEFAULT_USER: 'guest', RABBITMQ_DEFAULT_PASS: '' }, aliases: ['rabbitmq-management'] },
   { image: 'nats', port: '4222,8222' },
+
+  // --- CMS ---
+  { image: 'wordpress', port: '80', tmpfs: '/run/lock,/var/run/apache2', storage: true },
+  { image: 'ghost', port: '2368', storage: true },
 
   // --- Web Servers ---
   { image: 'nginx', port: '80' },
@@ -130,6 +146,12 @@ export interface KnownStackServiceConfig {
   command?: string[];
   args?: string[];
   description: string;
+  health_check?: HealthCheckConfig;
+  stop_grace_period?: string;
+  init?: boolean;
+  expose?: string;
+  labels?: Record<string, string>;
+  depends_on?: Record<string, { condition: string }>;
 }
 
 export interface KnownStackConfig {
@@ -149,7 +171,9 @@ export const KNOWN_STACKS: readonly KnownStackConfig[] = [
         image: 'wordpress',
         port: '80',
         env: { WORDPRESS_DB_HOST: 'db:3306', WORDPRESS_DB_USER: 'wordpress', WORDPRESS_DB_PASSWORD: '', WORDPRESS_DB_NAME: 'wordpress' },
+        tmpfs: '/run/lock,/var/run/apache2',
         description: 'WordPress CMS',
+        depends_on: { db: { condition: 'service_healthy' } },
       },
       db: {
         image: 'mysql',
@@ -168,6 +192,7 @@ export const KNOWN_STACKS: readonly KnownStackConfig[] = [
         port: '2368',
         env: { 'database__client': 'mysql', 'database__connection__host': 'db', 'database__connection__user': 'ghost', 'database__connection__password': '', 'database__connection__database': 'ghost' },
         description: 'Ghost publishing platform',
+        depends_on: { db: { condition: 'service_healthy' } },
       },
       db: {
         image: 'mysql',
@@ -184,6 +209,7 @@ export const KNOWN_STACKS: readonly KnownStackConfig[] = [
         image: 'adminer',
         port: '8080',
         description: 'Database management UI',
+        depends_on: { db: { condition: 'service_healthy' } },
       },
       db: {
         image: 'postgres',
@@ -230,6 +256,7 @@ export function generateImageReferenceForPrompt(): string {
     if (cfg.command) parts.push(`command=${JSON.stringify(cfg.command)}`);
     if (cfg.args) parts.push(`args=${JSON.stringify(cfg.args)}`);
     if (cfg.storage) parts.push('storage=true');
+    if (cfg.health_check) parts.push('health_check=yes');
     if (cfg.aliases?.length) parts.push(`(aka ${cfg.aliases.join(', ')})`);
     return parts.join(' ');
   });

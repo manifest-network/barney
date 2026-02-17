@@ -17,8 +17,8 @@ import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
-import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, type ServiceConfig } from '../manifest';
-import { findKnownImage } from '../knownImages';
+import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, type ServiceConfig, type HealthCheckConfig } from '../manifest';
+import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { DeployProgress } from '../progress';
 import type { ToolResult, ToolExecutorOptions, SignResult, PayloadAttachment } from './types';
@@ -152,6 +152,27 @@ export function parseAndValidateStackServices(
       svcArgs = cfg.args as string[];
     }
 
+    // Extract new compose fields from raw config
+    let healthCheck: HealthCheckConfig | undefined;
+    if (cfg.health_check && typeof cfg.health_check === 'object' && !Array.isArray(cfg.health_check)) {
+      const hc = cfg.health_check as Record<string, unknown>;
+      if (!Array.isArray(hc.test) || hc.test.length < 2) {
+        return { error: `Service "${svcName}": health_check.test must be an array with at least 2 elements (e.g. ["CMD-SHELL", "pg_isready"]).` };
+      }
+      healthCheck = cfg.health_check as HealthCheckConfig;
+    }
+    const stopGracePeriod = typeof cfg.stop_grace_period === 'string' ? cfg.stop_grace_period : undefined;
+    const init = typeof cfg.init === 'boolean' ? cfg.init : undefined;
+    const expose = typeof cfg.expose === 'string' ? cfg.expose : undefined;
+    let labels: Record<string, string> | undefined;
+    if (cfg.labels && typeof cfg.labels === 'object' && !Array.isArray(cfg.labels)) {
+      labels = cfg.labels as Record<string, string>;
+    }
+    let dependsOn: Record<string, { condition: string }> | undefined;
+    if (cfg.depends_on && typeof cfg.depends_on === 'object' && !Array.isArray(cfg.depends_on)) {
+      dependsOn = cfg.depends_on as Record<string, { condition: string }>;
+    }
+
     // Known image safety net per service
     const knownConfig = findKnownImage(cfg.image as string);
     if (knownConfig) {
@@ -165,6 +186,7 @@ export function parseAndValidateStackServices(
       if (!command && knownConfig.command) command = [...knownConfig.command];
       if (!svcArgs && knownConfig.args) svcArgs = [...knownConfig.args];
       if (knownConfig.storage) needsStorage = true;
+      if (!healthCheck && knownConfig.health_check) healthCheck = { ...knownConfig.health_check };
     }
 
     stackServices[svcName] = {
@@ -175,7 +197,26 @@ export function parseAndValidateStackServices(
       tmpfs: cfg.tmpfs as string | undefined,
       command,
       args: svcArgs,
+      health_check: healthCheck,
+      stop_grace_period: stopGracePeriod,
+      init,
+      expose,
+      labels,
+      depends_on: dependsOn,
     };
+  }
+
+  // Apply known stack depends_on defaults
+  for (const ks of KNOWN_STACKS) {
+    const ksNames = Object.keys(ks.services);
+    if (ksNames.length === serviceNames.length && ksNames.every(n => serviceNames.includes(n))) {
+      for (const [sName, sCfg] of Object.entries(ks.services)) {
+        if (sCfg.depends_on && stackServices[sName] && !stackServices[sName].depends_on) {
+          stackServices[sName].depends_on = sCfg.depends_on;
+        }
+      }
+      break;
+    }
   }
 
   return { services: stackServices, serviceNames, needsStorage };
@@ -580,7 +621,36 @@ export async function executeDeployApp(
       }
     }
 
-    // Known image safety net: merge defaults for port, env, user, tmpfs, storage, command, args
+    // Parse health_check from JSON string
+    let healthCheck: HealthCheckConfig | undefined;
+    if (typeof args.health_check === 'string' && args.health_check) {
+      try {
+        healthCheck = JSON.parse(args.health_check);
+        if (typeof healthCheck !== 'object' || healthCheck === null || Array.isArray(healthCheck)) {
+          return { success: false, error: 'health_check must be a JSON object.' };
+        }
+        if (!Array.isArray(healthCheck.test) || healthCheck.test.length < 2) {
+          return { success: false, error: 'health_check.test must be an array with at least 2 elements (e.g. ["CMD-SHELL", "curl -f http://localhost"]).' };
+        }
+      } catch {
+        return { success: false, error: 'Invalid health_check JSON.' };
+      }
+    }
+
+    // Parse labels from JSON string
+    let labels: Record<string, string> | undefined;
+    if (typeof args.labels === 'string' && args.labels) {
+      try {
+        labels = JSON.parse(args.labels);
+        if (typeof labels !== 'object' || labels === null || Array.isArray(labels)) {
+          return { success: false, error: 'labels must be a JSON object.' };
+        }
+      } catch {
+        return { success: false, error: 'Invalid labels JSON.' };
+      }
+    }
+
+    // Known image safety net: merge defaults for port, env, user, tmpfs, storage, command, args, health_check
     const knownConfig = findKnownImage(args.image as string);
     if (knownConfig) {
       if (!args.port && knownConfig.port) args.port = knownConfig.port;
@@ -591,6 +661,7 @@ export async function executeDeployApp(
       if (!command && knownConfig.command) command = [...knownConfig.command];
       if (!cmdArgs && knownConfig.args) cmdArgs = [...knownConfig.args];
       if (args.storage === undefined && knownConfig.storage) args.storage = knownConfig.storage;
+      if (!healthCheck && knownConfig.health_check) healthCheck = { ...knownConfig.health_check };
     }
 
     // Pre-generate env passwords so the same value can be shared with args
@@ -616,6 +687,11 @@ export async function executeDeployApp(
         tmpfs: args.tmpfs as string | undefined,
         command,
         args: cmdArgs,
+        health_check: healthCheck,
+        stop_grace_period: args.stop_grace_period as string | undefined,
+        init: typeof args.init === 'boolean' ? args.init : undefined,
+        expose: args.expose as string | undefined,
+        labels,
       });
     } catch (error) {
       logError('compositeTransactions.executeDeployApp.buildManifest', error);
@@ -2115,6 +2191,35 @@ export async function executeUpdateApp(
       }
     }
 
+    // Parse health_check from JSON string
+    let healthCheck: HealthCheckConfig | undefined;
+    if (typeof args.health_check === 'string' && args.health_check) {
+      try {
+        healthCheck = JSON.parse(args.health_check);
+        if (typeof healthCheck !== 'object' || healthCheck === null || Array.isArray(healthCheck)) {
+          return { success: false, error: 'health_check must be a JSON object.' };
+        }
+        if (!Array.isArray(healthCheck.test) || healthCheck.test.length < 2) {
+          return { success: false, error: 'health_check.test must be an array with at least 2 elements (e.g. ["CMD-SHELL", "curl -f http://localhost"]).' };
+        }
+      } catch {
+        return { success: false, error: 'Invalid health_check JSON.' };
+      }
+    }
+
+    // Parse labels from JSON string
+    let labels: Record<string, string> | undefined;
+    if (typeof args.labels === 'string' && args.labels) {
+      try {
+        labels = JSON.parse(args.labels);
+        if (typeof labels !== 'object' || labels === null || Array.isArray(labels)) {
+          return { success: false, error: 'labels must be a JSON object.' };
+        }
+      } catch {
+        return { success: false, error: 'Invalid labels JSON.' };
+      }
+    }
+
     // Known image safety net: merge defaults for port, user, tmpfs, command, args.
     // Env defaults are skipped for updates — the old manifest merge handles env carry-forward.
     const knownConfig = findKnownImage(args.image as string);
@@ -2149,6 +2254,11 @@ export async function executeUpdateApp(
         tmpfs: args.tmpfs as string | undefined,
         command,
         args: cmdArgs,
+        health_check: healthCheck,
+        stop_grace_period: args.stop_grace_period as string | undefined,
+        init: typeof args.init === 'boolean' ? args.init : undefined,
+        expose: args.expose as string | undefined,
+        labels,
       });
     } catch (error) {
       logError('compositeTransactions.executeUpdateApp.buildManifest', error);

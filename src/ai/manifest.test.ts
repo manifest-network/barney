@@ -182,6 +182,45 @@ describe('buildManifest', () => {
     expect(parsed.env).toBeUndefined();
   });
 
+  it('includes health_check when specified', async () => {
+    const result = await buildManifest({
+      image: 'postgres:18',
+      health_check: { test: ['CMD-SHELL', 'pg_isready'], interval: '10s', timeout: '5s', retries: 3, start_period: '30s' },
+    });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.health_check).toEqual({
+      test: ['CMD-SHELL', 'pg_isready'],
+      interval: '10s',
+      timeout: '5s',
+      retries: 3,
+      start_period: '30s',
+    });
+  });
+
+  it('includes stop_grace_period when specified', async () => {
+    const result = await buildManifest({ image: 'nginx', stop_grace_period: '30s' });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.stop_grace_period).toBe('30s');
+  });
+
+  it('includes init when specified', async () => {
+    const result = await buildManifest({ image: 'nginx', init: true });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.init).toBe(true);
+  });
+
+  it('includes expose as array when specified', async () => {
+    const result = await buildManifest({ image: 'nginx', expose: '3000,9090' });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.expose).toEqual(['3000', '9090']);
+  });
+
+  it('includes labels when specified', async () => {
+    const result = await buildManifest({ image: 'nginx', labels: { app: 'myapp', tier: 'frontend' } });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.labels).toEqual({ app: 'myapp', tier: 'frontend' });
+  });
+
   it('builds full manifest matching example app format', async () => {
     const result = await buildManifest({
       image: 'postgres:18',
@@ -328,6 +367,64 @@ describe('mergeManifest', () => {
     expect((merged as Record<string, unknown>).custom_field).toBeUndefined();
   });
 
+  it('carries forward health_check from old manifest', () => {
+    const newManifest = { image: 'postgres:19' };
+    const oldJson = JSON.stringify({
+      image: 'postgres:18',
+      health_check: { test: ['CMD-SHELL', 'pg_isready'], interval: '10s' },
+    });
+    const merged = mergeManifest(newManifest, oldJson);
+    expect(merged.health_check).toEqual({ test: ['CMD-SHELL', 'pg_isready'], interval: '10s' });
+  });
+
+  it('new health_check overrides old one', () => {
+    const newManifest = {
+      image: 'postgres:19',
+      health_check: { test: ['CMD', 'pg_isready', '-U', 'admin'] },
+    };
+    const oldJson = JSON.stringify({
+      image: 'postgres:18',
+      health_check: { test: ['CMD-SHELL', 'pg_isready'], interval: '10s' },
+    });
+    const merged = mergeManifest(newManifest, oldJson);
+    expect(merged.health_check).toEqual({ test: ['CMD', 'pg_isready', '-U', 'admin'] });
+  });
+
+  it('carries forward stop_grace_period from old manifest', () => {
+    const newManifest = { image: 'nginx:latest' };
+    const oldJson = JSON.stringify({ image: 'nginx:1.24', stop_grace_period: '30s' });
+    const merged = mergeManifest(newManifest, oldJson);
+    expect(merged.stop_grace_period).toBe('30s');
+  });
+
+  it('carries forward init from old manifest', () => {
+    const newManifest = { image: 'nginx:latest' };
+    const oldJson = JSON.stringify({ image: 'nginx:1.24', init: true });
+    const merged = mergeManifest(newManifest, oldJson);
+    expect(merged.init).toBe(true);
+  });
+
+  it('carries forward expose from old manifest', () => {
+    const newManifest = { image: 'nginx:latest' };
+    const oldJson = JSON.stringify({ image: 'nginx:1.24', expose: ['3000', '9090'] });
+    const merged = mergeManifest(newManifest, oldJson);
+    expect(merged.expose).toEqual(['3000', '9090']);
+  });
+
+  it('merges labels like env (old carry forward, new override)', () => {
+    const newManifest = { image: 'nginx:latest', labels: { tier: 'premium', version: '2' } };
+    const oldJson = JSON.stringify({ image: 'nginx:1.24', labels: { app: 'myapp', tier: 'basic' } });
+    const merged = mergeManifest(newManifest, oldJson);
+    expect(merged.labels).toEqual({ app: 'myapp', tier: 'premium', version: '2' });
+  });
+
+  it('carries forward depends_on from old manifest', () => {
+    const newManifest = { image: 'nginx:latest' };
+    const oldJson = JSON.stringify({ image: 'nginx:1.24', depends_on: { db: { condition: 'service_healthy' } } });
+    const merged = mergeManifest(newManifest, oldJson);
+    expect(merged.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+  });
+
   it('merges all fields together in a full scenario', () => {
     const newManifest = { image: 'postgres:19', env: { POSTGRES_DB: 'newdb' } };
     const oldJson = JSON.stringify({
@@ -428,6 +525,26 @@ describe('buildStackManifest', () => {
     await expect(
       buildStackManifest({ services: { 'Invalid Name': { image: 'nginx' } } })
     ).rejects.toThrow('Invalid service name');
+  });
+
+  it('includes depends_on per service', async () => {
+    const result = await buildStackManifest({
+      services: {
+        web: {
+          image: 'nginx',
+          port: '80',
+          depends_on: { db: { condition: 'service_healthy' } },
+        },
+        db: {
+          image: 'postgres:18',
+          port: '5432',
+          health_check: { test: ['CMD-SHELL', 'pg_isready'], interval: '10s' },
+        },
+      },
+    });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.services.web.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+    expect(parsed.services.db.health_check).toEqual({ test: ['CMD-SHELL', 'pg_isready'], interval: '10s' });
   });
 
   it('includes user and tmpfs per service', async () => {

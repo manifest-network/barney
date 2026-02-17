@@ -98,6 +98,56 @@ describe('findKnownImage', () => {
   });
 });
 
+describe('known image health checks', () => {
+  const imagesWithHealthChecks = KNOWN_IMAGES.filter(cfg => cfg.health_check);
+
+  it('has health checks for key database images', () => {
+    const names = imagesWithHealthChecks.map(cfg => cfg.image);
+    expect(names).toContain('postgres');
+    expect(names).toContain('mysql');
+    expect(names).toContain('mariadb');
+    expect(names).toContain('redis');
+  });
+
+  it('health checks have valid test arrays', () => {
+    for (const cfg of imagesWithHealthChecks) {
+      expect(cfg.health_check!.test).toBeInstanceOf(Array);
+      expect(cfg.health_check!.test.length).toBeGreaterThanOrEqual(2);
+      expect(['CMD', 'CMD-SHELL']).toContain(cfg.health_check!.test[0]);
+    }
+  });
+});
+
+describe('known stack depends_on', () => {
+  it('wordpress web depends on db with service_healthy', () => {
+    const wp = KNOWN_STACKS.find(s => s.name === 'wordpress')!;
+    expect(wp.services.web.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+  });
+
+  it('ghost web depends on db with service_healthy', () => {
+    const ghost = KNOWN_STACKS.find(s => s.name === 'ghost')!;
+    expect(ghost.services.web.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+  });
+
+  it('adminer-postgres adminer depends on db with service_healthy', () => {
+    const ap = KNOWN_STACKS.find(s => s.name === 'adminer-postgres')!;
+    expect(ap.services.adminer.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+  });
+
+  it('depends_on conditions are valid', () => {
+    const validConditions = new Set(['service_started', 'service_healthy', 'service_completed_successfully']);
+    for (const stack of KNOWN_STACKS) {
+      for (const [, svc] of Object.entries(stack.services)) {
+        if (svc.depends_on) {
+          for (const dep of Object.values(svc.depends_on)) {
+            expect(validConditions).toContain(dep.condition);
+          }
+        }
+      }
+    }
+  });
+});
+
 describe('generateImageReferenceForPrompt', () => {
   it('includes all known images', () => {
     const ref = generateImageReferenceForPrompt();
@@ -117,6 +167,14 @@ describe('generateImageReferenceForPrompt', () => {
     const ref = generateImageReferenceForPrompt();
     expect(ref).toContain('POSTGRES_PASSWORD=""');
     expect(ref).toContain('NEO4J_AUTH="neo4j/<password>"');
+  });
+
+  it('includes health_check indicator for images with health checks', () => {
+    const ref = generateImageReferenceForPrompt();
+    const postgresLine = ref.split('\n').find(l => l.startsWith('postgres:'));
+    expect(postgresLine).toContain('health_check=yes');
+    const redisLine = ref.split('\n').find(l => l.startsWith('redis:'));
+    expect(redisLine).toContain('health_check=yes');
   });
 
   it('includes storage flag when present', () => {
