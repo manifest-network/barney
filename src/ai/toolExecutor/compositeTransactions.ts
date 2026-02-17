@@ -74,6 +74,9 @@ export function formatLeaseItems(skuUuid: string, serviceNames?: string[]): stri
   return serviceNames.map(name => `${skuUuid}:1:${name}`);
 }
 
+/** Service names that indicate a backend service — port defaults are suppressed for these in stacks. */
+const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mysql', 'redis', 'mongo']);
+
 interface ParseStackServicesResult {
   services: Record<string, ServiceConfig>;
   serviceNames: string[];
@@ -176,7 +179,7 @@ export function parseAndValidateStackServices(
     // Known image safety net per service
     const knownConfig = findKnownImage(cfg.image as string);
     if (knownConfig) {
-      if (!cfg.port && knownConfig.port) cfg.port = knownConfig.port;
+      if (!cfg.port && knownConfig.port && !BACKEND_SERVICE_NAMES.has(svcName)) cfg.port = knownConfig.port;
       if (applyEnvDefaults) {
         if (!env && knownConfig.env) env = { ...knownConfig.env };
         else if (knownConfig.env) env = { ...knownConfig.env, ...env };
@@ -224,9 +227,6 @@ export function parseAndValidateStackServices(
 
 /** Service names that indicate a primary (user-facing) service in a stack. */
 const PRIMARY_SERVICE_NAMES = new Set(['web', 'app', 'frontend', 'ui']);
-
-/** Service names that indicate a backend service — deprioritized when resolving primary ports. */
-const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mysql', 'redis', 'mongo']);
 
 /**
  * Extract the "primary" service's ports from a stack services map.

@@ -586,6 +586,27 @@ describe('parseAndValidateStackServices', () => {
       expect(result.services.web.depends_on).toBeUndefined();
     }
   });
+
+  it('does not apply known image port defaults to backend service names', () => {
+    const backendNames = ['db', 'database', 'postgres', 'mysql', 'redis', 'mongo'];
+    for (const name of backendNames) {
+      const json = JSON.stringify({ [name]: { image: 'mysql:9' } });
+      const result = parseAndValidateStackServices(json, true, 'test');
+      expect('error' in result).toBe(false);
+      if (!('error' in result)) {
+        expect(result.services[name].port).toBeUndefined();
+      }
+    }
+  });
+
+  it('respects explicitly provided port on backend services', () => {
+    const json = JSON.stringify({ db: { image: 'mysql:9', port: '3306' } });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.db.port).toBe('3306');
+    }
+  });
 });
 
 describe('executeDeployApp', () => {
@@ -2132,8 +2153,8 @@ describe('executeUpdateApp', () => {
     const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
     // Env defaults should NOT be applied for updates
     expect(manifest.services.db.env).toBeUndefined();
-    // Port defaults should still be applied
-    expect(manifest.services.db.ports).toEqual({ '5432/tcp': {} });
+    // Port defaults should NOT be applied to backend service names (db)
+    expect(manifest.services.db.ports).toBeUndefined();
   });
 
   it('rejects non-string env values in stack services', async () => {

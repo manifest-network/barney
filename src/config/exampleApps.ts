@@ -117,7 +117,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     label: 'WordPress + MySQL',
     manifest: { services: {
       web: { image: 'wordpress:6', ports: { '80/tcp': {} }, env: {} },
-      db: { image: 'mysql:9', ports: { '3306/tcp': {} }, env: {} },
+      db: { image: 'mysql:9', env: {} },
     }},
     manifestFactory: () => {
       const dbPass = generatePassword();
@@ -129,7 +129,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
         },
         db: {
           image: 'mysql:9',
-          ports: { '3306/tcp': {} },
           env: { MYSQL_DATABASE: 'wordpress', MYSQL_USER: 'wordpress', MYSQL_PASSWORD: dbPass, MYSQL_ROOT_PASSWORD: generatePassword() },
         },
       }};
@@ -142,7 +141,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     label: 'Ghost + MySQL',
     manifest: { services: {
       web: { image: 'ghost:5', ports: { '2368/tcp': {} }, env: {} },
-      db: { image: 'mysql:9', ports: { '3306/tcp': {} }, env: {} },
+      db: { image: 'mysql:9', env: {} },
     }},
     manifestFactory: () => {
       const dbPass = generatePassword();
@@ -154,7 +153,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
         },
         db: {
           image: 'mysql:9',
-          ports: { '3306/tcp': {} },
           env: { MYSQL_DATABASE: 'ghost', MYSQL_USER: 'ghost', MYSQL_PASSWORD: dbPass, MYSQL_ROOT_PASSWORD: generatePassword() },
         },
       }};
@@ -167,7 +165,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     label: 'Adminer + Postgres',
     manifest: { services: {
       adminer: { image: 'adminer:5', ports: { '8080/tcp': {} }, env: {} },
-      db: { image: 'postgres:18', ports: { '5432/tcp': {} }, env: {}, user: '999:999', tmpfs: ['/var/run/postgresql'] },
+      db: { image: 'postgres:18', env: {}, user: '999:999', tmpfs: ['/var/run/postgresql'] },
     }},
     manifestFactory: () => {
       const dbPass = generatePassword();
@@ -179,7 +177,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
         },
         db: {
           image: 'postgres:18',
-          ports: { '5432/tcp': {} },
           env: { POSTGRES_PASSWORD: dbPass },
           user: '999:999',
           tmpfs: ['/var/run/postgresql'],
