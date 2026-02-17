@@ -86,4 +86,33 @@ describe('getSystemPrompt', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('storage=true');
   });
+
+  it('contains Compose Features section', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('## Compose Features');
+    expect(prompt).toContain('health_check');
+    expect(prompt).toContain('depends_on');
+    expect(prompt).toContain('stop_grace_period');
+    expect(prompt).toContain('init');
+    expect(prompt).toContain('expose');
+    expect(prompt).toContain('labels');
+  });
+
+  it('includes health_check indicator in Known Images section', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('health_check=yes');
+  });
+
+  it('contains Service Stacks section', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('## Service Stacks');
+    expect(prompt).toContain('wordpress');
+    expect(prompt).toContain('ghost');
+  });
+
+  it('contains stack deploy example with depends_on', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('depends_on');
+    expect(prompt).toContain('service_healthy');
+  });
 });

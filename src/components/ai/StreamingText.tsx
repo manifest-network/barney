@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { parseHttpUrl } from '../../utils/url';
 
 // Matches http(s):// URLs or bare IPv4:port (e.g., 192.168.1.1:8080)
 const URL_REGEX = /(https?:\/\/[^\s<>)"']+|\b\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}\b)/g;
@@ -15,11 +16,16 @@ function linkify(text: string): ReactNode[] {
       parts.push(text.slice(lastIndex, index));
     }
     const href = raw.startsWith('http') ? raw : `http://${raw}`;
-    parts.push(
-      <a key={index} href={href} target="_blank" rel="noopener noreferrer" className="message-link">
-        {raw}
-      </a>
-    );
+    // Validate the URL is well-formed http(s) before creating a clickable link
+    if (parseHttpUrl(href)) {
+      parts.push(
+        <a key={index} href={href} target="_blank" rel="noopener noreferrer" className="message-link">
+          {raw}
+        </a>
+      );
+    } else {
+      parts.push(raw);
+    }
     lastIndex = index + raw.length;
   }
 

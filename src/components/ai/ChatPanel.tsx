@@ -15,6 +15,7 @@ import { EXAMPLE_APPS, buildExampleManifest, type ExampleApp } from '../../confi
 import { HELP_TEXT } from '../../ai/helpText';
 
 const EXAMPLE_GAMES = EXAMPLE_APPS.filter((app) => app.group === 'games');
+const EXAMPLE_STACKS = EXAMPLE_APPS.filter((app) => app.group === 'stacks');
 
 /** Group service apps by category, preserving insertion order. */
 const SERVICE_CATEGORIES: [string, ExampleApp[]][] = (() => {
@@ -428,6 +429,25 @@ export function ChatPanel() {
                       </div>
                     ))}
                   </div>
+                  {EXAMPLE_STACKS.length > 0 && (
+                    <div className="chat-example-apps__group">
+                      <p className="chat-example-apps__group-label">Stacks</p>
+                      <div className="chat-example-apps__buttons" role="group" aria-label="Example stacks">
+                        {EXAMPLE_STACKS.map((app, i) => (
+                          <button
+                            key={app.label}
+                            type="button"
+                            onClick={() => deployExample(app)}
+                            className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
+                            style={{ '--stagger': i } as React.CSSProperties}
+                            disabled={!isConnected || isStreaming}
+                          >
+                            {app.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

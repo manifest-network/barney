@@ -3,6 +3,9 @@ import {
   deriveAppName,
   formatConnectionUrl,
   extractUrlFromFredStatus,
+  extractPrimaryServicePorts,
+  formatLeaseItems,
+  parseAndValidateStackServices,
   executeDeployApp,
   executeConfirmedDeployApp,
   executeStopApp,
@@ -218,6 +221,78 @@ describe('extractUrlFromFredStatus', () => {
       instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': 22222 } }],
     }, '1.2.3.4')).toBe('http://1.2.3.4:11111');
   });
+
+  it('extracts URL from stack services using primary service priority', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      services: {
+        db: { instances: [{ name: 'db-0', status: 'running', ports: { '5432/tcp': 32100 } }] },
+        web: { instances: [{ name: 'web-0', status: 'running', ports: { '80/tcp': 32200 } }] },
+      },
+    }, '1.2.3.4')).toBe('1.2.3.4:32200');
+  });
+
+  it('falls back to non-backend service in stack when no primary name', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      services: {
+        db: { instances: [{ name: 'db-0', status: 'running', ports: { '5432/tcp': 32100 } }] },
+        api: { instances: [{ name: 'api-0', status: 'running', ports: { '3000/tcp': 32300 } }] },
+      },
+    }, '1.2.3.4')).toBe('1.2.3.4:32300');
+  });
+});
+
+describe('extractPrimaryServicePorts', () => {
+  it('returns undefined for empty services', () => {
+    expect(extractPrimaryServicePorts({})).toBeUndefined();
+  });
+
+  it('prefers service named "web"', () => {
+    const result = extractPrimaryServicePorts({
+      db: { instances: [{ ports: { '5432/tcp': 32100 } }] },
+      web: { instances: [{ ports: { '80/tcp': 32200 } }] },
+    });
+    expect(result).toEqual({ serviceName: 'web', ports: { '80/tcp': 32200 } });
+  });
+
+  it('prefers service named "app"', () => {
+    const result = extractPrimaryServicePorts({
+      redis: { instances: [{ ports: { '6379/tcp': 32300 } }] },
+      app: { instances: [{ ports: { '3000/tcp': 32400 } }] },
+    });
+    expect(result).toEqual({ serviceName: 'app', ports: { '3000/tcp': 32400 } });
+  });
+
+  it('prefers non-backend service over backend', () => {
+    const result = extractPrimaryServicePorts({
+      postgres: { instances: [{ ports: { '5432/tcp': 32100 } }] },
+      api: { instances: [{ ports: { '8080/tcp': 32200 } }] },
+    });
+    expect(result).toEqual({ serviceName: 'api', ports: { '8080/tcp': 32200 } });
+  });
+
+  it('falls back to backend service if no other option', () => {
+    const result = extractPrimaryServicePorts({
+      db: { instances: [{ ports: { '5432/tcp': 32100 } }] },
+    });
+    expect(result).toEqual({ serviceName: 'db', ports: { '5432/tcp': 32100 } });
+  });
+
+  it('handles top-level service ports', () => {
+    const result = extractPrimaryServicePorts({
+      web: { ports: { '80/tcp': 32200 } },
+    });
+    expect(result).toEqual({ serviceName: 'web', ports: { '80/tcp': 32200 } });
+  });
+
+  it('skips services with empty ports', () => {
+    const result = extractPrimaryServicePorts({
+      web: { ports: {} },
+      api: { instances: [{ ports: { '3000/tcp': 32300 } }] },
+    });
+    expect(result).toEqual({ serviceName: 'api', ports: { '3000/tcp': 32300 } });
+  });
 });
 
 describe('formatConnectionUrl', () => {
@@ -281,6 +356,274 @@ describe('formatConnectionUrl', () => {
       host: '127.0.0.1',
       ports: { '8080/tcp': 12345 },
     })).toBe('http://127.0.0.1:12345');
+  });
+});
+
+describe('formatLeaseItems', () => {
+  it('returns single item without service names', () => {
+    expect(formatLeaseItems('sku-123')).toEqual(['sku-123:1']);
+  });
+
+  it('returns single item for empty array', () => {
+    expect(formatLeaseItems('sku-123', [])).toEqual(['sku-123:1']);
+  });
+
+  it('returns items with service name suffixes', () => {
+    expect(formatLeaseItems('sku-123', ['web', 'db'])).toEqual([
+      'sku-123:1:web',
+      'sku-123:1:db',
+    ]);
+  });
+
+  it('handles single service name', () => {
+    expect(formatLeaseItems('sku-123', ['web'])).toEqual(['sku-123:1:web']);
+  });
+
+  it('throws on non-string service name', () => {
+    expect(() => formatLeaseItems('sku-123', [123 as unknown as string])).toThrow('Invalid service name');
+  });
+
+  it('throws on empty string service name', () => {
+    expect(() => formatLeaseItems('sku-123', [''])).toThrow('Invalid service name');
+  });
+});
+
+describe('parseAndValidateStackServices', () => {
+  it('parses valid services JSON', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', port: '80' }, db: { image: 'postgres' } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.serviceNames).toEqual(['web', 'db']);
+      expect(result.services.web.image).toBe('nginx');
+      expect(result.services.db.image).toBe('postgres');
+    }
+  });
+
+  it('returns error for invalid JSON', () => {
+    const result = parseAndValidateStackServices('not-json', false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('Invalid services JSON');
+  });
+
+  it('returns error for empty services', () => {
+    const result = parseAndValidateStackServices('{}', false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('at least one service');
+  });
+
+  it('returns error for invalid service name', () => {
+    const json = JSON.stringify({ 'Bad Name': { image: 'nginx' } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('Invalid service name');
+  });
+
+  it('returns error for missing image', () => {
+    const json = JSON.stringify({ web: { port: '80' } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('requires an "image"');
+  });
+
+  it('returns error for non-string env value', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', env: { PORT: 80 } } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('must have a string value');
+  });
+
+  it('applies env defaults when applyEnvDefaults is true', () => {
+    const json = JSON.stringify({ db: { image: 'postgres' } });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.db.env).toBeDefined();
+      expect(result.services.db.env!.POSTGRES_PASSWORD).toBeDefined();
+    }
+  });
+
+  it('skips env defaults when applyEnvDefaults is false', () => {
+    const json = JSON.stringify({ db: { image: 'postgres' } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.db.env).toBeUndefined();
+    }
+  });
+
+  it('sets needsStorage when known image requires storage', () => {
+    const json = JSON.stringify({ db: { image: 'postgres' } });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.needsStorage).toBe(true);
+    }
+  });
+
+  it('extracts health_check from service config', () => {
+    const json = JSON.stringify({
+      web: { image: 'nginx', health_check: { test: ['CMD-SHELL', 'curl -f http://localhost'], interval: '30s' } },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.web.health_check).toEqual({
+        test: ['CMD-SHELL', 'curl -f http://localhost'],
+        interval: '30s',
+      });
+    }
+  });
+
+  it('applies known image health_check defaults', () => {
+    const json = JSON.stringify({ db: { image: 'postgres' } });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.db.health_check).toBeDefined();
+      expect(result.services.db.health_check!.test[0]).toBe('CMD-SHELL');
+    }
+  });
+
+  it('user-provided health_check overrides known image default', () => {
+    const customHealthCheck = {
+      test: ['CMD-SHELL', 'curl -f http://localhost:5432/health'],
+      interval: '30s',
+      timeout: '10s',
+      retries: 2,
+    };
+    const json = JSON.stringify({ db: { image: 'postgres', health_check: customHealthCheck } });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.db.health_check).toEqual(customHealthCheck);
+      expect(result.services.db.health_check!.test[1]).toBe('curl -f http://localhost:5432/health');
+    }
+  });
+
+  it('returns error for invalid health_check.test', () => {
+    const json = JSON.stringify({
+      web: { image: 'nginx', health_check: { test: 'not-an-array' } },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('health_check.test must be an array');
+  });
+
+  it('returns error for health_check.test with non-string elements', () => {
+    const json = JSON.stringify({
+      web: { image: 'nginx', health_check: { test: ['CMD-SHELL', 42] } },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('health_check.test must be an array of strings');
+  });
+
+  it('extracts stop_grace_period, init, expose, labels from service config', () => {
+    const json = JSON.stringify({
+      web: {
+        image: 'nginx',
+        stop_grace_period: '30s',
+        init: true,
+        expose: '3000,9090',
+        labels: { app: 'myapp' },
+      },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.web.stop_grace_period).toBe('30s');
+      expect(result.services.web.init).toBe(true);
+      expect(result.services.web.expose).toBe('3000,9090');
+      expect(result.services.web.labels).toEqual({ app: 'myapp' });
+    }
+  });
+
+  it('returns error for labels with non-string values in stack service', () => {
+    const json = JSON.stringify({
+      web: { image: 'nginx', labels: { app: 'myapp', priority: 123 } },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('label "priority" must have a string value');
+  });
+
+  it('applies known stack depends_on defaults for matching stacks', () => {
+    const json = JSON.stringify({
+      web: { image: 'wordpress', port: '80' },
+      db: { image: 'mysql', port: '3306' },
+    });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.web.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+    }
+  });
+
+  it('preserves custom depends_on from user input', () => {
+    const json = JSON.stringify({
+      web: {
+        image: 'nginx',
+        port: '80',
+        depends_on: { api: { condition: 'service_started' } },
+      },
+      api: { image: 'node:20', port: '3000' },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.web.depends_on).toEqual({ api: { condition: 'service_started' } });
+    }
+  });
+
+  it('applies known stack depends_on even when applyEnvDefaults is false', () => {
+    const json = JSON.stringify({
+      web: { image: 'wordpress', port: '80' },
+      db: { image: 'mysql', port: '3306' },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      // depends_on injection is independent of applyEnvDefaults
+      expect(result.services.web.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+      // but env defaults should NOT be applied
+      expect(result.services.db.env).toBeUndefined();
+    }
+  });
+
+  it('does not apply known stack depends_on for non-matching stacks', () => {
+    const json = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+      db: { image: 'postgres', port: '5432' },
+      cache: { image: 'redis', port: '6379' },
+    });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      // 3-service stack should not match any known 2-service stack
+      expect(result.services.web.depends_on).toBeUndefined();
+    }
+  });
+
+  it('does not apply known image port defaults to backend service names', () => {
+    const backendNames = ['db', 'database', 'postgres', 'mysql', 'redis', 'mongo'];
+    for (const name of backendNames) {
+      const json = JSON.stringify({ [name]: { image: 'mysql:9' } });
+      const result = parseAndValidateStackServices(json, true, 'test');
+      expect('error' in result).toBe(false);
+      if (!('error' in result)) {
+        expect(result.services[name].port).toBeUndefined();
+      }
+    }
+  });
+
+  it('respects explicitly provided port on backend services', () => {
+    const json = JSON.stringify({ db: { image: 'mysql:9', port: '3306' } });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.db.port).toBe('3306');
+    }
   });
 });
 
@@ -591,6 +934,263 @@ describe('executeDeployApp', () => {
     expect(result.confirmationMessage).toContain('docker-compose');
     expect(result.pendingAction?.args._generatedManifest).toBeUndefined();
   });
+
+  it('returns confirmation for stack deploy with services param', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const services = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+      db: { image: 'postgres', port: '5432', env: { POSTGRES_PASSWORD: '' } },
+    });
+    const result = await executeDeployApp(
+      { app_name: 'my-stack', services },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args._generatedManifest).toBeDefined();
+    expect(result.pendingAction?.args._serviceNames).toEqual(['web', 'db']);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.services).toBeDefined();
+    expect(manifest.services.web.image).toBe('nginx');
+    expect(manifest.services.db.image).toBe('postgres');
+  });
+
+  it('returns error for invalid services JSON', async () => {
+    const result = await executeDeployApp(
+      { app_name: 'bad-stack', services: 'not-json' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid services JSON');
+  });
+
+  it('returns error for invalid service name in stack', async () => {
+    const services = JSON.stringify({
+      'Invalid Name': { image: 'nginx' },
+    });
+    const result = await executeDeployApp(
+      { app_name: 'bad-stack', services },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid service name');
+  });
+
+  it('returns error when both services and image are provided', async () => {
+    const services = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+    });
+    const result = await executeDeployApp(
+      { app_name: 'my-stack', services, image: 'redis' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('mutually exclusive');
+  });
+
+  it('uses shared password for all auto-generated env vars in stack', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const services = JSON.stringify({
+      web: { image: 'wordpress', env: { WORDPRESS_DB_PASSWORD: '' } },
+      db: { image: 'postgres', env: { POSTGRES_PASSWORD: '' } },
+    });
+    const result = await executeDeployApp(
+      { app_name: 'stack-wp', services },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    // Both passwords should be the same (shared password)
+    expect(manifest.services.web.env.WORDPRESS_DB_PASSWORD).toBeDefined();
+    expect(manifest.services.web.env.WORDPRESS_DB_PASSWORD).toBe(manifest.services.db.env.POSTGRES_PASSWORD);
+    // And not empty
+    expect(manifest.services.web.env.WORDPRESS_DB_PASSWORD.length).toBeGreaterThan(0);
+  });
+
+  it('rejects non-string env values in stack deploy', async () => {
+    const services = JSON.stringify({
+      web: { image: 'nginx', env: { PORT: 80 } },
+    });
+    const result = await executeDeployApp(
+      { app_name: 'bad-stack', services },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('must have a string value');
+  });
+
+  it('rejects non-string env values in single-service deploy', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', env: '{"PORT": 80}' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('must have a string value');
+  });
+
+  it('parses health_check JSON and includes it in generated manifest', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      {
+        image: 'nginx',
+        port: '80',
+        health_check: '{"test":["CMD-SHELL","curl -f http://localhost"],"interval":"30s","timeout":"5s","retries":3}',
+      },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction?.args._generatedManifest as string);
+    expect(manifest.health_check.test).toEqual(['CMD-SHELL', 'curl -f http://localhost']);
+    expect(manifest.health_check.interval).toBe('30s');
+  });
+
+  it('returns error for invalid health_check JSON', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', health_check: 'not-json' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid health_check JSON');
+  });
+
+  it('returns error for health_check with invalid test field', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', health_check: '{"test":"not-an-array"}' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('health_check.test must be an array');
+  });
+
+  it('returns error for health_check.test with non-string elements in deploy', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', health_check: '{"test":["CMD-SHELL",123]}' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('health_check.test must be an array of strings');
+  });
+
+  it('passes stop_grace_period, init, expose, labels through to manifest', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      {
+        image: 'nginx',
+        port: '80',
+        stop_grace_period: '30s',
+        init: true,
+        expose: '3000,9090',
+        labels: '{"app":"myapp"}',
+      },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction?.args._generatedManifest as string);
+    expect(manifest.stop_grace_period).toBe('30s');
+    expect(manifest.init).toBe(true);
+    expect(manifest.expose).toEqual(['3000', '9090']);
+    expect(manifest.labels).toEqual({ app: 'myapp' });
+  });
+
+  it('returns error for invalid labels JSON', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', labels: 'not-json' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid labels JSON');
+  });
+
+  it('returns error for labels with non-string values in deploy', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', labels: '{"app":"myapp","count":42}' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Label "count" must have a string value, got number');
+  });
+
+  it('applies known image health_check default for postgres deploy', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'postgres:18' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction?.args._generatedManifest as string);
+    expect(manifest.health_check).toBeDefined();
+    expect(manifest.health_check.test[0]).toBe('CMD-SHELL');
+    expect(manifest.health_check.test[1]).toContain('pg_isready');
+  });
+
+  it('user-provided health_check overrides known image default for deploy', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const customHealthCheck = {
+      test: ['CMD-SHELL', 'pg_isready -U custom_user -d custom_db'],
+      interval: '20s',
+      timeout: '10s',
+      retries: 10,
+    };
+
+    const result = await executeDeployApp(
+      { image: 'postgres:18', health_check: JSON.stringify(customHealthCheck) },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction?.args._generatedManifest as string);
+    expect(manifest.health_check).toEqual(customHealthCheck);
+    expect(manifest.health_check.test[1]).toBe('pg_isready -U custom_user -d custom_db');
+    expect(manifest.health_check.retries).toBe(10);
+  });
 });
 
 describe('executeConfirmedDeployApp', () => {
@@ -881,6 +1481,38 @@ describe('executeConfirmedDeployApp', () => {
     const uploadCall = vi.mocked(uploadPayloadToProvider).mock.calls[0];
     // The hash should be consistent
     expect(uploadCall[2]).toHaveLength(64);
+  });
+
+  it('resolves URL from services-only connection response (stack deploy)', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: '1.2.3.4',
+        services: {
+          db: { instances: [{ instance_index: 0, container_id: 'db1', image: 'postgres', status: 'running', ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32100 } } }] },
+          web: { instances: [{ instance_index: 0, container_id: 'web1', image: 'nginx', status: 'running', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32200 } } }] },
+        },
+      },
+    });
+
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      { name: 'my-stack', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).url).toBe('https://1.2.3.4:32200');
+    expect((result.data as any).status).toBe('running');
   });
 });
 
@@ -1498,6 +2130,240 @@ describe('executeUpdateApp', () => {
     const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
     expect(manifest.image).toBe('redis:8');
     expect(manifest.env).toBeUndefined();
+  });
+
+  it('returns confirmation for stack update with services param', async () => {
+    const app = makeApp();
+    const services = JSON.stringify({
+      web: { image: 'nginx:2', port: '80' },
+      db: { image: 'postgres:19', port: '5432' },
+    });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', services },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('stack');
+    expect(result.confirmationMessage).toContain('2 services');
+    expect(result.pendingAction?.args._isStack).toBe(true);
+    expect(result.pendingAction?.args._generatedManifest).toBeDefined();
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.services.web.image).toBe('nginx:2');
+    expect(manifest.services.db.image).toBe('postgres:19');
+  });
+
+  it('returns error for invalid services JSON in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', services: 'not-json' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid services JSON');
+  });
+
+  it('returns error when both services and image are provided in update', async () => {
+    const app = makeApp();
+    const services = JSON.stringify({ web: { image: 'nginx' } });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', services, image: 'redis' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('mutually exclusive');
+  });
+
+  it('skips env defaults for stack updates (uses applyEnvDefaults=false)', async () => {
+    const app = makeApp();
+    const services = JSON.stringify({
+      db: { image: 'postgres:19' },
+    });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', services },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    // Env defaults should NOT be applied for updates
+    expect(manifest.services.db.env).toBeUndefined();
+    // Port defaults should NOT be applied to backend service names (db)
+    expect(manifest.services.db.ports).toBeUndefined();
+  });
+
+  it('rejects non-string env values in stack services', async () => {
+    const app = makeApp();
+    const services = JSON.stringify({
+      web: { image: 'nginx', env: { PORT: 80 } },
+    });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', services },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('must have a string value');
+    expect(result.error).toContain('PORT');
+  });
+
+  it('rejects non-string env values in single-service image update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', env: '{"PORT": 80}' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('must have a string value');
+  });
+
+  it('parses health_check JSON and includes it in update manifest', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      {
+        app_name: 'my-app',
+        image: 'nginx',
+        port: '80',
+        health_check: '{"test":["CMD-SHELL","curl -f http://localhost"],"interval":"30s"}',
+      },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.health_check.test).toEqual(['CMD-SHELL', 'curl -f http://localhost']);
+    expect(manifest.health_check.interval).toBe('30s');
+  });
+
+  it('returns error for invalid health_check JSON in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', health_check: 'not-json' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid health_check JSON');
+  });
+
+  it('returns error for health_check with invalid test field in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', health_check: '{"test":"not-an-array"}' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('health_check.test must be an array');
+  });
+
+  it('returns error for health_check.test with non-string elements in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', health_check: '{"test":["CMD-SHELL",null]}' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('health_check.test must be an array of strings');
+  });
+
+  it('passes stop_grace_period, init, expose, labels through in update manifest', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      {
+        app_name: 'my-app',
+        image: 'nginx',
+        port: '80',
+        stop_grace_period: '30s',
+        init: true,
+        expose: '3000,9090',
+        labels: '{"app":"myapp"}',
+      },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.stop_grace_period).toBe('30s');
+    expect(manifest.init).toBe(true);
+    expect(manifest.expose).toEqual(['3000', '9090']);
+    expect(manifest.labels).toEqual({ app: 'myapp' });
+  });
+
+  it('returns error for invalid labels JSON in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', labels: 'not-json' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid labels JSON');
+  });
+
+  it('returns error for labels with non-string values in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', labels: '{"env":"prod","enabled":true}' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Label "enabled" must have a string value, got boolean');
+  });
+
+  it('merges old health_check into update when new manifest omits it', async () => {
+    const oldManifest = JSON.stringify({
+      image: 'postgres:18',
+      health_check: { test: ['CMD-SHELL', 'pg_isready'], interval: '10s', timeout: '5s' },
+    });
+    const app = makeApp({ manifest: oldManifest });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'postgres:19', port: '5432' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.health_check).toEqual({
+      test: ['CMD-SHELL', 'pg_isready'],
+      interval: '10s',
+      timeout: '5s',
+    });
+  });
+
+  it('merges old stop_grace_period, init, labels, depends_on into update', async () => {
+    const oldManifest = JSON.stringify({
+      image: 'nginx:1.24',
+      stop_grace_period: '30s',
+      init: true,
+      labels: { app: 'myapp', tier: 'basic' },
+      depends_on: { db: { condition: 'service_healthy' } },
+    });
+    const app = makeApp({ manifest: oldManifest });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx:latest', port: '80' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.stop_grace_period).toBe('30s');
+    expect(manifest.init).toBe(true);
+    expect(manifest.labels).toEqual({ app: 'myapp', tier: 'basic' });
+    expect(manifest.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+  });
+
+  it('new labels override old labels during update merge', async () => {
+    const oldManifest = JSON.stringify({
+      image: 'nginx:1.24',
+      labels: { app: 'myapp', tier: 'basic' },
+    });
+    const app = makeApp({ manifest: oldManifest });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx:latest', port: '80', labels: '{"tier":"premium","version":"2"}' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.labels).toEqual({ app: 'myapp', tier: 'premium', version: '2' });
   });
 });
 

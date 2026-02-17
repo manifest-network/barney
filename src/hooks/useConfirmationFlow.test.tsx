@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createElement, useState } from 'react';
+import { createElement, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 import { useConfirmationFlow, type UseConfirmationFlowDeps } from './useConfirmationFlow';
@@ -22,17 +22,12 @@ vi.mock('../utils/errors', () => ({
 }));
 
 // Captures from the test component so tests can drive behavior
-let hookResult: ReturnType<typeof useConfirmationFlow>;
+const hookResultRef = { current: null as ReturnType<typeof useConfirmationFlow> | null };
 let setDeployProgressSpy: ReturnType<typeof vi.fn>;
 
 function TestComponent({ deps }: { deps: Omit<UseConfirmationFlowDeps, 'setDeployProgress'> }) {
-  const [, setDeployProgress] = useState<unknown>(null);
-
-  // Wrap the real setter with a spy
-  const spySetter = setDeployProgressSpy as typeof setDeployProgress;
-
-  const result = useConfirmationFlow({ ...deps, setDeployProgress: spySetter });
-  hookResult = result;
+  const result = useConfirmationFlow({ ...deps, setDeployProgress: setDeployProgressSpy as UseConfirmationFlowDeps['setDeployProgress'] });
+  useEffect(() => { hookResultRef.current = result; });
   return null;
 }
 
@@ -110,12 +105,12 @@ describe('useConfirmationFlow', () => {
     };
 
     act(() => {
-      hookResult.setPendingConfirmation(pending);
+      hookResultRef.current!.setPendingConfirmation(pending);
     });
 
     // Cancel the action
     act(() => {
-      hookResult.cancelAction();
+      hookResultRef.current!.cancelAction();
     });
 
     expect(setDeployProgressSpy).toHaveBeenCalledWith(null);
@@ -140,7 +135,7 @@ describe('useConfirmationFlow', () => {
     };
 
     act(() => {
-      hookResult.setPendingConfirmation(pending);
+      hookResultRef.current!.setPendingConfirmation(pending);
     });
 
     // Advance past the confirmation timeout (5 minutes)

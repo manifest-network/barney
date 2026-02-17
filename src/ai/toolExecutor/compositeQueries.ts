@@ -18,7 +18,7 @@ import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo, createSignMessage, createAuthToken } from '../../api/provider-api';
 import { getLeaseStatus, getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import { formatConnectionUrl } from './compositeTransactions';
+import { formatConnectionUrl, extractPrimaryServicePorts } from './compositeTransactions';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
@@ -77,7 +77,15 @@ export async function executeListApps(
         if (a.manifest) {
           try {
             const manifest = JSON.parse(a.manifest);
-            if (typeof manifest.image === 'string') image = manifest.image;
+            if (typeof manifest.image === 'string') {
+              image = manifest.image;
+            } else if (manifest.services && typeof manifest.services === 'object') {
+              // Stack: join service images (e.g. "nginx + postgres")
+              const images = Object.values(manifest.services as Record<string, Record<string, unknown>>)
+                .map((svc) => typeof svc.image === 'string' ? svc.image : null)
+                .filter(Boolean);
+              if (images.length > 0) image = images.join(' + ');
+            }
           } catch (error) {
             logError('compositeQueries.executeListApps.parseManifest', error);
           }
@@ -185,9 +193,20 @@ export async function executeAppStatus(
             );
             const connResponse = await getLeaseConnectionInfo(app.providerUrl, app.leaseUuid, infoAuthToken);
             if (connResponse.connection) {
-              appConnection = connResponse.connection;
-              if (connResponse.connection.host) {
-                appUrl = connResponse.connection.host;
+              const conn = connResponse.connection;
+              // Stack deployments: extract primary service ports when no top-level ports
+              if (!conn.ports && !conn.instances?.[0]?.ports && conn.services) {
+                const primary = extractPrimaryServicePorts(conn.services);
+                if (primary) {
+                  appConnection = { ...conn, ports: primary.ports };
+                } else {
+                  appConnection = conn;
+                }
+              } else {
+                appConnection = conn;
+              }
+              if (conn.host) {
+                appUrl = conn.host;
               }
             }
           } catch (error) {
@@ -213,13 +232,21 @@ export async function executeAppStatus(
   // Build a clickable connection URL from host + port mappings
   const connectionUrl = formatConnectionUrl(appUrl, appConnection) || appUrl;
 
-  // Extract image from stored manifest
+  // Extract image from stored manifest (single-service or stack)
   let image: string | undefined;
+  let serviceImages: Record<string, string> | undefined;
   if (app.manifest) {
     try {
       const manifest = JSON.parse(app.manifest);
       if (typeof manifest.image === 'string') {
         image = manifest.image;
+      } else if (manifest.services && typeof manifest.services === 'object') {
+        serviceImages = {};
+        for (const [svcName, svcConfig] of Object.entries(manifest.services as Record<string, Record<string, unknown>>)) {
+          if (typeof svcConfig.image === 'string') serviceImages[svcName] = svcConfig.image;
+        }
+        const imgs = Object.values(serviceImages);
+        if (imgs.length > 0) image = imgs.join(' + ');
       }
     } catch (error) {
       logError('compositeQueries.executeAppStatus.parseManifest', error);
@@ -233,8 +260,10 @@ export async function executeAppStatus(
       status: currentStatus,
       size: app.size,
       image,
+      ...(serviceImages ? { serviceImages } : {}),
       url: connectionUrl || appUrl,
       connection: appConnection,
+      ...(fredStatus?.services ? { services: fredStatus.services } : {}),
       chainState,
       fredStatus,
       created: new Date(app.createdAt).toISOString(),

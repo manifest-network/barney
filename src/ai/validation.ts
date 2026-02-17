@@ -5,6 +5,7 @@
 
 import * as ipaddr from 'ipaddr.js';
 import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
+import type { ChatMessage } from '../contexts/aiTypes';
 
 // ============================================================================
 // Settings Validation
@@ -179,18 +180,7 @@ export function validateSettings(data: unknown): AISettings {
 // Chat Message Validation
 // ============================================================================
 
-export interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'tool';
-  content: string;
-  thinking?: string;
-  timestamp: number;
-  toolCalls?: unknown[];
-  toolCallId?: string;
-  toolName?: string;
-  isStreaming?: boolean;
-  error?: string;
-}
+// ChatMessage is imported from '../contexts/aiTypes' — single source of truth.
 
 // Maximum message content length (1MB should be more than enough)
 const MAX_CONTENT_LENGTH = 1024 * 1024;

@@ -9,15 +9,13 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser
 import type { OllamaMessage } from '../api/ollama';
 import { streamChat } from '../api/ollama';
 import { executeConfirmedTool, type PayloadAttachment } from '../ai/toolExecutor';
-import type { AppRegistryAccess, SignResult } from '../ai/toolExecutor/types';
+import type { AppRegistryAccess, SignArbitraryFn } from '../ai/toolExecutor/types';
 import type { DeployProgress } from '../ai/progress';
 import { processStreamWithTimeout } from '../ai/streamUtils';
 import { logError } from '../utils/errors';
 import { AI_CONFIRMATION_TIMEOUT_MS } from '../config/constants';
 import type { ChatMessage, PendingConfirmation } from '../contexts/aiTypes';
 import type { AISettings } from './useChatPersistence';
-
-type SignArbitraryFn = (address: string, data: string) => Promise<SignResult>;
 
 export interface UseConfirmationFlowDeps {
   isStreamingRef: MutableRefObject<boolean>;

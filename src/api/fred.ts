@@ -13,7 +13,7 @@
 
 import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
 import { ProviderApiError } from './provider-api';
-import { LeaseState, leaseStateFromString } from './billing';
+import { LeaseState, leaseStateFromString, leaseStateToString } from './billing';
 import { logError } from '../utils/errors';
 import {
   FRED_POLL_INTERVAL_MS,
@@ -22,16 +22,28 @@ import {
   WS_LIVENESS_TIMEOUT_MS,
 } from '../config/constants';
 
+export interface FredInstanceInfo {
+  name: string;
+  status: string;
+  ports?: Record<string, number>;
+}
+
+export interface FredServiceStatus {
+  instances: FredInstanceInfo[];
+}
+
 export interface FredLeaseStatus {
   state: LeaseState;
   provision_status?: string;
   phase?: string;
   steps?: Record<string, string>;
-  instances?: Array<{ name: string; status: string; ports?: Record<string, number> }>;
+  instances?: FredInstanceInfo[];
   endpoints?: Record<string, string>;
   last_error?: string;
   fail_count?: number;
   created_at?: string;
+  /** Per-service status for stack (multi-service) deployments. */
+  services?: Record<string, FredServiceStatus>;
 }
 
 /** Negative terminal lease states — polling should always stop for these. */
@@ -69,15 +81,54 @@ function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
   if (typeof raw.provision_status === 'string') result.provision_status = raw.provision_status;
   if (typeof raw.phase === 'string') result.phase = raw.phase;
   if (raw.steps && typeof raw.steps === 'object' && !Array.isArray(raw.steps)) {
-    result.steps = raw.steps as Record<string, string>;
+    const steps: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw.steps as Record<string, unknown>)) {
+      if (typeof v === 'string') steps[k] = v;
+    }
+    result.steps = steps;
   }
-  if (Array.isArray(raw.instances)) result.instances = raw.instances as FredLeaseStatus['instances'];
+  if (Array.isArray(raw.instances)) {
+    result.instances = raw.instances.filter(
+      (i): i is FredInstanceInfo =>
+        i != null &&
+        typeof i === 'object' &&
+        typeof i.name === 'string' &&
+        typeof i.status === 'string'
+    );
+  }
   if (raw.endpoints && typeof raw.endpoints === 'object' && !Array.isArray(raw.endpoints)) {
-    result.endpoints = raw.endpoints as Record<string, string>;
+    const endpoints: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw.endpoints as Record<string, unknown>)) {
+      if (typeof v === 'string') endpoints[k] = v;
+    }
+    result.endpoints = endpoints;
   }
   if (typeof raw.last_error === 'string') result.last_error = raw.last_error;
   if (typeof raw.fail_count === 'number') result.fail_count = raw.fail_count;
   if (typeof raw.created_at === 'string') result.created_at = raw.created_at;
+
+  // Stack (multi-service) status: { services: { "web": { instances: [...] }, "db": { instances: [...] } } }
+  if (raw.services && typeof raw.services === 'object' && !Array.isArray(raw.services)) {
+    const services: Record<string, FredServiceStatus> = {};
+    for (const [name, value] of Object.entries(raw.services as Record<string, unknown>)) {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const svc = value as Record<string, unknown>;
+        services[name] = {
+          instances: Array.isArray(svc.instances)
+            ? svc.instances.filter(
+                (i): i is { name: string; status: string; ports?: Record<string, number> } =>
+                  i != null &&
+                  typeof i === 'object' &&
+                  typeof i.name === 'string' &&
+                  typeof i.status === 'string'
+              )
+            : [],
+        };
+      }
+    }
+    if (Object.keys(services).length > 0) result.services = services;
+  }
+
   return result;
 }
 
@@ -317,6 +368,7 @@ export async function pollLeaseUntilReady(
     }
   }
 
+  logError('fred.pollLeaseUntilReady', new Error(`Polling exhausted after ${maxAttempts} attempts (last state: ${leaseStateToString(lastStatus.state)}, provision: ${lastStatus.provision_status ?? 'none'})`));
   return lastStatus;
 }
 
@@ -433,7 +485,17 @@ export function connectLeaseEvents(
 
     ws.onmessage = (msg) => {
       try {
-        const event: FredWSEvent = JSON.parse(msg.data);
+        const parsed: unknown = JSON.parse(msg.data);
+        if (
+          !parsed ||
+          typeof parsed !== 'object' ||
+          typeof (parsed as Record<string, unknown>).status !== 'string' ||
+          typeof (parsed as Record<string, unknown>).lease_uuid !== 'string'
+        ) {
+          logError('fred.connectLeaseEvents: unexpected WS message shape', new Error(JSON.stringify(parsed).slice(0, 200)));
+          return;
+        }
+        const event = parsed as FredWSEvent;
         eventQueue.push(event);
         resolveWaiter?.();
       } catch (error) {
@@ -919,7 +981,7 @@ export async function getLeaseInfo(
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
   const { url, headers } = buildValidatedFredRequest(
     providerApiUrl,
-    `/info/${encodedLeaseUuid}`,
+    `/v1/leases/${encodedLeaseUuid}/info`,
     { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
   );
 

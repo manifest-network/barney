@@ -4,8 +4,14 @@ import type { PendingAction } from '../../ai/toolExecutor';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { ManifestEditor } from './ManifestEditor';
-import { parseEditableManifest, serializeManifest, type ManifestFields } from './manifestEditorUtils';
+import { StackManifestEditor } from './StackManifestEditor';
+import {
+  parseEditableManifest, serializeManifest,
+  parseEditableStackManifest, serializeStackManifest,
+  type ManifestFields, type StackManifestFields,
+} from './manifestEditorUtils';
 
 function parseManifestEnv(payload: PendingAction['payload']): Record<string, string> | null {
   if (!payload?.bytes) return null;
@@ -19,18 +25,44 @@ function parseManifestEnv(payload: PendingAction['payload']): Record<string, str
   return null;
 }
 
+interface StackServiceSummary {
+  image: string;
+  ports: string[];
+  envCount: number;
+}
+
+function parseStackManifest(action: PendingAction): Record<string, StackServiceSummary> | null {
+  const json = action.args._generatedManifest;
+  if (typeof json !== 'string') return null;
+  try {
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    if (!parsed.services || typeof parsed.services !== 'object' || Array.isArray(parsed.services)) return null;
+    const result: Record<string, StackServiceSummary> = {};
+    for (const [name, svc] of Object.entries(parsed.services as Record<string, Record<string, unknown>>)) {
+      if (!svc || typeof svc !== 'object') continue;
+      result[name] = {
+        image: (svc.image as string) || 'unknown',
+        ports: svc.ports ? Object.keys(svc.ports as Record<string, unknown>) : [],
+        envCount: svc.env ? Object.keys(svc.env as Record<string, unknown>).length : 0,
+      };
+    }
+    return Object.keys(result).length > 0 ? result : null;
+  } catch (error) {
+    logError('ConfirmationCard.parseStackManifest', error);
+    return null;
+  }
+}
+
+/** Internal args that should not be shown in the confirmation parameters. */
+const INTERNAL_ARGS = new Set(['_generatedManifest', '_serviceNames', '_isStack']);
+
 const SENSITIVE_PATTERN = /password|secret|token|key|credential/i;
 
-function CopyButton({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = () => {
-    navigator.clipboard.writeText(value).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch((err) => logError('CopyButton', err));
-  };
+function InlineCopyButton({ value }: { value: string }) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
+  const copied = isCopied(value);
   return (
-    <button type="button" onClick={handleCopy} className="btn-icon" aria-label="Copy to clipboard" title="Copy">
+    <button type="button" onClick={() => copyToClipboard(value)} className="btn-icon" aria-label="Copy to clipboard" title="Copy">
       {copied ? <CheckCheck className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5 text-muted" />}
     </button>
   );
@@ -54,7 +86,7 @@ function SensitiveValue({ envKey, value }: { envKey: string; value: string }) {
           {revealed ? <EyeOff className="w-3.5 h-3.5 text-muted" /> : <Eye className="w-3.5 h-3.5 text-muted" />}
         </button>
       )}
-      <CopyButton value={value} />
+      <InlineCopyButton value={value} />
     </span>
   );
 }
@@ -77,24 +109,35 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   const [editedManifest, setEditedManifest] = useState<ManifestFields | null>(initialManifest);
   const isEditable = initialManifest !== null;
 
+  const initialStack = useMemo(() => parseEditableStackManifest(action), [action]);
+  const [editedStack, setEditedStack] = useState<StackManifestFields | null>(initialStack);
+  const isStackEditable = initialStack !== null;
+
   const manifestEnv = useMemo(() => {
-    if (isEditable) return null; // ManifestEditor handles env display for editable manifests
+    if (isEditable || isStackEditable) return null;
     return parseManifestEnv(action.payload);
-  }, [action.payload, isEditable]);
+  }, [action.payload, isEditable, isStackEditable]);
+
+  const stackServices = useMemo(() => {
+    if (isEditable || isStackEditable) return null;
+    return parseStackManifest(action);
+  }, [action, isEditable, isStackEditable]);
 
   const handleConfirm = useCallback(() => {
     if (editedManifest) {
       onConfirm(serializeManifest(editedManifest));
+    } else if (editedStack) {
+      onConfirm(serializeStackManifest(editedStack));
     } else {
       onConfirm();
     }
-  }, [editedManifest, onConfirm]);
+  }, [editedManifest, editedStack, onConfirm]);
 
   // Filter out internal args for display
   const displayArgs = useMemo(() => {
     const filtered: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(action.args)) {
-      if (k !== '_generatedManifest') {
+      if (!INTERNAL_ARGS.has(k)) {
         filtered[k] = v;
       }
     }
@@ -117,13 +160,37 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
       <div className="confirmation-body">
         <p id="confirmation-description" className="confirmation-description">{action.description}</p>
 
-        {isEditable && editedManifest ? (
+        {isStackEditable && editedStack ? (
+          <div className="confirmation-details">
+            <StackManifestEditor stack={editedStack} onChange={setEditedStack} />
+          </div>
+        ) : isEditable && editedManifest ? (
           <div className="confirmation-details">
             <ManifestEditor manifest={editedManifest} onChange={setEditedManifest} />
           </div>
         ) : (
           <>
-            {action.args.entries && Array.isArray(action.args.entries) && action.args.entries.length > 1 ? (
+            {stackServices ? (
+              <div className="confirmation-details">
+                <p className="confirmation-details-title">Services ({Object.keys(stackServices).length}):</p>
+                <div className="confirmation-payload">
+                  {Object.entries(stackServices).map(([name, svc]) => (
+                    <div key={name} className="flex items-start gap-2 text-sm py-1">
+                      <code className="font-mono text-xs text-primary font-semibold whitespace-nowrap">{name}</code>
+                      <div className="text-dim text-xs">
+                        <span>{svc.image}</span>
+                        {svc.ports.length > 0 && (
+                          <span className="text-muted"> · {svc.ports.join(', ')}</span>
+                        )}
+                        {svc.envCount > 0 && (
+                          <span className="text-muted"> · {svc.envCount} env var{svc.envCount !== 1 ? 's' : ''}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : action.args.entries && Array.isArray(action.args.entries) && action.args.entries.length > 1 ? (
               <div className="confirmation-details">
                 <p className="confirmation-details-title">Apps to deploy:</p>
                 <ul className="confirmation-batch-list">

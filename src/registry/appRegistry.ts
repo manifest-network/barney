@@ -18,7 +18,7 @@ export interface AppEntry {
   providerUrl: string;
   createdAt: number;
   url?: string;
-  connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string> };
+  connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string>; services?: Record<string, unknown> };
   status: AppStatus;
   /** Original manifest JSON, stored for re-deploy. */
   manifest?: string;
@@ -46,12 +46,20 @@ export function sanitizeManifestForStorage(manifestJson: string): string {
     }
 
     const obj = manifest as Record<string, unknown>;
+
+    // Single-service: sanitize top-level env
     if (obj.env && typeof obj.env === 'object' && !Array.isArray(obj.env)) {
-      const sanitizedEnv: Record<string, string> = {};
-      for (const [key, value] of Object.entries(obj.env as Record<string, string>)) {
-        sanitizedEnv[key] = SENSITIVE_ENV_PATTERN.test(key) ? '' : String(value);
+      obj.env = sanitizeEnvObject(obj.env as Record<string, string>);
+    }
+
+    // Stack (multi-service): sanitize env inside each service
+    if (obj.services && typeof obj.services === 'object' && !Array.isArray(obj.services)) {
+      const services = obj.services as Record<string, Record<string, unknown>>;
+      for (const svc of Object.values(services)) {
+        if (svc.env && typeof svc.env === 'object' && !Array.isArray(svc.env)) {
+          svc.env = sanitizeEnvObject(svc.env as Record<string, string>);
+        }
       }
-      obj.env = sanitizedEnv;
     }
 
     return JSON.stringify(obj, null, 2);
@@ -60,6 +68,15 @@ export function sanitizeManifestForStorage(manifestJson: string): string {
     // Return empty manifest rather than unsanitized input that may contain secrets
     return '{}';
   }
+}
+
+/** Sanitize a single env object, replacing sensitive values with empty strings. */
+function sanitizeEnvObject(env: Record<string, string>): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    sanitized[key] = SENSITIVE_ENV_PATTERN.test(key) ? '' : String(value);
+  }
+  return sanitized;
 }
 
 function storageKey(address: string): string {

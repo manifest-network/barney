@@ -103,6 +103,7 @@ async function signAndBroadcast(
       events: result.events,
     };
   } catch (err) {
+    logError('tx.signAndBroadcast', err);
     return {
       success: false,
       error: err instanceof Error ? err.message : 'Unknown error',

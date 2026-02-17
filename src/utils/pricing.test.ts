@@ -7,7 +7,7 @@ import { DENOMS } from '../api/config';
 
 function makeItem(amount: string, quantity: bigint | string, denom: string = DENOMS.PWR): LeaseItem {
   const q = typeof quantity === 'string' ? BigInt(parseInt(quantity, 10) || 0) : quantity;
-  return { skuUuid: 'sku-1', quantity: q, lockedPrice: { amount, denom } };
+  return { skuUuid: 'sku-1', quantity: q, lockedPrice: { amount, denom }, serviceName: '' };
 }
 
 describe('formatCostPerHour', () => {

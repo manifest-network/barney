@@ -74,15 +74,20 @@ export interface OllamaModel {
  */
 function buildOllamaUrl(endpoint: string, path: string): string | null {
   try {
-    const url = new URL(path, endpoint);
+    const base = endpoint.endsWith('/') ? endpoint : endpoint + '/';
+    const relative = path.startsWith('/') ? path.slice(1) : path;
+    const url = new URL(relative, base);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      logError('ollama.buildOllamaUrl', new Error(`Unsupported protocol "${url.protocol}" for endpoint "${endpoint}"`));
       return null;
     }
     if (!isUrlSsrfSafe(url)) {
+      logError('ollama.buildOllamaUrl', new Error(`Endpoint "${endpoint}" failed SSRF validation`));
       return null;
     }
     return url.href;
-  } catch {
+  } catch (error) {
+    logError('ollama.buildOllamaUrl', error);
     return null;
   }
 }

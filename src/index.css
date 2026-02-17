@@ -5329,6 +5329,57 @@ h1, h2, h3, h4, h5, h6 {
   flex-shrink: 0;
 }
 
+/* Stack Manifest Editor (accordion per service) */
+.stack-manifest-editor {
+  display: flex;
+  flex-direction: column;
+}
+
+.stack-manifest-service {
+  border-bottom: 1px solid oklch(0.28 0.03 260 / 0.35);
+}
+
+.stack-manifest-service:last-of-type {
+  border-bottom: none;
+}
+
+.stack-manifest-service-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  background: oklch(0.15 0.01 260 / 0.4);
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.stack-manifest-service-toggle:hover {
+  background: oklch(0.20 0.02 260 / 0.5);
+  color: var(--text-primary);
+}
+
+.stack-manifest-service-name {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--color-primary-400);
+}
+
+.stack-manifest-service-image {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.stack-manifest-service-body {
+  padding: 0.75rem 0.625rem;
+}
+
 /* AI Settings Panel */
 .ai-settings {
   border-bottom: 1px solid var(--panel-border);

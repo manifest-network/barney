@@ -35,22 +35,26 @@ Chat-primary deployment platform:
 
 ```
 ErrorBoundary
-  └─ ThemeProvider (next-themes)
+  └─ ThemeProvider (next-themes, multi-theme support)
+      ├─ MatrixRain (animated background, matrix theme only)
       └─ ChainProvider (cosmos-kit wallet abstraction)
           └─ ToastProvider (toast notifications)
               └─ AIProvider (chat state, tool execution, Ollama streaming)
                   ├─ AppShell
                   │   ├─ LandingPage (when not connected)
                   │   └─ MainLayout (when connected)
-                  │       ├─ AppsSidebar (wallet, credits, running apps)
+                  │       ├─ ErrorBoundary (sidebar isolation)
+                  │       │   └─ AppsSidebar (wallet, credits, running apps)
+                  │       ├─ Modal (mobile sidebar overlay)
                   │       └─ AIErrorBoundary
-                  │           └─ ChatPanel (monolithic: messages, input, settings)
+                  │           └─ ChatPanel (messages, input, settings)
                   │               ├─ MessageBubble (per-message rendering)
-                  │               │   └─ StreamingText (typewriter effect)
+                  │               │   └─ StreamingText (typewriter effect with link detection)
                   │               ├─ ProgressCard (during deploy)
                   │               ├─ AppCard (deploy success)
                   │               ├─ ConfirmationCard (TX approval)
-                  │               │   └─ ManifestEditor (inline manifest editing)
+                  │               │   ├─ ManifestEditor (single-service manifest editing)
+                  │               │   └─ StackManifestEditor (multi-service stack editing)
                   │               ├─ ToolResultCard / LogCard
                   │               ├─ HelpCard (/help display)
                   │               └─ AISettings (inline settings panel)
@@ -75,11 +79,11 @@ The AI assistant uses a 3-layer architecture:
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, storage?)` | TX | Deploy from attached manifest or Docker image. Defaults: size=micro, name from filename/image |
+| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, storage?, services?, health_check?, stop_grace_period?, init?, expose?, labels?)` | TX | Deploy from attached manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image`. Defaults: size=micro, name from filename/image |
 | `stop_app(app_name)` | TX | Stop app by name, or "all" to stop all running apps |
 | `fund_credits(amount)` | TX | Add credits in display units |
 | `restart_app(app_name)` | TX | Restart a running app |
-| `update_app(app_name, image?, port?, env?, user?, tmpfs?)` | TX | Update app with new manifest (file attachment or Docker image) |
+| `update_app(app_name, image?, port?, env?, user?, tmpfs?, command?, args?, services?, health_check?, stop_grace_period?, init?, expose?, labels?)` | TX | Update app with new manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image` |
 | `list_apps(state?)` | Query | List apps filtered by state (default: running) |
 | `app_status(app_name)` | Query | Detailed status: registry + chain + fred |
 | `get_logs(app_name, tail?)` | Query | Container logs for a running app |
@@ -91,7 +95,26 @@ The AI assistant uses a 3-layer architecture:
 | `cosmos_query(module, subcommand, args?)` | Query | Raw chain query escape hatch |
 | `cosmos_tx(module, subcommand, args)` | TX | Raw chain TX escape hatch |
 
-Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`. Manifest generation: `src/ai/manifest.ts`. Known Docker images: `src/ai/knownImages.ts`.
+Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`. Known Docker images and stacks: `src/ai/knownImages.ts`.
+
+### Manifest Generation (`src/ai/manifest.ts`)
+
+Builds Docker Compose-style JSON manifests for single-service and multi-service (stack) deploys.
+
+- `buildManifest(opts)` — Build single-service manifest JSON from image, port, env, user, tmpfs, command, args, health_check, etc.
+- `buildStackManifest(opts)` — Build multi-service stack manifest with a `services` map of `ServiceConfig` entries
+- `mergeManifest(newManifest, oldManifestJson)` — Merge new manifest over old, preserving env vars, ports, health_check, depends_on unless explicitly overridden. Handles both single-service and stack manifests
+- `validateServiceName(name)` — RFC 1123 DNS label validation (1-63 chars, lowercase alphanumeric + hyphens)
+- `isStackManifest(manifest)` / `parseStackManifest(json)` / `getServiceNames(manifest)` — Stack manifest detection and parsing utilities
+- `ServiceConfig` — Type alias for `BuildManifestOptions`, used per-service in stacks
+
+### Known Images & Stacks (`src/ai/knownImages.ts`)
+
+- `KNOWN_IMAGES` — Readonly array of known Docker image configs with default ports, env, user, tmpfs, health_check, etc.
+- `findKnownImage(imageRef)` — Lookup known image config by Docker image reference
+- `KNOWN_STACKS` — Readonly array of pre-built multi-service stack configs (WordPress, Ghost, Adminer-Postgres) with `depends_on` ordering and aliases (e.g., `wp`, `pgadmin`)
+- `findKnownStack(name)` — Lookup known stack by name or alias
+- `generateImageReferenceForPrompt()` / `generateStackReferenceForPrompt()` — Generate reference text injected into the AI system prompt
 
 ### App Registry
 
@@ -103,7 +126,7 @@ AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, co
 AppStatus: 'deploying' | 'running' | 'stopped' | 'failed'
 ```
 
-Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `validateAppName`.
+Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `validateAppName`, `sanitizeManifestForStorage`.
 
 Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
 
@@ -112,6 +135,7 @@ Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
 `src/ai/progress.ts` defines `DeployProgress` with phases:
 `checking_credits → funding → creating_lease → uploading → provisioning → ready | failed`
 Additional phases for restart/update operations: `restarting`, `updating`
+The `operation` field (`'deploy' | 'restart' | 'update'`) indicates the current operation type for UI display.
 
 Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored in AIContext as `deployProgress`, and rendered by `ProgressCard`. Batch deploys include a `batch` array with per-app progress.
 
@@ -209,10 +233,15 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `AI_MAX_MESSAGES` | 200 | Chat history memory limit |
 | `AI_TOOL_CACHE_TTL_MS` | 10s | Query result cache lifetime |
 | `AI_TOOL_CACHE_MAX_SIZE` | 50 | Max cached query results |
+| `AI_MAX_RETRIES` | 3 | Max retry attempts for transient network errors |
+| `AI_RETRY_BASE_DELAY_MS` | 1s | Base delay for exponential backoff |
+| `AI_TOOL_API_TIMEOUT_MS` | 15s | Timeout for blockchain API calls during tool execution |
 | `MAX_PAYLOAD_SIZE` | 5KB | Maximum file upload size (in `hash.ts`) |
+| `FRED_POLL_INTERVAL_MS` | 3s | Default polling interval for Fred status checks |
 | `WS_RECONNECT_DELAY_MS` | 1s | Delay before WebSocket reconnect attempt |
 | `WS_MAX_RECONNECT_ATTEMPTS` | 2 | Max reconnects before falling back to polling |
 | `WS_LIVENESS_TIMEOUT_MS` | 45s | WebSocket data liveness timeout (Fred pings every 30s) |
+| `STORAGE_SKU_NAME` | 'docker-small' | SKU name that supports persistent disk storage |
 
 ## Styling
 
@@ -243,9 +272,12 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 
 `src/config/exampleApps.ts` — Pre-defined app/game manifests for one-click deploys from ChatPanel.
 
-- `EXAMPLE_APPS` array with `group: 'games' | 'apps'` classification
+- `EXAMPLE_APPS` array with `group: 'games' | 'apps' | 'stacks'` classification
 - `findExampleByAppName(appName)` — Reverse-lookup by registry name
-- `buildExampleManifest(app)` — JSON with envFactory expansion (e.g., Postgres password generation)
+- `buildExampleManifest(app)` — Produces final manifest JSON. Resolution order:
+  1. `manifestFactory()` — if present, builds the complete manifest dynamically (used by stacks like WordPress/Ghost that need coordinated passwords across services)
+  2. `envFactory()` — if present, merges generated env vars (e.g., `generatePassword()`) into `manifest.env` (used by single-service databases)
+  3. `manifest` — static manifest object used as-is (games, simple services)
 - ChatPanel uses these for deploy buttons; `AppsSidebar` uses them as re-deploy fallback
 
 ## Chain Configuration

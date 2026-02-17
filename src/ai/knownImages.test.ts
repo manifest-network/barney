@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findKnownImage, generateImageReferenceForPrompt, KNOWN_IMAGES } from './knownImages';
+import { findKnownImage, findKnownStack, generateImageReferenceForPrompt, generateStackReferenceForPrompt, KNOWN_IMAGES, KNOWN_STACKS } from './knownImages';
 
 describe('findKnownImage', () => {
   it('matches exact image name', () => {
@@ -98,6 +98,56 @@ describe('findKnownImage', () => {
   });
 });
 
+describe('known image health checks', () => {
+  const imagesWithHealthChecks = KNOWN_IMAGES.filter(cfg => cfg.health_check);
+
+  it('has health checks for key database images', () => {
+    const names = imagesWithHealthChecks.map(cfg => cfg.image);
+    expect(names).toContain('postgres');
+    expect(names).toContain('mysql');
+    expect(names).toContain('mariadb');
+    expect(names).toContain('redis');
+  });
+
+  it('health checks have valid test arrays', () => {
+    for (const cfg of imagesWithHealthChecks) {
+      expect(cfg.health_check!.test).toBeInstanceOf(Array);
+      expect(cfg.health_check!.test.length).toBeGreaterThanOrEqual(2);
+      expect(['CMD', 'CMD-SHELL']).toContain(cfg.health_check!.test[0]);
+    }
+  });
+});
+
+describe('known stack depends_on', () => {
+  it('wordpress web depends on db with service_healthy', () => {
+    const wp = KNOWN_STACKS.find(s => s.name === 'wordpress')!;
+    expect(wp.services.web.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+  });
+
+  it('ghost web depends on db with service_healthy', () => {
+    const ghost = KNOWN_STACKS.find(s => s.name === 'ghost')!;
+    expect(ghost.services.web.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+  });
+
+  it('adminer-postgres adminer depends on db with service_healthy', () => {
+    const ap = KNOWN_STACKS.find(s => s.name === 'adminer-postgres')!;
+    expect(ap.services.adminer.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+  });
+
+  it('depends_on conditions are valid', () => {
+    const validConditions = new Set(['service_started', 'service_healthy', 'service_completed_successfully']);
+    for (const stack of KNOWN_STACKS) {
+      for (const [, svc] of Object.entries(stack.services)) {
+        if (svc.depends_on) {
+          for (const dep of Object.values(svc.depends_on)) {
+            expect(validConditions).toContain(dep.condition);
+          }
+        }
+      }
+    }
+  });
+});
+
 describe('generateImageReferenceForPrompt', () => {
   it('includes all known images', () => {
     const ref = generateImageReferenceForPrompt();
@@ -119,6 +169,14 @@ describe('generateImageReferenceForPrompt', () => {
     expect(ref).toContain('NEO4J_AUTH="neo4j/<password>"');
   });
 
+  it('includes health_check indicator for images with health checks', () => {
+    const ref = generateImageReferenceForPrompt();
+    const postgresLine = ref.split('\n').find(l => l.startsWith('postgres:'));
+    expect(postgresLine).toContain('health_check=yes');
+    const redisLine = ref.split('\n').find(l => l.startsWith('redis:'));
+    expect(redisLine).toContain('health_check=yes');
+  });
+
   it('includes storage flag when present', () => {
     const ref = generateImageReferenceForPrompt();
     expect(ref).toContain('postgres: port=5432');
@@ -137,5 +195,70 @@ describe('generateImageReferenceForPrompt', () => {
     const ref = generateImageReferenceForPrompt();
     const lines = ref.split('\n');
     expect(lines.length).toBe(KNOWN_IMAGES.length);
+  });
+});
+
+describe('findKnownStack', () => {
+  it('matches exact stack name', () => {
+    const stack = findKnownStack('wordpress');
+    expect(stack).toBeDefined();
+    expect(stack!.name).toBe('wordpress');
+    expect(Object.keys(stack!.services)).toContain('web');
+    expect(Object.keys(stack!.services)).toContain('db');
+  });
+
+  it('matches by alias', () => {
+    const stack = findKnownStack('wp');
+    expect(stack).toBeDefined();
+    expect(stack!.name).toBe('wordpress');
+  });
+
+  it('is case-insensitive', () => {
+    const stack = findKnownStack('WordPress');
+    expect(stack).toBeDefined();
+    expect(stack!.name).toBe('wordpress');
+  });
+
+  it('returns undefined for unknown stack', () => {
+    expect(findKnownStack('nonexistent')).toBeUndefined();
+  });
+
+  it('finds ghost stack', () => {
+    const stack = findKnownStack('ghost');
+    expect(stack).toBeDefined();
+    expect(stack!.services.web.image).toBe('ghost');
+    expect(stack!.services.db.image).toBe('mysql');
+  });
+
+  it('finds adminer-postgres by alias', () => {
+    const stack = findKnownStack('pgadmin');
+    expect(stack).toBeDefined();
+    expect(stack!.name).toBe('adminer-postgres');
+  });
+});
+
+describe('generateStackReferenceForPrompt', () => {
+  it('includes all known stacks', () => {
+    const ref = generateStackReferenceForPrompt();
+    for (const stack of KNOWN_STACKS) {
+      expect(ref).toContain(stack.name);
+    }
+  });
+
+  it('includes service names and images', () => {
+    const ref = generateStackReferenceForPrompt();
+    expect(ref).toContain('web(wordpress)');
+    expect(ref).toContain('db(mysql)');
+  });
+
+  it('includes aliases', () => {
+    const ref = generateStackReferenceForPrompt();
+    expect(ref).toContain('(aka wp)');
+  });
+
+  it('produces one line per stack', () => {
+    const ref = generateStackReferenceForPrompt();
+    const lines = ref.split('\n');
+    expect(lines.length).toBe(KNOWN_STACKS.length);
   });
 });

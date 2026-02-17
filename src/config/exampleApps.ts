@@ -12,7 +12,7 @@ export interface ExampleApp {
   /** Builds the complete manifest dynamically (overrides manifest + envFactory when present). */
   manifestFactory?: () => Record<string, unknown>;
   size?: string;
-  group: 'games' | 'apps';
+  group: 'games' | 'apps' | 'stacks';
   category?: string;
 }
 
@@ -111,6 +111,82 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     };
   }, size: 'large', group: 'apps', category: 'Tools' },
   { label: 'Registry 2', manifest: SERVICE_MANIFEST('registry:2', ['5000']), size: 'micro', group: 'apps', category: 'Tools' },
+
+  // --- Stacks (multi-service) ---
+  {
+    label: 'WordPress + MySQL',
+    manifest: { services: {
+      web: { image: 'wordpress:6', ports: { '80/tcp': {} }, env: {} },
+      db: { image: 'mysql:9', env: {} },
+    }},
+    manifestFactory: () => {
+      const dbPass = generatePassword();
+      return { services: {
+        web: {
+          image: 'wordpress:6',
+          ports: { '80/tcp': {} },
+          env: { WORDPRESS_DB_HOST: 'db:3306', WORDPRESS_DB_USER: 'wordpress', WORDPRESS_DB_PASSWORD: dbPass, WORDPRESS_DB_NAME: 'wordpress' },
+        },
+        db: {
+          image: 'mysql:9',
+          env: { MYSQL_DATABASE: 'wordpress', MYSQL_USER: 'wordpress', MYSQL_PASSWORD: dbPass, MYSQL_ROOT_PASSWORD: generatePassword() },
+        },
+      }};
+    },
+    size: 'small',
+    group: 'stacks',
+    category: 'Stacks',
+  },
+  {
+    label: 'Ghost + MySQL',
+    manifest: { services: {
+      web: { image: 'ghost:5', ports: { '2368/tcp': {} }, env: {} },
+      db: { image: 'mysql:9', env: {} },
+    }},
+    manifestFactory: () => {
+      const dbPass = generatePassword();
+      return { services: {
+        web: {
+          image: 'ghost:5',
+          ports: { '2368/tcp': {} },
+          env: { 'database__client': 'mysql', 'database__connection__host': 'db', 'database__connection__user': 'ghost', 'database__connection__password': dbPass, 'database__connection__database': 'ghost' },
+        },
+        db: {
+          image: 'mysql:9',
+          env: { MYSQL_DATABASE: 'ghost', MYSQL_USER: 'ghost', MYSQL_PASSWORD: dbPass, MYSQL_ROOT_PASSWORD: generatePassword() },
+        },
+      }};
+    },
+    size: 'small',
+    group: 'stacks',
+    category: 'Stacks',
+  },
+  {
+    label: 'Adminer + Postgres',
+    manifest: { services: {
+      adminer: { image: 'adminer:5', ports: { '8080/tcp': {} }, env: {} },
+      db: { image: 'postgres:18', env: {}, user: '999:999', tmpfs: ['/var/run/postgresql'] },
+    }},
+    manifestFactory: () => {
+      const dbPass = generatePassword();
+      return { services: {
+        adminer: {
+          image: 'adminer:5',
+          ports: { '8080/tcp': {} },
+          env: { ADMINER_DEFAULT_SERVER: 'db' },
+        },
+        db: {
+          image: 'postgres:18',
+          env: { POSTGRES_PASSWORD: dbPass },
+          user: '999:999',
+          tmpfs: ['/var/run/postgresql'],
+        },
+      }};
+    },
+    size: 'small',
+    group: 'stacks',
+    category: 'Stacks',
+  },
 ];
 
 /**

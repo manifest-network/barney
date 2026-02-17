@@ -138,6 +138,54 @@ describe('getLeaseStatus', () => {
       'Invalid provider API URL'
     );
   });
+
+  it('parses stack services field from fred response', async () => {
+    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE', {
+      services: {
+        web: { instances: [{ name: 'web-0', status: 'running', ports: { '80/tcp': 32456 } }] },
+        db: { instances: [{ name: 'db-0', status: 'running' }] },
+      },
+    }));
+
+    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(result.services).toBeDefined();
+    expect(Object.keys(result.services!)).toEqual(['web', 'db']);
+    expect(result.services!.web.instances).toHaveLength(1);
+    expect(result.services!.web.instances[0].name).toBe('web-0');
+    expect(result.services!.db.instances).toHaveLength(1);
+  });
+
+  it('omits services when none present', async () => {
+    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE'));
+
+    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(result.services).toBeUndefined();
+  });
+
+  it('filters invalid instances in services', async () => {
+    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE', {
+      services: {
+        web: { instances: [{ name: 'web-0', status: 'running' }, 'invalid', null] },
+      },
+    }));
+
+    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(result.services!.web.instances).toHaveLength(1);
+  });
+
+  it('includes services with missing instances array (early provisioning)', async () => {
+    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE', {
+      services: {
+        web: { instances: [{ name: 'web-0', status: 'running' }] },
+        db: {},
+      },
+    }));
+
+    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+    expect(result.services).toBeDefined();
+    expect(result.services!.web.instances).toHaveLength(1);
+    expect(result.services!.db.instances).toHaveLength(0);
+  });
 });
 
 describe('pollLeaseUntilReady', () => {
@@ -572,13 +620,13 @@ describe('getLeaseInfo', () => {
     expect(result.ports).toEqual({ http: 80, https: 443 });
   });
 
-  it('uses /info/ path', async () => {
+  it('uses /v1/leases/ info path', async () => {
     mockFetchResponse({ host: 'https://app.example.com' });
 
     await getLeaseInfo(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
 
     const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain(`/info/${LEASE_UUID}`);
+    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/info`);
   });
 
   it('throws ProviderApiError on 404', async () => {
