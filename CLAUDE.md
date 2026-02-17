@@ -50,7 +50,8 @@ ErrorBoundary
                   │               ├─ ProgressCard (during deploy)
                   │               ├─ AppCard (deploy success)
                   │               ├─ ConfirmationCard (TX approval)
-                  │               │   └─ ManifestEditor (inline manifest editing)
+                  │               │   ├─ ManifestEditor (single-service manifest editing)
+                  │               │   └─ StackManifestEditor (multi-service stack editing)
                   │               ├─ ToolResultCard / LogCard
                   │               ├─ HelpCard (/help display)
                   │               └─ AISettings (inline settings panel)
@@ -91,7 +92,26 @@ The AI assistant uses a 3-layer architecture:
 | `cosmos_query(module, subcommand, args?)` | Query | Raw chain query escape hatch |
 | `cosmos_tx(module, subcommand, args)` | TX | Raw chain TX escape hatch |
 
-Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`. Manifest generation: `src/ai/manifest.ts`. Known Docker images: `src/ai/knownImages.ts`.
+Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`. Known Docker images and stacks: `src/ai/knownImages.ts`.
+
+### Manifest Generation (`src/ai/manifest.ts`)
+
+Builds Docker Compose-style JSON manifests for single-service and multi-service (stack) deploys.
+
+- `buildManifest(opts)` — Build single-service manifest JSON from image, port, env, user, tmpfs, command, args, health_check, etc.
+- `buildStackManifest(opts)` — Build multi-service stack manifest with a `services` map of `ServiceConfig` entries
+- `mergeManifest(newManifest, oldManifestJson)` — Merge new manifest over old, preserving env vars, ports, health_check, depends_on unless explicitly overridden. Handles both single-service and stack manifests
+- `validateServiceName(name)` — RFC 1123 DNS label validation (1-63 chars, lowercase alphanumeric + hyphens)
+- `isStackManifest(manifest)` / `parseStackManifest(json)` / `getServiceNames(manifest)` — Stack manifest detection and parsing utilities
+- `ServiceConfig` — Type alias for `BuildManifestOptions`, used per-service in stacks
+
+### Known Images & Stacks (`src/ai/knownImages.ts`)
+
+- `KNOWN_IMAGES` — Readonly array of known Docker image configs with default ports, env, user, tmpfs, health_check, etc.
+- `findKnownImage(imageRef)` — Lookup known image config by Docker image reference
+- `KNOWN_STACKS` — Readonly array of pre-built multi-service stack configs (WordPress, Ghost, Adminer-Postgres) with `depends_on` ordering and aliases (e.g., `wp`, `pgadmin`)
+- `findKnownStack(name)` — Lookup known stack by name or alias
+- `generateImageReferenceForPrompt()` / `generateStackReferenceForPrompt()` — Generate reference text injected into the AI system prompt
 
 ### App Registry
 
@@ -103,7 +123,7 @@ AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, co
 AppStatus: 'deploying' | 'running' | 'stopped' | 'failed'
 ```
 
-Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `validateAppName`.
+Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `validateAppName`, `sanitizeManifestForStorage`.
 
 Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
 
@@ -112,6 +132,7 @@ Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
 `src/ai/progress.ts` defines `DeployProgress` with phases:
 `checking_credits → funding → creating_lease → uploading → provisioning → ready | failed`
 Additional phases for restart/update operations: `restarting`, `updating`
+The `operation` field (`'deploy' | 'restart' | 'update'`) indicates the current operation type for UI display.
 
 Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored in AIContext as `deployProgress`, and rendered by `ProgressCard`. Batch deploys include a `batch` array with per-app progress.
 
@@ -248,7 +269,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 
 `src/config/exampleApps.ts` — Pre-defined app/game manifests for one-click deploys from ChatPanel.
 
-- `EXAMPLE_APPS` array with `group: 'games' | 'apps'` classification
+- `EXAMPLE_APPS` array with `group: 'games' | 'apps' | 'stacks'` classification
 - `findExampleByAppName(appName)` — Reverse-lookup by registry name
 - `buildExampleManifest(app)` — JSON with envFactory expansion (e.g., Postgres password generation)
 - ChatPanel uses these for deploy buttons; `AppsSidebar` uses them as re-deploy fallback
