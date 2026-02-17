@@ -10,7 +10,7 @@ import { AIContext } from './aiContextValue';
 import type { OllamaMessage } from '../api/ollama';
 import { streamChat, checkOllamaHealth, listModels, type OllamaModel } from '../api/ollama';
 import { AI_TOOLS } from '../ai/tools';
-import { type SignResult, type PayloadAttachment } from '../ai/toolExecutor';
+import { type SignArbitraryFn, type PayloadAttachment } from '../ai/toolExecutor';
 import { getSystemPrompt } from '../ai/systemPrompt';
 import type { DeployProgress } from '../ai/progress';
 import * as appRegistry from '../registry/appRegistry';
@@ -40,8 +40,6 @@ export type { ChatMessage, PendingConfirmation } from './aiTypes';
 export type { AISettings };
 
 import type { ChatMessage } from './aiTypes';
-
-type SignArbitraryFn = (address: string, data: string) => Promise<SignResult>;
 
 export interface AIContextType {
   // State
@@ -375,14 +373,14 @@ export function AIProvider({ children }: { children: ReactNode }) {
             break;
           }
 
-          const { shouldContinue, nextAssistantMessageId } = await processToolCalls(
+          const toolResult = await processToolCalls(
             streamResult.toolCalls,
             currentAssistantMessageId,
             streamResult
           );
 
-          if (!shouldContinue) return;
-          currentAssistantMessageId = nextAssistantMessageId!;
+          if (!toolResult.shouldContinue) return;
+          currentAssistantMessageId = toolResult.nextAssistantMessageId;
         }
 
         if (iteration >= AI_MAX_TOOL_ITERATIONS) {

@@ -81,7 +81,11 @@ function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
   if (typeof raw.provision_status === 'string') result.provision_status = raw.provision_status;
   if (typeof raw.phase === 'string') result.phase = raw.phase;
   if (raw.steps && typeof raw.steps === 'object' && !Array.isArray(raw.steps)) {
-    result.steps = raw.steps as Record<string, string>;
+    const steps: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw.steps as Record<string, unknown>)) {
+      if (typeof v === 'string') steps[k] = v;
+    }
+    result.steps = steps;
   }
   if (Array.isArray(raw.instances)) {
     result.instances = raw.instances.filter(
@@ -93,7 +97,11 @@ function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
     );
   }
   if (raw.endpoints && typeof raw.endpoints === 'object' && !Array.isArray(raw.endpoints)) {
-    result.endpoints = raw.endpoints as Record<string, string>;
+    const endpoints: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw.endpoints as Record<string, unknown>)) {
+      if (typeof v === 'string') endpoints[k] = v;
+    }
+    result.endpoints = endpoints;
   }
   if (typeof raw.last_error === 'string') result.last_error = raw.last_error;
   if (typeof raw.fail_count === 'number') result.fail_count = raw.fail_count;

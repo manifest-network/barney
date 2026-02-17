@@ -35,18 +35,21 @@ Chat-primary deployment platform:
 
 ```
 ErrorBoundary
-  └─ ThemeProvider (next-themes)
+  └─ ThemeProvider (next-themes, multi-theme support)
+      ├─ MatrixRain (animated background, matrix theme only)
       └─ ChainProvider (cosmos-kit wallet abstraction)
           └─ ToastProvider (toast notifications)
               └─ AIProvider (chat state, tool execution, Ollama streaming)
                   ├─ AppShell
                   │   ├─ LandingPage (when not connected)
                   │   └─ MainLayout (when connected)
-                  │       ├─ AppsSidebar (wallet, credits, running apps)
+                  │       ├─ ErrorBoundary (sidebar isolation)
+                  │       │   └─ AppsSidebar (wallet, credits, running apps)
+                  │       ├─ Modal (mobile sidebar overlay)
                   │       └─ AIErrorBoundary
-                  │           └─ ChatPanel (monolithic: messages, input, settings)
+                  │           └─ ChatPanel (messages, input, settings)
                   │               ├─ MessageBubble (per-message rendering)
-                  │               │   └─ StreamingText (typewriter effect)
+                  │               │   └─ StreamingText (typewriter effect with link detection)
                   │               ├─ ProgressCard (during deploy)
                   │               ├─ AppCard (deploy success)
                   │               ├─ ConfirmationCard (TX approval)
@@ -271,7 +274,10 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 
 - `EXAMPLE_APPS` array with `group: 'games' | 'apps' | 'stacks'` classification
 - `findExampleByAppName(appName)` — Reverse-lookup by registry name
-- `buildExampleManifest(app)` — JSON with envFactory expansion (e.g., Postgres password generation)
+- `buildExampleManifest(app)` — Produces final manifest JSON. Resolution order:
+  1. `manifestFactory()` — if present, builds the complete manifest dynamically (used by stacks like WordPress/Ghost that need coordinated passwords across services)
+  2. `envFactory()` — if present, merges generated env vars (e.g., `generatePassword()`) into `manifest.env` (used by single-service databases)
+  3. `manifest` — static manifest object used as-is (games, simple services)
 - ChatPanel uses these for deploy buttons; `AppsSidebar` uses them as re-deploy fallback
 
 ## Chain Configuration

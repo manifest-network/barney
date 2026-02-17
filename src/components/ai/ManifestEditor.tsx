@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { Plus, Trash2, Lock, Eye, EyeOff, Copy, CheckCheck } from 'lucide-react';
-import { logError } from '../../utils/errors';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { isValidPort, type ManifestFields } from './manifestEditorUtils';
 
 export type { ManifestFields };
@@ -12,16 +12,11 @@ export interface ManifestEditorProps {
   onChange: (updated: ManifestFields) => void;
 }
 
-function CopyButton({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = () => {
-    navigator.clipboard.writeText(value).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch((err) => logError('ManifestEditor.CopyButton', err));
-  };
+function InlineCopyButton({ value }: { value: string }) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
+  const copied = isCopied(value);
   return (
-    <button type="button" onClick={handleCopy} className="manifest-editor-icon-btn" aria-label="Copy to clipboard" title="Copy">
+    <button type="button" onClick={() => copyToClipboard(value)} className="manifest-editor-icon-btn" aria-label="Copy to clipboard" title="Copy">
       {copied ? <CheckCheck className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5 text-muted" />}
     </button>
   );
@@ -41,7 +36,7 @@ function SensitiveActions({ envKey, value, revealed, onToggle }: { envKey: strin
       >
         {revealed ? <EyeOff className="w-3.5 h-3.5 text-muted" /> : <Eye className="w-3.5 h-3.5 text-muted" />}
       </button>
-      <CopyButton value={value} />
+      <InlineCopyButton value={value} />
     </span>
   );
 }

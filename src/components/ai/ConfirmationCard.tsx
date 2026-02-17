@@ -4,6 +4,7 @@ import type { PendingAction } from '../../ai/toolExecutor';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { ManifestEditor } from './ManifestEditor';
 import { StackManifestEditor } from './StackManifestEditor';
 import {
@@ -57,16 +58,11 @@ const INTERNAL_ARGS = new Set(['_generatedManifest', '_serviceNames', '_isStack'
 
 const SENSITIVE_PATTERN = /password|secret|token|key|credential/i;
 
-function CopyButton({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = () => {
-    navigator.clipboard.writeText(value).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch((err) => logError('CopyButton', err));
-  };
+function InlineCopyButton({ value }: { value: string }) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
+  const copied = isCopied(value);
   return (
-    <button type="button" onClick={handleCopy} className="btn-icon" aria-label="Copy to clipboard" title="Copy">
+    <button type="button" onClick={() => copyToClipboard(value)} className="btn-icon" aria-label="Copy to clipboard" title="Copy">
       {copied ? <CheckCheck className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5 text-muted" />}
     </button>
   );
@@ -90,7 +86,7 @@ function SensitiveValue({ envKey, value }: { envKey: string; value: string }) {
           {revealed ? <EyeOff className="w-3.5 h-3.5 text-muted" /> : <Eye className="w-3.5 h-3.5 text-muted" />}
         </button>
       )}
-      <CopyButton value={value} />
+      <InlineCopyButton value={value} />
     </span>
   );
 }

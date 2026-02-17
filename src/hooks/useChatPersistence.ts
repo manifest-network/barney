@@ -68,7 +68,7 @@ export function useChatPersistence() {
     }
   }, [settings]);
 
-  // Save history to localStorage (if enabled)
+  // Save history to localStorage (if enabled), clear it when disabled
   useEffect(() => {
     if (settings.saveHistory) {
       try {
@@ -84,6 +84,8 @@ export function useChatPersistence() {
       } catch (error) {
         logError('AIContext.saveHistory', error);
       }
+    } else {
+      localStorage.removeItem(STORAGE_KEY_HISTORY);
     }
   }, [messages, settings.saveHistory]);
 

@@ -3,9 +3,9 @@
  * Shows app name, URL, status, cost info with action buttons.
  */
 
-import { memo, useState } from 'react';
+import { memo } from 'react';
 import { ExternalLink, Copy, Square, CheckCircle } from 'lucide-react';
-import { COPY_FEEDBACK_DURATION_MS } from '../../config/constants';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 
 interface PortMapping {
   host_ip: string;
@@ -30,7 +30,7 @@ interface AppCardProps {
 }
 
 export const AppCard = memo(function AppCard({ name, url, connection, status, onStop }: AppCardProps) {
-  const [copied, setCopied] = useState(false);
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
 
   const portEntries = connection?.ports ? Object.entries(connection.ports) : [];
 
@@ -58,15 +58,9 @@ export const AppCard = memo(function AppCard({ name, url, connection, status, on
     copyTarget = url;
   }
 
-  const handleCopy = async () => {
-    if (!copyTarget) return;
-    try {
-      await navigator.clipboard.writeText(copyTarget);
-      setCopied(true);
-      setTimeout(() => setCopied(false), COPY_FEEDBACK_DURATION_MS);
-    } catch {
-      // Clipboard API may not be available
-    }
+  const copied = copyTarget ? isCopied(copyTarget) : false;
+  const handleCopy = () => {
+    if (copyTarget) copyToClipboard(copyTarget);
   };
 
   return (

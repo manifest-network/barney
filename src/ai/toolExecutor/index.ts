@@ -33,7 +33,7 @@ import {
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 
 // Re-export types
-export type { ToolResult, ToolExecutorOptions, PendingAction, SignResult, PayloadAttachment } from './types';
+export type { ToolResult, ToolExecutorOptions, PendingAction, SignResult, SignArbitraryFn, PayloadAttachment } from './types';
 export type { AppRegistryAccess } from './types';
 
 /** Query tools that execute immediately */

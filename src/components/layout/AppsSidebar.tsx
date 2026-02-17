@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { LogOut, Circle, Zap, History, RotateCcw } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { getApps, reconcileWithChain, type AppEntry } from '../../registry/appRegistry';
 import { getCreditEstimate, getLeasesByTenant, LeaseState } from '../../api/billing';
 import { DENOMS } from '../../api/config';
@@ -46,7 +47,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const [credits, setCredits] = useState<number | null>(null);
   const [hoursRemaining, setHoursRemaining] = useState<number | null>(null);
   const [burnRate, setBurnRate] = useState<number | null>(null);
-  const [copied, setCopied] = useState(false);
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
 
   // Load apps and credit info, reconcile with chain state
   const refresh = useCallback(async () => {
@@ -147,20 +148,12 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
             {address && (
               <button
                 type="button"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(address);
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 1500);
-                  } catch (error) {
-                    logError('AppsSidebar.copyAddress', error);
-                  }
-                }}
+                onClick={() => copyToClipboard(address)}
                 className="apps-sidebar__wallet-address"
                 aria-label="Copy address to clipboard"
                 title="Click to copy address"
               >
-                {copied ? 'Copied!' : truncateAddress(address)}
+                {isCopied(address) ? 'Copied!' : truncateAddress(address)}
               </button>
             )}
           </div>

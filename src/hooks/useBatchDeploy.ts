@@ -8,14 +8,12 @@ import type { MutableRefObject, Dispatch, SetStateAction } from 'react';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import type { PayloadAttachment } from '../ai/toolExecutor';
 import { executeBatchDeploy, deriveAppName } from '../ai/toolExecutor/compositeTransactions';
-import type { AppRegistryAccess, SignResult } from '../ai/toolExecutor/types';
+import type { AppRegistryAccess, SignArbitraryFn } from '../ai/toolExecutor/types';
 import type { DeployProgress } from '../ai/progress';
 import { logError } from '../utils/errors';
 import { sha256, toHex } from '../utils/hash';
 import type { ChatMessage, PendingConfirmation } from '../contexts/aiTypes';
 import { generateMessageId } from './useMessageManager';
-
-type SignArbitraryFn = (address: string, data: string) => Promise<SignResult>;
 
 export interface UseBatchDeployDeps {
   isStreamingRef: MutableRefObject<boolean>;

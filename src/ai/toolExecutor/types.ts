@@ -11,6 +11,8 @@ export interface SignResult {
   signature: string;
 }
 
+export type SignArbitraryFn = (address: string, data: string) => Promise<SignResult>;
+
 export interface PayloadAttachment {
   bytes: Uint8Array;
   filename?: string;
@@ -79,7 +81,6 @@ export interface ToolExecutorOptions {
   clientManager: CosmosClientManager | null;
   address: string | undefined;
   signArbitrary?: (address: string, data: string) => Promise<SignResult>;
-  onConfirmationRequired?: (action: PendingAction) => void;
   onProgress?: (progress: DeployProgress) => void;
   appRegistry?: AppRegistryAccess;
   signal?: AbortSignal;
