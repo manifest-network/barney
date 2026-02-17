@@ -1,9 +1,9 @@
 import { memo, useMemo, useRef, useState, useCallback } from 'react';
 import { AlertTriangle, Check, X, Paperclip, Copy, CheckCheck, Eye, EyeOff } from 'lucide-react';
+import { FocusTrap } from 'focus-trap-react';
 import type { PendingAction } from '../../ai/toolExecutor';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { ManifestEditor } from './ManifestEditor';
 import { StackManifestEditor } from './StackManifestEditor';
@@ -100,10 +100,7 @@ interface ConfirmationCardProps {
 
 export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfirm, onCancel, isExecuting }: ConfirmationCardProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const trapRef = useFocusTrap(true, {
-    onEscape: () => { if (!isExecuting) onCancel(); },
-    initialFocusRef: cancelRef,
-  });
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const initialManifest = useMemo(() => parseEditableManifest(action), [action]);
   const [editedManifest, setEditedManifest] = useState<ManifestFields | null>(initialManifest);
@@ -145,8 +142,14 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   }, [action.args]);
 
   return (
+    <FocusTrap focusTrapOptions={{
+      escapeDeactivates: () => { if (!isExecuting) onCancel(); return false; },
+      returnFocusOnDeactivate: true,
+      initialFocus: () => cancelRef.current!,
+      fallbackFocus: () => containerRef.current!,
+    }}>
     <div
-      ref={trapRef}
+      ref={containerRef}
       className="confirmation-card"
       role="alertdialog"
       aria-labelledby="confirmation-title"
@@ -260,5 +263,6 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         </button>
       </div>
     </div>
+    </FocusTrap>
   );
 });

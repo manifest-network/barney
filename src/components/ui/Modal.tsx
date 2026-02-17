@@ -1,7 +1,7 @@
-import { useEffect, useId } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import { X } from 'lucide-react';
+import { FocusTrap } from 'focus-trap-react';
 import { cn } from '../../utils/cn';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 export type ModalSize = 'sm' | 'md' | 'lg';
 
@@ -21,8 +21,8 @@ const sizeClasses: Record<ModalSize, string> = {
 };
 
 export function Modal({ isOpen, onClose, title, size = 'md', children, footer }: ModalProps) {
-  const trapRef = useFocusTrap(isOpen, { onEscape: onClose });
   const titleId = useId();
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Prevent body scrolling when modal is open
   useEffect(() => {
@@ -39,34 +39,36 @@ export function Modal({ isOpen, onClose, title, size = 'md', children, footer }:
   if (!isOpen) return null;
 
   return (
-    <div
-      className="modal-backdrop"
-      onClick={onClose}
-      role="presentation"
-    >
+    <FocusTrap focusTrapOptions={{ escapeDeactivates: () => { onClose(); return false; }, returnFocusOnDeactivate: true, fallbackFocus: () => containerRef.current! }}>
       <div
-        ref={trapRef}
-        className={cn('modal', sizeClasses[size])}
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
+        className="modal-backdrop"
+        onClick={onClose}
+        role="presentation"
       >
-        <div className="modal-header">
-          <h3 id={titleId} className="modal-title">{title}</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="modal-close"
-            aria-label="Close dialog"
-          >
-            <X size={20} aria-hidden="true" />
-          </button>
+        <div
+          ref={containerRef}
+          className={cn('modal', sizeClasses[size])}
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          tabIndex={-1}
+        >
+          <div className="modal-header">
+            <h3 id={titleId} className="modal-title">{title}</h3>
+            <button
+              type="button"
+              onClick={onClose}
+              className="modal-close"
+              aria-label="Close dialog"
+            >
+              <X size={20} aria-hidden="true" />
+            </button>
+          </div>
+          <div className="modal-body">{children}</div>
+          {footer && <div className="modal-footer">{footer}</div>}
         </div>
-        <div className="modal-body">{children}</div>
-        {footer && <div className="modal-footer">{footer}</div>}
       </div>
-    </div>
+    </FocusTrap>
   );
 }

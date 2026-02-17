@@ -192,7 +192,6 @@ AIContext delegates to extracted hooks to keep the provider manageable:
 | `useToolCache` | Query tool result cache (10s TTL, 50 max, FIFO eviction), scoped per wallet address |
 | `useChatPersistence` | localStorage-backed settings + history with lazy initializers to avoid save/load race conditions |
 | `useAutoScroll` | MutationObserver-based auto-scroll that respects user scroll position |
-| `useFocusTrap` | Keyboard focus trapping for modals/overlays with Escape support |
 | `useInputHistory` | Arrow-key navigation through past chat inputs |
 | `useAI` | Context consumer hook for AIContext |
 | `useToast` | Context consumer hook for ToastContext |
