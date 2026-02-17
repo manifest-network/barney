@@ -51,6 +51,18 @@ describe('streamChat', () => {
     expect(chunks[0]).toEqual({ type: 'error', error: 'Invalid Ollama endpoint URL' });
   });
 
+  it('preserves endpoint path prefix in request URL', async () => {
+    const body = ndjsonStream([{ done: true }]);
+    vi.mocked(fetch).mockResolvedValue({ ok: true, body } as Response);
+
+    await collectChunks(
+      streamChat({ endpoint: 'https://example.com/api/ollama', model: 'test', messages: [] })
+    );
+
+    const calledUrl = vi.mocked(fetch).mock.calls[0][0];
+    expect(calledUrl).toBe('https://example.com/api/ollama/api/chat');
+  });
+
   it('yields content chunks from streaming response', async () => {
     const body = ndjsonStream([
       { message: { content: 'Hello' } },
