@@ -13,6 +13,13 @@ export interface ManifestFields {
   tmpfs?: string[];
 }
 
+export interface StackServiceFields {
+  editable: ManifestFields;
+  passthrough: Record<string, unknown>;
+}
+
+export type StackManifestFields = Record<string, StackServiceFields>;
+
 const EDITABLE_TOOL_NAMES = new Set(['deploy_app', 'update_app']);
 
 /**
@@ -26,7 +33,7 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
 
   try {
     const parsed = JSON.parse(json) as Record<string, unknown>;
-    // Stack manifests are not editable in v1 — shown as read-only summary
+    // Stack manifests are handled separately via parseEditableStackManifest
     if (parsed.services && typeof parsed.services === 'object' && !Array.isArray(parsed.services)) {
       return null;
     }
@@ -60,4 +67,65 @@ export function serializeManifest(manifest: ManifestFields): string {
 export function isValidPort(value: string): boolean {
   const n = parseInt(value, 10);
   return !isNaN(n) && n >= 1 && n <= 65535 && String(n) === value;
+}
+
+const EDITABLE_SERVICE_KEYS = new Set(['image', 'ports', 'env', 'user', 'tmpfs']);
+
+/**
+ * Parse a stack manifest from a pending action into per-service editable + passthrough fields.
+ * Returns null for non-stack manifests or non-deploy/update actions.
+ */
+export function parseEditableStackManifest(action: PendingAction): StackManifestFields | null {
+  if (!EDITABLE_TOOL_NAMES.has(action.toolName)) return null;
+  const json = action.args._generatedManifest;
+  if (typeof json !== 'string') return null;
+
+  try {
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    if (!parsed.services || typeof parsed.services !== 'object' || Array.isArray(parsed.services)) {
+      return null;
+    }
+    const services = parsed.services as Record<string, Record<string, unknown>>;
+    const result: StackManifestFields = {};
+    for (const [name, svc] of Object.entries(services)) {
+      if (!svc || typeof svc !== 'object') continue;
+      const passthrough: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(svc)) {
+        if (!EDITABLE_SERVICE_KEYS.has(k)) {
+          passthrough[k] = v;
+        }
+      }
+      result[name] = {
+        editable: {
+          image: (svc.image as string) || '',
+          ports: (svc.ports as Record<string, Record<string, never>>) || {},
+          env: (svc.env as Record<string, string>) || {},
+          user: (svc.user as string) || undefined,
+          tmpfs: Array.isArray(svc.tmpfs) ? (svc.tmpfs as string[]) : undefined,
+        },
+        passthrough,
+      };
+    }
+    return Object.keys(result).length > 0 ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Serialize a StackManifestFields back to a JSON string, merging editable fields with passthrough.
+ */
+export function serializeStackManifest(stack: StackManifestFields): string {
+  const services: Record<string, Record<string, unknown>> = {};
+  for (const [name, { editable, passthrough }] of Object.entries(stack)) {
+    // Spread passthrough first so editable fields always take precedence
+    const svc: Record<string, unknown> = { ...passthrough };
+    svc.image = editable.image;
+    if (Object.keys(editable.ports).length > 0) svc.ports = editable.ports;
+    if (Object.keys(editable.env).length > 0) svc.env = editable.env;
+    if (editable.user) svc.user = editable.user;
+    if (editable.tmpfs && editable.tmpfs.length > 0) svc.tmpfs = editable.tmpfs;
+    services[name] = svc;
+  }
+  return JSON.stringify({ services }, null, 2);
 }

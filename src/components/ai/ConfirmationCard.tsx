@@ -5,7 +5,12 @@ import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { ManifestEditor } from './ManifestEditor';
-import { parseEditableManifest, serializeManifest, type ManifestFields } from './manifestEditorUtils';
+import { StackManifestEditor } from './StackManifestEditor';
+import {
+  parseEditableManifest, serializeManifest,
+  parseEditableStackManifest, serializeStackManifest,
+  type ManifestFields, type StackManifestFields,
+} from './manifestEditorUtils';
 
 function parseManifestEnv(payload: PendingAction['payload']): Record<string, string> | null {
   if (!payload?.bytes) return null;
@@ -108,23 +113,29 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   const [editedManifest, setEditedManifest] = useState<ManifestFields | null>(initialManifest);
   const isEditable = initialManifest !== null;
 
+  const initialStack = useMemo(() => parseEditableStackManifest(action), [action]);
+  const [editedStack, setEditedStack] = useState<StackManifestFields | null>(initialStack);
+  const isStackEditable = initialStack !== null;
+
   const manifestEnv = useMemo(() => {
-    if (isEditable) return null; // ManifestEditor handles env display for editable manifests
+    if (isEditable || isStackEditable) return null;
     return parseManifestEnv(action.payload);
-  }, [action.payload, isEditable]);
+  }, [action.payload, isEditable, isStackEditable]);
 
   const stackServices = useMemo(() => {
-    if (isEditable) return null;
+    if (isEditable || isStackEditable) return null;
     return parseStackManifest(action);
-  }, [action, isEditable]);
+  }, [action, isEditable, isStackEditable]);
 
   const handleConfirm = useCallback(() => {
     if (editedManifest) {
       onConfirm(serializeManifest(editedManifest));
+    } else if (editedStack) {
+      onConfirm(serializeStackManifest(editedStack));
     } else {
       onConfirm();
     }
-  }, [editedManifest, onConfirm]);
+  }, [editedManifest, editedStack, onConfirm]);
 
   // Filter out internal args for display
   const displayArgs = useMemo(() => {
@@ -153,7 +164,11 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
       <div className="confirmation-body">
         <p id="confirmation-description" className="confirmation-description">{action.description}</p>
 
-        {isEditable && editedManifest ? (
+        {isStackEditable && editedStack ? (
+          <div className="confirmation-details">
+            <StackManifestEditor stack={editedStack} onChange={setEditedStack} />
+          </div>
+        ) : isEditable && editedManifest ? (
           <div className="confirmation-details">
             <ManifestEditor manifest={editedManifest} onChange={setEditedManifest} />
           </div>

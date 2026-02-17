@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createElement } from 'react';
 import { ConfirmationCard } from './ConfirmationCard';
-import { parseEditableManifest, serializeManifest, type ManifestFields } from './manifestEditorUtils';
+import {
+  parseEditableManifest, serializeManifest,
+  parseEditableStackManifest, serializeStackManifest,
+  type ManifestFields, type StackManifestFields,
+} from './manifestEditorUtils';
 import type { PendingAction } from '../../ai/toolExecutor';
 
 function makeAction(overrides?: Partial<PendingAction>): PendingAction {
@@ -274,5 +278,187 @@ describe('serializeManifest', () => {
     });
     const roundTripped = parseEditableManifest(action);
     expect(roundTripped).toEqual(original);
+  });
+});
+
+describe('parseEditableStackManifest', () => {
+  it('returns null for non-deploy tools', () => {
+    expect(parseEditableStackManifest(makeAction({ toolName: 'fund_credits' }))).toBeNull();
+    expect(parseEditableStackManifest(makeAction({ toolName: 'stop_app' }))).toBeNull();
+  });
+
+  it('returns null for single-container manifests', () => {
+    const result = parseEditableStackManifest(makeAction({
+      toolName: 'deploy_app',
+      args: {
+        _generatedManifest: JSON.stringify({ image: 'nginx', ports: { '80/tcp': {} } }),
+      },
+    }));
+    expect(result).toBeNull();
+  });
+
+  it('returns null when _generatedManifest is missing', () => {
+    expect(parseEditableStackManifest(makeAction({
+      toolName: 'deploy_app',
+      args: { app_name: 'x' },
+    }))).toBeNull();
+  });
+
+  it('parses a stack manifest with multiple services', () => {
+    const result = parseEditableStackManifest(makeAction({
+      toolName: 'deploy_app',
+      args: {
+        _generatedManifest: JSON.stringify({
+          services: {
+            wordpress: {
+              image: 'wordpress:latest',
+              ports: { '80/tcp': {} },
+              env: { WORDPRESS_DB_HOST: 'mysql' },
+            },
+            mysql: {
+              image: 'mysql:8',
+              env: { MYSQL_ROOT_PASSWORD: 'secret' },
+            },
+          },
+        }),
+      },
+    }));
+    expect(result).not.toBeNull();
+    expect(Object.keys(result!)).toEqual(['wordpress', 'mysql']);
+    expect(result!.wordpress.editable.image).toBe('wordpress:latest');
+    expect(result!.mysql.editable.env.MYSQL_ROOT_PASSWORD).toBe('secret');
+  });
+
+  it('preserves passthrough fields (command, depends_on, health_check, etc.)', () => {
+    const result = parseEditableStackManifest(makeAction({
+      toolName: 'deploy_app',
+      args: {
+        _generatedManifest: JSON.stringify({
+          services: {
+            web: {
+              image: 'nginx',
+              ports: { '80/tcp': {} },
+              command: ['nginx', '-g', 'daemon off;'],
+              depends_on: ['redis'],
+              health_check: { test: 'curl -f http://localhost/' },
+            },
+          },
+        }),
+      },
+    }));
+    expect(result).not.toBeNull();
+    expect(result!.web.passthrough).toEqual({
+      command: ['nginx', '-g', 'daemon off;'],
+      depends_on: ['redis'],
+      health_check: { test: 'curl -f http://localhost/' },
+    });
+    expect(result!.web.editable.image).toBe('nginx');
+  });
+
+  it('works for update_app with stack manifests', () => {
+    const result = parseEditableStackManifest(makeAction({
+      toolName: 'update_app',
+      args: {
+        _generatedManifest: JSON.stringify({
+          services: {
+            app: { image: 'myapp:v2', ports: { '3000/tcp': {} } },
+          },
+        }),
+      },
+    }));
+    expect(result).not.toBeNull();
+    expect(result!.app.editable.image).toBe('myapp:v2');
+  });
+});
+
+describe('serializeStackManifest', () => {
+  it('produces valid JSON with services wrapper', () => {
+    const stack: StackManifestFields = {
+      web: {
+        editable: { image: 'nginx', ports: { '80/tcp': {} as Record<string, never> }, env: {} },
+        passthrough: {},
+      },
+    };
+    const parsed = JSON.parse(serializeStackManifest(stack));
+    expect(parsed.services).toBeDefined();
+    expect(parsed.services.web.image).toBe('nginx');
+  });
+
+  it('omits empty optional fields per service', () => {
+    const stack: StackManifestFields = {
+      app: {
+        editable: { image: 'node:20', ports: {}, env: {}, user: '', tmpfs: [] },
+        passthrough: {},
+      },
+    };
+    const parsed = JSON.parse(serializeStackManifest(stack));
+    expect(parsed.services.app).toEqual({ image: 'node:20' });
+  });
+
+  it('preserves passthrough fields in output', () => {
+    const stack: StackManifestFields = {
+      web: {
+        editable: { image: 'nginx', ports: { '80/tcp': {} as Record<string, never> }, env: {} },
+        passthrough: { command: ['nginx'], depends_on: ['db'] },
+      },
+    };
+    const parsed = JSON.parse(serializeStackManifest(stack));
+    expect(parsed.services.web.command).toEqual(['nginx']);
+    expect(parsed.services.web.depends_on).toEqual(['db']);
+  });
+
+  it('round-trips through parseEditableStackManifest', () => {
+    const original: StackManifestFields = {
+      wordpress: {
+        editable: {
+          image: 'wordpress:latest',
+          ports: { '80/tcp': {} as Record<string, never> },
+          env: { WORDPRESS_DB_HOST: 'mysql' },
+        },
+        passthrough: { depends_on: ['mysql'] },
+      },
+      mysql: {
+        editable: {
+          image: 'mysql:8',
+          ports: {},
+          env: { MYSQL_ROOT_PASSWORD: 'secret' },
+          user: '999:999',
+        },
+        passthrough: {},
+      },
+    };
+    const json = serializeStackManifest(original);
+    const action = makeAction({
+      toolName: 'deploy_app',
+      args: { _generatedManifest: json },
+    });
+    const roundTripped = parseEditableStackManifest(action);
+    expect(roundTripped).not.toBeNull();
+    expect(roundTripped!.wordpress.editable.image).toBe('wordpress:latest');
+    expect(roundTripped!.wordpress.passthrough.depends_on).toEqual(['mysql']);
+    expect(roundTripped!.mysql.editable.env.MYSQL_ROOT_PASSWORD).toBe('secret');
+    expect(roundTripped!.mysql.editable.user).toBe('999:999');
+  });
+});
+
+describe('ConfirmationCard with stack manifest', () => {
+  it('can be instantiated for deploy_app with stack _generatedManifest', () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const manifest = JSON.stringify({
+      services: {
+        wordpress: { image: 'wordpress:latest', ports: { '80/tcp': {} }, env: { WORDPRESS_DB_HOST: 'mysql' } },
+        mysql: { image: 'mysql:8', env: { MYSQL_ROOT_PASSWORD: 'secret' } },
+      },
+    });
+    const action = makeAction({
+      toolName: 'deploy_app',
+      args: { app_name: 'wp-stack', size: 'small', _generatedManifest: manifest, _isStack: true },
+      description: 'Deploy "wp-stack" on small tier?',
+    });
+    const element = createElement(ConfirmationCard, { action, onConfirm, onCancel });
+    expect(element).toBeDefined();
+    expect(element.props.action.toolName).toBe('deploy_app');
+    expect(element.props.action.args._generatedManifest).toBe(manifest);
   });
 });

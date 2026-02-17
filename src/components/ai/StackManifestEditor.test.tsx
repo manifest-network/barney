@@ -1,0 +1,56 @@
+import { describe, it, expect, vi } from 'vitest';
+import { createElement } from 'react';
+import { StackManifestEditor } from './StackManifestEditor';
+import type { StackManifestFields } from './manifestEditorUtils';
+
+function makeStack(): StackManifestFields {
+  return {
+    wordpress: {
+      editable: {
+        image: 'wordpress:latest',
+        ports: { '80/tcp': {} as Record<string, never> },
+        env: { WORDPRESS_DB_HOST: 'mysql' },
+      },
+      passthrough: { depends_on: ['mysql'] },
+    },
+    mysql: {
+      editable: {
+        image: 'mysql:8',
+        ports: {},
+        env: { MYSQL_ROOT_PASSWORD: 'secret' },
+      },
+      passthrough: {},
+    },
+  };
+}
+
+describe('StackManifestEditor', () => {
+  it('can be instantiated with stack data', () => {
+    const onChange = vi.fn();
+    const element = createElement(StackManifestEditor, { stack: makeStack(), onChange });
+    expect(element).toBeDefined();
+    expect(element.type).toBe(StackManifestEditor);
+    expect(element.props.stack).toBeDefined();
+    expect(Object.keys(element.props.stack)).toEqual(['wordpress', 'mysql']);
+  });
+
+  it('renders correct number of service sections', () => {
+    const onChange = vi.fn();
+    const stack = makeStack();
+    const element = createElement(StackManifestEditor, { stack, onChange });
+    expect(Object.keys(element.props.stack)).toHaveLength(2);
+  });
+
+  it('accepts single-service stacks', () => {
+    const onChange = vi.fn();
+    const stack: StackManifestFields = {
+      app: {
+        editable: { image: 'node:20', ports: { '3000/tcp': {} as Record<string, never> }, env: {} },
+        passthrough: {},
+      },
+    };
+    const element = createElement(StackManifestEditor, { stack, onChange });
+    expect(element).toBeDefined();
+    expect(Object.keys(element.props.stack)).toHaveLength(1);
+  });
+});
