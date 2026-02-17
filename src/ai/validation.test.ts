@@ -38,8 +38,14 @@ describe('validateEndpointUrl', () => {
     expect(validateEndpointUrl(longUrl)).toBeNull();
   });
 
-  it('strips paths and returns origin', () => {
-    expect(validateEndpointUrl('https://api.example.com/api/generate')).toBe('https://api.example.com');
+  it('preserves URL path', () => {
+    expect(validateEndpointUrl('https://api.example.com/api/ollama')).toBe('https://api.example.com/api/ollama');
+    expect(validateEndpointUrl('https://api.example.com/api/ollama/')).toBe('https://api.example.com/api/ollama');
+  });
+
+  it('strips query string and fragment', () => {
+    expect(validateEndpointUrl('https://api.example.com/v1?key=val')).toBe('https://api.example.com/v1');
+    expect(validateEndpointUrl('https://api.example.com/v1#frag')).toBe('https://api.example.com/v1');
   });
 
   // Note: In development mode (import.meta.env.DEV === true), private hosts are allowed
