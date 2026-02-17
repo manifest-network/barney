@@ -485,6 +485,22 @@ describe('parseAndValidateStackServices', () => {
     }
   });
 
+  it('user-provided health_check overrides known image default', () => {
+    const customHealthCheck = {
+      test: ['CMD-SHELL', 'curl -f http://localhost:5432/health'],
+      interval: '30s',
+      timeout: '10s',
+      retries: 2,
+    };
+    const json = JSON.stringify({ db: { image: 'postgres', health_check: customHealthCheck } });
+    const result = parseAndValidateStackServices(json, true, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.db.health_check).toEqual(customHealthCheck);
+      expect(result.services.db.health_check!.test[1]).toBe('curl -f http://localhost:5432/health');
+    }
+  });
+
   it('returns error for invalid health_check.test', () => {
     const json = JSON.stringify({
       web: { image: 'nginx', health_check: { test: 'not-an-array' } },
@@ -1089,6 +1105,34 @@ describe('executeDeployApp', () => {
     expect(manifest.health_check).toBeDefined();
     expect(manifest.health_check.test[0]).toBe('CMD-SHELL');
     expect(manifest.health_check.test[1]).toContain('pg_isready');
+  });
+
+  it('user-provided health_check overrides known image default for deploy', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const customHealthCheck = {
+      test: ['CMD-SHELL', 'pg_isready -U custom_user -d custom_db'],
+      interval: '20s',
+      timeout: '10s',
+      retries: 10,
+    };
+
+    const result = await executeDeployApp(
+      { image: 'postgres:18', health_check: JSON.stringify(customHealthCheck) },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction?.args._generatedManifest as string);
+    expect(manifest.health_check).toEqual(customHealthCheck);
+    expect(manifest.health_check.test[1]).toBe('pg_isready -U custom_user -d custom_db');
+    expect(manifest.health_check.retries).toBe(10);
   });
 });
 
