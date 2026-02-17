@@ -526,6 +526,22 @@ describe('parseAndValidateStackServices', () => {
     }
   });
 
+  it('preserves custom depends_on from user input', () => {
+    const json = JSON.stringify({
+      web: {
+        image: 'nginx',
+        port: '80',
+        depends_on: { api: { condition: 'service_started' } },
+      },
+      api: { image: 'node:20', port: '3000' },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.web.depends_on).toEqual({ api: { condition: 'service_started' } });
+    }
+  });
+
   it('does not apply known stack depends_on for non-matching stacks', () => {
     const json = JSON.stringify({
       web: { image: 'nginx', port: '80' },
@@ -2083,6 +2099,135 @@ describe('executeUpdateApp', () => {
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('must have a string value');
+  });
+
+  it('parses health_check JSON and includes it in update manifest', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      {
+        app_name: 'my-app',
+        image: 'nginx',
+        port: '80',
+        health_check: '{"test":["CMD-SHELL","curl -f http://localhost"],"interval":"30s"}',
+      },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.health_check.test).toEqual(['CMD-SHELL', 'curl -f http://localhost']);
+    expect(manifest.health_check.interval).toBe('30s');
+  });
+
+  it('returns error for invalid health_check JSON in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', health_check: 'not-json' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid health_check JSON');
+  });
+
+  it('returns error for health_check with invalid test field in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', health_check: '{"test":"not-an-array"}' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('health_check.test must be an array');
+  });
+
+  it('passes stop_grace_period, init, expose, labels through in update manifest', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      {
+        app_name: 'my-app',
+        image: 'nginx',
+        port: '80',
+        stop_grace_period: '30s',
+        init: true,
+        expose: '3000,9090',
+        labels: '{"app":"myapp"}',
+      },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.stop_grace_period).toBe('30s');
+    expect(manifest.init).toBe(true);
+    expect(manifest.expose).toEqual(['3000', '9090']);
+    expect(manifest.labels).toEqual({ app: 'myapp' });
+  });
+
+  it('returns error for invalid labels JSON in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', labels: 'not-json' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid labels JSON');
+  });
+
+  it('merges old health_check into update when new manifest omits it', async () => {
+    const oldManifest = JSON.stringify({
+      image: 'postgres:18',
+      health_check: { test: ['CMD-SHELL', 'pg_isready'], interval: '10s', timeout: '5s' },
+    });
+    const app = makeApp({ manifest: oldManifest });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'postgres:19', port: '5432' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.health_check).toEqual({
+      test: ['CMD-SHELL', 'pg_isready'],
+      interval: '10s',
+      timeout: '5s',
+    });
+  });
+
+  it('merges old stop_grace_period, init, labels, depends_on into update', async () => {
+    const oldManifest = JSON.stringify({
+      image: 'nginx:1.24',
+      stop_grace_period: '30s',
+      init: true,
+      labels: { app: 'myapp', tier: 'basic' },
+      depends_on: { db: { condition: 'service_healthy' } },
+    });
+    const app = makeApp({ manifest: oldManifest });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx:latest', port: '80' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.stop_grace_period).toBe('30s');
+    expect(manifest.init).toBe(true);
+    expect(manifest.labels).toEqual({ app: 'myapp', tier: 'basic' });
+    expect(manifest.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+  });
+
+  it('new labels override old labels during update merge', async () => {
+    const oldManifest = JSON.stringify({
+      image: 'nginx:1.24',
+      labels: { app: 'myapp', tier: 'basic' },
+    });
+    const app = makeApp({ manifest: oldManifest });
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx:latest', port: '80', labels: '{"tier":"premium","version":"2"}' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.labels).toEqual({ app: 'myapp', tier: 'premium', version: '2' });
   });
 });
 

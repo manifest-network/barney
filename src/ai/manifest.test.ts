@@ -221,6 +221,66 @@ describe('buildManifest', () => {
     expect(parsed.labels).toEqual({ app: 'myapp', tier: 'frontend' });
   });
 
+  it('includes init: false when explicitly set', async () => {
+    const result = await buildManifest({ image: 'nginx', init: false });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.init).toBe(false);
+  });
+
+  it('omits init when undefined', async () => {
+    const result = await buildManifest({ image: 'nginx' });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.init).toBeUndefined();
+  });
+
+  it('omits expose when empty string', async () => {
+    const result = await buildManifest({ image: 'nginx', expose: '' });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.expose).toBeUndefined();
+  });
+
+  it('handles expose with whitespace around values', async () => {
+    const result = await buildManifest({ image: 'nginx', expose: ' 3000 , 9090 ' });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.expose).toEqual(['3000', '9090']);
+  });
+
+  it('handles single port in expose', async () => {
+    const result = await buildManifest({ image: 'nginx', expose: '3000' });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.expose).toEqual(['3000']);
+  });
+
+  it('omits labels when empty object', async () => {
+    const result = await buildManifest({ image: 'nginx', labels: {} });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.labels).toBeUndefined();
+  });
+
+  it('includes health_check with only required test field', async () => {
+    const result = await buildManifest({
+      image: 'nginx',
+      health_check: { test: ['CMD', 'curl', '-f', 'http://localhost'] },
+    });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.health_check).toEqual({ test: ['CMD', 'curl', '-f', 'http://localhost'] });
+  });
+
+  it('includes depends_on when specified', async () => {
+    const result = await buildManifest({
+      image: 'nginx',
+      depends_on: { db: { condition: 'service_healthy' } },
+    });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+  });
+
+  it('omits depends_on when empty object', async () => {
+    const result = await buildManifest({ image: 'nginx', depends_on: {} });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.depends_on).toBeUndefined();
+  });
+
   it('builds full manifest matching example app format', async () => {
     const result = await buildManifest({
       image: 'postgres:18',
@@ -418,6 +478,13 @@ describe('mergeManifest', () => {
     expect(merged.labels).toEqual({ app: 'myapp', tier: 'premium', version: '2' });
   });
 
+  it('skips old labels when it is an array instead of an object', () => {
+    const newManifest = { image: 'redis:8' };
+    const oldJson = JSON.stringify({ image: 'redis:7', labels: ['foo=bar'] });
+    const merged = mergeManifest(newManifest, oldJson);
+    expect(merged.labels).toBeUndefined();
+  });
+
   it('carries forward depends_on from old manifest', () => {
     const newManifest = { image: 'nginx:latest' };
     const oldJson = JSON.stringify({ image: 'nginx:1.24', depends_on: { db: { condition: 'service_healthy' } } });
@@ -545,6 +612,44 @@ describe('buildStackManifest', () => {
     const parsed = JSON.parse(result.json);
     expect(parsed.services.web.depends_on).toEqual({ db: { condition: 'service_healthy' } });
     expect(parsed.services.db.health_check).toEqual({ test: ['CMD-SHELL', 'pg_isready'], interval: '10s' });
+  });
+
+  it('includes init: false per service', async () => {
+    const result = await buildStackManifest({
+      services: {
+        web: { image: 'nginx', init: false },
+      },
+    });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.services.web.init).toBe(false);
+  });
+
+  it('includes stop_grace_period, expose, and labels per service', async () => {
+    const result = await buildStackManifest({
+      services: {
+        web: {
+          image: 'nginx',
+          stop_grace_period: '15s',
+          expose: '3000',
+          labels: { app: 'test' },
+        },
+      },
+    });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.services.web.stop_grace_period).toBe('15s');
+    expect(parsed.services.web.expose).toEqual(['3000']);
+    expect(parsed.services.web.labels).toEqual({ app: 'test' });
+  });
+
+  it('omits empty labels and expose per service', async () => {
+    const result = await buildStackManifest({
+      services: {
+        web: { image: 'nginx', labels: {}, expose: '' },
+      },
+    });
+    const parsed = JSON.parse(result.json);
+    expect(parsed.services.web.labels).toBeUndefined();
+    expect(parsed.services.web.expose).toBeUndefined();
   });
 
   it('includes user and tmpfs per service', async () => {
