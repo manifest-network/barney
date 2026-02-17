@@ -159,8 +159,8 @@ export function parseAndValidateStackServices(
     let healthCheck: HealthCheckConfig | undefined;
     if (cfg.health_check && typeof cfg.health_check === 'object' && !Array.isArray(cfg.health_check)) {
       const hc = cfg.health_check as Record<string, unknown>;
-      if (!Array.isArray(hc.test) || hc.test.length < 2) {
-        return { error: `Service "${svcName}": health_check.test must be an array with at least 2 elements (e.g. ["CMD-SHELL", "pg_isready"]).` };
+      if (!Array.isArray(hc.test) || hc.test.length < 2 || !hc.test.every(el => typeof el === 'string')) {
+        return { error: `Service "${svcName}": health_check.test must be an array of strings with at least 2 elements (e.g. ["CMD-SHELL", "pg_isready"]).` };
       }
       healthCheck = cfg.health_check as HealthCheckConfig;
     }
@@ -169,6 +169,11 @@ export function parseAndValidateStackServices(
     const expose = typeof cfg.expose === 'string' ? cfg.expose : undefined;
     let labels: Record<string, string> | undefined;
     if (cfg.labels && typeof cfg.labels === 'object' && !Array.isArray(cfg.labels)) {
+      for (const [k, v] of Object.entries(cfg.labels as Record<string, unknown>)) {
+        if (typeof v !== 'string') {
+          return { error: `Service "${svcName}": label "${k}" must have a string value, got ${typeof v}.` };
+        }
+      }
       labels = cfg.labels as Record<string, string>;
     }
     let dependsOn: Record<string, { condition: string }> | undefined;
@@ -629,8 +634,8 @@ export async function executeDeployApp(
         if (typeof healthCheck !== 'object' || healthCheck === null || Array.isArray(healthCheck)) {
           return { success: false, error: 'health_check must be a JSON object.' };
         }
-        if (!Array.isArray(healthCheck.test) || healthCheck.test.length < 2) {
-          return { success: false, error: 'health_check.test must be an array with at least 2 elements (e.g. ["CMD-SHELL", "curl -f http://localhost"]).' };
+        if (!Array.isArray(healthCheck.test) || healthCheck.test.length < 2 || !healthCheck.test.every(el => typeof el === 'string')) {
+          return { success: false, error: 'health_check.test must be an array of strings with at least 2 elements (e.g. ["CMD-SHELL", "curl -f http://localhost"]).' };
         }
       } catch {
         return { success: false, error: 'Invalid health_check JSON.' };
@@ -644,6 +649,11 @@ export async function executeDeployApp(
         labels = JSON.parse(args.labels);
         if (typeof labels !== 'object' || labels === null || Array.isArray(labels)) {
           return { success: false, error: 'labels must be a JSON object.' };
+        }
+        for (const [k, v] of Object.entries(labels)) {
+          if (typeof v !== 'string') {
+            return { success: false, error: `Label "${k}" must have a string value, got ${typeof v}.` };
+          }
         }
       } catch {
         return { success: false, error: 'Invalid labels JSON.' };
@@ -2199,8 +2209,8 @@ export async function executeUpdateApp(
         if (typeof healthCheck !== 'object' || healthCheck === null || Array.isArray(healthCheck)) {
           return { success: false, error: 'health_check must be a JSON object.' };
         }
-        if (!Array.isArray(healthCheck.test) || healthCheck.test.length < 2) {
-          return { success: false, error: 'health_check.test must be an array with at least 2 elements (e.g. ["CMD-SHELL", "curl -f http://localhost"]).' };
+        if (!Array.isArray(healthCheck.test) || healthCheck.test.length < 2 || !healthCheck.test.every(el => typeof el === 'string')) {
+          return { success: false, error: 'health_check.test must be an array of strings with at least 2 elements (e.g. ["CMD-SHELL", "curl -f http://localhost"]).' };
         }
       } catch {
         return { success: false, error: 'Invalid health_check JSON.' };
@@ -2214,6 +2224,11 @@ export async function executeUpdateApp(
         labels = JSON.parse(args.labels);
         if (typeof labels !== 'object' || labels === null || Array.isArray(labels)) {
           return { success: false, error: 'labels must be a JSON object.' };
+        }
+        for (const [k, v] of Object.entries(labels)) {
+          if (typeof v !== 'string') {
+            return { success: false, error: `Label "${k}" must have a string value, got ${typeof v}.` };
+          }
         }
       } catch {
         return { success: false, error: 'Invalid labels JSON.' };

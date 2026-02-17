@@ -510,6 +510,15 @@ describe('parseAndValidateStackServices', () => {
     if ('error' in result) expect(result.error).toContain('health_check.test must be an array');
   });
 
+  it('returns error for health_check.test with non-string elements', () => {
+    const json = JSON.stringify({
+      web: { image: 'nginx', health_check: { test: ['CMD-SHELL', 42] } },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('health_check.test must be an array of strings');
+  });
+
   it('extracts stop_grace_period, init, expose, labels from service config', () => {
     const json = JSON.stringify({
       web: {
@@ -528,6 +537,15 @@ describe('parseAndValidateStackServices', () => {
       expect(result.services.web.expose).toBe('3000,9090');
       expect(result.services.web.labels).toEqual({ app: 'myapp' });
     }
+  });
+
+  it('returns error for labels with non-string values in stack service', () => {
+    const json = JSON.stringify({
+      web: { image: 'nginx', labels: { app: 'myapp', priority: 123 } },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) expect(result.error).toContain('label "priority" must have a string value');
   });
 
   it('applies known stack depends_on defaults for matching stacks', () => {
@@ -1069,6 +1087,15 @@ describe('executeDeployApp', () => {
     expect(result.error).toContain('health_check.test must be an array');
   });
 
+  it('returns error for health_check.test with non-string elements in deploy', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', health_check: '{"test":["CMD-SHELL",123]}' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('health_check.test must be an array of strings');
+  });
+
   it('passes stop_grace_period, init, expose, labels through to manifest', async () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
@@ -1105,6 +1132,15 @@ describe('executeDeployApp', () => {
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid labels JSON');
+  });
+
+  it('returns error for labels with non-string values in deploy', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', labels: '{"app":"myapp","count":42}' },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Label "count" must have a string value, got number');
   });
 
   it('applies known image health_check default for postgres deploy', async () => {
@@ -2219,6 +2255,16 @@ describe('executeUpdateApp', () => {
     expect(result.error).toContain('health_check.test must be an array');
   });
 
+  it('returns error for health_check.test with non-string elements in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', health_check: '{"test":["CMD-SHELL",null]}' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('health_check.test must be an array of strings');
+  });
+
   it('passes stop_grace_period, init, expose, labels through in update manifest', async () => {
     const app = makeApp();
     const result = await executeUpdateApp(
@@ -2250,6 +2296,16 @@ describe('executeUpdateApp', () => {
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid labels JSON');
+  });
+
+  it('returns error for labels with non-string values in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', labels: '{"env":"prod","enabled":true}' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Label "enabled" must have a string value, got boolean');
   });
 
   it('merges old health_check into update when new manifest omits it', async () => {
