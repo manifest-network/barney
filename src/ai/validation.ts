@@ -132,8 +132,9 @@ export function validateEndpointUrl(url: string): string | null {
     return null;
   }
 
-  // Return the normalized URL (removes trailing slashes, normalizes encoding)
-  return parsed.origin;
+  // Return the normalized URL (preserves path, strips query/fragment/trailing slashes)
+  const pathname = parsed.pathname.replace(/\/+$/, '');
+  return parsed.origin + pathname;
 }
 
 /**
