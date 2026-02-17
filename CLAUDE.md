@@ -67,7 +67,7 @@ ErrorBoundary
 
 The AI assistant uses a 3-layer architecture:
 
-1. **AIContext** (`src/contexts/AIContext.tsx`) - Manages chat state, streams from Ollama, executes tools
+1. **AI Store** (`src/stores/aiStore.ts`) - Zustand store managing chat state, streaming, tool execution, and wallet refs. Actions in `src/stores/aiActions/`.
 2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser`
 3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
    - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`
@@ -137,7 +137,7 @@ Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
 Additional phases for restart/update operations: `restarting`, `updating`
 The `operation` field (`'deploy' | 'restart' | 'update'`) indicates the current operation type for UI display.
 
-Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored in AIContext as `deployProgress`, and rendered by `ProgressCard`. Batch deploys include a `batch` array with per-app progress.
+Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored in the AI store as `deployProgress`, and rendered by `ProgressCard`. Batch deploys include a `batch` array with per-app progress.
 
 ### Fred API Client
 
@@ -180,27 +180,35 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 | `queryClient.ts` | LCD query client factory (cached singleton) |
 | `index.ts` | Barrel re-exports for API modules |
 
-### Hooks (`src/hooks/`)
+### AI Store (`src/stores/aiStore.ts`)
 
-AIContext delegates to extracted hooks to keep the provider manageable:
+All AI chat state lives in a single Zustand store. Actions that are large async functions are extracted into `src/stores/aiActions/*.ts` as plain functions receiving `get`/`set`.
+
+| Module | Purpose |
+|--------|---------|
+| `aiStore.ts` | Store definition, type, simple actions, tool cache, lifecycle |
+| `aiActions/sendMessage.ts` | `sendMessage` streaming loop |
+| `aiActions/confirmAction.ts` | `confirmAction` + `cancelAction` |
+| `aiActions/batchDeploy.ts` | `requestBatchDeploy` |
+| `aiActions/toolExecution.ts` | `processToolCalls`, `handleToolCall` |
+| `aiActions/streaming.ts` | `scheduleStreamingUpdate`, `flushPendingUpdate` (RAF) |
+| `aiActions/persistence.ts` | `loadSettings`, `loadHistory`, persistence subscriptions |
+| `aiActions/utils.ts` | `generateMessageId`, `trimMessages`, `createAssistantMessage`, `toOllamaMessages`, `getAppRegistryAccess` |
+
+`AIProvider` (`src/contexts/AIContext.tsx`) is a thin lifecycle wrapper that sets up persistence subscriptions, health checks, confirmation timeouts, and calls `store.getState().destroy()` on unmount.
+
+### Hooks (`src/hooks/`)
 
 | Hook | Purpose |
 |------|---------|
 | `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser` |
-| `useMessageManager` | Message CRUD with synchronous ref mirror — updates `messagesRef` before `setMessages` so rapid async calls always read consistent state |
-| `useStreamingUpdates` | RAF-throttled message updates during LLM streaming — batches rapid content chunks into one state update per animation frame |
-| `useToolCache` | Query tool result cache (10s TTL, 50 max, FIFO eviction), scoped per wallet address |
-| `useChatPersistence` | localStorage-backed settings + history with lazy initializers to avoid save/load race conditions |
 | `useAutoScroll` | MutationObserver-based auto-scroll that respects user scroll position |
 | `useInputHistory` | Arrow-key navigation through past chat inputs |
-| `useAI` | Context consumer hook for AIContext |
+| `useAI` | Zustand store consumer — selects all public state/actions via `useShallow` |
 | `useToast` | Context consumer hook for ToastContext |
 | `useTxHandler` | Transaction submission handler with cosmos-kit integration and toast notifications |
 | `useLeaseItems` | Manages lease item state in forms (add/remove/update SKU items) |
 | `useBatchSelection` | Manages batch selection state for bulk operations |
-| `useToolExecution` | Tool call dispatch, caching, and display — handles tool result rendering and confirmation flow handoff |
-| `useConfirmationFlow` | TX confirmation, cancellation, and timeout — owns `pendingConfirmation` state |
-| `useBatchDeploy` | Multi-app deploy orchestration from the UI (creates payloads, executes batch, sets confirmation) |
 | `useCopyToClipboard` | Clipboard copy with feedback state |
 
 ### Utility Modules (`src/utils/`)
@@ -252,18 +260,18 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 
 ## Key Patterns
 
-- **Refs for async access**: AIContext uses refs (`clientManagerRef`, `addressRef`, `signArbitraryRef`) to avoid stale closures in streaming callbacks
+- **Zustand store**: AI state uses a Zustand store (`src/stores/aiStore.ts`) instead of React Context + refs. Async callbacks read current state via `get()` — no ref mirrors needed. Actions are plain functions receiving `get`/`set`, extracted into `src/stores/aiActions/`. The `useAI()` hook selects all public fields via `useShallow` for backward compatibility.
 - **SSRF protection**: `src/utils/url.ts` provides `parseHttpUrl` and `isUrlSsrfSafe` used across the codebase; `src/ai/validation.ts` adds `isPrivateHost()` with `ipaddr.js` for Ollama endpoint validation (DEV mode allows localhost)
 - **Error utilities**: Use `logError()` from `src/utils/errors.ts` instead of raw `console.error`
 - **Retry logic**: Use `withRetry()` from `src/api/utils.ts` for transient network error recovery with exponential backoff
-- **Tool result caching**: Query tool results cached for 10s in AIContext to reduce redundant API calls (max 50 entries, FIFO eviction). Cache is scoped per wallet address and cleared on wallet change.
+- **Tool result caching**: Query tool results cached for 10s in the AI store to reduce redundant API calls (max 50 entries, FIFO eviction). Cache is scoped per wallet address and cleared on wallet change.
 - **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
 - **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
 - **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs. The rsbuild proxy (`rsbuild.config.ts`) has its own SSRF validation layer (`isValidProxyTarget`) separate from runtime validation, blocking cloud metadata endpoints, dangerous IP ranges, and embedded credentials.
 - **Stream timeout**: `processStreamWithTimeout` in `src/ai/streamUtils.ts` wraps the Ollama async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely. The inner `withTimeout` generator ensures cleanup of the underlying generator via `finally` block.
 - **Tool-call leak stripping**: `stripToolCallLeaks()` in `src/ai/streamUtils.ts` filters raw `[TOOL_CALLS]` markers that some Ollama models emit as literal text instead of structured tool_calls.
-- **Message debouncing**: AIContext debounces rapid message sends via `AI_MESSAGE_DEBOUNCE_MS` (300ms) and aborts in-flight streams when a new message is sent.
-- **Chat persistence**: AIContext persists settings and chat history to localStorage (`barney-ai-settings`, `barney-ai-history`). History is validated and sanitized on load; corrupted data is cleared. Streaming messages are excluded from persistence.
+- **Message debouncing**: The AI store debounces rapid message sends via `AI_MESSAGE_DEBOUNCE_MS` (300ms) and aborts in-flight streams when a new message is sent.
+- **Chat persistence**: The AI store persists settings and chat history to localStorage (`barney-ai-settings`, `barney-ai-history`) via Zustand subscriptions. History is validated and sanitized on load; corrupted data is cleared. Streaming messages are excluded from persistence.
 - **Confirmation timeout**: Pending transaction confirmations auto-cancel after `AI_CONFIRMATION_TIMEOUT_MS` (5 minutes) to prevent stuck UI state.
 - **App registry scoping**: Registry is per-wallet in localStorage. `AppShell` syncs wallet changes and clears deploy progress on disconnect.
 
