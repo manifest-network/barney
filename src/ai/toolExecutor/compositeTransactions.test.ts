@@ -542,13 +542,28 @@ describe('parseAndValidateStackServices', () => {
     }
   });
 
+  it('applies known stack depends_on even when applyEnvDefaults is false', () => {
+    const json = JSON.stringify({
+      web: { image: 'wordpress', port: '80' },
+      db: { image: 'mysql', port: '3306' },
+    });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      // depends_on injection is independent of applyEnvDefaults
+      expect(result.services.web.depends_on).toEqual({ db: { condition: 'service_healthy' } });
+      // but env defaults should NOT be applied
+      expect(result.services.db.env).toBeUndefined();
+    }
+  });
+
   it('does not apply known stack depends_on for non-matching stacks', () => {
     const json = JSON.stringify({
       web: { image: 'nginx', port: '80' },
       db: { image: 'postgres', port: '5432' },
       cache: { image: 'redis', port: '6379' },
     });
-    const result = parseAndValidateStackServices(json, false, 'test');
+    const result = parseAndValidateStackServices(json, true, 'test');
     expect('error' in result).toBe(false);
     if (!('error' in result)) {
       // 3-service stack should not match any known 2-service stack
