@@ -652,6 +652,44 @@ describe('parseAndValidateStackServices', () => {
       expect(result.services.web.tmpfs).toBe('/var/run,/tmp');
     }
   });
+
+  it('rejects object port with clear error', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', port: { tcp: 80 } } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toContain('port must be a string');
+      expect(result.error).toContain('Service "web"');
+    }
+  });
+
+  it('rejects object user with clear error', () => {
+    const json = JSON.stringify({ db: { image: 'postgres', user: { uid: 999 } } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toContain('user must be a string');
+      expect(result.error).toContain('Service "db"');
+    }
+  });
+
+  it('rejects object tmpfs with clear error', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', tmpfs: { path: '/tmp' } } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toContain('tmpfs must be a string or array');
+    }
+  });
+
+  it('rejects tmpfs array with non-string elements', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', tmpfs: ['/var/run', 123] } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toContain('tmpfs array element');
+    }
+  });
 });
 
 describe('executeDeployApp', () => {
@@ -1026,6 +1064,15 @@ describe('executeDeployApp', () => {
     expect(result.requiresConfirmation).toBe(true);
     const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
     expect(manifest.ports).toEqual({ '80/tcp': {} });
+  });
+
+  it('rejects object port with clear error for single-service deploy', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', port: { tcp: 80 } as unknown as string },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('port must be a string');
   });
 
   it('returns error for invalid services JSON', async () => {

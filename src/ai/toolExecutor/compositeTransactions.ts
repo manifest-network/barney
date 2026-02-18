@@ -75,6 +75,32 @@ export function formatLeaseItems(skuUuid: string, serviceNames?: string[]): stri
   return serviceNames.map(name => `${skuUuid}:1:${name}`);
 }
 
+/** Coerce a string-or-number tool arg to string; reject objects/arrays/booleans. */
+function coerceStringArg(value: unknown, fieldName: string, context?: string): { value?: string; error?: string } {
+  if (value == null) return {};
+  if (typeof value === 'string') return { value };
+  if (typeof value === 'number' && isFinite(value)) return { value: String(value) };
+  const prefix = context ? `${context}: ` : '';
+  return { error: `${prefix}${fieldName} must be a string, got ${typeof value}.` };
+}
+
+/** Coerce a tmpfs arg (string, number, or string[]) to a comma-separated string. */
+function coerceTmpfsArg(value: unknown, context?: string): { value?: string; error?: string } {
+  if (value == null) return {};
+  if (typeof value === 'string') return { value };
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      if (typeof value[i] !== 'string') {
+        const prefix = context ? `${context}: ` : '';
+        return { error: `${prefix}tmpfs array element ${i} must be a string, got ${typeof value[i]}.` };
+      }
+    }
+    return { value: (value as string[]).join(',') };
+  }
+  const prefix = context ? `${context}: ` : '';
+  return { error: `${prefix}tmpfs must be a string or array of strings, got ${typeof value}.` };
+}
+
 /**
  * Validate internal stack service names persisted in pending action args.
  * These values are runtime-unknown and must be revalidated before use.
@@ -226,22 +252,21 @@ export function parseAndValidateStackServices(
       if (!healthCheck && knownConfig.health_check) healthCheck = { ...knownConfig.health_check };
     }
 
-    // Coerce port/user/tmpfs — LLMs frequently produce numbers or arrays instead of strings
-    const port = cfg.port != null ? String(cfg.port) : undefined;
-    const user = cfg.user != null ? String(cfg.user) : undefined;
-    let tmpfs: string | undefined;
-    if (Array.isArray(cfg.tmpfs)) {
-      tmpfs = cfg.tmpfs.filter((p): p is string => typeof p === 'string').join(',');
-    } else if (cfg.tmpfs != null) {
-      tmpfs = String(cfg.tmpfs);
-    }
+    // Coerce port/user/tmpfs — LLMs frequently produce numbers instead of strings
+    const svcCtx = `Service "${svcName}"`;
+    const portResult = coerceStringArg(cfg.port, 'port', svcCtx);
+    if (portResult.error) return { error: portResult.error };
+    const userResult = coerceStringArg(cfg.user, 'user', svcCtx);
+    if (userResult.error) return { error: userResult.error };
+    const tmpfsResult = coerceTmpfsArg(cfg.tmpfs, svcCtx);
+    if (tmpfsResult.error) return { error: tmpfsResult.error };
 
     stackServices[svcName] = {
       image: cfg.image as string,
-      port,
+      port: portResult.value,
       env,
-      user,
-      tmpfs,
+      user: userResult.value,
+      tmpfs: tmpfsResult.value,
       command,
       args: svcArgs,
       health_check: healthCheck,
@@ -597,24 +622,22 @@ export async function executeDeployApp(
       cmdArgs[0] += ` --token ${env.OPENCLAW_GATEWAY_TOKEN}`;
     }
 
-    // Coerce port/user/tmpfs — LLMs frequently produce numbers or arrays instead of strings
-    const port = args.port != null ? String(args.port) : undefined;
-    const user = args.user != null ? String(args.user) : undefined;
-    let tmpfs: string | undefined;
-    if (Array.isArray(args.tmpfs)) {
-      tmpfs = (args.tmpfs as unknown[]).filter((p): p is string => typeof p === 'string').join(',');
-    } else if (args.tmpfs != null) {
-      tmpfs = String(args.tmpfs);
-    }
+    // Coerce port/user/tmpfs — LLMs frequently produce numbers instead of strings
+    const portResult = coerceStringArg(args.port, 'port');
+    if (portResult.error) return { success: false, error: portResult.error };
+    const userResult = coerceStringArg(args.user, 'user');
+    if (userResult.error) return { success: false, error: userResult.error };
+    const tmpfsResult = coerceTmpfsArg(args.tmpfs);
+    if (tmpfsResult.error) return { success: false, error: tmpfsResult.error };
 
     let manifestResult;
     try {
       manifestResult = await buildManifest({
         image: args.image as string,
-        port,
+        port: portResult.value,
         env,
-        user,
-        tmpfs,
+        user: userResult.value,
+        tmpfs: tmpfsResult.value,
         command,
         args: cmdArgs,
         health_check: healthCheck,
@@ -2169,24 +2192,22 @@ export async function executeUpdateApp(
       cmdArgs[0] += ` --token ${env.OPENCLAW_GATEWAY_TOKEN}`;
     }
 
-    // Coerce port/user/tmpfs — LLMs frequently produce numbers or arrays instead of strings
-    const port = args.port != null ? String(args.port) : undefined;
-    const user = args.user != null ? String(args.user) : undefined;
-    let tmpfs: string | undefined;
-    if (Array.isArray(args.tmpfs)) {
-      tmpfs = (args.tmpfs as unknown[]).filter((p): p is string => typeof p === 'string').join(',');
-    } else if (args.tmpfs != null) {
-      tmpfs = String(args.tmpfs);
-    }
+    // Coerce port/user/tmpfs — LLMs frequently produce numbers instead of strings
+    const portResult = coerceStringArg(args.port, 'port');
+    if (portResult.error) return { success: false, error: portResult.error };
+    const userResult = coerceStringArg(args.user, 'user');
+    if (userResult.error) return { success: false, error: userResult.error };
+    const tmpfsResult = coerceTmpfsArg(args.tmpfs);
+    if (tmpfsResult.error) return { success: false, error: tmpfsResult.error };
 
     let manifestResult;
     try {
       manifestResult = await buildManifest({
         image: args.image as string,
-        port,
+        port: portResult.value,
         env,
-        user,
-        tmpfs,
+        user: userResult.value,
+        tmpfs: tmpfsResult.value,
         command,
         args: cmdArgs,
         health_check: healthCheck,
