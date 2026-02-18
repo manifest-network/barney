@@ -284,7 +284,8 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 
 Defined in `src/config/chain.ts`:
 - Chain name: `manifestlocal` (used for cosmos-kit / chain registry lookups)
-- Chain ID: `manifest-ledger-beta`
+- Chain ID: configurable via `PUBLIC_CHAIN_ID` (default: `manifest-ledger-beta`)
+- Gas price: configurable via `PUBLIC_GAS_PRICE` (default: `0.0025umfx`)
 - Denoms: `umfx` (native), `factory/.../upwr` (PWR factory token) - both 6 decimals
 - Endpoints default to localhost (26657 RPC, 1317 REST)
 
