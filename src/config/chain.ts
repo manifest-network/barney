@@ -21,6 +21,14 @@ export const CHAIN_ID = runtimeConfig.PUBLIC_CHAIN_ID;
  */
 export const GAS_PRICE = runtimeConfig.PUBLIC_GAS_PRICE;
 
+/** Parse the numeric portion from a CosmJS gas price string (e.g. "0.0025umfx" → 0.0025). */
+function parseGasPriceAmount(gasPrice: string): number {
+  const n = parseFloat(gasPrice);
+  return Number.isFinite(n) && n >= 0 ? n : 0.0025;
+}
+
+const gasPriceAmount = parseGasPriceAmount(GAS_PRICE);
+
 export const manifestLocalChain: Chain = {
   chain_name: 'manifestlocal',
   chain_type: 'cosmos',
@@ -34,10 +42,10 @@ export const manifestLocalChain: Chain = {
     fee_tokens: [
       {
         denom: 'umfx',
-        fixed_min_gas_price: 0.0025,
-        low_gas_price: 0.0025,
-        average_gas_price: 0.005,
-        high_gas_price: 0.01,
+        fixed_min_gas_price: gasPriceAmount,
+        low_gas_price: gasPriceAmount * 1.05,
+        average_gas_price: gasPriceAmount * 1.1,
+        high_gas_price: gasPriceAmount * 3,
       },
     ],
   },
