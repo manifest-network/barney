@@ -7,6 +7,17 @@ import { REST_URL, RPC_ENDPOINT } from '../api/config';
  */
 export const CHAIN_NAME = 'manifestlocal';
 
+/**
+ * The chain ID used for MCP config and transaction signing.
+ */
+export const CHAIN_ID = 'manifest-ledger-beta';
+
+/**
+ * Gas price string used for transaction fee estimation.
+ * Format: `{amount}{denom}` as expected by CosmJS GasPrice.fromString().
+ */
+export const GAS_PRICE = '0.0025umfx';
+
 export const manifestLocalChain: Chain = {
   chain_name: 'manifestlocal',
   chain_type: 'cosmos',
@@ -20,10 +31,10 @@ export const manifestLocalChain: Chain = {
     fee_tokens: [
       {
         denom: 'umfx',
-        fixed_min_gas_price: 0,
-        low_gas_price: 0,
-        average_gas_price: 0,
-        high_gas_price: 0,
+        fixed_min_gas_price: 0.0025,
+        low_gas_price: 0.0025,
+        average_gas_price: 0.005,
+        high_gas_price: 0.01,
       },
     ],
   },
