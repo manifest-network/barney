@@ -84,7 +84,7 @@ function coerceStringArg(value: unknown, fieldName: string, context?: string): {
   return { error: `${prefix}${fieldName} must be a string, got ${typeof value}.` };
 }
 
-/** Coerce a tmpfs arg (string, number, or string[]) to a comma-separated string. */
+/** Coerce a tmpfs arg (string or string[]) to a comma-separated string. */
 function coerceTmpfsArg(value: unknown, context?: string): { value?: string; error?: string } {
   if (value == null) return {};
   if (typeof value === 'string') return { value };
