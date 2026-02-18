@@ -667,12 +667,28 @@ async function waitViaWS(
       // Periodic chain-state check: catches on-chain rejections that
       // Fred may never surface as a WS event (e.g. manifest validation
       // failures where the lease is rejected before provisioning starts).
+      // When terminal, we persist the status and set a flag so the main
+      // loop returns it directly after conn.close() breaks the stream.
+      let chainTerminalDetected = false;
       let chainPollTimer: ReturnType<typeof setInterval> | undefined;
       if (opts.checkChainState) {
         chainPollTimer = setInterval(async () => {
           try {
             const chainState = await opts.checkChainState!();
-            if (chainState) conn?.close();
+            if (chainState) {
+              const stateMap: Record<string, LeaseState> = {
+                closed: LeaseState.LEASE_STATE_CLOSED,
+                rejected: LeaseState.LEASE_STATE_REJECTED,
+                expired: LeaseState.LEASE_STATE_EXPIRED,
+              };
+              lastStatus = {
+                state: stateMap[chainState.state] ?? LeaseState.LEASE_STATE_CLOSED,
+                phase: 'chain_rejected',
+                last_error: `Lease ${chainState.state} on chain`,
+              };
+              chainTerminalDetected = true;
+              conn?.close();
+            }
           } catch { /* next interval retries */ }
         }, intervalMs);
       }
@@ -757,6 +773,13 @@ async function waitViaWS(
         logError(`fred.waitViaWS: connection dropped (attempt ${attempt + 1})`, error);
       } finally {
         if (chainPollTimer) clearInterval(chainPollTimer);
+      }
+
+      // Chain poll timer detected a terminal state — return directly
+      // instead of continuing to the next reconnect attempt.
+      if (chainTerminalDetected) {
+        opts.onProgress?.(lastStatus);
+        return lastStatus;
       }
     } catch (error) {
       conn?.close();
