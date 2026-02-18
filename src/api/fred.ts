@@ -664,6 +664,19 @@ async function waitViaWS(
 
       resetLiveness();
 
+      // Periodic chain-state check: catches on-chain rejections that
+      // Fred may never surface as a WS event (e.g. manifest validation
+      // failures where the lease is rejected before provisioning starts).
+      let chainPollTimer: ReturnType<typeof setInterval> | undefined;
+      if (opts.checkChainState) {
+        chainPollTimer = setInterval(async () => {
+          try {
+            const chainState = await opts.checkChainState!();
+            if (chainState) conn?.close();
+          } catch { /* next interval retries */ }
+        }, intervalMs);
+      }
+
       try {
         for await (const event of conn.events) {
           if (opts.abortSignal?.aborted) {
@@ -742,6 +755,8 @@ async function waitViaWS(
         if (error instanceof ProviderApiError && PERMANENT_WS_CLOSE_CODES.has(error.status)) throw error;
 
         logError(`fred.waitViaWS: connection dropped (attempt ${attempt + 1})`, error);
+      } finally {
+        if (chainPollTimer) clearInterval(chainPollTimer);
       }
     } catch (error) {
       conn?.close();
