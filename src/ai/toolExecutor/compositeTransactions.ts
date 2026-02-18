@@ -226,12 +226,22 @@ export function parseAndValidateStackServices(
       if (!healthCheck && knownConfig.health_check) healthCheck = { ...knownConfig.health_check };
     }
 
+    // Coerce port/user/tmpfs — LLMs frequently produce numbers or arrays instead of strings
+    const port = cfg.port != null ? String(cfg.port) : undefined;
+    const user = cfg.user != null ? String(cfg.user) : undefined;
+    let tmpfs: string | undefined;
+    if (Array.isArray(cfg.tmpfs)) {
+      tmpfs = cfg.tmpfs.filter((p): p is string => typeof p === 'string').join(',');
+    } else if (cfg.tmpfs != null) {
+      tmpfs = String(cfg.tmpfs);
+    }
+
     stackServices[svcName] = {
       image: cfg.image as string,
-      port: cfg.port as string | undefined,
+      port,
       env,
-      user: cfg.user as string | undefined,
-      tmpfs: cfg.tmpfs as string | undefined,
+      user,
+      tmpfs,
       command,
       args: svcArgs,
       health_check: healthCheck,
@@ -587,14 +597,24 @@ export async function executeDeployApp(
       cmdArgs[0] += ` --token ${env.OPENCLAW_GATEWAY_TOKEN}`;
     }
 
+    // Coerce port/user/tmpfs — LLMs frequently produce numbers or arrays instead of strings
+    const port = args.port != null ? String(args.port) : undefined;
+    const user = args.user != null ? String(args.user) : undefined;
+    let tmpfs: string | undefined;
+    if (Array.isArray(args.tmpfs)) {
+      tmpfs = (args.tmpfs as unknown[]).filter((p): p is string => typeof p === 'string').join(',');
+    } else if (args.tmpfs != null) {
+      tmpfs = String(args.tmpfs);
+    }
+
     let manifestResult;
     try {
       manifestResult = await buildManifest({
         image: args.image as string,
-        port: args.port as string | undefined,
+        port,
         env,
-        user: args.user as string | undefined,
-        tmpfs: args.tmpfs as string | undefined,
+        user,
+        tmpfs,
         command,
         args: cmdArgs,
         health_check: healthCheck,
@@ -2149,14 +2169,24 @@ export async function executeUpdateApp(
       cmdArgs[0] += ` --token ${env.OPENCLAW_GATEWAY_TOKEN}`;
     }
 
+    // Coerce port/user/tmpfs — LLMs frequently produce numbers or arrays instead of strings
+    const port = args.port != null ? String(args.port) : undefined;
+    const user = args.user != null ? String(args.user) : undefined;
+    let tmpfs: string | undefined;
+    if (Array.isArray(args.tmpfs)) {
+      tmpfs = (args.tmpfs as unknown[]).filter((p): p is string => typeof p === 'string').join(',');
+    } else if (args.tmpfs != null) {
+      tmpfs = String(args.tmpfs);
+    }
+
     let manifestResult;
     try {
       manifestResult = await buildManifest({
         image: args.image as string,
-        port: args.port as string | undefined,
+        port,
         env,
-        user: args.user as string | undefined,
-        tmpfs: args.tmpfs as string | undefined,
+        user,
+        tmpfs,
         command,
         args: cmdArgs,
         health_check: healthCheck,

@@ -625,6 +625,33 @@ describe('parseAndValidateStackServices', () => {
       expect(result.services.db.port).toBe('3306');
     }
   });
+
+  it('coerces numeric port to string', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', port: 80 } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.web.port).toBe('80');
+    }
+  });
+
+  it('coerces numeric user to string', () => {
+    const json = JSON.stringify({ db: { image: 'postgres', user: 999 } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.db.user).toBe('999');
+    }
+  });
+
+  it('coerces tmpfs array to comma-separated string', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', tmpfs: ['/var/run', '/tmp'] } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.web.tmpfs).toBe('/var/run,/tmp');
+    }
+  });
 });
 
 describe('executeDeployApp', () => {
@@ -979,6 +1006,26 @@ describe('executeDeployApp', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid stack service metadata');
+  });
+
+  it('coerces numeric port to string for single-service deploy', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'nginx', port: 80 as unknown as string },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.ports).toEqual({ '80/tcp': {} });
   });
 
   it('returns error for invalid services JSON', async () => {
