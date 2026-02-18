@@ -11,7 +11,7 @@ import {
 } from '@manifest-network/manifest-mcp-browser';
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import { RPC_ENDPOINT } from '../api/config';
-import { CHAIN_NAME } from '../config/chain';
+import { CHAIN_NAME, CHAIN_ID, GAS_PRICE } from '../config/chain';
 import { logError } from '../utils/errors';
 
 /**
@@ -78,9 +78,9 @@ export function useManifestMCP(): UseManifestMCPResult {
         const walletProvider = new CosmosKitWalletProvider(signer, address);
 
         const config: ManifestMCPConfig = {
-          chainId: 'manifest-ledger-beta',
+          chainId: CHAIN_ID,
           rpcUrl: RPC_ENDPOINT,
-          gasPrice: '0.0umfx',
+          gasPrice: GAS_PRICE,
           addressPrefix: 'manifest',
         };
 

@@ -284,13 +284,14 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 
 Defined in `src/config/chain.ts`:
 - Chain name: `manifestlocal` (used for cosmos-kit / chain registry lookups)
-- Chain ID: `manifest-ledger-beta`
+- Chain ID: configurable via `PUBLIC_CHAIN_ID` (default: `manifest-ledger-beta`)
+- Gas price: configurable via `PUBLIC_GAS_PRICE` (default: `0.0025umfx`)
 - Denoms: `umfx` (native), `factory/.../upwr` (PWR factory token) - both 6 decimals
 - Endpoints default to localhost (26657 RPC, 1317 REST)
 
 ### Runtime Environment Variables
 
-All 7 `PUBLIC_*` variables use a 3-tier fallback defined in `src/config/runtimeConfig.ts`:
+All 9 `PUBLIC_*` variables use a 3-tier fallback defined in `src/config/runtimeConfig.ts`:
 
 1. `window.__RUNTIME_CONFIG__` — set by `public/config.js` (generated at container startup by `docker/env.sh`)
 2. `import.meta.env` — Rsbuild static replacement from `.env` files (requires static property access, not dynamic `import.meta.env[key]`)
@@ -300,4 +301,4 @@ Consumer code imports `runtimeConfig` from `src/config/runtimeConfig.ts` — nev
 
 Built-in flags (`import.meta.env.DEV` / `PROD`) remain build-time and are accessed directly where needed.
 
-Variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_OLLAMA_URL`, `PUBLIC_OLLAMA_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`
+Variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_OLLAMA_URL`, `PUBLIC_OLLAMA_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`, `PUBLIC_GAS_PRICE`, `PUBLIC_CHAIN_ID`
