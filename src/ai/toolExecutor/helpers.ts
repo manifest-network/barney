@@ -7,7 +7,7 @@
 const PRIMARY_SERVICE_NAMES = new Set(['web', 'app', 'frontend', 'ui']);
 
 /** Service names that indicate backend infrastructure (not user-facing). */
-const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mysql', 'redis', 'mongo']);
+export const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mysql', 'redis', 'mongo']);
 
 /**
  * Extract the "primary" service's ports from a stack services map.

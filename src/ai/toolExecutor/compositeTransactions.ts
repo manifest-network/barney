@@ -15,7 +15,7 @@ import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
-import { extractPrimaryServicePorts, formatConnectionUrl } from './helpers';
+import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl } from './helpers';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, type ServiceConfig, type HealthCheckConfig } from '../manifest';
@@ -74,9 +74,6 @@ export function formatLeaseItems(skuUuid: string, serviceNames?: string[]): stri
   }
   return serviceNames.map(name => `${skuUuid}:1:${name}`);
 }
-
-/** Service names that indicate a backend service — port defaults are suppressed for these in stacks. */
-const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mysql', 'redis', 'mongo']);
 
 interface ParseStackServicesResult {
   services: Record<string, ServiceConfig>;
