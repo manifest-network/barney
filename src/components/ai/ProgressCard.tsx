@@ -20,6 +20,7 @@ interface ProgressCardProps {
 
 const PHASES = [
   { key: 'checking_credits', label: 'Checking credits' },
+  { key: 'funding', label: 'Funding credits' },
   { key: 'creating_lease', label: 'Creating lease' },
   { key: 'uploading', label: 'Uploading manifest' },
   { key: 'provisioning', label: 'Provisioning' },

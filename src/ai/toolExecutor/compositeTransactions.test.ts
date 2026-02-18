@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
 import {
   deriveAppName,
-  formatConnectionUrl,
   extractUrlFromFredStatus,
-  extractPrimaryServicePorts,
   formatLeaseItems,
   parseAndValidateStackServices,
   executeDeployApp,
@@ -79,6 +78,7 @@ vi.mock('./utils', () => ({
   extractLeaseUuidFromTxResult: vi.fn().mockReturnValue('new-lease-uuid'),
   uploadPayloadToProvider: vi.fn().mockResolvedValue({ success: true, data: { message: 'ok' } }),
   computePayloadHash: vi.fn(),
+  getProviderAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
 }));
 
 vi.mock('./transactions', () => ({

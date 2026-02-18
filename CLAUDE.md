@@ -103,7 +103,7 @@ Builds Docker Compose-style JSON manifests for single-service and multi-service 
 
 - `buildManifest(opts)` — Build single-service manifest JSON from image, port, env, user, tmpfs, command, args, health_check, etc.
 - `buildStackManifest(opts)` — Build multi-service stack manifest with a `services` map of `ServiceConfig` entries
-- `mergeManifest(newManifest, oldManifestJson)` — Merge new manifest over old, preserving env vars, ports, health_check, depends_on unless explicitly overridden. Handles both single-service and stack manifests
+- `mergeManifest(newManifest, oldManifestJson)` — Merge new manifest over old, preserving env, ports, labels (merged with override), user, tmpfs, command, args, health_check, stop_grace_period, init, expose, depends_on (carried forward if not specified in new). Handles both single-service and stack manifests
 - `validateServiceName(name)` — RFC 1123 DNS label validation (1-63 chars, lowercase alphanumeric + hyphens)
 - `isStackManifest(manifest)` / `parseStackManifest(json)` / `getServiceNames(manifest)` — Stack manifest detection and parsing utilities
 - `ServiceConfig` — Type alias for `BuildManifestOptions`, used per-service in stacks
@@ -224,7 +224,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `address.ts` | Bech32 address validation (`isValidBech32Address`) and truncation (`truncateAddress`) |
 | `url.ts` | URL validation with SSRF protection (`parseHttpUrl`, `isUrlSsrfSafe`) |
 | `tx.ts` | Transaction event parsing utilities (extract attribute values from TX events) |
-| `cn.ts` | Class name combiner (clsx-style): `cn('foo', condition && 'bar')` |
+| `cn.ts` | Re-exports `clsx` as `cn`: `cn('foo', condition && 'bar')` |
 
 ### Constants (`src/config/constants.ts`)
 
@@ -255,13 +255,13 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 - Tailwind v4 with inline `@theme` configuration in `src/index.css` (no separate `tailwind.config` file)
 - Custom Manifest design system using OKLCH color space
 - Fonts: Plus Jakarta Sans (headings/body), IBM Plex Mono (code)
-- Use `cn()` from `src/utils/cn.ts` for conditional class names
+- Use `cn()` from `src/utils/cn.ts` (re-export of `clsx`) for conditional class names
 - No CSS modules or styled-components — pure Tailwind utility classes
 
 ## Key Patterns
 
 - **Zustand store**: AI state uses a Zustand store (`src/stores/aiStore.ts`) instead of React Context + refs. Async callbacks read current state via `get()` — no ref mirrors needed. Actions are plain functions receiving `get`/`set`, extracted into `src/stores/aiActions/`. The `useAI()` hook selects all public fields via `useShallow` for backward compatibility.
-- **SSRF protection**: `src/utils/url.ts` provides `parseHttpUrl` and `isUrlSsrfSafe` used across the codebase; `src/ai/validation.ts` adds `isPrivateHost()` with `ipaddr.js` for Ollama endpoint validation (DEV mode allows localhost)
+- **SSRF protection**: `src/utils/url.ts` provides `parseHttpUrl` and `isUrlSsrfSafe` (DEV mode allows localhost via `isUrlSsrfSafe`); `src/ai/validation.ts` adds `isPrivateHost()` with `ipaddr.js` for IP range classification
 - **Error utilities**: Use `logError()` from `src/utils/errors.ts` instead of raw `console.error`
 - **Retry logic**: Use `withRetry()` from `src/api/utils.ts` for transient network error recovery with exponential backoff
 - **Tool result caching**: Query tool results cached for 10s in the AI store to reduce redundant API calls (max 50 entries, FIFO eviction). Cache is scoped per wallet address and cleared on wallet change.
@@ -290,8 +290,8 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 ## Chain Configuration
 
 Defined in `src/config/chain.ts`:
-- Chain name: `manifestlocal` (used for cosmos-kit / chain registry lookups)
-- Chain ID: `manifest-ledger-beta`
+- Chain name: `CHAIN_NAME = 'manifestlocal'` (used for cosmos-kit / chain registry lookups)
+- Chain ID: `CHAIN_ID = 'manifest-ledger-beta'` (used for MCP config and TX signing)
 - Denoms: `umfx` (native), `factory/.../upwr` (PWR factory token) - both 6 decimals
 - Endpoints default to localhost (26657 RPC, 1317 REST)
 

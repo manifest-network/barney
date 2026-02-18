@@ -7,10 +7,15 @@ import { REST_URL, RPC_ENDPOINT } from '../api/config';
  */
 export const CHAIN_NAME = 'manifestlocal';
 
+/**
+ * The chain ID used for MCP config and transaction signing.
+ */
+export const CHAIN_ID = 'manifest-ledger-beta';
+
 export const manifestLocalChain: Chain = {
   chain_name: 'manifestlocal',
   chain_type: 'cosmos',
-  chain_id: 'manifest-ledger-beta',
+  chain_id: CHAIN_ID,
   pretty_name: 'Manifest (Local)',
   status: 'live',
   network_type: 'devnet',

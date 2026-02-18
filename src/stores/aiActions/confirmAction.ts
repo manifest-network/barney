@@ -7,7 +7,7 @@ import { executeConfirmedTool } from '../../ai/toolExecutor';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
 import type { AIStore } from '../aiStore';
-import { toOllamaMessages, getAppRegistryAccess } from './utils';
+import { generateMessageId, toOllamaMessages, getAppRegistryAccess } from './utils';
 
 type Get = () => AIStore;
 type Set = (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) => void;
@@ -80,7 +80,7 @@ export async function confirmActionFn(get: Get, set: Set, editedManifestJson?: s
     const toolError = result.success ? undefined : result.error;
 
     // Update tool message and append assistant message in one atomic update
-    const newAssistantMessageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const newAssistantMessageId = generateMessageId();
     const newAssistantMessage = {
       id: newAssistantMessageId,
       role: 'assistant' as const,

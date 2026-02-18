@@ -7,8 +7,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { getAIStore, checkConnection } from '../stores/aiStore';
 import { setupPersistenceSubscriptions } from '../stores/aiActions/persistence';
-import { AI_HEALTH_CHECK_INTERVAL_MS } from '../config/constants';
-import { AI_CONFIRMATION_TIMEOUT_MS } from '../config/constants';
+import { AI_HEALTH_CHECK_INTERVAL_MS, AI_CONFIRMATION_TIMEOUT_MS, MS_PER_SECOND, SECONDS_PER_MINUTE } from '../config/constants';
 import { logError } from '../utils/errors';
 
 // Re-export types for backward compatibility
@@ -31,7 +30,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
     // Confirmation timeout watcher
     let confirmationTimeoutId: ReturnType<typeof setTimeout> | null = null;
-    let lastConfirmationId: string | null = null;
 
     const unsubConfirmation = store.subscribe((state, prev) => {
       if (state.pendingConfirmation === prev.pendingConfirmation) return;
@@ -43,22 +41,21 @@ export function AIProvider({ children }: { children: ReactNode }) {
       }
 
       if (!state.pendingConfirmation) {
-        lastConfirmationId = null;
         return;
       }
 
-      lastConfirmationId = state.pendingConfirmation.id;
-      const capturedId = lastConfirmationId;
+      const capturedId = state.pendingConfirmation.id;
 
       confirmationTimeoutId = setTimeout(() => {
         const current = store.getState();
         if (current.pendingConfirmation?.id === capturedId) {
           const { messageId } = current.pendingConfirmation;
+          const timeoutMinutes = AI_CONFIRMATION_TIMEOUT_MS / (MS_PER_SECOND * SECONDS_PER_MINUTE);
           const updatedMessages = current.messages.map((m) =>
             m.id === messageId
               ? {
                   ...m,
-                  content: `Action timed out - confirmation not received within ${AI_CONFIRMATION_TIMEOUT_MS / 60000} minutes.`,
+                  content: `Action timed out - confirmation not received within ${timeoutMinutes} minutes.`,
                   isStreaming: false,
                   error: 'timeout',
                 }

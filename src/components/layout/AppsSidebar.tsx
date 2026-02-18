@@ -15,6 +15,8 @@ import { truncateAddress } from '../../utils/address';
 import { logError } from '../../utils/errors';
 import { CHAIN_NAME } from '../../config/chain';
 import { findExampleByAppName, buildExampleManifest } from '../../config/exampleApps';
+import { SECONDS_PER_HOUR, AUTO_REFRESH_INTERVAL_MS } from '../../config/constants';
+import { timeAgo } from '../../utils/format';
 
 interface AppsSidebarProps {
   onClose?: () => void;
@@ -22,16 +24,8 @@ interface AppsSidebarProps {
 
 const MAX_RECENT = 5;
 
-function timeAgo(timestamp: number): string {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000);
-  if (seconds < 60) return 'just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
+/** Hours in 30 days — used as the "full" reference for the credit gauge */
+const CREDIT_GAUGE_MAX_HOURS = 24 * 30;
 
 const STATUS_COLORS: Record<string, string> = {
   running: 'text-success-400',
@@ -89,8 +83,8 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
         }
       }
       if (ratePerSecond > 0 && estimate?.estimatedDurationSeconds) {
-        setHoursRemaining(Math.floor(Number(estimate.estimatedDurationSeconds) / 3600));
-        setBurnRate(Math.round(ratePerSecond * 3600 * 100) / 100);
+        setHoursRemaining(Math.floor(Number(estimate.estimatedDurationSeconds) / SECONDS_PER_HOUR));
+        setBurnRate(Math.round(ratePerSecond * SECONDS_PER_HOUR * 100) / 100);
       } else {
         setHoursRemaining(null);
         setBurnRate(null);
@@ -104,7 +98,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     // Initial fetch — refresh is async (setState calls happen after awaits, not synchronously)
     // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
-    const interval = setInterval(refresh, 10000);
+    const interval = setInterval(refresh, AUTO_REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [refresh]);
 
@@ -192,7 +186,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
             <div
               className="apps-sidebar__gauge-fill"
               style={{
-                width: `${Math.min(100, Math.max(5, (hoursRemaining / 720) * 100))}%`,
+                width: `${Math.min(100, Math.max(5, (hoursRemaining / CREDIT_GAUGE_MAX_HOURS) * 100))}%`,
               }}
             />
           </div>

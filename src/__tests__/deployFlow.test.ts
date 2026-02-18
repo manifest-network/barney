@@ -69,6 +69,7 @@ vi.mock('../ai/toolExecutor/utils', () => ({
   extractLeaseUuidFromTxResult: vi.fn(),
   uploadPayloadToProvider: vi.fn(),
   computePayloadHash: vi.fn(),
+  getProviderAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
 }));
 
 import { getLeasesByTenant, getCreditAccount, getCreditEstimate, getLease } from '../api/billing';

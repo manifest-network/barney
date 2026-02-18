@@ -16,15 +16,17 @@ import {
 } from '../../api/billing';
 import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
-import { getProviderHealth, getLeaseConnectionInfo, createSignMessage, createAuthToken } from '../../api/provider-api';
+import { getProviderHealth, getLeaseConnectionInfo } from '../../api/provider-api';
 import { getLeaseStatus, getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import { formatConnectionUrl, extractPrimaryServicePorts } from './compositeTransactions';
+import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
-import type { ToolResult, ToolExecutorOptions, SignResult } from './types';
+import { SECONDS_PER_HOUR } from '../../config/constants';
+import { getProviderAuthToken } from './utils';
+import type { ToolResult, ToolExecutorOptions } from './types';
 
 /**
  * Execute list_apps: Get apps from registry, reconcile with chain.
@@ -143,16 +145,7 @@ export async function executeAppStatus(
     signArbitrary
   ) {
     try {
-      const timestamp = Math.floor(Date.now() / 1000);
-      const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
-      const signResult: SignResult = await signArbitrary(address, signMessage);
-      const authToken = createAuthToken(
-        address,
-        app.leaseUuid,
-        timestamp,
-        signResult.pub_key.value,
-        signResult.signature
-      );
+      const authToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
       fredStatus = await getLeaseStatus(app.providerUrl, app.leaseUuid, authToken);
     } catch (error) {
       logError('compositeQueries.executeAppStatus.fredStatus', error);
@@ -181,16 +174,7 @@ export async function executeAppStatus(
         // Fetch connection details from provider API
         if (signArbitrary && app.providerUrl) {
           try {
-            const infoTimestamp = Math.floor(Date.now() / 1000);
-            const infoSignMessage = createSignMessage(address, app.leaseUuid, infoTimestamp);
-            const infoSignResult: SignResult = await signArbitrary(address, infoSignMessage);
-            const infoAuthToken = createAuthToken(
-              address,
-              app.leaseUuid,
-              infoTimestamp,
-              infoSignResult.pub_key.value,
-              infoSignResult.signature
-            );
+            const infoAuthToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
             const connResponse = await getLeaseConnectionInfo(app.providerUrl, app.leaseUuid, infoAuthToken);
             if (connResponse.connection) {
               const conn = connResponse.connection;
@@ -308,7 +292,7 @@ export async function executeGetBalance(
   if (estimate?.totalRatePerSecond) {
     for (const rate of estimate.totalRatePerSecond) {
       const perSecond = fromBaseUnits(rate.amount, rate.denom);
-      spendingPerHour += perSecond * 3600;
+      spendingPerHour += perSecond * SECONDS_PER_HOUR;
     }
   }
 
@@ -318,7 +302,7 @@ export async function executeGetBalance(
   // Time remaining (only meaningful when credits are actively being spent)
   let hoursRemaining: number | null = null;
   if (spendingPerHour > 0 && estimate?.estimatedDurationSeconds) {
-    hoursRemaining = Math.floor(Number(estimate.estimatedDurationSeconds) / 3600);
+    hoursRemaining = Math.floor(Number(estimate.estimatedDurationSeconds) / SECONDS_PER_HOUR);
   }
 
   // Wallet MFX balance
@@ -480,16 +464,7 @@ export async function executeGetLogs(
 
   let authToken: string;
   try {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
-    const signResult: SignResult = await signArbitrary(address, signMessage);
-    authToken = createAuthToken(
-      address,
-      app.leaseUuid,
-      timestamp,
-      signResult.pub_key.value,
-      signResult.signature
-    );
+    authToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
   } catch (error) {
     logError('compositeQueries.executeGetLogs.sign', error);
     return {
@@ -627,16 +602,7 @@ export async function executeAppDiagnostics(
 
   let authToken: string;
   try {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
-    const signResult: SignResult = await signArbitrary(address, signMessage);
-    authToken = createAuthToken(
-      address,
-      app.leaseUuid,
-      timestamp,
-      signResult.pub_key.value,
-      signResult.signature
-    );
+    authToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
   } catch (error) {
     logError('compositeQueries.executeAppDiagnostics.sign', error);
     return {
@@ -691,16 +657,7 @@ export async function executeAppReleases(
 
   let authToken: string;
   try {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signMessage = createSignMessage(address, app.leaseUuid, timestamp);
-    const signResult: SignResult = await signArbitrary(address, signMessage);
-    authToken = createAuthToken(
-      address,
-      app.leaseUuid,
-      timestamp,
-      signResult.pub_key.value,
-      signResult.signature
-    );
+    authToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
   } catch (error) {
     logError('compositeQueries.executeAppReleases.sign', error);
     return {

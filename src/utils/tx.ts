@@ -2,6 +2,8 @@
  * Shared transaction utilities for extracting data from transaction results.
  */
 
+import { logError } from './errors';
+
 /**
  * Event structure from transaction results.
  */
@@ -91,7 +93,8 @@ export function extractLeaseUuid(result: unknown): string | null {
     }
 
     return null;
-  } catch {
+  } catch (err) {
+    logError('extractLeaseUuid', 'Failed to parse TX result', err);
     return null;
   }
 }
