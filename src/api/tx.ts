@@ -1,7 +1,9 @@
-import { getSigningLiftedinitClient, liftedinit } from '@manifest-network/manifestjs';
+import { getSigningLiftedinitClientOptions, liftedinit } from '@manifest-network/manifestjs';
 import type { OfflineSigner } from '@cosmjs/proto-signing';
+import { GasPrice, SigningStargateClient } from '@cosmjs/stargate';
 import type { Coin } from './bank';
 import { RPC_ENDPOINT } from './config';
+import { GAS_PRICE } from '../config/chain';
 import { getEventAttribute, type TxEvent } from '../utils/tx';
 import { logError } from '../utils/errors';
 
@@ -55,16 +57,13 @@ export type CreateLeaseResult =
     };
 
 export async function getSigningClient(signer: OfflineSigner) {
-  return getSigningLiftedinitClient({
-    rpcEndpoint: RPC_ENDPOINT,
-    signer,
+  const { registry, aminoTypes } = getSigningLiftedinitClientOptions();
+  return SigningStargateClient.connectWithSigner(RPC_ENDPOINT, signer, {
+    registry,
+    aminoTypes,
+    gasPrice: GasPrice.fromString(GAS_PRICE),
   });
 }
-
-const DEFAULT_FEE = {
-  amount: [{ denom: 'umfx', amount: '0' }],
-  gas: '200000',
-};
 
 /**
  * Build a signed message from a manifestjs Msg encoder and partial fields.
@@ -87,7 +86,7 @@ async function signAndBroadcast(
 ): Promise<TxResult> {
   try {
     const client = await getSigningClient(signer);
-    const result = await client.signAndBroadcast(sender, messages, DEFAULT_FEE);
+    const result = await client.signAndBroadcast(sender, messages, 'auto');
 
     if (result.code !== 0) {
       return {

@@ -33,6 +33,8 @@ describe('getConfigValue', () => {
     expect(getConfigValue('PUBLIC_PWR_DENOM')).toBe(
       'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr'
     );
+    expect(getConfigValue('PUBLIC_GAS_PRICE')).toBe('0.0025umfx');
+    expect(getConfigValue('PUBLIC_CHAIN_ID')).toBe('manifest-ledger-beta');
   });
 
   it('skips whitespace-only values and falls through to default', () => {
@@ -48,8 +50,8 @@ describe('getConfigValue', () => {
 });
 
 describe('runtimeConfig', () => {
-  it('exports all 7 keys as non-empty strings', () => {
-    expect(Object.keys(runtimeConfig)).toHaveLength(7);
+  it('exports all 9 keys as non-empty strings', () => {
+    expect(Object.keys(runtimeConfig)).toHaveLength(9);
     for (const value of Object.values(runtimeConfig)) {
       expect(typeof value).toBe('string');
       expect(value.length).toBeGreaterThan(0);
