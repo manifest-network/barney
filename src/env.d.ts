@@ -8,6 +8,8 @@ interface ImportMetaEnv {
   readonly PUBLIC_OLLAMA_URL?: string;
   readonly PUBLIC_OLLAMA_MODEL?: string;
   readonly PUBLIC_PWR_DENOM?: string;
+  readonly PUBLIC_GAS_PRICE?: string;
+  readonly PUBLIC_CHAIN_ID?: string;
   readonly DEV: boolean;
   readonly PROD: boolean;
 }
