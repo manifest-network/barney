@@ -8,8 +8,6 @@ import type { FredLeaseStatus } from '../api/fred';
 
 export interface DeployProgress {
   phase:
-    | 'checking_credits'
-    | 'funding'
     | 'creating_lease'
     | 'uploading'
     | 'provisioning'

@@ -56,7 +56,7 @@ describe('confirmation flow (Zustand store)', () => {
 
     store.setState({
       pendingConfirmation: pending,
-      deployProgress: { phase: 'checking_credits', operation: 'deploy' },
+      deployProgress: { phase: 'creating_lease', operation: 'deploy' },
     });
 
     store.getState().cancelAction();
@@ -72,7 +72,7 @@ describe('confirmation flow (Zustand store)', () => {
   });
 
   it('cancelAction is a no-op when no pending confirmation', () => {
-    store.setState({ deployProgress: { phase: 'checking_credits', operation: 'deploy' } });
+    store.setState({ deployProgress: { phase: 'creating_lease', operation: 'deploy' } });
     store.getState().cancelAction();
     // deployProgress should NOT be cleared since there's no pending confirmation
     expect(store.getState().deployProgress).not.toBeNull();
