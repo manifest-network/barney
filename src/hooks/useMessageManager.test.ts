@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateMessageId } from './useMessageManager';
+import { generateMessageId, trimMessages } from '../stores/aiActions/utils';
 import type { ChatMessage } from '../contexts/aiTypes';
 import { AI_MAX_MESSAGES } from '../config/constants';
 
@@ -14,14 +14,8 @@ function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
 }
 
 /**
- * Extracted logic from useMessageManager for testing without React context.
- * The hook's addMessage does: trimMessages([...messagesRef.current, message])
- * and updateMessageById does: messagesRef.current.map(m => m.id === id ? {...m, ...updates} : m)
+ * Pure logic tests for message operations now implemented in the Zustand store.
  */
-function trimMessages(msgs: ChatMessage[]): ChatMessage[] {
-  if (msgs.length <= AI_MAX_MESSAGES) return msgs;
-  return msgs.slice(-AI_MAX_MESSAGES);
-}
 
 function addMessage(current: ChatMessage[], message: ChatMessage): ChatMessage[] {
   return trimMessages([...current, message]);

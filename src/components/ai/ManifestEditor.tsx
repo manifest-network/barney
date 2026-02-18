@@ -5,8 +5,6 @@ import { isValidPort, type ManifestFields } from './manifestEditorUtils';
 
 export type { ManifestFields };
 
-const SENSITIVE_PATTERN = /password|secret|token|key|credential/i;
-
 export interface ManifestEditorProps {
   manifest: ManifestFields;
   onChange: (updated: ManifestFields) => void;
@@ -22,9 +20,7 @@ function InlineCopyButton({ value }: { value: string }) {
   );
 }
 
-function SensitiveActions({ envKey, value, revealed, onToggle }: { envKey: string; value: string; revealed: boolean; onToggle: () => void }) {
-  if (!SENSITIVE_PATTERN.test(envKey)) return null;
-
+function SensitiveActions({ value, revealed, onToggle }: { value: string; revealed: boolean; onToggle: () => void }) {
   return (
     <span className="manifest-editor-sensitive-actions">
       <button
@@ -36,7 +32,7 @@ function SensitiveActions({ envKey, value, revealed, onToggle }: { envKey: strin
       >
         {revealed ? <EyeOff className="w-3.5 h-3.5 text-muted" /> : <Eye className="w-3.5 h-3.5 text-muted" />}
       </button>
-      <InlineCopyButton value={value} />
+      {revealed && <InlineCopyButton value={value} />}
     </span>
   );
 }
@@ -48,8 +44,7 @@ function EnvRow({ envKey, value, onKeyChange, onValueChange, onRemove }: {
   onValueChange: (key: string, value: string) => void;
   onRemove: (key: string) => void;
 }) {
-  const isSensitive = SENSITIVE_PATTERN.test(envKey);
-  const [revealed, setRevealed] = useState(!isSensitive);
+  const [revealed, setRevealed] = useState(false);
 
   return (
     <div className="manifest-editor-field">
@@ -62,13 +57,13 @@ function EnvRow({ envKey, value, onKeyChange, onValueChange, onRemove }: {
       />
       <span className="text-muted text-xs">=</span>
       <input
-        type={isSensitive && !revealed ? 'password' : 'text'}
+        type={revealed ? 'text' : 'password'}
         value={value}
         onChange={(e) => onValueChange(envKey, e.target.value)}
         className="manifest-editor-input"
         aria-label={`Environment variable value: ${envKey}`}
       />
-      <SensitiveActions envKey={envKey} value={value} revealed={revealed} onToggle={() => setRevealed((r) => !r)} />
+      <SensitiveActions value={value} revealed={revealed} onToggle={() => setRevealed((r) => !r)} />
       <button
         type="button"
         onClick={() => onRemove(envKey)}

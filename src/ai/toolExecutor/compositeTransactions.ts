@@ -7,21 +7,22 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
-import { createSignMessage, createAuthToken, getLeaseConnectionInfo, ProviderApiError } from '../../api/provider-api';
+import { getLeaseConnectionInfo, ProviderApiError } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
-import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
+import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
+import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl } from './helpers';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, type ServiceConfig, type HealthCheckConfig } from '../manifest';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { DeployProgress } from '../progress';
-import type { ToolResult, ToolExecutorOptions, SignResult, PayloadAttachment } from './types';
+import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([
@@ -73,9 +74,6 @@ export function formatLeaseItems(skuUuid: string, serviceNames?: string[]): stri
   }
   return serviceNames.map(name => `${skuUuid}:1:${name}`);
 }
-
-/** Service names that indicate a backend service — port defaults are suppressed for these in stacks. */
-const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mysql', 'redis', 'mongo']);
 
 interface ParseStackServicesResult {
   services: Record<string, ServiceConfig>;
@@ -230,123 +228,6 @@ export function parseAndValidateStackServices(
   return { services: stackServices, serviceNames, needsStorage };
 }
 
-/** Service names that indicate a primary (user-facing) service in a stack. */
-const PRIMARY_SERVICE_NAMES = new Set(['web', 'app', 'frontend', 'ui']);
-
-/**
- * Extract the "primary" service's ports from a stack services map.
- * Priority:
- *  1. Service named web/app/frontend/ui
- *  2. First non-backend service with ports (skip db, postgres, redis, etc.)
- *  3. Any service with ports
- */
-export function extractPrimaryServicePorts(
-  services: Record<string, { ports?: Record<string, unknown>; instances?: { ports?: Record<string, unknown> }[] }>
-): { serviceName: string; ports: Record<string, unknown> } | undefined {
-  const entries = Object.entries(services);
-  if (entries.length === 0) return undefined;
-
-  const getPorts = (svc: { ports?: Record<string, unknown>; instances?: { ports?: Record<string, unknown> }[] }): Record<string, unknown> | undefined =>
-    svc.ports ?? svc.instances?.[0]?.ports;
-
-  // 1. Named primary service
-  for (const [name, svc] of entries) {
-    if (PRIMARY_SERVICE_NAMES.has(name)) {
-      const ports = getPorts(svc);
-      if (ports && Object.keys(ports).length > 0) return { serviceName: name, ports };
-    }
-  }
-
-  // 2. First non-backend service with ports
-  for (const [name, svc] of entries) {
-    if (!BACKEND_SERVICE_NAMES.has(name)) {
-      const ports = getPorts(svc);
-      if (ports && Object.keys(ports).length > 0) return { serviceName: name, ports };
-    }
-  }
-
-  // 3. Any service with ports
-  for (const [name, svc] of entries) {
-    const ports = getPorts(svc);
-    if (ports && Object.keys(ports).length > 0) return { serviceName: name, ports };
-  }
-
-  return undefined;
-}
-
-/**
- * Extract port number from a port mapping value.
- * Handles multiple formats the provider API may return:
- *  - Our typed format:   { host_ip: "0.0.0.0", host_port: 12345 }
- *  - Docker PascalCase:  { HostIp: "0.0.0.0", HostPort: "12345" }
- *  - Docker array:       [{ HostIp: "0.0.0.0", HostPort: "12345" }]
- *  - Plain number:       12345
- */
-function extractPort(value: unknown): number | undefined {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'string') { const n = parseInt(value, 10); return isNaN(n) ? undefined : n; }
-
-  // Array — take first element
-  let obj = value;
-  if (Array.isArray(obj)) obj = obj[0];
-
-  if (obj && typeof obj === 'object') {
-    const rec = obj as Record<string, unknown>;
-    // snake_case (our interface)
-    if (rec.host_port != null) {
-      const n = typeof rec.host_port === 'number' ? rec.host_port : parseInt(String(rec.host_port), 10);
-      if (!isNaN(n)) return n;
-    }
-    // PascalCase (Docker native)
-    if (rec.HostPort != null) {
-      const n = typeof rec.HostPort === 'number' ? rec.HostPort : parseInt(String(rec.HostPort), 10);
-      if (!isNaN(n)) return n;
-    }
-  }
-  return undefined;
-}
-
-export function formatConnectionUrl(
-  host: string | undefined,
-  // Accept any shape — the port values may not match our PortMapping interface
-  connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string> }
-): string | undefined {
-  let url = host;
-
-  // Try port mappings — use port number but prefer connection.host (hostname) over host_ip (raw IP)
-  if (connection?.ports) {
-    const firstEntry = Object.values(connection.ports)[0];
-    const port = extractPort(firstEntry);
-    if (port != null) {
-      const h = connection.host || host;
-      if (!h) return undefined;
-      // Strip any existing protocol from h before appending port
-      const bareHost = h.replace(/^https?:\/\//, '');
-      if (port === 80 || port === 443) {
-        url = bareHost;
-      } else {
-        url = `${bareHost}:${port}`;
-      }
-    }
-  }
-
-  // Fallback: check metadata for a URL hint
-  if (url === host && connection?.metadata?.url) {
-    url = connection.metadata.url;
-  }
-
-  if (!url) return undefined;
-
-  // Add protocol if missing: https by default, http only for localhost/loopback
-  if (!/^https?:\/\//i.test(url)) {
-    // Strip protocol-detection to the hostname (before any port)
-    const hostPart = url.replace(/:\d+$/, '');
-    const isLocal = hostPart === 'localhost' || hostPart === '127.0.0.1' || hostPart === '::1';
-    url = `${isLocal ? 'http' : 'https'}://${url}`;
-  }
-
-  return url;
-}
 
 /**
  * Extract URL from fred status data (endpoints or instances).
@@ -404,10 +285,7 @@ async function resolveAppUrl(
   // 1. Try connection endpoint (has proper host + port mappings)
   if (signArbitrary) {
     try {
-      const ts = Math.floor(Date.now() / 1000);
-      const msg = createSignMessage(address, leaseUuid, ts);
-      const sig: SignResult = await signArbitrary(address, msg);
-      const token = createAuthToken(address, leaseUuid, ts, sig.pub_key.value, sig.signature);
+      const token = await getProviderAuthToken(address, leaseUuid, signArbitrary);
       const connResponse = await getLeaseConnectionInfo(providerUrl, leaseUuid, token);
       if (connResponse.connection) {
         const connection = connResponse.connection;
@@ -468,16 +346,7 @@ async function fetchFailureLogs(
   if (!signArbitrary) return null;
 
   try {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signMessage = createSignMessage(address, leaseUuid, timestamp);
-    const signResult: SignResult = await signArbitrary(address, signMessage);
-    const authToken = createAuthToken(
-      address,
-      leaseUuid,
-      timestamp,
-      signResult.pub_key.value,
-      signResult.signature
-    );
+    const authToken = await getProviderAuthToken(address, leaseUuid, signArbitrary);
 
     const parts: string[] = [];
 
@@ -981,14 +850,8 @@ export async function executeConfirmedDeployApp(
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for deployment...' });
 
   try {
-    const getAuthToken = async (): Promise<string> => {
-      const ts = Math.floor(Date.now() / 1000);
-      const msg = createSignMessage(address, leaseUuid, ts);
-      const sig: SignResult = await signArbitrary(address, msg);
-      return createAuthToken(address, leaseUuid, ts, sig.pub_key.value, sig.signature);
-    };
-
-    const authToken = await getAuthToken();
+    const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
+    const authToken = await refreshAuthToken();
 
     const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
       maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
@@ -1001,7 +864,7 @@ export async function executeConfirmedDeployApp(
           fredStatus: status,
         });
       },
-      getAuthToken,
+      getAuthToken: refreshAuthToken,
       // Check chain state to detect rejected/closed leases
       checkChainState: async (): Promise<TerminalChainState | null> => {
         const lease = await getLease(leaseUuid);
@@ -1200,14 +1063,8 @@ export async function deploySingleApp(
   onProgress({ phase: 'provisioning', detail: 'Waiting for deployment...' });
 
   try {
-    const getAuthToken = async (): Promise<string> => {
-      const ts = Math.floor(Date.now() / 1000);
-      const msg = createSignMessage(address, leaseUuid, ts);
-      const sig: SignResult = await signArbitrary(address, msg);
-      return createAuthToken(address, leaseUuid, ts, sig.pub_key.value, sig.signature);
-    };
-
-    const authToken = await getAuthToken();
+    const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
+    const authToken = await refreshAuthToken();
 
     const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
       maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
@@ -1216,7 +1073,7 @@ export async function deploySingleApp(
       onProgress: (status) => {
         onProgress({ phase: 'provisioning', detail: status.phase || 'Provisioning...' });
       },
-      getAuthToken,
+      getAuthToken: refreshAuthToken,
       checkChainState: async (): Promise<TerminalChainState | null> => {
         const lease = await getLease(leaseUuid);
         if (!lease) return { state: 'closed' };
@@ -1570,14 +1427,9 @@ export async function executeConfirmedBatchDeploy(
     const pollResults = await Promise.allSettled(
       prepared.map(async ({ idx, name, leaseUuid, providerUrl }) => {
         try {
-          const getAuthToken = async (): Promise<string> => {
-            const ts = Math.floor(Date.now() / 1000);
-            const msg = createSignMessage(address, leaseUuid, ts);
-            const sig: SignResult = await signArbitrary(address, msg);
-            return createAuthToken(address, leaseUuid, ts, sig.pub_key.value, sig.signature);
-          };
+          const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
 
-          const authToken = await getAuthToken();
+          const authToken = await refreshAuthToken();
 
           const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
             maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
@@ -1587,7 +1439,7 @@ export async function executeConfirmedBatchDeploy(
               batchProgress[idx] = { name, phase: 'provisioning', detail: status.phase || 'Provisioning...' };
               emitProgress();
             },
-            getAuthToken,
+            getAuthToken: refreshAuthToken,
             checkChainState: async (): Promise<TerminalChainState | null> => {
               const lease = await getLease(leaseUuid);
               if (!lease) return { state: 'closed' };
@@ -1919,13 +1771,16 @@ export function executeCosmosTransaction(
     return { success: false, error: parseResult.error };
   }
 
+  // Safe: parseResult.error was checked above, so data is always defined here
+  const parsedArgs = parseResult.data!;
+  const argsSummary = parsedArgs.length > 0 ? ` with args: ${parsedArgs.join(', ')}` : '';
   return {
     success: true,
     requiresConfirmation: true,
-    confirmationMessage: `Execute ${module} ${subcommand}?`,
+    confirmationMessage: `Execute ${module} ${subcommand}${argsSummary}?`,
     pendingAction: {
       toolName: 'cosmos_tx',
-      args: { module, subcommand, parsedArgs: parseResult.data },
+      args: { module, subcommand, parsedArgs },
     },
   };
 }
@@ -2020,15 +1875,10 @@ export async function executeConfirmedRestartApp(
   onProgress?.({ phase: 'restarting', detail: 'Restarting app...', operation: 'restart' });
 
   // Mint auth token and call restart
-  const getAuthToken = async (): Promise<string> => {
-    const ts = Math.floor(Date.now() / 1000);
-    const msg = createSignMessage(address, leaseUuid, ts);
-    const sig: SignResult = await signArbitrary(address, msg);
-    return createAuthToken(address, leaseUuid, ts, sig.pub_key.value, sig.signature);
-  };
+  const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
 
   try {
-    const authToken = await getAuthToken();
+    const authToken = await refreshAuthToken();
     await restartLease(providerUrl, leaseUuid, authToken);
   } catch (error) {
     logError('compositeTransactions.executeConfirmedRestartApp', error);
@@ -2048,7 +1898,7 @@ export async function executeConfirmedRestartApp(
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for app to come back up...', operation: 'restart' });
 
   try {
-    const authToken = await getAuthToken();
+    const authToken = await refreshAuthToken();
     const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
       maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
       intervalMs: FRED_POLL_INTERVAL_MS,
@@ -2061,7 +1911,7 @@ export async function executeConfirmedRestartApp(
           operation: 'restart',
         });
       },
-      getAuthToken,
+      getAuthToken: refreshAuthToken,
     });
 
     if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
@@ -2377,15 +2227,10 @@ export async function executeConfirmedUpdateApp(
   onProgress?.({ phase: 'updating', detail: 'Updating app with new manifest...', operation: 'update' });
 
   // Mint auth token and call update
-  const getAuthToken = async (): Promise<string> => {
-    const ts = Math.floor(Date.now() / 1000);
-    const msg = createSignMessage(address, leaseUuid, ts);
-    const sig: SignResult = await signArbitrary(address, msg);
-    return createAuthToken(address, leaseUuid, ts, sig.pub_key.value, sig.signature);
-  };
+  const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
 
   try {
-    const authToken = await getAuthToken();
+    const authToken = await refreshAuthToken();
     // Base64-encode the payload for the update API
     const base64Payload = btoa(Array.from(payload.bytes, (b) => String.fromCharCode(b)).join(''));
     await updateLease(providerUrl, leaseUuid, base64Payload, authToken);
@@ -2416,7 +2261,7 @@ export async function executeConfirmedUpdateApp(
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for app to come back up...', operation: 'update' });
 
   try {
-    const authToken = await getAuthToken();
+    const authToken = await refreshAuthToken();
     const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
       maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
       intervalMs: FRED_POLL_INTERVAL_MS,
@@ -2429,7 +2274,7 @@ export async function executeConfirmedUpdateApp(
           operation: 'update',
         });
       },
-      getAuthToken,
+      getAuthToken: refreshAuthToken,
     });
 
     if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
@@ -2441,7 +2286,7 @@ export async function executeConfirmedUpdateApp(
       //   - Rollback failed: provision.status="failed",  provision.last_error="<why>"
       //   - Update OK:       provision.status="ready",  provision.last_error=""
       try {
-        const provisionToken = await getAuthToken();
+        const provisionToken = await refreshAuthToken();
         const provision = await getLeaseProvision(providerUrl, leaseUuid, provisionToken);
         if (provision.last_error) {
           const rollbackOk = provision.status === 'ready';

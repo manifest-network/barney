@@ -20,7 +20,6 @@ const GAME_MANIFEST = (game: string) => ({
   image: `docker.io/lifted/demo-games:${game}`,
   ports: { '8080/tcp': {} },
   env: {},
-  read_only: true,
   tmpfs: ['/var/cache/nginx', '/var/run'],
 });
 

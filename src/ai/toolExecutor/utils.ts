@@ -6,6 +6,7 @@ import {
   computePayloadHash,
   isValidMetaHash,
   createLeaseDataSignMessage,
+  createSignMessage,
   createAuthToken,
   uploadLeaseData,
   ProviderApiError,
@@ -14,6 +15,21 @@ import type { ToolResult, SignResult } from './types';
 
 // Re-export for backward compatibility
 export { extractLeaseUuid as extractLeaseUuidFromTxResult } from '../../utils/tx';
+
+/**
+ * Create a provider auth token for ADR-036 authenticated requests.
+ * Centralizes the sign-and-create-token pattern used across query and TX executors.
+ */
+export async function getProviderAuthToken(
+  address: string,
+  leaseUuid: string,
+  signArbitrary: (address: string, data: string) => Promise<SignResult>
+): Promise<string> {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const message = createSignMessage(address, leaseUuid, timestamp);
+  const signResult = await signArbitrary(address, message);
+  return createAuthToken(address, leaseUuid, timestamp, signResult.pub_key.value, signResult.signature);
+}
 
 /**
  * Upload payload to provider with ADR-036 authentication.

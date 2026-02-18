@@ -4,6 +4,7 @@
  */
 
 import type { PendingAction } from '../../ai/toolExecutor';
+import { logError } from '../../utils/errors';
 
 export interface ManifestFields {
   image: string;
@@ -44,7 +45,8 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
       user: (parsed.user as string) || undefined,
       tmpfs: Array.isArray(parsed.tmpfs) ? (parsed.tmpfs as string[]) : undefined,
     };
-  } catch {
+  } catch (err) {
+    logError('parseEditableManifest', err);
     return null;
   }
 }
@@ -107,7 +109,8 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
       };
     }
     return Object.keys(result).length > 0 ? result : null;
-  } catch {
+  } catch (err) {
+    logError('parseEditableStackManifest', err);
     return null;
   }
 }

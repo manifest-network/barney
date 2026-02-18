@@ -103,7 +103,8 @@ src/
     layout/        # AppShell, MainLayout, sidebar
     ui/            # Reusable UI components
   config/          # Chain config, constants, example apps
-  contexts/        # AIContext (chat state + tool execution), ToastContext
+  contexts/        # AIContext (lifecycle wrapper), ToastContext
+  stores/          # Zustand stores (aiStore: chat state, tool execution, streaming)
   hooks/           # Custom hooks (persistence, MCP bridge, polling)
   registry/        # App registry (localStorage-backed name→lease mapping)
   styles/          # Global CSS with Tailwind v4 theme
@@ -126,7 +127,7 @@ See [CLAUDE.md](./CLAUDE.md) for detailed architecture, tool definitions, and co
 
 Three-layer architecture:
 
-- **AIContext** — manages chat state, streams from Ollama, executes tools
+- **AI Store** (Zustand) — manages chat state, streams from Ollama, executes tools
 - **useManifestMCP** — bridges cosmos-kit with the MCP browser client
 - **Tool Executor** — dispatches to composite executors for queries and transactions
 

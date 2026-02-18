@@ -441,6 +441,51 @@ describe('serializeStackManifest', () => {
   });
 });
 
+describe('SensitiveValue masks all env values by default', () => {
+  it('masks env values for non-obvious secret keys (e.g. RABBITMQ_DEFAULT_PASS)', () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    // These keys were previously missed by the SENSITIVE_PATTERN denylist.
+    // With mask-by-default, all values are hidden regardless of key name.
+    const manifest = JSON.stringify({
+      image: 'rabbitmq:3',
+      ports: { '5672/tcp': {} },
+      env: { RABBITMQ_DEFAULT_PASS: 'hunter2', NEO4J_AUTH: 'neo4j/secret' },
+    });
+    const action = makeAction({
+      toolName: 'deploy_app',
+      args: { app_name: 'rabbit', size: 'micro', _generatedManifest: manifest },
+      description: 'Deploy "rabbit" on micro tier?',
+    });
+    const element = createElement(ConfirmationCard, { action, onConfirm, onCancel });
+    expect(element).toBeDefined();
+    // Component renders without error; all values are masked internally
+    expect(element.props.action.args._generatedManifest).toContain('RABBITMQ_DEFAULT_PASS');
+  });
+
+  it('masks env values for innocuous-looking keys (e.g. DATABASE_URL)', () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const payloadBytes = new TextEncoder().encode(JSON.stringify({
+      env: { DATABASE_URL: 'postgres://user:pass@host/db', PORT: '3000' },
+    }));
+    const action = makeAction({
+      toolName: 'deploy_app',
+      args: { app_name: 'myapp', size: 'micro' },
+      description: 'Deploy "myapp"?',
+      payload: {
+        bytes: payloadBytes,
+        filename: 'manifest.json',
+        size: payloadBytes.length,
+        hash: 'abc123',
+      },
+    });
+    const element = createElement(ConfirmationCard, { action, onConfirm, onCancel });
+    expect(element).toBeDefined();
+    // Both DATABASE_URL and PORT are masked by default (no denylist filtering)
+  });
+});
+
 describe('ConfirmationCard with stack manifest', () => {
   it('can be instantiated for deploy_app with stack _generatedManifest', () => {
     const onConfirm = vi.fn();

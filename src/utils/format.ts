@@ -160,6 +160,21 @@ export function formatRelativeTime(dateInput: Date | string | undefined): string
 }
 
 /**
+ * Format a timestamp as a short relative time string (e.g., "just now", "5m ago", "2h ago", "3d ago").
+ * Unlike formatRelativeTime, accepts a raw numeric timestamp (Date.now()-style).
+ */
+export function timeAgo(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+/**
  * Format a byte count for display (e.g., "1.2 KB" or "512 B").
  */
 export function formatFileSize(bytes: number): string {
