@@ -10,8 +10,9 @@ export const CHAIN_NAME = 'manifestlocal';
 
 /**
  * The chain ID used for MCP config and transaction signing.
+ * Configurable via PUBLIC_CHAIN_ID env variable.
  */
-export const CHAIN_ID = 'manifest-ledger-beta';
+export const CHAIN_ID = runtimeConfig.PUBLIC_CHAIN_ID;
 
 /**
  * Gas price string used for transaction fee estimation.
@@ -23,7 +24,7 @@ export const GAS_PRICE = runtimeConfig.PUBLIC_GAS_PRICE;
 export const manifestLocalChain: Chain = {
   chain_name: 'manifestlocal',
   chain_type: 'cosmos',
-  chain_id: 'manifest-ledger-beta',
+  chain_id: CHAIN_ID,
   pretty_name: 'Manifest (Local)',
   status: 'live',
   network_type: 'devnet',
