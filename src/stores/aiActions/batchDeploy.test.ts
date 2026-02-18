@@ -297,9 +297,13 @@ describe('requestBatchDeploy', () => {
   // Success without requiresConfirmation (contract test)
   // -----------------------------------------------------------------------
   describe('success without requiresConfirmation (contract test)', () => {
-    it('treats result without requiresConfirmation as error path', async () => {
+    it('falls through to else branch which renders "Error: undefined"', async () => {
       // batch_deploy MUST go through confirmation. If executeBatchDeploy returns
-      // success without requiresConfirmation, the else branch treats it as error.
+      // success without requiresConfirmation, the else branch runs:
+      //   content: `Error: ${result.error}`
+      // Since result.error is undefined on a success result, this produces
+      // "Error: undefined" — a known UX gap. This test locks in the current
+      // behavior so any fix is intentional.
       const store = setupStore();
       mockExecuteBatchDeploy.mockResolvedValueOnce({
         success: true,
@@ -311,9 +315,7 @@ describe('requestBatchDeploy', () => {
       const state = store.getState();
       const toolMsg = state.messages.find(m => m.role === 'tool');
       expect(toolMsg).toBeDefined();
-      // The else branch does: content: `Error: ${result.error}`
-      // result.error is undefined here, so content = "Error: undefined"
-      expect(toolMsg!.content).toContain('Error:');
+      expect(toolMsg!.content).toBe('Error: undefined');
       expect(toolMsg!.isStreaming).toBe(false);
     });
   });
@@ -358,29 +360,16 @@ describe('requestBatchDeploy', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Catch: pre-message-creation failure
+  // Catch: non-Error throw
   // -----------------------------------------------------------------------
-  describe('catch: pre-message-creation failure', () => {
-    it('does not crash when error occurs before toolMsgId is assigned', async () => {
-      // If error occurs during the very first operations (before toolMsgId),
-      // the catch block checks `if (toolMsgId)` and skips the message update.
-      // We can trigger this by making the store inaccessible early,
-      // but the simplest approach is to verify the catch block handles it.
-      // Since all early operations (creating user msg, assistant msg) use
-      // set() which doesn't throw, the realistic pre-toolMsgId errors are
-      // limited. We verify the finally invariant still holds.
+  describe('catch: non-Error throw', () => {
+    it('handles non-Error thrown values with "Unknown error" fallback', async () => {
+      // When something other than an Error is thrown (e.g. a string), the
+      // catch block falls back to 'Unknown error'. This throw happens after
+      // toolMsgId is assigned (executeBatchDeploy runs after line 52), so
+      // the catch block's `if (toolMsgId)` guard passes and the tool
+      // message gets updated.
       const store = setupStore();
-      // Make the first sha256 call fail — but toolMsgId is set before sha256
-      // is called (line 52 sets toolMsgId). So we need to trigger an error
-      // before line 52. The code flow:
-      //   1. set isStreaming
-      //   2. create user msg → set messages
-      //   3. create assistant msg → set messages
-      //   4. toolMsgId = generateMessageId()
-      //   5. create tool msg → set messages
-      //   6. sha256 call
-      // Since steps 1-5 don't throw in practice, this path is hard to trigger.
-      // We verify that if we get there (non-Error throw), it still works.
       mockExecuteBatchDeploy.mockImplementationOnce(() => {
         throw 'non-Error string'; // eslint-disable-line no-throw-literal
       });
@@ -388,11 +377,11 @@ describe('requestBatchDeploy', () => {
       await store.getState().requestBatchDeploy(makeApps());
 
       const state = store.getState();
-      // Should not crash, and isStreaming should be cleared
       expect(state.isStreaming).toBe(false);
       const toolMsg = state.messages.find(m => m.role === 'tool');
       expect(toolMsg).toBeDefined();
-      expect(toolMsg!.content).toContain('Batch deploy failed: Unknown error');
+      expect(toolMsg!.content).toBe('Batch deploy failed: Unknown error');
+      expect(toolMsg!.error).toBe('Unknown error');
     });
   });
 

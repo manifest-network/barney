@@ -363,7 +363,12 @@ describe('confirmAction', () => {
       expect(store.getState().deployProgress).toBeNull();
     });
 
-    it('preserves deployProgress on deploy_app failure', async () => {
+    it('does not enter isSimple branch on deploy_app failure (deployProgress already cleared at top of try)', async () => {
+      // The try block unconditionally does set({ deployProgress: null }) at the
+      // top, so deployProgress is always null after confirmAction regardless of
+      // tool type. The isSimple branch (restart_app/update_app) adds a redundant
+      // second clear. This test verifies deploy_app skips that branch — the
+      // observable outcome is the same (null), but the code path differs.
       const toolMsg = makeToolMessage('tool_msg_1');
       const store = setupStore({
         pendingConfirmation: makePendingConfirmation(),
@@ -376,13 +381,6 @@ describe('confirmAction', () => {
 
       await store.getState().confirmAction();
 
-      // deployProgress is cleared at the top of the try block (set({ deployProgress: null })),
-      // but deploy_app failure does NOT trigger the additional clear in the isSimple check.
-      // The top-level set({ deployProgress: null }) always runs though.
-      // Let's verify via the absence of the isSimple branch clear.
-      // Actually the top of try block does: set({ deployProgress: null });
-      // So it's always null after execution. The key difference is deploy_app
-      // doesn't get the extra clear in the isSimple block. But both are null.
       expect(store.getState().deployProgress).toBeNull();
     });
 
