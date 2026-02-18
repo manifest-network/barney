@@ -93,7 +93,11 @@ function validateInternalServiceNames(
 
   const validated: string[] = [];
   for (const serviceName of serviceNames) {
-    if (typeof serviceName !== 'string' || !serviceName || validateServiceName(serviceName)) {
+    if (typeof serviceName !== 'string' || !serviceName) {
+      return { error: `Invalid stack service metadata. Please run ${toolName} again with a valid services definition.` };
+    }
+    const nameError = validateServiceName(serviceName);
+    if (nameError !== null) {
       return { error: `Invalid stack service metadata. Please run ${toolName} again with a valid services definition.` };
     }
     validated.push(serviceName);
