@@ -46,7 +46,7 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
       tmpfs: Array.isArray(parsed.tmpfs) ? (parsed.tmpfs as string[]) : undefined,
     };
   } catch (err) {
-    logError('parseEditableManifest', 'Failed to parse manifest JSON', err);
+    logError('parseEditableManifest', err);
     return null;
   }
 }
@@ -110,7 +110,7 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
     }
     return Object.keys(result).length > 0 ? result : null;
   } catch (err) {
-    logError('parseEditableStackManifest', 'Failed to parse stack manifest JSON', err);
+    logError('parseEditableStackManifest', err);
     return null;
   }
 }

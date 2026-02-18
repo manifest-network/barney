@@ -1774,14 +1774,16 @@ export function executeCosmosTransaction(
     return { success: false, error: parseResult.error };
   }
 
-  const argsSummary = parseResult.data.length > 0 ? ` with args: ${parseResult.data.join(', ')}` : '';
+  // Safe: parseResult.error was checked above, so data is always defined here
+  const parsedArgs = parseResult.data!;
+  const argsSummary = parsedArgs.length > 0 ? ` with args: ${parsedArgs.join(', ')}` : '';
   return {
     success: true,
     requiresConfirmation: true,
     confirmationMessage: `Execute ${module} ${subcommand}${argsSummary}?`,
     pendingAction: {
       toolName: 'cosmos_tx',
-      args: { module, subcommand, parsedArgs: parseResult.data },
+      args: { module, subcommand, parsedArgs },
     },
   };
 }

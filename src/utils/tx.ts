@@ -94,7 +94,7 @@ export function extractLeaseUuid(result: unknown): string | null {
 
     return null;
   } catch (err) {
-    logError('extractLeaseUuid', 'Failed to parse TX result', err);
+    logError('extractLeaseUuid', err);
     return null;
   }
 }
