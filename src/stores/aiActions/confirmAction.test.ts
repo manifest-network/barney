@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { StreamResult } from '../../ai/streamUtils';
 import type { ToolResult } from '../../ai/toolExecutor';
 import type { PendingConfirmation, ChatMessage } from '../../contexts/aiTypes';
-import { createAIStore } from '../aiStore';
+import { createAIStore, type AIStore } from '../aiStore';
 
 // ---------------------------------------------------------------------------
 // Deterministic IDs
@@ -32,9 +32,15 @@ vi.mock('../../api/ollama', () => ({
   listModels: vi.fn().mockResolvedValue([]),
 }));
 
-const mockExecuteConfirmedTool = vi.fn<() => Promise<ToolResult>>();
+const mockExecuteConfirmedTool = vi.fn<(
+  toolName: string,
+  args: Record<string, unknown>,
+  clientManager: unknown,
+  options: unknown,
+  payload?: unknown
+) => Promise<ToolResult>>();
 vi.mock('../../ai/toolExecutor', () => ({
-  executeConfirmedTool: (...args: unknown[]) => mockExecuteConfirmedTool(...(args as [])),
+  executeConfirmedTool: (...args: unknown[]) => mockExecuteConfirmedTool(...(args as [string, Record<string, unknown>, unknown, unknown, unknown?])),
 }));
 
 const mockProcessStream = vi.fn<() => Promise<StreamResult>>();
@@ -131,7 +137,7 @@ function makeToolMessage(id: string): ChatMessage {
   };
 }
 
-const fakeClientManager = { fake: true } as unknown as NonNullable<ReturnType<typeof createAIStore>['getState']>['clientManager'];
+const fakeClientManager = { fake: true } as unknown as NonNullable<AIStore['clientManager']>;
 
 function setupStore(overrides: Record<string, unknown> = {}): Store {
   const store = createAIStore();

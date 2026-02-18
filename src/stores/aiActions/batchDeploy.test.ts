@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ToolResult } from '../../ai/toolExecutor';
-import { createAIStore } from '../aiStore';
+import { createAIStore, type AIStore } from '../aiStore';
 
 // ---------------------------------------------------------------------------
 // Deterministic IDs
@@ -29,7 +29,7 @@ const mockDeriveAppName = vi.fn((filename: string) =>
 );
 vi.mock('../../ai/toolExecutor/compositeTransactions', () => ({
   executeBatchDeploy: (...args: unknown[]) => mockExecuteBatchDeploy(...(args as [])),
-  deriveAppName: (...args: unknown[]) => mockDeriveAppName(...(args as [])),
+  deriveAppName: (...args: unknown[]) => mockDeriveAppName(...(args as [string])),
 }));
 
 vi.mock('../../utils/hash', () => ({
@@ -92,7 +92,7 @@ import { sha256 } from '../../utils/hash';
 
 type Store = ReturnType<typeof createAIStore>;
 
-const fakeClientManager = { fake: true } as unknown as NonNullable<ReturnType<typeof createAIStore>['getState']>['clientManager'];
+const fakeClientManager = { fake: true } as unknown as NonNullable<AIStore['clientManager']>;
 
 function makeApps(count = 2): Array<{ label: string; manifest: object }> {
   return Array.from({ length: count }, (_, i) => ({
