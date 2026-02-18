@@ -297,13 +297,10 @@ describe('requestBatchDeploy', () => {
   // Success without requiresConfirmation (contract test)
   // -----------------------------------------------------------------------
   describe('success without requiresConfirmation (contract test)', () => {
-    it('falls through to else branch which renders "Error: undefined"', async () => {
+    it('falls through to else branch with a descriptive error message', async () => {
       // batch_deploy MUST go through confirmation. If executeBatchDeploy returns
-      // success without requiresConfirmation, the else branch runs:
-      //   content: `Error: ${result.error}`
-      // Since result.error is undefined on a success result, this produces
-      // "Error: undefined" — a known UX gap. This test locks in the current
-      // behavior so any fix is intentional.
+      // success without requiresConfirmation, the else branch treats it as an
+      // error with a fallback message (since result.error is undefined on success).
       const store = setupStore();
       mockExecuteBatchDeploy.mockResolvedValueOnce({
         success: true,
@@ -315,7 +312,8 @@ describe('requestBatchDeploy', () => {
       const state = store.getState();
       const toolMsg = state.messages.find(m => m.role === 'tool');
       expect(toolMsg).toBeDefined();
-      expect(toolMsg!.content).toBe('Error: undefined');
+      expect(toolMsg!.content).toBe('Error: Batch deploy did not return a confirmation step');
+      expect(toolMsg!.error).toBe('Batch deploy did not return a confirmation step');
       expect(toolMsg!.isStreaming).toBe(false);
     });
   });

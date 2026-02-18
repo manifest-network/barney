@@ -105,9 +105,10 @@ export async function requestBatchDeployFn(
       );
       set({ messages: updated });
     } else {
+      const errorText = result.error || 'Batch deploy did not return a confirmation step';
       const updated = get().messages.map((m) =>
         m.id === toolMsgId
-          ? { ...m, content: `Error: ${result.error}`, error: result.error, isStreaming: false }
+          ? { ...m, content: `Error: ${errorText}`, error: errorText, isStreaming: false }
           : m
       );
       set({ messages: updated });
