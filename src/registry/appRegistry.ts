@@ -54,10 +54,14 @@ export function sanitizeManifestForStorage(manifestJson: string): string {
 
     // Stack (multi-service): sanitize env inside each service
     if (obj.services && typeof obj.services === 'object' && !Array.isArray(obj.services)) {
-      const services = obj.services as Record<string, Record<string, unknown>>;
+      const services = obj.services as Record<string, unknown>;
       for (const svc of Object.values(services)) {
-        if (svc.env && typeof svc.env === 'object' && !Array.isArray(svc.env)) {
-          svc.env = sanitizeEnvObject(svc.env as Record<string, string>);
+        if (!svc || typeof svc !== 'object' || Array.isArray(svc)) {
+          continue;
+        }
+        const service = svc as Record<string, unknown>;
+        if (service.env && typeof service.env === 'object' && !Array.isArray(service.env)) {
+          service.env = sanitizeEnvObject(service.env as Record<string, string>);
         }
       }
     }

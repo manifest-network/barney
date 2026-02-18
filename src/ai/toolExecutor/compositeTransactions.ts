@@ -75,6 +75,63 @@ export function formatLeaseItems(skuUuid: string, serviceNames?: string[]): stri
   return serviceNames.map(name => `${skuUuid}:1:${name}`);
 }
 
+/** Coerce a string-or-number tool arg to string; reject objects/arrays/booleans. */
+function coerceStringArg(value: unknown, fieldName: string, context?: string): { value?: string; error?: string } {
+  if (value == null) return {};
+  if (typeof value === 'string') return { value };
+  if (typeof value === 'number' && isFinite(value)) return { value: String(value) };
+  const prefix = context ? `${context}: ` : '';
+  return { error: `${prefix}${fieldName} must be a string, got ${typeof value}.` };
+}
+
+/** Coerce a tmpfs arg (string or string[]) to a comma-separated string. */
+function coerceTmpfsArg(value: unknown, context?: string): { value?: string; error?: string } {
+  if (value == null) return {};
+  if (typeof value === 'string') return { value };
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      if (typeof value[i] !== 'string') {
+        const prefix = context ? `${context}: ` : '';
+        return { error: `${prefix}tmpfs array element ${i} must be a string, got ${typeof value[i]}.` };
+      }
+    }
+    return { value: (value as string[]).join(',') };
+  }
+  const prefix = context ? `${context}: ` : '';
+  return { error: `${prefix}tmpfs must be a string or array of strings, got ${typeof value}.` };
+}
+
+/**
+ * Validate internal stack service names persisted in pending action args.
+ * These values are runtime-unknown and must be revalidated before use.
+ */
+function validateInternalServiceNames(
+  serviceNames: unknown,
+  toolName: 'deploy_app' | 'update_app'
+): { serviceNames?: string[]; error?: string } {
+  if (serviceNames === undefined) {
+    return {};
+  }
+
+  if (!Array.isArray(serviceNames)) {
+    return { error: `Invalid stack service metadata. Please run ${toolName} again with a valid services definition.` };
+  }
+
+  const validated: string[] = [];
+  for (const serviceName of serviceNames) {
+    if (typeof serviceName !== 'string' || !serviceName) {
+      return { error: `Invalid stack service metadata. Please run ${toolName} again with a valid services definition.` };
+    }
+    const nameError = validateServiceName(serviceName);
+    if (nameError !== null) {
+      return { error: `Invalid stack service metadata. Please run ${toolName} again with a valid services definition.` };
+    }
+    validated.push(serviceName);
+  }
+
+  return { serviceNames: validated };
+}
+
 interface ParseStackServicesResult {
   services: Record<string, ServiceConfig>;
   serviceNames: string[];
@@ -195,12 +252,21 @@ export function parseAndValidateStackServices(
       if (!healthCheck && knownConfig.health_check) healthCheck = { ...knownConfig.health_check };
     }
 
+    // Coerce port/user/tmpfs — LLMs frequently produce numbers instead of strings
+    const svcCtx = `Service "${svcName}"`;
+    const portResult = coerceStringArg(cfg.port, 'port', svcCtx);
+    if (portResult.error) return { error: portResult.error };
+    const userResult = coerceStringArg(cfg.user, 'user', svcCtx);
+    if (userResult.error) return { error: userResult.error };
+    const tmpfsResult = coerceTmpfsArg(cfg.tmpfs, svcCtx);
+    if (tmpfsResult.error) return { error: tmpfsResult.error };
+
     stackServices[svcName] = {
       image: cfg.image as string,
-      port: cfg.port as string | undefined,
+      port: portResult.value,
       env,
-      user: cfg.user as string | undefined,
-      tmpfs: cfg.tmpfs as string | undefined,
+      user: userResult.value,
+      tmpfs: tmpfsResult.value,
       command,
       args: svcArgs,
       health_check: healthCheck,
@@ -556,14 +622,22 @@ export async function executeDeployApp(
       cmdArgs[0] += ` --token ${env.OPENCLAW_GATEWAY_TOKEN}`;
     }
 
+    // Coerce port/user/tmpfs — LLMs frequently produce numbers instead of strings
+    const portResult = coerceStringArg(args.port, 'port');
+    if (portResult.error) return { success: false, error: portResult.error };
+    const userResult = coerceStringArg(args.user, 'user');
+    if (userResult.error) return { success: false, error: userResult.error };
+    const tmpfsResult = coerceTmpfsArg(args.tmpfs);
+    if (tmpfsResult.error) return { success: false, error: tmpfsResult.error };
+
     let manifestResult;
     try {
       manifestResult = await buildManifest({
         image: args.image as string,
-        port: args.port as string | undefined,
+        port: portResult.value,
         env,
-        user: args.user as string | undefined,
-        tmpfs: args.tmpfs as string | undefined,
+        user: userResult.value,
+        tmpfs: tmpfsResult.value,
         command,
         args: cmdArgs,
         health_check: healthCheck,
@@ -695,7 +769,12 @@ export async function executeDeployApp(
   }
 
   // Stack deploys multiply cost by service count
-  const serviceCount = Array.isArray(args._serviceNames) ? (args._serviceNames as string[]).length : 1;
+  const serviceNamesResult = validateInternalServiceNames(args._serviceNames, 'deploy_app');
+  if (serviceNamesResult.error) {
+    return { success: false, error: serviceNamesResult.error };
+  }
+  const serviceNames = serviceNamesResult.serviceNames;
+  const serviceCount = serviceNames && serviceNames.length > 0 ? serviceNames.length : 1;
 
   // Check credits - verify user can afford at least 1 hour of this SKU
   let creditWarning = '';
@@ -751,7 +830,7 @@ export async function executeDeployApp(
         providerUuid: provider.uuid,
         providerUrl: provider.apiUrl,
         ...(args._generatedManifest ? { _generatedManifest: args._generatedManifest } : {}),
-        ...(args._serviceNames ? { _serviceNames: args._serviceNames } : {}),
+        ...(serviceNames && serviceNames.length > 0 ? { _serviceNames: serviceNames } : {}),
       },
     },
   };
@@ -791,8 +870,12 @@ export async function executeConfirmedDeployApp(
   // Create lease
   onProgress?.({ phase: 'creating_lease', detail: 'Creating lease on-chain...' });
 
-  const serviceNames = args._serviceNames as string[] | undefined;
-  const leaseItems = formatLeaseItems(skuUuid, serviceNames);
+  const serviceNamesResult = validateInternalServiceNames(args._serviceNames, 'deploy_app');
+  if (serviceNamesResult.error) {
+    onProgress?.({ phase: 'failed', detail: serviceNamesResult.error });
+    return { success: false, error: serviceNamesResult.error };
+  }
+  const leaseItems = formatLeaseItems(skuUuid, serviceNamesResult.serviceNames);
   const cmdArgs = ['--meta-hash', metaHashHex, ...leaseItems];
   const result = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
 
@@ -2109,14 +2192,22 @@ export async function executeUpdateApp(
       cmdArgs[0] += ` --token ${env.OPENCLAW_GATEWAY_TOKEN}`;
     }
 
+    // Coerce port/user/tmpfs — LLMs frequently produce numbers instead of strings
+    const portResult = coerceStringArg(args.port, 'port');
+    if (portResult.error) return { success: false, error: portResult.error };
+    const userResult = coerceStringArg(args.user, 'user');
+    if (userResult.error) return { success: false, error: userResult.error };
+    const tmpfsResult = coerceTmpfsArg(args.tmpfs);
+    if (tmpfsResult.error) return { success: false, error: tmpfsResult.error };
+
     let manifestResult;
     try {
       manifestResult = await buildManifest({
         image: args.image as string,
-        port: args.port as string | undefined,
+        port: portResult.value,
         env,
-        user: args.user as string | undefined,
-        tmpfs: args.tmpfs as string | undefined,
+        user: userResult.value,
+        tmpfs: tmpfsResult.value,
         command,
         args: cmdArgs,
         health_check: healthCheck,
@@ -2177,11 +2268,23 @@ export async function executeUpdateApp(
     }
   }
 
+  let stackServiceCount = 0;
+  if (args._isStack) {
+    const serviceNamesResult = validateInternalServiceNames(args._serviceNames, 'update_app');
+    if (serviceNamesResult.error || !serviceNamesResult.serviceNames || serviceNamesResult.serviceNames.length === 0) {
+      return {
+        success: false,
+        error: serviceNamesResult.error ?? 'Invalid stack service metadata. Please run update_app again with a valid services definition.',
+      };
+    }
+    stackServiceCount = serviceNamesResult.serviceNames.length;
+  }
+
   return {
     success: true,
     requiresConfirmation: true,
     confirmationMessage: args._isStack
-      ? `Update stack "${app.name}" with ${(args._serviceNames as string[]).length} services (new manifest)?`
+      ? `Update stack "${app.name}" with ${stackServiceCount} services (new manifest)?`
       : `Update app "${app.name}" with ${args._generatedManifest ? `image ${args.image}` : 'new manifest'}?`,
     pendingAction: {
       toolName: 'update_app',

@@ -625,6 +625,71 @@ describe('parseAndValidateStackServices', () => {
       expect(result.services.db.port).toBe('3306');
     }
   });
+
+  it('coerces numeric port to string', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', port: 80 } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.web.port).toBe('80');
+    }
+  });
+
+  it('coerces numeric user to string', () => {
+    const json = JSON.stringify({ db: { image: 'postgres', user: 999 } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.db.user).toBe('999');
+    }
+  });
+
+  it('coerces tmpfs array to comma-separated string', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', tmpfs: ['/var/run', '/tmp'] } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.services.web.tmpfs).toBe('/var/run,/tmp');
+    }
+  });
+
+  it('rejects object port with clear error', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', port: { tcp: 80 } } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toContain('port must be a string');
+      expect(result.error).toContain('Service "web"');
+    }
+  });
+
+  it('rejects object user with clear error', () => {
+    const json = JSON.stringify({ db: { image: 'postgres', user: { uid: 999 } } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toContain('user must be a string');
+      expect(result.error).toContain('Service "db"');
+    }
+  });
+
+  it('rejects object tmpfs with clear error', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', tmpfs: { path: '/tmp' } } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toContain('tmpfs must be a string or array');
+    }
+  });
+
+  it('rejects tmpfs array with non-string elements', () => {
+    const json = JSON.stringify({ web: { image: 'nginx', tmpfs: ['/var/run', 123] } });
+    const result = parseAndValidateStackServices(json, false, 'test');
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toContain('tmpfs array element');
+    }
+  });
 });
 
 describe('executeDeployApp', () => {
@@ -963,6 +1028,53 @@ describe('executeDeployApp', () => {
     expect(manifest.services.db.image).toBe('postgres');
   });
 
+  it('returns error for invalid internal _serviceNames metadata', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'redis:8.4', _serviceNames: 'web' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid stack service metadata');
+  });
+
+  it('coerces numeric port to string for single-service deploy', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'nginx', port: 80 as unknown as string },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
+    expect(manifest.ports).toEqual({ '80/tcp': {} });
+  });
+
+  it('rejects object port with clear error for single-service deploy', async () => {
+    const result = await executeDeployApp(
+      { image: 'nginx', port: { tcp: 80 } as unknown as string },
+      makeOptions()
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('port must be a string');
+  });
+
   it('returns error for invalid services JSON', async () => {
     const result = await executeDeployApp(
       { app_name: 'bad-stack', services: 'not-json' },
@@ -1195,6 +1307,28 @@ describe('executeDeployApp', () => {
 
 describe('executeConfirmedDeployApp', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('returns user-facing error for invalid internal _serviceNames metadata', async () => {
+    const onProgress = vi.fn();
+    const result = await executeConfirmedDeployApp(
+      {
+        app_name: 'test-app',
+        size: 'small',
+        skuUuid: 'sku-1',
+        providerUuid: 'p1',
+        providerUrl: 'https://fred.example.com',
+        _serviceNames: 'web',
+      },
+      CLIENT_MANAGER,
+      makeOptions({ onProgress }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid stack service metadata');
+    expect(cosmosTx).not.toHaveBeenCalled();
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'failed' }));
+  });
 
   it('creates lease, uploads, and polls to ready — extracts port from instances', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
@@ -2152,6 +2286,16 @@ describe('executeUpdateApp', () => {
     const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
     expect(manifest.services.web.image).toBe('nginx:2');
     expect(manifest.services.db.image).toBe('postgres:19');
+  });
+
+  it('returns error for invalid internal stack service metadata in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', _isStack: true, _serviceNames: 'web' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid stack service metadata');
   });
 
   it('returns error for invalid services JSON in update', async () => {

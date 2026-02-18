@@ -362,4 +362,16 @@ describe('sanitizeManifestForStorage', () => {
     const result = JSON.parse(sanitizeManifestForStorage(manifest));
     expect(result.services.web.env.PORT).toBe('80');
   });
+
+  it('ignores non-object services entries while sanitizing valid services', () => {
+    const manifest = JSON.stringify({
+      services: {
+        web: null,
+        db: { image: 'mysql', env: { MYSQL_ROOT_PASSWORD: 'root_pass' } },
+      },
+    });
+    const result = JSON.parse(sanitizeManifestForStorage(manifest));
+    expect(result.services.web).toBeNull();
+    expect(result.services.db.env.MYSQL_ROOT_PASSWORD).toBe('');
+  });
 });
