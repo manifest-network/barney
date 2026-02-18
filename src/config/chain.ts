@@ -1,5 +1,6 @@
 import type { Chain, AssetList } from '@chain-registry/types';
 import { REST_URL, RPC_ENDPOINT } from '../api/config';
+import { runtimeConfig } from './runtimeConfig';
 
 /**
  * The chain name used for cosmos-kit and chain registry lookups.
@@ -15,8 +16,9 @@ export const CHAIN_ID = 'manifest-ledger-beta';
 /**
  * Gas price string used for transaction fee estimation.
  * Format: `{amount}{denom}` as expected by CosmJS GasPrice.fromString().
+ * Configurable via PUBLIC_GAS_PRICE env variable.
  */
-export const GAS_PRICE = '0.0025umfx';
+export const GAS_PRICE = runtimeConfig.PUBLIC_GAS_PRICE;
 
 export const manifestLocalChain: Chain = {
   chain_name: 'manifestlocal',
