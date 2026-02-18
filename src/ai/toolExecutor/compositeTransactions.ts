@@ -75,6 +75,33 @@ export function formatLeaseItems(skuUuid: string, serviceNames?: string[]): stri
   return serviceNames.map(name => `${skuUuid}:1:${name}`);
 }
 
+/**
+ * Validate internal stack service names persisted in pending action args.
+ * These values are runtime-unknown and must be revalidated before use.
+ */
+function validateInternalServiceNames(
+  serviceNames: unknown,
+  toolName: 'deploy_app' | 'update_app'
+): { serviceNames?: string[]; error?: string } {
+  if (serviceNames === undefined) {
+    return {};
+  }
+
+  if (!Array.isArray(serviceNames)) {
+    return { error: `Invalid stack service metadata. Please run ${toolName} again with a valid services definition.` };
+  }
+
+  const validated: string[] = [];
+  for (const serviceName of serviceNames) {
+    if (typeof serviceName !== 'string' || !serviceName || validateServiceName(serviceName)) {
+      return { error: `Invalid stack service metadata. Please run ${toolName} again with a valid services definition.` };
+    }
+    validated.push(serviceName);
+  }
+
+  return { serviceNames: validated };
+}
+
 interface ParseStackServicesResult {
   services: Record<string, ServiceConfig>;
   serviceNames: string[];
@@ -695,7 +722,12 @@ export async function executeDeployApp(
   }
 
   // Stack deploys multiply cost by service count
-  const serviceCount = Array.isArray(args._serviceNames) ? (args._serviceNames as string[]).length : 1;
+  const serviceNamesResult = validateInternalServiceNames(args._serviceNames, 'deploy_app');
+  if (serviceNamesResult.error) {
+    return { success: false, error: serviceNamesResult.error };
+  }
+  const serviceNames = serviceNamesResult.serviceNames;
+  const serviceCount = serviceNames && serviceNames.length > 0 ? serviceNames.length : 1;
 
   // Check credits - verify user can afford at least 1 hour of this SKU
   let creditWarning = '';
@@ -751,7 +783,7 @@ export async function executeDeployApp(
         providerUuid: provider.uuid,
         providerUrl: provider.apiUrl,
         ...(args._generatedManifest ? { _generatedManifest: args._generatedManifest } : {}),
-        ...(args._serviceNames ? { _serviceNames: args._serviceNames } : {}),
+        ...(serviceNames && serviceNames.length > 0 ? { _serviceNames: serviceNames } : {}),
       },
     },
   };
@@ -791,8 +823,12 @@ export async function executeConfirmedDeployApp(
   // Create lease
   onProgress?.({ phase: 'creating_lease', detail: 'Creating lease on-chain...' });
 
-  const serviceNames = args._serviceNames as string[] | undefined;
-  const leaseItems = formatLeaseItems(skuUuid, serviceNames);
+  const serviceNamesResult = validateInternalServiceNames(args._serviceNames, 'deploy_app');
+  if (serviceNamesResult.error) {
+    onProgress?.({ phase: 'failed', detail: serviceNamesResult.error });
+    return { success: false, error: serviceNamesResult.error };
+  }
+  const leaseItems = formatLeaseItems(skuUuid, serviceNamesResult.serviceNames);
   const cmdArgs = ['--meta-hash', metaHashHex, ...leaseItems];
   const result = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
 
@@ -2177,11 +2213,23 @@ export async function executeUpdateApp(
     }
   }
 
+  let stackServiceCount = 0;
+  if (args._isStack) {
+    const serviceNamesResult = validateInternalServiceNames(args._serviceNames, 'update_app');
+    if (serviceNamesResult.error || !serviceNamesResult.serviceNames || serviceNamesResult.serviceNames.length === 0) {
+      return {
+        success: false,
+        error: serviceNamesResult.error ?? 'Invalid stack service metadata. Please run update_app again with a valid services definition.',
+      };
+    }
+    stackServiceCount = serviceNamesResult.serviceNames.length;
+  }
+
   return {
     success: true,
     requiresConfirmation: true,
     confirmationMessage: args._isStack
-      ? `Update stack "${app.name}" with ${(args._serviceNames as string[]).length} services (new manifest)?`
+      ? `Update stack "${app.name}" with ${stackServiceCount} services (new manifest)?`
       : `Update app "${app.name}" with ${args._generatedManifest ? `image ${args.image}` : 'new manifest'}?`,
     pendingAction: {
       toolName: 'update_app',

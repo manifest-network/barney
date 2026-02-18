@@ -963,6 +963,24 @@ describe('executeDeployApp', () => {
     expect(manifest.services.db.image).toBe('postgres');
   });
 
+  it('returns error for invalid internal _serviceNames metadata', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const result = await executeDeployApp(
+      { image: 'redis:8.4', _serviceNames: 'web' },
+      makeOptions()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid stack service metadata');
+  });
+
   it('returns error for invalid services JSON', async () => {
     const result = await executeDeployApp(
       { app_name: 'bad-stack', services: 'not-json' },
@@ -1195,6 +1213,28 @@ describe('executeDeployApp', () => {
 
 describe('executeConfirmedDeployApp', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('returns user-facing error for invalid internal _serviceNames metadata', async () => {
+    const onProgress = vi.fn();
+    const result = await executeConfirmedDeployApp(
+      {
+        app_name: 'test-app',
+        size: 'small',
+        skuUuid: 'sku-1',
+        providerUuid: 'p1',
+        providerUrl: 'https://fred.example.com',
+        _serviceNames: 'web',
+      },
+      CLIENT_MANAGER,
+      makeOptions({ onProgress }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid stack service metadata');
+    expect(cosmosTx).not.toHaveBeenCalled();
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'failed' }));
+  });
 
   it('creates lease, uploads, and polls to ready — extracts port from instances', async () => {
     vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
@@ -2152,6 +2192,16 @@ describe('executeUpdateApp', () => {
     const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
     expect(manifest.services.web.image).toBe('nginx:2');
     expect(manifest.services.db.image).toBe('postgres:19');
+  });
+
+  it('returns error for invalid internal stack service metadata in update', async () => {
+    const app = makeApp();
+    const result = await executeUpdateApp(
+      { app_name: 'my-app', image: 'nginx', _isStack: true, _serviceNames: 'web' },
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid stack service metadata');
   });
 
   it('returns error for invalid services JSON in update', async () => {
