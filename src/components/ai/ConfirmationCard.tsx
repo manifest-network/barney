@@ -56,8 +56,6 @@ function parseStackManifest(action: PendingAction): Record<string, StackServiceS
 /** Internal args that should not be shown in the confirmation parameters. */
 const INTERNAL_ARGS = new Set(['_generatedManifest', '_serviceNames', '_isStack']);
 
-const SENSITIVE_PATTERN = /password|secret|token|key|credential/i;
-
 function InlineCopyButton({ value }: { value: string }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const copied = isCopied(value);
@@ -68,25 +66,22 @@ function InlineCopyButton({ value }: { value: string }) {
   );
 }
 
-function SensitiveValue({ envKey, value }: { envKey: string; value: string }) {
-  const isSensitive = SENSITIVE_PATTERN.test(envKey);
-  const [revealed, setRevealed] = useState(!isSensitive);
+function SensitiveValue({ value }: { value: string }) {
+  const [revealed, setRevealed] = useState(false);
 
   return (
     <span className="flex items-center gap-1">
       <code className="font-mono text-xs text-primary">{revealed ? value : '\u2022'.repeat(12)}</code>
-      {isSensitive && (
-        <button
-          type="button"
-          onClick={() => setRevealed((r) => !r)}
-          className="btn-icon"
-          aria-label={revealed ? 'Hide value' : 'Reveal value'}
-          title={revealed ? 'Hide' : 'Reveal'}
-        >
-          {revealed ? <EyeOff className="w-3.5 h-3.5 text-muted" /> : <Eye className="w-3.5 h-3.5 text-muted" />}
-        </button>
-      )}
-      <InlineCopyButton value={value} />
+      <button
+        type="button"
+        onClick={() => setRevealed((r) => !r)}
+        className="btn-icon"
+        aria-label={revealed ? 'Hide value' : 'Reveal value'}
+        title={revealed ? 'Hide' : 'Reveal'}
+      >
+        {revealed ? <EyeOff className="w-3.5 h-3.5 text-muted" /> : <Eye className="w-3.5 h-3.5 text-muted" />}
+      </button>
+      {revealed && <InlineCopyButton value={value} />}
     </span>
   );
 }
@@ -232,7 +227,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                   {Object.entries(manifestEnv).map(([key, value]) => (
                     <div key={key} className="flex items-center justify-between gap-2 text-sm">
                       <span className="font-mono text-xs text-dim">{key}</span>
-                      <SensitiveValue envKey={key} value={value} />
+                      <SensitiveValue value={value} />
                     </div>
                   ))}
                 </div>

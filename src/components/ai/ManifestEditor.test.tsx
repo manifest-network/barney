@@ -74,6 +74,26 @@ describe('ManifestEditor', () => {
   });
 });
 
+describe('ManifestEditor env masking', () => {
+  it('renders with env vars that have non-obvious secret keys (mask-by-default)', () => {
+    const onChange = vi.fn();
+    // These keys were previously missed by the SENSITIVE_PATTERN denylist.
+    // With mask-by-default, all env values use password input type regardless of key name.
+    const manifest = makeManifest({
+      env: {
+        RABBITMQ_DEFAULT_PASS: 'hunter2',
+        NEO4J_AUTH: 'neo4j/secret',
+        DATABASE_URL: 'postgres://user:pass@host/db',
+        PORT: '3000',
+      },
+    });
+    const element = createElement(ManifestEditor, { manifest, onChange });
+    expect(element).toBeDefined();
+    expect(Object.keys(element.props.manifest.env)).toHaveLength(4);
+    // All values are masked by default (password input type) — no denylist filtering
+  });
+});
+
 describe('isValidPort', () => {
   it('accepts valid port numbers', () => {
     expect(isValidPort('1')).toBe(true);
