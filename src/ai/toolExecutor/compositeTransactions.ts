@@ -18,7 +18,7 @@ import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthT
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl } from './helpers';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
-import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, type ServiceConfig, type HealthCheckConfig } from '../manifest';
+import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, getServiceNames, type ServiceConfig, type HealthCheckConfig } from '../manifest';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { DeployProgress } from '../progress';
@@ -56,6 +56,60 @@ function validateEnvNames(env: Record<string, string>): string | null {
     return `Blocked env variable(s): ${blocked.join(', ')}. These variables could compromise the runtime environment.`;
   }
   return null;
+}
+
+/**
+ * Extract service names from a payload that may be JSON or YAML.
+ * Tries JSON.parse first (via getServiceNames), then falls back to
+ * lightweight YAML extraction for .yaml/.yml uploads.
+ */
+export function extractServiceNamesFromPayload(bytes: Uint8Array): string[] {
+  const text = new TextDecoder().decode(bytes);
+
+  // Try JSON first
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const names = getServiceNames(parsed);
+    if (names.length > 0) return names;
+  } catch {
+    // Not JSON — try YAML extraction below
+  }
+
+  // Lightweight YAML extraction: find top-level `services:` key,
+  // then collect immediate child keys (one indent level deeper).
+  const lines = text.split('\n');
+  let inServices = false;
+  let indent = '';
+  const names: string[] = [];
+
+  for (const line of lines) {
+    if (/^services:\s*(#.*)?$/.test(line)) {
+      inServices = true;
+      continue;
+    }
+    if (!inServices) continue;
+
+    // Skip blank lines and comments
+    if (/^\s*(#.*)?$/.test(line)) continue;
+
+    // Non-indented line means we've left the services block
+    if (/^\S/.test(line)) break;
+
+    // Detect indent level from first child key
+    if (!indent) {
+      const match = line.match(/^(\s+)/);
+      if (!match) break;
+      indent = match[1];
+    }
+
+    // Lines at the child indent level that end with `:` are service names
+    if (line.startsWith(indent) && !line.startsWith(indent + ' ') && !line.startsWith(indent + '\t')) {
+      const match = line.match(/^\s+([\w][\w-]*):\s*(#.*)?$/);
+      if (match) names.push(match[1]);
+    }
+  }
+
+  return names;
 }
 
 /**
@@ -663,6 +717,14 @@ export async function executeDeployApp(
     return { success: false, error: 'No file attached and no image specified. Attach a manifest file or specify a Docker image (e.g. deploy_app(image="redis:8.4")).' };
   }
 
+  // Extract service names from file-uploaded stack manifests (JSON or YAML)
+  if (!args._serviceNames) {
+    const names = extractServiceNamesFromPayload(payload.bytes);
+    if (names.length > 0) {
+      args._serviceNames = names;
+    }
+  }
+
   // Resolve name
   let name = args.app_name as string | undefined;
   if (!name && payload.filename) {
@@ -1068,6 +1130,7 @@ export interface SingleDeployEntry {
   providerUuid: string;
   providerUrl: string;
   payload: PayloadAttachment;
+  serviceNames?: string[];
 }
 
 /**
@@ -1085,13 +1148,13 @@ export async function deploySingleApp(
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
 
-  const { app_name: name, size, skuUuid, providerUrl, providerUuid, payload } = entry;
+  const { app_name: name, size, skuUuid, providerUrl, providerUuid, payload, serviceNames } = entry;
   const metaHashHex = payload.hash;
 
   // Create lease
   onProgress({ phase: 'creating_lease', detail: 'Creating lease on-chain...' });
 
-  const cmdArgs = ['--meta-hash', metaHashHex, ...formatLeaseItems(skuUuid)];
+  const cmdArgs = ['--meta-hash', metaHashHex, ...formatLeaseItems(skuUuid, serviceNames)];
   const result = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
 
   if (result.code !== 0) {
@@ -1298,6 +1361,11 @@ export async function executeBatchDeploy(
     }
 
     usedNames.add(name);
+
+    // Extract service names from stack manifests (JSON or YAML)
+    const extractedNames = extractServiceNamesFromPayload(entry.payload.bytes);
+    const serviceNames = extractedNames.length > 0 ? extractedNames : undefined;
+
     resolvedEntries.push({
       app_name: name,
       size: normalizedSize,
@@ -1305,6 +1373,7 @@ export async function executeBatchDeploy(
       providerUuid: provider.uuid,
       providerUrl: provider.apiUrl,
       payload: entry.payload,
+      serviceNames,
     });
   }
 
@@ -1328,7 +1397,12 @@ export async function executeBatchDeploy(
     }
   }
 
-  const totalHourlyCost = skuHourlyCost * entries.length;
+  // Count total services across all entries (stacks contribute multiple services)
+  const totalServiceCount = resolvedEntries.reduce(
+    (sum, e) => sum + (e.serviceNames && e.serviceNames.length > 0 ? e.serviceNames.length : 1),
+    0
+  );
+  const totalHourlyCost = skuHourlyCost * totalServiceCount;
   let creditWarning = '';
 
   try {
@@ -1345,7 +1419,7 @@ export async function executeBatchDeploy(
       if (totalHourlyCost > 0 && credits < totalHourlyCost) {
         return {
           success: false,
-          error: `Insufficient credits. You have ${Math.round(credits * 100) / 100} credits but need at least ${Math.round(totalHourlyCost * 100) / 100} for 1 hour of ${entries.length} apps.`,
+          error: `Insufficient credits. You have ${Math.round(credits * 100) / 100} credits but need at least ${Math.round(totalHourlyCost * 100) / 100} for 1 hour of ${totalServiceCount} services across ${entries.length} apps.`,
         };
       }
 
@@ -1442,7 +1516,7 @@ export async function executeConfirmedBatchDeploy(
     batchProgress[i] = { name, phase: 'creating_lease', detail: 'Creating lease on-chain...' };
     emitProgress();
 
-    const cmdArgs = ['--meta-hash', entry.payload.hash, ...formatLeaseItems(entry.skuUuid)];
+    const cmdArgs = ['--meta-hash', entry.payload.hash, ...formatLeaseItems(entry.skuUuid, entry.serviceNames)];
     const txResult = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
 
     if (txResult.code !== 0) {

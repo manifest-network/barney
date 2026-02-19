@@ -3,6 +3,7 @@ import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
 import {
   deriveAppName,
   extractUrlFromFredStatus,
+  extractServiceNamesFromPayload,
   formatLeaseItems,
   parseAndValidateStackServices,
   executeDeployApp,
@@ -385,6 +386,78 @@ describe('formatLeaseItems', () => {
 
   it('throws on empty string service name', () => {
     expect(() => formatLeaseItems('sku-123', [''])).toThrow('Invalid service name');
+  });
+});
+
+describe('extractServiceNamesFromPayload', () => {
+  it('extracts from JSON stack manifest', () => {
+    const json = JSON.stringify({ services: { web: { image: 'nginx' }, db: { image: 'postgres' } } });
+    const bytes = new TextEncoder().encode(json);
+    expect(extractServiceNamesFromPayload(bytes)).toEqual(['web', 'db']);
+  });
+
+  it('returns empty for JSON single-service manifest', () => {
+    const json = JSON.stringify({ image: 'nginx', ports: { '80/tcp': {} } });
+    const bytes = new TextEncoder().encode(json);
+    expect(extractServiceNamesFromPayload(bytes)).toEqual([]);
+  });
+
+  it('extracts from YAML stack manifest', () => {
+    const yaml = [
+      'services:',
+      '  web:',
+      '    image: wordpress:6',
+      '    ports:',
+      '      80/tcp: {}',
+      '  db:',
+      '    image: mysql:9',
+      '    env:',
+      '      MYSQL_ROOT_PASSWORD: secret',
+    ].join('\n');
+    const bytes = new TextEncoder().encode(yaml);
+    expect(extractServiceNamesFromPayload(bytes)).toEqual(['web', 'db']);
+  });
+
+  it('extracts from YAML with comments', () => {
+    const yaml = [
+      '# Docker Compose stack',
+      'services: # main services',
+      '  frontend:',
+      '    image: nginx',
+      '  # backend database',
+      '  backend-db:',
+      '    image: postgres',
+    ].join('\n');
+    const bytes = new TextEncoder().encode(yaml);
+    expect(extractServiceNamesFromPayload(bytes)).toEqual(['frontend', 'backend-db']);
+  });
+
+  it('stops at next top-level YAML key', () => {
+    const yaml = [
+      'services:',
+      '  web:',
+      '    image: nginx',
+      'volumes:',
+      '  data:',
+      '    driver: local',
+    ].join('\n');
+    const bytes = new TextEncoder().encode(yaml);
+    expect(extractServiceNamesFromPayload(bytes)).toEqual(['web']);
+  });
+
+  it('returns empty for YAML single-service manifest', () => {
+    const yaml = [
+      'image: nginx',
+      'ports:',
+      '  80/tcp: {}',
+    ].join('\n');
+    const bytes = new TextEncoder().encode(yaml);
+    expect(extractServiceNamesFromPayload(bytes)).toEqual([]);
+  });
+
+  it('returns empty for non-parseable content', () => {
+    const bytes = new TextEncoder().encode('this is just plain text');
+    expect(extractServiceNamesFromPayload(bytes)).toEqual([]);
   });
 });
 
@@ -1026,6 +1099,72 @@ describe('executeDeployApp', () => {
     expect(manifest.services).toBeDefined();
     expect(manifest.services.web.image).toBe('nginx');
     expect(manifest.services.db.image).toBe('postgres');
+  });
+
+  it('extracts service names from file-uploaded stack manifest payload', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const stackManifest = {
+      services: {
+        web: { image: 'wordpress:6', ports: { '80/tcp': {} }, env: { WORDPRESS_DB_HOST: 'db:3306' } },
+        db: { image: 'mysql:9', env: { MYSQL_ROOT_PASSWORD: 'secret' } },
+      },
+    };
+    const json = JSON.stringify(stackManifest, null, 2);
+    const bytes = new TextEncoder().encode(json);
+    const payload: PayloadAttachment = {
+      bytes,
+      filename: 'docker-compose.json',
+      size: bytes.length,
+      hash: 'c'.repeat(64),
+    };
+
+    const result = await executeDeployApp({}, makeOptions(), payload);
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args._serviceNames).toEqual(['web', 'db']);
+  });
+
+  it('extracts service names from file-uploaded YAML stack manifest', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+
+    const yaml = [
+      'services:',
+      '  web:',
+      '    image: wordpress:6',
+      '    ports:',
+      '      80/tcp: {}',
+      '  db:',
+      '    image: mysql:9',
+      '    env:',
+      '      MYSQL_ROOT_PASSWORD: secret',
+    ].join('\n');
+    const bytes = new TextEncoder().encode(yaml);
+    const payload: PayloadAttachment = {
+      bytes,
+      filename: 'docker-compose.yml',
+      size: bytes.length,
+      hash: 'd'.repeat(64),
+    };
+
+    const result = await executeDeployApp({}, makeOptions(), payload);
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args._serviceNames).toEqual(['web', 'db']);
   });
 
   it('returns error for invalid internal _serviceNames metadata', async () => {
@@ -1834,6 +1973,72 @@ describe('executeBatchDeploy', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('Insufficient credits');
   });
+
+  it('extracts service names from stack manifest payloads', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+
+    const stackManifest = {
+      services: {
+        web: { image: 'wordpress:6', ports: { '80/tcp': {} }, env: { WORDPRESS_DB_HOST: 'db:3306' } },
+        db: { image: 'mysql:9', env: { MYSQL_ROOT_PASSWORD: 'secret' } },
+      },
+    };
+    const json = JSON.stringify(stackManifest, null, 2);
+    const bytes = new TextEncoder().encode(json);
+    const entry: BatchDeployEntry = {
+      app_name: 'wordpress',
+      payload: { bytes, filename: 'manifest-wordpress.json', size: bytes.length, hash: 'b'.repeat(64) },
+    };
+
+    const result = await executeBatchDeploy([entry], makeOptions());
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    const resolvedEntries = result.pendingAction?.args.entries as any[];
+    expect(resolvedEntries).toHaveLength(1);
+    expect(resolvedEntries[0].serviceNames).toEqual(['web', 'db']);
+  });
+
+  it('counts services (not just entries) for credit check on stack deploys', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1', basePrice: { denom: 'upwr', amount: '1000000' }, unit: 1 } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    // 1.5 credits: enough for 1 entry but not 2 services
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      balances: [{ denom: 'upwr', amount: '1500000' }],
+    } as any);
+
+    const stackManifest = {
+      services: {
+        web: { image: 'wordpress:6', ports: { '80/tcp': {} } },
+        db: { image: 'mysql:9' },
+      },
+    };
+    const json = JSON.stringify(stackManifest, null, 2);
+    const bytes = new TextEncoder().encode(json);
+    const entry: BatchDeployEntry = {
+      app_name: 'wordpress',
+      payload: { bytes, filename: 'manifest-wordpress.json', size: bytes.length, hash: 'b'.repeat(64) },
+    };
+
+    // 1 entry with 2 services → needs 2 credits, but only 1.5 available
+    const result = await executeBatchDeploy([entry], makeOptions());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Insufficient credits');
+    expect(result.error).toContain('2 services');
+  });
 });
 
 describe('executeConfirmedBatchDeploy', () => {
@@ -1942,6 +2147,47 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).deployed.map((d: any) => d.name)).toContain('game1');
     expect((result.data as any).failed).toContain('game2');
+  });
+
+  it('includes service names in lease items for stack deploys', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
+    });
+
+    const registry = makeRegistry();
+    const entries = [
+      {
+        app_name: 'wordpress',
+        size: 'small',
+        skuUuid: 'sku-1',
+        providerUuid: 'p1',
+        providerUrl: 'https://fred.example.com',
+        payload: makePayload(),
+        serviceNames: ['web', 'db'],
+      },
+    ];
+
+    await executeConfirmedBatchDeploy(
+      { entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    // Verify cosmosTx was called with service-name-qualified lease items
+    const txCall = vi.mocked(cosmosTx).mock.calls[0];
+    const cmdArgs = txCall[3] as string[];
+    expect(cmdArgs).toContain('sku-1:1:web');
+    expect(cmdArgs).toContain('sku-1:1:db');
+    // Should NOT contain the single-service format
+    expect(cmdArgs).not.toContain('sku-1:1');
   });
 });
 
