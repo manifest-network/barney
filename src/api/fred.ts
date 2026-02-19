@@ -53,6 +53,13 @@ const TERMINAL_STATES = new Set<LeaseState>([
   LeaseState.LEASE_STATE_EXPIRED,
 ]);
 
+/** Map chain state strings to LeaseState enums for terminal detection. */
+const CHAIN_STATE_MAP: Record<string, LeaseState> = {
+  closed: LeaseState.LEASE_STATE_CLOSED,
+  rejected: LeaseState.LEASE_STATE_REJECTED,
+  expired: LeaseState.LEASE_STATE_EXPIRED,
+};
+
 /** Provision states that indicate the backend is still working — keep waiting. */
 const TRANSIENT_PROVISION_STATES = new Set(['provisioning', 'updating', 'restarting']);
 
@@ -296,11 +303,7 @@ export async function pollLeaseUntilReady(
       try {
         const chainState = await opts.checkChainState();
         if (chainState) {
-          const stateMap: Record<string, LeaseState> = {
-            closed: LeaseState.LEASE_STATE_CLOSED,
-            rejected: LeaseState.LEASE_STATE_REJECTED,
-            expired: LeaseState.LEASE_STATE_EXPIRED,
-          };
+          const stateMap = CHAIN_STATE_MAP;
           lastStatus = {
             state: stateMap[chainState.state] ?? LeaseState.LEASE_STATE_CLOSED,
             phase: 'chain_rejected',
@@ -619,11 +622,7 @@ async function waitViaWS(
       try {
         const chainState = await opts.checkChainState();
         if (chainState) {
-          const stateMap: Record<string, LeaseState> = {
-            closed: LeaseState.LEASE_STATE_CLOSED,
-            rejected: LeaseState.LEASE_STATE_REJECTED,
-            expired: LeaseState.LEASE_STATE_EXPIRED,
-          };
+          const stateMap = CHAIN_STATE_MAP;
           lastStatus = {
             state: stateMap[chainState.state] ?? LeaseState.LEASE_STATE_CLOSED,
             phase: 'chain_rejected',
@@ -676,11 +675,7 @@ async function waitViaWS(
           try {
             const chainState = await opts.checkChainState!();
             if (chainState) {
-              const stateMap: Record<string, LeaseState> = {
-                closed: LeaseState.LEASE_STATE_CLOSED,
-                rejected: LeaseState.LEASE_STATE_REJECTED,
-                expired: LeaseState.LEASE_STATE_EXPIRED,
-              };
+              const stateMap = CHAIN_STATE_MAP;
               lastStatus = {
                 state: stateMap[chainState.state] ?? LeaseState.LEASE_STATE_CLOSED,
                 phase: 'chain_rejected',
@@ -730,11 +725,7 @@ async function waitViaWS(
               try {
                 const chainState = await opts.checkChainState();
                 if (chainState) {
-                  const stateMap: Record<string, LeaseState> = {
-                    closed: LeaseState.LEASE_STATE_CLOSED,
-                    rejected: LeaseState.LEASE_STATE_REJECTED,
-                    expired: LeaseState.LEASE_STATE_EXPIRED,
-                  };
+                  const stateMap = CHAIN_STATE_MAP;
                   const terminalStatus: FredLeaseStatus = {
                     state: stateMap[chainState.state] ?? LeaseState.LEASE_STATE_CLOSED,
                     provision_status: 'failed',

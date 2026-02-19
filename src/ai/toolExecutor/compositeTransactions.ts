@@ -670,9 +670,11 @@ export async function executeDeployApp(
       }
     }
 
-    // Append --token to the shell command string for openclaw
+    // Append --token to the shell command string for openclaw.
+    // Use shell variable expansion instead of interpolating the raw value to prevent
+    // shell injection if the token contains metacharacters.
     if (env?.OPENCLAW_GATEWAY_TOKEN && cmdArgs?.length === 1 && command?.[0] === '/bin/sh') {
-      cmdArgs[0] += ` --token ${env.OPENCLAW_GATEWAY_TOKEN}`;
+      cmdArgs[0] += ' --token "$OPENCLAW_GATEWAY_TOKEN"';
     }
 
     // Coerce port/user/tmpfs — LLMs frequently produce numbers instead of strings
@@ -2124,9 +2126,11 @@ export async function executeUpdateApp(
       }
     }
 
-    // Append --token to the shell command string for openclaw
+    // Append --token to the shell command string for openclaw.
+    // Use shell variable expansion instead of interpolating the raw value to prevent
+    // shell injection if the token contains metacharacters.
     if (env?.OPENCLAW_GATEWAY_TOKEN && cmdArgs?.length === 1 && command?.[0] === '/bin/sh') {
-      cmdArgs[0] += ` --token ${env.OPENCLAW_GATEWAY_TOKEN}`;
+      cmdArgs[0] += ' --token "$OPENCLAW_GATEWAY_TOKEN"';
     }
 
     // Coerce port/user/tmpfs — LLMs frequently produce numbers instead of strings

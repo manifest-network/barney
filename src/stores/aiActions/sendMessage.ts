@@ -178,7 +178,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
     );
     set({ messages: updated });
   } finally {
-    set({ isStreaming: false });
+    set({ isStreaming: false, pendingPayload: null });
     get().abortController?.abort();
     set({ abortController: null });
   }
