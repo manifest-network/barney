@@ -165,7 +165,7 @@ export function ChatPanel() {
     //      exposed port, which example apps hardcode as 8080/tcp. Arbitrary
     //      images would need a default port assumption or an LLM step to ask.
     //   3. Call requestBatchDeploy() with the constructed manifests.
-    // The downstream batch machinery (executeBatchDeploy, deploySingleApp,
+    // The downstream batch machinery (executeBatchDeploy,
     // ProgressCard batch rendering) is image-agnostic and needs no changes.
     if (!pendingPayload) {
       const deployMatch = message.match(/^deploy\s+(.+)$/i);

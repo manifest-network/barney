@@ -218,7 +218,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `errors.ts` | `logError()` — structured error logging (use instead of raw `console.error`) |
 | `hash.ts` | `sha256()`, `toHex()`, `generatePassword()` — hashing, hex encoding, password generation; `MAX_PAYLOAD_SIZE` (5KB) |
 | `format.ts` | Amount conversion (`toBaseUnits`, `fromBaseUnits`), date/duration formatting, UUID validation |
-| `fileValidation.ts` | Upload validation: size limits, allowed extensions (`.yaml`, `.yml`, `.json`, `.txt`), MIME type checks |
+| `fileValidation.ts` | Upload validation: size limits, allowed extensions (`.yaml`, `.yml`, `.json`, `.txt`), MIME type checks, manifest content validation (`validateManifestContent`), YAML service name extraction (`extractYamlServiceNames`) |
 | `pricing.ts` | BigInt-based cost calculations (`formatCostPerHour`, `calculateEstimatedCost`) to avoid integer overflow |
 | `leaseState.ts` | Lease state display helpers — badge classes, labels, colors, filter mapping |
 | `address.ts` | Bech32 address validation (`isValidBech32Address`) and truncation (`truncateAddress`) |

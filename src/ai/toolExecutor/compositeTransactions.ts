@@ -18,7 +18,8 @@ import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthT
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl } from './helpers';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
-import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, type ServiceConfig, type HealthCheckConfig } from '../manifest';
+import { extractYamlServiceNames } from '../../utils/fileValidation';
+import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, getServiceNames, type ServiceConfig, type HealthCheckConfig } from '../manifest';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { DeployProgress } from '../progress';
@@ -56,6 +57,58 @@ function validateEnvNames(env: Record<string, string>): string | null {
     return `Blocked env variable(s): ${blocked.join(', ')}. These variables could compromise the runtime environment.`;
   }
   return null;
+}
+
+/**
+ * Extract service names from a payload that may be JSON or YAML.
+ * Tries JSON.parse first (via getServiceNames), then falls back to
+ * lightweight YAML extraction for .yaml/.yml uploads.
+ */
+export function extractServiceNamesFromPayload(bytes: Uint8Array): string[] {
+  let text: string;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return []; // Not valid UTF-8 — cannot extract names
+  }
+
+  let raw: string[] = [];
+
+  // Try JSON first
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const names = getServiceNames(parsed);
+    if (names.length > 0) raw = names;
+  } catch {
+    // Not JSON — try YAML extraction below
+  }
+
+  // YAML fallback: use shared extraction from fileValidation
+  if (raw.length === 0) {
+    raw = extractYamlServiceNames(text);
+  }
+
+  // Validate and deduplicate
+  const seen = new Set<string>();
+  const valid: string[] = [];
+  const dropped: string[] = [];
+  for (const name of raw) {
+    if (validateServiceName(name) !== null) {
+      dropped.push(name);
+      continue;
+    }
+    if (seen.has(name)) continue;
+    seen.add(name);
+    valid.push(name);
+  }
+
+  if (dropped.length > 0) {
+    logError('extractServiceNamesFromPayload', new Error(
+      `Dropped ${dropped.length} invalid service name(s): ${dropped.join(', ')}`
+    ));
+  }
+
+  return valid;
 }
 
 /**
@@ -663,6 +716,14 @@ export async function executeDeployApp(
     return { success: false, error: 'No file attached and no image specified. Attach a manifest file or specify a Docker image (e.g. deploy_app(image="redis:8.4")).' };
   }
 
+  // Extract service names from file-uploaded stack manifests (JSON or YAML)
+  if (!args._serviceNames) {
+    const names = extractServiceNamesFromPayload(payload.bytes);
+    if (names.length > 0) {
+      args._serviceNames = names;
+    }
+  }
+
   // Resolve name
   let name = args.app_name as string | undefined;
   if (!name && payload.filename) {
@@ -1068,142 +1129,7 @@ export interface SingleDeployEntry {
   providerUuid: string;
   providerUrl: string;
   payload: PayloadAttachment;
-}
-
-/**
- * Core single-app deploy logic: create lease → upload → poll.
- * Used by both executeConfirmedDeployApp and executeConfirmedBatchDeploy.
- */
-export async function deploySingleApp(
-  entry: SingleDeployEntry,
-  clientManager: CosmosClientManager,
-  options: ToolExecutorOptions,
-  onProgress: (progress: { phase: DeployProgress['phase']; detail?: string }) => void
-): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary, signal } = options;
-  if (!address) return { success: false, error: 'Wallet not connected' };
-  if (!appRegistry) return { success: false, error: 'App registry not available' };
-  if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
-
-  const { app_name: name, size, skuUuid, providerUrl, providerUuid, payload } = entry;
-  const metaHashHex = payload.hash;
-
-  // Create lease
-  onProgress({ phase: 'creating_lease', detail: 'Creating lease on-chain...' });
-
-  const cmdArgs = ['--meta-hash', metaHashHex, ...formatLeaseItems(skuUuid)];
-  const result = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
-
-  if (result.code !== 0) {
-    onProgress({ phase: 'failed', detail: result.rawLog ?? 'Transaction failed' });
-    return { success: false, error: result.rawLog ?? 'Failed to create lease' };
-  }
-
-  const leaseUuid = extractLeaseUuidFromTxResult(result);
-  if (!leaseUuid) {
-    onProgress({ phase: 'failed', detail: 'Could not extract lease UUID from transaction' });
-    return { success: false, error: 'Lease created but could not extract UUID. Check your leases manually.' };
-  }
-
-  // Add to registry
-  try {
-    appRegistry.addApp(address, {
-      name,
-      leaseUuid,
-      size,
-      providerUuid,
-      providerUrl,
-      createdAt: Date.now(),
-      status: 'deploying',
-    });
-  } catch (error) {
-    // Lease already created on-chain — log but don't abort the deploy flow
-    logError('compositeTransactions.deploySingleApp.addApp', error);
-  }
-
-  // Upload payload
-  onProgress({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
-
-  const uploadResult = await uploadPayloadToProvider(
-    providerUrl,
-    leaseUuid,
-    metaHashHex,
-    payload.bytes,
-    address,
-    signArbitrary
-  );
-
-  if (!uploadResult.success) {
-    onProgress({ phase: 'failed', detail: `Upload failed: ${uploadResult.error}` });
-    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-    return {
-      success: false,
-      error: `Lease created but upload failed: ${uploadResult.error}. The lease ${leaseUuid} is active — you may need to stop it.`,
-    };
-  }
-
-  // Poll fred for readiness
-  onProgress({ phase: 'provisioning', detail: 'Waiting for deployment...' });
-
-  try {
-    const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
-    const authToken = await refreshAuthToken();
-
-    const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
-      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
-      intervalMs: FRED_POLL_INTERVAL_MS,
-      abortSignal: signal,
-      onProgress: (status) => {
-        onProgress({ phase: 'provisioning', detail: status.phase || 'Provisioning...' });
-      },
-      getAuthToken: refreshAuthToken,
-      checkChainState: async (): Promise<TerminalChainState | null> => {
-        const lease = await getLease(leaseUuid);
-        if (!lease) return { state: 'closed' };
-        if (lease.state === LeaseState.LEASE_STATE_CLOSED) return { state: 'closed' };
-        if (lease.state === LeaseState.LEASE_STATE_REJECTED) return { state: 'rejected' };
-        if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return { state: 'expired' };
-        return null;
-      },
-    });
-
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
-      const { url: connectionUrl, connection } = await resolveAppUrl(
-        providerUrl, leaseUuid, fredStatus, address, signArbitrary,
-        'deploySingleApp'
-      );
-
-      appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection });
-      onProgress({ phase: 'ready', detail: 'App is live!' });
-
-      return {
-        success: true,
-        data: { message: `App "${name}" is live!`, name, url: connectionUrl, connection, status: 'running' },
-      };
-    }
-
-    if (
-      fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
-      fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
-      fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
-      fredStatus.provision_status === 'failed'
-    ) {
-      appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-      onProgress({ phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' });
-
-      const diagnostics = await fetchFailureLogs(providerUrl, leaseUuid, address, signArbitrary);
-      const errorMsg = diagnostics
-        ? `Deployment failed: ${fredStatus.last_error || 'Unknown error'}\n\n${diagnostics}`
-        : `Deployment failed: ${fredStatus.last_error || 'Unknown error'}`;
-
-      return { success: false, error: errorMsg };
-    }
-
-    return await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => onProgress(p));
-  } catch (error) {
-    logError('deploySingleApp.polling', error);
-    return await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => onProgress(p));
-  }
+  serviceNames?: string[];
 }
 
 // ============================================================================
@@ -1298,6 +1224,11 @@ export async function executeBatchDeploy(
     }
 
     usedNames.add(name);
+
+    // Extract service names from stack manifests (JSON or YAML)
+    const extractedNames = extractServiceNamesFromPayload(entry.payload.bytes);
+    const serviceNames = extractedNames.length > 0 ? extractedNames : undefined;
+
     resolvedEntries.push({
       app_name: name,
       size: normalizedSize,
@@ -1305,6 +1236,7 @@ export async function executeBatchDeploy(
       providerUuid: provider.uuid,
       providerUrl: provider.apiUrl,
       payload: entry.payload,
+      serviceNames,
     });
   }
 
@@ -1328,7 +1260,12 @@ export async function executeBatchDeploy(
     }
   }
 
-  const totalHourlyCost = skuHourlyCost * entries.length;
+  // Count total services across all entries (stacks contribute multiple services)
+  const totalServiceCount = resolvedEntries.reduce(
+    (sum, e) => sum + (e.serviceNames && e.serviceNames.length > 0 ? e.serviceNames.length : 1),
+    0
+  );
+  const totalHourlyCost = skuHourlyCost * totalServiceCount;
   let creditWarning = '';
 
   try {
@@ -1345,7 +1282,7 @@ export async function executeBatchDeploy(
       if (totalHourlyCost > 0 && credits < totalHourlyCost) {
         return {
           success: false,
-          error: `Insufficient credits. You have ${Math.round(credits * 100) / 100} credits but need at least ${Math.round(totalHourlyCost * 100) / 100} for 1 hour of ${entries.length} apps.`,
+          error: `Insufficient credits. You have ${Math.round(credits * 100) / 100} credits but need at least ${Math.round(totalHourlyCost * 100) / 100} for 1 hour of ${totalServiceCount} services across ${entries.length} apps.`,
         };
       }
 
@@ -1442,7 +1379,7 @@ export async function executeConfirmedBatchDeploy(
     batchProgress[i] = { name, phase: 'creating_lease', detail: 'Creating lease on-chain...' };
     emitProgress();
 
-    const cmdArgs = ['--meta-hash', entry.payload.hash, ...formatLeaseItems(entry.skuUuid)];
+    const cmdArgs = ['--meta-hash', entry.payload.hash, ...formatLeaseItems(entry.skuUuid, entry.serviceNames)];
     const txResult = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
 
     if (txResult.code !== 0) {

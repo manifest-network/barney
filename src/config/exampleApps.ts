@@ -115,8 +115,8 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   {
     label: 'WordPress + MySQL',
     manifest: { services: {
-      web: { image: 'wordpress:6', ports: { '80/tcp': {} }, env: {} },
-      db: { image: 'mysql:9', env: {} },
+      web: { image: 'wordpress:6', ports: { '80/tcp': {} }, env: {}, tmpfs: ['/run/lock', '/var/run/apache2'] },
+      db: { image: 'mysql:9', env: {}, tmpfs: ['/var/run/mysqld'] },
     }},
     manifestFactory: () => {
       const dbPass = generatePassword();
@@ -125,10 +125,14 @@ export const EXAMPLE_APPS: ExampleApp[] = [
           image: 'wordpress:6',
           ports: { '80/tcp': {} },
           env: { WORDPRESS_DB_HOST: 'db:3306', WORDPRESS_DB_USER: 'wordpress', WORDPRESS_DB_PASSWORD: dbPass, WORDPRESS_DB_NAME: 'wordpress' },
+          tmpfs: ['/run/lock', '/var/run/apache2'],
+          depends_on: { db: { condition: 'service_healthy' } },
         },
         db: {
           image: 'mysql:9',
           env: { MYSQL_DATABASE: 'wordpress', MYSQL_USER: 'wordpress', MYSQL_PASSWORD: dbPass, MYSQL_ROOT_PASSWORD: generatePassword() },
+          tmpfs: ['/var/run/mysqld'],
+          health_check: { test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' },
         },
       }};
     },
@@ -140,7 +144,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     label: 'Ghost + MySQL',
     manifest: { services: {
       web: { image: 'ghost:5', ports: { '2368/tcp': {} }, env: {} },
-      db: { image: 'mysql:9', env: {} },
+      db: { image: 'mysql:9', env: {}, tmpfs: ['/var/run/mysqld'] },
     }},
     manifestFactory: () => {
       const dbPass = generatePassword();
@@ -149,10 +153,13 @@ export const EXAMPLE_APPS: ExampleApp[] = [
           image: 'ghost:5',
           ports: { '2368/tcp': {} },
           env: { 'database__client': 'mysql', 'database__connection__host': 'db', 'database__connection__user': 'ghost', 'database__connection__password': dbPass, 'database__connection__database': 'ghost' },
+          depends_on: { db: { condition: 'service_healthy' } },
         },
         db: {
           image: 'mysql:9',
           env: { MYSQL_DATABASE: 'ghost', MYSQL_USER: 'ghost', MYSQL_PASSWORD: dbPass, MYSQL_ROOT_PASSWORD: generatePassword() },
+          tmpfs: ['/var/run/mysqld'],
+          health_check: { test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' },
         },
       }};
     },
@@ -164,7 +171,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     label: 'Adminer + Postgres',
     manifest: { services: {
       adminer: { image: 'adminer:5', ports: { '8080/tcp': {} }, env: {} },
-      db: { image: 'postgres:18', env: {}, user: '999:999', tmpfs: ['/var/run/postgresql'] },
+      db: { image: 'postgres:18', env: {}, user: '999:999', tmpfs: ['/var/run/postgresql'], health_check: { test: ['CMD-SHELL', 'pg_isready -U postgres'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' } },
     }},
     manifestFactory: () => {
       const dbPass = generatePassword();
@@ -173,12 +180,14 @@ export const EXAMPLE_APPS: ExampleApp[] = [
           image: 'adminer:5',
           ports: { '8080/tcp': {} },
           env: { ADMINER_DEFAULT_SERVER: 'db' },
+          depends_on: { db: { condition: 'service_healthy' } },
         },
         db: {
           image: 'postgres:18',
           env: { POSTGRES_PASSWORD: dbPass },
           user: '999:999',
           tmpfs: ['/var/run/postgresql'],
+          health_check: { test: ['CMD-SHELL', 'pg_isready -U postgres'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' },
         },
       }};
     },

@@ -12,9 +12,13 @@ vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
-vi.mock('../utils/fileValidation', () => ({
-  validateFile: vi.fn().mockReturnValue({ valid: true }),
-}));
+vi.mock('../utils/fileValidation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/fileValidation')>();
+  return {
+    ...actual,
+    validateFile: vi.fn().mockReturnValue({ valid: true }),
+  };
+});
 
 vi.mock('../utils/hash', () => ({
   sha256: vi.fn().mockResolvedValue(new Uint8Array([0xab, 0xcd])),
@@ -291,8 +295,15 @@ describe('aiStore', () => {
       expect(store.getState().pendingPayload).toBeNull();
     });
 
-    it('attaches payload on success', async () => {
+    it('rejects invalid manifest content', async () => {
       const file = new File(['hello'], 'test.json', { type: 'application/json' });
+      const result = await store.getState().attachPayload(file);
+      expect(result.error).toContain('Invalid JSON');
+      expect(store.getState().pendingPayload).toBeNull();
+    });
+
+    it('attaches payload on success', async () => {
+      const file = new File([JSON.stringify({ image: 'redis:8' })], 'test.json', { type: 'application/json' });
       const result = await store.getState().attachPayload(file);
       expect(result.error).toBeUndefined();
       expect(store.getState().pendingPayload).not.toBeNull();
