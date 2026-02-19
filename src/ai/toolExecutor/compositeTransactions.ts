@@ -18,6 +18,7 @@ import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthT
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl } from './helpers';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
+import { extractYamlServiceNames } from '../../utils/fileValidation';
 import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, getServiceNames, type ServiceConfig, type HealthCheckConfig } from '../manifest';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
@@ -76,39 +77,9 @@ export function extractServiceNamesFromPayload(bytes: Uint8Array): string[] {
     // Not JSON — try YAML extraction below
   }
 
-  // Lightweight YAML extraction: find top-level `services:` key,
-  // then collect immediate child keys (one indent level deeper).
+  // YAML fallback: use shared extraction from fileValidation
   if (raw.length === 0) {
-    const lines = text.split('\n');
-    let inServices = false;
-    let indent = '';
-
-    for (const line of lines) {
-      if (/^services:\s*(#.*)?$/.test(line)) {
-        inServices = true;
-        continue;
-      }
-      if (!inServices) continue;
-
-      // Skip blank lines and comments
-      if (/^\s*(#.*)?$/.test(line)) continue;
-
-      // Non-indented line means we've left the services block
-      if (/^\S/.test(line)) break;
-
-      // Detect indent level from first child key
-      if (!indent) {
-        const match = line.match(/^(\s+)/);
-        if (!match) break;
-        indent = match[1];
-      }
-
-      // Lines at the child indent level that end with `:` are service names
-      if (line.startsWith(indent) && !line.startsWith(indent + ' ') && !line.startsWith(indent + '\t')) {
-        const match = line.match(/^\s+([\w][\w-]*):\s*(#.*)?$/);
-        if (match) raw.push(match[1]);
-      }
-    }
+    raw = extractYamlServiceNames(text);
   }
 
   // Validate and deduplicate

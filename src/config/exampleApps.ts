@@ -171,7 +171,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     label: 'Adminer + Postgres',
     manifest: { services: {
       adminer: { image: 'adminer:5', ports: { '8080/tcp': {} }, env: {} },
-      db: { image: 'postgres:18', env: {}, user: '999:999', tmpfs: ['/var/run/postgresql'] },
+      db: { image: 'postgres:18', env: {}, user: '999:999', tmpfs: ['/var/run/postgresql'], health_check: { test: ['CMD-SHELL', 'pg_isready -U postgres'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' } },
     }},
     manifestFactory: () => {
       const dbPass = generatePassword();
@@ -187,6 +187,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
           env: { POSTGRES_PASSWORD: dbPass },
           user: '999:999',
           tmpfs: ['/var/run/postgresql'],
+          health_check: { test: ['CMD-SHELL', 'pg_isready -U postgres'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' },
         },
       }};
     },

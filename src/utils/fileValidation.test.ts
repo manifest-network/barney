@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   validateFile,
   validateManifestContent,
+  extractYamlServiceNames,
   ALLOWED_FILE_TYPES,
   ALLOWED_FILE_EXTENSIONS,
 } from './fileValidation';
@@ -276,6 +277,33 @@ describe('validateManifestContent', () => {
       expect(result.valid).toBe(false);
       expect(result.error).toContain('"image" or "services"');
     });
+
+    it('rejects YAML services block with no extractable service names', () => {
+      const bytes = encode('services:\n  # only comments\n');
+      const result = validateManifestContent(bytes, 'empty-svc.yaml');
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('at least one service');
+    });
+
+    it('rejects YAML service with uppercase name', () => {
+      const bytes = encode('services:\n  MyDB:\n    image: mysql:9');
+      const result = validateManifestContent(bytes, 'bad-name.yaml');
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Invalid service name "MyDB"');
+    });
+
+    it('rejects YAML service with underscored name', () => {
+      const bytes = encode('services:\n  my_db:\n    image: mysql:9');
+      const result = validateManifestContent(bytes, 'bad-name.yml');
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Invalid service name "my_db"');
+    });
+
+    it('accepts YAML with multiple valid services', () => {
+      const yaml = 'services:\n  web:\n    image: wordpress:6\n  db:\n    image: mysql:9';
+      const bytes = encode(yaml);
+      expect(validateManifestContent(bytes, 'stack.yaml')).toEqual({ valid: true });
+    });
   });
 
   describe('.txt files', () => {
@@ -310,5 +338,40 @@ describe('validateManifestContent', () => {
       expect(result.valid).toBe(false);
       expect(result.error).toBe('File is empty');
     });
+  });
+});
+
+describe('extractYamlServiceNames', () => {
+  it('extracts service names from standard YAML', () => {
+    const yaml = 'services:\n  web:\n    image: wordpress:6\n  db:\n    image: mysql:9';
+    expect(extractYamlServiceNames(yaml)).toEqual(['web', 'db']);
+  });
+
+  it('returns empty for single-service YAML', () => {
+    expect(extractYamlServiceNames('image: redis:8\nports:\n  6379/tcp: {}')).toEqual([]);
+  });
+
+  it('returns empty for no services block', () => {
+    expect(extractYamlServiceNames('ports:\n  80/tcp: {}')).toEqual([]);
+  });
+
+  it('handles comments within services block', () => {
+    const yaml = 'services:\n  # frontend\n  web:\n    image: nginx\n  # backend\n  api:\n    image: node';
+    expect(extractYamlServiceNames(yaml)).toEqual(['web', 'api']);
+  });
+
+  it('stops at next top-level key', () => {
+    const yaml = 'services:\n  web:\n    image: nginx\nvolumes:\n  data:\n    driver: local';
+    expect(extractYamlServiceNames(yaml)).toEqual(['web']);
+  });
+
+  it('captures names with uppercase and underscores (raw extraction)', () => {
+    const yaml = 'services:\n  My_DB:\n    image: mysql:9\n  web:\n    image: nginx';
+    // extractYamlServiceNames returns raw names; validation is caller's responsibility
+    expect(extractYamlServiceNames(yaml)).toEqual(['My_DB', 'web']);
+  });
+
+  it('returns empty when services block has only comments', () => {
+    expect(extractYamlServiceNames('services:\n  # nothing here\n')).toEqual([]);
   });
 });

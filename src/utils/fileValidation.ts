@@ -153,12 +153,67 @@ function validateManifestStructure(manifest: Record<string, unknown>): { valid: 
   return { valid: true };
 }
 
+/**
+ * Lightweight extraction of service names from YAML text.
+ * Finds top-level `services:` block and collects immediate child keys.
+ * Returns raw names (including potentially invalid ones) for callers to filter.
+ */
+export function extractYamlServiceNames(text: string): string[] {
+  const lines = text.split('\n');
+  let inServices = false;
+  let indent = '';
+  const names: string[] = [];
+
+  for (const line of lines) {
+    if (/^services:\s*(#.*)?$/.test(line)) {
+      inServices = true;
+      continue;
+    }
+    if (!inServices) continue;
+
+    // Skip blank lines and comments
+    if (/^\s*(#.*)?$/.test(line)) continue;
+
+    // Non-indented line means we've left the services block
+    if (/^\S/.test(line)) break;
+
+    // Detect indent level from first child key
+    if (!indent) {
+      const match = line.match(/^(\s+)/);
+      if (!match) break;
+      indent = match[1];
+    }
+
+    // Lines at the child indent level that end with `:` are service names
+    if (line.startsWith(indent) && !line.startsWith(indent + ' ') && !line.startsWith(indent + '\t')) {
+      const match = line.match(/^\s+([\w][\w-]*):\s*(#.*)?$/);
+      if (match) names.push(match[1]);
+    }
+  }
+
+  return names;
+}
+
 function validateYamlManifest(text: string): { valid: boolean; error?: string } {
   const hasImage = /^image:\s/m.test(text);
   const hasServices = /^services:\s*(#.*)?$/m.test(text);
 
   if (!hasImage && !hasServices) {
     return { valid: false, error: 'Manifest must contain an "image" or "services" field' };
+  }
+
+  // For stack manifests, verify at least one valid service name is extractable
+  if (hasServices) {
+    const rawNames = extractYamlServiceNames(text);
+    if (rawNames.length === 0) {
+      return { valid: false, error: '"services" block must contain at least one service' };
+    }
+    // Validate extracted names against DNS label rules
+    for (const name of rawNames) {
+      if (!SERVICE_NAME_RE.test(name)) {
+        return { valid: false, error: `Invalid service name "${name}": must be a lowercase DNS label (a-z, 0-9, hyphens, 1-63 chars)` };
+      }
+    }
   }
 
   return { valid: true };
