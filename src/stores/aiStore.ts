@@ -12,7 +12,7 @@ import type { AISettings } from '../ai/validation';
 import type { SignArbitraryFn, PayloadAttachment, ToolResult } from '../ai/toolExecutor';
 import type { DeployProgress } from '../ai/progress';
 import { validateEndpointUrl } from '../ai/validation';
-import { validateFile } from '../utils/fileValidation';
+import { validateFile, validateManifestContent } from '../utils/fileValidation';
 import { sha256, toHex } from '../utils/hash';
 import { logError } from '../utils/errors';
 import {
@@ -172,6 +172,12 @@ export const createAIStore = () =>
       try {
         const arrayBuffer = await file.arrayBuffer();
         const bytes = new Uint8Array(arrayBuffer);
+
+        const contentValidation = validateManifestContent(bytes, file.name);
+        if (!contentValidation.valid) {
+          return { error: contentValidation.error };
+        }
+
         const hashBytes = await sha256(bytes);
         const hash = toHex(hashBytes);
 

@@ -459,6 +459,33 @@ describe('extractServiceNamesFromPayload', () => {
     const bytes = new TextEncoder().encode('this is just plain text');
     expect(extractServiceNamesFromPayload(bytes)).toEqual([]);
   });
+
+  it('filters out invalid service names from JSON', () => {
+    const json = JSON.stringify({ services: {
+      web: { image: 'nginx:1' },
+      My_DB: { image: 'mysql:9' },
+      db: { image: 'postgres:18' },
+    }});
+    const bytes = new TextEncoder().encode(json);
+    expect(extractServiceNamesFromPayload(bytes)).toEqual(['web', 'db']);
+  });
+
+  it('filters out invalid service names from YAML', () => {
+    const yaml = 'services:\n  web:\n    image: nginx\n  BAD_NAME:\n    image: redis\n  cache:\n    image: redis';
+    const bytes = new TextEncoder().encode(yaml);
+    expect(extractServiceNamesFromPayload(bytes)).toEqual(['web', 'cache']);
+  });
+
+  it('deduplicates service names', () => {
+    const json = JSON.stringify({ services: {
+      web: { image: 'nginx:1' },
+    }});
+    // JSON Object.keys won't produce dupes, but exercise the dedup path
+    const bytes = new TextEncoder().encode(json);
+    const result = extractServiceNamesFromPayload(bytes);
+    expect(result).toEqual(['web']);
+    expect(new Set(result).size).toBe(result.length);
+  });
 });
 
 describe('parseAndValidateStackServices', () => {

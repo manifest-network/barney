@@ -65,51 +65,62 @@ function validateEnvNames(env: Record<string, string>): string | null {
  */
 export function extractServiceNamesFromPayload(bytes: Uint8Array): string[] {
   const text = new TextDecoder().decode(bytes);
+  let raw: string[] = [];
 
   // Try JSON first
   try {
     const parsed: unknown = JSON.parse(text);
     const names = getServiceNames(parsed);
-    if (names.length > 0) return names;
+    if (names.length > 0) raw = names;
   } catch {
     // Not JSON — try YAML extraction below
   }
 
   // Lightweight YAML extraction: find top-level `services:` key,
   // then collect immediate child keys (one indent level deeper).
-  const lines = text.split('\n');
-  let inServices = false;
-  let indent = '';
-  const names: string[] = [];
+  if (raw.length === 0) {
+    const lines = text.split('\n');
+    let inServices = false;
+    let indent = '';
 
-  for (const line of lines) {
-    if (/^services:\s*(#.*)?$/.test(line)) {
-      inServices = true;
-      continue;
-    }
-    if (!inServices) continue;
+    for (const line of lines) {
+      if (/^services:\s*(#.*)?$/.test(line)) {
+        inServices = true;
+        continue;
+      }
+      if (!inServices) continue;
 
-    // Skip blank lines and comments
-    if (/^\s*(#.*)?$/.test(line)) continue;
+      // Skip blank lines and comments
+      if (/^\s*(#.*)?$/.test(line)) continue;
 
-    // Non-indented line means we've left the services block
-    if (/^\S/.test(line)) break;
+      // Non-indented line means we've left the services block
+      if (/^\S/.test(line)) break;
 
-    // Detect indent level from first child key
-    if (!indent) {
-      const match = line.match(/^(\s+)/);
-      if (!match) break;
-      indent = match[1];
-    }
+      // Detect indent level from first child key
+      if (!indent) {
+        const match = line.match(/^(\s+)/);
+        if (!match) break;
+        indent = match[1];
+      }
 
-    // Lines at the child indent level that end with `:` are service names
-    if (line.startsWith(indent) && !line.startsWith(indent + ' ') && !line.startsWith(indent + '\t')) {
-      const match = line.match(/^\s+([\w][\w-]*):\s*(#.*)?$/);
-      if (match) names.push(match[1]);
+      // Lines at the child indent level that end with `:` are service names
+      if (line.startsWith(indent) && !line.startsWith(indent + ' ') && !line.startsWith(indent + '\t')) {
+        const match = line.match(/^\s+([\w][\w-]*):\s*(#.*)?$/);
+        if (match) raw.push(match[1]);
+      }
     }
   }
 
-  return names;
+  // Validate and deduplicate
+  const seen = new Set<string>();
+  const valid: string[] = [];
+  for (const name of raw) {
+    if (validateServiceName(name) !== null) continue;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    valid.push(name);
+  }
+  return valid;
 }
 
 /**
@@ -1131,142 +1142,6 @@ export interface SingleDeployEntry {
   providerUrl: string;
   payload: PayloadAttachment;
   serviceNames?: string[];
-}
-
-/**
- * Core single-app deploy logic: create lease → upload → poll.
- * Used by both executeConfirmedDeployApp and executeConfirmedBatchDeploy.
- */
-export async function deploySingleApp(
-  entry: SingleDeployEntry,
-  clientManager: CosmosClientManager,
-  options: ToolExecutorOptions,
-  onProgress: (progress: { phase: DeployProgress['phase']; detail?: string }) => void
-): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary, signal } = options;
-  if (!address) return { success: false, error: 'Wallet not connected' };
-  if (!appRegistry) return { success: false, error: 'App registry not available' };
-  if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
-
-  const { app_name: name, size, skuUuid, providerUrl, providerUuid, payload, serviceNames } = entry;
-  const metaHashHex = payload.hash;
-
-  // Create lease
-  onProgress({ phase: 'creating_lease', detail: 'Creating lease on-chain...' });
-
-  const cmdArgs = ['--meta-hash', metaHashHex, ...formatLeaseItems(skuUuid, serviceNames)];
-  const result = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
-
-  if (result.code !== 0) {
-    onProgress({ phase: 'failed', detail: result.rawLog ?? 'Transaction failed' });
-    return { success: false, error: result.rawLog ?? 'Failed to create lease' };
-  }
-
-  const leaseUuid = extractLeaseUuidFromTxResult(result);
-  if (!leaseUuid) {
-    onProgress({ phase: 'failed', detail: 'Could not extract lease UUID from transaction' });
-    return { success: false, error: 'Lease created but could not extract UUID. Check your leases manually.' };
-  }
-
-  // Add to registry
-  try {
-    appRegistry.addApp(address, {
-      name,
-      leaseUuid,
-      size,
-      providerUuid,
-      providerUrl,
-      createdAt: Date.now(),
-      status: 'deploying',
-    });
-  } catch (error) {
-    // Lease already created on-chain — log but don't abort the deploy flow
-    logError('compositeTransactions.deploySingleApp.addApp', error);
-  }
-
-  // Upload payload
-  onProgress({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
-
-  const uploadResult = await uploadPayloadToProvider(
-    providerUrl,
-    leaseUuid,
-    metaHashHex,
-    payload.bytes,
-    address,
-    signArbitrary
-  );
-
-  if (!uploadResult.success) {
-    onProgress({ phase: 'failed', detail: `Upload failed: ${uploadResult.error}` });
-    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-    return {
-      success: false,
-      error: `Lease created but upload failed: ${uploadResult.error}. The lease ${leaseUuid} is active — you may need to stop it.`,
-    };
-  }
-
-  // Poll fred for readiness
-  onProgress({ phase: 'provisioning', detail: 'Waiting for deployment...' });
-
-  try {
-    const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
-    const authToken = await refreshAuthToken();
-
-    const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
-      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
-      intervalMs: FRED_POLL_INTERVAL_MS,
-      abortSignal: signal,
-      onProgress: (status) => {
-        onProgress({ phase: 'provisioning', detail: status.phase || 'Provisioning...' });
-      },
-      getAuthToken: refreshAuthToken,
-      checkChainState: async (): Promise<TerminalChainState | null> => {
-        const lease = await getLease(leaseUuid);
-        if (!lease) return { state: 'closed' };
-        if (lease.state === LeaseState.LEASE_STATE_CLOSED) return { state: 'closed' };
-        if (lease.state === LeaseState.LEASE_STATE_REJECTED) return { state: 'rejected' };
-        if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return { state: 'expired' };
-        return null;
-      },
-    });
-
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
-      const { url: connectionUrl, connection } = await resolveAppUrl(
-        providerUrl, leaseUuid, fredStatus, address, signArbitrary,
-        'deploySingleApp'
-      );
-
-      appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection });
-      onProgress({ phase: 'ready', detail: 'App is live!' });
-
-      return {
-        success: true,
-        data: { message: `App "${name}" is live!`, name, url: connectionUrl, connection, status: 'running' },
-      };
-    }
-
-    if (
-      fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
-      fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
-      fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
-      fredStatus.provision_status === 'failed'
-    ) {
-      appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-      onProgress({ phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' });
-
-      const diagnostics = await fetchFailureLogs(providerUrl, leaseUuid, address, signArbitrary);
-      const errorMsg = diagnostics
-        ? `Deployment failed: ${fredStatus.last_error || 'Unknown error'}\n\n${diagnostics}`
-        : `Deployment failed: ${fredStatus.last_error || 'Unknown error'}`;
-
-      return { success: false, error: errorMsg };
-    }
-
-    return await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => onProgress(p));
-  } catch (error) {
-    logError('deploySingleApp.polling', error);
-    return await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => onProgress(p));
-  }
 }
 
 // ============================================================================
