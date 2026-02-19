@@ -304,6 +304,20 @@ describe('validateManifestContent', () => {
       const bytes = encode(yaml);
       expect(validateManifestContent(bytes, 'stack.yaml')).toEqual({ valid: true });
     });
+
+    it('accepts YAML service name at 63-char boundary', () => {
+      const name = 'a' + 'b'.repeat(61) + 'c'; // exactly 63 chars
+      const bytes = encode(`services:\n  ${name}:\n    image: nginx`);
+      expect(validateManifestContent(bytes, 'stack.yaml')).toEqual({ valid: true });
+    });
+
+    it('rejects YAML service name at 64 chars', () => {
+      const name = 'a' + 'b'.repeat(62) + 'c'; // 64 chars
+      const bytes = encode(`services:\n  ${name}:\n    image: nginx`);
+      const result = validateManifestContent(bytes, 'stack.yaml');
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Invalid service name');
+    });
   });
 
   describe('.txt files', () => {
@@ -321,6 +335,13 @@ describe('validateManifestContent', () => {
       const bytes = encode('just some random text');
       const result = validateManifestContent(bytes, 'notes.txt');
       expect(result.valid).toBe(false);
+    });
+
+    it('rejects .txt YAML stack with invalid service name', () => {
+      const bytes = encode('services:\n  My_DB:\n    image: mysql:9');
+      const result = validateManifestContent(bytes, 'stack.txt');
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Invalid service name "My_DB"');
     });
   });
 
@@ -373,5 +394,10 @@ describe('extractYamlServiceNames', () => {
 
   it('returns empty when services block has only comments', () => {
     expect(extractYamlServiceNames('services:\n  # nothing here\n')).toEqual([]);
+  });
+
+  it('extracts service names from tab-indented YAML', () => {
+    const yaml = 'services:\n\tweb:\n\t\timage: nginx\n\tdb:\n\t\timage: postgres';
+    expect(extractYamlServiceNames(yaml)).toEqual(['web', 'db']);
   });
 });

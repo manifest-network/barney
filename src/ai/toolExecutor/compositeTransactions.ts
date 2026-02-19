@@ -65,7 +65,13 @@ function validateEnvNames(env: Record<string, string>): string | null {
  * lightweight YAML extraction for .yaml/.yml uploads.
  */
 export function extractServiceNamesFromPayload(bytes: Uint8Array): string[] {
-  const text = new TextDecoder().decode(bytes);
+  let text: string;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return []; // Not valid UTF-8 — cannot extract names
+  }
+
   let raw: string[] = [];
 
   // Try JSON first
@@ -85,12 +91,23 @@ export function extractServiceNamesFromPayload(bytes: Uint8Array): string[] {
   // Validate and deduplicate
   const seen = new Set<string>();
   const valid: string[] = [];
+  const dropped: string[] = [];
   for (const name of raw) {
-    if (validateServiceName(name) !== null) continue;
+    if (validateServiceName(name) !== null) {
+      dropped.push(name);
+      continue;
+    }
     if (seen.has(name)) continue;
     seen.add(name);
     valid.push(name);
   }
+
+  if (dropped.length > 0) {
+    logError('extractServiceNamesFromPayload', new Error(
+      `Dropped ${dropped.length} invalid service name(s): ${dropped.join(', ')}`
+    ));
+  }
+
   return valid;
 }
 

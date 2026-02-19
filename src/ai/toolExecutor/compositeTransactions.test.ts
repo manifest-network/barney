@@ -27,6 +27,7 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser
 import type { AppEntry } from '../../registry/appRegistry';
 import { LeaseState } from '../../api/billing';
 import { ProviderApiError } from '../../api/provider-api';
+import { logError } from '../../utils/errors';
 
 // Mock external modules
 vi.mock('../../api/billing', async (importOriginal) => {
@@ -460,7 +461,8 @@ describe('extractServiceNamesFromPayload', () => {
     expect(extractServiceNamesFromPayload(bytes)).toEqual([]);
   });
 
-  it('filters out invalid service names from JSON', () => {
+  it('filters out invalid service names from JSON and logs', () => {
+    vi.mocked(logError).mockClear();
     const json = JSON.stringify({ services: {
       web: { image: 'nginx:1' },
       My_DB: { image: 'mysql:9' },
@@ -468,12 +470,21 @@ describe('extractServiceNamesFromPayload', () => {
     }});
     const bytes = new TextEncoder().encode(json);
     expect(extractServiceNamesFromPayload(bytes)).toEqual(['web', 'db']);
+    expect(logError).toHaveBeenCalledWith(
+      'extractServiceNamesFromPayload',
+      expect.objectContaining({ message: expect.stringContaining('My_DB') }),
+    );
   });
 
-  it('filters out invalid service names from YAML', () => {
+  it('filters out invalid service names from YAML and logs', () => {
+    vi.mocked(logError).mockClear();
     const yaml = 'services:\n  web:\n    image: nginx\n  BAD_NAME:\n    image: redis\n  cache:\n    image: redis';
     const bytes = new TextEncoder().encode(yaml);
     expect(extractServiceNamesFromPayload(bytes)).toEqual(['web', 'cache']);
+    expect(logError).toHaveBeenCalledWith(
+      'extractServiceNamesFromPayload',
+      expect.objectContaining({ message: expect.stringContaining('BAD_NAME') }),
+    );
   });
 
   it('deduplicates service names', () => {
@@ -485,6 +496,11 @@ describe('extractServiceNamesFromPayload', () => {
     const result = extractServiceNamesFromPayload(bytes);
     expect(result).toEqual(['web']);
     expect(new Set(result).size).toBe(result.length);
+  });
+
+  it('returns empty for non-UTF-8 binary data', () => {
+    const bytes = new Uint8Array([0xff, 0xfe, 0x00, 0x01]);
+    expect(extractServiceNamesFromPayload(bytes)).toEqual([]);
   });
 });
 
