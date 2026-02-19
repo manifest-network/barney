@@ -133,7 +133,7 @@ Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
 ### Deploy Progress
 
 `src/ai/progress.ts` defines `DeployProgress` with phases:
-`checking_credits → funding → creating_lease → uploading → provisioning → ready | failed`
+`creating_lease → uploading → provisioning → ready | failed`
 Additional phases for restart/update operations: `restarting`, `updating`
 The `operation` field (`'deploy' | 'restart' | 'update'`) indicates the current operation type for UI display.
 

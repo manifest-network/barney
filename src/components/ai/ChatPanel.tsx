@@ -371,7 +371,7 @@ export function ChatPanel() {
                 <button
                   key={text}
                   type="button"
-                  onClick={() => sendMessage(text)}
+                  onClick={() => { sendMessage(text).catch((err) => logError('ChatPanel.suggestion', err)); }}
                   className="chat-suggestion"
                   disabled={!isConnected || isStreaming}
                 >
