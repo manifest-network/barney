@@ -184,7 +184,7 @@ describe('processToolCallsFn', () => {
     vi.mocked(executeTool).mockResolvedValueOnce({
       success: true,
       data: { apps: [] },
-      displayCard: { type: 'app_list', data: { apps: [] } },
+      displayCard: { type: 'logs', data: { app_name: 'test', logs: {}, truncated: false } },
     });
 
     const assistantMsg = makeMessage({ id: 'asst_1' });
@@ -199,7 +199,7 @@ describe('processToolCallsFn', () => {
 
     expect(result.shouldContinue).toBe(false);
     const toolMsg = state.messages.find(m => m.role === 'tool');
-    expect(toolMsg!.card).toEqual({ type: 'app_list', data: { apps: [] } });
+    expect(toolMsg!.card).toEqual({ type: 'logs', data: { app_name: 'test', logs: {}, truncated: false } });
   });
 
   it('sets error content on tool message for failed result', async () => {

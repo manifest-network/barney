@@ -12,7 +12,6 @@ import { logError } from '../utils/errors';
 
 // Re-export types for backward compatibility
 export type { ChatMessage, PendingConfirmation, AISettings } from '../stores/aiStore';
-export type { AIContextType } from './aiContextType';
 
 export function AIProvider({ children }: { children: ReactNode }) {
   useEffect(() => {

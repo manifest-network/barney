@@ -19,7 +19,7 @@ import {
   AI_TOOL_CACHE_TTL_MS,
   AI_TOOL_CACHE_MAX_SIZE,
 } from '../config/constants';
-import type { ChatMessage, PendingConfirmation } from '../contexts/aiTypes';
+import type { ChatMessage, PendingConfirmation, MessageCard } from '../contexts/aiTypes';
 
 import { loadSettings, loadHistory, clearHistoryStorage } from './aiActions/persistence';
 import { scheduleStreamingUpdateFn, flushPendingUpdateFn } from './aiActions/streaming';
@@ -74,7 +74,7 @@ export interface AIStore {
   clearHistory: () => void;
   refreshModels: (endpoint?: string) => Promise<void>;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
-  addLocalMessage: (content: string, card?: { type: string; data: unknown }) => void;
+  addLocalMessage: (content: string, card?: MessageCard) => void;
   stopStreaming: () => void;
   scheduleStreamingUpdate: (messageId: string, content: string, thinking?: string) => void;
   flushPendingUpdate: () => void;

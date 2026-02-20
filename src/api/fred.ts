@@ -2,7 +2,7 @@
  * Fred API client for polling lease deployment status.
  *
  * Fred is the provider-side service that manages container deployments.
- * Its `/status/{uuid}` endpoint returns deployment progress and readiness.
+ * Its `/v1/leases/{uuid}/status` endpoint returns deployment progress and readiness.
  *
  * Follows the same patterns as provider-api.ts:
  * - SSRF validation via parseHttpUrl + isUrlSsrfSafe
@@ -11,8 +11,8 @@
  * - ProviderApiError for typed HTTP failures
  */
 
-import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
 import { ProviderApiError } from './provider-api';
+import { validateProviderUrl, normalizeBaseUrl, buildValidatedProviderRequest } from './providerFetch';
 import { LeaseState, leaseStateFromString, leaseStateToString } from './billing';
 import { logError } from '../utils/errors';
 import {
@@ -140,56 +140,6 @@ function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
 }
 
 /**
- * Validates and normalizes a provider API URL.
- * Prevents SSRF by blocking private/internal addresses (except localhost in dev).
- */
-function validateProviderUrl(url: string): URL {
-  const parsed = parseHttpUrl(url);
-  if (!parsed) {
-    throw new Error(`Invalid provider API URL: ${url || '(empty)'}`);
-  }
-  if (!isUrlSsrfSafe(parsed)) {
-    throw new Error('Provider API URL cannot point to private/internal addresses');
-  }
-  return parsed;
-}
-
-function normalizeBaseUrl(validated: URL): string {
-  return validated.origin + validated.pathname.replace(/\/$/, '');
-}
-
-/**
- * Build fetch URL and headers, routing through dev CORS proxy when needed.
- */
-function buildFredFetchArgs(
-  baseUrl: string,
-  path: string,
-  extraHeaders?: Record<string, string>
-): { url: string; headers: Record<string, string> } {
-  const headers: Record<string, string> = { ...extraHeaders };
-
-  if (import.meta.env.DEV) {
-    headers['X-Proxy-Target'] = baseUrl;
-    return { url: `/proxy-provider${path}`, headers };
-  }
-
-  return { url: `${baseUrl}${path}`, headers };
-}
-
-/**
- * Validate, normalize, and build fetch args in one step.
- */
-function buildValidatedFredRequest(
-  providerApiUrl: string,
-  path: string,
-  extraHeaders?: Record<string, string>
-): { url: string; headers: Record<string, string> } {
-  const validatedUrl = validateProviderUrl(providerApiUrl);
-  const baseUrl = normalizeBaseUrl(validatedUrl);
-  return buildFredFetchArgs(baseUrl, path, extraHeaders);
-}
-
-/**
  * Fetch the current deployment status for a lease from fred.
  *
  * @param providerApiUrl - The provider's API base URL (fred)
@@ -202,7 +152,7 @@ export async function getLeaseStatus(
   authToken: string
 ): Promise<FredLeaseStatus> {
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  const { url, headers } = buildValidatedFredRequest(
+  const { url, headers } = buildValidatedProviderRequest(
     providerApiUrl,
     `/v1/leases/${encodedLeaseUuid}/status`,
     { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
@@ -764,6 +714,7 @@ async function waitViaWS(
         logError(`fred.waitViaWS: connection dropped (attempt ${attempt + 1})`, error);
       } finally {
         if (chainPollTimer) clearInterval(chainPollTimer);
+        if (livenessTimer) clearTimeout(livenessTimer);
       }
 
       // Chain poll timer detected a terminal state — return directly
@@ -811,7 +762,7 @@ export async function getLeaseLogs(
   tail = 100
 ): Promise<LeaseLogsResponse> {
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  const { url, headers } = buildValidatedFredRequest(
+  const { url, headers } = buildValidatedProviderRequest(
     providerApiUrl,
     `/v1/leases/${encodedLeaseUuid}/logs?tail=${tail}`,
     { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
@@ -847,7 +798,7 @@ export async function getLeaseProvision(
   authToken: string
 ): Promise<LeaseProvision> {
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  const { url, headers } = buildValidatedFredRequest(
+  const { url, headers } = buildValidatedProviderRequest(
     providerApiUrl,
     `/v1/leases/${encodedLeaseUuid}/provision`,
     { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
@@ -901,7 +852,7 @@ export async function restartLease(
   authToken: string
 ): Promise<{ status: string }> {
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  const { url, headers } = buildValidatedFredRequest(
+  const { url, headers } = buildValidatedProviderRequest(
     providerApiUrl,
     `/v1/leases/${encodedLeaseUuid}/restart`,
     { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
@@ -939,7 +890,7 @@ export async function updateLease(
   authToken: string
 ): Promise<{ status: string }> {
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  const { url, headers } = buildValidatedFredRequest(
+  const { url, headers } = buildValidatedProviderRequest(
     providerApiUrl,
     `/v1/leases/${encodedLeaseUuid}/update`,
     { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
@@ -979,7 +930,7 @@ export async function getLeaseReleases(
   authToken: string
 ): Promise<LeaseReleasesResponse> {
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  const { url, headers } = buildValidatedFredRequest(
+  const { url, headers } = buildValidatedProviderRequest(
     providerApiUrl,
     `/v1/leases/${encodedLeaseUuid}/releases`,
     { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }
@@ -1008,7 +959,7 @@ export async function getLeaseInfo(
   authToken: string
 ): Promise<LeaseInfo> {
   const encodedLeaseUuid = encodeURIComponent(leaseUuid);
-  const { url, headers } = buildValidatedFredRequest(
+  const { url, headers } = buildValidatedProviderRequest(
     providerApiUrl,
     `/v1/leases/${encodedLeaseUuid}/info`,
     { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' }

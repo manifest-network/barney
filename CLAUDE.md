@@ -103,7 +103,7 @@ Builds Docker Compose-style JSON manifests for single-service and multi-service 
 
 - `buildManifest(opts)` — Build single-service manifest JSON from image, port, env, user, tmpfs, command, args, health_check, etc.
 - `buildStackManifest(opts)` — Build multi-service stack manifest with a `services` map of `ServiceConfig` entries
-- `mergeManifest(newManifest, oldManifestJson)` — Merge new manifest over old, preserving env, ports, labels (merged with override), user, tmpfs, command, args, health_check, stop_grace_period, init, expose, depends_on (carried forward if not specified in new). Handles both single-service and stack manifests
+- `mergeManifest(newManifest, oldManifestJson)` — Merge new manifest over old, preserving env, ports, labels (merged with override), user, tmpfs, command, args, health_check, stop_grace_period, init, expose, depends_on (carried forward if not specified in new). Single-service manifests only (stack updates use full manifest replacement)
 - `validateServiceName(name)` — RFC 1123 DNS label validation (1-63 chars, lowercase alphanumeric + hyphens)
 - `isStackManifest(manifest)` / `parseStackManifest(json)` / `getServiceNames(manifest)` — Stack manifest detection and parsing utilities
 - `ServiceConfig` — Type alias for `BuildManifestOptions`, used per-service in stacks

@@ -41,8 +41,15 @@ const BLOCKED_ENV_NAMES = new Set([
   'GIT_SSH_COMMAND', 'GIT_PROXY_COMMAND', 'GIT_SSH',
   // glibc / DNS hijacking
   'GCONV_PATH', 'HOSTALIASES',
+  // Shell / process environment
+  'HOME', 'SHELL', 'IFS',
+  // Temp directory redirection
+  'TMPDIR', 'TMP', 'TEMP',
+  // TLS trust redirection
+  'SSL_CERT_FILE', 'SSL_CERT_DIR', 'CURL_CA_BUNDLE',
   // Proxy / infrastructure
   'http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY',
+  'no_proxy', 'NO_PROXY',
   'DOCKER_HOST', 'DOCKER_CONFIG', 'KUBECONFIG',
   'BUILDKIT_HOST', 'COMPOSE_FILE',
 ]);
