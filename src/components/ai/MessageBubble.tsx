@@ -116,9 +116,9 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
         {/* Tool results: LogCard for logs, collapsible block for others */}
         {isTool && message.card?.type === 'logs' && (
           <LogCard
-            appName={(message.card.data as { app_name: string }).app_name}
-            logs={(message.card.data as { logs: Record<string, string> }).logs}
-            truncated={(message.card.data as { truncated: boolean }).truncated}
+            appName={message.card.data.app_name}
+            logs={message.card.data.logs}
+            truncated={message.card.data.truncated}
           />
         )}
         {isTool && !message.card && (

@@ -6,6 +6,18 @@
 import type { OllamaToolCall } from '../api/ollama';
 import type { PendingAction } from '../ai/toolExecutor';
 
+/** Data for a logs display card. */
+export interface LogsCardData {
+  app_name: string;
+  logs: Record<string, string>;
+  truncated: boolean;
+}
+
+/** Discriminated union for message display cards. */
+export type MessageCard =
+  | { type: 'logs'; data: LogsCardData }
+  | { type: 'help'; data: null };
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool';
@@ -18,7 +30,7 @@ export interface ChatMessage {
   toolDescription?: string;
   isStreaming?: boolean;
   error?: string;
-  card?: { type: string; data: unknown };
+  card?: MessageCard;
 }
 
 export interface PendingConfirmation {

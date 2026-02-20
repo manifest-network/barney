@@ -136,13 +136,13 @@ describe('persistence actions', () => {
           id: 'm1',
           role: 'assistant',
           content: 'original',
-          card: { type: 'app', data: {} },
+          card: { type: 'help', data: null },
           toolCalls: [{ id: 'tc1', type: 'function' as const, function: { name: 'list_apps', arguments: {} } }],
         }),
       ];
       saveHistory(msgs, true);
       const stored = JSON.parse(localStorage.getItem(STORAGE_KEY_HISTORY)!);
-      expect(stored[0].content).toBe('[app displayed to user]');
+      expect(stored[0].content).toBe('[help displayed to user]');
       expect(stored[0].card).toBeUndefined();
       expect(stored[0].toolCalls).toBeUndefined();
     });

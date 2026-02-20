@@ -229,13 +229,20 @@ export async function buildManifest(opts: BuildManifestOptions): Promise<BuildMa
 
 /**
  * Merge old manifest fields as defaults into a new manifest.
- * Preserves env vars, ports, user, and tmpfs from the old manifest
- * unless the new manifest explicitly overrides them.
+ * Single-service manifests only (stack updates use full manifest replacement).
  *
  * - env: old vars carry forward; new values override
  * - ports: old ports carry forward; new ports override
+ * - labels: old labels carry forward; new labels override
  * - user: old value used if new manifest doesn't specify one
  * - tmpfs: old value used if new manifest doesn't specify one
+ * - command: old value used if new manifest doesn't specify one
+ * - args: old value used if new manifest doesn't specify one
+ * - health_check: old value used if new manifest doesn't specify one
+ * - stop_grace_period: old value used if new manifest doesn't specify one
+ * - init: old value used if new manifest doesn't specify one
+ * - expose: old value used if new manifest doesn't specify one
+ * - depends_on: old value used if new manifest doesn't specify one
  * - image: always from new manifest
  */
 export function mergeManifest(

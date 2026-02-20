@@ -174,9 +174,9 @@ describe('aiStore', () => {
     });
 
     it('includes a card if provided', () => {
-      store.getState().addLocalMessage('card msg', { type: 'help', data: {} });
+      store.getState().addLocalMessage('card msg', { type: 'help', data: null });
       const msgs = store.getState().messages;
-      expect(msgs[0].card).toEqual({ type: 'help', data: {} });
+      expect(msgs[0].card).toEqual({ type: 'help', data: null });
     });
   });
 

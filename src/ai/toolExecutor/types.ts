@@ -5,6 +5,7 @@
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import type { DeployProgress } from '../progress';
 import type { AppEntry } from '../../registry/appRegistry';
+import type { MessageCard } from '../../contexts/aiTypes';
 
 export interface SignResult {
   pub_key: { type: string; value: string };
@@ -27,7 +28,7 @@ interface ToolResultSuccess {
   success: true;
   requiresConfirmation?: false;
   data: unknown;
-  displayCard?: { type: string; data: unknown };
+  displayCard?: MessageCard;
   error?: never;
   confirmationMessage?: never;
   pendingAction?: never;
