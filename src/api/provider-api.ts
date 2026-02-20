@@ -54,7 +54,8 @@ export const InstanceInfoSchema = z.object({
   container_id: z.string(),
   image: z.string(),
   status: z.string(),
-  ports: z.record(z.string(), PortMappingSchema).optional(),
+  // Port formats vary across providers; extractPort() in helpers.ts handles normalization
+  ports: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type InstanceInfo = z.infer<typeof InstanceInfoSchema>;
