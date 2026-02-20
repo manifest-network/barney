@@ -61,6 +61,7 @@ export type InstanceInfo = z.infer<typeof InstanceInfoSchema>;
 
 export const ServiceConnectionDetailsSchema = z.object({
   host: z.string().optional(),
+  fqdn: z.string().optional(),
   ports: z.record(z.string(), PortMappingSchema).optional(),
   instances: z.array(InstanceInfoSchema).optional(),
 });
@@ -69,6 +70,7 @@ export type ServiceConnectionDetails = z.infer<typeof ServiceConnectionDetailsSc
 
 export const ConnectionDetailsSchema = z.object({
   host: z.string(),
+  fqdn: z.string().optional(),
   // Port formats vary across providers; extractPort() in helpers.ts handles normalization
   ports: z.record(z.string(), z.unknown()).optional(),
   instances: z.array(InstanceInfoSchema).optional(),

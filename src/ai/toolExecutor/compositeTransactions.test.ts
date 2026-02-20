@@ -359,6 +359,21 @@ describe('formatConnectionUrl', () => {
       ports: { '8080/tcp': 12345 },
     })).toBe('http://127.0.0.1:12345');
   });
+
+  it('prefers fqdn over host and ports', () => {
+    expect(formatConnectionUrl('1.2.3.4', {
+      host: '1.2.3.4',
+      fqdn: 'a1b2c3d.barney8.manifest0.net',
+      ports: { '8080/tcp': { host_ip: '1.2.3.4', host_port: 32456 } },
+    })).toBe('https://a1b2c3d.barney8.manifest0.net');
+  });
+
+  it('uses fqdn without ports', () => {
+    expect(formatConnectionUrl('1.2.3.4', {
+      host: '1.2.3.4',
+      fqdn: 'myapp.barney7.manifest0.net',
+    })).toBe('https://myapp.barney7.manifest0.net');
+  });
 });
 
 describe('formatLeaseItems', () => {
