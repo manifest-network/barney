@@ -3,6 +3,7 @@
  * Handles communication with Ollama API for LLM inference
  */
 
+import { z } from 'zod';
 import { logError } from '../utils/errors';
 import { HEALTH_CHECK_TIMEOUT_MS, AI_STREAM_TIMEOUT_MS } from '../config/constants';
 import { isUrlSsrfSafe } from '../utils/url';
@@ -62,11 +63,21 @@ export type OllamaStreamChunk =
   | { type: 'done' }
   | { type: 'error'; error: string };
 
-export interface OllamaModel {
-  name: string;
-  modified_at: string;
-  size: number;
-}
+export const OllamaModelSchema = z.object({
+  name: z.string(),
+  modified_at: z.string(),
+  size: z.number(),
+});
+
+export type OllamaModel = z.infer<typeof OllamaModelSchema>;
+
+const OllamaModelsResponseSchema = z.object({
+  models: z.array(z.unknown()).catch([]).transform((arr) =>
+    arr.map((item) => OllamaModelSchema.safeParse(item))
+      .filter((r) => r.success)
+      .map((r) => r.data)
+  ),
+}).catch({ models: [] });
 
 /**
  * Validates an Ollama endpoint URL and builds the full API URL for a given path.
@@ -321,7 +332,7 @@ export async function listModels(endpoint: string): Promise<OllamaModel[]> {
         throw new Error(`Failed to fetch models: ${response.status}`);
       }
       const data = await response.json();
-      return data.models ?? [];
+      return OllamaModelsResponseSchema.parse(data).models;
     });
   } catch (error) {
     logError('ollama.listModels', error);
