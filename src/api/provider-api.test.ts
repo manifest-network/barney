@@ -267,7 +267,7 @@ describe('getLeaseConnectionInfo', () => {
     );
 
     await expect(getLeaseConnectionInfo(PROVIDER_URL, 'uuid-1', 'token'))
-      .rejects.toThrow('Provider returned invalid JSON');
+      .rejects.toThrow('Provider returned invalid or malformed data');
   });
 
   it('throws for invalid provider URL', async () => {

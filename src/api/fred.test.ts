@@ -125,7 +125,7 @@ describe('getLeaseStatus', () => {
     );
 
     await expect(getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      'invalid JSON'
+      'invalid or malformed data'
     );
   });
 
@@ -483,7 +483,7 @@ describe('getLeaseLogs', () => {
   });
 
   it('uses /v1/leases/ path with tail parameter', async () => {
-    mockFetchResponse({});
+    mockFetchResponse({ lease_uuid: LEASE_UUID, tenant: '', provider_uuid: '', logs: {} });
 
     await getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, 50);
 
@@ -492,7 +492,7 @@ describe('getLeaseLogs', () => {
   });
 
   it('defaults tail to 100', async () => {
-    mockFetchResponse({});
+    mockFetchResponse({ lease_uuid: LEASE_UUID, tenant: '', provider_uuid: '', logs: {} });
 
     await getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
 
@@ -501,7 +501,7 @@ describe('getLeaseLogs', () => {
   });
 
   it('passes auth header', async () => {
-    mockFetchResponse({});
+    mockFetchResponse({ lease_uuid: LEASE_UUID, tenant: '', provider_uuid: '', logs: {} });
 
     await getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
 
@@ -536,7 +536,7 @@ describe('getLeaseLogs', () => {
     );
 
     await expect(getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      'invalid JSON'
+      'invalid or malformed data'
     );
   });
 });
@@ -719,7 +719,7 @@ describe('restartLease', () => {
     );
 
     await expect(restartLease(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      'invalid JSON'
+      'invalid or malformed data'
     );
   });
 });
@@ -792,7 +792,7 @@ describe('updateLease', () => {
     );
 
     await expect(updateLease(PROVIDER_URL, LEASE_UUID, 'payload', AUTH_TOKEN)).rejects.toThrow(
-      'invalid JSON'
+      'invalid or malformed data'
     );
   });
 });
@@ -870,7 +870,7 @@ describe('getLeaseReleases', () => {
     );
 
     await expect(getLeaseReleases(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      'invalid JSON'
+      'invalid or malformed data'
     );
   });
 });

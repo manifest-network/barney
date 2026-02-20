@@ -3,6 +3,7 @@
  * Uses ADR-036 off-chain signatures for authentication.
  */
 
+import { z } from 'zod';
 import { logError } from '../utils/errors';
 import { HEALTH_CHECK_TIMEOUT_MS } from '../config/constants';
 import { buildValidatedProviderRequest } from './providerFetch';
@@ -31,63 +32,65 @@ async function throwProviderApiError(response: Response, prefix: string): Promis
   throw new ProviderApiError(response.status, `${prefix} (${response.status}): ${errorText}`);
 }
 
-export interface ProviderHealthResponse {
-  status: 'healthy' | 'unhealthy';
-  provider_uuid: string;
-  checks?: {
-    chain?: {
-      status: string;
-    };
-  };
-}
+export const ProviderHealthResponseSchema = z.object({
+  status: z.enum(['healthy', 'unhealthy']),
+  provider_uuid: z.string(),
+  checks: z.object({
+    chain: z.object({ status: z.string() }).optional(),
+  }).optional(),
+});
 
-/**
- * Port mapping from container port to host binding.
- */
-export interface PortMapping {
-  host_ip: string;
-  host_port: number;
-}
+export type ProviderHealthResponse = z.infer<typeof ProviderHealthResponseSchema>;
 
-/**
- * Connection details returned by the provider API.
- */
-export interface InstanceInfo {
-  instance_index: number;
-  container_id: string;
-  image: string;
-  status: string;
-  ports?: Record<string, PortMapping>;
-}
+export const PortMappingSchema = z.object({
+  host_ip: z.string(),
+  host_port: z.number(),
+});
 
-export interface ServiceConnectionDetails {
-  host?: string;
-  fqdn?: string;
-  ports?: Record<string, PortMapping>;
-  instances?: InstanceInfo[];
-}
+export type PortMapping = z.infer<typeof PortMappingSchema>;
 
-export interface ConnectionDetails {
-  host: string;
-  fqdn?: string;
-  ports?: Record<string, PortMapping>;
-  instances?: InstanceInfo[];
-  protocol?: string;
-  metadata?: Record<string, string>;
-  /** Per-service connection details for stack (multi-service) deployments. */
-  services?: Record<string, ServiceConnectionDetails>;
-}
+export const InstanceInfoSchema = z.object({
+  instance_index: z.number(),
+  container_id: z.string(),
+  image: z.string(),
+  status: z.string(),
+  // Port formats vary across providers; extractPort() in helpers.ts handles normalization
+  ports: z.record(z.string(), z.unknown()).optional(),
+});
 
-/**
- * Lease connection response from the provider API.
- * Matches fred's ConnectionResponse structure.
- */
-export interface LeaseConnectionResponse {
-  lease_uuid: string;
-  tenant: string;
-  provider_uuid: string;
-  connection: ConnectionDetails;
-}
+export type InstanceInfo = z.infer<typeof InstanceInfoSchema>;
+
+export const ServiceConnectionDetailsSchema = z.object({
+  host: z.string().optional(),
+  fqdn: z.string().optional(),
+  // Port formats vary across providers; extractPort() in helpers.ts handles normalization
+  ports: z.record(z.string(), z.unknown()).optional(),
+  instances: z.array(InstanceInfoSchema).optional(),
+});
+
+export type ServiceConnectionDetails = z.infer<typeof ServiceConnectionDetailsSchema>;
+
+export const ConnectionDetailsSchema = z.object({
+  host: z.string(),
+  fqdn: z.string().optional(),
+  // Port formats vary across providers; extractPort() in helpers.ts handles normalization
+  ports: z.record(z.string(), z.unknown()).optional(),
+  instances: z.array(InstanceInfoSchema).optional(),
+  protocol: z.string().optional(),
+  metadata: z.record(z.string(), z.string()).optional(),
+  services: z.record(z.string(), ServiceConnectionDetailsSchema).optional(),
+});
+
+export type ConnectionDetails = z.infer<typeof ConnectionDetailsSchema>;
+
+export const LeaseConnectionResponseSchema = z.object({
+  lease_uuid: z.string(),
+  tenant: z.string(),
+  provider_uuid: z.string(),
+  connection: ConnectionDetailsSchema,
+});
+
+export type LeaseConnectionResponse = z.infer<typeof LeaseConnectionResponseSchema>;
 
 export interface AuthToken {
   tenant: string;
@@ -192,9 +195,11 @@ export async function getLeaseConnectionInfo(
   }
 
   try {
-    return await response.json();
-  } catch {
-    throw new ProviderApiError(response.status, 'Provider returned invalid JSON');
+    const data = await response.json();
+    return LeaseConnectionResponseSchema.parse(data);
+  } catch (error) {
+    if (error instanceof ProviderApiError) throw error;
+    throw new ProviderApiError(response.status, 'Provider returned invalid or malformed data');
   }
 }
 
@@ -238,19 +243,13 @@ export async function getProviderHealth(
     }
 
     const data: unknown = await response.json();
-
-    // Validate response shape — provider could return unexpected JSON
-    if (
-      !data ||
-      typeof data !== 'object' ||
-      !('status' in data) ||
-      (data.status !== 'healthy' && data.status !== 'unhealthy')
-    ) {
+    const result = ProviderHealthResponseSchema.safeParse(data);
+    if (!result.success) {
       logError('provider-api.getProviderHealth.shape', new Error('Provider returned unexpected health response shape'));
       return null;
     }
 
-    return data as ProviderHealthResponse;
+    return result.data;
   } catch (error) {
     logError('provider-api.getProviderHealth.fetch', error);
     return null;

@@ -11,6 +11,7 @@
  * - ProviderApiError for typed HTTP failures
  */
 
+import { z } from 'zod';
 import { ProviderApiError } from './provider-api';
 import { validateProviderUrl, normalizeBaseUrl, buildValidatedProviderRequest } from './providerFetch';
 import { LeaseState, leaseStateFromString, leaseStateToString } from './billing';
@@ -46,6 +47,82 @@ export interface FredLeaseStatus {
   services?: Record<string, FredServiceStatus>;
 }
 
+const FredInstanceInfoSchema = z.object({
+  name: z.string(),
+  status: z.string(),
+  ports: z.record(z.string(), z.number()).optional().catch(undefined),
+});
+
+const FredServiceStatusSchema = z.object({
+  instances: z.array(z.unknown())
+    .catch([])
+    .transform((arr) =>
+      arr.map((item) => FredInstanceInfoSchema.safeParse(item))
+        .filter((r) => r.success)
+        .map((r) => r.data)
+    ),
+});
+
+/** Parse a record, keeping only entries with string values (matches original per-entry filtering). */
+const stringRecordSchema = z.record(z.string(), z.unknown()).optional().catch(undefined)
+  .transform((rec) => {
+    if (!rec) return undefined;
+    const filtered: Record<string, string> = {};
+    for (const [k, v] of Object.entries(rec)) {
+      if (typeof v === 'string') filtered[k] = v;
+    }
+    return Object.keys(filtered).length > 0 ? filtered : undefined;
+  });
+
+const FredLeaseStatusSchema = z.object({
+  state: z.string().transform((s): LeaseState => {
+    try {
+      const parsed = leaseStateFromString(s);
+      if (parsed !== LeaseState.UNRECOGNIZED) return parsed;
+      logError(`fred: unrecognized state "${s}"`, new Error('leaseStateFromString returned UNRECOGNIZED'));
+      return LeaseState.LEASE_STATE_PENDING;
+    } catch (error) {
+      logError(`fred: unrecognized state "${s}"`, error);
+      return LeaseState.LEASE_STATE_PENDING;
+    }
+  }).catch(LeaseState.LEASE_STATE_PENDING as LeaseState),
+  provision_status: z.string().optional().catch(undefined),
+  phase: z.string().optional().catch(undefined),
+  steps: stringRecordSchema,
+  instances: z.array(z.unknown()).optional().catch(undefined)
+    .transform((arr) =>
+      arr?.map((item) => FredInstanceInfoSchema.safeParse(item))
+        .filter((r) => r.success)
+        .map((r) => r.data)
+    ),
+  endpoints: stringRecordSchema,
+  last_error: z.string().optional().catch(undefined),
+  fail_count: z.number().optional().catch(undefined),
+  created_at: z.string().optional().catch(undefined),
+  services: z.record(z.string(), z.unknown()).optional().catch(undefined)
+    .transform((rec) => {
+      if (!rec) return undefined;
+      const filtered: Record<string, FredServiceStatus> = {};
+      for (const [k, v] of Object.entries(rec)) {
+        const r = FredServiceStatusSchema.safeParse(v);
+        if (r.success) filtered[k] = r.data;
+      }
+      return Object.keys(filtered).length > 0 ? filtered : undefined;
+    }),
+}).transform((raw): FredLeaseStatus => {
+  const result: FredLeaseStatus = { state: raw.state };
+  if (raw.provision_status !== undefined) result.provision_status = raw.provision_status;
+  if (raw.phase !== undefined) result.phase = raw.phase;
+  if (raw.steps !== undefined) result.steps = raw.steps;
+  if (raw.instances !== undefined) result.instances = raw.instances;
+  if (raw.endpoints !== undefined) result.endpoints = raw.endpoints;
+  if (raw.last_error !== undefined) result.last_error = raw.last_error;
+  if (raw.fail_count !== undefined) result.fail_count = raw.fail_count;
+  if (raw.created_at !== undefined) result.created_at = raw.created_at;
+  if (raw.services && Object.keys(raw.services).length > 0) result.services = raw.services;
+  return result;
+});
+
 /** Negative terminal lease states — polling should always stop for these. */
 const TERMINAL_STATES = new Set<LeaseState>([
   LeaseState.LEASE_STATE_CLOSED,
@@ -62,82 +139,6 @@ const CHAIN_STATE_MAP: Record<string, LeaseState> = {
 
 /** Provision states that indicate the backend is still working — keep waiting. */
 const TRANSIENT_PROVISION_STATES = new Set(['provisioning', 'updating', 'restarting']);
-
-/**
- * Parse a raw fred response into a FredLeaseStatus.
- * Fred returns `state: 'LEASE_STATE_ACTIVE'` (chain-style enum string).
- */
-function parseFredResponse(raw: Record<string, unknown>): FredLeaseStatus {
-  let state = LeaseState.LEASE_STATE_PENDING;
-  if (typeof raw.state === 'string' && raw.state) {
-    try {
-      const parsed = leaseStateFromString(raw.state);
-      if (parsed !== LeaseState.UNRECOGNIZED) {
-        state = parsed;
-      } else {
-        logError(`fred.parseFredResponse: unrecognized state "${raw.state}"`, new Error(`leaseStateFromString returned UNRECOGNIZED`));
-      }
-    } catch (error) {
-      logError(`fred.parseFredResponse: unrecognized state "${raw.state}"`, error);
-    }
-  }
-
-  // Explicitly extract known fields to prevent injection of unexpected properties
-  // from untrusted provider responses.
-  const result: FredLeaseStatus = { state };
-  if (typeof raw.provision_status === 'string') result.provision_status = raw.provision_status;
-  if (typeof raw.phase === 'string') result.phase = raw.phase;
-  if (raw.steps && typeof raw.steps === 'object' && !Array.isArray(raw.steps)) {
-    const steps: Record<string, string> = {};
-    for (const [k, v] of Object.entries(raw.steps as Record<string, unknown>)) {
-      if (typeof v === 'string') steps[k] = v;
-    }
-    result.steps = steps;
-  }
-  if (Array.isArray(raw.instances)) {
-    result.instances = raw.instances.filter(
-      (i): i is FredInstanceInfo =>
-        i != null &&
-        typeof i === 'object' &&
-        typeof i.name === 'string' &&
-        typeof i.status === 'string'
-    );
-  }
-  if (raw.endpoints && typeof raw.endpoints === 'object' && !Array.isArray(raw.endpoints)) {
-    const endpoints: Record<string, string> = {};
-    for (const [k, v] of Object.entries(raw.endpoints as Record<string, unknown>)) {
-      if (typeof v === 'string') endpoints[k] = v;
-    }
-    result.endpoints = endpoints;
-  }
-  if (typeof raw.last_error === 'string') result.last_error = raw.last_error;
-  if (typeof raw.fail_count === 'number') result.fail_count = raw.fail_count;
-  if (typeof raw.created_at === 'string') result.created_at = raw.created_at;
-
-  // Stack (multi-service) status: { services: { "web": { instances: [...] }, "db": { instances: [...] } } }
-  if (raw.services && typeof raw.services === 'object' && !Array.isArray(raw.services)) {
-    const services: Record<string, FredServiceStatus> = {};
-    for (const [name, value] of Object.entries(raw.services as Record<string, unknown>)) {
-      if (value && typeof value === 'object' && !Array.isArray(value)) {
-        const svc = value as Record<string, unknown>;
-        services[name] = {
-          instances: Array.isArray(svc.instances)
-            ? svc.instances.filter(
-                (i): i is { name: string; status: string; ports?: Record<string, number> } =>
-                  i != null &&
-                  typeof i === 'object' &&
-                  typeof i.name === 'string' &&
-                  typeof i.status === 'string'
-              )
-            : [],
-        };
-      }
-    }
-    if (Object.keys(services).length > 0) result.services = services;
-  }
-
-  return result;
-}
 
 /**
  * Fetch the current deployment status for a lease from fred.
@@ -170,9 +171,10 @@ export async function getLeaseStatus(
 
   try {
     const raw = await response.json();
-    return parseFredResponse(raw);
-  } catch {
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON');
+    return FredLeaseStatusSchema.parse(raw);
+  } catch (error) {
+    if (error instanceof ProviderApiError) throw error;
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data');
   }
 }
 
@@ -181,27 +183,29 @@ export interface TerminalChainState {
   state: 'closed' | 'rejected' | 'expired';
 }
 
-/** Response from the logs endpoint. */
-export interface LeaseLogsResponse {
-  lease_uuid: string;
-  tenant: string;
-  provider_uuid: string;
-  /** Container logs keyed by service/container name. */
-  logs: Record<string, string>;
-}
+export const LeaseLogsResponseSchema = z.object({
+  lease_uuid: z.string(),
+  tenant: z.string(),
+  provider_uuid: z.string(),
+  logs: z.record(z.string(), z.string()),
+});
 
-/** Provision status from the provider. */
-export interface LeaseProvision {
-  status: string;
-  fail_count: number;
-  last_error: string;
-}
+export type LeaseLogsResponse = z.infer<typeof LeaseLogsResponseSchema>;
 
-/** Connection details from the provider. */
-export interface LeaseInfo {
-  host: string;
-  ports?: Record<string, unknown>;
-}
+export const LeaseProvisionSchema = z.object({
+  status: z.string(),
+  fail_count: z.number(),
+  last_error: z.string(),
+});
+
+export type LeaseProvision = z.infer<typeof LeaseProvisionSchema>;
+
+export const LeaseInfoSchema = z.object({
+  host: z.string(),
+  ports: z.record(z.string(), z.unknown()).optional(),
+});
+
+export type LeaseInfo = z.infer<typeof LeaseInfoSchema>;
 
 export interface PollOptions {
   intervalMs?: number;
@@ -335,13 +339,14 @@ export async function pollLeaseUntilReady(
  */
 const PERMANENT_WS_CLOSE_CODES = new Set([1008, 4001, 4003]);
 
-/** Wire format for events from Fred's /v1/leases/{uuid}/events WebSocket endpoint. */
-export interface FredWSEvent {
-  lease_uuid: string;
-  status: string; // 'provisioning' | 'ready' | 'failed' | 'restarting' | 'updating'
-  last_error?: string;
-  timestamp: string; // RFC3339
-}
+export const FredWSEventSchema = z.object({
+  lease_uuid: z.string(),
+  status: z.string(),
+  last_error: z.string().optional(),
+  timestamp: z.string(),
+});
+
+export type FredWSEvent = z.infer<typeof FredWSEventSchema>;
 
 /**
  * Build a WebSocket URL for Fred's events endpoint, routing through the
@@ -439,17 +444,12 @@ export function connectLeaseEvents(
     ws.onmessage = (msg) => {
       try {
         const parsed: unknown = JSON.parse(msg.data);
-        if (
-          !parsed ||
-          typeof parsed !== 'object' ||
-          typeof (parsed as Record<string, unknown>).status !== 'string' ||
-          typeof (parsed as Record<string, unknown>).lease_uuid !== 'string'
-        ) {
+        const result = FredWSEventSchema.safeParse(parsed);
+        if (!result.success) {
           logError('fred.connectLeaseEvents: unexpected WS message shape', new Error(JSON.stringify(parsed).slice(0, 200)));
           return;
         }
-        const event = parsed as FredWSEvent;
-        eventQueue.push(event);
+        eventQueue.push(result.data);
         resolveWaiter?.();
       } catch (error) {
         logError('fred.connectLeaseEvents: invalid JSON in WS message', error);
@@ -779,9 +779,11 @@ export async function getLeaseLogs(
   }
 
   try {
-    return await response.json();
-  } catch {
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for logs');
+    const data = await response.json();
+    return LeaseLogsResponseSchema.parse(data);
+  } catch (error) {
+    if (error instanceof ProviderApiError) throw error;
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data for logs');
   }
 }
 
@@ -815,29 +817,37 @@ export async function getLeaseProvision(
   }
 
   try {
-    return await response.json();
-  } catch {
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for provision');
+    const data = await response.json();
+    return LeaseProvisionSchema.parse(data);
+  } catch (error) {
+    if (error instanceof ProviderApiError) throw error;
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data for provision');
   }
 }
 
-/** A single release/version entry for a lease. */
-export interface LeaseRelease {
-  version: number;
-  image: string;
-  status: string;
-  created_at: string;
-  error?: string;
-  manifest?: string;
-}
+export const LeaseReleaseSchema = z.object({
+  version: z.number(),
+  image: z.string(),
+  status: z.string(),
+  created_at: z.string(),
+  error: z.string().optional(),
+  manifest: z.string().optional(),
+});
 
-/** Response from the releases endpoint. */
-export interface LeaseReleasesResponse {
-  lease_uuid: string;
-  tenant: string;
-  provider_uuid: string;
-  releases: LeaseRelease[];
-}
+export type LeaseRelease = z.infer<typeof LeaseReleaseSchema>;
+
+export const LeaseReleasesResponseSchema = z.object({
+  lease_uuid: z.string(),
+  tenant: z.string(),
+  provider_uuid: z.string(),
+  releases: z.array(LeaseReleaseSchema),
+});
+
+export type LeaseReleasesResponse = z.infer<typeof LeaseReleasesResponseSchema>;
+
+const StatusResponseSchema = z.object({
+  status: z.string(),
+});
 
 /**
  * Restart a running lease.
@@ -869,9 +879,11 @@ export async function restartLease(
   }
 
   try {
-    return await response.json();
-  } catch {
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for restart');
+    const data = await response.json();
+    return StatusResponseSchema.parse(data);
+  } catch (error) {
+    if (error instanceof ProviderApiError) throw error;
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data for restart');
   }
 }
 
@@ -911,9 +923,11 @@ export async function updateLease(
   }
 
   try {
-    return await response.json();
-  } catch {
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for update');
+    const data = await response.json();
+    return StatusResponseSchema.parse(data);
+  } catch (error) {
+    if (error instanceof ProviderApiError) throw error;
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data for update');
   }
 }
 
@@ -947,9 +961,11 @@ export async function getLeaseReleases(
   }
 
   try {
-    return await response.json();
-  } catch {
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for releases');
+    const data = await response.json();
+    return LeaseReleasesResponseSchema.parse(data);
+  } catch (error) {
+    if (error instanceof ProviderApiError) throw error;
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data for releases');
   }
 }
 
@@ -976,8 +992,10 @@ export async function getLeaseInfo(
   }
 
   try {
-    return await response.json();
-  } catch {
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for info');
+    const data = await response.json();
+    return LeaseInfoSchema.parse(data);
+  } catch (error) {
+    if (error instanceof ProviderApiError) throw error;
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data for info');
   }
 }

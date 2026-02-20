@@ -5,27 +5,31 @@
  * address gets its own isolated registry keyed as `barney-apps-{address}`.
  */
 
+import { z } from 'zod';
 import { logError } from '../utils/errors';
 
 export const APP_STATUSES = ['deploying', 'running', 'stopped', 'failed'] as const;
 export type AppStatus = (typeof APP_STATUSES)[number];
 
-export interface AppEntry {
-  name: string;
-  leaseUuid: string;
-  size: string;
-  providerUuid: string;
-  providerUrl: string;
-  createdAt: number;
-  url?: string;
-  connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string>; services?: Record<string, unknown> };
-  status: AppStatus;
-  /** Original manifest JSON, stored for re-deploy. */
-  manifest?: string;
-}
+export const AppEntrySchema = z.object({
+  name: z.string(),
+  leaseUuid: z.string(),
+  size: z.string(),
+  providerUuid: z.string(),
+  providerUrl: z.string(),
+  createdAt: z.number(),
+  url: z.string().optional(),
+  connection: z.object({
+    host: z.string(),
+    ports: z.record(z.string(), z.unknown()).optional(),
+    metadata: z.record(z.string(), z.string()).optional(),
+    services: z.record(z.string(), z.unknown()).optional(),
+  }).optional(),
+  status: z.enum(APP_STATUSES),
+  manifest: z.string().optional(),
+});
 
-/** Runtime set derived from APP_STATUSES for O(1) validation at the localStorage boundary */
-const VALID_STATUSES: Set<string> = new Set(APP_STATUSES);
+export type AppEntry = z.infer<typeof AppEntrySchema>;
 
 /** Name validation: lowercase alphanumeric + hyphens, 1-32 chars, no leading/trailing hyphen */
 const APP_NAME_REGEX = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
@@ -100,19 +104,11 @@ function loadApps(address: string): AppEntry[] {
       localStorage.removeItem(storageKey(address));
       return [];
     }
-    // Sanitize: keep only entries with required fields
-    const valid = parsed.filter(
-      (entry): entry is AppEntry =>
-        entry != null &&
-        typeof entry === 'object' &&
-        typeof (entry as AppEntry).name === 'string' &&
-        typeof (entry as AppEntry).leaseUuid === 'string' &&
-        typeof (entry as AppEntry).size === 'string' &&
-        typeof (entry as AppEntry).providerUuid === 'string' &&
-        typeof (entry as AppEntry).providerUrl === 'string' &&
-        typeof (entry as AppEntry).createdAt === 'number' &&
-        VALID_STATUSES.has((entry as AppEntry).status)
-    );
+    // Sanitize: keep only entries that pass schema validation
+    const valid = parsed
+      .map((entry) => AppEntrySchema.safeParse(entry))
+      .filter((r) => r.success)
+      .map((r) => r.data);
     // If we dropped entries, persist the cleaned list
     if (valid.length !== parsed.length) {
       if (!saveApps(address, valid)) {

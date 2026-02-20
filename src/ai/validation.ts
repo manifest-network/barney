@@ -3,6 +3,7 @@
  * Provides schema validation for localStorage data and input sanitization
  */
 
+import { z } from 'zod';
 import * as ipaddr from 'ipaddr.js';
 import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
 import type { ChatMessage } from '../contexts/aiTypes';
@@ -10,20 +11,6 @@ import type { ChatMessage } from '../contexts/aiTypes';
 // ============================================================================
 // Settings Validation
 // ============================================================================
-
-export interface AISettings {
-  ollamaEndpoint: string;
-  model: string;
-  saveHistory: boolean;
-  enableThinking: boolean;
-}
-
-const DEFAULT_SETTINGS: AISettings = {
-  ollamaEndpoint: 'http://localhost:11434',
-  model: 'llama3.2',
-  saveHistory: true,
-  enableThinking: false,
-};
 
 /**
  * IP ranges that should be blocked for SSRF protection.
@@ -137,44 +124,30 @@ export function validateEndpointUrl(url: string): string | null {
   return parsed.origin + pathname;
 }
 
+export const AISettingsSchema = z.object({
+  ollamaEndpoint: z.string()
+    .transform((url) => validateEndpointUrl(url))
+    .pipe(z.string())
+    .catch('http://localhost:11434'),
+  model: z.string()
+    .min(1)
+    .max(256)
+    .regex(/^[a-zA-Z0-9\-_.:]+$/)
+    .catch('llama3.2'),
+  saveHistory: z.boolean().catch(true),
+  enableThinking: z.boolean().catch(false),
+});
+
+export type AISettings = z.infer<typeof AISettingsSchema>;
+
 /**
- * Validate settings object from localStorage
- * Returns validated settings or defaults if invalid
+ * Validate settings object from localStorage.
+ * Returns validated settings or defaults if invalid.
  */
 export function validateSettings(data: unknown): AISettings {
-  if (typeof data !== 'object' || data === null) {
-    return DEFAULT_SETTINGS;
-  }
-
-  const obj = data as Record<string, unknown>;
-  const result: AISettings = { ...DEFAULT_SETTINGS };
-
-  // Validate ollamaEndpoint
-  if (typeof obj.ollamaEndpoint === 'string') {
-    const validatedUrl = validateEndpointUrl(obj.ollamaEndpoint);
-    if (validatedUrl) {
-      result.ollamaEndpoint = validatedUrl;
-    }
-  }
-
-  // Validate model (string, max length)
-  if (typeof obj.model === 'string' && obj.model.length > 0 && obj.model.length <= 256) {
-    // Only allow alphanumeric, hyphens, underscores, colons, and dots
-    if (/^[a-zA-Z0-9\-_.:]+$/.test(obj.model)) {
-      result.model = obj.model;
-    }
-  }
-
-  // Validate booleans
-  if (typeof obj.saveHistory === 'boolean') {
-    result.saveHistory = obj.saveHistory;
-  }
-
-  if (typeof obj.enableThinking === 'boolean') {
-    result.enableThinking = obj.enableThinking;
-  }
-
-  return result;
+  const result = AISettingsSchema.safeParse(data);
+  if (result.success) return result.data;
+  return AISettingsSchema.parse({});
 }
 
 // ============================================================================
@@ -189,66 +162,22 @@ const MAX_CONTENT_LENGTH = 1024 * 1024;
 // Maximum number of messages to load from history
 const MAX_HISTORY_MESSAGES = 100;
 
-/**
- * Validate a single chat message
- */
-function validateMessage(msg: unknown): ChatMessage | null {
-  if (typeof msg !== 'object' || msg === null) {
-    return null;
-  }
-
-  const obj = msg as Record<string, unknown>;
-
-  // Required fields
-  if (typeof obj.id !== 'string' || obj.id.length === 0 || obj.id.length > 64) {
-    return null;
-  }
-
-  if (obj.role !== 'user' && obj.role !== 'assistant' && obj.role !== 'tool') {
-    return null;
-  }
-
-  if (typeof obj.content !== 'string' || obj.content.length > MAX_CONTENT_LENGTH) {
-    return null;
-  }
-
-  if (typeof obj.timestamp !== 'number' || !Number.isFinite(obj.timestamp)) {
-    return null;
-  }
-
-  // Build validated message
-  const validated: ChatMessage = {
-    id: obj.id,
-    role: obj.role,
-    content: obj.content,
-    timestamp: obj.timestamp,
-  };
-
-  // Optional fields
-  if (typeof obj.thinking === 'string' && obj.thinking.length <= MAX_CONTENT_LENGTH) {
-    validated.thinking = obj.thinking;
-  }
-
-  if (typeof obj.toolCallId === 'string' && obj.toolCallId.length <= 64) {
-    validated.toolCallId = obj.toolCallId;
-  }
-
-  if (typeof obj.toolName === 'string' && obj.toolName.length <= 64) {
-    validated.toolName = obj.toolName;
-  }
-
-  if (typeof obj.error === 'string' && obj.error.length <= 2048) {
-    validated.error = obj.error;
-  }
-
+const PersistedMessageSchema = z.object({
+  id: z.string().min(1).max(64),
+  role: z.enum(['user', 'assistant', 'tool']),
+  content: z.string().max(MAX_CONTENT_LENGTH),
+  timestamp: z.number().finite(),
+  thinking: z.string().max(MAX_CONTENT_LENGTH).optional().catch(undefined),
+  toolCallId: z.string().max(64).optional().catch(undefined),
+  toolName: z.string().max(64).optional().catch(undefined),
+  error: z.string().max(2048).optional().catch(undefined),
+}).transform((msg): ChatMessage => ({
+  ...msg,
   // Don't restore isStreaming state (should always start as false)
-  validated.isStreaming = false;
-
+  isStreaming: false,
   // Don't restore toolCalls from localStorage - they're user-controlled and could be
   // malformed/oversized. Historical tool calls aren't needed for conversation continuity.
-
-  return validated;
-}
+}));
 
 /**
  * Validate chat history from localStorage
@@ -259,18 +188,16 @@ export function validateChatHistory(data: unknown): ChatMessage[] {
     return [];
   }
 
-  const validated: ChatMessage[] = [];
-
   // Limit the number of messages we process - keep the most recent ones
   const messagesToProcess = data.slice(-MAX_HISTORY_MESSAGES);
 
+  const validated: ChatMessage[] = [];
   for (const msg of messagesToProcess) {
-    const validatedMsg = validateMessage(msg);
-    if (validatedMsg) {
-      validated.push(validatedMsg);
+    const result = PersistedMessageSchema.safeParse(msg);
+    if (result.success) {
+      validated.push(result.data);
     }
   }
-
   return validated;
 }
 
