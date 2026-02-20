@@ -62,12 +62,14 @@ export interface InstanceInfo {
 
 export interface ServiceConnectionDetails {
   host?: string;
+  fqdn?: string;
   ports?: Record<string, PortMapping>;
   instances?: InstanceInfo[];
 }
 
 export interface ConnectionDetails {
   host: string;
+  fqdn?: string;
   ports?: Record<string, PortMapping>;
   instances?: InstanceInfo[];
   protocol?: string;

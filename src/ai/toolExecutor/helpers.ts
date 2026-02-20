@@ -85,8 +85,13 @@ function extractPort(value: unknown): number | undefined {
 export function formatConnectionUrl(
   host: string | undefined,
   // Accept any shape — the port values may not match our PortMapping interface
-  connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string> }
+  connection?: { host: string; fqdn?: string; ports?: Record<string, unknown>; metadata?: Record<string, string> }
 ): string | undefined {
+  // Prefer FQDN — provider-assigned domain with TLS termination
+  if (connection?.fqdn) {
+    return `https://${connection.fqdn}`;
+  }
+
   let url = host;
 
   // Try port mappings — use port number but prefer connection.host (hostname) over host_ip (raw IP)
