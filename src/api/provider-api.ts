@@ -62,7 +62,8 @@ export type InstanceInfo = z.infer<typeof InstanceInfoSchema>;
 export const ServiceConnectionDetailsSchema = z.object({
   host: z.string().optional(),
   fqdn: z.string().optional(),
-  ports: z.record(z.string(), PortMappingSchema).optional(),
+  // Port formats vary across providers; extractPort() in helpers.ts handles normalization
+  ports: z.record(z.string(), z.unknown()).optional(),
   instances: z.array(InstanceInfoSchema).optional(),
 });
 
@@ -197,7 +198,7 @@ export async function getLeaseConnectionInfo(
     return LeaseConnectionResponseSchema.parse(data);
   } catch (error) {
     if (error instanceof ProviderApiError) throw error;
-    throw new ProviderApiError(response.status, 'Provider returned invalid JSON');
+    throw new ProviderApiError(response.status, 'Provider returned invalid or malformed data');
   }
 }
 

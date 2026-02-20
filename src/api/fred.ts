@@ -174,7 +174,7 @@ export async function getLeaseStatus(
     return FredLeaseStatusSchema.parse(raw);
   } catch (error) {
     if (error instanceof ProviderApiError) throw error;
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON');
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data');
   }
 }
 
@@ -783,7 +783,7 @@ export async function getLeaseLogs(
     return LeaseLogsResponseSchema.parse(data);
   } catch (error) {
     if (error instanceof ProviderApiError) throw error;
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for logs');
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data for logs');
   }
 }
 
@@ -821,7 +821,7 @@ export async function getLeaseProvision(
     return LeaseProvisionSchema.parse(data);
   } catch (error) {
     if (error instanceof ProviderApiError) throw error;
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for provision');
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data for provision');
   }
 }
 
@@ -883,7 +883,7 @@ export async function restartLease(
     return StatusResponseSchema.parse(data);
   } catch (error) {
     if (error instanceof ProviderApiError) throw error;
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for restart');
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data for restart');
   }
 }
 
@@ -927,7 +927,7 @@ export async function updateLease(
     return StatusResponseSchema.parse(data);
   } catch (error) {
     if (error instanceof ProviderApiError) throw error;
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for update');
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data for update');
   }
 }
 
@@ -965,7 +965,7 @@ export async function getLeaseReleases(
     return LeaseReleasesResponseSchema.parse(data);
   } catch (error) {
     if (error instanceof ProviderApiError) throw error;
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for releases');
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data for releases');
   }
 }
 
@@ -996,6 +996,6 @@ export async function getLeaseInfo(
     return LeaseInfoSchema.parse(data);
   } catch (error) {
     if (error instanceof ProviderApiError) throw error;
-    throw new ProviderApiError(response.status, 'Fred returned invalid JSON for info');
+    throw new ProviderApiError(response.status, 'Fred returned invalid or malformed data for info');
   }
 }
