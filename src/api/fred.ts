@@ -99,7 +99,16 @@ const FredLeaseStatusSchema = z.object({
   last_error: z.string().optional().catch(undefined),
   fail_count: z.number().optional().catch(undefined),
   created_at: z.string().optional().catch(undefined),
-  services: z.record(z.string(), FredServiceStatusSchema).optional().catch(undefined),
+  services: z.record(z.string(), z.unknown()).optional().catch(undefined)
+    .transform((rec) => {
+      if (!rec) return undefined;
+      const filtered: Record<string, FredServiceStatus> = {};
+      for (const [k, v] of Object.entries(rec)) {
+        const r = FredServiceStatusSchema.safeParse(v);
+        if (r.success) filtered[k] = r.data;
+      }
+      return Object.keys(filtered).length > 0 ? filtered : undefined;
+    }),
 }).transform((raw): FredLeaseStatus => {
   const result: FredLeaseStatus = { state: raw.state };
   if (raw.provision_status !== undefined) result.provision_status = raw.provision_status;
