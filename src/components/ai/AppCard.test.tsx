@@ -1,6 +1,23 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { createElement } from 'react';
+import { flushSync } from 'react-dom';
+import { createRoot, type Root } from 'react-dom/client';
 import { AppCard } from './AppCard';
+
+let container: HTMLDivElement;
+let root: Root;
+
+function render(props: Parameters<typeof AppCard>[0]) {
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+  flushSync(() => { root.render(createElement(AppCard, props)); });
+}
+
+afterEach(() => {
+  flushSync(() => { root?.unmount(); });
+  container?.remove();
+});
 
 describe('AppCard', () => {
   it('can be instantiated with minimal props', () => {
@@ -28,8 +45,8 @@ describe('AppCard', () => {
     expect(element.props.connection?.fqdn).toBe('abc123.barney8.manifest0.net');
   });
 
-  it('accepts connection with multi-instance FQDNs', () => {
-    const element = createElement(AppCard, {
+  it('renders instance links with valid https hrefs for multi-instance FQDNs', () => {
+    render({
       name: 'my-app',
       url: 'https://abc123.barney8.manifest0.net',
       connection: {
@@ -41,40 +58,36 @@ describe('AppCard', () => {
       },
       status: 'running',
     });
-    expect(element.props.connection?.instances).toHaveLength(2);
-    expect(element.props.connection?.instances?.[0].fqdn).toBe('0-abc123.barney8.manifest0.net');
+
+    const links = container.querySelectorAll<HTMLAnchorElement>('.app-card__instance-link');
+    expect(links).toHaveLength(2);
+    expect(links[0].href).toBe('https://0-abc123.barney8.manifest0.net/');
+    expect(links[1].href).toBe('https://1-def456.barney8.manifest0.net/');
+    // Verify security attributes
+    for (const link of links) {
+      expect(link.target).toBe('_blank');
+      expect(link.rel).toBe('noopener noreferrer');
+    }
   });
 
-  it('accepts connection with stack service instances', () => {
-    const element = createElement(AppCard, {
-      name: 'wp-stack',
-      url: 'https://web.barney8.manifest0.net',
+  it('renders no instance links for a single-instance deployment', () => {
+    render({
+      name: 'my-app',
       connection: {
         host: '1.2.3.4',
-        services: {
-          web: {
-            instances: [
-              { fqdn: 'web-0.barney8.manifest0.net', ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 32000 } } },
-              { fqdn: 'web-1.barney8.manifest0.net', ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 32001 } } },
-            ],
-          },
-          db: {
-            instances: [
-              { fqdn: 'db-0.barney8.manifest0.net', ports: { '5432/tcp': { host_ip: '1.2.3.4', host_port: 32100 } } },
-            ],
-          },
-        },
+        instances: [
+          { fqdn: '0-abc123.barney8.manifest0.net' },
+        ],
       },
       status: 'running',
     });
-    expect(element.props.connection?.services?.web.instances).toHaveLength(2);
+
+    const links = container.querySelectorAll('.app-card__instance-link');
+    expect(links).toHaveLength(0);
   });
 
-  it('does not expose malicious FQDNs as instance links (validated by collectInstanceUrls)', () => {
-    // collectInstanceUrls performs hostname validation and skips invalid FQDNs.
-    // This test verifies the prop shape is accepted; the actual filtering
-    // is covered by the collectInstanceUrls unit tests in utils/connection.test.ts.
-    const element = createElement(AppCard, {
+  it('renders no instance links when FQDNs are malicious', () => {
+    render({
       name: 'my-app',
       connection: {
         host: '1.2.3.4',
@@ -85,8 +98,53 @@ describe('AppCard', () => {
       },
       status: 'running',
     });
-    expect(element).toBeDefined();
-    // Both invalid FQDNs would be filtered by collectInstanceUrls,
-    // resulting in 0 instance URLs rendered.
+
+    const links = container.querySelectorAll('.app-card__instance-link');
+    expect(links).toHaveLength(0);
+    // No instances section should be rendered at all
+    expect(container.querySelector('.app-card__instances')).toBeNull();
+  });
+
+  it('renders only valid instance links when mixed with invalid FQDNs', () => {
+    render({
+      name: 'my-app',
+      connection: {
+        host: '1.2.3.4',
+        instances: [
+          { fqdn: '0-abc123.barney8.manifest0.net' },
+          { fqdn: 'javascript:alert(1)' },
+          { fqdn: '1-def456.barney8.manifest0.net' },
+        ],
+      },
+      status: 'running',
+    });
+
+    const links = container.querySelectorAll<HTMLAnchorElement>('.app-card__instance-link');
+    expect(links).toHaveLength(2);
+    expect(links[0].href).toBe('https://0-abc123.barney8.manifest0.net/');
+    expect(links[1].href).toBe('https://1-def456.barney8.manifest0.net/');
+  });
+
+  it('renders stack service instance links from services map', () => {
+    render({
+      name: 'wp-stack',
+      connection: {
+        host: '1.2.3.4',
+        services: {
+          web: {
+            instances: [
+              { fqdn: 'web-0.barney8.manifest0.net', ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 32000 } } },
+              { fqdn: 'web-1.barney8.manifest0.net', ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 32001 } } },
+            ],
+          },
+        },
+      },
+      status: 'running',
+    });
+
+    const links = container.querySelectorAll<HTMLAnchorElement>('.app-card__instance-link');
+    expect(links).toHaveLength(2);
+    expect(links[0].href).toBe('https://web-0.barney8.manifest0.net/');
+    expect(links[1].href).toBe('https://web-1.barney8.manifest0.net/');
   });
 });
