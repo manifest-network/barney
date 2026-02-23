@@ -10396,6 +10396,40 @@ code.lease-card-mono {
   color: var(--text-primary);
 }
 
+.app-card__instances {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--color-surface-900);
+  border-radius: var(--radius-md);
+  margin-bottom: 0.75rem;
+}
+
+.app-card__instances-label {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.app-card__instance-link {
+  display: flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--color-primary-400);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-card__instance-link:hover {
+  color: var(--color-primary-300);
+}
+
 .app-card__actions {
   display: flex;
   gap: 0.5rem;
