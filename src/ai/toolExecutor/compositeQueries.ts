@@ -178,11 +178,17 @@ export async function executeAppStatus(
             const connResponse = await getLeaseConnectionInfo(app.providerUrl, app.leaseUuid, infoAuthToken);
             if (connResponse.connection) {
               const conn = connResponse.connection;
-              // Stack deployments: extract primary service ports when no top-level ports
+              // Stack deployments: extract primary service ports/fqdn when no top-level values
               if (!conn.ports && !conn.instances?.[0]?.ports && conn.services) {
                 const primary = extractPrimaryServicePorts(conn.services);
                 if (primary) {
-                  appConnection = { ...conn, ports: primary.ports };
+                  // Promote primary service's FQDN to top-level for formatConnectionUrl
+                  let fqdn = conn.fqdn;
+                  if (!fqdn) {
+                    const svc = conn.services[primary.serviceName];
+                    fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
+                  }
+                  appConnection = { ...conn, ports: primary.ports, fqdn };
                 } else {
                   appConnection = conn;
                 }

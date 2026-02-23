@@ -420,12 +420,20 @@ async function resolveAppUrl(
           connection.ports ?? connection.instances?.[0]?.ports;
 
         // Stack deployments: ports nested under services.<name>.instances[0].ports
+        let fqdn = connection.fqdn;
         if (!ports && connection.services) {
           const primary = extractPrimaryServicePorts(connection.services);
-          if (primary) ports = primary.ports;
+          if (primary) {
+            ports = primary.ports;
+            // Promote primary service's FQDN to top-level for formatConnectionUrl
+            if (!fqdn) {
+              const svc = connection.services[primary.serviceName];
+              fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
+            }
+          }
         }
 
-        const withPorts = { ...connection, ports };
+        const withPorts = { ...connection, ports, fqdn };
         const url = formatConnectionUrl(connection.host, withPorts);
         if (url) return { url, connection: withPorts };
       }
