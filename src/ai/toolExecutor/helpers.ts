@@ -128,3 +128,6 @@ export function formatConnectionUrl(
 
   return url;
 }
+
+// Re-export from shared module so existing tool-executor consumers don't break.
+export { collectInstanceUrls } from '../../utils/connection';

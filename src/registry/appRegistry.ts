@@ -21,7 +21,9 @@ export const AppEntrySchema = z.object({
   url: z.string().optional(),
   connection: z.object({
     host: z.string(),
+    fqdn: z.string().optional(),
     ports: z.record(z.string(), z.unknown()).optional(),
+    instances: z.array(z.object({ fqdn: z.string().optional() }).passthrough()).optional(),
     metadata: z.record(z.string(), z.string()).optional(),
     services: z.record(z.string(), z.unknown()).optional(),
   }).optional(),
