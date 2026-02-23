@@ -307,6 +307,102 @@ describe('extractPrimaryServicePorts', () => {
   });
 });
 
+describe('stack FQDN promotion', () => {
+  it('promotes primary service fqdn to formatConnectionUrl for stack deployments', () => {
+    const connection = {
+      host: '64.29.115.29',
+      // No top-level fqdn
+      services: {
+        db: { instances: [{ ports: { '3306/tcp': 32100 } }] },
+        wordpress: {
+          fqdn: 'wp-abc123.barney8.manifest0.net',
+          instances: [{ ports: { '80/tcp': 32769 } }],
+        },
+      },
+    };
+
+    // Simulate what resolveAppUrl / executeAppStatus now do
+    const primary = extractPrimaryServicePorts(connection.services);
+    expect(primary).toBeDefined();
+
+    let fqdn: string | undefined;
+    if (primary && connection.services) {
+      const svc = connection.services[primary!.serviceName] as { fqdn?: string; instances?: { fqdn?: string }[] };
+      fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
+    }
+
+    const withPorts = { ...connection, ports: primary!.ports, fqdn };
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('https://wp-abc123.barney8.manifest0.net');
+  });
+
+  it('falls back to IP:port when primary service has no fqdn', () => {
+    const connection = {
+      host: '64.29.115.29',
+      services: {
+        db: { instances: [{ ports: { '3306/tcp': 32100 } }] },
+        wordpress: { instances: [{ ports: { '80/tcp': 32769 } }] },
+      },
+    };
+
+    const primary = extractPrimaryServicePorts(connection.services);
+    expect(primary).toBeDefined();
+
+    let fqdn: string | undefined;
+    if (primary && connection.services) {
+      const svc = connection.services[primary!.serviceName] as { fqdn?: string; instances?: { fqdn?: string }[] };
+      fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
+    }
+
+    const withPorts = { ...connection, ports: primary!.ports, fqdn };
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('https://64.29.115.29:32769');
+  });
+
+  it('uses instance fqdn when service-level fqdn is absent', () => {
+    const connection = {
+      host: '64.29.115.29',
+      services: {
+        wordpress: {
+          instances: [{ ports: { '80/tcp': 32769 }, fqdn: 'inst-abc.barney8.manifest0.net' }],
+        },
+      },
+    };
+
+    const primary = extractPrimaryServicePorts(connection.services);
+    let fqdn: string | undefined;
+    if (primary && connection.services) {
+      const svc = connection.services[primary!.serviceName] as { fqdn?: string; instances?: { fqdn?: string }[] };
+      fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
+    }
+
+    const withPorts = { ...connection, ports: primary!.ports, fqdn };
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('https://inst-abc.barney8.manifest0.net');
+  });
+
+  it('preserves top-level fqdn over service fqdn', () => {
+    const connection = {
+      host: '64.29.115.29',
+      fqdn: 'top-level.barney8.manifest0.net',
+      services: {
+        wordpress: {
+          fqdn: 'svc-level.barney8.manifest0.net',
+          instances: [{ ports: { '80/tcp': 32769 } }],
+        },
+      },
+    };
+
+    // Top-level fqdn exists, so promotion is skipped (matching the if (!fqdn) guard)
+    const primary = extractPrimaryServicePorts(connection.services);
+    let fqdn: string | undefined = connection.fqdn;
+    if (!fqdn && primary && connection.services) {
+      const svc = connection.services[primary!.serviceName] as { fqdn?: string; instances?: { fqdn?: string }[] };
+      fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
+    }
+
+    const withPorts = { ...connection, ports: primary!.ports, fqdn };
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('https://top-level.barney8.manifest0.net');
+  });
+});
+
 describe('formatConnectionUrl', () => {
   it('adds https for non-local hosts', () => {
     expect(formatConnectionUrl('example.com')).toBe('https://example.com');
