@@ -3,6 +3,8 @@
  * Extracted from compositeTransactions to avoid peer-dependency from compositeQueries.
  */
 
+import { isValidFqdn } from '../../utils/connection';
+
 /** Service names that indicate a primary (user-facing) service in a stack. */
 const PRIMARY_SERVICE_NAMES = new Set(['web', 'app', 'frontend', 'ui']);
 
@@ -88,7 +90,7 @@ export function formatConnectionUrl(
   connection?: { host: string; fqdn?: string; ports?: Record<string, unknown>; metadata?: Record<string, string> }
 ): string | undefined {
   // Prefer FQDN — provider-assigned domain with TLS termination
-  if (connection?.fqdn) {
+  if (connection?.fqdn && isValidFqdn(connection.fqdn)) {
     return `https://${connection.fqdn}`;
   }
 

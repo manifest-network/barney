@@ -384,6 +384,21 @@ describe('formatConnectionUrl', () => {
       fqdn: 'myapp.barney7.manifest0.net',
     })).toBe('https://myapp.barney7.manifest0.net');
   });
+
+  it('rejects fqdn with userinfo injection', () => {
+    expect(formatConnectionUrl('1.2.3.4', {
+      host: '1.2.3.4',
+      fqdn: 'legit.com@evil.com',
+      ports: { '8080/tcp': { host_ip: '1.2.3.4', host_port: 32456 } },
+    })).toBe('https://1.2.3.4:32456');
+  });
+
+  it('rejects fqdn with path injection', () => {
+    expect(formatConnectionUrl('1.2.3.4', {
+      host: '1.2.3.4',
+      fqdn: 'evil.com/phish',
+    })).toBe('https://1.2.3.4');
+  });
 });
 
 describe('formatLeaseItems', () => {
