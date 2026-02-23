@@ -1,5 +1,45 @@
 import { describe, it, expect } from 'vitest';
-import { collectInstanceUrls } from './helpers';
+import { collectInstanceUrls, isValidFqdn } from './connection';
+
+describe('isValidFqdn', () => {
+  it('accepts valid hostnames', () => {
+    expect(isValidFqdn('example.com')).toBe(true);
+    expect(isValidFqdn('0-abc1234.barney8.manifest0.net')).toBe(true);
+    expect(isValidFqdn('web-0-abc1234.barney8.manifest0.net')).toBe(true);
+    expect(isValidFqdn('a')).toBe(true);
+  });
+
+  it('rejects empty string', () => {
+    expect(isValidFqdn('')).toBe(false);
+  });
+
+  it('rejects hostnames with path traversal', () => {
+    expect(isValidFqdn('evil.com/phish')).toBe(false);
+  });
+
+  it('rejects hostnames with protocol injection', () => {
+    expect(isValidFqdn('javascript:alert(1)')).toBe(false);
+  });
+
+  it('rejects hostnames with spaces', () => {
+    expect(isValidFqdn('evil .com')).toBe(false);
+  });
+
+  it('rejects labels starting or ending with hyphen', () => {
+    expect(isValidFqdn('-bad.com')).toBe(false);
+    expect(isValidFqdn('bad-.com')).toBe(false);
+  });
+
+  it('rejects hostnames exceeding 253 characters', () => {
+    const long = `${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(63)}`;
+    expect(long.length).toBeGreaterThan(253);
+    expect(isValidFqdn(long)).toBe(false);
+  });
+
+  it('rejects labels exceeding 63 characters', () => {
+    expect(isValidFqdn(`${'a'.repeat(64)}.com`)).toBe(false);
+  });
+});
 
 describe('collectInstanceUrls', () => {
   it('returns empty array for undefined connection', () => {
@@ -95,5 +135,28 @@ describe('collectInstanceUrls', () => {
       'https://0-abc1234.barney8.manifest0.net',
       'https://web-0-def5678.barney8.manifest0.net',
     ]);
+  });
+
+  it('skips FQDNs that fail hostname validation', () => {
+    const result = collectInstanceUrls({
+      instances: [
+        { fqdn: '0-abc1234.barney8.manifest0.net' },
+        { fqdn: 'javascript:alert(1)' },
+        { fqdn: '1-def5678.barney8.manifest0.net' },
+      ],
+    });
+    expect(result).toEqual([
+      'https://0-abc1234.barney8.manifest0.net',
+      'https://1-def5678.barney8.manifest0.net',
+    ]);
+  });
+
+  it('skips FQDNs with path components', () => {
+    expect(collectInstanceUrls({
+      instances: [
+        { fqdn: 'evil.com/phish' },
+        { fqdn: 'also-evil.com/steal' },
+      ],
+    })).toEqual([]);
   });
 });

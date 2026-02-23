@@ -6,7 +6,7 @@
 import { memo } from 'react';
 import { ExternalLink, Copy, Square, CheckCircle } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { collectInstanceUrls } from '../../ai/toolExecutor/helpers';
+import { collectInstanceUrls } from '../../utils/connection';
 
 interface PortMapping {
   host_ip: string;
