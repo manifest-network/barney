@@ -6,6 +6,7 @@
 import { memo } from 'react';
 import { ExternalLink, Copy, Square, CheckCircle } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { collectInstanceUrls } from '../../ai/toolExecutor/helpers';
 
 interface PortMapping {
   host_ip: string;
@@ -14,7 +15,7 @@ interface PortMapping {
 
 interface ServiceInfo {
   ports?: Record<string, PortMapping>;
-  instances?: { ports?: Record<string, PortMapping> }[];
+  instances?: { fqdn?: string; ports?: Record<string, PortMapping> }[];
 }
 
 interface AppCardProps {
@@ -22,7 +23,9 @@ interface AppCardProps {
   url?: string;
   connection?: {
     host: string;
+    fqdn?: string;
     ports?: Record<string, PortMapping>;
+    instances?: { fqdn?: string; ports?: Record<string, PortMapping> }[];
     services?: Record<string, ServiceInfo>;
   };
   status: string;
@@ -32,6 +35,7 @@ interface AppCardProps {
 export const AppCard = memo(function AppCard({ name, url, connection, status, onStop }: AppCardProps) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
+  const instanceUrls = collectInstanceUrls(connection);
   const portEntries = connection?.ports ? Object.entries(connection.ports) : [];
 
   // Stack deployments: build service-grouped port list when no top-level ports
@@ -94,6 +98,18 @@ export const AppCard = memo(function AppCard({ name, url, connection, status, on
               <Copy className="w-3.5 h-3.5" />
             )}
           </button>
+        </div>
+      )}
+
+      {instanceUrls.length > 0 && (
+        <div className="app-card__instances">
+          <span className="app-card__instances-label">Instances</span>
+          {instanceUrls.map(u => (
+            <a key={u} href={u} target="_blank" rel="noopener noreferrer" className="app-card__instance-link">
+              {u.replace('https://', '')}
+              <ExternalLink className="w-3 h-3 ml-1" aria-hidden="true" />
+            </a>
+          ))}
         </div>
       )}
 

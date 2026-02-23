@@ -72,6 +72,7 @@ The AI assistant uses a 3-layer architecture:
 3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
    - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`
    - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`
+   - **Helpers** (`helpers.ts`): Shared functions — `extractPrimaryServicePorts`, `formatConnectionUrl`, `collectInstanceUrls`
    - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
    - **Internal**: `batch_deploy` — orchestrates multi-app deploys from the UI (not exposed to AI, used by `requestBatchDeploy` in AIContext)
 
@@ -123,6 +124,7 @@ Builds Docker Compose-style JSON manifests for single-service and multi-service 
 ```
 Key: barney-apps-{address}
 AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, connection?, manifest?, status }
+  connection? { host, fqdn?, ports?, instances?: { fqdn? }[], metadata?, services? }
 AppStatus: 'deploying' | 'running' | 'stopped' | 'failed'
 ```
 

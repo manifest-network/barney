@@ -128,3 +128,43 @@ export function formatConnectionUrl(
 
   return url;
 }
+
+/**
+ * Collect per-instance FQDN URLs from a connection object.
+ * For flat leases: collects `https://{inst.fqdn}` from `connection.instances`.
+ * For stack leases: collects from each service's instances, prefixed with service name.
+ * Returns empty array if ≤1 unique FQDN (single-instance doesn't need extra URLs).
+ */
+export function collectInstanceUrls(
+  connection?: { instances?: { fqdn?: string }[]; services?: Record<string, { instances?: { fqdn?: string }[] }> }
+): string[] {
+  if (!connection) return [];
+
+  const urls: string[] = [];
+
+  // Flat leases: collect from top-level instances
+  if (connection.instances) {
+    for (const inst of connection.instances) {
+      if (inst.fqdn) {
+        urls.push(`https://${inst.fqdn}`);
+      }
+    }
+  }
+
+  // Stack leases: collect from each service's instances
+  if (connection.services) {
+    for (const svc of Object.values(connection.services)) {
+      if (svc.instances) {
+        for (const inst of svc.instances) {
+          if (inst.fqdn) {
+            urls.push(`https://${inst.fqdn}`);
+          }
+        }
+      }
+    }
+  }
+
+  // Only return if there are multiple unique FQDNs
+  const unique = [...new Set(urls)];
+  return unique.length > 1 ? unique : [];
+}

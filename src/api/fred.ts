@@ -27,6 +27,7 @@ export interface FredInstanceInfo {
   name: string;
   status: string;
   ports?: Record<string, number>;
+  fqdn?: string;
 }
 
 export interface FredServiceStatus {
@@ -51,6 +52,7 @@ const FredInstanceInfoSchema = z.object({
   name: z.string(),
   status: z.string(),
   ports: z.record(z.string(), z.number()).optional().catch(undefined),
+  fqdn: z.string().optional().catch(undefined),
 });
 
 const FredServiceStatusSchema = z.object({

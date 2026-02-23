@@ -243,6 +243,16 @@ describe('extractUrlFromFredStatus', () => {
       },
     }, '1.2.3.4')).toBe('1.2.3.4:32300');
   });
+
+  it('returns undefined for instances with fqdn but no ports or endpoints', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      instances: [
+        { name: 'web-0', status: 'running', fqdn: '0-abc1234.barney8.manifest0.net' },
+        { name: 'web-1', status: 'running', fqdn: '1-def5678.barney8.manifest0.net' },
+      ],
+    })).toBeUndefined();
+  });
 });
 
 describe('extractPrimaryServicePorts', () => {

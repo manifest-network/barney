@@ -7,7 +7,7 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser
 import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
-import { getLeaseConnectionInfo, ProviderApiError } from '../../api/provider-api';
+import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
@@ -407,7 +407,7 @@ async function resolveAppUrl(
   address: string,
   signArbitrary: ToolExecutorOptions['signArbitrary'],
   logContext: string
-): Promise<{ url?: string; connection?: { host: string; ports?: Record<string, unknown>; metadata?: Record<string, string>; services?: Record<string, unknown> } }> {
+): Promise<{ url?: string; connection?: ConnectionDetails }> {
   // 1. Try connection endpoint (has proper host + port mappings)
   if (signArbitrary) {
     try {
