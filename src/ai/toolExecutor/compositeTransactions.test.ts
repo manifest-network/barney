@@ -327,7 +327,7 @@ describe('stack FQDN promotion', () => {
 
     let fqdn: string | undefined;
     if (primary && connection.services) {
-      const svc = connection.services[primary!.serviceName] as { fqdn?: string; instances?: { fqdn?: string }[] };
+      const svc = (connection.services as Record<string, { fqdn?: string; instances?: { fqdn?: string }[] }>)[primary!.serviceName];
       fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
     }
 
@@ -349,7 +349,7 @@ describe('stack FQDN promotion', () => {
 
     let fqdn: string | undefined;
     if (primary && connection.services) {
-      const svc = connection.services[primary!.serviceName] as { fqdn?: string; instances?: { fqdn?: string }[] };
+      const svc = (connection.services as Record<string, { fqdn?: string; instances?: { fqdn?: string }[] }>)[primary!.serviceName];
       fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
     }
 
@@ -370,7 +370,7 @@ describe('stack FQDN promotion', () => {
     const primary = extractPrimaryServicePorts(connection.services);
     let fqdn: string | undefined;
     if (primary && connection.services) {
-      const svc = connection.services[primary!.serviceName] as { fqdn?: string; instances?: { fqdn?: string }[] };
+      const svc = (connection.services as Record<string, { fqdn?: string; instances?: { fqdn?: string }[] }>)[primary!.serviceName];
       fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
     }
 
@@ -394,7 +394,7 @@ describe('stack FQDN promotion', () => {
     const primary = extractPrimaryServicePorts(connection.services);
     let fqdn: string | undefined = connection.fqdn;
     if (!fqdn && primary && connection.services) {
-      const svc = connection.services[primary!.serviceName] as { fqdn?: string; instances?: { fqdn?: string }[] };
+      const svc = (connection.services as Record<string, { fqdn?: string; instances?: { fqdn?: string }[] }>)[primary!.serviceName];
       fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
     }
 
