@@ -74,42 +74,42 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   // --- Databases ---
   { label: 'Postgres 18', manifest: SERVICE_MANIFEST('postgres:18', ['5432'], { user: '999:999', tmpfs: ['/var/run/postgresql'] }), envFactory: () => ({ POSTGRES_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
   { label: 'MySQL 9', manifest: SERVICE_MANIFEST('mysql:9', ['3306'], { tmpfs: ['/var/run/mysqld'] }), envFactory: () => ({ MYSQL_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
-  { label: 'MariaDB 12', manifest: SERVICE_MANIFEST('mariadb:12', ['3306'], { tmpfs: ['/run/mysqld'] }), envFactory: () => ({ MARIADB_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
-  { label: 'MongoDB 8', manifest: SERVICE_MANIFEST('mongo:8', ['27017']), envFactory: () => ({ MONGO_INITDB_ROOT_USERNAME: 'admin', MONGO_INITDB_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
-  { label: 'Neo4j 2026.01', manifest: SERVICE_MANIFEST('neo4j:2026.01', ['7474', '7687']), envFactory: () => ({ NEO4J_AUTH: `neo4j/${generatePassword()}` }), size: 'small', group: 'apps', category: 'Databases' },
+  // { label: 'MariaDB 12', manifest: SERVICE_MANIFEST('mariadb:12', ['3306'], { tmpfs: ['/run/mysqld'] }), envFactory: () => ({ MARIADB_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
+  // { label: 'MongoDB 8', manifest: SERVICE_MANIFEST('mongo:8', ['27017']), envFactory: () => ({ MONGO_INITDB_ROOT_USERNAME: 'admin', MONGO_INITDB_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
+  // { label: 'Neo4j 2026.01', manifest: SERVICE_MANIFEST('neo4j:2026.01', ['7474', '7687']), envFactory: () => ({ NEO4J_AUTH: `neo4j/${generatePassword()}` }), size: 'small', group: 'apps', category: 'Databases' },
   { label: 'Redis 8.4', manifest: SERVICE_MANIFEST('redis:8.4', ['6379']), size: 'micro', group: 'apps', category: 'Databases' },
   { label: 'Memcached 1.6', manifest: SERVICE_MANIFEST('memcached:1.6', ['11211']), size: 'micro', group: 'apps', category: 'Databases' },
-  { label: 'ClickHouse 25', manifest: SERVICE_MANIFEST('clickhouse/clickhouse-server:25.12', ['8123', '9000']), size: 'small', group: 'apps', category: 'Databases' },
-  { label: 'InfluxDB 2', manifest: SERVICE_MANIFEST('influxdb:2', ['8086']), size: 'small', group: 'apps', category: 'Databases' },
+  // { label: 'ClickHouse 25', manifest: SERVICE_MANIFEST('clickhouse/clickhouse-server:25.12', ['8123', '9000']), size: 'small', group: 'apps', category: 'Databases' },
+  // { label: 'InfluxDB 2', manifest: SERVICE_MANIFEST('influxdb:2', ['8086']), size: 'small', group: 'apps', category: 'Databases' },
 
   // --- Messaging ---
-  { label: 'RabbitMQ 4', manifest: SERVICE_MANIFEST('rabbitmq:4-management', ['5672', '15672']), envFactory: () => ({ RABBITMQ_DEFAULT_USER: 'guest', RABBITMQ_DEFAULT_PASS: generatePassword() }), size: 'small', group: 'apps', category: 'Messaging' },
-  { label: 'NATS 2', manifest: SERVICE_MANIFEST('nats:2', ['4222', '8222']), size: 'micro', group: 'apps', category: 'Messaging' },
+  // { label: 'RabbitMQ 4', manifest: SERVICE_MANIFEST('rabbitmq:4-management', ['5672', '15672']), envFactory: () => ({ RABBITMQ_DEFAULT_USER: 'guest', RABBITMQ_DEFAULT_PASS: generatePassword() }), size: 'small', group: 'apps', category: 'Messaging' },
+  // { label: 'NATS 2', manifest: SERVICE_MANIFEST('nats:2', ['4222', '8222']), size: 'micro', group: 'apps', category: 'Messaging' },
 
   // --- Web Servers ---
-  { label: 'Nginx 1', manifest: SERVICE_MANIFEST('nginx:1', ['80']), size: 'micro', group: 'apps', category: 'Web Servers' },
-  { label: 'Apache 2.4', manifest: SERVICE_MANIFEST('httpd:2.4', ['80']), size: 'micro', group: 'apps', category: 'Web Servers' },
-  { label: 'Caddy 2', manifest: SERVICE_MANIFEST('caddy:2', ['80', '443']), size: 'micro', group: 'apps', category: 'Web Servers' },
+  // { label: 'Nginx 1', manifest: SERVICE_MANIFEST('nginx:1', ['80']), size: 'micro', group: 'apps', category: 'Web Servers' },
+  // { label: 'Apache 2.4', manifest: SERVICE_MANIFEST('httpd:2.4', ['80']), size: 'micro', group: 'apps', category: 'Web Servers' },
+  // { label: 'Caddy 2', manifest: SERVICE_MANIFEST('caddy:2', ['80', '443']), size: 'micro', group: 'apps', category: 'Web Servers' },
 
   // --- Search & Storage ---
-  { label: 'Elasticsearch 8', manifest: SERVICE_MANIFEST('elasticsearch:8', ['9200', '9300'], { env: { 'discovery.type': 'single-node' } }), size: 'small', group: 'apps', category: 'Search & Storage' },
-  { label: 'MinIO', manifest: SERVICE_MANIFEST('minio/minio', ['9000', '9001']), envFactory: () => ({ MINIO_ROOT_USER: 'minioadmin', MINIO_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Search & Storage' },
+  // { label: 'Elasticsearch 8', manifest: SERVICE_MANIFEST('elasticsearch:8', ['9200', '9300'], { env: { 'discovery.type': 'single-node' } }), size: 'small', group: 'apps', category: 'Search & Storage' },
+  // { label: 'MinIO', manifest: SERVICE_MANIFEST('minio/minio', ['9000', '9001']), envFactory: () => ({ MINIO_ROOT_USER: 'minioadmin', MINIO_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Search & Storage' },
 
   // --- Monitoring ---
-  { label: 'Grafana 11', manifest: SERVICE_MANIFEST('grafana/grafana:11', ['3000']), size: 'micro', group: 'apps', category: 'Monitoring' },
-  { label: 'Prometheus 3', manifest: SERVICE_MANIFEST('prom/prometheus:v3', ['9090']), size: 'micro', group: 'apps', category: 'Monitoring' },
+  // { label: 'Grafana 11', manifest: SERVICE_MANIFEST('grafana/grafana:11', ['3000']), size: 'micro', group: 'apps', category: 'Monitoring' },
+  // { label: 'Prometheus 3', manifest: SERVICE_MANIFEST('prom/prometheus:v3', ['9090']), size: 'micro', group: 'apps', category: 'Monitoring' },
 
   // --- Tools ---
-  { label: 'Adminer 5', manifest: SERVICE_MANIFEST('adminer:5', ['8080']), size: 'micro', group: 'apps', category: 'Tools' },
-  { label: 'OpenClaw', manifest: OPENCLAW_MANIFEST, manifestFactory: () => {
-    const token = generatePassword();
-    return {
-      ...OPENCLAW_MANIFEST,
-      args: [OPENCLAW_SHELL_CMD + ` --token ${token}`],
-      env: { OPENCLAW_GATEWAY_TOKEN: token, OLLAMA_HOST: '172.17.0.1' },
-    };
-  }, size: 'large', group: 'apps', category: 'Tools' },
-  { label: 'Registry 2', manifest: SERVICE_MANIFEST('registry:2', ['5000']), size: 'micro', group: 'apps', category: 'Tools' },
+  // { label: 'Adminer 5', manifest: SERVICE_MANIFEST('adminer:5', ['8080']), size: 'micro', group: 'apps', category: 'Tools' },
+  // { label: 'OpenClaw', manifest: OPENCLAW_MANIFEST, manifestFactory: () => {
+  //   const token = generatePassword();
+  //   return {
+  //     ...OPENCLAW_MANIFEST,
+  //     args: [OPENCLAW_SHELL_CMD + ` --token ${token}`],
+  //     env: { OPENCLAW_GATEWAY_TOKEN: token, OLLAMA_HOST: '172.17.0.1' },
+  //   };
+  // }, size: 'large', group: 'apps', category: 'Tools' },
+  // { label: 'Registry 2', manifest: SERVICE_MANIFEST('registry:2', ['5000']), size: 'micro', group: 'apps', category: 'Tools' },
 
   // --- Stacks (multi-service) ---
   {
@@ -140,61 +140,61 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     group: 'stacks',
     category: 'Stacks',
   },
-  {
-    label: 'Ghost + MySQL',
-    manifest: { services: {
-      web: { image: 'ghost:5', ports: { '2368/tcp': {} }, env: {} },
-      db: { image: 'mysql:9', env: {}, tmpfs: ['/var/run/mysqld'] },
-    }},
-    manifestFactory: () => {
-      const dbPass = generatePassword();
-      return { services: {
-        web: {
-          image: 'ghost:5',
-          ports: { '2368/tcp': {} },
-          env: { 'database__client': 'mysql', 'database__connection__host': 'db', 'database__connection__user': 'ghost', 'database__connection__password': dbPass, 'database__connection__database': 'ghost' },
-          depends_on: { db: { condition: 'service_healthy' } },
-        },
-        db: {
-          image: 'mysql:9',
-          env: { MYSQL_DATABASE: 'ghost', MYSQL_USER: 'ghost', MYSQL_PASSWORD: dbPass, MYSQL_ROOT_PASSWORD: generatePassword() },
-          tmpfs: ['/var/run/mysqld'],
-          health_check: { test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' },
-        },
-      }};
-    },
-    size: 'small',
-    group: 'stacks',
-    category: 'Stacks',
-  },
-  {
-    label: 'Adminer + Postgres',
-    manifest: { services: {
-      adminer: { image: 'adminer:5', ports: { '8080/tcp': {} }, env: {} },
-      db: { image: 'postgres:18', env: {}, user: '999:999', tmpfs: ['/var/run/postgresql'], health_check: { test: ['CMD-SHELL', 'pg_isready -U postgres'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' } },
-    }},
-    manifestFactory: () => {
-      const dbPass = generatePassword();
-      return { services: {
-        adminer: {
-          image: 'adminer:5',
-          ports: { '8080/tcp': {} },
-          env: { ADMINER_DEFAULT_SERVER: 'db' },
-          depends_on: { db: { condition: 'service_healthy' } },
-        },
-        db: {
-          image: 'postgres:18',
-          env: { POSTGRES_PASSWORD: dbPass },
-          user: '999:999',
-          tmpfs: ['/var/run/postgresql'],
-          health_check: { test: ['CMD-SHELL', 'pg_isready -U postgres'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' },
-        },
-      }};
-    },
-    size: 'small',
-    group: 'stacks',
-    category: 'Stacks',
-  },
+  // {
+  //   label: 'Ghost + MySQL',
+  //   manifest: { services: {
+  //     web: { image: 'ghost:5', ports: { '2368/tcp': {} }, env: {} },
+  //     db: { image: 'mysql:9', env: {}, tmpfs: ['/var/run/mysqld'] },
+  //   }},
+  //   manifestFactory: () => {
+  //     const dbPass = generatePassword();
+  //     return { services: {
+  //       web: {
+  //         image: 'ghost:5',
+  //         ports: { '2368/tcp': {} },
+  //         env: { 'database__client': 'mysql', 'database__connection__host': 'db', 'database__connection__user': 'ghost', 'database__connection__password': dbPass, 'database__connection__database': 'ghost' },
+  //         depends_on: { db: { condition: 'service_healthy' } },
+  //       },
+  //       db: {
+  //         image: 'mysql:9',
+  //         env: { MYSQL_DATABASE: 'ghost', MYSQL_USER: 'ghost', MYSQL_PASSWORD: dbPass, MYSQL_ROOT_PASSWORD: generatePassword() },
+  //         tmpfs: ['/var/run/mysqld'],
+  //         health_check: { test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' },
+  //       },
+  //     }};
+  //   },
+  //   size: 'small',
+  //   group: 'stacks',
+  //   category: 'Stacks',
+  // },
+  // {
+  //   label: 'Adminer + Postgres',
+  //   manifest: { services: {
+  //     adminer: { image: 'adminer:5', ports: { '8080/tcp': {} }, env: {} },
+  //     db: { image: 'postgres:18', env: {}, user: '999:999', tmpfs: ['/var/run/postgresql'], health_check: { test: ['CMD-SHELL', 'pg_isready -U postgres'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' } },
+  //   }},
+  //   manifestFactory: () => {
+  //     const dbPass = generatePassword();
+  //     return { services: {
+  //       adminer: {
+  //         image: 'adminer:5',
+  //         ports: { '8080/tcp': {} },
+  //         env: { ADMINER_DEFAULT_SERVER: 'db' },
+  //         depends_on: { db: { condition: 'service_healthy' } },
+  //       },
+  //       db: {
+  //         image: 'postgres:18',
+  //         env: { POSTGRES_PASSWORD: dbPass },
+  //         user: '999:999',
+  //         tmpfs: ['/var/run/postgresql'],
+  //         health_check: { test: ['CMD-SHELL', 'pg_isready -U postgres'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' },
+  //       },
+  //     }};
+  //   },
+  //   size: 'small',
+  //   group: 'stacks',
+  //   category: 'Stacks',
+  // },
 ];
 
 /**
