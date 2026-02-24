@@ -41,13 +41,13 @@ const SERVICE_MANIFEST = (
   };
 };
 
-const OPENCLAW_SHELL_CMD =
-  `mkdir -p /home/node/.openclaw && echo '{"gateway":{"controlUi":{"enabled":true,"allowInsecureAuth":true}},"models":{"providers":{"ollama":{"baseUrl":"http://172.17.0.1:11434/v1","apiKey":"ollama-local","api":"openai-completions","models":[{"id":"qwen3-coder:30b","name":"Qwen3 Coder 30B","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":131072,"maxTokens":16000}]}}},"agents":{"defaults":{"model":{"primary":"ollama/qwen3-coder:30b"}}}}' > /home/node/.openclaw/openclaw.json && exec docker-entrypoint.sh node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789`;
+// const OPENCLAW_SHELL_CMD =
+//   `mkdir -p /home/node/.openclaw && echo '{"gateway":{"controlUi":{"enabled":true,"allowInsecureAuth":true}},"models":{"providers":{"ollama":{"baseUrl":"http://172.17.0.1:11434/v1","apiKey":"ollama-local","api":"openai-completions","models":[{"id":"qwen3-coder:30b","name":"Qwen3 Coder 30B","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":131072,"maxTokens":16000}]}}},"agents":{"defaults":{"model":{"primary":"ollama/qwen3-coder:30b"}}}}' > /home/node/.openclaw/openclaw.json && exec docker-entrypoint.sh node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789`;
 
-const OPENCLAW_MANIFEST = SERVICE_MANIFEST('ghcr.io/openclaw/openclaw:2026.2.12', ['18789'], {
-  command: ['/bin/sh', '-c'],
-  args: [OPENCLAW_SHELL_CMD],
-});
+// const OPENCLAW_MANIFEST = SERVICE_MANIFEST('ghcr.io/openclaw/openclaw:2026.2.12', ['18789'], {
+//   command: ['/bin/sh', '-c'],
+//   args: [OPENCLAW_SHELL_CMD],
+// });
 
 export const EXAMPLE_APPS: ExampleApp[] = [
   { label: 'Tetris', manifest: GAME_MANIFEST('tetris'), group: 'games' },
