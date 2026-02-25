@@ -186,11 +186,11 @@ export function useAutoRefill({
               denom: DENOMS.PWR,
               amount: toBaseUnits(AUTO_REFILL_CREDIT_AMOUNT, DENOMS.PWR),
             });
-            // Stamp cooldown after the TX completes (not before), so transient
-            // network errors don't lock out funding for the full cooldown period.
-            lastFundAttemptRef.current = Date.now();
             if (signal.aborted || addressRef.current !== targetAddress) return;
             if (result.success) {
+              // Only stamp cooldown on success — on-chain errors (e.g. sequence mismatch)
+              // should allow retries on the next interval, matching the faucet pattern.
+              lastFundAttemptRef.current = Date.now();
               toastRef.current.success(`Funded ${AUTO_REFILL_CREDIT_AMOUNT} credits — you're all set!`);
             } else {
               logError('useAutoRefill.fundCredits', result.error);
