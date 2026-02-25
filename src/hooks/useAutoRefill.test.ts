@@ -390,10 +390,12 @@ describe('useAutoRefill — recurring', () => {
     expect(requestFaucetTokens).not.toHaveBeenCalled();
   });
 
-  it('does not stamp faucet cooldown on network error', async () => {
+  it('does not stamp faucet cooldown when all drips fail', async () => {
+    // requestFaucetTokens never throws — it converts network/HTTP errors into
+    // { success: false } results. All-failed should NOT lock out retries for 25h.
     setBalances(0, 0);
     setCreditBalance(100);
-    vi.mocked(requestFaucetTokens).mockRejectedValueOnce(new Error('network error'));
+    setFaucetResults(false, false);
 
     render(defaultProps());
     await flushMicrotasks();
@@ -404,7 +406,7 @@ describe('useAutoRefill — recurring', () => {
     // Fix the faucet for next attempt
     setFaucetResults(true, true);
 
-    // Next interval — should retry because cooldown was NOT stamped on error
+    // Next interval — should retry because cooldown was NOT stamped on all-failed
     await vi.advanceTimersByTimeAsync(60_000);
     await flushMicrotasks();
 
@@ -596,15 +598,16 @@ describe('useAutoRefill — recurring', () => {
     expect(fundCredit).toHaveBeenCalled();
   });
 
-  it('still checks credits when faucet request throws', async () => {
+  it('still checks credits when all faucet drips fail', async () => {
+    // requestFaucetTokens returns { success: false } on network/HTTP errors — never throws.
+    // Credit funding should still proceed using the original wallet PWR balance.
     setBalances(0, 100); // Triggers faucet need, but also has enough PWR to fund
     setCreditBalance(2);
-    vi.mocked(requestFaucetTokens).mockRejectedValue(new Error('faucet down'));
+    setFaucetResults(false, false);
 
     render(defaultProps());
     await flushMicrotasks();
 
-    expect(logError).toHaveBeenCalledWith('useAutoRefill.faucet', expect.any(Error));
     // Credit check should still proceed
     expect(getCreditAccount).toHaveBeenCalled();
     expect(fundCredit).toHaveBeenCalled();
@@ -666,6 +669,21 @@ describe('useAutoRefill — recurring', () => {
 
     expect(logError).toHaveBeenCalledWith('useAutoRefill.check', expect.any(Error));
     expect(requestFaucetTokens).not.toHaveBeenCalled();
+  });
+
+  it('logs error and bails on NaN credit balance', async () => {
+    setBalances(10, 100);
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      creditAccount: { tenant: '', creditAddress: '', activeLeaseCount: 0n, pendingLeaseCount: 0n, reservedAmounts: [] },
+      balances: [{ denom: 'factory/addr/upwr', amount: 'garbage' }],
+      availableBalances: [],
+    });
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(logError).toHaveBeenCalledWith('useAutoRefill.check', expect.any(Error));
+    expect(fundCredit).not.toHaveBeenCalled();
   });
 
   it('re-requests faucet after 25h cooldown expires', async () => {

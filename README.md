@@ -119,10 +119,11 @@ See [CLAUDE.md](./CLAUDE.md) for detailed architecture, tool definitions, and co
 ### How It Works
 
 1. **Connect** a wallet via Web3Auth social login
-2. **Chat** with the AI assistant to deploy, manage, and monitor apps
-3. The AI calls 15 composite tools that map to on-chain transactions and queries
-4. Transaction tools require explicit user confirmation before broadcasting
-5. Deploy progress is tracked in real-time through provider status polling
+2. **Auto-refill** — on connect and every 60 seconds, the `useAutoRefill` hook checks MFX, PWR, and credit balances. When below threshold it requests faucet tokens and auto-funds credits (faucet-enabled deployments only; cooldowns prevent excessive requests)
+3. **Chat** with the AI assistant to deploy, manage, and monitor apps
+4. The AI calls 15 composite tools that map to on-chain transactions and queries
+5. AI-initiated transaction tools require explicit user confirmation before broadcasting. The `useAutoRefill` background funding (`fundCredit`) is the sole exception — it runs automatically with small fixed amounts, gated by balance thresholds and cooldown timers
+6. Deploy progress is tracked in real-time through provider status polling
 
 ### AI Tool Execution
 
@@ -136,7 +137,7 @@ Three-layer architecture:
 
 - **SSRF Protection**: URL validation using `ipaddr.js` to block private/internal addresses
 - **Input Validation**: All user inputs and localStorage data are validated
-- **Transaction Confirmation**: AI-initiated transactions require explicit user approval
+- **Transaction Confirmation**: AI-initiated transactions require explicit user approval. The sole exception is `useAutoRefill`, which auto-funds small credit amounts when balances drop below thresholds (faucet-gated, cooldown-protected)
 - **ADR-036 Signatures**: Off-chain authentication for provider API interactions
 
 ## Tech Stack

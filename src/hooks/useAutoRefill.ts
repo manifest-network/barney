@@ -109,12 +109,16 @@ export function useAutoRefill({
           try {
             toastRef.current.info('Sending free MFX and PWR tokens to your wallet…');
             const { results } = await requestFaucetTokens(targetAddress);
-            // Stamp cooldown after the request completes (not before), so transient
-            // network errors don't lock out the faucet for the full cooldown period.
-            lastFaucetAttemptRef.current = Date.now();
             if (signal.aborted || addressRef.current !== targetAddress) return;
 
             const anySuccess = results.some((r) => r.success);
+            // Only stamp cooldown when at least one drip succeeded.
+            // requestFaucetTokens never throws — it converts network/HTTP errors into
+            // { success: false } results, so all-failed responses may be transient
+            // outages that should be retried on the next interval, not locked out for 25h.
+            if (anySuccess) {
+              lastFaucetAttemptRef.current = Date.now();
+            }
             // Only re-query PWR (step 3) when at least one drip actually deposited tokens.
             faucetRan = anySuccess;
             const allSuccess = results.every((r) => r.success);
@@ -156,6 +160,13 @@ export function useAutoRefill({
         const creditBalance = pwrCredit
           ? Number(fromBaseUnits(pwrCredit.amount, DENOMS.PWR))
           : 0;
+
+        if (Number.isNaN(creditBalance)) {
+          logError('useAutoRefill.check', new Error(
+            `Unexpected credit balance: ${pwrCredit?.amount}`
+          ));
+          return;
+        }
 
         // 4. Fund credits if below threshold and wallet has enough PWR
         const fundCooldownElapsed =
