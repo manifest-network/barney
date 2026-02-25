@@ -9697,6 +9697,15 @@ code.lease-card-mono {
     opacity: 1;
   }
 
+  /* Hide version padding when collapsed */
+  .main-layout__sidebar .apps-sidebar__version {
+    padding-top: 0;
+  }
+
+  .main-layout__sidebar:hover .apps-sidebar__version {
+    padding-top: 0.5rem;
+  }
+
   /* Center icons when collapsed */
   .main-layout__sidebar .apps-sidebar__wallet {
     justify-content: center;
