@@ -218,6 +218,25 @@ describe('AppShell auto-faucet', () => {
     expect(mockToast.info).not.toHaveBeenCalled();
   });
 
+  it('shows distinct toast when all faucet requests fail', async () => {
+    mockIsWalletConnected = true;
+    mockAddress = 'manifest1new';
+    vi.mocked(requestFaucetTokens).mockResolvedValue({
+      results: [
+        { denom: 'umfx', success: false, error: 'cooldown active' },
+        { denom: 'factory/addr/upwr', success: false, error: 'cooldown active' },
+      ],
+    });
+
+    render();
+    await flushAsync();
+
+    expect(mockToast.info).toHaveBeenCalledWith(
+      'Welcome! No tokens could be sent — the 24h cooldown may be active.'
+    );
+    expect(mockToast.success).not.toHaveBeenCalled();
+  });
+
   it('does not request faucet when wallet is not connected', async () => {
     mockIsWalletConnected = false;
     mockAddress = undefined;
