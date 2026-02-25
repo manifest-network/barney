@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "rsbuild dev",
     "build": "tsc -b && rsbuild build",
-    "build-release": "node scripts/update-version.js && tsc -b && rsbuild build",
-    "update-version": "node scripts/update-version.js",
+    "build-release": "node scripts/update-version.cjs && tsc -b && rsbuild build",
+    "update-version": "node scripts/update-version.cjs",
     "lint": "eslint .",
     "preview": "rsbuild preview",
     "test": "vitest run",
