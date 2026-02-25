@@ -24,12 +24,12 @@ export const HELP_TEXT = `## Quick Reference
 - "Browse catalog"
 
 ### Resource tiers
-| Tier | CPU | Memory | Storage |
-|------|-----|--------|---------|
-| micro | 0.25 vCPU | 256 MB | — |
-| small | 0.5 vCPU | 512 MB | 1 GB |
-| medium | 1 vCPU | 1 GB | — |
-| large | 4 vCPU | 4 GB | 10 GB |
+| Tier | CPUs | Memory | Disk |
+|------|------|--------|------|
+| docker-micro | 0.5 | 512 MB | 1 GB |
+| docker-small | 1 | 1 GB | 5 GB |
+| docker-medium | 2 | 2 GB | 10 GB |
+| docker-large | 4 | 4 GB | 20 GB |
 
 ### Keyboard shortcuts
 | Key | Action |
