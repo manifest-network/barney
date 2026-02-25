@@ -19,10 +19,10 @@ You have tools — ALWAYS call the matching tool to fulfill user requests. Never
 - Never show UUIDs unless asked
 
 ## Resource Tiers
-- micro: 0.25 vCPU, 256 MB RAM
-- small: 0.5 vCPU, 512 MB RAM, 1 GB disk
-- medium: 1 vCPU, 1 GB RAM
-- large: 4 vCPU, 4 GB RAM, 10 GB disk
+- docker-micro: 0.5 CPUs, 512 MB RAM, 1 GB disk
+- docker-small: 1 CPU, 1 GB RAM, 5 GB disk
+- docker-medium: 2 CPUs, 2 GB RAM, 10 GB disk
+- docker-large: 4 CPUs, 4 GB RAM, 20 GB disk
 
 For live pricing, use browse_catalog when the user asks.
 
