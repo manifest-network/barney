@@ -56,12 +56,15 @@ export function AppShell() {
     if (faucetRequestedRef.current === address) return;
     faucetRequestedRef.current = address;
 
+    const targetAddress = address;
     (async () => {
       try {
-        const { amount } = await getBalance(address, DENOMS.MFX);
+        const { amount } = await getBalance(targetAddress, DENOMS.MFX);
         if (amount !== '0') return; // returning user
 
-        const { results } = await requestFaucetTokens(address);
+        const { results } = await requestFaucetTokens(targetAddress);
+        // Skip toast if address changed during the async request
+        if (faucetRequestedRef.current !== targetAddress) return;
         const allSuccess = results.every((r) => r.success);
         if (allSuccess) {
           toast.success('Welcome! Free MFX and PWR tokens have been sent to your wallet.');

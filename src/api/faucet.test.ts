@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getFaucetBaseUrl, isFaucetEnabled, requestFaucetTokens, FAUCET_COOLDOWN_HOURS } from './faucet';
 
+const mockRuntimeConfig = vi.hoisted(() => ({ PUBLIC_FAUCET_URL: 'http://localhost:8000' }));
 vi.mock('../config/runtimeConfig', () => ({
-  runtimeConfig: { PUBLIC_FAUCET_URL: 'http://localhost:8000' },
+  runtimeConfig: mockRuntimeConfig,
 }));
 
 vi.mock('./config', () => ({
@@ -30,14 +31,13 @@ describe('isFaucetEnabled', () => {
     expect(isFaucetEnabled()).toBe(true);
   });
 
-  it('returns false when PUBLIC_FAUCET_URL is empty', async () => {
-    const { runtimeConfig } = await import('../config/runtimeConfig');
-    const original = runtimeConfig.PUBLIC_FAUCET_URL;
-    (runtimeConfig as any).PUBLIC_FAUCET_URL = '';
+  it('returns false when PUBLIC_FAUCET_URL is empty', () => {
+    const original = mockRuntimeConfig.PUBLIC_FAUCET_URL;
+    mockRuntimeConfig.PUBLIC_FAUCET_URL = '';
     try {
       expect(isFaucetEnabled()).toBe(false);
     } finally {
-      (runtimeConfig as any).PUBLIC_FAUCET_URL = original;
+      mockRuntimeConfig.PUBLIC_FAUCET_URL = original;
     }
   });
 });

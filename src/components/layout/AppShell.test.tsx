@@ -187,6 +187,24 @@ describe('AppShell auto-faucet', () => {
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
   });
 
+  it('requests faucet again when wallet address changes', async () => {
+    mockIsWalletConnected = true;
+    mockAddress = 'manifest1new';
+
+    render();
+    await flushAsync();
+
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+
+    // Change address and re-render — should trigger a new faucet request
+    mockAddress = 'manifest1other';
+    flushSync(() => { root.render(createElement(AppShell)); });
+    await flushAsync();
+
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(2);
+    expect(requestFaucetTokens).toHaveBeenLastCalledWith('manifest1other');
+  });
+
   it('silently logs errors without showing toast', async () => {
     mockIsWalletConnected = true;
     mockAddress = 'manifest1new';

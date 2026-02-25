@@ -42,7 +42,7 @@ export async function requestFaucetTokens(
   const results = await Promise.all(
     denoms.map(async (denom): Promise<FaucetDripResult> => {
       try {
-        const result = await withRetry(
+        await withRetry(
           async () => {
             const res = await fetch(`${baseUrl}/credit`, {
               method: 'POST',
@@ -56,8 +56,6 @@ export async function requestFaucetTokens(
           },
           { context: `faucet.requestTokens[${denom}]`, maxRetries: 1 }
         );
-        // withRetry returns void here (fetch doesn't return a value we use)
-        void result;
         return { denom, success: true };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
