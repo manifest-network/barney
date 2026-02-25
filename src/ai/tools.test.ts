@@ -131,8 +131,13 @@ describe('AI_TOOLS', () => {
     expect(toolNames).toContain('get_logs');
   });
 
-  it('has 15 tools total', () => {
-    expect(AI_TOOLS).toHaveLength(15);
+  it('has 16 tools total', () => {
+    expect(AI_TOOLS).toHaveLength(16);
+  });
+
+  it('includes request_faucet tool', () => {
+    const toolNames = AI_TOOLS.map((t) => t.function.name);
+    expect(toolNames).toContain('request_faucet');
   });
 
   it('includes restart_app tool', () => {
@@ -192,5 +197,10 @@ describe('getToolCallDescription - new tools', () => {
     const desc = getToolCallDescription('app_releases', { app_name: 'my-api' });
     expect(desc).toContain('my-api');
     expect(desc).toContain('releases');
+  });
+
+  it('returns description for request_faucet', () => {
+    const desc = getToolCallDescription('request_faucet', {});
+    expect(desc).toContain('faucet');
   });
 });

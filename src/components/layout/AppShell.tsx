@@ -4,13 +4,18 @@
  * Transitions between views with a fade + slide animation.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { useAI } from '../../hooks/useAI';
 import { useManifestMCP } from '../../hooks/useManifestMCP';
+import { useToast } from '../../hooks/useToast';
 import { LandingPage } from '../landing/LandingPage';
 import { MainLayout } from './MainLayout';
 import { CHAIN_NAME } from '../../config/chain';
+import { getBalance } from '../../api/bank';
+import { requestFaucetTokens, isFaucetEnabled } from '../../api/faucet';
+import { DENOMS } from '../../api/config';
+import { logError } from '../../utils/errors';
 
 const EXIT_DURATION_MS = 150;
 
@@ -41,6 +46,33 @@ export function AppShell() {
     const canSign = isWalletConnected && typeof signArbitrary === 'function';
     setSignArbitrary(canSign ? wrappedSignArbitrary : undefined);
   }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, wrappedSignArbitrary]);
+
+  // Auto-faucet: request tokens for new wallets with zero balance
+  const toast = useToast();
+  const faucetRequestedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!isFaucetEnabled() || !isWalletConnected || !address) return;
+    if (faucetRequestedRef.current === address) return;
+    faucetRequestedRef.current = address;
+
+    (async () => {
+      try {
+        const { amount } = await getBalance(address, DENOMS.MFX);
+        if (amount !== '0') return; // returning user
+
+        const { results } = await requestFaucetTokens(address);
+        const allSuccess = results.every((r) => r.success);
+        if (allSuccess) {
+          toast.success('Welcome! Free MFX and PWR tokens have been sent to your wallet.');
+        } else {
+          toast.info('Welcome! Some tokens could not be sent — the 24h cooldown may be active.');
+        }
+      } catch (error) {
+        logError('AppShell.autoFaucet', error);
+      }
+    })();
+  }, [isWalletConnected, address, toast]);
 
   // Page transition: defer content swap until exit animation completes.
   // `exiting` is derived (not state) so we avoid calling setState in the effect body.

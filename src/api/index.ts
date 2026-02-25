@@ -7,3 +7,4 @@ export * from './billing';
 export * from './sku';
 export * from './tx';
 export * from './utils';
+export * from './faucet';

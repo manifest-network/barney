@@ -13,6 +13,7 @@ vi.mock('./compositeQueries', () => ({
   executeLeaseHistory: vi.fn(),
   executeAppDiagnostics: vi.fn(),
   executeAppReleases: vi.fn(),
+  executeRequestFaucet: vi.fn(),
 }));
 
 vi.mock('./compositeTransactions', () => ({
@@ -40,6 +41,7 @@ import {
   executeLeaseHistory,
   executeAppDiagnostics,
   executeAppReleases,
+  executeRequestFaucet,
 } from './compositeQueries';
 import {
   executeDeployApp,
@@ -221,6 +223,15 @@ describe('executeTool', () => {
 
     const result = await executeTool('app_releases', { app_name: 'my-app' }, makeOptions());
     expect(result).toBe(queryResult);
+  });
+
+  it('routes request_faucet to executor', async () => {
+    const queryResult: ToolResult = { success: true, data: { message: 'Tokens sent!', results: [] } };
+    vi.mocked(executeRequestFaucet).mockResolvedValue(queryResult);
+
+    const result = await executeTool('request_faucet', {}, makeOptions());
+    expect(result).toBe(queryResult);
+    expect(executeRequestFaucet).toHaveBeenCalledWith(expect.any(Object));
   });
 
   // --- Error handling ---

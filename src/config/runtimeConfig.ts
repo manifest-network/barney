@@ -18,7 +18,8 @@ type RuntimeConfigKey =
   | 'PUBLIC_OLLAMA_MODEL'
   | 'PUBLIC_PWR_DENOM'
   | 'PUBLIC_GAS_PRICE'
-  | 'PUBLIC_CHAIN_ID';
+  | 'PUBLIC_CHAIN_ID'
+  | 'PUBLIC_FAUCET_URL';
 
 type RuntimeConfig = Record<RuntimeConfigKey, string>;
 
@@ -40,6 +41,7 @@ const BUILD_ENV: RuntimeConfig = {
   PUBLIC_PWR_DENOM: import.meta.env.PUBLIC_PWR_DENOM ?? '',
   PUBLIC_GAS_PRICE: import.meta.env.PUBLIC_GAS_PRICE ?? '',
   PUBLIC_CHAIN_ID: import.meta.env.PUBLIC_CHAIN_ID ?? '',
+  PUBLIC_FAUCET_URL: import.meta.env.PUBLIC_FAUCET_URL ?? '',
 };
 
 const DEFAULTS: RuntimeConfig = {
@@ -53,6 +55,7 @@ const DEFAULTS: RuntimeConfig = {
     'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr',
   PUBLIC_GAS_PRICE: '0.0025umfx',
   PUBLIC_CHAIN_ID: 'manifest-ledger-beta',
+  PUBLIC_FAUCET_URL: '',
 };
 
 export function getConfigValue(key: RuntimeConfigKey): string {
@@ -75,4 +78,5 @@ export const runtimeConfig: Readonly<RuntimeConfig> = Object.freeze({
   PUBLIC_PWR_DENOM: getConfigValue('PUBLIC_PWR_DENOM'),
   PUBLIC_GAS_PRICE: getConfigValue('PUBLIC_GAS_PRICE'),
   PUBLIC_CHAIN_ID: getConfigValue('PUBLIC_CHAIN_ID'),
+  PUBLIC_FAUCET_URL: getConfigValue('PUBLIC_FAUCET_URL'),
 });

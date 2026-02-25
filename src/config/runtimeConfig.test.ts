@@ -50,12 +50,16 @@ describe('getConfigValue', () => {
 });
 
 describe('runtimeConfig', () => {
-  it('exports all 9 keys as non-empty strings', () => {
-    expect(Object.keys(runtimeConfig)).toHaveLength(9);
+  it('exports all 10 keys as strings', () => {
+    expect(Object.keys(runtimeConfig)).toHaveLength(10);
     for (const value of Object.values(runtimeConfig)) {
       expect(typeof value).toBe('string');
-      expect(value.length).toBeGreaterThan(0);
     }
+  });
+
+  it('defaults PUBLIC_FAUCET_URL to empty string (disabled)', () => {
+    window.__RUNTIME_CONFIG__ = {};
+    expect(getConfigValue('PUBLIC_FAUCET_URL')).toBe('');
   });
 
   it('is frozen', () => {
