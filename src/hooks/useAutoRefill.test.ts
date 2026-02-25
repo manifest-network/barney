@@ -489,6 +489,32 @@ describe('useAutoRefill — recurring', () => {
     root = createRoot(container);
   });
 
+  it('aborts in-flight check on unmount', async () => {
+    // Make getBalance hang so we can unmount while the check is in-flight
+    let resolveBalance: ((v: any) => void) | undefined;
+    vi.mocked(getBalance).mockImplementation(
+      () => new Promise((resolve) => { resolveBalance = resolve; })
+    );
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Unmount while check is still pending
+    flushSync(() => { root.unmount(); });
+
+    // Resolve the hanging balance — abort signal should prevent further action
+    resolveBalance?.({ denom: 'umfx', amount: '0' });
+    await flushMicrotasks();
+
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
+    expect(fundCredit).not.toHaveBeenCalled();
+
+    // Prevent afterEach from double-unmounting
+    container.remove();
+    container = document.createElement('div');
+    root = createRoot(container);
+  });
+
   it('resets cooldowns on address change', async () => {
     setBalances(0, 0);
     setCreditBalance(100);

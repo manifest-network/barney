@@ -71,6 +71,8 @@ export function useAutoRefill({
     isCheckingRef.current = false;
 
     const targetAddress = address;
+    const abortController = new AbortController();
+    const { signal } = abortController;
 
     async function checkAndRefill() {
       if (isCheckingRef.current) return;
@@ -83,7 +85,7 @@ export function useAutoRefill({
           getBalance(targetAddress, DENOMS.PWR),
         ]);
 
-        if (addressRef.current !== targetAddress) return;
+        if (signal.aborted || addressRef.current !== targetAddress) return;
 
         const mfxBalance = Number(fromBaseUnits(mfxCoin.amount, DENOMS.MFX));
         const pwrBalance = Number(fromBaseUnits(pwrCoin.amount, DENOMS.PWR));
@@ -110,9 +112,10 @@ export function useAutoRefill({
             // Stamp cooldown after the request completes (not before), so transient
             // network errors don't lock out the faucet for the full cooldown period.
             lastFaucetAttemptRef.current = Date.now();
-            if (addressRef.current !== targetAddress) return;
+            if (signal.aborted || addressRef.current !== targetAddress) return;
 
             const anySuccess = results.some((r) => r.success);
+            // Only re-query PWR (step 3) when at least one drip actually deposited tokens.
             faucetRan = anySuccess;
             const allSuccess = results.every((r) => r.success);
             const allFailed = results.every((r) => !r.success);
@@ -129,7 +132,7 @@ export function useAutoRefill({
           }
         }
 
-        if (addressRef.current !== targetAddress) return;
+        if (signal.aborted || addressRef.current !== targetAddress) return;
 
         // 3. Check credit balance
         let currentPwr = pwrBalance;
@@ -138,7 +141,7 @@ export function useAutoRefill({
           // Fall back to original balance if re-query fails so credit funding isn't skipped.
           try {
             const freshPwr = await getBalance(targetAddress, DENOMS.PWR);
-            if (addressRef.current !== targetAddress) return;
+            if (signal.aborted || addressRef.current !== targetAddress) return;
             const parsed = Number(fromBaseUnits(freshPwr.amount, DENOMS.PWR));
             if (!Number.isNaN(parsed)) currentPwr = parsed;
           } catch (error) {
@@ -147,7 +150,7 @@ export function useAutoRefill({
         }
 
         const creditResponse = await getCreditAccount(targetAddress);
-        if (addressRef.current !== targetAddress) return;
+        if (signal.aborted || addressRef.current !== targetAddress) return;
 
         const pwrCredit = creditResponse.balances.find((c) => c.denom === DENOMS.PWR);
         const creditBalance = pwrCredit
@@ -172,7 +175,7 @@ export function useAutoRefill({
             // Stamp cooldown after the TX completes (not before), so transient
             // network errors don't lock out funding for the full cooldown period.
             lastFundAttemptRef.current = Date.now();
-            if (addressRef.current !== targetAddress) return;
+            if (signal.aborted || addressRef.current !== targetAddress) return;
             if (result.success) {
               toastRef.current.success(`Funded ${AUTO_REFILL_CREDIT_AMOUNT} credits — you're all set!`);
             } else {
@@ -188,9 +191,9 @@ export function useAutoRefill({
         logError('useAutoRefill.check', error);
       } finally {
         // Only release if this invocation still owns the mutex.
-        // On address change, the effect resets the mutex and launches a new check;
+        // On address change / unmount, the effect resets the mutex and launches a new check;
         // this stale invocation must not clear the new check's mutex.
-        if (addressRef.current === targetAddress) {
+        if (!signal.aborted && addressRef.current === targetAddress) {
           isCheckingRef.current = false;
         }
       }
@@ -204,6 +207,7 @@ export function useAutoRefill({
 
     return () => {
       clearInterval(intervalId);
+      abortController.abort();
     };
   }, [isWalletConnected, address, getOfflineSignerRef]);
 }
