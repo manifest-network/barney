@@ -62,6 +62,7 @@ export function AppShell() {
         const { amount } = await getBalance(targetAddress, DENOMS.MFX);
         if (amount !== '0') return; // returning user
 
+        toast.info('Sending free MFX and PWR tokens to your wallet…');
         const { results } = await requestFaucetTokens(targetAddress);
         // Skip toast if address changed during the async request
         if (faucetRequestedRef.current !== targetAddress) return;
