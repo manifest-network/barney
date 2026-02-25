@@ -342,6 +342,16 @@ describe('useAutoRefill — recurring', () => {
     expect(fundCredit).toHaveBeenCalled();
   });
 
+  it('skips fund when credit balance exactly at threshold', async () => {
+    setBalances(10, 100);
+    setCreditBalance(5); // Exactly at threshold — uses strict <, so should NOT trigger
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(fundCredit).not.toHaveBeenCalled();
+  });
+
   it('skips fund when wallet PWR insufficient', async () => {
     setBalances(10, 5); // PWR = 5, need >= 10 to fund
     setCreditBalance(2);
@@ -585,6 +595,24 @@ describe('useAutoRefill — recurring', () => {
     expect(fundCredit).not.toHaveBeenCalled();
   });
 
+  it('falls back to original PWR balance when post-faucet re-query returns NaN', async () => {
+    // Wallet starts with 100 PWR (enough to fund), faucet succeeds, re-query returns garbage
+    let pwrCallCount = 0;
+    vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
+      if (denom === 'umfx') return { denom, amount: '0' };
+      pwrCallCount++;
+      if (pwrCallCount <= 1) return { denom, amount: String(100 * 1_000_000) };
+      return { denom, amount: 'garbage' }; // NaN after fromBaseUnits
+    });
+    setCreditBalance(2);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Should still fund using original 100 PWR balance (NaN discarded)
+    expect(fundCredit).toHaveBeenCalled();
+  });
+
   it('falls back to original PWR balance when post-faucet re-query fails', async () => {
     // Wallet starts with 100 PWR (enough to fund), faucet succeeds, re-query throws
     let pwrCallCount = 0;
@@ -630,6 +658,28 @@ describe('useAutoRefill — recurring', () => {
     await flushMicrotasks();
 
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+  });
+
+  it('bails safely when wallet disconnects mid-check', async () => {
+    // Make getBalance hang so we can disconnect while check is in-flight
+    let resolveBalance: ((v: any) => void) | undefined;
+    vi.mocked(getBalance).mockImplementation(
+      () => new Promise((resolve) => { resolveBalance = resolve; })
+    );
+
+    render(defaultProps({ address: 'manifest1test' }));
+    await flushMicrotasks();
+
+    // Disconnect wallet while check is pending
+    rerender(defaultProps({ isWalletConnected: false, address: undefined }));
+    await flushMicrotasks();
+
+    // Resolve the hanging balance — stale-address guard should prevent further action
+    resolveBalance?.({ denom: 'umfx', amount: '0' });
+    await flushMicrotasks();
+
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
+    expect(fundCredit).not.toHaveBeenCalled();
   });
 
   it('old check finally does not steal new address mutex', async () => {

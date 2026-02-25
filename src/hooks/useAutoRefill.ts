@@ -139,7 +139,8 @@ export function useAutoRefill({
           try {
             const freshPwr = await getBalance(targetAddress, DENOMS.PWR);
             if (addressRef.current !== targetAddress) return;
-            currentPwr = Number(fromBaseUnits(freshPwr.amount, DENOMS.PWR));
+            const parsed = Number(fromBaseUnits(freshPwr.amount, DENOMS.PWR));
+            if (!Number.isNaN(parsed)) currentPwr = parsed;
           } catch (error) {
             logError('useAutoRefill.pwrRequery', error);
           }
