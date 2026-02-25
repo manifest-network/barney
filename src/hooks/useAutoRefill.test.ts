@@ -29,7 +29,11 @@ vi.mock('../api/config', () => ({
 
 vi.mock('../utils/format', () => ({
   toBaseUnits: (amount: number) => String(amount * 1_000_000),
-  fromBaseUnits: (amount: string) => String(Number(amount) / 1_000_000),
+  fromBaseUnits: (amount: string) => {
+    const parsed = parseInt(amount, 10);
+    if (Number.isNaN(parsed)) return 0;
+    return parsed / 1_000_000;
+  },
 }));
 
 vi.mock('../utils/errors', () => ({
@@ -624,21 +628,21 @@ describe('useAutoRefill — recurring', () => {
     expect(fundCredit).not.toHaveBeenCalled();
   });
 
-  it('falls back to original PWR balance when post-faucet re-query returns NaN', async () => {
+  it('falls back to original PWR balance when post-faucet re-query returns invalid string', async () => {
     // Wallet starts with 100 PWR (enough to fund), faucet succeeds, re-query returns garbage
     let pwrCallCount = 0;
     vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
       if (denom === 'umfx') return { denom, amount: '0' };
       pwrCallCount++;
       if (pwrCallCount <= 1) return { denom, amount: String(100 * 1_000_000) };
-      return { denom, amount: 'garbage' }; // NaN after fromBaseUnits
+      return { denom, amount: 'garbage' }; // fails /^\d+$/ validation
     });
     setCreditBalance(2);
 
     render(defaultProps());
     await flushMicrotasks();
 
-    // Should still fund using original 100 PWR balance (NaN discarded)
+    // Should still fund using original 100 PWR balance (invalid string discarded)
     expect(fundCredit).toHaveBeenCalled();
   });
 
@@ -661,7 +665,7 @@ describe('useAutoRefill — recurring', () => {
     expect(fundCredit).toHaveBeenCalled();
   });
 
-  it('logs error and bails on NaN balance', async () => {
+  it('logs error and bails on invalid balance string', async () => {
     vi.mocked(getBalance).mockResolvedValue({ denom: 'umfx', amount: 'garbage' });
 
     render(defaultProps());
@@ -671,7 +675,7 @@ describe('useAutoRefill — recurring', () => {
     expect(requestFaucetTokens).not.toHaveBeenCalled();
   });
 
-  it('logs error and bails on NaN credit balance', async () => {
+  it('logs error and bails on invalid credit balance string', async () => {
     setBalances(10, 100);
     vi.mocked(getCreditAccount).mockResolvedValue({
       creditAccount: { tenant: '', creditAddress: '', activeLeaseCount: 0n, pendingLeaseCount: 0n, reservedAmounts: [] },

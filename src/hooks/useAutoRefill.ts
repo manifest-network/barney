@@ -87,15 +87,18 @@ export function useAutoRefill({
 
         if (signal.aborted || addressRef.current !== targetAddress) return;
 
-        const mfxBalance = Number(fromBaseUnits(mfxCoin.amount, DENOMS.MFX));
-        const pwrBalance = Number(fromBaseUnits(pwrCoin.amount, DENOMS.PWR));
-
-        if (Number.isNaN(mfxBalance) || Number.isNaN(pwrBalance)) {
+        // Validate raw amount strings before conversion. fromBaseUnits returns 0
+        // for invalid input (via parseInt → NaN → 0 fallback), which would silently
+        // trigger faucet/funding as if the balance were zero.
+        if (!/^\d+$/.test(mfxCoin.amount) || !/^\d+$/.test(pwrCoin.amount)) {
           logError('useAutoRefill.check', new Error(
             `Unexpected balance: MFX=${mfxCoin.amount}, PWR=${pwrCoin.amount}`
           ));
           return;
         }
+
+        const mfxBalance = fromBaseUnits(mfxCoin.amount, DENOMS.MFX);
+        const pwrBalance = fromBaseUnits(pwrCoin.amount, DENOMS.PWR);
 
         // 2. Faucet if below thresholds and cooldown elapsed
         let faucetRan = false;
@@ -146,8 +149,9 @@ export function useAutoRefill({
           try {
             const freshPwr = await getBalance(targetAddress, DENOMS.PWR);
             if (signal.aborted || addressRef.current !== targetAddress) return;
-            const parsed = Number(fromBaseUnits(freshPwr.amount, DENOMS.PWR));
-            if (!Number.isNaN(parsed)) currentPwr = parsed;
+            if (/^\d+$/.test(freshPwr.amount)) {
+              currentPwr = fromBaseUnits(freshPwr.amount, DENOMS.PWR);
+            }
           } catch (error) {
             logError('useAutoRefill.pwrRequery', error);
           }
@@ -157,16 +161,15 @@ export function useAutoRefill({
         if (signal.aborted || addressRef.current !== targetAddress) return;
 
         const pwrCredit = creditResponse.balances.find((c) => c.denom === DENOMS.PWR);
-        const creditBalance = pwrCredit
-          ? Number(fromBaseUnits(pwrCredit.amount, DENOMS.PWR))
-          : 0;
-
-        if (Number.isNaN(creditBalance)) {
+        if (pwrCredit && !/^\d+$/.test(pwrCredit.amount)) {
           logError('useAutoRefill.check', new Error(
-            `Unexpected credit balance: ${pwrCredit?.amount}`
+            `Unexpected credit balance: ${pwrCredit.amount}`
           ));
           return;
         }
+        const creditBalance = pwrCredit
+          ? fromBaseUnits(pwrCredit.amount, DENOMS.PWR)
+          : 0;
 
         // 4. Fund credits if below threshold and wallet has enough PWR
         const fundCooldownElapsed =
