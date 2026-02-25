@@ -47,7 +47,6 @@ export function useAutoRefill({
   const isCheckingRef = useRef(false);
   const lastFaucetAttemptRef = useRef(0);
   const lastFundAttemptRef = useRef(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const addressRef = useRef(address);
   const lastEffectAddressRef = useRef<string | undefined>(undefined);
   // Stable ref for toast — avoids re-triggering the effect when toasts change the context value
@@ -89,6 +88,13 @@ export function useAutoRefill({
         const mfxBalance = Number(fromBaseUnits(mfxCoin.amount, DENOMS.MFX));
         const pwrBalance = Number(fromBaseUnits(pwrCoin.amount, DENOMS.PWR));
 
+        if (Number.isNaN(mfxBalance) || Number.isNaN(pwrBalance)) {
+          logError('useAutoRefill.check', new Error(
+            `Unexpected balance: MFX=${mfxCoin.amount}, PWR=${pwrCoin.amount}`
+          ));
+          return;
+        }
+
         // 2. Faucet if below thresholds and cooldown elapsed
         let faucetRan = false;
         const needsFaucet =
@@ -128,10 +134,15 @@ export function useAutoRefill({
         // 3. Check credit balance
         let currentPwr = pwrBalance;
         if (faucetRan) {
-          // Re-query PWR — faucet may have deposited new tokens
-          const freshPwr = await getBalance(targetAddress, DENOMS.PWR);
-          if (addressRef.current !== targetAddress) return;
-          currentPwr = Number(fromBaseUnits(freshPwr.amount, DENOMS.PWR));
+          // Re-query PWR — faucet may have deposited new tokens.
+          // Fall back to original balance if re-query fails so credit funding isn't skipped.
+          try {
+            const freshPwr = await getBalance(targetAddress, DENOMS.PWR);
+            if (addressRef.current !== targetAddress) return;
+            currentPwr = Number(fromBaseUnits(freshPwr.amount, DENOMS.PWR));
+          } catch (error) {
+            logError('useAutoRefill.pwrRequery', error);
+          }
         }
 
         const creditResponse = await getCreditAccount(targetAddress);
@@ -175,7 +186,12 @@ export function useAutoRefill({
       } catch (error) {
         logError('useAutoRefill.check', error);
       } finally {
-        isCheckingRef.current = false;
+        // Only release if this invocation still owns the mutex.
+        // On address change, the effect resets the mutex and launches a new check;
+        // this stale invocation must not clear the new check's mutex.
+        if (addressRef.current === targetAddress) {
+          isCheckingRef.current = false;
+        }
       }
     }
 
@@ -183,11 +199,10 @@ export function useAutoRefill({
     checkAndRefill();
 
     // Recurring checks
-    intervalRef.current = setInterval(checkAndRefill, AUTO_REFILL_CHECK_INTERVAL_MS);
+    const intervalId = setInterval(checkAndRefill, AUTO_REFILL_CHECK_INTERVAL_MS);
 
     return () => {
-      clearInterval(intervalRef.current);
-      intervalRef.current = undefined;
+      clearInterval(intervalId);
     };
   }, [isWalletConnected, address, getOfflineSignerRef]);
 }

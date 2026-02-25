@@ -584,4 +584,85 @@ describe('useAutoRefill — recurring', () => {
     expect(logError).toHaveBeenCalledWith('useAutoRefill.check', expect.any(Error));
     expect(fundCredit).not.toHaveBeenCalled();
   });
+
+  it('falls back to original PWR balance when post-faucet re-query fails', async () => {
+    // Wallet starts with 100 PWR (enough to fund), faucet succeeds, re-query throws
+    let pwrCallCount = 0;
+    vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
+      if (denom === 'umfx') return { denom, amount: '0' };
+      pwrCallCount++;
+      if (pwrCallCount <= 1) return { denom, amount: String(100 * 1_000_000) };
+      throw new Error('RPC timeout');
+    });
+    setCreditBalance(2);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(logError).toHaveBeenCalledWith('useAutoRefill.pwrRequery', expect.any(Error));
+    // Should still fund using original 100 PWR balance
+    expect(fundCredit).toHaveBeenCalled();
+  });
+
+  it('logs error and bails on NaN balance', async () => {
+    vi.mocked(getBalance).mockResolvedValue({ denom: 'umfx', amount: 'garbage' });
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(logError).toHaveBeenCalledWith('useAutoRefill.check', expect.any(Error));
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
+  });
+
+  it('re-requests faucet after 25h cooldown expires', async () => {
+    setBalances(0, 0);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    vi.clearAllMocks();
+    setFaucetResults(true, true);
+
+    // Advance past 25h cooldown + next interval tick
+    await vi.advanceTimersByTimeAsync(25 * 3600_000 + 60_000);
+    await flushMicrotasks();
+
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+  });
+
+  it('old check finally does not steal new address mutex', async () => {
+    // Make getBalance for first address hang
+    let resolveOld: ((v: any) => void) | undefined;
+    vi.mocked(getBalance).mockImplementation(
+      () => new Promise((resolve) => { resolveOld = resolve; })
+    );
+
+    render(defaultProps({ address: 'manifest1first' }));
+    await flushMicrotasks();
+
+    // Switch address — resets mutex, starts new check
+    setBalances(10, 100);
+    setCreditBalance(100);
+    rerender(defaultProps({ address: 'manifest1second' }));
+    await flushMicrotasks();
+
+    // New check for second address should have completed
+    expect(getCreditAccount).toHaveBeenCalledWith('manifest1second');
+
+    // Now resolve the old hanging check — its finally must NOT steal the mutex
+    vi.clearAllMocks();
+    resolveOld?.({ denom: 'umfx', amount: '0' });
+    await flushMicrotasks();
+
+    // Advance to next interval — if mutex was stolen, this check would be skipped
+    setBalances(10, 100);
+    setCreditBalance(100);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+
+    // Should still run the interval check (mutex not stuck)
+    expect(getBalance).toHaveBeenCalled();
+  });
 });
