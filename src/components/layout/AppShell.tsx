@@ -14,7 +14,9 @@ import { MainLayout } from './MainLayout';
 import { CHAIN_NAME } from '../../config/chain';
 import { getBalance } from '../../api/bank';
 import { requestFaucetTokens, isFaucetEnabled } from '../../api/faucet';
+import { fundCredit } from '../../api/tx';
 import { DENOMS } from '../../api/config';
+import { toBaseUnits } from '../../utils/format';
 import { logError } from '../../utils/errors';
 
 const EXIT_DURATION_MS = 150;
@@ -22,7 +24,7 @@ const EXIT_DURATION_MS = 150;
 export function AppShell() {
   const { setClientManager, setAddress, setSignArbitrary } = useAI();
   const { clientManager, address } = useManifestMCP();
-  const { signArbitrary, isWalletConnected, isWalletConnecting, openView } = useChain(CHAIN_NAME);
+  const { signArbitrary, isWalletConnected, isWalletConnecting, openView, getOfflineSigner } = useChain(CHAIN_NAME);
 
   // Create a stable wrapper for signArbitrary
   const wrappedSignArbitrary = useCallback(
@@ -50,6 +52,9 @@ export function AppShell() {
   // Auto-faucet: request tokens for new wallets with zero balance
   const toast = useToast();
   const faucetRequestedRef = useRef<string | null>(null);
+  // Ref avoids unstable getOfflineSigner closure in useEffect deps (same pattern as useManifestMCP)
+  const getOfflineSignerRef = useRef(getOfflineSigner);
+  useEffect(() => { getOfflineSignerRef.current = getOfflineSigner; }, [getOfflineSigner]);
 
   useEffect(() => {
     if (!isFaucetEnabled() || !isWalletConnected || !address) return;
@@ -74,6 +79,29 @@ export function AppShell() {
           toast.info('Welcome! No tokens could be sent — the 24h cooldown may be active.');
         } else {
           toast.info('Welcome! Some tokens could not be sent — the 24h cooldown may be active.');
+        }
+
+        // Auto-fund credit account if the faucet sent PWR
+        const pwrDrip = results.find((r) => r.denom === DENOMS.PWR);
+        if (pwrDrip?.success) {
+          const AUTO_FUND_AMOUNT = 10;
+          try {
+            const signer = getOfflineSignerRef.current();
+            const result = await fundCredit(signer, targetAddress, targetAddress, {
+              denom: DENOMS.PWR,
+              amount: toBaseUnits(AUTO_FUND_AMOUNT, DENOMS.PWR),
+            });
+            if (faucetRequestedRef.current !== targetAddress) return;
+            if (result.success) {
+              toast.success(`Funded ${AUTO_FUND_AMOUNT} credits — you're all set!`);
+            } else {
+              logError('AppShell.autoFundCredits', result.error);
+              toast.info('Tokens received, but auto-funding credits failed. You can fund credits manually.');
+            }
+          } catch (error) {
+            logError('AppShell.autoFundCredits', error);
+            toast.info('Tokens received, but auto-funding credits failed. You can fund credits manually.');
+          }
         }
       } catch (error) {
         logError('AppShell.autoFaucet', error);

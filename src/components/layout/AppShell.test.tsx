@@ -28,12 +28,15 @@ vi.mock('../../hooks/useManifestMCP', () => ({
   }),
 }));
 
+const mockGetOfflineSigner = vi.fn().mockReturnValue({ getAccounts: vi.fn() });
+
 vi.mock('@cosmos-kit/react', () => ({
   useChain: () => ({
     signArbitrary: vi.fn(),
     isWalletConnected: mockIsWalletConnected,
     isWalletConnecting: false,
     openView: vi.fn(),
+    getOfflineSigner: mockGetOfflineSigner,
   }),
 }));
 
@@ -63,8 +66,16 @@ vi.mock('../../api/faucet', () => ({
   isFaucetEnabled: vi.fn(),
 }));
 
+vi.mock('../../api/tx', () => ({
+  fundCredit: vi.fn(),
+}));
+
 vi.mock('../../api/config', () => ({
   DENOMS: { MFX: 'umfx', PWR: 'factory/addr/upwr' },
+}));
+
+vi.mock('../../utils/format', () => ({
+  toBaseUnits: (amount: number) => String(amount * 1_000_000),
 }));
 
 vi.mock('../../utils/errors', () => ({
@@ -73,6 +84,7 @@ vi.mock('../../utils/errors', () => ({
 
 import { getBalance } from '../../api/bank';
 import { requestFaucetTokens, isFaucetEnabled } from '../../api/faucet';
+import { fundCredit } from '../../api/tx';
 import { logError } from '../../utils/errors';
 
 // --- Helpers ---
@@ -104,6 +116,7 @@ beforeEach(() => {
       { denom: 'factory/addr/upwr', success: true },
     ],
   });
+  vi.mocked(fundCredit).mockResolvedValue({ success: true, transactionHash: 'hash123', events: [] });
 });
 
 afterEach(() => {
@@ -246,5 +259,86 @@ describe('AppShell auto-faucet', () => {
 
     expect(getBalance).not.toHaveBeenCalled();
     expect(requestFaucetTokens).not.toHaveBeenCalled();
+  });
+});
+
+describe('AppShell auto-fund credits', () => {
+  it('funds credit account after successful faucet', async () => {
+    mockIsWalletConnected = true;
+    mockAddress = 'manifest1new';
+
+    render();
+    await flushAsync();
+
+    expect(fundCredit).toHaveBeenCalledWith(
+      expect.anything(), // signer
+      'manifest1new',
+      'manifest1new',
+      { denom: 'factory/addr/upwr', amount: '10000000' },
+    );
+    expect(mockToast.success).toHaveBeenCalledWith('Funded 10 credits — you\'re all set!');
+  });
+
+  it('skips auto-fund when PWR faucet drip fails', async () => {
+    mockIsWalletConnected = true;
+    mockAddress = 'manifest1new';
+    vi.mocked(requestFaucetTokens).mockResolvedValue({
+      results: [
+        { denom: 'umfx', success: true },
+        { denom: 'factory/addr/upwr', success: false, error: 'cooldown' },
+      ],
+    });
+
+    render();
+    await flushAsync();
+
+    expect(fundCredit).not.toHaveBeenCalled();
+  });
+
+  it('shows info toast when fundCredit throws', async () => {
+    mockIsWalletConnected = true;
+    mockAddress = 'manifest1new';
+    vi.mocked(fundCredit).mockRejectedValue(new Error('insufficient funds'));
+
+    render();
+    await flushAsync();
+
+    expect(logError).toHaveBeenCalledWith('AppShell.autoFundCredits', expect.any(Error));
+    // Faucet success toast should still appear
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Welcome! Free MFX and PWR tokens have been sent to your wallet.'
+    );
+    // User informed about fund failure
+    expect(mockToast.info).toHaveBeenCalledWith(
+      'Tokens received, but auto-funding credits failed. You can fund credits manually.'
+    );
+  });
+
+  it('shows info toast when fundCredit TX fails on-chain', async () => {
+    mockIsWalletConnected = true;
+    mockAddress = 'manifest1new';
+    vi.mocked(fundCredit).mockResolvedValue({
+      success: false,
+      error: 'account sequence mismatch',
+    });
+
+    render();
+    await flushAsync();
+
+    expect(logError).toHaveBeenCalledWith('AppShell.autoFundCredits', 'account sequence mismatch');
+    expect(mockToast.info).toHaveBeenCalledWith(
+      'Tokens received, but auto-funding credits failed. You can fund credits manually.'
+    );
+  });
+
+  it('skips auto-fund for returning users', async () => {
+    mockIsWalletConnected = true;
+    mockAddress = 'manifest1rich';
+    vi.mocked(getBalance).mockResolvedValue({ denom: 'umfx', amount: '5000000' });
+
+    render();
+    await flushAsync();
+
+    expect(fundCredit).not.toHaveBeenCalled();
   });
 });
