@@ -213,6 +213,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `useLeaseItems` | Manages lease item state in forms (add/remove/update SKU items) |
 | `useBatchSelection` | Manages batch selection state for bulk operations |
 | `useCopyToClipboard` | Clipboard copy with feedback state |
+| `useAutoRefill` | Recurring faucet + credit funding — monitors MFX/PWR/credit balances and auto-refills when below thresholds |
 
 ### Utility Modules (`src/utils/`)
 
