@@ -9673,7 +9673,8 @@ code.lease-card-mono {
   .main-layout__sidebar .apps-sidebar__recent-header span,
   .main-layout__sidebar .apps-sidebar__recent-name,
   .main-layout__sidebar .apps-sidebar__recent-time,
-  .main-layout__sidebar .apps-sidebar__recent-redeploy {
+  .main-layout__sidebar .apps-sidebar__recent-redeploy,
+  .main-layout__sidebar .apps-sidebar__version-link {
     opacity: 0;
     transition: opacity 0.15s ease;
   }
@@ -9691,8 +9692,18 @@ code.lease-card-mono {
   .main-layout__sidebar:hover .apps-sidebar__recent-header span,
   .main-layout__sidebar:hover .apps-sidebar__recent-name,
   .main-layout__sidebar:hover .apps-sidebar__recent-time,
-  .main-layout__sidebar:hover .apps-sidebar__recent-redeploy {
+  .main-layout__sidebar:hover .apps-sidebar__recent-redeploy,
+  .main-layout__sidebar:hover .apps-sidebar__version-link {
     opacity: 1;
+  }
+
+  /* Hide version padding when collapsed */
+  .main-layout__sidebar .apps-sidebar__version {
+    padding-top: 0;
+  }
+
+  .main-layout__sidebar:hover .apps-sidebar__version {
+    padding-top: 0.5rem;
   }
 
   /* Center icons when collapsed */
@@ -10077,6 +10088,23 @@ code.lease-card-mono {
 .apps-sidebar__recent-redeploy:active {
   transform: scale(0.9);
   transition: transform 0.07s ease;
+}
+
+.apps-sidebar__version {
+  margin-top: auto;
+  padding-top: 0.5rem;
+  text-align: center;
+}
+
+.apps-sidebar__version-link {
+  font-size: 0.75rem;
+  color: var(--color-surface-400);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.apps-sidebar__version-link:hover {
+  color: var(--color-surface-300);
 }
 
 

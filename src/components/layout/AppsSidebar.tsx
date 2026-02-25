@@ -283,6 +283,19 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
           </div>
         </div>
       )}
+
+      {/* Version */}
+      <div className="apps-sidebar__version">
+        <a
+          href="https://github.com/manifest-network/barney"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="apps-sidebar__version-link"
+          title="View source on GitHub"
+        >
+          v{import.meta.env.APP_VERSION}
+        </a>
+      </div>
     </div>
   );
 }

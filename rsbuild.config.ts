@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginNodePolyfill } from '@rsbuild/plugin-node-polyfill';
 import * as ipaddr from 'ipaddr.js';
+
+const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
 /**
  * Validate that a proxy target is a safe HTTP(S) URL.
  * Blocks non-HTTP protocols, credentials in URLs, cloud metadata endpoints,
@@ -105,6 +108,9 @@ export default defineConfig({
   source: {
     entry: {
       index: './src/main.tsx',
+    },
+    define: {
+      'import.meta.env.APP_VERSION': JSON.stringify(pkg.version),
     },
   },
   html: {
