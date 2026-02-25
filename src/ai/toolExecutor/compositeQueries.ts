@@ -19,6 +19,7 @@ import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../../api/provider-api';
 import { getLeaseStatus, getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
+import { requestFaucetTokens, isFaucetEnabled, FAUCET_COOLDOWN_HOURS } from '../../api/faucet';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
@@ -689,4 +690,48 @@ export async function executeAppReleases(
       error: `Failed to fetch releases for "${app.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
     };
   }
+}
+
+/**
+ * Execute request_faucet: Request MFX and PWR tokens from the faucet.
+ */
+export async function executeRequestFaucet(
+  options: ToolExecutorOptions
+): Promise<ToolResult> {
+  if (!isFaucetEnabled()) return { success: false, error: 'Faucet is not available on this network' };
+  const { address } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+
+  const { results } = await requestFaucetTokens(address);
+
+  const allSuccess = results.every((r) => r.success);
+  const allFailed = results.every((r) => !r.success);
+
+  if (allSuccess) {
+    return {
+      success: true,
+      data: {
+        message: 'Tokens sent! You received MFX (for gas) and PWR (for credits).',
+        results,
+      },
+    };
+  }
+
+  if (allFailed) {
+    return {
+      success: false,
+      error: `Faucet request failed for all tokens. ${FAUCET_COOLDOWN_HOURS}-hour cooldown may be active. Details: ${results.map((r) => `${r.denom}: ${r.error}`).join('; ')}`,
+    };
+  }
+
+  // Partial success
+  const succeeded = results.filter((r) => r.success).map((r) => r.denom);
+  const failed = results.filter((r) => !r.success);
+  return {
+    success: true,
+    data: {
+      message: `Partial success: received ${succeeded.join(', ')}. Failed: ${failed.map((r) => `${r.denom} (${r.error})`).join(', ')}. ${FAUCET_COOLDOWN_HOURS}-hour cooldown may be active for failed tokens.`,
+      results,
+    },
+  };
 }

@@ -38,6 +38,7 @@ For live pricing, use browse_catalog when the user asks.
 8. **stop_app**: Use app_name="all" to stop all running apps at once.
 9. **Escape hatches**: cosmos_query and cosmos_tx are advanced tools. Only use when the user explicitly requests a raw chain operation.
 10. **update_app vs restart_app**: update_app changes the manifest (file attachment or new image). restart_app just restarts the same manifest.
+11. **Faucet**: When the user asks for free tokens/credits or to use the faucet, call request_faucet(). 24-hour cooldown per token.
 
 ## Don't
 - Explain blockchain or Cosmos internals
@@ -109,6 +110,7 @@ User: "Show logs for my-api" → get_logs(app_name="my-api")
 User: "Show my lease history" → lease_history()
 User: "Show releases for my-app" → app_releases(app_name="my-app")
 User: "What are the prices?" → browse_catalog()
+User: "Give me tokens" / "I need credits" / "Use the faucet" → request_faucet()
 
 User: "Deploy WordPress with MySQL"
 → deploy_app(app_name="wordpress", services='{"web":{"image":"wordpress","port":"80","env":{"WORDPRESS_DB_HOST":"db:3306","WORDPRESS_DB_USER":"wordpress","WORDPRESS_DB_PASSWORD":"","WORDPRESS_DB_NAME":"wordpress"}},"db":{"image":"mysql","port":"3306","env":{"MYSQL_DATABASE":"wordpress","MYSQL_USER":"wordpress","MYSQL_PASSWORD":"","MYSQL_ROOT_PASSWORD":""}}}')

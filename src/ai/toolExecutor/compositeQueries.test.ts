@@ -9,6 +9,7 @@ import {
   executeLeaseHistory,
   executeAppDiagnostics,
   executeAppReleases,
+  executeRequestFaucet,
 } from './compositeQueries';
 import type { ToolExecutorOptions, AppRegistryAccess } from './types';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
@@ -65,6 +66,12 @@ vi.mock('../../api/fred', () => ({
   getLeaseReleases: vi.fn(),
 }));
 
+vi.mock('../../api/faucet', () => ({
+  requestFaucetTokens: vi.fn(),
+  isFaucetEnabled: vi.fn().mockReturnValue(true),
+  FAUCET_COOLDOWN_HOURS: 24,
+}));
+
 vi.mock('@manifest-network/manifest-mcp-browser', () => ({
   cosmosQuery: vi.fn(),
 }));
@@ -90,6 +97,7 @@ import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { cosmosQuery } from '@manifest-network/manifest-mcp-browser';
+import { requestFaucetTokens, isFaucetEnabled } from '../../api/faucet';
 
 const ADDRESS = 'manifest1abc';
 const CLIENT_MANAGER = {} as CosmosClientManager;
@@ -751,5 +759,72 @@ describe('executeAppReleases', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('Failed to fetch releases');
     expect(result.error).toContain('connection refused');
+  });
+});
+
+describe('executeRequestFaucet', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isFaucetEnabled).mockReturnValue(true);
+  });
+
+  it('returns error when faucet is disabled', async () => {
+    vi.mocked(isFaucetEnabled).mockReturnValue(false);
+    const result = await executeRequestFaucet(makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Faucet is not available');
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
+  });
+
+  it('returns error without wallet', async () => {
+    const result = await executeRequestFaucet(makeOptions({ address: undefined }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Wallet not connected');
+  });
+
+  it('returns success when all tokens received', async () => {
+    vi.mocked(requestFaucetTokens).mockResolvedValue({
+      results: [
+        { denom: 'umfx', success: true },
+        { denom: 'factory/addr/upwr', success: true },
+      ],
+    });
+
+    const result = await executeRequestFaucet(makeOptions());
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.message).toContain('MFX');
+    expect(data.message).toContain('PWR');
+    expect(data.results).toHaveLength(2);
+  });
+
+  it('returns failure when all tokens fail', async () => {
+    vi.mocked(requestFaucetTokens).mockResolvedValue({
+      results: [
+        { denom: 'umfx', success: false, error: 'cooldown active' },
+        { denom: 'factory/addr/upwr', success: false, error: 'cooldown active' },
+      ],
+    });
+
+    const result = await executeRequestFaucet(makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('24-hour cooldown');
+    expect(result.error).toContain('umfx');
+  });
+
+  it('returns partial success when one token fails', async () => {
+    vi.mocked(requestFaucetTokens).mockResolvedValue({
+      results: [
+        { denom: 'umfx', success: true },
+        { denom: 'factory/addr/upwr', success: false, error: 'cooldown active' },
+      ],
+    });
+
+    const result = await executeRequestFaucet(makeOptions());
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.message).toContain('Partial success');
+    expect(data.message).toContain('umfx');
+    expect(data.message).toContain('cooldown active');
   });
 });

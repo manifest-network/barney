@@ -14,6 +14,7 @@ import {
   executeLeaseHistory,
   executeAppDiagnostics,
   executeAppReleases,
+  executeRequestFaucet,
 } from './compositeQueries';
 import {
   executeDeployApp,
@@ -46,6 +47,7 @@ const QUERY_TOOLS = new Set([
   'lease_history',
   'app_diagnostics',
   'app_releases',
+  'request_faucet',
 ]);
 
 /** TX tools that require user confirmation */
@@ -88,6 +90,8 @@ export async function executeTool(
           return await executeAppDiagnostics(args, options);
         case 'app_releases':
           return await executeAppReleases(args, options);
+        case 'request_faucet':
+          return await executeRequestFaucet(options);
         default:
           return { success: false, error: `Unknown query tool: ${toolName}` };
       }

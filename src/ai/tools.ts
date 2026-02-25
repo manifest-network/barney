@@ -1,7 +1,7 @@
 /**
  * AI Tool Definitions
  *
- * 15 tools: 5 TX (require confirmation), 8 query, 2 escape hatch.
+ * 16 tools: 5 TX (require confirmation), 9 query, 2 escape hatch.
  * Model does intent classification; code does orchestration.
  */
 
@@ -353,6 +353,19 @@ export const AI_TOOLS: OllamaTool[] = [
     },
   },
 
+  {
+    type: 'function',
+    function: {
+      name: 'request_faucet',
+      description: 'Request free MFX (gas) and PWR (credits) tokens from the faucet. 24-hour cooldown per token.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+
   // --- Escape hatch ---
   {
     type: 'function',
@@ -476,6 +489,8 @@ export function getToolCallDescription(
       return `Fetching diagnostics for "${args.app_name}"...`;
     case 'app_releases':
       return `Fetching releases for "${args.app_name}"...`;
+    case 'request_faucet':
+      return 'Requesting tokens from faucet...';
     case 'cosmos_query':
       return `Querying ${args.module} ${args.subcommand}...`;
     case 'cosmos_tx':
