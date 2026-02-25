@@ -17,18 +17,7 @@ import { HELP_TEXT } from '../../ai/helpText';
 const EXAMPLE_GAMES = EXAMPLE_APPS.filter((app) => app.group === 'games');
 const EXAMPLE_STACKS = EXAMPLE_APPS.filter((app) => app.group === 'stacks');
 
-/** Group service apps by category, preserving insertion order. */
-const SERVICE_CATEGORIES: [string, ExampleApp[]][] = (() => {
-  const map = new Map<string, ExampleApp[]>();
-  for (const app of EXAMPLE_APPS) {
-    if (app.group !== 'apps') continue;
-    const cat = app.category ?? 'Other';
-    let list = map.get(cat);
-    if (!list) { list = []; map.set(cat, list); }
-    list.push(app);
-  }
-  return [...map.entries()];
-})();
+const EXAMPLE_SERVICES = EXAMPLE_APPS.filter((app) => app.group === 'apps');
 
 const SUGGESTIONS = ['Deploy an app', 'Check my credits', "What's running?"];
 
@@ -409,25 +398,20 @@ export function ChatPanel() {
                   </div>
                   <div className="chat-example-apps__group">
                     <p className="chat-example-apps__group-label">Apps</p>
-                    {SERVICE_CATEGORIES.map(([category, apps]) => (
-                      <div key={category} className="chat-example-apps__subcategory">
-                        <p className="chat-example-apps__subcategory-label">{category}</p>
-                        <div className="chat-example-apps__buttons" role="group" aria-label={`${category} apps`}>
-                          {apps.map((app, i) => (
-                            <button
-                              key={app.label}
-                              type="button"
-                              onClick={() => deployExample(app)}
-                              className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
-                              style={{ '--stagger': i } as React.CSSProperties}
-                              disabled={!isConnected || isStreaming}
-                            >
-                              {app.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
+                    <div className="chat-example-apps__buttons" role="group" aria-label="Service apps">
+                      {EXAMPLE_SERVICES.map((app, i) => (
+                        <button
+                          key={app.label}
+                          type="button"
+                          onClick={() => deployExample(app)}
+                          className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
+                          style={{ '--stagger': i } as React.CSSProperties}
+                          disabled={!isConnected || isStreaming}
+                        >
+                          {app.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   {EXAMPLE_STACKS.length > 0 && (
                     <div className="chat-example-apps__group">
