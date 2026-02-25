@@ -109,6 +109,18 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   //     env: { OPENCLAW_GATEWAY_TOKEN: token, OLLAMA_HOST: '172.17.0.1' },
   //   };
   // }, size: 'large', group: 'apps', category: 'Tools' },
+  // { label: 'EverClaw', manifest: SERVICE_MANIFEST('ghcr.io/everclaw/everclaw:2026.2.23.1', ['18789', '8083']), manifestFactory: () => {
+  //   const token = generatePassword();
+  //   return {
+  //     image: 'ghcr.io/everclaw/everclaw:2026.2.23.1',
+  //     ports: { '18789/tcp': {}, '8083/tcp': {} },
+  //     env: { OPENCLAW_GATEWAY_TOKEN: token, MOR_GATEWAY_API_KEY: '' },
+  //     command: ['/bin/sh', '-c'],
+  //     args: [
+  //       `jq '. + {"gateway":{"controlUi":{"enabled":true,"allowInsecureAuth":true}}}' /home/node/.openclaw/openclaw-default.json > /home/node/.openclaw/openclaw.json && sed -i 's/--bind lan/--bind lan --token "$OPENCLAW_GATEWAY_TOKEN"/' /app/docker-entrypoint.sh && exec /app/docker-entrypoint.sh`,
+  //     ],
+  //   };
+  // }, size: 'large', group: 'apps', category: 'Tools' },
   // { label: 'Registry 2', manifest: SERVICE_MANIFEST('registry:2', ['5000']), size: 'micro', group: 'apps', category: 'Tools' },
 
   // --- Stacks (multi-service) ---

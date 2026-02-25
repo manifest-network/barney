@@ -733,6 +733,17 @@ export async function executeDeployApp(
     return { success: false, error: 'No file attached and no image specified. Attach a manifest file or specify a Docker image (e.g. deploy_app(image="redis:8.4")).' };
   }
 
+  // Make file-attached JSON manifests editable in the confirmation card
+  if (!args._generatedManifest && payload.filename?.endsWith('.json')) {
+    try {
+      const json = new TextDecoder().decode(payload.bytes);
+      JSON.parse(json); // validate it's valid JSON
+      args._generatedManifest = json;
+    } catch {
+      // Not valid JSON — fall through to read-only display
+    }
+  }
+
   // Extract service names from file-uploaded stack manifests (JSON or YAML)
   if (!args._serviceNames) {
     const names = extractServiceNamesFromPayload(payload.bytes);
@@ -2183,6 +2194,17 @@ export async function executeUpdateApp(
 
   if (!payload) {
     return { success: false, error: 'No file attached and no image specified. Attach a manifest file or specify a Docker image (e.g. update_app(app_name="my-app", image="redis:8")).' };
+  }
+
+  // Make file-attached JSON manifests editable in the confirmation card
+  if (!args._generatedManifest && payload.filename?.endsWith('.json')) {
+    try {
+      const json = new TextDecoder().decode(payload.bytes);
+      JSON.parse(json); // validate it's valid JSON
+      args._generatedManifest = json;
+    } catch {
+      // Not valid JSON — fall through to read-only display
+    }
   }
 
   const name = args.app_name as string;
