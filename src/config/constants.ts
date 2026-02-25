@@ -117,3 +117,28 @@ export const WS_LIVENESS_TIMEOUT_MS = 45_000;
 
 /** SKU name that supports persistent disk storage (hardcoded until Fred exposes this via API) */
 export const STORAGE_SKU_NAME = 'docker-small';
+
+// ============================================
+// Auto-Refill Constants
+// ============================================
+
+/** Interval between recurring balance checks (milliseconds) */
+export const AUTO_REFILL_CHECK_INTERVAL_MS = 60_000;
+
+/** Request faucet when wallet MFX balance falls below this (display units, i.e. after fromBaseUnits conversion) */
+export const AUTO_REFILL_MFX_THRESHOLD = 0.5;
+
+/** Request faucet when wallet PWR balance falls below this (display units) */
+export const AUTO_REFILL_PWR_WALLET_THRESHOLD = 5;
+
+/** Fund credits when credit account balance falls below this (display units) */
+export const AUTO_REFILL_CREDIT_THRESHOLD = 5;
+
+/** PWR amount to fund into credits each time (display units) */
+export const AUTO_REFILL_CREDIT_AMOUNT = 10;
+
+/** Minimum time between faucet requests — exceeds FAUCET_COOLDOWN_HOURS (24h) from faucet.ts (milliseconds) */
+export const AUTO_REFILL_FAUCET_COOLDOWN_MS = 25 * 3600_000;
+
+/** Minimum time between credit fund TX attempts (milliseconds) */
+export const AUTO_REFILL_FUND_COOLDOWN_MS = 5 * 60_000;
