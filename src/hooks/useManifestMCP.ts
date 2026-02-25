@@ -18,7 +18,7 @@ import { logError } from '../utils/errors';
  * Custom WalletProvider that wraps cosmos-kit's signer
  */
 class CosmosKitWalletProvider implements WalletProvider {
-  readonly type = 'keplr' as const;
+  readonly type = 'web3auth' as const;
   private signer: OfflineSigner;
   private address: string;
 
