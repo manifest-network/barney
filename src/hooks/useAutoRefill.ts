@@ -27,6 +27,7 @@ import { requestFaucetTokens, isFaucetEnabled } from '../api/faucet';
 import { fundCredit } from '../api/tx';
 import { fromBaseUnits, toBaseUnits } from '../utils/format';
 import { logError } from '../utils/errors';
+import { createVersionedStorage } from '../utils/versionedStorage';
 import type { ToastContextType } from '../contexts/ToastContext';
 import {
   AUTO_REFILL_CHECK_INTERVAL_MS,
@@ -56,48 +57,62 @@ export interface AccountSetupState {
 
 // --- localStorage helpers ---
 
-interface PersistedCooldowns {
+export interface CooldownsV1 {
   lastFaucetAttempt: number;
   lastFundAttempt: number;
-  faucetSucceeded?: boolean;
+  faucetSucceeded: boolean;
 }
+
+function migrateCooldownsV0toV1(old: unknown): CooldownsV1 | null {
+  if (typeof old !== 'object' || old === null) return null;
+  const o = old as Record<string, unknown>;
+  if (typeof o.lastFaucetAttempt !== 'number' || typeof o.lastFundAttempt !== 'number') {
+    return null;
+  }
+  return {
+    lastFaucetAttempt: o.lastFaucetAttempt,
+    lastFundAttempt: o.lastFundAttempt,
+    // Old format only stamped lastFaucetAttempt on success, so a non-zero
+    // timestamp implies the faucet succeeded in the older version.
+    faucetSucceeded: typeof o.faucetSucceeded === 'boolean'
+      ? o.faucetSucceeded
+      : o.lastFaucetAttempt > 0,
+  };
+}
+
+function validateCooldownsV1(data: unknown): CooldownsV1 | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const d = data as Record<string, unknown>;
+  if (
+    typeof d.lastFaucetAttempt !== 'number' ||
+    typeof d.lastFundAttempt !== 'number' ||
+    typeof d.faucetSucceeded !== 'boolean'
+  ) {
+    return null;
+  }
+  return d as unknown as CooldownsV1;
+}
+
+const cooldownsStorage = createVersionedStorage<CooldownsV1>({
+  version: 1,
+  migrations: [migrateCooldownsV0toV1],
+  validate: validateCooldownsV1,
+});
 
 function cooldownKey(address: string): string {
   return `barney-refill-${address}`;
 }
 
-export function loadCooldowns(address: string): PersistedCooldowns | null {
-  try {
-    const raw = localStorage.getItem(cooldownKey(address));
-    if (raw === null) return null;
-    const parsed = JSON.parse(raw) as PersistedCooldowns;
-    if (
-      typeof parsed.lastFaucetAttempt !== 'number' ||
-      typeof parsed.lastFundAttempt !== 'number'
-    ) {
-      return null;
-    }
-    return parsed;
-  } catch (error) {
-    logError('useAutoRefill.loadCooldowns', error);
-    return null;
-  }
+export function loadCooldowns(address: string): CooldownsV1 | null {
+  return cooldownsStorage.load(cooldownKey(address));
 }
 
-export function saveCooldowns(address: string, cooldowns: PersistedCooldowns): void {
-  try {
-    localStorage.setItem(cooldownKey(address), JSON.stringify(cooldowns));
-  } catch (error) {
-    logError('useAutoRefill.saveCooldowns', error);
-  }
+export function saveCooldowns(address: string, cooldowns: CooldownsV1): void {
+  cooldownsStorage.save(cooldownKey(address), cooldowns);
 }
 
 export function clearCooldowns(address: string): void {
-  try {
-    localStorage.removeItem(cooldownKey(address));
-  } catch (error) {
-    logError('useAutoRefill.clearCooldowns', error);
-  }
+  cooldownsStorage.clear(cooldownKey(address));
 }
 
 const INITIAL_SETUP_STATE: AccountSetupState = { isInitialSetup: false, phase: 'checking' };
@@ -136,11 +151,7 @@ export function useAutoRefill({
       if (persisted) {
         lastFaucetAttemptRef.current = persisted.lastFaucetAttempt;
         lastFundAttemptRef.current = persisted.lastFundAttempt;
-        // Backward compat: versions prior to this fix only stamped lastFaucetAttempt
-        // on success (failures were not persisted). A non-zero timestamp therefore
-        // implies the faucet succeeded in that older version. New-format entries always
-        // include faucetSucceeded explicitly, so this fallback only fires for old data.
-        faucetSucceededRef.current = persisted.faucetSucceeded ?? (persisted.lastFaucetAttempt > 0);
+        faucetSucceededRef.current = persisted.faucetSucceeded;
         // Returning wallet — no overlay
         setSetupState({ isInitialSetup: false, phase: 'checking' });
       } else {

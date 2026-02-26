@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createElement, type FC, useEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
-import { useAutoRefill, loadCooldowns, saveCooldowns, type UseAutoRefillOptions, type AccountSetupState } from './useAutoRefill';
+import { useAutoRefill, loadCooldowns, saveCooldowns, type UseAutoRefillOptions, type AccountSetupState, type CooldownsV1 } from './useAutoRefill';
 
 // --- Mocks ---
 
@@ -232,7 +232,7 @@ describe('useAutoRefill — recurring', () => {
 
   it('requests faucet when MFX below threshold (non-zero)', async () => {
     // Pre-seed so this is not initial setup (avoids toast suppression)
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0.3, 100); // MFX below 0.5 threshold
 
     render(defaultProps());
@@ -242,7 +242,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('requests faucet when PWR below threshold', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(10, 3); // PWR below 5 threshold
 
     render(defaultProps());
@@ -328,7 +328,7 @@ describe('useAutoRefill — recurring', () => {
 
   it('respects faucet 25h cooldown', async () => {
     // Pre-seed so recurring runs show toasts
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
     setCreditBalance(100);
 
@@ -349,7 +349,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('stamps faucet cooldown even when all drips fail', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
     setCreditBalance(100);
     setFaucetResults(false, false);
@@ -504,7 +504,7 @@ describe('useAutoRefill — recurring', () => {
 
   it('loads persisted cooldowns on address change', async () => {
     // Pre-seed so recurring runs show toasts and respect cooldowns
-    saveCooldowns('manifest1second', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1second', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
     setCreditBalance(100);
 
@@ -518,7 +518,7 @@ describe('useAutoRefill — recurring', () => {
     // Change to address with pre-existing cooldowns and non-zero balances
     // (non-zero balances prevent stale-key detection from triggering)
     setBalances(10, 100);
-    saveCooldowns('manifest1second', { lastFaucetAttempt: Date.now(), lastFundAttempt: 0 });
+    saveCooldowns('manifest1second', { lastFaucetAttempt: Date.now(), lastFundAttempt: 0, faucetSucceeded: true });
     rerender(defaultProps({ address: 'manifest1second' }));
     await flushMicrotasks();
 
@@ -527,7 +527,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('does not reset cooldowns on re-render with same address', async () => {
-    saveCooldowns('manifest1same', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1same', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
     setCreditBalance(100);
 
@@ -579,7 +579,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('skips PWR re-query when all faucet drips failed', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setFaucetResults(false, false); // All fail → faucetRan stays false
     setBalances(0, 100);
     setCreditBalance(2);
@@ -596,7 +596,7 @@ describe('useAutoRefill — recurring', () => {
   it('still checks credits when all faucet drips fail', async () => {
     // requestFaucetTokens returns { success: false } on network/HTTP errors — never throws.
     // Credit funding should still proceed using the original wallet PWR balance.
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 100); // Triggers faucet need, but also has enough PWR to fund
     setCreditBalance(2);
     setFaucetResults(false, false);
@@ -683,7 +683,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('re-requests faucet after 25h cooldown expires', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
     setCreditBalance(100);
 
@@ -763,7 +763,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('shows info toast on partial faucet failure (recurring, not initial)', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
     setCreditBalance(100);
     setFaucetResults(true, false);
@@ -777,7 +777,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('shows distinct toast when all faucet requests fail (recurring)', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
     setCreditBalance(100);
     setFaucetResults(false, false);
@@ -791,7 +791,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('shows info toast when faucet request throws (recurring)', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
     vi.mocked(requestFaucetTokens).mockRejectedValue(new Error('faucet down'));
 
@@ -805,7 +805,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('shows info toast when fundCredit throws (recurring)', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 100);
     vi.mocked(fundCredit).mockRejectedValue(new Error('insufficient funds'));
 
@@ -819,7 +819,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('shows info toast when fundCredit TX fails on-chain (recurring)', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 100);
     vi.mocked(fundCredit).mockResolvedValue({ success: false, error: 'account sequence mismatch' });
 
@@ -833,7 +833,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('shows success toast for faucet and fund on recurring runs', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     let pwrCallCount = 0;
     vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
       if (denom === 'umfx') return { denom, amount: '0' };
@@ -885,7 +885,7 @@ describe('useAutoRefill — cooldown persistence', () => {
     // Pre-seed a recent faucet cooldown with non-zero balances
     // (zero balances + non-zero faucet timestamp would trigger stale-key detection)
     const recentTimestamp = Date.now();
-    saveCooldowns('manifest1test', { lastFaucetAttempt: recentTimestamp, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: recentTimestamp, lastFundAttempt: 0, faucetSucceeded: true });
     setBalances(0.3, 3);
     setCreditBalance(100);
 
@@ -905,7 +905,7 @@ describe('useAutoRefill — cooldown persistence', () => {
     await flushMicrotasks();
 
     // Should treat as initial setup (no valid cooldowns) and still faucet
-    expect(logError).toHaveBeenCalledWith('useAutoRefill.loadCooldowns', expect.any(Error));
+    expect(logError).toHaveBeenCalledWith('versionedStorage.load', expect.any(Error));
     expect(requestFaucetTokens).toHaveBeenCalled();
   });
 
@@ -941,9 +941,7 @@ describe('useAutoRefill — cooldown persistence', () => {
 describe('useAutoRefill — stale-key detection', () => {
   it('clears stale cooldowns and re-runs onboarding when backend is reset', async () => {
     // Simulate: faucet ran and succeeded previously, then backend was wiped
-    // Uses old-format cooldowns (no faucetSucceeded flag) to verify backward compat:
-    // lastFaucetAttempt > 0 implies faucet previously succeeded.
-    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: Date.now() - 1000 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: Date.now() - 1000, faucetSucceeded: true });
     setBalances(0, 0);
     setCreditBalance(0);
 
@@ -975,7 +973,7 @@ describe('useAutoRefill — stale-key detection', () => {
 
   it('does not clear cooldowns when balances are non-zero', async () => {
     const faucetTime = Date.now() - 1000;
-    saveCooldowns('manifest1test', { lastFaucetAttempt: faucetTime, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: faucetTime, lastFundAttempt: 0, faucetSucceeded: true });
     setBalances(10, 100);
     setCreditBalance(100);
 
@@ -988,7 +986,7 @@ describe('useAutoRefill — stale-key detection', () => {
   });
 
   it('does not clear cooldowns when only one balance is zero', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: 0, faucetSucceeded: true });
     setBalances(0, 100); // MFX zero but PWR non-zero
     setCreditBalance(100);
 
@@ -1001,7 +999,7 @@ describe('useAutoRefill — stale-key detection', () => {
 
   it('does not trigger stale detection when faucet never succeeded', async () => {
     // faucetSucceeded absent/false means faucet never actually succeeded — not a reset scenario
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
     setCreditBalance(100);
 
@@ -1043,7 +1041,7 @@ describe('useAutoRefill — initial setup state', () => {
   });
 
   it('reports isInitialSetup: false for returning wallet', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(10, 100);
     setCreditBalance(100);
 
@@ -1068,7 +1066,7 @@ describe('useAutoRefill — initial setup state', () => {
 
   it('shows toasts for recurring runs after initial setup', async () => {
     // Seed cooldowns so this is NOT initial setup
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
     setCreditBalance(100);
 
@@ -1262,8 +1260,11 @@ describe('useAutoRefill — lifecycle scenarios', () => {
   });
 
   it('backend reset with old-format localStorage → stale-key triggers', async () => {
-    // Simulate old-format cooldowns (no faucetSucceeded field)
-    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: Date.now() - 1000 });
+    // Simulate old-format cooldowns (no envelope, no faucetSucceeded field)
+    localStorage.setItem('barney-refill-manifest1test', JSON.stringify({
+      lastFaucetAttempt: Date.now() - 1000,
+      lastFundAttempt: Date.now() - 1000,
+    }));
     setBalances(0, 0);
     setCreditBalance(0);
 
@@ -1280,7 +1281,7 @@ describe('useAutoRefill — lifecycle scenarios', () => {
 
   it('toast spam prevention: recurring faucet failure → shows toast once → cooldown blocks repeat', async () => {
     // Seed cooldowns so this is a recurring (non-initial) run
-    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
     setCreditBalance(100);
     setFaucetResults(false, false);
@@ -1349,7 +1350,7 @@ describe('useAutoRefill — lifecycle scenarios', () => {
   });
 
   it('recurring fund failure → stamps cooldown → no toast spam', async () => {
-    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now(), lastFundAttempt: 0 });
+    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now(), lastFundAttempt: 0, faucetSucceeded: true });
     setBalances(10, 100);
     setCreditBalance(0);
     vi.mocked(fundCredit).mockResolvedValue({ success: false, error: 'sequence mismatch' });
@@ -1382,21 +1383,21 @@ describe('useAutoRefill — lifecycle scenarios', () => {
 
 describe('loadCooldowns / saveCooldowns', () => {
   it('round-trips correctly', () => {
-    const data = { lastFaucetAttempt: 12345, lastFundAttempt: 67890 };
+    const data: CooldownsV1 = { lastFaucetAttempt: 12345, lastFundAttempt: 67890, faucetSucceeded: false };
     saveCooldowns('manifest1addr', data);
     expect(loadCooldowns('manifest1addr')).toEqual(data);
   });
 
   it('round-trips faucetSucceeded: true', () => {
-    const data = { lastFaucetAttempt: 12345, lastFundAttempt: 67890, faucetSucceeded: true };
+    const data: CooldownsV1 = { lastFaucetAttempt: 12345, lastFundAttempt: 67890, faucetSucceeded: true };
     saveCooldowns('manifest1addr', data);
     expect(loadCooldowns('manifest1addr')).toEqual(data);
   });
 
-  it('round-trips faucetSucceeded: false', () => {
-    const data = { lastFaucetAttempt: 12345, lastFundAttempt: 67890, faucetSucceeded: false };
-    saveCooldowns('manifest1addr', data);
-    expect(loadCooldowns('manifest1addr')).toEqual(data);
+  it('saves data in versioned envelope format', () => {
+    saveCooldowns('manifest1addr', { lastFaucetAttempt: 100, lastFundAttempt: 200, faucetSucceeded: true });
+    const raw = JSON.parse(localStorage.getItem('barney-refill-manifest1addr')!);
+    expect(raw).toEqual({ v: 1, data: { lastFaucetAttempt: 100, lastFundAttempt: 200, faucetSucceeded: true } });
   });
 
   it('returns null when key does not exist', () => {
@@ -1406,11 +1407,45 @@ describe('loadCooldowns / saveCooldowns', () => {
   it('returns null for corrupted JSON', () => {
     localStorage.setItem('barney-refill-manifest1bad', '{invalid');
     expect(loadCooldowns('manifest1bad')).toBeNull();
-    expect(logError).toHaveBeenCalledWith('useAutoRefill.loadCooldowns', expect.any(Error));
+    expect(logError).toHaveBeenCalledWith('versionedStorage.load', expect.any(Error));
   });
 
   it('returns null for JSON with wrong shape', () => {
     localStorage.setItem('barney-refill-manifest1wrong', JSON.stringify({ x: 1 }));
     expect(loadCooldowns('manifest1wrong')).toBeNull();
+  });
+
+  it('migrates legacy v0 cooldowns (no envelope)', () => {
+    // Simulate pre-versioning format: raw JSON with no { v, data } wrapper
+    localStorage.setItem('barney-refill-manifest1legacy', JSON.stringify({
+      lastFaucetAttempt: 5000,
+      lastFundAttempt: 6000,
+    }));
+    const loaded = loadCooldowns('manifest1legacy');
+    expect(loaded).toEqual({
+      lastFaucetAttempt: 5000,
+      lastFundAttempt: 6000,
+      faucetSucceeded: true, // inferred from lastFaucetAttempt > 0
+    });
+  });
+
+  it('migrates legacy v0 cooldowns with faucetSucceeded already present', () => {
+    // Some old entries may have the optional faucetSucceeded field
+    localStorage.setItem('barney-refill-manifest1mixed', JSON.stringify({
+      lastFaucetAttempt: 5000,
+      lastFundAttempt: 6000,
+      faucetSucceeded: false,
+    }));
+    const loaded = loadCooldowns('manifest1mixed');
+    expect(loaded).toEqual({
+      lastFaucetAttempt: 5000,
+      lastFundAttempt: 6000,
+      faucetSucceeded: false, // preserves explicit false even though lastFaucetAttempt > 0
+    });
+  });
+
+  it('returns null for future version envelope', () => {
+    localStorage.setItem('barney-refill-manifest1future', JSON.stringify({ v: 99, data: {} }));
+    expect(loadCooldowns('manifest1future')).toBeNull();
   });
 });
