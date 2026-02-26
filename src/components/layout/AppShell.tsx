@@ -70,7 +70,7 @@ export function AppShell() {
     if (status === prev) return;
 
     if (status === 'Error' || status === 'Rejected') {
-      const errorMsg = message ?? 'Connection failed';
+      const errorMsg = message || 'Connection failed';
       logError('AppShell.walletConnect', errorMsg);
 
       if (isPopupBlockedError(errorMsg)) {
@@ -85,7 +85,7 @@ export function AppShell() {
       }
 
       // Reset cosmos-kit back to Disconnected so user can retry
-      disconnect();
+      disconnect().catch(err => logError('AppShell.disconnect', err));
     }
   }, [status, message, disconnect, toast]);
 

@@ -22,7 +22,7 @@ let mockIsWalletConnected = false;
 let mockAddress: string | undefined;
 let mockStatus = 'Disconnected';
 let mockMessage: string | undefined;
-const mockDisconnect = vi.fn();
+const mockDisconnect = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('../../hooks/useManifestMCP', () => ({
   useManifestMCP: () => ({
