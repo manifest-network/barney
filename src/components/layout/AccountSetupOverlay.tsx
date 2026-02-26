@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Loader, CheckCircle, Circle } from 'lucide-react';
 import type { AccountSetupState, SetupPhase } from '../../hooks/useAutoRefill';
 
@@ -32,11 +33,32 @@ function StepIcon({ status }: { status: 'done' | 'active' | 'pending' }) {
 }
 
 export function AccountSetupOverlay({ state }: AccountSetupOverlayProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Focus the dialog on mount so screen readers announce it
+  useEffect(() => {
+    if (state.isInitialSetup) {
+      dialogRef.current?.focus();
+    }
+  }, [state.isInitialSetup]);
+
+  // Prevent body scrolling while overlay is visible
+  useEffect(() => {
+    if (!state.isInitialSetup) return;
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [state.isInitialSetup]);
+
   if (!state.isInitialSetup) return null;
 
   return (
     <div className="modal-backdrop" role="alertdialog" aria-modal="true" aria-label="Setting up your account">
-      <div className="account-setup">
+      <div ref={dialogRef} className="account-setup" tabIndex={-1}>
         <h2 className="account-setup__title">Setting up your account</h2>
         <div className="account-setup__steps">
           {STEPS.map(({ phase, label }) => {

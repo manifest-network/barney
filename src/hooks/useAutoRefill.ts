@@ -110,7 +110,10 @@ export function useAutoRefill({
   useEffect(() => {
     addressRef.current = address;
 
-    if (!isFaucetEnabled() || !isWalletConnected || !address) return;
+    if (!isFaucetEnabled() || !isWalletConnected || !address) {
+      setSetupState(INITIAL_SETUP_STATE);
+      return;
+    }
 
     // Only handle cooldowns when the address actually changes, not on every effect re-run
     let isInitialForAddress = false;
