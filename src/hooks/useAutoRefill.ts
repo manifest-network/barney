@@ -105,6 +105,7 @@ export function useAutoRefill({
   useEffect(() => { toastRef.current = toast; }, [toast]);
 
   const [setupState, setSetupState] = useState<AccountSetupState>(INITIAL_SETUP_STATE);
+  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     addressRef.current = address;
@@ -168,6 +169,11 @@ export function useAutoRefill({
           logError('useAutoRefill.check', new Error(
             `Unexpected balance: MFX=${mfxCoin.amount}, PWR=${pwrCoin.amount}`
           ));
+          if (isInitialRun) {
+            isInitialRunPending = false;
+            saveCooldowns(targetAddress, { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+            setSetupState({ isInitialSetup: false, phase: 'complete' });
+          }
           return;
         }
 
@@ -252,6 +258,11 @@ export function useAutoRefill({
           logError('useAutoRefill.check', new Error(
             `Unexpected credit balance: ${pwrCredit.amount}`
           ));
+          if (isInitialRun) {
+            isInitialRunPending = false;
+            saveCooldowns(targetAddress, { lastFaucetAttempt: lastFaucetAttemptRef.current, lastFundAttempt: 0 });
+            setSetupState({ isInitialSetup: false, phase: 'complete' });
+          }
           return;
         }
         const creditBalance = pwrCredit
@@ -276,15 +287,15 @@ export function useAutoRefill({
               denom: DENOMS.PWR,
               amount: toBaseUnits(AUTO_REFILL_CREDIT_AMOUNT, DENOMS.PWR),
             });
-            // Stamp cooldown after the TX completes (not before), so transient
-            // network errors don't lock out funding for the full cooldown period.
-            lastFundAttemptRef.current = Date.now();
-            saveCooldowns(targetAddress, {
-              lastFaucetAttempt: lastFaucetAttemptRef.current,
-              lastFundAttempt: lastFundAttemptRef.current,
-            });
             if (signal.aborted || addressRef.current !== targetAddress) return;
             if (result.success) {
+              // Only stamp cooldown on success — on-chain failures (sequence mismatch, etc.)
+              // should be retried on the next interval, not locked out for 5 minutes.
+              lastFundAttemptRef.current = Date.now();
+              saveCooldowns(targetAddress, {
+                lastFaucetAttempt: lastFaucetAttemptRef.current,
+                lastFundAttempt: lastFundAttemptRef.current,
+              });
               if (!isInitialRun) {
                 toastRef.current.success(`Funded ${AUTO_REFILL_CREDIT_AMOUNT} credits — you're all set!`);
               }
@@ -310,12 +321,17 @@ export function useAutoRefill({
             lastFundAttempt: lastFundAttemptRef.current,
           });
           setSetupState({ isInitialSetup: true, phase: 'complete' });
-          setTimeout(() => {
+          dismissTimerRef.current = setTimeout(() => {
             setSetupState({ isInitialSetup: false, phase: 'complete' });
           }, ACCOUNT_SETUP_COMPLETE_DELAY_MS);
         }
       } catch (error) {
         logError('useAutoRefill.check', error);
+        if (isInitialRun && !signal.aborted && addressRef.current === targetAddress) {
+          isInitialRunPending = false;
+          saveCooldowns(targetAddress, { lastFaucetAttempt: lastFaucetAttemptRef.current, lastFundAttempt: lastFundAttemptRef.current });
+          setSetupState({ isInitialSetup: false, phase: 'complete' });
+        }
       } finally {
         // Only release if this invocation still owns the mutex.
         // On address change / unmount, the effect resets the mutex and launches a new check;
@@ -334,6 +350,7 @@ export function useAutoRefill({
 
     return () => {
       clearInterval(intervalId);
+      if (dismissTimerRef.current !== null) clearTimeout(dismissTimerRef.current);
       abortController.abort();
     };
   }, [isWalletConnected, address, getOfflineSignerRef]);
