@@ -517,6 +517,13 @@ describe('formatConnectionUrl', () => {
       metadata: { url: 'https://my-app.example.com' },
     })).toBe('my-app.example.com');
   });
+
+  it('extracts host:port from metadata url, stripping path and userinfo', () => {
+    expect(formatConnectionUrl('1.2.3.4', {
+      host: '1.2.3.4',
+      metadata: { url: 'https://user@my-app.example.com:8080/path?q=1' },
+    })).toBe('my-app.example.com:8080');
+  });
 });
 
 describe('stack FQDN promotion — standalone service', () => {

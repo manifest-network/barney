@@ -115,9 +115,15 @@ export function formatConnectionUrl(
     }
   }
 
-  // Fallback: check metadata for a URL hint
+  // Fallback: extract host[:port] from metadata URL hint (strip scheme, path, query, userinfo)
   if (connection?.metadata?.url) {
-    return connection.metadata.url.replace(/^https?:\/\//, '');
+    try {
+      const parsed = new URL(connection.metadata.url);
+      return parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+    } catch {
+      // Not a valid URL — strip scheme and return as-is
+      return connection.metadata.url.replace(/^https?:\/\//, '');
+    }
   }
 
   // Last resort: bare host
