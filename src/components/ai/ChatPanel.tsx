@@ -19,7 +19,7 @@ const EXAMPLE_STACKS = EXAMPLE_APPS.filter((app) => app.group === 'stacks');
 
 const EXAMPLE_SERVICES = EXAMPLE_APPS.filter((app) => app.group === 'apps');
 
-const SUGGESTIONS = ['Fund 10 credits', 'Deploy an app', 'Check my credits', "What's running?"];
+const SUGGESTIONS = ['Deploy an app', 'Check my credits', "What's running?"];
 
 /**
  * Match user input against an EXAMPLE_APPS label.
