@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { useAI } from '../../hooks/useAI';
 import { useManifestMCP } from '../../hooks/useManifestMCP';
+import { useToast } from '../../hooks/useToast';
 import { useAccountSetup } from '../../hooks/useAccountSetup';
 import { LandingPage } from '../landing/LandingPage';
 import { MainLayout } from './MainLayout';
@@ -31,6 +32,7 @@ export function AppShell() {
   const { setClientManager, setAddress, setSignArbitrary } = useAI();
   const { clientManager, address } = useManifestMCP();
   const { signArbitrary, isWalletConnected, isWalletConnecting, openView, getOfflineSigner, status, message, disconnect } = useChain(CHAIN_NAME);
+  const toast = useToast();
 
   // Create a stable wrapper for signArbitrary
   const wrappedSignArbitrary = useCallback(

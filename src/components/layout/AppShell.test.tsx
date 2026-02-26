@@ -44,6 +44,11 @@ vi.mock('@cosmos-kit/react', () => ({
   }),
 }));
 
+const mockToast = { success: vi.fn(), info: vi.fn(), error: vi.fn(), warning: vi.fn() };
+vi.mock('../../hooks/useToast', () => ({
+  useToast: () => mockToast,
+}));
+
 vi.mock('../../hooks/useAccountSetup', () => ({
   useAccountSetup: vi.fn().mockReturnValue({ isInitialSetup: false, phase: 'checking' }),
 }));
