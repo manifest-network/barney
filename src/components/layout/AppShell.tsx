@@ -9,7 +9,7 @@ import { useChain } from '@cosmos-kit/react';
 import { useAI } from '../../hooks/useAI';
 import { useManifestMCP } from '../../hooks/useManifestMCP';
 import { useToast } from '../../hooks/useToast';
-import { useAutoRefill } from '../../hooks/useAutoRefill';
+import { useAccountSetup } from '../../hooks/useAccountSetup';
 import { LandingPage } from '../landing/LandingPage';
 import { MainLayout } from './MainLayout';
 import { AccountSetupOverlay } from './AccountSetupOverlay';
@@ -32,6 +32,7 @@ export function AppShell() {
   const { setClientManager, setAddress, setSignArbitrary } = useAI();
   const { clientManager, address } = useManifestMCP();
   const { signArbitrary, isWalletConnected, isWalletConnecting, openView, getOfflineSigner, status, message, disconnect } = useChain(CHAIN_NAME);
+  const toast = useToast();
 
   // Create a stable wrapper for signArbitrary
   const wrappedSignArbitrary = useCallback(
@@ -56,8 +57,7 @@ export function AppShell() {
     setSignArbitrary(canSign ? wrappedSignArbitrary : undefined);
   }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, wrappedSignArbitrary]);
 
-  // Auto-refill: faucet + credit funding (immediate on connect, then recurring)
-  const toast = useToast();
+  // Account setup: one-shot faucet + credit funding on first connect
   // Ref avoids unstable getOfflineSigner closure in useEffect deps (same pattern as useManifestMCP)
   const getOfflineSignerRef = useRef(getOfflineSigner);
   useEffect(() => { getOfflineSignerRef.current = getOfflineSigner; }, [getOfflineSigner]);
@@ -89,7 +89,7 @@ export function AppShell() {
     }
   }, [status, message, disconnect, toast]);
 
-  const setupState = useAutoRefill({ address, isWalletConnected, getOfflineSignerRef, toast });
+  const setupState = useAccountSetup({ address, isWalletConnected, getOfflineSignerRef });
 
   // Page transition: defer content swap until exit animation completes.
   // `exiting` is derived (not state) so we avoid calling setState in the effect body.

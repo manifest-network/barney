@@ -49,8 +49,8 @@ vi.mock('../../hooks/useToast', () => ({
   useToast: () => mockToast,
 }));
 
-vi.mock('../../hooks/useAutoRefill', () => ({
-  useAutoRefill: vi.fn().mockReturnValue({ isInitialSetup: false, phase: 'checking' }),
+vi.mock('../../hooks/useAccountSetup', () => ({
+  useAccountSetup: vi.fn().mockReturnValue({ isInitialSetup: false, phase: 'checking' }),
 }));
 
 vi.mock('../../config/chain', () => ({

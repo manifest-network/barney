@@ -119,29 +119,32 @@ export const WS_LIVENESS_TIMEOUT_MS = 45_000;
 export const STORAGE_SKU_NAME = 'docker-small';
 
 // ============================================
-// Auto-Refill Constants
+// Account Setup Constants
 // ============================================
 
-/** Interval between recurring balance checks (milliseconds) */
-export const AUTO_REFILL_CHECK_INTERVAL_MS = 60_000;
-
 /** Request faucet when wallet MFX balance falls below this (display units, i.e. after fromBaseUnits conversion) */
-export const AUTO_REFILL_MFX_THRESHOLD = 0.5;
+export const ACCOUNT_SETUP_MFX_THRESHOLD = 0.5;
 
 /** Request faucet when wallet PWR balance falls below this (display units) */
-export const AUTO_REFILL_PWR_WALLET_THRESHOLD = 5;
+export const ACCOUNT_SETUP_PWR_THRESHOLD = 5;
 
 /** Fund credits when credit account balance falls below this (display units) */
-export const AUTO_REFILL_CREDIT_THRESHOLD = 5;
+export const ACCOUNT_SETUP_CREDIT_THRESHOLD = 5;
 
 /** PWR amount to fund into credits each time (display units) */
-export const AUTO_REFILL_CREDIT_AMOUNT = 10;
+export const ACCOUNT_SETUP_CREDIT_AMOUNT = 10;
 
-/** Minimum time between faucet requests — exceeds FAUCET_COOLDOWN_HOURS (24h) from faucet.ts (milliseconds) */
-export const AUTO_REFILL_FAUCET_COOLDOWN_MS = 25 * 3600_000;
+/** Polling interval for balance verification after faucet drip (milliseconds) */
+export const ACCOUNT_SETUP_POLL_INTERVAL_MS = 2_000;
 
-/** Minimum time between credit fund TX attempts (milliseconds) */
-export const AUTO_REFILL_FUND_COOLDOWN_MS = 5 * 60_000;
+/** Timeout for balance polling after faucet drip (milliseconds) — block time is ~6s */
+export const ACCOUNT_SETUP_POLL_TIMEOUT_MS = 10_000;
 
 /** Delay before dismissing the account setup overlay after completion (milliseconds) */
 export const ACCOUNT_SETUP_COMPLETE_DELAY_MS = 1500;
+
+/** Delay before retrying a failed step during initial account setup (milliseconds) */
+export const ACCOUNT_SETUP_RETRY_DELAY_MS = 5_000;
+
+/** Delay before dismissing the account setup overlay when an error persists (milliseconds) */
+export const ACCOUNT_SETUP_ERROR_DELAY_MS = 5_000;
