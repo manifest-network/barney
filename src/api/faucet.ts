@@ -123,8 +123,18 @@ export async function faucetDripAndVerify(
   const signal = options?.signal;
 
   // 1. Snapshot pre-drip balance
-  const preDrip = await getBalance(address, denom);
-  const preDripAmount = BigInt(preDrip.amount || '0');
+  let preDripAmount: bigint;
+  try {
+    const preDrip = await getBalance(address, denom);
+    if (!/^\d+$/.test(preDrip.amount || '')) {
+      return { denom, success: false, error: `Invalid pre-drip balance: ${preDrip.amount}` };
+    }
+    preDripAmount = BigInt(preDrip.amount);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return { denom, success: false, error: `Failed to read balance: ${message}` };
+  }
 
   // 2. Fire faucet drip
   const drip = await requestFaucetDrip(address, denom, signal);
@@ -137,10 +147,13 @@ export async function faucetDripAndVerify(
     await new Promise((resolve) => setTimeout(resolve, pollInterval));
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-    const current = await getBalance(address, denom);
-    const currentAmount = BigInt(current.amount || '0');
-    if (currentAmount > preDripAmount) {
-      return { denom, success: true };
+    try {
+      const current = await getBalance(address, denom);
+      if (/^\d+$/.test(current.amount || '') && BigInt(current.amount) > preDripAmount) {
+        return { denom, success: true };
+      }
+    } catch {
+      // Transient polling failure — continue to next iteration
     }
   }
 

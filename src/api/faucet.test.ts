@@ -236,4 +236,35 @@ describe('faucetDripAndVerify', () => {
       faucetDripAndVerify('manifest1abc', 'umfx', { pollInterval: 10, pollTimeout: 200, signal: controller.signal })
     ).rejects.toThrow('Aborted');
   });
+
+  it('returns failure when pre-drip getBalance throws', async () => {
+    vi.mocked(getBalance).mockRejectedValueOnce(new Error('network error'));
+
+    const result = await faucetDripAndVerify('manifest1abc', 'umfx', { pollInterval: 10, pollTimeout: 200 });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Failed to read balance');
+    // Should not fire faucet drip
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('returns failure when pre-drip balance is non-numeric', async () => {
+    vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'umfx', amount: 'NaN' });
+
+    const result = await faucetDripAndVerify('manifest1abc', 'umfx', { pollInterval: 10, pollTimeout: 200 });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid pre-drip balance');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('tolerates transient polling errors and continues', async () => {
+    vi.mocked(getBalance)
+      .mockResolvedValueOnce({ denom: 'umfx', amount: '1000000' })   // pre-drip
+      .mockRejectedValueOnce(new Error('transient'))                   // first poll fails
+      .mockResolvedValueOnce({ denom: 'umfx', amount: '2000000' });  // second poll succeeds
+    vi.mocked(globalThis.fetch).mockResolvedValue({ ok: true, text: () => Promise.resolve('ok') } as Response);
+
+    const result = await faucetDripAndVerify('manifest1abc', 'umfx', { pollInterval: 10, pollTimeout: 200 });
+    expect(result).toEqual({ denom: 'umfx', success: true });
+    expect(vi.mocked(getBalance)).toHaveBeenCalledTimes(3);
+  });
 });

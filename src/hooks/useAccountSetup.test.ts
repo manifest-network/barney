@@ -351,6 +351,74 @@ describe('useAccountSetup — retry', () => {
     expect(stored?.setupCompleted).toBe(false);
   });
 
+  it('retries PWR faucet once on failure then succeeds', async () => {
+    mockZeroBalances();
+    vi.mocked(faucetDripAndVerify)
+      .mockResolvedValueOnce({ denom: 'umfx', success: true })                              // MFX ok
+      .mockResolvedValueOnce({ denom: 'factory/addr/upwr', success: false, error: 'timeout' }) // PWR fail
+      .mockResolvedValueOnce({ denom: 'factory/addr/upwr', success: true });                    // PWR retry ok
+    vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
+    vi.mocked(getCreditAccount).mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '10000000' }] } as any);
+
+    renderHook(defaultHookProps());
+    await flush();
+
+    expect(faucetDripAndVerify).toHaveBeenCalledTimes(3);
+    expect(hadState((s) => s.phase === 'complete')).toBe(true);
+    expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(true);
+  });
+
+  it('stops on PWR faucet failure after retry', async () => {
+    mockZeroBalances();
+    vi.mocked(faucetDripAndVerify)
+      .mockResolvedValueOnce({ denom: 'umfx', success: true })                                 // MFX ok
+      .mockResolvedValueOnce({ denom: 'factory/addr/upwr', success: false, error: 'timeout' }) // PWR fail
+      .mockResolvedValueOnce({ denom: 'factory/addr/upwr', success: false, error: 'timeout' }); // PWR retry fail
+
+    renderHook(defaultHookProps());
+    await flush();
+
+    expect(faucetDripAndVerify).toHaveBeenCalledTimes(3);
+    expect(hadState((s) => s.phase === 'faucet' && !!s.error && s.error.includes('starter funds'))).toBe(true);
+    expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(false);
+  });
+
+  it('retries fund credits when first attempt throws', async () => {
+    vi.mocked(getBalance)
+      .mockResolvedValueOnce({ denom: 'umfx', amount: '10000000' })
+      .mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
+    vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
+    vi.mocked(getCreditAccount).mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any);
+    vi.mocked(fundCredit)
+      .mockRejectedValueOnce(new Error('signer error'))
+      .mockResolvedValueOnce({ success: true, transactionHash: '0xabc', events: [] });
+
+    renderHook(defaultHookProps());
+    await flush();
+
+    expect(fundCredit).toHaveBeenCalledTimes(2);
+    expect(hadState((s) => s.phase === 'complete')).toBe(true);
+    expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(true);
+  });
+
+  it('shows error when fund credits throws on both attempts', async () => {
+    vi.mocked(getBalance)
+      .mockResolvedValueOnce({ denom: 'umfx', amount: '10000000' })
+      .mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
+    vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
+    vi.mocked(getCreditAccount).mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any);
+    vi.mocked(fundCredit)
+      .mockRejectedValueOnce(new Error('signer error'))
+      .mockRejectedValueOnce(new Error('signer error again'));
+
+    renderHook(defaultHookProps());
+    await flush();
+
+    expect(fundCredit).toHaveBeenCalledTimes(2);
+    expect(hadState((s) => s.phase === 'funding' && !!s.error && s.error.includes('credits'))).toBe(true);
+    expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(false);
+  });
+
   it('shows error when PWR insufficient for credits', async () => {
     // MFX sufficient, PWR=5 (at faucet threshold but below credit amount of 10)
     vi.mocked(getBalance)
@@ -436,7 +504,7 @@ describe('useAccountSetup — cleanup', () => {
 // ============================================
 
 describe('useAccountSetup — error handling', () => {
-  it('handles unexpected balance format gracefully', async () => {
+  it('shows error in overlay for invalid balance format on new wallet', async () => {
     vi.mocked(getBalance)
       .mockResolvedValueOnce({ denom: 'umfx', amount: 'NaN' })
       .mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '1000000' });
@@ -445,14 +513,61 @@ describe('useAccountSetup — error handling', () => {
     await flush();
 
     expect(logError).toHaveBeenCalledWith('useAccountSetup.check', expect.any(Error));
+    expect(hadState((s) => s.isInitialSetup && s.phase === 'checking' && !!s.error && s.error.includes('balances'))).toBe(true);
+    expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(false);
   });
 
-  it('handles getBalance throwing during initial check', async () => {
+  it('shows error in overlay when getBalance throws on new wallet', async () => {
     vi.mocked(getBalance).mockRejectedValue(new Error('network error'));
 
     renderHook(defaultHookProps());
     await flush();
 
     expect(logError).toHaveBeenCalledWith('useAccountSetup.run', expect.any(Error));
+    expect(hadState((s) => s.isInitialSetup && s.phase === 'checking' && !!s.error && s.error.includes('wrong'))).toBe(true);
+    expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(false);
+  });
+
+  it('does not flash overlay for returning wallet with invalid balance format', async () => {
+    saveSetupData('manifest1abc', { setupCompleted: true });
+    vi.mocked(getBalance)
+      .mockResolvedValueOnce({ denom: 'umfx', amount: 'garbage' })
+      .mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '1000000' });
+
+    renderHook(defaultHookProps());
+    await flush();
+
+    expect(logError).toHaveBeenCalledWith('useAccountSetup.check', expect.any(Error));
+    // Should never show overlay for returning wallet
+    expect(hadState((s) => s.isInitialSetup)).toBe(false);
+  });
+
+  it('logs invalid fresh PWR balance format', async () => {
+    vi.mocked(getBalance)
+      .mockResolvedValueOnce({ denom: 'umfx', amount: '10000000' })
+      .mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
+    // Fresh PWR re-query returns garbage
+    vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: 'bad' });
+    vi.mocked(getCreditAccount).mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '10000000' }] } as any);
+
+    renderHook(defaultHookProps());
+    await flush();
+
+    expect(logError).toHaveBeenCalledWith('useAccountSetup.freshPwr', expect.any(Error));
+  });
+
+  it('logs invalid credit balance format', async () => {
+    vi.mocked(getBalance)
+      .mockResolvedValueOnce({ denom: 'umfx', amount: '10000000' })
+      .mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
+    vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
+    vi.mocked(getCreditAccount).mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: 'NaN' }] } as any);
+    // Credit balance defaults to 0, so funding will be attempted
+    vi.mocked(fundCredit).mockResolvedValueOnce({ success: true, transactionHash: '0xabc', events: [] });
+
+    renderHook(defaultHookProps());
+    await flush();
+
+    expect(logError).toHaveBeenCalledWith('useAccountSetup.creditBalance', expect.any(Error));
   });
 });

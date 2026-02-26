@@ -138,6 +138,7 @@ export function useAccountSetup({
     addressRef.current = address;
 
     if (!isFaucetEnabled() || !isWalletConnected || !address) {
+      lastEffectAddressRef.current = undefined;
       setSetupState(INITIAL_SETUP_STATE); // eslint-disable-line react-hooks/set-state-in-effect -- guard reset on disconnect
       return;
     }
@@ -164,9 +165,8 @@ export function useAccountSetup({
     const { signal } = abortController;
 
     async function runSetup() {
+      let isNewSetup = !persisted?.setupCompleted;
       try {
-        setSetupState({ isInitialSetup: true, phase: 'checking' });
-
         // 1. Fetch balances
         const [mfxCoin, pwrCoin] = await Promise.all([
           getBalance(targetAddress, DENOMS.MFX),
@@ -178,8 +178,13 @@ export function useAccountSetup({
           logError('useAccountSetup.check', new Error(
             `Unexpected balance: MFX=${mfxCoin.amount}, PWR=${pwrCoin.amount}`
           ));
-          saveSetupData(targetAddress, { setupCompleted: false });
-          setSetupState({ isInitialSetup: false, phase: 'complete' });
+          if (isNewSetup) {
+            setSetupState({ isInitialSetup: true, phase: 'checking', error: 'Could not check balances. Please try again later.' });
+            finishWithError(targetAddress, signal);
+          } else {
+            saveSetupData(targetAddress, { setupCompleted: false });
+            setSetupState({ isInitialSetup: false, phase: 'complete' });
+          }
           return;
         }
 
@@ -190,6 +195,8 @@ export function useAccountSetup({
         // backend was reset — clear and re-run
         if (persisted?.setupCompleted && mfxBalance === 0 && pwrBalance === 0) {
           clearSetupData(targetAddress);
+          isNewSetup = true;
+          setSetupState({ isInitialSetup: true, phase: 'checking' });
           // Fall through to run setup
         } else if (persisted?.setupCompleted) {
           // Returning wallet with balances — skip setup
@@ -221,7 +228,7 @@ export function useAccountSetup({
               if (!retry.success) {
                 setupError = 'Could not add starter funds. Please try again later.';
                 setSetupState({ isInitialSetup: true, phase: 'faucet', error: setupError });
-                finishWithError(targetAddress, setupError, signal);
+                finishWithError(targetAddress, signal);
                 return;
               }
             }
@@ -247,7 +254,7 @@ export function useAccountSetup({
               if (!retry.success) {
                 setupError = 'Could not add starter funds. Please try again later.';
                 setSetupState({ isInitialSetup: true, phase: 'faucet', error: setupError });
-                finishWithError(targetAddress, setupError, signal);
+                finishWithError(targetAddress, signal);
                 return;
               }
             }
@@ -263,19 +270,24 @@ export function useAccountSetup({
         ]);
         if (signal.aborted || addressRef.current !== targetAddress) return;
 
-        const currentPwr = /^\d+$/.test(freshPwr.amount)
-          ? fromBaseUnits(freshPwr.amount, DENOMS.PWR)
-          : pwrBalance;
+        const freshPwrValid = /^\d+$/.test(freshPwr.amount);
+        if (!freshPwrValid) {
+          logError('useAccountSetup.freshPwr', new Error(`Invalid fresh PWR balance: ${freshPwr.amount}`));
+        }
+        const currentPwr = freshPwrValid ? fromBaseUnits(freshPwr.amount, DENOMS.PWR) : pwrBalance;
+
         const pwrCredit = creditResponse.balances.find((c) => c.denom === DENOMS.PWR);
-        const creditBalance = pwrCredit && /^\d+$/.test(pwrCredit.amount)
-          ? fromBaseUnits(pwrCredit.amount, DENOMS.PWR)
-          : 0;
+        const creditAmountValid = pwrCredit ? /^\d+$/.test(pwrCredit.amount) : false;
+        if (pwrCredit && !creditAmountValid) {
+          logError('useAccountSetup.creditBalance', new Error(`Invalid credit balance: ${pwrCredit.amount}`));
+        }
+        const creditBalance = creditAmountValid ? fromBaseUnits(pwrCredit!.amount, DENOMS.PWR) : 0;
 
         if (creditBalance < ACCOUNT_SETUP_CREDIT_THRESHOLD) {
           if (currentPwr < ACCOUNT_SETUP_CREDIT_AMOUNT) {
             setupError = 'Not enough funds to activate credits. Please try again later.';
             setSetupState({ isInitialSetup: true, phase: 'funding', error: setupError });
-            finishWithError(targetAddress, setupError, signal);
+            finishWithError(targetAddress, signal);
             return;
           }
 
@@ -315,14 +327,14 @@ export function useAccountSetup({
                 logError('useAccountSetup.fundCredits', retryResult.error);
                 setupError = 'Could not activate credits. Please try again later.';
                 setSetupState({ isInitialSetup: true, phase: 'funding', error: setupError });
-                finishWithError(targetAddress, setupError, signal);
+                finishWithError(targetAddress, signal);
                 return;
               }
             } catch (retryError) {
               logError('useAccountSetup.fundCredits', retryError);
               setupError = 'Could not activate credits. Please try again later.';
               setSetupState({ isInitialSetup: true, phase: 'funding', error: setupError });
-              finishWithError(targetAddress, setupError, signal);
+              finishWithError(targetAddress, signal);
               return;
             }
           }
@@ -338,12 +350,17 @@ export function useAccountSetup({
       } catch (error) {
         if (signal.aborted || addressRef.current !== targetAddress) return;
         logError('useAccountSetup.run', error);
-        saveSetupData(targetAddress, { setupCompleted: false });
-        setSetupState({ isInitialSetup: false, phase: 'complete' });
+        if (isNewSetup) {
+          setSetupState({ isInitialSetup: true, phase: 'checking', error: 'Something went wrong. Please try again later.' });
+          finishWithError(targetAddress, signal);
+        } else {
+          saveSetupData(targetAddress, { setupCompleted: false });
+          setSetupState({ isInitialSetup: false, phase: 'complete' });
+        }
       }
     }
 
-    function finishWithError(addr: string, _error: string, sig: AbortSignal) {
+    function finishWithError(addr: string, sig: AbortSignal) {
       if (sig.aborted || addressRef.current !== addr) return;
       saveSetupData(addr, { setupCompleted: false });
       dismissTimerRef.current = setTimeout(() => {
