@@ -16,11 +16,10 @@ function linkify(text: string): ReactNode[] {
     if (index > lastIndex) {
       parts.push(text.slice(lastIndex, index));
     }
-    const href = raw.startsWith('http') ? raw : `http://${raw}`;
     // Validate the URL is well-formed http(s) before creating a clickable link
-    if (parseHttpUrl(href)) {
+    if (parseHttpUrl(raw)) {
       parts.push(
-        <a key={index} href={href} target="_blank" rel="noopener noreferrer" className="message-link">
+        <a key={index} href={raw} target="_blank" rel="noopener noreferrer" className="message-link">
           {raw}
         </a>
       );

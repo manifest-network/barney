@@ -98,7 +98,7 @@ export const AppCard = memo(function AppCard({ name, url, connection, status, on
           <span className="app-card__instances-label">Instances</span>
           {instanceUrls.map(u => (
             <span key={u} className="app-card__instance-link">
-              {u.replace('https://', '')}
+              {u}
             </span>
           ))}
         </div>
