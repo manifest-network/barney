@@ -20,10 +20,10 @@ const EXAMPLES = [
 ];
 
 const TIERS = [
-  { name: 'micro', cpu: '0.5', mem: '512 Mi', disk: '512 Mi' },
-  { name: 'small', cpu: '1', mem: '1 Gi', disk: '1 Gi' },
-  { name: 'medium', cpu: '2', mem: '2 Gi', disk: '2 Gi' },
-  { name: 'large', cpu: '4', mem: '4 Gi', disk: '4 Gi' },
+  { name: 'micro', cpu: '0.5', mem: '512 MB', disk: '1 GB' },
+  { name: 'small', cpu: '1', mem: '1 GB', disk: '5 GB' },
+  { name: 'medium', cpu: '2', mem: '2 GB', disk: '10 GB' },
+  { name: 'large', cpu: '4', mem: '4 GB', disk: '20 GB' },
 ];
 
 const SHORTCUTS = [
