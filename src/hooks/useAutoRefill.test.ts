@@ -348,9 +348,7 @@ describe('useAutoRefill — recurring', () => {
     expect(requestFaucetTokens).not.toHaveBeenCalled();
   });
 
-  it('does not stamp faucet cooldown when all drips fail', async () => {
-    // requestFaucetTokens never throws — it converts network/HTTP errors into
-    // { success: false } results. All-failed should NOT lock out retries for 25h.
+  it('stamps faucet cooldown even when all drips fail', async () => {
     saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
     setBalances(0, 0);
     setCreditBalance(100);
@@ -360,16 +358,19 @@ describe('useAutoRefill — recurring', () => {
     await flushMicrotasks();
 
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    // Cooldown should be persisted even on all-failed
+    const persisted = loadCooldowns('manifest1test');
+    expect(persisted!.lastFaucetAttempt).toBeGreaterThan(0);
     vi.clearAllMocks();
 
     // Fix the faucet for next attempt
     setFaucetResults(true, true);
 
-    // Next interval — should retry because cooldown was NOT stamped on all-failed
+    // Next interval — should NOT retry because cooldown was stamped even on failure
     await vi.advanceTimersByTimeAsync(60_000);
     await flushMicrotasks();
 
-    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
   });
 
   it('respects fund 5min cooldown', async () => {
@@ -914,8 +915,8 @@ describe('useAutoRefill — cooldown persistence', () => {
 
 describe('useAutoRefill — stale-key detection', () => {
   it('clears stale cooldowns and re-runs onboarding when backend is reset', async () => {
-    // Simulate: faucet ran previously, then backend was wiped
-    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: Date.now() - 1000 });
+    // Simulate: faucet ran and succeeded previously, then backend was wiped
+    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: Date.now() - 1000, faucetSucceeded: true });
     setBalances(0, 0);
     setCreditBalance(0);
 
@@ -957,8 +958,8 @@ describe('useAutoRefill — stale-key detection', () => {
     expect(lastSetupState.isInitialSetup).toBe(false);
   });
 
-  it('does not trigger stale detection when faucet timestamp is zero', async () => {
-    // lastFaucetAttempt: 0 means faucet never actually ran — not a reset scenario
+  it('does not trigger stale detection when faucet never succeeded', async () => {
+    // faucetSucceeded absent/false means faucet never actually succeeded — not a reset scenario
     saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
     setBalances(0, 0);
     setCreditBalance(100);
@@ -970,8 +971,8 @@ describe('useAutoRefill — stale-key detection', () => {
     expect(lastSetupState.isInitialSetup).toBe(false);
     // Faucet still runs (cooldown timestamp is 0, so cooldown is elapsed)
     expect(requestFaucetTokens).toHaveBeenCalled();
-    // Toasts should fire (recurring, not initial)
-    expect(mockToast.info).toHaveBeenCalled();
+    // Result toasts should fire (recurring, not initial)
+    expect(mockToast.success).toHaveBeenCalled();
   });
 });
 
@@ -1033,8 +1034,7 @@ describe('useAutoRefill — initial setup state', () => {
     render(defaultProps());
     await flushMicrotasks();
 
-    // Should show toasts for recurring runs
-    expect(mockToast.info).toHaveBeenCalledWith('Adding starter funds to your account…');
+    // Should show result toasts for recurring runs (not suppressed like initial setup)
     expect(mockToast.success).toHaveBeenCalledWith(
       'Starter funds have been added to your account.'
     );

@@ -59,6 +59,7 @@ export interface AccountSetupState {
 interface PersistedCooldowns {
   lastFaucetAttempt: number;
   lastFundAttempt: number;
+  faucetSucceeded?: boolean;
 }
 
 function cooldownKey(address: string): string {
@@ -111,6 +112,7 @@ export function useAutoRefill({
   const lastFaucetAttemptRef = useRef(0);
   const lastFundAttemptRef = useRef(0);
   const addressRef = useRef(address);
+  const faucetSucceededRef = useRef(false);
   const lastEffectAddressRef = useRef<string | undefined>(undefined);
   // Stable ref for toast — avoids re-triggering the effect when toasts change the context value
   const toastRef = useRef(toast);
@@ -134,11 +136,13 @@ export function useAutoRefill({
       if (persisted) {
         lastFaucetAttemptRef.current = persisted.lastFaucetAttempt;
         lastFundAttemptRef.current = persisted.lastFundAttempt;
+        faucetSucceededRef.current = persisted.faucetSucceeded ?? false;
         // Returning wallet — no overlay
         setSetupState({ isInitialSetup: false, phase: 'checking' });
       } else {
         lastFaucetAttemptRef.current = 0;
         lastFundAttemptRef.current = 0;
+        faucetSucceededRef.current = false;
         isInitialForAddress = true;
         // First time for this wallet — show overlay
         setSetupState({ isInitialSetup: true, phase: 'checking' });
@@ -186,7 +190,7 @@ export function useAutoRefill({
           ));
           if (isInitialRun) {
             isInitialRunPending = false;
-            saveCooldowns(targetAddress, { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+            saveCooldowns(targetAddress, { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: faucetSucceededRef.current || undefined });
             setSetupState({ isInitialSetup: false, phase: 'complete' });
           }
           return;
@@ -199,10 +203,11 @@ export function useAutoRefill({
         // the account is now completely empty, the backend was likely reset. Clear
         // the stale key and promote this run to initial setup so the onboarding
         // overlay appears again.
-        if (!isInitialRun && mfxBalance === 0 && pwrBalance === 0 && lastFaucetAttemptRef.current > 0) {
+        if (!isInitialRun && mfxBalance === 0 && pwrBalance === 0 && faucetSucceededRef.current) {
           clearCooldowns(targetAddress);
           lastFaucetAttemptRef.current = 0;
           lastFundAttemptRef.current = 0;
+          faucetSucceededRef.current = false;
           isInitialRunPending = true;
           isInitialRun = true;
           setSetupState({ isInitialSetup: true, phase: 'checking' });
@@ -221,24 +226,20 @@ export function useAutoRefill({
             setSetupState({ isInitialSetup: true, phase: 'faucet' });
           }
           try {
-            if (!isInitialRun) {
-              toastRef.current.info('Adding starter funds to your account…');
-            }
             const { results } = await requestFaucetTokens(targetAddress);
             if (signal.aborted || addressRef.current !== targetAddress) return;
 
             const anySuccess = results.some((r) => r.success);
-            // Only stamp cooldown when at least one drip succeeded.
-            // requestFaucetTokens never throws — it converts network/HTTP errors into
-            // { success: false } results, so all-failed responses may be transient
-            // outages that should be retried on the next interval, not locked out for 25h.
             if (anySuccess) {
-              lastFaucetAttemptRef.current = Date.now();
-              saveCooldowns(targetAddress, {
-                lastFaucetAttempt: lastFaucetAttemptRef.current,
-                lastFundAttempt: lastFundAttemptRef.current,
-              });
+              faucetSucceededRef.current = true;
             }
+            // Always stamp cooldown to prevent toast spam on repeated failures.
+            lastFaucetAttemptRef.current = Date.now();
+            saveCooldowns(targetAddress, {
+              lastFaucetAttempt: lastFaucetAttemptRef.current,
+              lastFundAttempt: lastFundAttemptRef.current,
+              faucetSucceeded: faucetSucceededRef.current || undefined,
+            });
             // Only re-query PWR (step 3) when at least one drip actually deposited tokens.
             faucetRan = anySuccess;
             const allSuccess = results.every((r) => r.success);
@@ -254,6 +255,12 @@ export function useAutoRefill({
             }
           } catch (error) {
             logError('useAutoRefill.faucet', error);
+            lastFaucetAttemptRef.current = Date.now();
+            saveCooldowns(targetAddress, {
+              lastFaucetAttempt: lastFaucetAttemptRef.current,
+              lastFundAttempt: lastFundAttemptRef.current,
+              faucetSucceeded: faucetSucceededRef.current || undefined,
+            });
             if (!isInitialRun) {
               toastRef.current.info('Could not add funds right now. Will retry automatically.');
             }
@@ -288,7 +295,7 @@ export function useAutoRefill({
           ));
           if (isInitialRun) {
             isInitialRunPending = false;
-            saveCooldowns(targetAddress, { lastFaucetAttempt: lastFaucetAttemptRef.current, lastFundAttempt: 0 });
+            saveCooldowns(targetAddress, { lastFaucetAttempt: lastFaucetAttemptRef.current, lastFundAttempt: 0, faucetSucceeded: faucetSucceededRef.current || undefined });
             setSetupState({ isInitialSetup: false, phase: 'complete' });
           }
           return;
@@ -316,14 +323,14 @@ export function useAutoRefill({
               amount: toBaseUnits(AUTO_REFILL_CREDIT_AMOUNT, DENOMS.PWR),
             });
             if (signal.aborted || addressRef.current !== targetAddress) return;
+            // Always stamp cooldown to prevent toast spam on repeated failures.
+            lastFundAttemptRef.current = Date.now();
+            saveCooldowns(targetAddress, {
+              lastFaucetAttempt: lastFaucetAttemptRef.current,
+              lastFundAttempt: lastFundAttemptRef.current,
+              faucetSucceeded: faucetSucceededRef.current || undefined,
+            });
             if (result.success) {
-              // Only stamp cooldown on success — on-chain failures (sequence mismatch, etc.)
-              // should be retried on the next interval, not locked out for 5 minutes.
-              lastFundAttemptRef.current = Date.now();
-              saveCooldowns(targetAddress, {
-                lastFaucetAttempt: lastFaucetAttemptRef.current,
-                lastFundAttempt: lastFundAttemptRef.current,
-              });
               if (!isInitialRun) {
                 toastRef.current.success('Credits activated — you\'re all set!');
               }
@@ -335,6 +342,12 @@ export function useAutoRefill({
             }
           } catch (error) {
             logError('useAutoRefill.fundCredits', error);
+            lastFundAttemptRef.current = Date.now();
+            saveCooldowns(targetAddress, {
+              lastFaucetAttempt: lastFaucetAttemptRef.current,
+              lastFundAttempt: lastFundAttemptRef.current,
+              faucetSucceeded: faucetSucceededRef.current || undefined,
+            });
             if (!isInitialRun) {
               toastRef.current.info('Could not activate credits right now. Will retry automatically.');
             }
@@ -347,6 +360,7 @@ export function useAutoRefill({
           saveCooldowns(targetAddress, {
             lastFaucetAttempt: lastFaucetAttemptRef.current,
             lastFundAttempt: lastFundAttemptRef.current,
+            faucetSucceeded: faucetSucceededRef.current || undefined,
           });
           setSetupState({ isInitialSetup: true, phase: 'complete' });
           dismissTimerRef.current = setTimeout(() => {
@@ -357,7 +371,7 @@ export function useAutoRefill({
         logError('useAutoRefill.check', error);
         if (isInitialRun && !signal.aborted && addressRef.current === targetAddress) {
           isInitialRunPending = false;
-          saveCooldowns(targetAddress, { lastFaucetAttempt: lastFaucetAttemptRef.current, lastFundAttempt: lastFundAttemptRef.current });
+          saveCooldowns(targetAddress, { lastFaucetAttempt: lastFaucetAttemptRef.current, lastFundAttempt: lastFundAttemptRef.current, faucetSucceeded: faucetSucceededRef.current || undefined });
           setSetupState({ isInitialSetup: false, phase: 'complete' });
         }
       } finally {
