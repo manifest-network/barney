@@ -348,7 +348,7 @@ describe('useAutoRefill — recurring', () => {
     expect(requestFaucetTokens).not.toHaveBeenCalled();
   });
 
-  it('stamps faucet cooldown even when all drips fail', async () => {
+  it('does not stamp faucet cooldown when all drips fail (retries on next interval)', async () => {
     saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
     setCreditBalance(100);
@@ -358,31 +358,36 @@ describe('useAutoRefill — recurring', () => {
     await flushMicrotasks();
 
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
-    // Cooldown should be persisted even on all-failed
+    // Cooldown should NOT be stamped on failure — allows retry on next interval
     const persisted = loadCooldowns('manifest1test');
-    expect(persisted!.lastFaucetAttempt).toBeGreaterThan(0);
+    expect(persisted!.lastFaucetAttempt).toBe(0);
     vi.clearAllMocks();
 
     // Fix the faucet for next attempt
     setFaucetResults(true, true);
 
-    // Next interval — should NOT retry because cooldown was stamped even on failure
+    // Next interval — SHOULD retry because failure didn't stamp cooldown
     await vi.advanceTimersByTimeAsync(60_000);
     await flushMicrotasks();
 
-    expect(requestFaucetTokens).not.toHaveBeenCalled();
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
   });
 
-  it('does not stamp faucet cooldown on failure during initial setup', async () => {
+  it('does not stamp faucet cooldown on failure during initial setup (both attempts)', async () => {
     // No seeded cooldowns = initial setup
     setBalances(0, 0);
     setCreditBalance(100);
     setFaucetResults(false, false);
 
     render(defaultProps());
+    // Flush initial attempt
+    await flushMicrotasks();
+    // Advance past retry delay
+    await vi.advanceTimersByTimeAsync(5_000);
     await flushMicrotasks();
 
-    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    // Called twice: initial + retry
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(2);
     // Cooldown should NOT be stamped — initial setup failures retry quickly
     const persisted = loadCooldowns('manifest1test');
     expect(persisted!.lastFaucetAttempt).toBe(0);
@@ -1147,16 +1152,19 @@ describe('useAutoRefill — lifecycle scenarios', () => {
     expect(fundCredit).not.toHaveBeenCalled();
   });
 
-  it('faucet fails during initial setup → retries on next interval → succeeds', async () => {
+  it('faucet fails during initial setup → retries in overlay → both fail → retries on next interval', async () => {
     setBalances(0, 0);
     setCreditBalance(100);
     setFaucetResults(false, false);
 
     render(defaultProps());
     await flushMicrotasks();
+    // Advance past retry delay for the in-overlay retry
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
 
-    // Faucet ran but failed — overlay still shows complete
-    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    // Faucet called twice: initial + overlay retry
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(2);
     // No toasts during initial setup
     expect(mockToast.info).not.toHaveBeenCalled();
 
@@ -1169,8 +1177,8 @@ describe('useAutoRefill — lifecycle scenarios', () => {
     // Fix the faucet and set up for retry
     setFaucetResults(true, true);
 
-    // Next interval — should retry because cooldown was not stamped
-    await vi.advanceTimersByTimeAsync(60_000);
+    // Advance past error dismiss delay + next interval
+    await vi.advanceTimersByTimeAsync(5_000 + 60_000);
     await flushMicrotasks();
 
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
@@ -1180,7 +1188,7 @@ describe('useAutoRefill — lifecycle scenarios', () => {
     );
   });
 
-  it('fund fails during initial setup → retries on next interval → succeeds', async () => {
+  it('fund fails during initial setup → retries in overlay → both fail → retries on next interval', async () => {
     let pwrCallCount = 0;
     vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
       if (denom === 'umfx') return { denom, amount: '0' };
@@ -1192,10 +1200,13 @@ describe('useAutoRefill — lifecycle scenarios', () => {
 
     render(defaultProps());
     await flushMicrotasks();
+    // Advance past fund retry delay
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
 
-    // Faucet succeeded, fund failed
+    // Faucet succeeded, fund called twice (initial + retry)
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
-    expect(fundCredit).toHaveBeenCalledTimes(1);
+    expect(fundCredit).toHaveBeenCalledTimes(2);
 
     // Fund cooldown should NOT be stamped (initial setup failure)
     const persisted = loadCooldowns('manifest1test');
@@ -1210,8 +1221,8 @@ describe('useAutoRefill — lifecycle scenarios', () => {
     setBalances(10, 100);
     setCreditBalance(0);
 
-    // Next interval — fund should retry (cooldown not stamped)
-    await vi.advanceTimersByTimeAsync(60_000);
+    // Advance past error dismiss delay + next interval — fund should retry
+    await vi.advanceTimersByTimeAsync(5_000 + 60_000);
     await flushMicrotasks();
 
     expect(fundCredit).toHaveBeenCalledTimes(1);
@@ -1279,7 +1290,7 @@ describe('useAutoRefill — lifecycle scenarios', () => {
     expect(mockToast.info).not.toHaveBeenCalled();
   });
 
-  it('toast spam prevention: recurring faucet failure → shows toast once → cooldown blocks repeat', async () => {
+  it('recurring faucet failure retries on next interval and recovers on success', async () => {
     // Seed cooldowns so this is a recurring (non-initial) run
     saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: false });
     setBalances(0, 0);
@@ -1289,47 +1300,47 @@ describe('useAutoRefill — lifecycle scenarios', () => {
     render(defaultProps());
     await flushMicrotasks();
 
-    // First failure: toast shown, cooldown stamped
+    // First failure: toast shown, but cooldown NOT stamped (allows retry)
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
     expect(mockToast.info).toHaveBeenCalledWith(
       'Funds could not be added right now. Please try again later.'
     );
     vi.clearAllMocks();
 
-    // 2nd interval
+    // 2nd interval — retries because failure didn't stamp cooldown
     await vi.advanceTimersByTimeAsync(60_000);
     await flushMicrotasks();
-    expect(requestFaucetTokens).not.toHaveBeenCalled();
-    expect(mockToast.info).not.toHaveBeenCalled();
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    vi.clearAllMocks();
 
-    // 3rd interval
+    // Fix the faucet, next interval succeeds
+    setFaucetResults(true, true);
     await vi.advanceTimersByTimeAsync(60_000);
     await flushMicrotasks();
-    expect(requestFaucetTokens).not.toHaveBeenCalled();
-    expect(mockToast.info).not.toHaveBeenCalled();
-
-    // 10th interval (10 minutes total)
-    await vi.advanceTimersByTimeAsync(8 * 60_000);
-    await flushMicrotasks();
-    expect(requestFaucetTokens).not.toHaveBeenCalled();
-    // Zero toasts over 10 intervals — no spam
-    expect(mockToast.info).not.toHaveBeenCalled();
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Starter funds have been added to your account.'
+    );
   });
 
   it('page refresh after initial setup faucet failure → retries immediately', async () => {
-    // Step 1: Initial setup — faucet fails
+    // Step 1: Initial setup — faucet fails (both attempts)
     setBalances(0, 0);
     setCreditBalance(100);
     setFaucetResults(false, false);
 
     render(defaultProps());
     await flushMicrotasks();
+    // Advance past retry delay for overlay retry
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
 
-    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(2);
     // Cooldown not stamped for initial failure
     expect(loadCooldowns('manifest1test')!.lastFaucetAttempt).toBe(0);
 
-    // Step 2: Simulate page refresh — unmount and remount
+    // Step 2: Simulate page refresh — advance past error dismiss delay, then unmount
+    await vi.advanceTimersByTimeAsync(5_000);
     flushSync(() => { root.unmount(); });
     container.remove();
     vi.clearAllMocks();
@@ -1349,7 +1360,7 @@ describe('useAutoRefill — lifecycle scenarios', () => {
     );
   });
 
-  it('recurring fund failure → stamps cooldown → no toast spam', async () => {
+  it('recurring fund failure retries on next interval and recovers on success', async () => {
     saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now(), lastFundAttempt: 0, faucetSucceeded: true });
     setBalances(10, 100);
     setCreditBalance(0);
@@ -1364,16 +1375,273 @@ describe('useAutoRefill — lifecycle scenarios', () => {
     );
     vi.clearAllMocks();
 
-    // Next interval — fund cooldown (5min) not elapsed
+    // Next interval — retries immediately since failure didn't stamp cooldown
     await vi.advanceTimersByTimeAsync(60_000);
     await flushMicrotasks();
-    expect(fundCredit).not.toHaveBeenCalled();
-    expect(mockToast.info).not.toHaveBeenCalled();
+    expect(fundCredit).toHaveBeenCalledTimes(1);
 
-    // After 5min cooldown expires — retries
-    await vi.advanceTimersByTimeAsync(4 * 60_000 + 60_000);
+    vi.clearAllMocks();
+
+    // Now succeed — should stamp cooldown and show success toast
+    vi.mocked(fundCredit).mockResolvedValue({ success: true, transactionHash: 'hash', events: [] });
+    await vi.advanceTimersByTimeAsync(60_000);
     await flushMicrotasks();
     expect(fundCredit).toHaveBeenCalledTimes(1);
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Credits activated — you\'re all set!'
+    );
+  });
+});
+
+// ============================================
+// Initial setup retry behavior
+// ============================================
+
+describe('useAutoRefill — initial setup retry', () => {
+  it('faucet failure → shows error → retries → succeeds → continues to funding', async () => {
+    let faucetCallCount = 0;
+    vi.mocked(requestFaucetTokens).mockImplementation(async () => {
+      faucetCallCount++;
+      if (faucetCallCount === 1) {
+        return { results: [{ denom: 'umfx', success: false, error: 'cooldown' }, { denom: 'factory/addr/upwr', success: false, error: 'cooldown' }] };
+      }
+      return { results: [{ denom: 'umfx', success: true }, { denom: 'factory/addr/upwr', success: true }] };
+    });
+
+    // PWR: initial check returns 0, post-faucet re-query returns 100
+    let pwrCallCount = 0;
+    vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
+      if (denom === 'umfx') return { denom, amount: '0' };
+      pwrCallCount++;
+      return { denom, amount: pwrCallCount <= 1 ? '0' : String(100 * 1_000_000) };
+    });
+    setCreditBalance(0);
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // After first failure, should show error with "Retrying..."
+    expect(lastSetupState.phase).toBe('faucet');
+    expect(lastSetupState.error).toBe('Could not add starter funds. Retrying...');
+
+    // Advance past retry delay
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // Retry succeeded — should continue to funding and complete
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(2);
+    expect(fundCredit).toHaveBeenCalled();
+    expect(lastSetupState.phase).toBe('complete');
+    expect(lastSetupState.error).toBeUndefined();
+  });
+
+  it('faucet failure → retry also fails → shows final error → dismisses', async () => {
+    setBalances(0, 0);
+    setCreditBalance(100);
+    setFaucetResults(false, false);
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // Shows retrying error
+    expect(lastSetupState.error).toBe('Could not add starter funds. Retrying...');
+
+    // Advance past retry delay
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // Both attempts failed — final error shown
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(2);
+    expect(lastSetupState.phase).toBe('faucet');
+    expect(lastSetupState.error).toBe('Could not add starter funds. Please try again later.');
+    expect(lastSetupState.isInitialSetup).toBe(true);
+
+    // Advance past error dismiss delay
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(lastSetupState.isInitialSetup).toBe(false);
+  });
+
+  it('fund failure → shows error → retries → succeeds → completes', async () => {
+    let pwrCallCount = 0;
+    vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
+      if (denom === 'umfx') return { denom, amount: '0' };
+      pwrCallCount++;
+      return { denom, amount: pwrCallCount <= 1 ? '0' : String(100 * 1_000_000) };
+    });
+    setCreditBalance(0);
+
+    let fundCallCount = 0;
+    vi.mocked(fundCredit).mockImplementation(async () => {
+      fundCallCount++;
+      if (fundCallCount === 1) {
+        return { success: false, error: 'sequence mismatch' };
+      }
+      return { success: true, transactionHash: 'hash', events: [] };
+    });
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // After first fund failure, should show retrying error
+    expect(lastSetupState.phase).toBe('funding');
+    expect(lastSetupState.error).toBe('Could not activate credits. Retrying...');
+
+    // Advance past retry delay
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // Retry succeeded — should complete without error
+    expect(fundCredit).toHaveBeenCalledTimes(2);
+    expect(lastSetupState.phase).toBe('complete');
+    expect(lastSetupState.error).toBeUndefined();
+  });
+
+  it('fund failure → retry also fails → shows final error → dismisses', async () => {
+    let pwrCallCount = 0;
+    vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
+      if (denom === 'umfx') return { denom, amount: '0' };
+      pwrCallCount++;
+      return { denom, amount: pwrCallCount <= 1 ? '0' : String(100 * 1_000_000) };
+    });
+    setCreditBalance(0);
+    vi.mocked(fundCredit).mockResolvedValue({ success: false, error: 'sequence mismatch' });
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // Shows retrying error
+    expect(lastSetupState.phase).toBe('funding');
+    expect(lastSetupState.error).toBe('Could not activate credits. Retrying...');
+
+    // Advance past retry delay
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // Both attempts failed — final error shown
+    expect(fundCredit).toHaveBeenCalledTimes(2);
+    expect(lastSetupState.phase).toBe('funding');
+    expect(lastSetupState.error).toBe('Could not activate credits. Please try again later.');
+    expect(lastSetupState.isInitialSetup).toBe(true);
+
+    // Advance past error dismiss delay
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(lastSetupState.isInitialSetup).toBe(false);
+  });
+
+  it('faucet exception → shows error → retries → succeeds', async () => {
+    let faucetCallCount = 0;
+    vi.mocked(requestFaucetTokens).mockImplementation(async () => {
+      faucetCallCount++;
+      if (faucetCallCount === 1) throw new Error('network error');
+      return { results: [{ denom: 'umfx', success: true }, { denom: 'factory/addr/upwr', success: true }] };
+    });
+
+    // PWR: initial check returns 0, post-faucet re-query returns 100
+    let pwrCallCount = 0;
+    vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
+      if (denom === 'umfx') return { denom, amount: '0' };
+      pwrCallCount++;
+      return { denom, amount: pwrCallCount <= 1 ? '0' : String(100 * 1_000_000) };
+    });
+    setCreditBalance(0);
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(lastSetupState.error).toBe('Could not add starter funds. Retrying...');
+    expect(logError).toHaveBeenCalledWith('useAutoRefill.faucet', expect.any(Error));
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // Retry succeeded
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(2);
+    expect(fundCredit).toHaveBeenCalled();
+    expect(lastSetupState.phase).toBe('complete');
+    expect(lastSetupState.error).toBeUndefined();
+  });
+
+  it('faucet exception → retry also throws → shows final error', async () => {
+    vi.mocked(requestFaucetTokens).mockRejectedValue(new Error('faucet down'));
+    setBalances(0, 0);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(2);
+    expect(lastSetupState.error).toBe('Could not add starter funds. Please try again later.');
+    expect(logError).toHaveBeenCalledWith('useAutoRefill.faucet', expect.any(Error));
+  });
+
+  it('fund exception → shows error → retries → succeeds', async () => {
+    let pwrCallCount = 0;
+    vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
+      if (denom === 'umfx') return { denom, amount: '0' };
+      pwrCallCount++;
+      return { denom, amount: pwrCallCount <= 1 ? '0' : String(100 * 1_000_000) };
+    });
+    setCreditBalance(0);
+
+    let fundCallCount = 0;
+    vi.mocked(fundCredit).mockImplementation(async () => {
+      fundCallCount++;
+      if (fundCallCount === 1) throw new Error('signing failed');
+      return { success: true, transactionHash: 'hash', events: [] };
+    });
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(lastSetupState.phase).toBe('funding');
+    expect(lastSetupState.error).toBe('Could not activate credits. Retrying...');
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(fundCredit).toHaveBeenCalledTimes(2);
+    expect(lastSetupState.phase).toBe('complete');
+    expect(lastSetupState.error).toBeUndefined();
+  });
+
+  it('skips fund retry when faucet already errored (no PWR)', async () => {
+    setBalances(0, 0);
+    setCreditBalance(0);
+    setFaucetResults(false, false);
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // Faucet failed both attempts → fund should be skipped entirely
+    expect(fundCredit).not.toHaveBeenCalled();
+    expect(lastSetupState.phase).toBe('faucet');
+    expect(lastSetupState.error).toBe('Could not add starter funds. Please try again later.');
   });
 });
 

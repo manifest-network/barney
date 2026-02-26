@@ -38,6 +38,8 @@ import {
   AUTO_REFILL_FAUCET_COOLDOWN_MS,
   AUTO_REFILL_FUND_COOLDOWN_MS,
   ACCOUNT_SETUP_COMPLETE_DELAY_MS,
+  ACCOUNT_SETUP_RETRY_DELAY_MS,
+  ACCOUNT_SETUP_ERROR_DELAY_MS,
 } from '../config/constants';
 
 export interface UseAutoRefillOptions {
@@ -53,6 +55,7 @@ export type SetupPhase = 'checking' | 'faucet' | 'funding' | 'complete';
 export interface AccountSetupState {
   isInitialSetup: boolean;
   phase: SetupPhase;
+  error?: string;
 }
 
 // --- localStorage helpers ---
@@ -230,6 +233,7 @@ export function useAutoRefill({
 
         // 2. Faucet if below thresholds and cooldown elapsed
         let faucetRan = false;
+        let initialError: string | undefined;
         const needsFaucet =
           mfxBalance < AUTO_REFILL_MFX_THRESHOLD ||
           pwrBalance < AUTO_REFILL_PWR_WALLET_THRESHOLD;
@@ -247,23 +251,41 @@ export function useAutoRefill({
             const anySuccess = results.some((r) => r.success);
             if (anySuccess) {
               faucetSucceededRef.current = true;
-            }
-            // Stamp cooldown on success, or on failure for recurring runs (prevents
-            // toast spam). Initial setup failures keep timestamp at 0 so the next
-            // interval retries quickly.
-            if (anySuccess || !isInitialRun) {
               lastFaucetAttemptRef.current = Date.now();
+              saveCooldowns(targetAddress, {
+                lastFaucetAttempt: lastFaucetAttemptRef.current,
+                lastFundAttempt: lastFundAttemptRef.current,
+                faucetSucceeded: faucetSucceededRef.current,
+              });
             }
-            saveCooldowns(targetAddress, {
-              lastFaucetAttempt: lastFaucetAttemptRef.current,
-              lastFundAttempt: lastFundAttemptRef.current,
-              faucetSucceeded: faucetSucceededRef.current,
-            });
             // Only re-query PWR (step 3) when at least one drip actually deposited tokens.
             faucetRan = anySuccess;
             const allSuccess = results.every((r) => r.success);
             const allFailed = results.every((r) => !r.success);
-            if (!isInitialRun) {
+
+            // Retry once during initial setup if all drips failed
+            if (isInitialRun && allFailed) {
+              setSetupState({ isInitialSetup: true, phase: 'faucet', error: 'Could not add starter funds. Retrying...' });
+              await new Promise((r) => setTimeout(r, ACCOUNT_SETUP_RETRY_DELAY_MS));
+              if (signal.aborted || addressRef.current !== targetAddress) return;
+              setSetupState({ isInitialSetup: true, phase: 'faucet' });
+              const retry = await requestFaucetTokens(targetAddress);
+              if (signal.aborted || addressRef.current !== targetAddress) return;
+              const retryAny = retry.results.some((r) => r.success);
+              if (retryAny) {
+                faucetSucceededRef.current = true;
+                lastFaucetAttemptRef.current = Date.now();
+                saveCooldowns(targetAddress, {
+                  lastFaucetAttempt: lastFaucetAttemptRef.current,
+                  lastFundAttempt: lastFundAttemptRef.current,
+                  faucetSucceeded: faucetSucceededRef.current,
+                });
+                faucetRan = true;
+              } else {
+                initialError = 'Could not add starter funds. Please try again later.';
+                setSetupState({ isInitialSetup: true, phase: 'faucet', error: initialError });
+              }
+            } else if (!isInitialRun) {
               if (allSuccess) {
                 toastRef.current.success('Starter funds have been added to your account.');
               } else if (allFailed) {
@@ -274,15 +296,35 @@ export function useAutoRefill({
             }
           } catch (error) {
             logError('useAutoRefill.faucet', error);
-            // Only stamp cooldown on recurring runs to prevent toast spam.
-            // Initial setup failures should retry on the next interval.
-            if (!isInitialRun) {
-              lastFaucetAttemptRef.current = Date.now();
-              saveCooldowns(targetAddress, {
-                lastFaucetAttempt: lastFaucetAttemptRef.current,
-                lastFundAttempt: lastFundAttemptRef.current,
-                faucetSucceeded: faucetSucceededRef.current,
-              });
+            if (isInitialRun) {
+              // Retry once on exception
+              setSetupState({ isInitialSetup: true, phase: 'faucet', error: 'Could not add starter funds. Retrying...' });
+              await new Promise((r) => setTimeout(r, ACCOUNT_SETUP_RETRY_DELAY_MS));
+              if (signal.aborted || addressRef.current !== targetAddress) return;
+              setSetupState({ isInitialSetup: true, phase: 'faucet' });
+              try {
+                const retry = await requestFaucetTokens(targetAddress);
+                if (signal.aborted || addressRef.current !== targetAddress) return;
+                const retryAny = retry.results.some((r) => r.success);
+                if (retryAny) {
+                  faucetSucceededRef.current = true;
+                  lastFaucetAttemptRef.current = Date.now();
+                  saveCooldowns(targetAddress, {
+                    lastFaucetAttempt: lastFaucetAttemptRef.current,
+                    lastFundAttempt: lastFundAttemptRef.current,
+                    faucetSucceeded: faucetSucceededRef.current,
+                  });
+                  faucetRan = true;
+                } else {
+                  initialError = 'Could not add starter funds. Please try again later.';
+                  setSetupState({ isInitialSetup: true, phase: 'faucet', error: initialError });
+                }
+              } catch (retryError) {
+                logError('useAutoRefill.faucet', retryError);
+                initialError = 'Could not add starter funds. Please try again later.';
+                setSetupState({ isInitialSetup: true, phase: 'faucet', error: initialError });
+              }
+            } else {
               toastRef.current.info('Could not add funds right now. Will retry automatically.');
             }
           }
@@ -326,10 +368,12 @@ export function useAutoRefill({
           : 0;
 
         // 4. Fund credits if below threshold and wallet has enough PWR
+        //    Skip if faucet error already set (no PWR to fund with).
         const fundCooldownElapsed =
           Date.now() - lastFundAttemptRef.current >= AUTO_REFILL_FUND_COOLDOWN_MS;
 
         if (
+          !initialError &&
           creditBalance < AUTO_REFILL_CREDIT_THRESHOLD &&
           currentPwr >= AUTO_REFILL_CREDIT_AMOUNT &&
           fundCooldownElapsed
@@ -337,6 +381,7 @@ export function useAutoRefill({
           if (isInitialRun) {
             setSetupState({ isInitialSetup: true, phase: 'funding' });
           }
+          let fundSucceeded = false;
           try {
             const signer = getOfflineSignerRef.current();
             const result = await fundCredit(signer, targetAddress, targetAddress, {
@@ -344,18 +389,14 @@ export function useAutoRefill({
               amount: toBaseUnits(AUTO_REFILL_CREDIT_AMOUNT, DENOMS.PWR),
             });
             if (signal.aborted || addressRef.current !== targetAddress) return;
-            // Stamp cooldown on success, or on failure for recurring runs (prevents
-            // toast spam). Initial setup failures keep timestamp at 0 so the next
-            // interval retries quickly.
-            if (result.success || !isInitialRun) {
-              lastFundAttemptRef.current = Date.now();
-            }
-            saveCooldowns(targetAddress, {
-              lastFaucetAttempt: lastFaucetAttemptRef.current,
-              lastFundAttempt: lastFundAttemptRef.current,
-              faucetSucceeded: faucetSucceededRef.current,
-            });
             if (result.success) {
+              fundSucceeded = true;
+              lastFundAttemptRef.current = Date.now();
+              saveCooldowns(targetAddress, {
+                lastFaucetAttempt: lastFaucetAttemptRef.current,
+                lastFundAttempt: lastFundAttemptRef.current,
+                faucetSucceeded: faucetSucceededRef.current,
+              });
               if (!isInitialRun) {
                 toastRef.current.success('Credits activated — you\'re all set!');
               }
@@ -367,16 +408,40 @@ export function useAutoRefill({
             }
           } catch (error) {
             logError('useAutoRefill.fundCredits', error);
-            // Only stamp cooldown on recurring runs to prevent toast spam.
-            // Initial setup failures should retry on the next interval.
             if (!isInitialRun) {
-              lastFundAttemptRef.current = Date.now();
-              saveCooldowns(targetAddress, {
-                lastFaucetAttempt: lastFaucetAttemptRef.current,
-                lastFundAttempt: lastFundAttemptRef.current,
-                faucetSucceeded: faucetSucceededRef.current,
-              });
               toastRef.current.info('Could not activate credits right now. Will retry automatically.');
+            }
+          }
+
+          // Retry once during initial setup if funding failed
+          if (isInitialRun && !fundSucceeded) {
+            setSetupState({ isInitialSetup: true, phase: 'funding', error: 'Could not activate credits. Retrying...' });
+            await new Promise((r) => setTimeout(r, ACCOUNT_SETUP_RETRY_DELAY_MS));
+            if (signal.aborted || addressRef.current !== targetAddress) return;
+            setSetupState({ isInitialSetup: true, phase: 'funding' });
+            try {
+              const signer = getOfflineSignerRef.current();
+              const retryResult = await fundCredit(signer, targetAddress, targetAddress, {
+                denom: DENOMS.PWR,
+                amount: toBaseUnits(AUTO_REFILL_CREDIT_AMOUNT, DENOMS.PWR),
+              });
+              if (signal.aborted || addressRef.current !== targetAddress) return;
+              if (retryResult.success) {
+                lastFundAttemptRef.current = Date.now();
+                saveCooldowns(targetAddress, {
+                  lastFaucetAttempt: lastFaucetAttemptRef.current,
+                  lastFundAttempt: lastFundAttemptRef.current,
+                  faucetSucceeded: faucetSucceededRef.current,
+                });
+              } else {
+                logError('useAutoRefill.fundCredits', retryResult.error);
+                initialError = 'Could not activate credits. Please try again later.';
+                setSetupState({ isInitialSetup: true, phase: 'funding', error: initialError });
+              }
+            } catch (retryError) {
+              logError('useAutoRefill.fundCredits', retryError);
+              initialError = 'Could not activate credits. Please try again later.';
+              setSetupState({ isInitialSetup: true, phase: 'funding', error: initialError });
             }
           }
         }
@@ -389,10 +454,17 @@ export function useAutoRefill({
             lastFundAttempt: lastFundAttemptRef.current,
             faucetSucceeded: faucetSucceededRef.current,
           });
-          setSetupState({ isInitialSetup: true, phase: 'complete' });
-          dismissTimerRef.current = setTimeout(() => {
-            setSetupState({ isInitialSetup: false, phase: 'complete' });
-          }, ACCOUNT_SETUP_COMPLETE_DELAY_MS);
+          if (initialError) {
+            // Error persists — show overlay with error for a delay before dismissing
+            dismissTimerRef.current = setTimeout(() => {
+              setSetupState({ isInitialSetup: false, phase: 'complete' });
+            }, ACCOUNT_SETUP_ERROR_DELAY_MS);
+          } else {
+            setSetupState({ isInitialSetup: true, phase: 'complete' });
+            dismissTimerRef.current = setTimeout(() => {
+              setSetupState({ isInitialSetup: false, phase: 'complete' });
+            }, ACCOUNT_SETUP_COMPLETE_DELAY_MS);
+          }
         }
       } catch (error) {
         logError('useAutoRefill.check', error);

@@ -100,4 +100,35 @@ describe('AccountSetupOverlay', () => {
     expect(title).not.toBeNull();
     expect(title!.textContent).toBe('Setting up your account');
   });
+
+  it('shows XCircle icon on failed step with error', () => {
+    const el = renderToContainer({ isInitialSetup: true, phase: 'faucet', error: 'Faucet failed' });
+    const steps = el.querySelectorAll('.account-setup__step');
+
+    // First step (checking) should be done — checkmark
+    expect(steps[0].querySelector('.animate-spin')).toBeNull();
+    expect(steps[0].querySelector('svg')).not.toBeNull();
+
+    // Second step (faucet) should show error icon — no spinner
+    expect(steps[1].querySelector('.animate-spin')).toBeNull();
+    // Should have an SVG with error color
+    const errorIcon = steps[1].querySelector('.text-\\[var\\(--color-error-400\\)\\]');
+    expect(errorIcon).not.toBeNull();
+
+    // Third step should be pending
+    expect(steps[2].querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('renders error message text', () => {
+    const errorMsg = 'Could not add starter funds. Please try again later.';
+    const el = renderToContainer({ isInitialSetup: true, phase: 'faucet', error: errorMsg });
+    const errorEl = el.querySelector('.account-setup__error');
+    expect(errorEl).not.toBeNull();
+    expect(errorEl!.textContent).toBe(errorMsg);
+  });
+
+  it('does not render error element when no error', () => {
+    const el = renderToContainer({ isInitialSetup: true, phase: 'faucet' });
+    expect(el.querySelector('.account-setup__error')).toBeNull();
+  });
 });

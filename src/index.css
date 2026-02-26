@@ -10234,6 +10234,12 @@ code.lease-card-mono {
   font-size: 0.875rem;
 }
 
+.account-setup__error {
+  margin-top: 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--color-error-400);
+}
+
 /* ============================================
    HELP CARD
    ============================================ */

@@ -145,3 +145,9 @@ export const AUTO_REFILL_FUND_COOLDOWN_MS = 5 * 60_000;
 
 /** Delay before dismissing the account setup overlay after completion (milliseconds) */
 export const ACCOUNT_SETUP_COMPLETE_DELAY_MS = 1500;
+
+/** Delay before retrying a failed step during initial account setup (milliseconds) */
+export const ACCOUNT_SETUP_RETRY_DELAY_MS = 5_000;
+
+/** Delay before dismissing the account setup overlay when an error persists (milliseconds) */
+export const ACCOUNT_SETUP_ERROR_DELAY_MS = 5_000;
