@@ -142,3 +142,6 @@ export const AUTO_REFILL_FAUCET_COOLDOWN_MS = 25 * 3600_000;
 
 /** Minimum time between credit fund TX attempts (milliseconds) */
 export const AUTO_REFILL_FUND_COOLDOWN_MS = 5 * 60_000;
+
+/** Delay before dismissing the account setup overlay after completion (milliseconds) */
+export const ACCOUNT_SETUP_COMPLETE_DELAY_MS = 1500;

@@ -7,10 +7,14 @@
  * requests faucet tokens or funds credits whenever balances drop below configured
  * thresholds. Cooldown timers prevent excessive requests.
  *
+ * Cooldowns are persisted to localStorage so they survive page refreshes.
+ * On the very first run for a wallet (no localStorage key), the hook exposes
+ * AccountSetupState so the UI can show a blocking overlay instead of scattered toasts.
+ *
  * Gated entirely by isFaucetEnabled() — deployments without a faucet are unaffected.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import { getBalance } from '../api/bank';
 import { getCreditAccount } from '../api/billing';
@@ -28,6 +32,7 @@ import {
   AUTO_REFILL_CREDIT_AMOUNT,
   AUTO_REFILL_FAUCET_COOLDOWN_MS,
   AUTO_REFILL_FUND_COOLDOWN_MS,
+  ACCOUNT_SETUP_COMPLETE_DELAY_MS,
 } from '../config/constants';
 
 export interface UseAutoRefillOptions {
@@ -38,12 +43,58 @@ export interface UseAutoRefillOptions {
   toast: ToastContextType;
 }
 
+export type SetupPhase = 'checking' | 'faucet' | 'funding' | 'complete';
+
+export interface AccountSetupState {
+  isInitialSetup: boolean;
+  phase: SetupPhase;
+}
+
+// --- localStorage helpers ---
+
+interface PersistedCooldowns {
+  lastFaucetAttempt: number;
+  lastFundAttempt: number;
+}
+
+function cooldownKey(address: string): string {
+  return `barney-refill-${address}`;
+}
+
+export function loadCooldowns(address: string): PersistedCooldowns | null {
+  try {
+    const raw = localStorage.getItem(cooldownKey(address));
+    if (raw === null) return null;
+    const parsed = JSON.parse(raw) as PersistedCooldowns;
+    if (
+      typeof parsed.lastFaucetAttempt !== 'number' ||
+      typeof parsed.lastFundAttempt !== 'number'
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch (error) {
+    logError('useAutoRefill.loadCooldowns', error);
+    return null;
+  }
+}
+
+export function saveCooldowns(address: string, cooldowns: PersistedCooldowns): void {
+  try {
+    localStorage.setItem(cooldownKey(address), JSON.stringify(cooldowns));
+  } catch (error) {
+    logError('useAutoRefill.saveCooldowns', error);
+  }
+}
+
+const INITIAL_SETUP_STATE: AccountSetupState = { isInitialSetup: false, phase: 'checking' };
+
 export function useAutoRefill({
   address,
   isWalletConnected,
   getOfflineSignerRef,
   toast,
-}: UseAutoRefillOptions): void {
+}: UseAutoRefillOptions): AccountSetupState {
   const isCheckingRef = useRef(false);
   const lastFaucetAttemptRef = useRef(0);
   const lastFundAttemptRef = useRef(0);
@@ -53,15 +104,29 @@ export function useAutoRefill({
   const toastRef = useRef(toast);
   useEffect(() => { toastRef.current = toast; }, [toast]);
 
+  const [setupState, setSetupState] = useState<AccountSetupState>(INITIAL_SETUP_STATE);
+
   useEffect(() => {
     addressRef.current = address;
 
     if (!isFaucetEnabled() || !isWalletConnected || !address) return;
 
-    // Only reset cooldowns when the address actually changes, not on every effect re-run
+    // Only handle cooldowns when the address actually changes, not on every effect re-run
+    let isInitialForAddress = false;
     if (address !== lastEffectAddressRef.current) {
-      lastFaucetAttemptRef.current = 0;
-      lastFundAttemptRef.current = 0;
+      const persisted = loadCooldowns(address);
+      if (persisted) {
+        lastFaucetAttemptRef.current = persisted.lastFaucetAttempt;
+        lastFundAttemptRef.current = persisted.lastFundAttempt;
+        // Returning wallet — no overlay
+        setSetupState({ isInitialSetup: false, phase: 'checking' });
+      } else {
+        lastFaucetAttemptRef.current = 0;
+        lastFundAttemptRef.current = 0;
+        isInitialForAddress = true;
+        // First time for this wallet — show overlay
+        setSetupState({ isInitialSetup: true, phase: 'checking' });
+      }
       lastEffectAddressRef.current = address;
     }
 
@@ -71,6 +136,9 @@ export function useAutoRefill({
     isCheckingRef.current = false;
 
     const targetAddress = address;
+    // Captured once per effect lifecycle — only the first checkAndRefill invocation
+    // (immediate call on connect) runs as initial setup; interval calls never do.
+    let isInitialRunPending = isInitialForAddress;
     const abortController = new AbortController();
     const { signal } = abortController;
 
@@ -78,7 +146,13 @@ export function useAutoRefill({
       if (isCheckingRef.current) return;
       isCheckingRef.current = true;
 
+      const isInitialRun = isInitialRunPending;
+
       try {
+        if (isInitialRun) {
+          setSetupState({ isInitialSetup: true, phase: 'checking' });
+        }
+
         // 1. Check wallet MFX and PWR balances
         const [mfxCoin, pwrCoin] = await Promise.all([
           getBalance(targetAddress, DENOMS.MFX),
@@ -109,8 +183,13 @@ export function useAutoRefill({
           Date.now() - lastFaucetAttemptRef.current >= AUTO_REFILL_FAUCET_COOLDOWN_MS;
 
         if (needsFaucet && faucetCooldownElapsed) {
+          if (isInitialRun) {
+            setSetupState({ isInitialSetup: true, phase: 'faucet' });
+          }
           try {
-            toastRef.current.info('Sending free MFX and PWR tokens to your wallet…');
+            if (!isInitialRun) {
+              toastRef.current.info('Sending free MFX and PWR tokens to your wallet…');
+            }
             const { results } = await requestFaucetTokens(targetAddress);
             if (signal.aborted || addressRef.current !== targetAddress) return;
 
@@ -121,21 +200,29 @@ export function useAutoRefill({
             // outages that should be retried on the next interval, not locked out for 25h.
             if (anySuccess) {
               lastFaucetAttemptRef.current = Date.now();
+              saveCooldowns(targetAddress, {
+                lastFaucetAttempt: lastFaucetAttemptRef.current,
+                lastFundAttempt: lastFundAttemptRef.current,
+              });
             }
             // Only re-query PWR (step 3) when at least one drip actually deposited tokens.
             faucetRan = anySuccess;
             const allSuccess = results.every((r) => r.success);
             const allFailed = results.every((r) => !r.success);
-            if (allSuccess) {
-              toastRef.current.success('Free MFX and PWR tokens have been sent to your wallet.');
-            } else if (allFailed) {
-              toastRef.current.info('No tokens could be sent — the faucet cooldown may be active.');
-            } else {
-              toastRef.current.info('Some tokens could not be sent — the faucet cooldown may be active.');
+            if (!isInitialRun) {
+              if (allSuccess) {
+                toastRef.current.success('Free MFX and PWR tokens have been sent to your wallet.');
+              } else if (allFailed) {
+                toastRef.current.info('No tokens could be sent — the faucet cooldown may be active.');
+              } else {
+                toastRef.current.info('Some tokens could not be sent — the faucet cooldown may be active.');
+              }
             }
           } catch (error) {
             logError('useAutoRefill.faucet', error);
-            toastRef.current.info('Could not reach the faucet. Will retry automatically.');
+            if (!isInitialRun) {
+              toastRef.current.info('Could not reach the faucet. Will retry automatically.');
+            }
           }
         }
 
@@ -180,6 +267,9 @@ export function useAutoRefill({
           currentPwr >= AUTO_REFILL_CREDIT_AMOUNT &&
           fundCooldownElapsed
         ) {
+          if (isInitialRun) {
+            setSetupState({ isInitialSetup: true, phase: 'funding' });
+          }
           try {
             const signer = getOfflineSignerRef.current();
             const result = await fundCredit(signer, targetAddress, targetAddress, {
@@ -189,17 +279,40 @@ export function useAutoRefill({
             // Stamp cooldown after the TX completes (not before), so transient
             // network errors don't lock out funding for the full cooldown period.
             lastFundAttemptRef.current = Date.now();
+            saveCooldowns(targetAddress, {
+              lastFaucetAttempt: lastFaucetAttemptRef.current,
+              lastFundAttempt: lastFundAttemptRef.current,
+            });
             if (signal.aborted || addressRef.current !== targetAddress) return;
             if (result.success) {
-              toastRef.current.success(`Funded ${AUTO_REFILL_CREDIT_AMOUNT} credits — you're all set!`);
+              if (!isInitialRun) {
+                toastRef.current.success(`Funded ${AUTO_REFILL_CREDIT_AMOUNT} credits — you're all set!`);
+              }
             } else {
               logError('useAutoRefill.fundCredits', result.error);
-              toastRef.current.info('Auto-funding credits failed. You can fund credits manually.');
+              if (!isInitialRun) {
+                toastRef.current.info('Auto-funding credits failed. You can fund credits manually.');
+              }
             }
           } catch (error) {
             logError('useAutoRefill.fundCredits', error);
-            toastRef.current.info('Auto-funding credits failed. You can fund credits manually.');
+            if (!isInitialRun) {
+              toastRef.current.info('Auto-funding credits failed. You can fund credits manually.');
+            }
           }
+        }
+
+        // 5. Initial setup complete — persist cooldowns (even if 0) so the key exists
+        if (isInitialRun && !signal.aborted && addressRef.current === targetAddress) {
+          isInitialRunPending = false;
+          saveCooldowns(targetAddress, {
+            lastFaucetAttempt: lastFaucetAttemptRef.current,
+            lastFundAttempt: lastFundAttemptRef.current,
+          });
+          setSetupState({ isInitialSetup: true, phase: 'complete' });
+          setTimeout(() => {
+            setSetupState({ isInitialSetup: false, phase: 'complete' });
+          }, ACCOUNT_SETUP_COMPLETE_DELAY_MS);
         }
       } catch (error) {
         logError('useAutoRefill.check', error);
@@ -224,4 +337,6 @@ export function useAutoRefill({
       abortController.abort();
     };
   }, [isWalletConnected, address, getOfflineSignerRef]);
+
+  return setupState;
 }

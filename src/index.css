@@ -134,7 +134,8 @@ html[data-theme="light"] body {
 /* Light overrides for component-level surface colors */
 [data-theme="light"] .main-layout__sidebar,
 [data-theme="light"] .ai-settings,
-[data-theme="light"] .progress-card {
+[data-theme="light"] .progress-card,
+[data-theme="light"] .account-setup {
   background: var(--panel-bg-solid);
 }
 
@@ -284,7 +285,8 @@ html[data-theme="retro"] body {
 
 [data-theme="retro"] .main-layout__sidebar,
 [data-theme="retro"] .ai-settings,
-[data-theme="retro"] .progress-card {
+[data-theme="retro"] .progress-card,
+[data-theme="retro"] .account-setup {
   background: oklch(0.12 0.04 290 / 0.92);
 }
 
@@ -942,7 +944,8 @@ html[data-theme="nord"] body {
 
 [data-theme="nord"] .main-layout__sidebar,
 [data-theme="nord"] .ai-settings,
-[data-theme="nord"] .progress-card {
+[data-theme="nord"] .progress-card,
+[data-theme="nord"] .account-setup {
   background: var(--panel-bg-solid);
 }
 
@@ -1061,7 +1064,8 @@ html[data-theme="dracula"] body {
 
 [data-theme="dracula"] .main-layout__sidebar,
 [data-theme="dracula"] .ai-settings,
-[data-theme="dracula"] .progress-card {
+[data-theme="dracula"] .progress-card,
+[data-theme="dracula"] .account-setup {
   background: var(--panel-bg-solid);
 }
 
@@ -1180,7 +1184,8 @@ html[data-theme="catppuccin"] body {
 
 [data-theme="catppuccin"] .main-layout__sidebar,
 [data-theme="catppuccin"] .ai-settings,
-[data-theme="catppuccin"] .progress-card {
+[data-theme="catppuccin"] .progress-card,
+[data-theme="catppuccin"] .account-setup {
   background: var(--panel-bg-solid);
 }
 
@@ -1368,7 +1373,8 @@ html[data-theme="matrix"] body {
 
 [data-theme="matrix"] .main-layout__sidebar,
 [data-theme="matrix"] .ai-settings,
-[data-theme="matrix"] .progress-card {
+[data-theme="matrix"] .progress-card,
+[data-theme="matrix"] .account-setup {
   background: oklch(0.08 0.03 145 / 0.92);
 }
 
@@ -10188,6 +10194,44 @@ code.lease-card-mono {
   font-weight: 500;
   color: var(--text-primary);
   min-width: 6rem;
+}
+
+/* ============================================
+   ACCOUNT SETUP OVERLAY
+   ============================================ */
+
+.account-setup {
+  width: 100%;
+  max-width: 22rem;
+  padding: 1.5rem;
+  background: var(--color-surface-800);
+  border: 1px solid var(--color-surface-700);
+  border-radius: var(--radius-xl);
+  box-shadow:
+    0 24px 80px oklch(0 0 0 / 0.5),
+    inset 0 1px 0 oklch(1 0 0 / 0.03);
+  animation: modalIn 0.25s ease-out;
+}
+
+.account-setup__title {
+  font-family: var(--font-heading);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 1rem;
+}
+
+.account-setup__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.account-setup__step {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
 }
 
 /* ============================================
