@@ -1,8 +1,9 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { parseHttpUrl } from '../../utils/url';
 
-// Matches http(s):// URLs or bare IPv4:port (e.g., 192.168.1.1:8080)
-const URL_REGEX = /(https?:\/\/[^\s<>)"']+|\b\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}\b)/g;
+// Matches explicit http(s):// URLs only — bare host:port endpoints are not
+// auto-linked because we don't know the upstream protocol.
+const URL_REGEX = /(https?:\/\/[^\s<>)"']+)/g;
 
 /** Split text into plain strings and clickable links. */
 function linkify(text: string): ReactNode[] {
