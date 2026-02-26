@@ -57,8 +57,8 @@ export function createVersionedStorage<T>(config: VersionedStorageConfig<T>): Ve
         data = parsed;
       }
 
-      if (currentVersion > version) {
-        // Future version — graceful degradation
+      if (!Number.isInteger(currentVersion) || currentVersion < 0 || currentVersion > version) {
+        // Invalid or future version — graceful degradation
         return null;
       }
 

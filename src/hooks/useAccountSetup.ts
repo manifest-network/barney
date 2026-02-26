@@ -81,13 +81,15 @@ function migrateCooldownsV0toV1(old: unknown): CooldownsV1 | null {
 function migrateV1toV2(old: unknown): SetupDataV2 | null {
   if (typeof old !== 'object' || old === null) return null;
   const o = old as Record<string, unknown>;
-  // V1 had faucetSucceeded — map to setupCompleted
+  // V1 had faucetSucceeded + lastFundAttempt — either signals setup completed
+  const hasFund = typeof o.lastFundAttempt === 'number' && o.lastFundAttempt > 0;
   if (typeof o.faucetSucceeded === 'boolean') {
-    return { setupCompleted: o.faucetSucceeded };
+    return { setupCompleted: o.faucetSucceeded || hasFund };
   }
-  // V1 had lastFaucetAttempt > 0 — the key existing means setup ran
-  if (typeof o.lastFaucetAttempt === 'number') {
-    return { setupCompleted: o.lastFaucetAttempt > 0 };
+  // V1 had lastFaucetAttempt / lastFundAttempt — either having run means setup completed
+  const hasFaucet = typeof o.lastFaucetAttempt === 'number' && o.lastFaucetAttempt > 0;
+  if (hasFaucet || hasFund) {
+    return { setupCompleted: true };
   }
   return null;
 }
@@ -182,7 +184,7 @@ export function useAccountSetup({
             setSetupState({ isInitialSetup: true, phase: 'checking', error: 'Could not check balances. Please try again later.' });
             finishWithError(targetAddress, signal);
           } else {
-            saveSetupData(targetAddress, { setupCompleted: false });
+            // Returning wallet: preserve setupCompleted on transient RPC/parse errors
             setSetupState({ isInitialSetup: false, phase: 'complete' });
           }
           return;
@@ -354,7 +356,7 @@ export function useAccountSetup({
           setSetupState({ isInitialSetup: true, phase: 'checking', error: 'Something went wrong. Please try again later.' });
           finishWithError(targetAddress, signal);
         } else {
-          saveSetupData(targetAddress, { setupCompleted: false });
+          // Returning wallet: preserve setupCompleted on transient errors
           setSetupState({ isInitialSetup: false, phase: 'complete' });
         }
       }

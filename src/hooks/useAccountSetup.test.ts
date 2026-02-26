@@ -460,6 +460,16 @@ describe('useAccountSetup — storage migration', () => {
     expect(data).toEqual({ setupCompleted: true });
   });
 
+  it('migrates v0 with lastFaucetAttempt=0 but lastFundAttempt>0 to setupCompleted=true', () => {
+    // Edge case: wallet was already funded, faucet was never needed
+    localStorage.setItem('barney-refill-manifest1abc', JSON.stringify({
+      lastFaucetAttempt: 0,
+      lastFundAttempt: 500,
+    }));
+    const data = loadSetupData('manifest1abc');
+    expect(data).toEqual({ setupCompleted: true });
+  });
+
   it('migrates v1 with faucetSucceeded=false to setupCompleted=false', () => {
     localStorage.setItem('barney-refill-manifest1abc', JSON.stringify({
       v: 1,

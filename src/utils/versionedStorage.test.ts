@@ -100,6 +100,30 @@ describe('createVersionedStorage', () => {
       expect(storage.load('key')).toBeNull();
     });
 
+    it('returns null for negative version number', () => {
+      localStorage.setItem('key', JSON.stringify({ v: -1, data: 'bad' }));
+
+      const storage = createVersionedStorage({
+        version: 1,
+        migrations: [(d) => d],
+        validate: (d) => (typeof d === 'string' ? d : null),
+      });
+
+      expect(storage.load('key')).toBeNull();
+    });
+
+    it('returns null for non-integer version number', () => {
+      localStorage.setItem('key', JSON.stringify({ v: 1.5, data: 'bad' }));
+
+      const storage = createVersionedStorage({
+        version: 2,
+        migrations: [(d) => d, (d) => d],
+        validate: (d) => (typeof d === 'string' ? d : null),
+      });
+
+      expect(storage.load('key')).toBeNull();
+    });
+
     it('returns null and logs error for corrupted JSON', () => {
       localStorage.setItem('key', 'not-json{{{');
 
