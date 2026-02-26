@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { formatConnectionUrl, extractPrimaryServicePorts, isNonHttpService } from './helpers';
+import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
 import {
   deriveAppName,
   extractUrlFromFredStatus,
@@ -332,7 +332,7 @@ describe('stack FQDN promotion', () => {
     }
 
     const withPorts = { ...connection, ports: primary!.ports, fqdn };
-    expect(formatConnectionUrl(connection.host, withPorts)).toBe('https://wp-abc123.barney8.manifest0.net');
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('wp-abc123.barney8.manifest0.net:32769');
   });
 
   it('falls back to IP:port when primary service has no fqdn', () => {
@@ -354,7 +354,7 @@ describe('stack FQDN promotion', () => {
     }
 
     const withPorts = { ...connection, ports: primary!.ports, fqdn };
-    expect(formatConnectionUrl(connection.host, withPorts)).toBe('https://64.29.115.29:32769');
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('64.29.115.29:32769');
   });
 
   it('uses instance fqdn when service-level fqdn is absent', () => {
@@ -375,7 +375,7 @@ describe('stack FQDN promotion', () => {
     }
 
     const withPorts = { ...connection, ports: primary!.ports, fqdn };
-    expect(formatConnectionUrl(connection.host, withPorts)).toBe('https://inst-abc.barney8.manifest0.net');
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('inst-abc.barney8.manifest0.net:32769');
   });
 
   it('preserves top-level fqdn over service fqdn', () => {
@@ -399,46 +399,38 @@ describe('stack FQDN promotion', () => {
     }
 
     const withPorts = { ...connection, ports: primary!.ports, fqdn };
-    expect(formatConnectionUrl(connection.host, withPorts)).toBe('https://top-level.barney8.manifest0.net');
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('top-level.barney8.manifest0.net:32769');
   });
 });
 
 describe('formatConnectionUrl', () => {
-  it('adds https for non-local hosts', () => {
-    expect(formatConnectionUrl('example.com')).toBe('https://example.com');
+  it('returns bare host (no protocol)', () => {
+    expect(formatConnectionUrl('example.com')).toBe('example.com');
   });
 
-  it('adds http for localhost', () => {
-    expect(formatConnectionUrl('localhost:8080')).toBe('http://localhost:8080');
+  it('strips existing protocol', () => {
+    expect(formatConnectionUrl('https://example.com:443')).toBe('example.com:443');
   });
 
-  it('adds http for 127.0.0.1', () => {
-    expect(formatConnectionUrl('127.0.0.1:12345')).toBe('http://127.0.0.1:12345');
-  });
-
-  it('preserves existing protocol', () => {
-    expect(formatConnectionUrl('https://example.com:443')).toBe('https://example.com:443');
-  });
-
-  it('extracts port from connection.ports with host', () => {
+  it('returns host:port from connection.ports', () => {
     expect(formatConnectionUrl('1.2.3.4', {
       host: '1.2.3.4',
       ports: { '8080/tcp': { host_ip: '1.2.3.4', host_port: 32456 } },
-    })).toBe('https://1.2.3.4:32456');
+    })).toBe('1.2.3.4:32456');
   });
 
-  it('prefers connection.host over host_ip', () => {
+  it('prefers connection.host over host param', () => {
     expect(formatConnectionUrl('fallback', {
       host: 'https://my-app.example.com',
       ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 12345 } },
-    })).toBe('https://my-app.example.com:12345');
+    })).toBe('my-app.example.com:12345');
   });
 
-  it('omits port for standard 80/443', () => {
+  it('returns host:port even for standard ports', () => {
     expect(formatConnectionUrl('example.com', {
       host: 'example.com',
       ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 443 } },
-    })).toBe('https://example.com');
+    })).toBe('example.com:443');
   });
 
   it('returns undefined when no host', () => {
@@ -449,21 +441,21 @@ describe('formatConnectionUrl', () => {
     expect(formatConnectionUrl('127.0.0.1', {
       host: '127.0.0.1',
       ports: { '8080/tcp': { HostIp: '0.0.0.0', HostPort: '32456' } },
-    })).toBe('http://127.0.0.1:32456');
+    })).toBe('127.0.0.1:32456');
   });
 
   it('handles Docker array port format', () => {
     expect(formatConnectionUrl('127.0.0.1', {
       host: '127.0.0.1',
       ports: { '8080/tcp': [{ HostIp: '0.0.0.0', HostPort: '32789' }] },
-    })).toBe('http://127.0.0.1:32789');
+    })).toBe('127.0.0.1:32789');
   });
 
   it('handles plain number port format', () => {
     expect(formatConnectionUrl('127.0.0.1', {
       host: '127.0.0.1',
       ports: { '8080/tcp': 12345 },
-    })).toBe('http://127.0.0.1:12345');
+    })).toBe('127.0.0.1:12345');
   });
 
   it('prefers fqdn over host and ports', () => {
@@ -471,14 +463,14 @@ describe('formatConnectionUrl', () => {
       host: '1.2.3.4',
       fqdn: 'a1b2c3d.barney8.manifest0.net',
       ports: { '8080/tcp': { host_ip: '1.2.3.4', host_port: 32456 } },
-    })).toBe('https://a1b2c3d.barney8.manifest0.net');
+    })).toBe('a1b2c3d.barney8.manifest0.net:32456');
   });
 
   it('uses fqdn without ports', () => {
     expect(formatConnectionUrl('1.2.3.4', {
       host: '1.2.3.4',
       fqdn: 'myapp.barney7.manifest0.net',
-    })).toBe('https://myapp.barney7.manifest0.net');
+    })).toBe('myapp.barney7.manifest0.net');
   });
 
   it('rejects fqdn with userinfo injection', () => {
@@ -486,17 +478,17 @@ describe('formatConnectionUrl', () => {
       host: '1.2.3.4',
       fqdn: 'legit.com@evil.com',
       ports: { '8080/tcp': { host_ip: '1.2.3.4', host_port: 32456 } },
-    })).toBe('https://1.2.3.4:32456');
+    })).toBe('1.2.3.4:32456');
   });
 
   it('rejects fqdn with path injection', () => {
     expect(formatConnectionUrl('1.2.3.4', {
       host: '1.2.3.4',
       fqdn: 'evil.com/phish',
-    })).toBe('https://1.2.3.4');
+    })).toBe('1.2.3.4');
   });
 
-  it('returns fqdn:port for non-HTTP service with FQDN', () => {
+  it('returns fqdn:port for postgres with FQDN', () => {
     expect(formatConnectionUrl('1.2.3.4', {
       host: '1.2.3.4',
       fqdn: 'pg-abc123.barney8.manifest0.net',
@@ -504,78 +496,30 @@ describe('formatConnectionUrl', () => {
     })).toBe('pg-abc123.barney8.manifest0.net:31234');
   });
 
-  it('returns host:port without protocol for non-HTTP service', () => {
+  it('returns host:port for postgres without FQDN', () => {
     expect(formatConnectionUrl('1.2.3.4', {
       host: '1.2.3.4',
       ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 31234 } },
     })).toBe('1.2.3.4:31234');
   });
 
-  it('returns host:port for redis', () => {
-    expect(formatConnectionUrl('10.0.0.1', {
-      host: '10.0.0.1',
-      ports: { '6379/tcp': 32000 },
-    })).toBe('10.0.0.1:32000');
-  });
-
-  it('returns fqdn without port when non-HTTP has no port mapping value', () => {
+  it('returns fqdn when port mapping has no extractable value', () => {
     expect(formatConnectionUrl('1.2.3.4', {
       host: '1.2.3.4',
       fqdn: 'pg.barney8.manifest0.net',
       ports: { '5432/tcp': {} },
     })).toBe('pg.barney8.manifest0.net');
   });
-});
 
-describe('isNonHttpService', () => {
-  it('detects postgres', () => {
-    expect(isNonHttpService({ '5432/tcp': 31234 })).toBe(true);
-  });
-
-  it('detects redis', () => {
-    expect(isNonHttpService({ '6379/tcp': 32000 })).toBe(true);
-  });
-
-  it('detects mysql', () => {
-    expect(isNonHttpService({ '3306/tcp': 31000 })).toBe(true);
-  });
-
-  it('returns false for HTTP ports', () => {
-    expect(isNonHttpService({ '80/tcp': 32200 })).toBe(false);
-    expect(isNonHttpService({ '8080/tcp': 32300 })).toBe(false);
-    expect(isNonHttpService({ '443/tcp': 32400 })).toBe(false);
-  });
-
-  it('returns false for empty ports', () => {
-    expect(isNonHttpService({})).toBe(false);
-  });
-
-  it('returns false for mixed HTTP and non-HTTP ports', () => {
-    expect(isNonHttpService({ '80/tcp': 32200, '5432/tcp': 31234 })).toBe(false);
-  });
-
-  it('handles multiple non-HTTP ports', () => {
-    expect(isNonHttpService({ '5432/tcp': 31234, '6379/tcp': 32000 })).toBe(true);
+  it('strips protocol from metadata url fallback', () => {
+    expect(formatConnectionUrl('1.2.3.4', {
+      host: '1.2.3.4',
+      metadata: { url: 'https://my-app.example.com' },
+    })).toBe('my-app.example.com');
   });
 });
 
-describe('extractUrlFromFredStatus — non-HTTP', () => {
-  it('returns raw endpoint URL for non-HTTP (caller handles stripping)', () => {
-    expect(extractUrlFromFredStatus({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-      endpoints: { '5432/tcp': 'http://1.2.3.4:31234' },
-    })).toBe('http://1.2.3.4:31234');
-  });
-
-  it('returns bare host:port for non-HTTP instances', () => {
-    expect(extractUrlFromFredStatus({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-      instances: [{ name: 'pg', status: 'running', ports: { '5432/tcp': 31234 } }],
-    }, '1.2.3.4')).toBe('1.2.3.4:31234');
-  });
-});
-
-describe('stack FQDN promotion — standalone non-HTTP service', () => {
+describe('stack FQDN promotion — standalone service', () => {
   it('returns fqdn:port for standalone postgres with FQDN', () => {
     const connection = {
       host: '64.29.115.29',
@@ -1781,7 +1725,7 @@ describe('executeConfirmedDeployApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect((result.data as any).url).toBe('http://127.0.0.1:32456');
+    expect((result.data as any).url).toBe('127.0.0.1:32456');
     expect(onProgress).toHaveBeenCalled();
     expect(registry.addApp).toHaveBeenCalled();
     expect(getLeaseConnectionInfo).toHaveBeenCalled();
@@ -1817,7 +1761,7 @@ describe('executeConfirmedDeployApp', () => {
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as any).url).toBe('http://127.0.0.1:32456');
+    expect((result.data as any).url).toBe('127.0.0.1:32456');
   });
 
   it('falls back to fred status when connection endpoint fails', async () => {
@@ -1838,7 +1782,7 @@ describe('executeConfirmedDeployApp', () => {
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as any).url).toBe('http://1.2.3.4:32456');
+    expect((result.data as any).url).toBe('1.2.3.4:32456');
   });
 
   it('handles lease creation failure', async () => {
@@ -2067,7 +2011,7 @@ describe('executeConfirmedDeployApp', () => {
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as any).url).toBe('https://1.2.3.4:32200');
+    expect((result.data as any).url).toBe('1.2.3.4:32200');
     expect((result.data as any).status).toBe('running');
   });
 });

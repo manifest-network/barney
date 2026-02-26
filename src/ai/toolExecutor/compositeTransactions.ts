@@ -15,7 +15,7 @@ import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
-import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, isNonHttpService } from './helpers';
+import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl } from './helpers';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { extractYamlServiceNames } from '../../utils/fileValidation';
@@ -445,10 +445,6 @@ async function resolveAppUrl(
   // 2. Fall back to fred status data (endpoints/instances)
   const fredUrl = extractUrlFromFredStatus(fredStatus);
   if (fredUrl) {
-    // Non-HTTP endpoints: return bare host:port (no protocol wrapping)
-    if (fredStatus.endpoints && isNonHttpService(fredStatus.endpoints)) {
-      return { url: fredUrl.replace(/^https?:\/\//, '') };
-    }
     return { url: formatConnectionUrl(fredUrl) || fredUrl };
   }
 

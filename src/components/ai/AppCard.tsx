@@ -4,7 +4,7 @@
  */
 
 import { memo } from 'react';
-import { ExternalLink, Copy, Square, CheckCircle } from 'lucide-react';
+import { Copy, Square, CheckCircle } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { collectInstanceUrls } from '../../utils/connection';
 
@@ -34,7 +34,6 @@ interface AppCardProps {
 
 export const AppCard = memo(function AppCard({ name, url, connection, status, onStop }: AppCardProps) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
-  const isClickable = url?.startsWith('http://') || url?.startsWith('https://');
 
   const instanceUrls = collectInstanceUrls(connection);
   const portEntries = connection?.ports ? Object.entries(connection.ports) : [];
@@ -78,19 +77,7 @@ export const AppCard = memo(function AppCard({ name, url, connection, status, on
 
       {url && (
         <div className="app-card__url">
-          {isClickable ? (
-            <a
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="app-card__link"
-            >
-              {url}
-              <ExternalLink className="w-3 h-3 ml-1" aria-hidden="true" />
-            </a>
-          ) : (
-            <span className="app-card__link">{url}</span>
-          )}
+          <span className="app-card__link">{url}</span>
           <button
             type="button"
             onClick={handleCopy}
@@ -110,10 +97,9 @@ export const AppCard = memo(function AppCard({ name, url, connection, status, on
         <div className="app-card__instances">
           <span className="app-card__instances-label">Instances</span>
           {instanceUrls.map(u => (
-            <a key={u} href={u} target="_blank" rel="noopener noreferrer" className="app-card__instance-link">
+            <span key={u} className="app-card__instance-link">
               {u.replace('https://', '')}
-              <ExternalLink className="w-3 h-3 ml-1" aria-hidden="true" />
-            </a>
+            </span>
           ))}
         </div>
       )}
@@ -144,17 +130,6 @@ export const AppCard = memo(function AppCard({ name, url, connection, status, on
       )}
 
       <div className="app-card__actions">
-        {isClickable && (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn btn-primary btn-sm"
-          >
-            <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
-            Open
-          </a>
-        )}
         {onStop && (
           <button
             type="button"
