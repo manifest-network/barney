@@ -8,7 +8,7 @@ import { LogOut, Circle, Zap, History, RotateCcw } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { getApps, reconcileWithChain, type AppEntry } from '../../registry/appRegistry';
-import { getCreditEstimate, getLeasesByTenant, LeaseState } from '../../api/billing';
+import { getCreditAccount, getCreditEstimate, getLeasesByTenant, LeaseState } from '../../api/billing';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits } from '../../utils/format';
 import { truncateAddress } from '../../utils/address';
@@ -65,17 +65,20 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     // Re-read after reconciliation
     setApps(getApps(address));
 
+    // Credit balance — always available via creditAccount
+    try {
+      const creditResponse = await getCreditAccount(address);
+      const pwrBal = creditResponse.balances.find(
+        (b) => b.denom === DENOMS.PWR || b.denom.includes('upwr'),
+      );
+      setCredits(pwrBal ? fromBaseUnits(pwrBal.amount, pwrBal.denom) : 0);
+    } catch (error) {
+      logError('AppsSidebar.refresh.credits', error);
+    }
+
+    // Burn rate / time remaining — only meaningful with active leases
     try {
       const estimate = await getCreditEstimate(address);
-      if (estimate?.currentBalance) {
-        for (const bal of estimate.currentBalance) {
-          if (bal.denom === DENOMS.PWR || bal.denom.includes('upwr')) {
-            setCredits(fromBaseUnits(bal.amount, bal.denom));
-            break;
-          }
-        }
-      }
-      // Only show time remaining when credits are actively being spent
       let ratePerSecond = 0;
       if (estimate?.totalRatePerSecond) {
         for (const rate of estimate.totalRatePerSecond) {
@@ -90,7 +93,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
         setBurnRate(null);
       }
     } catch (error) {
-      logError('AppsSidebar.refresh', error);
+      logError('AppsSidebar.refresh.estimate', error);
     }
   }, [address]);
 
