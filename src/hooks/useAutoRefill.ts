@@ -11,6 +11,10 @@
  * On the very first run for a wallet (no localStorage key), the hook exposes
  * AccountSetupState so the UI can show a blocking overlay instead of scattered toasts.
  *
+ * If the cooldown key exists but the account is completely empty (zero MFX, PWR,
+ * and credits), the backend was likely reset — the stale key is cleared and the
+ * run is promoted to initial setup so the overlay appears again.
+ *
  * Gated entirely by isFaucetEnabled() — deployments without a faucet are unaffected.
  */
 
@@ -87,6 +91,14 @@ export function saveCooldowns(address: string, cooldowns: PersistedCooldowns): v
   }
 }
 
+export function clearCooldowns(address: string): void {
+  try {
+    localStorage.removeItem(cooldownKey(address));
+  } catch (error) {
+    logError('useAutoRefill.clearCooldowns', error);
+  }
+}
+
 const INITIAL_SETUP_STATE: AccountSetupState = { isInitialSetup: false, phase: 'checking' };
 
 export function useAutoRefill({
@@ -150,7 +162,7 @@ export function useAutoRefill({
       if (isCheckingRef.current) return;
       isCheckingRef.current = true;
 
-      const isInitialRun = isInitialRunPending;
+      let isInitialRun = isInitialRunPending;
 
       try {
         if (isInitialRun) {
@@ -182,6 +194,19 @@ export function useAutoRefill({
 
         const mfxBalance = fromBaseUnits(mfxCoin.amount, DENOMS.MFX);
         const pwrBalance = fromBaseUnits(pwrCoin.amount, DENOMS.PWR);
+
+        // Stale-key detection: if the faucet previously ran (non-zero cooldown) but
+        // the account is now completely empty, the backend was likely reset. Clear
+        // the stale key and promote this run to initial setup so the onboarding
+        // overlay appears again.
+        if (!isInitialRun && mfxBalance === 0 && pwrBalance === 0 && lastFaucetAttemptRef.current > 0) {
+          clearCooldowns(targetAddress);
+          lastFaucetAttemptRef.current = 0;
+          lastFundAttemptRef.current = 0;
+          isInitialRunPending = true;
+          isInitialRun = true;
+          setSetupState({ isInitialSetup: true, phase: 'checking' });
+        }
 
         // 2. Faucet if below thresholds and cooldown elapsed
         let faucetRan = false;

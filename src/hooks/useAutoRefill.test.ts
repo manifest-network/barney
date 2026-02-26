@@ -338,6 +338,8 @@ describe('useAutoRefill — recurring', () => {
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
     vi.clearAllMocks();
     setFaucetResults(true, true);
+    // Simulate faucet depositing tokens so stale-key detection doesn't trigger
+    setBalances(10, 100);
 
     await vi.advanceTimersByTimeAsync(60_000);
     await flushMicrotasks();
@@ -487,7 +489,9 @@ describe('useAutoRefill — recurring', () => {
     vi.clearAllMocks();
     setFaucetResults(true, true);
 
-    // Change to address with pre-existing cooldowns
+    // Change to address with pre-existing cooldowns and non-zero balances
+    // (non-zero balances prevent stale-key detection from triggering)
+    setBalances(10, 100);
     saveCooldowns('manifest1second', { lastFaucetAttempt: Date.now(), lastFundAttempt: 0 });
     rerender(defaultProps({ address: 'manifest1second' }));
     await flushMicrotasks();
@@ -506,6 +510,8 @@ describe('useAutoRefill — recurring', () => {
 
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
     vi.clearAllMocks();
+    // Simulate faucet depositing tokens so stale-key detection doesn't trigger on reconnect
+    setBalances(10, 100);
 
     // Disconnect and reconnect same address
     rerender(defaultProps({ isWalletConnected: false, address: undefined }));
@@ -661,9 +667,14 @@ describe('useAutoRefill — recurring', () => {
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
     vi.clearAllMocks();
     setFaucetResults(true, true);
+    // Simulate faucet depositing tokens, then balance dropping back to zero over time
+    setBalances(10, 100);
 
     // Advance past 25h cooldown + next interval tick
-    await vi.advanceTimersByTimeAsync(25 * 3600_000 + 60_000);
+    // Reset balances to zero to trigger faucet need again
+    await vi.advanceTimersByTimeAsync(25 * 3600_000);
+    setBalances(0, 0);
+    await vi.advanceTimersByTimeAsync(60_000);
     await flushMicrotasks();
 
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
@@ -845,10 +856,11 @@ describe('useAutoRefill — cooldown persistence', () => {
   });
 
   it('loads persisted cooldowns on mount', async () => {
-    // Pre-seed a recent faucet cooldown
+    // Pre-seed a recent faucet cooldown with non-zero balances
+    // (zero balances + non-zero faucet timestamp would trigger stale-key detection)
     const recentTimestamp = Date.now();
     saveCooldowns('manifest1test', { lastFaucetAttempt: recentTimestamp, lastFundAttempt: 0 });
-    setBalances(0, 0);
+    setBalances(0.3, 3);
     setCreditBalance(100);
 
     render(defaultProps());
@@ -893,6 +905,73 @@ describe('useAutoRefill — cooldown persistence', () => {
     // Even though nothing ran, cooldowns should be saved so the key exists
     const persisted = loadCooldowns('manifest1test');
     expect(persisted).not.toBeNull();
+  });
+});
+
+// ============================================
+// Stale-key detection (backend reset)
+// ============================================
+
+describe('useAutoRefill — stale-key detection', () => {
+  it('clears stale cooldowns and re-runs onboarding when backend is reset', async () => {
+    // Simulate: faucet ran previously, then backend was wiped
+    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: Date.now() - 1000 });
+    setBalances(0, 0);
+    setCreditBalance(0);
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // Stale key should be cleared and faucet should run as initial setup
+    expect(requestFaucetTokens).toHaveBeenCalledWith('manifest1test');
+    // Toasts should be suppressed (initial setup, not recurring)
+    expect(mockToast.info).not.toHaveBeenCalled();
+    // Should show overlay
+    expect(lastSetupState.isInitialSetup).toBe(true);
+  });
+
+  it('does not clear cooldowns when balances are non-zero', async () => {
+    const faucetTime = Date.now() - 1000;
+    saveCooldowns('manifest1test', { lastFaucetAttempt: faucetTime, lastFundAttempt: 0 });
+    setBalances(10, 100);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Cooldowns should be preserved — not a backend reset
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
+    expect(lastSetupState.isInitialSetup).toBe(false);
+  });
+
+  it('does not clear cooldowns when only one balance is zero', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: 0 });
+    setBalances(0, 100); // MFX zero but PWR non-zero
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Not a backend reset — only MFX is zero, PWR is fine
+    expect(lastSetupState.isInitialSetup).toBe(false);
+  });
+
+  it('does not trigger stale detection when faucet timestamp is zero', async () => {
+    // lastFaucetAttempt: 0 means faucet never actually ran — not a reset scenario
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    setBalances(0, 0);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Should treat as recurring (cooldown key exists), not re-trigger onboarding
+    expect(lastSetupState.isInitialSetup).toBe(false);
+    // Faucet still runs (cooldown timestamp is 0, so cooldown is elapsed)
+    expect(requestFaucetTokens).toHaveBeenCalled();
+    // Toasts should fire (recurring, not initial)
+    expect(mockToast.info).toHaveBeenCalled();
   });
 });
 
