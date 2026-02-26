@@ -373,6 +373,31 @@ describe('useAutoRefill — recurring', () => {
     expect(requestFaucetTokens).not.toHaveBeenCalled();
   });
 
+  it('does not stamp faucet cooldown on failure during initial setup', async () => {
+    // No seeded cooldowns = initial setup
+    setBalances(0, 0);
+    setCreditBalance(100);
+    setFaucetResults(false, false);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    // Cooldown should NOT be stamped — initial setup failures retry quickly
+    const persisted = loadCooldowns('manifest1test');
+    expect(persisted!.lastFaucetAttempt).toBe(0);
+    vi.clearAllMocks();
+
+    // Fix the faucet for next attempt
+    setFaucetResults(true, true);
+
+    // Next interval — SHOULD retry because cooldown was not stamped during initial setup
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+  });
+
   it('respects fund 5min cooldown', async () => {
     setBalances(10, 100);
     setCreditBalance(2);
@@ -916,7 +941,9 @@ describe('useAutoRefill — cooldown persistence', () => {
 describe('useAutoRefill — stale-key detection', () => {
   it('clears stale cooldowns and re-runs onboarding when backend is reset', async () => {
     // Simulate: faucet ran and succeeded previously, then backend was wiped
-    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: Date.now() - 1000, faucetSucceeded: true });
+    // Uses old-format cooldowns (no faucetSucceeded flag) to verify backward compat:
+    // lastFaucetAttempt > 0 implies faucet previously succeeded.
+    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: Date.now() - 1000 });
     setBalances(0, 0);
     setCreditBalance(0);
 
@@ -929,6 +956,20 @@ describe('useAutoRefill — stale-key detection', () => {
     // Toasts should be suppressed (initial setup, not recurring)
     expect(mockToast.info).not.toHaveBeenCalled();
     // Should show overlay
+    expect(lastSetupState.isInitialSetup).toBe(true);
+  });
+
+  it('clears stale cooldowns with explicit faucetSucceeded flag', async () => {
+    // New-format cooldowns with explicit faucetSucceeded: true
+    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: Date.now() - 1000, faucetSucceeded: true });
+    setBalances(0, 0);
+    setCreditBalance(0);
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(requestFaucetTokens).toHaveBeenCalledWith('manifest1test');
     expect(lastSetupState.isInitialSetup).toBe(true);
   });
 
@@ -1061,12 +1102,299 @@ describe('useAutoRefill — initial setup state', () => {
 });
 
 // ============================================
+// Lifecycle integration tests
+// ============================================
+
+describe('useAutoRefill — lifecycle scenarios', () => {
+  it('full happy path: initial setup → faucet → fund → returning wallet on refresh', async () => {
+    // Step 1: First connect — initial setup
+    let pwrCallCount = 0;
+    vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
+      if (denom === 'umfx') return { denom, amount: '0' };
+      pwrCallCount++;
+      return { denom, amount: pwrCallCount <= 1 ? '0' : String(100 * 1_000_000) };
+    });
+    setCreditBalance(0);
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    expect(fundCredit).toHaveBeenCalledTimes(1);
+    expect(lastSetupState.phase).toBe('complete');
+    expect(lastSetupState.isInitialSetup).toBe(true);
+
+    // Verify cooldowns persisted with faucetSucceeded
+    const persisted = loadCooldowns('manifest1test');
+    expect(persisted!.faucetSucceeded).toBe(true);
+    expect(persisted!.lastFaucetAttempt).toBeGreaterThan(0);
+    expect(persisted!.lastFundAttempt).toBeGreaterThan(0);
+
+    // Step 2: Simulate page refresh — unmount and remount
+    flushSync(() => { root.unmount(); });
+    container.remove();
+    vi.clearAllMocks();
+
+    // Balances are now healthy (faucet + fund worked)
+    setBalances(10, 100);
+    setCreditBalance(50);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Returning wallet — no overlay, no faucet, no fund
+    expect(lastSetupState.isInitialSetup).toBe(false);
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
+    expect(fundCredit).not.toHaveBeenCalled();
+  });
+
+  it('faucet fails during initial setup → retries on next interval → succeeds', async () => {
+    setBalances(0, 0);
+    setCreditBalance(100);
+    setFaucetResults(false, false);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Faucet ran but failed — overlay still shows complete
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    // No toasts during initial setup
+    expect(mockToast.info).not.toHaveBeenCalled();
+
+    // Cooldown should NOT be stamped (initial setup failure)
+    const persisted = loadCooldowns('manifest1test');
+    expect(persisted!.lastFaucetAttempt).toBe(0);
+
+    vi.clearAllMocks();
+
+    // Fix the faucet and set up for retry
+    setFaucetResults(true, true);
+
+    // Next interval — should retry because cooldown was not stamped
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    // This is a recurring run — success toast should appear
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Starter funds have been added to your account.'
+    );
+  });
+
+  it('fund fails during initial setup → retries on next interval → succeeds', async () => {
+    let pwrCallCount = 0;
+    vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
+      if (denom === 'umfx') return { denom, amount: '0' };
+      pwrCallCount++;
+      return { denom, amount: pwrCallCount <= 1 ? '0' : String(100 * 1_000_000) };
+    });
+    setCreditBalance(0);
+    vi.mocked(fundCredit).mockResolvedValue({ success: false, error: 'sequence mismatch' });
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Faucet succeeded, fund failed
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    expect(fundCredit).toHaveBeenCalledTimes(1);
+
+    // Fund cooldown should NOT be stamped (initial setup failure)
+    const persisted = loadCooldowns('manifest1test');
+    expect(persisted!.lastFundAttempt).toBe(0);
+    expect(persisted!.lastFaucetAttempt).toBeGreaterThan(0);
+
+    vi.clearAllMocks();
+
+    // Fix fund for retry
+    vi.mocked(fundCredit).mockResolvedValue({ success: true, transactionHash: 'hash', events: [] });
+    // Balances after faucet success
+    setBalances(10, 100);
+    setCreditBalance(0);
+
+    // Next interval — fund should retry (cooldown not stamped)
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+
+    expect(fundCredit).toHaveBeenCalledTimes(1);
+    expect(mockToast.success).toHaveBeenCalledWith("Credits activated — you're all set!");
+  });
+
+  it('backend reset: successful setup → page refresh with zero balances → re-onboarding', async () => {
+    // Step 1: Successful initial setup
+    let pwrCallCount = 0;
+    vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
+      if (denom === 'umfx') return { denom, amount: '0' };
+      pwrCallCount++;
+      return { denom, amount: pwrCallCount <= 1 ? '0' : String(100 * 1_000_000) };
+    });
+    setCreditBalance(0);
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    expect(fundCredit).toHaveBeenCalledTimes(1);
+
+    // Verify faucetSucceeded was persisted
+    const persisted = loadCooldowns('manifest1test');
+    expect(persisted!.faucetSucceeded).toBe(true);
+
+    // Step 2: Simulate page refresh after backend reset
+    flushSync(() => { root.unmount(); });
+    container.remove();
+    vi.clearAllMocks();
+
+    // Backend reset — all balances are now 0
+    setBalances(0, 0);
+    setCreditBalance(0);
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // Stale-key detection should trigger — re-onboarding with overlay
+    expect(requestFaucetTokens).toHaveBeenCalled();
+    expect(lastSetupState.isInitialSetup).toBe(true);
+    // Toasts suppressed during initial setup
+    expect(mockToast.info).not.toHaveBeenCalled();
+  });
+
+  it('backend reset with old-format localStorage → stale-key triggers', async () => {
+    // Simulate old-format cooldowns (no faucetSucceeded field)
+    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: Date.now() - 1000 });
+    setBalances(0, 0);
+    setCreditBalance(0);
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // Should infer faucetSucceeded from lastFaucetAttempt > 0, trigger stale-key
+    expect(requestFaucetTokens).toHaveBeenCalledWith('manifest1test');
+    expect(lastSetupState.isInitialSetup).toBe(true);
+    // Toasts suppressed during initial setup
+    expect(mockToast.info).not.toHaveBeenCalled();
+  });
+
+  it('toast spam prevention: recurring faucet failure → shows toast once → cooldown blocks repeat', async () => {
+    // Seed cooldowns so this is a recurring (non-initial) run
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    setBalances(0, 0);
+    setCreditBalance(100);
+    setFaucetResults(false, false);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // First failure: toast shown, cooldown stamped
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    expect(mockToast.info).toHaveBeenCalledWith(
+      'Funds could not be added right now. Please try again later.'
+    );
+    vi.clearAllMocks();
+
+    // 2nd interval
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
+    expect(mockToast.info).not.toHaveBeenCalled();
+
+    // 3rd interval
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
+    expect(mockToast.info).not.toHaveBeenCalled();
+
+    // 10th interval (10 minutes total)
+    await vi.advanceTimersByTimeAsync(8 * 60_000);
+    await flushMicrotasks();
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
+    // Zero toasts over 10 intervals — no spam
+    expect(mockToast.info).not.toHaveBeenCalled();
+  });
+
+  it('page refresh after initial setup faucet failure → retries immediately', async () => {
+    // Step 1: Initial setup — faucet fails
+    setBalances(0, 0);
+    setCreditBalance(100);
+    setFaucetResults(false, false);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    // Cooldown not stamped for initial failure
+    expect(loadCooldowns('manifest1test')!.lastFaucetAttempt).toBe(0);
+
+    // Step 2: Simulate page refresh — unmount and remount
+    flushSync(() => { root.unmount(); });
+    container.remove();
+    vi.clearAllMocks();
+
+    // Faucet is now working
+    setFaucetResults(true, true);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Should load persisted cooldowns (key exists, lastFaucetAttempt: 0)
+    // Treated as returning wallet, faucet cooldown elapsed → retries immediately
+    expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
+    // Recurring run — success toast shown
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Starter funds have been added to your account.'
+    );
+  });
+
+  it('recurring fund failure → stamps cooldown → no toast spam', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now(), lastFundAttempt: 0 });
+    setBalances(10, 100);
+    setCreditBalance(0);
+    vi.mocked(fundCredit).mockResolvedValue({ success: false, error: 'sequence mismatch' });
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(fundCredit).toHaveBeenCalledTimes(1);
+    expect(mockToast.info).toHaveBeenCalledWith(
+      'Could not activate credits right now. Will retry automatically.'
+    );
+    vi.clearAllMocks();
+
+    // Next interval — fund cooldown (5min) not elapsed
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+    expect(fundCredit).not.toHaveBeenCalled();
+    expect(mockToast.info).not.toHaveBeenCalled();
+
+    // After 5min cooldown expires — retries
+    await vi.advanceTimersByTimeAsync(4 * 60_000 + 60_000);
+    await flushMicrotasks();
+    expect(fundCredit).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ============================================
 // loadCooldowns / saveCooldowns unit tests
 // ============================================
 
 describe('loadCooldowns / saveCooldowns', () => {
   it('round-trips correctly', () => {
     const data = { lastFaucetAttempt: 12345, lastFundAttempt: 67890 };
+    saveCooldowns('manifest1addr', data);
+    expect(loadCooldowns('manifest1addr')).toEqual(data);
+  });
+
+  it('round-trips faucetSucceeded: true', () => {
+    const data = { lastFaucetAttempt: 12345, lastFundAttempt: 67890, faucetSucceeded: true };
+    saveCooldowns('manifest1addr', data);
+    expect(loadCooldowns('manifest1addr')).toEqual(data);
+  });
+
+  it('round-trips faucetSucceeded: false', () => {
+    const data = { lastFaucetAttempt: 12345, lastFundAttempt: 67890, faucetSucceeded: false };
     saveCooldowns('manifest1addr', data);
     expect(loadCooldowns('manifest1addr')).toEqual(data);
   });

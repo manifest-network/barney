@@ -136,7 +136,11 @@ export function useAutoRefill({
       if (persisted) {
         lastFaucetAttemptRef.current = persisted.lastFaucetAttempt;
         lastFundAttemptRef.current = persisted.lastFundAttempt;
-        faucetSucceededRef.current = persisted.faucetSucceeded ?? false;
+        // Backward compat: versions prior to this fix only stamped lastFaucetAttempt
+        // on success (failures were not persisted). A non-zero timestamp therefore
+        // implies the faucet succeeded in that older version. New-format entries always
+        // include faucetSucceeded explicitly, so this fallback only fires for old data.
+        faucetSucceededRef.current = persisted.faucetSucceeded ?? (persisted.lastFaucetAttempt > 0);
         // Returning wallet — no overlay
         setSetupState({ isInitialSetup: false, phase: 'checking' });
       } else {
@@ -190,7 +194,7 @@ export function useAutoRefill({
           ));
           if (isInitialRun) {
             isInitialRunPending = false;
-            saveCooldowns(targetAddress, { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: faucetSucceededRef.current || undefined });
+            saveCooldowns(targetAddress, { lastFaucetAttempt: 0, lastFundAttempt: 0, faucetSucceeded: faucetSucceededRef.current });
             setSetupState({ isInitialSetup: false, phase: 'complete' });
           }
           return;
@@ -233,12 +237,16 @@ export function useAutoRefill({
             if (anySuccess) {
               faucetSucceededRef.current = true;
             }
-            // Always stamp cooldown to prevent toast spam on repeated failures.
-            lastFaucetAttemptRef.current = Date.now();
+            // Stamp cooldown on success, or on failure for recurring runs (prevents
+            // toast spam). Initial setup failures keep timestamp at 0 so the next
+            // interval retries quickly.
+            if (anySuccess || !isInitialRun) {
+              lastFaucetAttemptRef.current = Date.now();
+            }
             saveCooldowns(targetAddress, {
               lastFaucetAttempt: lastFaucetAttemptRef.current,
               lastFundAttempt: lastFundAttemptRef.current,
-              faucetSucceeded: faucetSucceededRef.current || undefined,
+              faucetSucceeded: faucetSucceededRef.current,
             });
             // Only re-query PWR (step 3) when at least one drip actually deposited tokens.
             faucetRan = anySuccess;
@@ -255,13 +263,15 @@ export function useAutoRefill({
             }
           } catch (error) {
             logError('useAutoRefill.faucet', error);
-            lastFaucetAttemptRef.current = Date.now();
-            saveCooldowns(targetAddress, {
-              lastFaucetAttempt: lastFaucetAttemptRef.current,
-              lastFundAttempt: lastFundAttemptRef.current,
-              faucetSucceeded: faucetSucceededRef.current || undefined,
-            });
+            // Only stamp cooldown on recurring runs to prevent toast spam.
+            // Initial setup failures should retry on the next interval.
             if (!isInitialRun) {
+              lastFaucetAttemptRef.current = Date.now();
+              saveCooldowns(targetAddress, {
+                lastFaucetAttempt: lastFaucetAttemptRef.current,
+                lastFundAttempt: lastFundAttemptRef.current,
+                faucetSucceeded: faucetSucceededRef.current,
+              });
               toastRef.current.info('Could not add funds right now. Will retry automatically.');
             }
           }
@@ -295,7 +305,7 @@ export function useAutoRefill({
           ));
           if (isInitialRun) {
             isInitialRunPending = false;
-            saveCooldowns(targetAddress, { lastFaucetAttempt: lastFaucetAttemptRef.current, lastFundAttempt: 0, faucetSucceeded: faucetSucceededRef.current || undefined });
+            saveCooldowns(targetAddress, { lastFaucetAttempt: lastFaucetAttemptRef.current, lastFundAttempt: 0, faucetSucceeded: faucetSucceededRef.current });
             setSetupState({ isInitialSetup: false, phase: 'complete' });
           }
           return;
@@ -323,12 +333,16 @@ export function useAutoRefill({
               amount: toBaseUnits(AUTO_REFILL_CREDIT_AMOUNT, DENOMS.PWR),
             });
             if (signal.aborted || addressRef.current !== targetAddress) return;
-            // Always stamp cooldown to prevent toast spam on repeated failures.
-            lastFundAttemptRef.current = Date.now();
+            // Stamp cooldown on success, or on failure for recurring runs (prevents
+            // toast spam). Initial setup failures keep timestamp at 0 so the next
+            // interval retries quickly.
+            if (result.success || !isInitialRun) {
+              lastFundAttemptRef.current = Date.now();
+            }
             saveCooldowns(targetAddress, {
               lastFaucetAttempt: lastFaucetAttemptRef.current,
               lastFundAttempt: lastFundAttemptRef.current,
-              faucetSucceeded: faucetSucceededRef.current || undefined,
+              faucetSucceeded: faucetSucceededRef.current,
             });
             if (result.success) {
               if (!isInitialRun) {
@@ -342,13 +356,15 @@ export function useAutoRefill({
             }
           } catch (error) {
             logError('useAutoRefill.fundCredits', error);
-            lastFundAttemptRef.current = Date.now();
-            saveCooldowns(targetAddress, {
-              lastFaucetAttempt: lastFaucetAttemptRef.current,
-              lastFundAttempt: lastFundAttemptRef.current,
-              faucetSucceeded: faucetSucceededRef.current || undefined,
-            });
+            // Only stamp cooldown on recurring runs to prevent toast spam.
+            // Initial setup failures should retry on the next interval.
             if (!isInitialRun) {
+              lastFundAttemptRef.current = Date.now();
+              saveCooldowns(targetAddress, {
+                lastFaucetAttempt: lastFaucetAttemptRef.current,
+                lastFundAttempt: lastFundAttemptRef.current,
+                faucetSucceeded: faucetSucceededRef.current,
+              });
               toastRef.current.info('Could not activate credits right now. Will retry automatically.');
             }
           }
@@ -360,7 +376,7 @@ export function useAutoRefill({
           saveCooldowns(targetAddress, {
             lastFaucetAttempt: lastFaucetAttemptRef.current,
             lastFundAttempt: lastFundAttemptRef.current,
-            faucetSucceeded: faucetSucceededRef.current || undefined,
+            faucetSucceeded: faucetSucceededRef.current,
           });
           setSetupState({ isInitialSetup: true, phase: 'complete' });
           dismissTimerRef.current = setTimeout(() => {
@@ -371,7 +387,7 @@ export function useAutoRefill({
         logError('useAutoRefill.check', error);
         if (isInitialRun && !signal.aborted && addressRef.current === targetAddress) {
           isInitialRunPending = false;
-          saveCooldowns(targetAddress, { lastFaucetAttempt: lastFaucetAttemptRef.current, lastFundAttempt: lastFundAttemptRef.current, faucetSucceeded: faucetSucceededRef.current || undefined });
+          saveCooldowns(targetAddress, { lastFaucetAttempt: lastFaucetAttemptRef.current, lastFundAttempt: lastFundAttemptRef.current, faucetSucceeded: faucetSucceededRef.current });
           setSetupState({ isInitialSetup: false, phase: 'complete' });
         }
       } finally {
