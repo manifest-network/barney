@@ -42,6 +42,7 @@ ErrorBoundary
           └─ ToastProvider (toast notifications)
               └─ AIProvider (chat state, tool execution, Ollama streaming)
                   ├─ AppShell
+                  │   ├─ AccountSetupOverlay (blocking stepper during first-connect provisioning)
                   │   ├─ LandingPage (when not connected)
                   │   └─ MainLayout (when connected)
                   │       ├─ ErrorBoundary (sidebar isolation)
@@ -213,7 +214,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `useLeaseItems` | Manages lease item state in forms (add/remove/update SKU items) |
 | `useBatchSelection` | Manages batch selection state for bulk operations |
 | `useCopyToClipboard` | Clipboard copy with feedback state |
-| `useAutoRefill` | Recurring faucet + credit funding — monitors MFX/PWR/credit balances and auto-refills when below thresholds |
+| `useAutoRefill` | Recurring faucet + credit funding — monitors MFX/PWR/credit balances and auto-refills when below thresholds. Returns `AccountSetupState` (`isInitialSetup` + `phase`) for first-connect overlay. Cooldowns persisted to localStorage (`barney-refill-{address}`) |
 
 ### Utility Modules (`src/utils/`)
 
@@ -254,6 +255,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `WS_MAX_RECONNECT_ATTEMPTS` | 2 | Max reconnects before falling back to polling |
 | `WS_LIVENESS_TIMEOUT_MS` | 45s | WebSocket data liveness timeout (Fred pings every 30s) |
 | `STORAGE_SKU_NAME` | 'docker-small' | SKU name that supports persistent disk storage |
+| `ACCOUNT_SETUP_COMPLETE_DELAY_MS` | 1.5s | Delay before dismissing account setup overlay after completion |
 
 ## Styling
 

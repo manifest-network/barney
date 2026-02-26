@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createElement, type FC } from 'react';
+import { createElement, type FC, useEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
-import { useAutoRefill, type UseAutoRefillOptions } from './useAutoRefill';
+import { useAutoRefill, loadCooldowns, saveCooldowns, type UseAutoRefillOptions, type AccountSetupState } from './useAutoRefill';
 
 // --- Mocks ---
 
@@ -54,31 +54,42 @@ const mockGetOfflineSignerRef = { current: mockGetOfflineSigner };
 
 let container: HTMLDivElement;
 let root: Root;
+let lastSetupState: AccountSetupState;
 
-/** Wrapper component that calls useAutoRefill with given options. */
-function HookHost(props: UseAutoRefillOptions) {
-  useAutoRefill(props);
+/** Wrapper component that calls useAutoRefill with given options and captures state. */
+function HookHost(props: UseAutoRefillOptions & { onState?: (s: AccountSetupState) => void }) {
+  const { onState, ...hookProps } = props;
+  const state = useAutoRefill(hookProps);
+  useEffect(() => {
+    if (onState) onState(state);
+  }, [onState, state]);
   return null;
 }
 
-function defaultProps(overrides?: Partial<UseAutoRefillOptions>): UseAutoRefillOptions {
+/** Callback used by HookHost to capture the latest setup state */
+const captureState = (s: AccountSetupState) => { lastSetupState = s; };
+
+type HookHostProps = UseAutoRefillOptions & { onState?: (s: AccountSetupState) => void };
+
+function defaultProps(overrides?: Partial<HookHostProps>): HookHostProps {
   return {
     address: 'manifest1test',
     isWalletConnected: true,
     getOfflineSignerRef: mockGetOfflineSignerRef as any,
     toast: mockToast as any,
+    onState: captureState,
     ...overrides,
   };
 }
 
-function render(props: UseAutoRefillOptions) {
+function render(props: HookHostProps) {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   flushSync(() => { root.render(createElement(HookHost as FC, props as any)); });
 }
 
-function rerender(props: UseAutoRefillOptions) {
+function rerender(props: HookHostProps) {
   flushSync(() => { root.render(createElement(HookHost as FC, props as any)); });
 }
 
@@ -122,6 +133,7 @@ function setFaucetResults(mfxSuccess: boolean, pwrSuccess: boolean) {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  localStorage.clear();
   vi.mocked(isFaucetEnabled).mockReturnValue(true);
   setBalances(0, 0);
   setCreditBalance(0);
@@ -146,9 +158,6 @@ describe('useAutoRefill — first-connect', () => {
 
     expect(getBalance).toHaveBeenCalledWith('manifest1test', 'umfx');
     expect(requestFaucetTokens).toHaveBeenCalledWith('manifest1test');
-    expect(mockToast.success).toHaveBeenCalledWith(
-      'Free MFX and PWR tokens have been sent to your wallet.'
-    );
   });
 
   it('funds credits after successful faucet', async () => {
@@ -168,7 +177,6 @@ describe('useAutoRefill — first-connect', () => {
       'manifest1test',
       { denom: 'factory/addr/upwr', amount: '10000000' },
     );
-    expect(mockToast.success).toHaveBeenCalledWith("Funded 10 credits — you're all set!");
   });
 
   it('skips faucet when disabled', async () => {
@@ -189,28 +197,6 @@ describe('useAutoRefill — first-connect', () => {
     expect(requestFaucetTokens).not.toHaveBeenCalled();
   });
 
-  it('shows info toast on partial faucet failure', async () => {
-    setFaucetResults(true, false);
-
-    render(defaultProps());
-    await flushMicrotasks();
-
-    expect(mockToast.info).toHaveBeenCalledWith(
-      'Some tokens could not be sent — the faucet cooldown may be active.'
-    );
-  });
-
-  it('shows distinct toast when all faucet requests fail', async () => {
-    setFaucetResults(false, false);
-
-    render(defaultProps());
-    await flushMicrotasks();
-
-    expect(mockToast.info).toHaveBeenCalledWith(
-      'No tokens could be sent — the faucet cooldown may be active.'
-    );
-  });
-
   it('logs and toasts on faucet network failure', async () => {
     vi.mocked(getBalance).mockRejectedValue(new Error('network error'));
 
@@ -218,45 +204,6 @@ describe('useAutoRefill — first-connect', () => {
     await flushMicrotasks();
 
     expect(logError).toHaveBeenCalledWith('useAutoRefill.check', expect.any(Error));
-  });
-
-  it('shows info toast when faucet request throws', async () => {
-    setBalances(0, 0);
-    vi.mocked(requestFaucetTokens).mockRejectedValue(new Error('faucet down'));
-
-    render(defaultProps());
-    await flushMicrotasks();
-
-    expect(logError).toHaveBeenCalledWith('useAutoRefill.faucet', expect.any(Error));
-    expect(mockToast.info).toHaveBeenCalledWith(
-      'Could not reach the faucet. Will retry automatically.'
-    );
-  });
-
-  it('shows info toast when fundCredit throws', async () => {
-    setBalances(0, 100);
-    vi.mocked(fundCredit).mockRejectedValue(new Error('insufficient funds'));
-
-    render(defaultProps());
-    await flushMicrotasks();
-
-    expect(logError).toHaveBeenCalledWith('useAutoRefill.fundCredits', expect.any(Error));
-    expect(mockToast.info).toHaveBeenCalledWith(
-      'Auto-funding credits failed. You can fund credits manually.'
-    );
-  });
-
-  it('shows info toast when fundCredit TX fails on-chain', async () => {
-    setBalances(0, 100);
-    vi.mocked(fundCredit).mockResolvedValue({ success: false, error: 'account sequence mismatch' });
-
-    render(defaultProps());
-    await flushMicrotasks();
-
-    expect(logError).toHaveBeenCalledWith('useAutoRefill.fundCredits', 'account sequence mismatch');
-    expect(mockToast.info).toHaveBeenCalledWith(
-      'Auto-funding credits failed. You can fund credits manually.'
-    );
   });
 });
 
@@ -284,6 +231,8 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('requests faucet when MFX below threshold (non-zero)', async () => {
+    // Pre-seed so this is not initial setup (avoids toast suppression)
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
     setBalances(0.3, 100); // MFX below 0.5 threshold
 
     render(defaultProps());
@@ -293,6 +242,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('requests faucet when PWR below threshold', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
     setBalances(10, 3); // PWR below 5 threshold
 
     render(defaultProps());
@@ -377,6 +327,8 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('respects faucet 25h cooldown', async () => {
+    // Pre-seed so recurring runs show toasts
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
     setBalances(0, 0);
     setCreditBalance(100);
 
@@ -386,6 +338,8 @@ describe('useAutoRefill — recurring', () => {
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
     vi.clearAllMocks();
     setFaucetResults(true, true);
+    // Simulate faucet depositing tokens so stale-key detection doesn't trigger
+    setBalances(10, 100);
 
     await vi.advanceTimersByTimeAsync(60_000);
     await flushMicrotasks();
@@ -397,6 +351,7 @@ describe('useAutoRefill — recurring', () => {
   it('does not stamp faucet cooldown when all drips fail', async () => {
     // requestFaucetTokens never throws — it converts network/HTTP errors into
     // { success: false } results. All-failed should NOT lock out retries for 25h.
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
     setBalances(0, 0);
     setCreditBalance(100);
     setFaucetResults(false, false);
@@ -521,7 +476,9 @@ describe('useAutoRefill — recurring', () => {
     root = createRoot(container);
   });
 
-  it('resets cooldowns on address change', async () => {
+  it('loads persisted cooldowns on address change', async () => {
+    // Pre-seed so recurring runs show toasts and respect cooldowns
+    saveCooldowns('manifest1second', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
     setBalances(0, 0);
     setCreditBalance(100);
 
@@ -532,14 +489,19 @@ describe('useAutoRefill — recurring', () => {
     vi.clearAllMocks();
     setFaucetResults(true, true);
 
-    // Change address — cooldowns should reset, immediate check fires
+    // Change to address with pre-existing cooldowns and non-zero balances
+    // (non-zero balances prevent stale-key detection from triggering)
+    setBalances(10, 100);
+    saveCooldowns('manifest1second', { lastFaucetAttempt: Date.now(), lastFundAttempt: 0 });
     rerender(defaultProps({ address: 'manifest1second' }));
     await flushMicrotasks();
 
-    expect(requestFaucetTokens).toHaveBeenCalledWith('manifest1second');
+    // Faucet should NOT fire — persisted cooldown is recent
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
   });
 
   it('does not reset cooldowns on re-render with same address', async () => {
+    saveCooldowns('manifest1same', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
     setBalances(0, 0);
     setCreditBalance(100);
 
@@ -548,6 +510,8 @@ describe('useAutoRefill — recurring', () => {
 
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
     vi.clearAllMocks();
+    // Simulate faucet depositing tokens so stale-key detection doesn't trigger on reconnect
+    setBalances(10, 100);
 
     // Disconnect and reconnect same address
     rerender(defaultProps({ isWalletConnected: false, address: undefined }));
@@ -589,6 +553,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('skips PWR re-query when all faucet drips failed', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
     setFaucetResults(false, false); // All fail → faucetRan stays false
     setBalances(0, 100);
     setCreditBalance(2);
@@ -605,6 +570,7 @@ describe('useAutoRefill — recurring', () => {
   it('still checks credits when all faucet drips fail', async () => {
     // requestFaucetTokens returns { success: false } on network/HTTP errors — never throws.
     // Credit funding should still proceed using the original wallet PWR balance.
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
     setBalances(0, 100); // Triggers faucet need, but also has enough PWR to fund
     setCreditBalance(2);
     setFaucetResults(false, false);
@@ -691,6 +657,7 @@ describe('useAutoRefill — recurring', () => {
   });
 
   it('re-requests faucet after 25h cooldown expires', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
     setBalances(0, 0);
     setCreditBalance(100);
 
@@ -700,9 +667,14 @@ describe('useAutoRefill — recurring', () => {
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
     vi.clearAllMocks();
     setFaucetResults(true, true);
+    // Simulate faucet depositing tokens, then balance dropping back to zero over time
+    setBalances(10, 100);
 
     // Advance past 25h cooldown + next interval tick
-    await vi.advanceTimersByTimeAsync(25 * 3600_000 + 60_000);
+    // Reset balances to zero to trigger faucet need again
+    await vi.advanceTimersByTimeAsync(25 * 3600_000);
+    setBalances(0, 0);
+    await vi.advanceTimersByTimeAsync(60_000);
     await flushMicrotasks();
 
     expect(requestFaucetTokens).toHaveBeenCalledTimes(1);
@@ -762,5 +734,355 @@ describe('useAutoRefill — recurring', () => {
 
     // Should still run the interval check (mutex not stuck)
     expect(getBalance).toHaveBeenCalled();
+  });
+
+  it('shows info toast on partial faucet failure (recurring, not initial)', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    setBalances(0, 0);
+    setCreditBalance(100);
+    setFaucetResults(true, false);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(mockToast.info).toHaveBeenCalledWith(
+      'Some funds could not be added right now. Please try again later.'
+    );
+  });
+
+  it('shows distinct toast when all faucet requests fail (recurring)', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    setBalances(0, 0);
+    setCreditBalance(100);
+    setFaucetResults(false, false);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(mockToast.info).toHaveBeenCalledWith(
+      'Funds could not be added right now. Please try again later.'
+    );
+  });
+
+  it('shows info toast when faucet request throws (recurring)', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    setBalances(0, 0);
+    vi.mocked(requestFaucetTokens).mockRejectedValue(new Error('faucet down'));
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(logError).toHaveBeenCalledWith('useAutoRefill.faucet', expect.any(Error));
+    expect(mockToast.info).toHaveBeenCalledWith(
+      'Could not add funds right now. Will retry automatically.'
+    );
+  });
+
+  it('shows info toast when fundCredit throws (recurring)', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    setBalances(0, 100);
+    vi.mocked(fundCredit).mockRejectedValue(new Error('insufficient funds'));
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(logError).toHaveBeenCalledWith('useAutoRefill.fundCredits', expect.any(Error));
+    expect(mockToast.info).toHaveBeenCalledWith(
+      'Could not activate credits right now. Will retry automatically.'
+    );
+  });
+
+  it('shows info toast when fundCredit TX fails on-chain (recurring)', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    setBalances(0, 100);
+    vi.mocked(fundCredit).mockResolvedValue({ success: false, error: 'account sequence mismatch' });
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(logError).toHaveBeenCalledWith('useAutoRefill.fundCredits', 'account sequence mismatch');
+    expect(mockToast.info).toHaveBeenCalledWith(
+      'Could not activate credits right now. Will retry automatically.'
+    );
+  });
+
+  it('shows success toast for faucet and fund on recurring runs', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    let pwrCallCount = 0;
+    vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
+      if (denom === 'umfx') return { denom, amount: '0' };
+      pwrCallCount++;
+      return { denom, amount: pwrCallCount <= 1 ? '0' : String(100 * 1_000_000) };
+    });
+    setCreditBalance(0);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Starter funds have been added to your account.'
+    );
+    expect(mockToast.success).toHaveBeenCalledWith("Credits activated — you're all set!");
+  });
+});
+
+// ============================================
+// Cooldown persistence
+// ============================================
+
+describe('useAutoRefill — cooldown persistence', () => {
+  it('saves cooldowns after successful faucet', async () => {
+    setBalances(0, 0);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    const persisted = loadCooldowns('manifest1test');
+    expect(persisted).not.toBeNull();
+    expect(persisted!.lastFaucetAttempt).toBeGreaterThan(0);
+  });
+
+  it('saves cooldowns after successful fund', async () => {
+    setBalances(10, 100);
+    setCreditBalance(2);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    const persisted = loadCooldowns('manifest1test');
+    expect(persisted).not.toBeNull();
+    expect(persisted!.lastFundAttempt).toBeGreaterThan(0);
+  });
+
+  it('loads persisted cooldowns on mount', async () => {
+    // Pre-seed a recent faucet cooldown with non-zero balances
+    // (zero balances + non-zero faucet timestamp would trigger stale-key detection)
+    const recentTimestamp = Date.now();
+    saveCooldowns('manifest1test', { lastFaucetAttempt: recentTimestamp, lastFundAttempt: 0 });
+    setBalances(0.3, 3);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Faucet should NOT fire — persisted cooldown is recent
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
+  });
+
+  it('handles corrupted localStorage gracefully', async () => {
+    localStorage.setItem('barney-refill-manifest1test', 'not-json');
+    setBalances(0, 0);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Should treat as initial setup (no valid cooldowns) and still faucet
+    expect(logError).toHaveBeenCalledWith('useAutoRefill.loadCooldowns', expect.any(Error));
+    expect(requestFaucetTokens).toHaveBeenCalled();
+  });
+
+  it('handles localStorage with invalid shape gracefully', async () => {
+    localStorage.setItem('barney-refill-manifest1test', JSON.stringify({ foo: 'bar' }));
+    setBalances(0, 0);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Should treat as initial setup (invalid shape) and still faucet
+    expect(requestFaucetTokens).toHaveBeenCalled();
+  });
+
+  it('always saves cooldowns at end of initial setup', async () => {
+    setBalances(10, 100);
+    setCreditBalance(100); // No faucet or fund needed
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Even though nothing ran, cooldowns should be saved so the key exists
+    const persisted = loadCooldowns('manifest1test');
+    expect(persisted).not.toBeNull();
+  });
+});
+
+// ============================================
+// Stale-key detection (backend reset)
+// ============================================
+
+describe('useAutoRefill — stale-key detection', () => {
+  it('clears stale cooldowns and re-runs onboarding when backend is reset', async () => {
+    // Simulate: faucet ran previously, then backend was wiped
+    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: Date.now() - 1000 });
+    setBalances(0, 0);
+    setCreditBalance(0);
+
+    render(defaultProps());
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // Stale key should be cleared and faucet should run as initial setup
+    expect(requestFaucetTokens).toHaveBeenCalledWith('manifest1test');
+    // Toasts should be suppressed (initial setup, not recurring)
+    expect(mockToast.info).not.toHaveBeenCalled();
+    // Should show overlay
+    expect(lastSetupState.isInitialSetup).toBe(true);
+  });
+
+  it('does not clear cooldowns when balances are non-zero', async () => {
+    const faucetTime = Date.now() - 1000;
+    saveCooldowns('manifest1test', { lastFaucetAttempt: faucetTime, lastFundAttempt: 0 });
+    setBalances(10, 100);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Cooldowns should be preserved — not a backend reset
+    expect(requestFaucetTokens).not.toHaveBeenCalled();
+    expect(lastSetupState.isInitialSetup).toBe(false);
+  });
+
+  it('does not clear cooldowns when only one balance is zero', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: Date.now() - 1000, lastFundAttempt: 0 });
+    setBalances(0, 100); // MFX zero but PWR non-zero
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Not a backend reset — only MFX is zero, PWR is fine
+    expect(lastSetupState.isInitialSetup).toBe(false);
+  });
+
+  it('does not trigger stale detection when faucet timestamp is zero', async () => {
+    // lastFaucetAttempt: 0 means faucet never actually ran — not a reset scenario
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    setBalances(0, 0);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Should treat as recurring (cooldown key exists), not re-trigger onboarding
+    expect(lastSetupState.isInitialSetup).toBe(false);
+    // Faucet still runs (cooldown timestamp is 0, so cooldown is elapsed)
+    expect(requestFaucetTokens).toHaveBeenCalled();
+    // Toasts should fire (recurring, not initial)
+    expect(mockToast.info).toHaveBeenCalled();
+  });
+});
+
+// ============================================
+// Initial setup state
+// ============================================
+
+describe('useAutoRefill — initial setup state', () => {
+  it('reports isInitialSetup: true for new wallet and dismisses after delay', async () => {
+    setBalances(10, 100);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    // Flush async operations + React state batching
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // After completion, phase should be 'complete' with isInitialSetup still true
+    expect(lastSetupState.phase).toBe('complete');
+    expect(lastSetupState.isInitialSetup).toBe(true);
+
+    // After delay, isInitialSetup should be false
+    await vi.advanceTimersByTimeAsync(1500);
+    await flushMicrotasks();
+    await flushMicrotasks();
+    expect(lastSetupState.isInitialSetup).toBe(false);
+  });
+
+  it('reports isInitialSetup: false for returning wallet', async () => {
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    setBalances(10, 100);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    expect(lastSetupState.isInitialSetup).toBe(false);
+  });
+
+  it('suppresses toasts during initial setup', async () => {
+    // No pre-seeded cooldowns = initial setup
+    setBalances(0, 0);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // During initial setup, toasts should NOT be shown
+    expect(mockToast.info).not.toHaveBeenCalled();
+    expect(mockToast.success).not.toHaveBeenCalled();
+  });
+
+  it('shows toasts for recurring runs after initial setup', async () => {
+    // Seed cooldowns so this is NOT initial setup
+    saveCooldowns('manifest1test', { lastFaucetAttempt: 0, lastFundAttempt: 0 });
+    setBalances(0, 0);
+    setCreditBalance(100);
+
+    render(defaultProps());
+    await flushMicrotasks();
+
+    // Should show toasts for recurring runs
+    expect(mockToast.info).toHaveBeenCalledWith('Adding starter funds to your account…');
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Starter funds have been added to your account.'
+    );
+  });
+
+  it('transitions through phases during initial setup', async () => {
+    let pwrCallCount = 0;
+    vi.mocked(getBalance).mockImplementation(async (_addr: string, denom: string) => {
+      if (denom === 'umfx') return { denom, amount: '0' };
+      pwrCallCount++;
+      return { denom, amount: pwrCallCount <= 1 ? '0' : String(100 * 1_000_000) };
+    });
+    setCreditBalance(2);
+
+    render(defaultProps());
+    // Flush async operations + React state batching
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // After everything completes, should be at 'complete'
+    expect(lastSetupState.phase).toBe('complete');
+    expect(lastSetupState.isInitialSetup).toBe(true);
+  });
+});
+
+// ============================================
+// loadCooldowns / saveCooldowns unit tests
+// ============================================
+
+describe('loadCooldowns / saveCooldowns', () => {
+  it('round-trips correctly', () => {
+    const data = { lastFaucetAttempt: 12345, lastFundAttempt: 67890 };
+    saveCooldowns('manifest1addr', data);
+    expect(loadCooldowns('manifest1addr')).toEqual(data);
+  });
+
+  it('returns null when key does not exist', () => {
+    expect(loadCooldowns('manifest1missing')).toBeNull();
+  });
+
+  it('returns null for corrupted JSON', () => {
+    localStorage.setItem('barney-refill-manifest1bad', '{invalid');
+    expect(loadCooldowns('manifest1bad')).toBeNull();
+    expect(logError).toHaveBeenCalledWith('useAutoRefill.loadCooldowns', expect.any(Error));
+  });
+
+  it('returns null for JSON with wrong shape', () => {
+    localStorage.setItem('barney-refill-manifest1wrong', JSON.stringify({ x: 1 }));
+    expect(loadCooldowns('manifest1wrong')).toBeNull();
   });
 });

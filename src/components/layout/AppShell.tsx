@@ -12,6 +12,7 @@ import { useToast } from '../../hooks/useToast';
 import { useAutoRefill } from '../../hooks/useAutoRefill';
 import { LandingPage } from '../landing/LandingPage';
 import { MainLayout } from './MainLayout';
+import { AccountSetupOverlay } from './AccountSetupOverlay';
 import { CHAIN_NAME } from '../../config/chain';
 
 const EXIT_DURATION_MS = 150;
@@ -50,7 +51,7 @@ export function AppShell() {
   const getOfflineSignerRef = useRef(getOfflineSigner);
   useEffect(() => { getOfflineSignerRef.current = getOfflineSigner; }, [getOfflineSigner]);
 
-  useAutoRefill({ address, isWalletConnected, getOfflineSignerRef, toast });
+  const setupState = useAutoRefill({ address, isWalletConnected, getOfflineSignerRef, toast });
 
   // Page transition: defer content swap until exit animation completes.
   // `exiting` is derived (not state) so we avoid calling setState in the effect body.
@@ -66,11 +67,14 @@ export function AppShell() {
   }, [isWalletConnected, renderedConnected]);
 
   return (
-    <div className={`app-shell__page ${exiting ? 'app-shell__page--exit' : ''}`}>
-      {renderedConnected
-        ? <MainLayout />
-        : <LandingPage onConnect={() => openView()} isConnecting={isWalletConnecting} />
-      }
-    </div>
+    <>
+      <AccountSetupOverlay state={setupState} />
+      <div className={`app-shell__page ${exiting ? 'app-shell__page--exit' : ''}`}>
+        {renderedConnected
+          ? <MainLayout />
+          : <LandingPage onConnect={() => openView()} isConnecting={isWalletConnecting} />
+        }
+      </div>
+    </>
   );
 }
