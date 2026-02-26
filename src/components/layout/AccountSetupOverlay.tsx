@@ -57,8 +57,8 @@ export function AccountSetupOverlay({ state }: AccountSetupOverlayProps) {
   if (!state.isInitialSetup) return null;
 
   return (
-    <div className="modal-backdrop" role="alertdialog" aria-modal="true" aria-label="Setting up your account">
-      <div ref={dialogRef} className="account-setup" tabIndex={-1}>
+    <div ref={dialogRef} className="modal-backdrop" role="alertdialog" aria-modal="true" aria-label="Setting up your account" tabIndex={-1}>
+      <div className="account-setup">
         <h2 className="account-setup__title">Setting up your account</h2>
         <div className="account-setup__steps">
           {STEPS.map(({ phase, label }) => {

@@ -11,9 +11,9 @@
  * On the very first run for a wallet (no localStorage key), the hook exposes
  * AccountSetupState so the UI can show a blocking overlay instead of scattered toasts.
  *
- * If the cooldown key exists but the account is completely empty (zero MFX, PWR,
- * and credits), the backend was likely reset — the stale key is cleared and the
- * run is promoted to initial setup so the overlay appears again.
+ * If the cooldown key exists but wallet balances are zero (MFX and PWR), the
+ * backend was likely reset — the stale key is cleared and the run is promoted
+ * to initial setup so the overlay appears again.
  *
  * Gated entirely by isFaucetEnabled() — deployments without a faucet are unaffected.
  */

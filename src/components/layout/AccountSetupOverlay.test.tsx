@@ -1,45 +1,50 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { flushSync } from 'react-dom';
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import { AccountSetupOverlay } from './AccountSetupOverlay';
 import type { AccountSetupState } from '../../hooks/useAutoRefill';
 
+let container: HTMLDivElement;
+let root: Root;
+
 function renderToContainer(state: AccountSetupState): HTMLDivElement {
-  const container = document.createElement('div');
+  container = document.createElement('div');
   document.body.appendChild(container);
-  const root = createRoot(container);
+  root = createRoot(container);
   flushSync(() => {
     root.render(createElement(AccountSetupOverlay, { state }));
   });
   return container;
 }
 
+afterEach(() => {
+  flushSync(() => { root?.unmount(); });
+  container?.remove();
+});
+
 describe('AccountSetupOverlay', () => {
   it('renders nothing when isInitialSetup is false', () => {
-    const container = renderToContainer({ isInitialSetup: false, phase: 'complete' });
-    expect(container.innerHTML).toBe('');
-    container.remove();
+    const el = renderToContainer({ isInitialSetup: false, phase: 'complete' });
+    expect(el.innerHTML).toBe('');
   });
 
   it('renders overlay with alertdialog role when isInitialSetup is true', () => {
-    const container = renderToContainer({ isInitialSetup: true, phase: 'checking' });
-    const dialog = container.querySelector('[role="alertdialog"]');
+    const el = renderToContainer({ isInitialSetup: true, phase: 'checking' });
+    const dialog = el.querySelector('[role="alertdialog"]');
     expect(dialog).not.toBeNull();
     expect(dialog!.getAttribute('aria-modal')).toBe('true');
-    container.remove();
   });
 
   it('renders three steps', () => {
-    const container = renderToContainer({ isInitialSetup: true, phase: 'checking' });
-    const steps = container.querySelectorAll('.account-setup__step');
+    const el = renderToContainer({ isInitialSetup: true, phase: 'checking' });
+    const steps = el.querySelectorAll('.account-setup__step');
     expect(steps.length).toBe(3);
-    container.remove();
   });
 
   it('shows spinner on active step and circle on pending steps', () => {
-    const container = renderToContainer({ isInitialSetup: true, phase: 'checking' });
-    const steps = container.querySelectorAll('.account-setup__step');
+    const el = renderToContainer({ isInitialSetup: true, phase: 'checking' });
+    const steps = el.querySelectorAll('.account-setup__step');
 
     // First step (checking) should have spinning loader
     const firstStepSvg = steps[0].querySelector('.animate-spin');
@@ -48,13 +53,11 @@ describe('AccountSetupOverlay', () => {
     // Second and third steps should NOT have spinner
     expect(steps[1].querySelector('.animate-spin')).toBeNull();
     expect(steps[2].querySelector('.animate-spin')).toBeNull();
-
-    container.remove();
   });
 
   it('shows checkmark on completed steps during faucet phase', () => {
-    const container = renderToContainer({ isInitialSetup: true, phase: 'faucet' });
-    const steps = container.querySelectorAll('.account-setup__step');
+    const el = renderToContainer({ isInitialSetup: true, phase: 'faucet' });
+    const steps = el.querySelectorAll('.account-setup__step');
 
     // First step (checking) should be done — no spinner
     expect(steps[0].querySelector('.animate-spin')).toBeNull();
@@ -64,44 +67,37 @@ describe('AccountSetupOverlay', () => {
 
     // Third step should be pending
     expect(steps[2].querySelector('.animate-spin')).toBeNull();
-
-    container.remove();
   });
 
   it('shows all checks on complete phase', () => {
-    const container = renderToContainer({ isInitialSetup: true, phase: 'complete' });
-    const steps = container.querySelectorAll('.account-setup__step');
+    const el = renderToContainer({ isInitialSetup: true, phase: 'complete' });
+    const steps = el.querySelectorAll('.account-setup__step');
 
     // No spinners anywhere
-    expect(container.querySelector('.animate-spin')).toBeNull();
+    expect(el.querySelector('.animate-spin')).toBeNull();
 
     // All steps should be done (no pending circles)
     steps.forEach((step) => {
       // Should have an SVG icon (CheckCircle)
       expect(step.querySelector('svg')).not.toBeNull();
     });
-
-    container.remove();
   });
 
   it('has no close button or escape handler', () => {
-    const container = renderToContainer({ isInitialSetup: true, phase: 'checking' });
+    const el = renderToContainer({ isInitialSetup: true, phase: 'checking' });
 
     // No buttons at all
-    expect(container.querySelector('button')).toBeNull();
+    expect(el.querySelector('button')).toBeNull();
 
     // No elements with close-related classes
-    expect(container.querySelector('.modal-close')).toBeNull();
-    expect(container.querySelector('[aria-label="Close"]')).toBeNull();
-
-    container.remove();
+    expect(el.querySelector('.modal-close')).toBeNull();
+    expect(el.querySelector('[aria-label="Close"]')).toBeNull();
   });
 
   it('renders the title', () => {
-    const container = renderToContainer({ isInitialSetup: true, phase: 'checking' });
-    const title = container.querySelector('.account-setup__title');
+    const el = renderToContainer({ isInitialSetup: true, phase: 'checking' });
+    const title = el.querySelector('.account-setup__title');
     expect(title).not.toBeNull();
     expect(title!.textContent).toBe('Setting up your account');
-    container.remove();
   });
 });

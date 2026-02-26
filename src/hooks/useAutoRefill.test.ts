@@ -62,7 +62,7 @@ function HookHost(props: UseAutoRefillOptions & { onState?: (s: AccountSetupStat
   const state = useAutoRefill(hookProps);
   useEffect(() => {
     if (onState) onState(state);
-  });
+  }, [onState, state]);
   return null;
 }
 
