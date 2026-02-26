@@ -317,6 +317,9 @@ export function useAutoRefill({
             });
             if (signal.aborted || addressRef.current !== targetAddress) return;
             if (result.success) {
+              // Only stamp cooldown on success — on-chain errors (e.g. sequence mismatch)
+              // should allow retries on the next interval, matching the faucet pattern.
+              lastFundAttemptRef.current = Date.now();
               // Only stamp cooldown on success — on-chain failures (sequence mismatch, etc.)
               // should be retried on the next interval, not locked out for 5 minutes.
               lastFundAttemptRef.current = Date.now();
