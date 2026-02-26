@@ -735,7 +735,7 @@ describe('useAutoRefill — recurring', () => {
     await flushMicrotasks();
 
     expect(mockToast.info).toHaveBeenCalledWith(
-      'Some tokens could not be sent — the faucet cooldown may be active.'
+      'Some funds could not be added right now. Please try again later.'
     );
   });
 
@@ -749,7 +749,7 @@ describe('useAutoRefill — recurring', () => {
     await flushMicrotasks();
 
     expect(mockToast.info).toHaveBeenCalledWith(
-      'No tokens could be sent — the faucet cooldown may be active.'
+      'Funds could not be added right now. Please try again later.'
     );
   });
 
@@ -763,7 +763,7 @@ describe('useAutoRefill — recurring', () => {
 
     expect(logError).toHaveBeenCalledWith('useAutoRefill.faucet', expect.any(Error));
     expect(mockToast.info).toHaveBeenCalledWith(
-      'Could not reach the faucet. Will retry automatically.'
+      'Could not add funds right now. Will retry automatically.'
     );
   });
 
@@ -777,7 +777,7 @@ describe('useAutoRefill — recurring', () => {
 
     expect(logError).toHaveBeenCalledWith('useAutoRefill.fundCredits', expect.any(Error));
     expect(mockToast.info).toHaveBeenCalledWith(
-      'Auto-funding credits failed. You can fund credits manually.'
+      'Could not activate credits right now. Will retry automatically.'
     );
   });
 
@@ -791,7 +791,7 @@ describe('useAutoRefill — recurring', () => {
 
     expect(logError).toHaveBeenCalledWith('useAutoRefill.fundCredits', 'account sequence mismatch');
     expect(mockToast.info).toHaveBeenCalledWith(
-      'Auto-funding credits failed. You can fund credits manually.'
+      'Could not activate credits right now. Will retry automatically.'
     );
   });
 
@@ -809,9 +809,9 @@ describe('useAutoRefill — recurring', () => {
     await flushMicrotasks();
 
     expect(mockToast.success).toHaveBeenCalledWith(
-      'Free MFX and PWR tokens have been sent to your wallet.'
+      'Starter funds have been added to your account.'
     );
-    expect(mockToast.success).toHaveBeenCalledWith("Funded 10 credits — you're all set!");
+    expect(mockToast.success).toHaveBeenCalledWith("Credits activated — you're all set!");
   });
 });
 
@@ -955,9 +955,9 @@ describe('useAutoRefill — initial setup state', () => {
     await flushMicrotasks();
 
     // Should show toasts for recurring runs
-    expect(mockToast.info).toHaveBeenCalledWith('Sending free MFX and PWR tokens to your wallet…');
+    expect(mockToast.info).toHaveBeenCalledWith('Adding starter funds to your account…');
     expect(mockToast.success).toHaveBeenCalledWith(
-      'Free MFX and PWR tokens have been sent to your wallet.'
+      'Starter funds have been added to your account.'
     );
   });
 

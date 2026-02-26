@@ -194,7 +194,7 @@ export function useAutoRefill({
           }
           try {
             if (!isInitialRun) {
-              toastRef.current.info('Sending free MFX and PWR tokens to your wallet…');
+              toastRef.current.info('Adding starter funds to your account…');
             }
             const { results } = await requestFaucetTokens(targetAddress);
             if (signal.aborted || addressRef.current !== targetAddress) return;
@@ -217,17 +217,17 @@ export function useAutoRefill({
             const allFailed = results.every((r) => !r.success);
             if (!isInitialRun) {
               if (allSuccess) {
-                toastRef.current.success('Free MFX and PWR tokens have been sent to your wallet.');
+                toastRef.current.success('Starter funds have been added to your account.');
               } else if (allFailed) {
-                toastRef.current.info('No tokens could be sent — the faucet cooldown may be active.');
+                toastRef.current.info('Funds could not be added right now. Please try again later.');
               } else {
-                toastRef.current.info('Some tokens could not be sent — the faucet cooldown may be active.');
+                toastRef.current.info('Some funds could not be added right now. Please try again later.');
               }
             }
           } catch (error) {
             logError('useAutoRefill.faucet', error);
             if (!isInitialRun) {
-              toastRef.current.info('Could not reach the faucet. Will retry automatically.');
+              toastRef.current.info('Could not add funds right now. Will retry automatically.');
             }
           }
         }
@@ -297,18 +297,18 @@ export function useAutoRefill({
                 lastFundAttempt: lastFundAttemptRef.current,
               });
               if (!isInitialRun) {
-                toastRef.current.success(`Funded ${AUTO_REFILL_CREDIT_AMOUNT} credits — you're all set!`);
+                toastRef.current.success('Credits activated — you\'re all set!');
               }
             } else {
               logError('useAutoRefill.fundCredits', result.error);
               if (!isInitialRun) {
-                toastRef.current.info('Auto-funding credits failed. You can fund credits manually.');
+                toastRef.current.info('Could not activate credits right now. Will retry automatically.');
               }
             }
           } catch (error) {
             logError('useAutoRefill.fundCredits', error);
             if (!isInitialRun) {
-              toastRef.current.info('Auto-funding credits failed. You can fund credits manually.');
+              toastRef.current.info('Could not activate credits right now. Will retry automatically.');
             }
           }
         }

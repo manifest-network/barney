@@ -6,9 +6,9 @@ interface AccountSetupOverlayProps {
 }
 
 const STEPS: { phase: SetupPhase; label: string }[] = [
-  { phase: 'checking', label: 'Checking balances' },
-  { phase: 'faucet', label: 'Sending tokens' },
-  { phase: 'funding', label: 'Funding credits' },
+  { phase: 'checking', label: 'Preparing your account' },
+  { phase: 'faucet', label: 'Adding starter funds' },
+  { phase: 'funding', label: 'Activating credits' },
 ];
 
 const PHASE_ORDER: SetupPhase[] = ['checking', 'faucet', 'funding', 'complete'];
