@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
+import { formatConnectionUrl, extractPrimaryServicePorts, isNonHttpService } from './helpers';
 import {
   deriveAppName,
   extractUrlFromFredStatus,
@@ -494,6 +494,110 @@ describe('formatConnectionUrl', () => {
       host: '1.2.3.4',
       fqdn: 'evil.com/phish',
     })).toBe('https://1.2.3.4');
+  });
+
+  it('returns fqdn:port for non-HTTP service with FQDN', () => {
+    expect(formatConnectionUrl('1.2.3.4', {
+      host: '1.2.3.4',
+      fqdn: 'pg-abc123.barney8.manifest0.net',
+      ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 31234 } },
+    })).toBe('pg-abc123.barney8.manifest0.net:31234');
+  });
+
+  it('returns host:port without protocol for non-HTTP service', () => {
+    expect(formatConnectionUrl('1.2.3.4', {
+      host: '1.2.3.4',
+      ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 31234 } },
+    })).toBe('1.2.3.4:31234');
+  });
+
+  it('returns host:port for redis', () => {
+    expect(formatConnectionUrl('10.0.0.1', {
+      host: '10.0.0.1',
+      ports: { '6379/tcp': 32000 },
+    })).toBe('10.0.0.1:32000');
+  });
+
+  it('returns fqdn without port when non-HTTP has no port mapping value', () => {
+    expect(formatConnectionUrl('1.2.3.4', {
+      host: '1.2.3.4',
+      fqdn: 'pg.barney8.manifest0.net',
+      ports: { '5432/tcp': {} },
+    })).toBe('pg.barney8.manifest0.net');
+  });
+});
+
+describe('isNonHttpService', () => {
+  it('detects postgres', () => {
+    expect(isNonHttpService({ '5432/tcp': 31234 })).toBe(true);
+  });
+
+  it('detects redis', () => {
+    expect(isNonHttpService({ '6379/tcp': 32000 })).toBe(true);
+  });
+
+  it('detects mysql', () => {
+    expect(isNonHttpService({ '3306/tcp': 31000 })).toBe(true);
+  });
+
+  it('returns false for HTTP ports', () => {
+    expect(isNonHttpService({ '80/tcp': 32200 })).toBe(false);
+    expect(isNonHttpService({ '8080/tcp': 32300 })).toBe(false);
+    expect(isNonHttpService({ '443/tcp': 32400 })).toBe(false);
+  });
+
+  it('returns false for empty ports', () => {
+    expect(isNonHttpService({})).toBe(false);
+  });
+
+  it('returns false for mixed HTTP and non-HTTP ports', () => {
+    expect(isNonHttpService({ '80/tcp': 32200, '5432/tcp': 31234 })).toBe(false);
+  });
+
+  it('handles multiple non-HTTP ports', () => {
+    expect(isNonHttpService({ '5432/tcp': 31234, '6379/tcp': 32000 })).toBe(true);
+  });
+});
+
+describe('extractUrlFromFredStatus — non-HTTP', () => {
+  it('returns raw endpoint URL for non-HTTP (caller handles stripping)', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      endpoints: { '5432/tcp': 'http://1.2.3.4:31234' },
+    })).toBe('http://1.2.3.4:31234');
+  });
+
+  it('returns bare host:port for non-HTTP instances', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      instances: [{ name: 'pg', status: 'running', ports: { '5432/tcp': 31234 } }],
+    }, '1.2.3.4')).toBe('1.2.3.4:31234');
+  });
+});
+
+describe('stack FQDN promotion — standalone non-HTTP service', () => {
+  it('returns fqdn:port for standalone postgres with FQDN', () => {
+    const connection = {
+      host: '64.29.115.29',
+      services: {
+        db: {
+          fqdn: 'pg-abc123.barney8.manifest0.net',
+          instances: [{ ports: { '5432/tcp': 31234 } }],
+        },
+      },
+    };
+
+    const primary = extractPrimaryServicePorts(connection.services);
+    expect(primary).toBeDefined();
+
+    let fqdn: string | undefined;
+    if (primary && connection.services) {
+      const svc = (connection.services as Record<string, { fqdn?: string; instances?: { fqdn?: string }[] }>)[primary!.serviceName];
+      fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
+    }
+
+    const withPorts = { ...connection, ports: primary!.ports, fqdn };
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('pg-abc123.barney8.manifest0.net:31234');
   });
 });
 

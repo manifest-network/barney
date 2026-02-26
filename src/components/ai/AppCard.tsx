@@ -34,6 +34,7 @@ interface AppCardProps {
 
 export const AppCard = memo(function AppCard({ name, url, connection, status, onStop }: AppCardProps) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
+  const isClickable = url?.startsWith('http://') || url?.startsWith('https://');
 
   const instanceUrls = collectInstanceUrls(connection);
   const portEntries = connection?.ports ? Object.entries(connection.ports) : [];
@@ -77,20 +78,24 @@ export const AppCard = memo(function AppCard({ name, url, connection, status, on
 
       {url && (
         <div className="app-card__url">
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="app-card__link"
-          >
-            {url}
-            <ExternalLink className="w-3 h-3 ml-1" aria-hidden="true" />
-          </a>
+          {isClickable ? (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="app-card__link"
+            >
+              {url}
+              <ExternalLink className="w-3 h-3 ml-1" aria-hidden="true" />
+            </a>
+          ) : (
+            <span className="app-card__link">{url}</span>
+          )}
           <button
             type="button"
             onClick={handleCopy}
             className="app-card__copy"
-            aria-label={copied ? 'Copied' : 'Copy URL'}
+            aria-label={copied ? 'Copied' : 'Copy endpoint'}
           >
             {copied ? (
               <CheckCircle className="w-3.5 h-3.5 text-success-400" />
@@ -139,7 +144,7 @@ export const AppCard = memo(function AppCard({ name, url, connection, status, on
       )}
 
       <div className="app-card__actions">
-        {url && (
+        {isClickable && (
           <a
             href={url}
             target="_blank"

@@ -11,6 +11,33 @@ const PRIMARY_SERVICE_NAMES = new Set(['web', 'app', 'frontend', 'ui']);
 /** Service names that indicate backend infrastructure (not user-facing). */
 export const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mysql', 'redis', 'mongo']);
 
+/** Well-known container ports that speak non-HTTP protocols (databases, caches, message queues). */
+const NON_HTTP_CONTAINER_PORTS = new Set([
+  1433,  // MSSQL
+  3306,  // MySQL / MariaDB
+  4222,  // NATS
+  5432,  // PostgreSQL
+  5672,  // RabbitMQ (AMQP)
+  6379,  // Redis
+  7687,  // Neo4j (Bolt)
+  9300,  // Elasticsearch transport
+  11211, // Memcached
+  27017, // MongoDB
+]);
+
+/**
+ * Detect whether all container ports in a port mapping are non-HTTP services.
+ * Uses the container port key (e.g. "5432/tcp") to classify protocol.
+ */
+export function isNonHttpService(ports: Record<string, unknown>): boolean {
+  const keys = Object.keys(ports);
+  if (keys.length === 0) return false;
+  return keys.every(key => {
+    const portNum = parseInt(key, 10);
+    return !isNaN(portNum) && NON_HTTP_CONTAINER_PORTS.has(portNum);
+  });
+}
+
 /**
  * Extract the "primary" service's ports from a stack services map.
  * Priority:
@@ -89,8 +116,15 @@ export function formatConnectionUrl(
   // Accept any shape — the port values may not match our PortMapping interface
   connection?: { host: string; fqdn?: string; ports?: Record<string, unknown>; metadata?: Record<string, string> }
 ): string | undefined {
+  const nonHttp = connection?.ports ? isNonHttpService(connection.ports) : false;
+
   // Prefer FQDN — provider-assigned domain with TLS termination
   if (connection?.fqdn && isValidFqdn(connection.fqdn)) {
+    // Non-HTTP: return fqdn:host_port (no protocol)
+    if (nonHttp && connection.ports) {
+      const port = extractPort(Object.values(connection.ports)[0]);
+      return port != null ? `${connection.fqdn}:${port}` : connection.fqdn;
+    }
     return `https://${connection.fqdn}`;
   }
 
@@ -105,6 +139,12 @@ export function formatConnectionUrl(
       if (!h) return undefined;
       // Strip any existing protocol from h before appending port
       const bareHost = h.replace(/^https?:\/\//, '');
+
+      // Non-HTTP: return host:port without protocol prefix
+      if (nonHttp) {
+        return `${bareHost}:${port}`;
+      }
+
       if (port === 80 || port === 443) {
         url = bareHost;
       } else {
