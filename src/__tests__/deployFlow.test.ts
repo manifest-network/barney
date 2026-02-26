@@ -192,7 +192,7 @@ describe('Deploy Flow Integration', () => {
     expect(registry._store).toHaveLength(1);
     expect(registry._store[0].name).toBe('my-app');
     expect(registry._store[0].status).toBe('running');
-    expect(registry._store[0].url).toBe('https://my-app.example.com:12345');
+    expect(registry._store[0].url).toBe('my-app.example.com:12345');
 
     // Verify progress events were emitted
     expect(progressEvents.length).toBeGreaterThan(0);

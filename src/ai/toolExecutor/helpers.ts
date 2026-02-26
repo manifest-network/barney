@@ -84,51 +84,51 @@ function extractPort(value: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * Build a bare connection endpoint (no protocol prefix).
+ * We never know the upstream protocol, so we return fqdn:port or host:port
+ * and let the user decide how to connect.
+ */
 export function formatConnectionUrl(
   host: string | undefined,
   // Accept any shape — the port values may not match our PortMapping interface
   connection?: { host: string; fqdn?: string; ports?: Record<string, unknown>; metadata?: Record<string, string> }
 ): string | undefined {
-  // Prefer FQDN — provider-assigned domain with TLS termination
+  // Prefer FQDN — provider-assigned DNS name
   if (connection?.fqdn && isValidFqdn(connection.fqdn)) {
-    return `https://${connection.fqdn}`;
+    if (connection.ports) {
+      const port = extractPort(Object.values(connection.ports)[0]);
+      if (port != null) return `${connection.fqdn}:${port}`;
+    }
+    return connection.fqdn;
   }
 
-  let url = host;
-
-  // Try port mappings — use port number but prefer connection.host (hostname) over host_ip (raw IP)
+  // Try port mappings — prefer connection.host (hostname) over host_ip (raw IP)
   if (connection?.ports) {
     const firstEntry = Object.values(connection.ports)[0];
     const port = extractPort(firstEntry);
     if (port != null) {
       const h = connection.host || host;
       if (!h) return undefined;
-      // Strip any existing protocol from h before appending port
       const bareHost = h.replace(/^https?:\/\//, '');
-      if (port === 80 || port === 443) {
-        url = bareHost;
-      } else {
-        url = `${bareHost}:${port}`;
-      }
+      return `${bareHost}:${port}`;
     }
   }
 
-  // Fallback: check metadata for a URL hint
-  if (url === host && connection?.metadata?.url) {
-    url = connection.metadata.url;
+  // Fallback: extract host[:port] from metadata URL hint (strip scheme, path, query, userinfo)
+  if (connection?.metadata?.url) {
+    try {
+      const parsed = new URL(connection.metadata.url);
+      return parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+    } catch {
+      // Not a valid URL — strip scheme and return as-is
+      return connection.metadata.url.replace(/^https?:\/\//, '');
+    }
   }
 
-  if (!url) return undefined;
-
-  // Add protocol if missing: https by default, http only for localhost/loopback
-  if (!/^https?:\/\//i.test(url)) {
-    // Strip protocol-detection to the hostname (before any port)
-    const hostPart = url.replace(/:\d+$/, '');
-    const isLocal = hostPart === 'localhost' || hostPart === '127.0.0.1' || hostPart === '::1';
-    url = `${isLocal ? 'http' : 'https'}://${url}`;
-  }
-
-  return url;
+  // Last resort: bare host
+  if (!host) return undefined;
+  return host.replace(/^https?:\/\//, '');
 }
 
 // Re-export from shared module so existing tool-executor consumers don't break.

@@ -435,7 +435,7 @@ async function resolveAppUrl(
 
         const withPorts = { ...connection, ports, fqdn };
         const url = formatConnectionUrl(connection.host, withPorts);
-        if (url) return { url, connection: withPorts };
+        if (url || withPorts.ports) return { url, connection: withPorts };
       }
     } catch (error) {
       logError(`${logContext}.connection`, error);

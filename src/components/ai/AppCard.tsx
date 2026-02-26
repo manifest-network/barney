@@ -4,7 +4,7 @@
  */
 
 import { memo } from 'react';
-import { ExternalLink, Copy, Square, CheckCircle } from 'lucide-react';
+import { Copy, Square, CheckCircle } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { collectInstanceUrls } from '../../utils/connection';
 
@@ -77,20 +77,12 @@ export const AppCard = memo(function AppCard({ name, url, connection, status, on
 
       {url && (
         <div className="app-card__url">
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="app-card__link"
-          >
-            {url}
-            <ExternalLink className="w-3 h-3 ml-1" aria-hidden="true" />
-          </a>
+          <span className="app-card__link">{url}</span>
           <button
             type="button"
             onClick={handleCopy}
             className="app-card__copy"
-            aria-label={copied ? 'Copied' : 'Copy URL'}
+            aria-label={copied ? 'Copied' : 'Copy endpoint'}
           >
             {copied ? (
               <CheckCircle className="w-3.5 h-3.5 text-success-400" />
@@ -105,10 +97,9 @@ export const AppCard = memo(function AppCard({ name, url, connection, status, on
         <div className="app-card__instances">
           <span className="app-card__instances-label">Instances</span>
           {instanceUrls.map(u => (
-            <a key={u} href={u} target="_blank" rel="noopener noreferrer" className="app-card__instance-link">
-              {u.replace('https://', '')}
-              <ExternalLink className="w-3 h-3 ml-1" aria-hidden="true" />
-            </a>
+            <span key={u} className="app-card__instance-link">
+              {u}
+            </span>
           ))}
         </div>
       )}
@@ -139,17 +130,6 @@ export const AppCard = memo(function AppCard({ name, url, connection, status, on
       )}
 
       <div className="app-card__actions">
-        {url && (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn btn-primary btn-sm"
-          >
-            <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
-            Open
-          </a>
-        )}
         {onStop && (
           <button
             type="button"

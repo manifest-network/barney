@@ -13,8 +13,8 @@ export function isValidFqdn(value: string): boolean {
 }
 
 /**
- * Collect per-instance FQDN URLs from a connection object.
- * For flat leases: collects `https://{inst.fqdn}` from `connection.instances`.
+ * Collect per-instance FQDNs from a connection object.
+ * For flat leases: collects from `connection.instances`.
  * For stack leases: collects from each service's instances.
  * Returns empty array if ≤1 unique FQDN (single-instance doesn't need extra URLs).
  * FQDNs that fail hostname validation are silently skipped.
@@ -30,7 +30,7 @@ export function collectInstanceUrls(
   if (connection.instances) {
     for (const inst of connection.instances) {
       if (inst.fqdn && isValidFqdn(inst.fqdn)) {
-        urls.push(`https://${inst.fqdn}`);
+        urls.push(inst.fqdn);
       }
     }
   }
@@ -41,7 +41,7 @@ export function collectInstanceUrls(
       if (svc.instances) {
         for (const inst of svc.instances) {
           if (inst.fqdn && isValidFqdn(inst.fqdn)) {
-            urls.push(`https://${inst.fqdn}`);
+            urls.push(inst.fqdn);
           }
         }
       }

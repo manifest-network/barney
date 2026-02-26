@@ -64,8 +64,8 @@ describe('collectInstanceUrls', () => {
       ],
     });
     expect(result).toEqual([
-      'https://0-abc1234.barney8.manifest0.net',
-      'https://1-def5678.barney8.manifest0.net',
+      '0-abc1234.barney8.manifest0.net',
+      '1-def5678.barney8.manifest0.net',
     ]);
   });
 
@@ -81,8 +81,8 @@ describe('collectInstanceUrls', () => {
       },
     });
     expect(result).toEqual([
-      'https://web-0-abc1234.barney8.manifest0.net',
-      'https://web-1-def5678.barney8.manifest0.net',
+      'web-0-abc1234.barney8.manifest0.net',
+      'web-1-def5678.barney8.manifest0.net',
     ]);
   });
 
@@ -104,8 +104,8 @@ describe('collectInstanceUrls', () => {
       ],
     });
     expect(result).toEqual([
-      'https://0-abc1234.barney8.manifest0.net',
-      'https://2-ghi9012.barney8.manifest0.net',
+      '0-abc1234.barney8.manifest0.net',
+      '2-ghi9012.barney8.manifest0.net',
     ]);
   });
 
@@ -132,8 +132,8 @@ describe('collectInstanceUrls', () => {
       },
     });
     expect(result).toEqual([
-      'https://0-abc1234.barney8.manifest0.net',
-      'https://web-0-def5678.barney8.manifest0.net',
+      '0-abc1234.barney8.manifest0.net',
+      'web-0-def5678.barney8.manifest0.net',
     ]);
   });
 
@@ -146,8 +146,8 @@ describe('collectInstanceUrls', () => {
       ],
     });
     expect(result).toEqual([
-      'https://0-abc1234.barney8.manifest0.net',
-      'https://1-def5678.barney8.manifest0.net',
+      '0-abc1234.barney8.manifest0.net',
+      '1-def5678.barney8.manifest0.net',
     ]);
   });
 

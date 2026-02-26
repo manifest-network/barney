@@ -220,8 +220,8 @@ export async function executeAppStatus(
     }
   }
 
-  // Build a clickable connection URL from host + port mappings
-  const connectionUrl = formatConnectionUrl(appUrl, appConnection) || appUrl;
+  // Build a bare connection endpoint from host + port mappings
+  const connectionUrl = formatConnectionUrl(appUrl, appConnection);
 
   // Extract image from stored manifest (single-service or stack)
   let image: string | undefined;

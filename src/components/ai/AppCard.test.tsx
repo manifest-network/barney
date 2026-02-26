@@ -45,10 +45,10 @@ describe('AppCard', () => {
     expect(element.props.connection?.fqdn).toBe('abc123.barney8.manifest0.net');
   });
 
-  it('renders instance links with valid https hrefs for multi-instance FQDNs', () => {
+  it('renders instance endpoints as plain text for multi-instance FQDNs', () => {
     render({
       name: 'my-app',
-      url: 'https://abc123.barney8.manifest0.net',
+      url: 'abc123.barney8.manifest0.net',
       connection: {
         host: '1.2.3.4',
         instances: [
@@ -59,15 +59,13 @@ describe('AppCard', () => {
       status: 'running',
     });
 
-    const links = container.querySelectorAll<HTMLAnchorElement>('.app-card__instance-link');
-    expect(links).toHaveLength(2);
-    expect(links[0].href).toBe('https://0-abc123.barney8.manifest0.net/');
-    expect(links[1].href).toBe('https://1-def456.barney8.manifest0.net/');
-    // Verify security attributes
-    for (const link of links) {
-      expect(link.target).toBe('_blank');
-      expect(link.rel).toBe('noopener noreferrer');
-    }
+    const items = container.querySelectorAll('.app-card__instance-link');
+    expect(items).toHaveLength(2);
+    expect(items[0].textContent).toBe('0-abc123.barney8.manifest0.net');
+    expect(items[1].textContent).toBe('1-def456.barney8.manifest0.net');
+    // Verify they are spans, not anchors
+    expect(items[0].tagName).toBe('SPAN');
+    expect(items[1].tagName).toBe('SPAN');
   });
 
   it('renders no instance links for a single-instance deployment', () => {
@@ -105,7 +103,7 @@ describe('AppCard', () => {
     expect(container.querySelector('.app-card__instances')).toBeNull();
   });
 
-  it('renders only valid instance links when mixed with invalid FQDNs', () => {
+  it('renders only valid instance endpoints when mixed with invalid FQDNs', () => {
     render({
       name: 'my-app',
       connection: {
@@ -119,13 +117,13 @@ describe('AppCard', () => {
       status: 'running',
     });
 
-    const links = container.querySelectorAll<HTMLAnchorElement>('.app-card__instance-link');
-    expect(links).toHaveLength(2);
-    expect(links[0].href).toBe('https://0-abc123.barney8.manifest0.net/');
-    expect(links[1].href).toBe('https://1-def456.barney8.manifest0.net/');
+    const items = container.querySelectorAll('.app-card__instance-link');
+    expect(items).toHaveLength(2);
+    expect(items[0].textContent).toBe('0-abc123.barney8.manifest0.net');
+    expect(items[1].textContent).toBe('1-def456.barney8.manifest0.net');
   });
 
-  it('renders stack service instance links from services map', () => {
+  it('renders stack service instance endpoints from services map', () => {
     render({
       name: 'wp-stack',
       connection: {
@@ -142,9 +140,9 @@ describe('AppCard', () => {
       status: 'running',
     });
 
-    const links = container.querySelectorAll<HTMLAnchorElement>('.app-card__instance-link');
-    expect(links).toHaveLength(2);
-    expect(links[0].href).toBe('https://web-0.barney8.manifest0.net/');
-    expect(links[1].href).toBe('https://web-1.barney8.manifest0.net/');
+    const items = container.querySelectorAll('.app-card__instance-link');
+    expect(items).toHaveLength(2);
+    expect(items[0].textContent).toBe('web-0.barney8.manifest0.net');
+    expect(items[1].textContent).toBe('web-1.barney8.manifest0.net');
   });
 });
