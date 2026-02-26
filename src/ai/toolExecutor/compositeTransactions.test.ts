@@ -332,7 +332,7 @@ describe('stack FQDN promotion', () => {
     }
 
     const withPorts = { ...connection, ports: primary!.ports, fqdn };
-    expect(formatConnectionUrl(connection.host, withPorts)).toBe('wp-abc123.barney8.manifest0.net:32769');
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('wp-abc123.barney8.manifest0.net');
   });
 
   it('falls back to IP:port when primary service has no fqdn', () => {
@@ -375,7 +375,7 @@ describe('stack FQDN promotion', () => {
     }
 
     const withPorts = { ...connection, ports: primary!.ports, fqdn };
-    expect(formatConnectionUrl(connection.host, withPorts)).toBe('inst-abc.barney8.manifest0.net:32769');
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('inst-abc.barney8.manifest0.net');
   });
 
   it('preserves top-level fqdn over service fqdn', () => {
@@ -399,7 +399,7 @@ describe('stack FQDN promotion', () => {
     }
 
     const withPorts = { ...connection, ports: primary!.ports, fqdn };
-    expect(formatConnectionUrl(connection.host, withPorts)).toBe('top-level.barney8.manifest0.net:32769');
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('top-level.barney8.manifest0.net');
   });
 });
 
@@ -458,12 +458,12 @@ describe('formatConnectionUrl', () => {
     })).toBe('127.0.0.1:12345');
   });
 
-  it('prefers fqdn over host and ports', () => {
+  it('prefers bare fqdn for HTTP ports (Traefik-routed)', () => {
     expect(formatConnectionUrl('1.2.3.4', {
       host: '1.2.3.4',
       fqdn: 'a1b2c3d.barney8.manifest0.net',
       ports: { '8080/tcp': { host_ip: '1.2.3.4', host_port: 32456 } },
-    })).toBe('a1b2c3d.barney8.manifest0.net:32456');
+    })).toBe('a1b2c3d.barney8.manifest0.net');
   });
 
   it('uses fqdn without ports', () => {

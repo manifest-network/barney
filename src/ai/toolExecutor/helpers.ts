@@ -84,22 +84,55 @@ function extractPort(value: unknown): number | undefined {
   return undefined;
 }
 
+// TODO: Replace this hard-coded set with an automated signal from the provider
+// API (e.g., a protocol field on port mappings) so we don't have to maintain a
+// manual list of non-HTTP ports.
+/** Container ports that require direct TCP access (not HTTP-routable by Traefik). */
+const TCP_ONLY_PORTS = new Set([
+  5432,  // PostgreSQL
+  3306,  // MySQL / MariaDB
+  6379,  // Redis / Valkey
+  27017, // MongoDB
+  11211, // Memcached
+  5672,  // RabbitMQ (AMQP)
+  4222,  // NATS
+  7687,  // Neo4j Bolt
+  9300,  // Elasticsearch transport
+  1433,  // MSSQL
+  26257, // CockroachDB
+]);
+
+/** Parse container port number from a Docker port key like "5432/tcp". */
+function parseContainerPort(portKey: string): number | undefined {
+  const m = portKey.match(/^(\d+)/);
+  return m ? parseInt(m[1], 10) : undefined;
+}
+
 /**
- * Build a bare connection endpoint (no protocol prefix).
- * We never know the upstream protocol, so we return fqdn:port or host:port
- * and let the user decide how to connect.
+ * Build a connection endpoint from host/FQDN + port mappings.
+ *
+ * When an FQDN is present, Traefik terminates TLS on 443 and routes by
+ * subdomain — so HTTP services return the bare FQDN (no port).
+ * Non-HTTP services (databases, brokers) need the Docker host-mapped port
+ * because Traefik doesn't route raw TCP by subdomain.
  */
 export function formatConnectionUrl(
   host: string | undefined,
   // Accept any shape — the port values may not match our PortMapping interface
   connection?: { host: string; fqdn?: string; ports?: Record<string, unknown>; metadata?: Record<string, string> }
 ): string | undefined {
-  // Prefer FQDN — provider-assigned DNS name
+  // FQDN present — Traefik routes HTTP services on 443 by subdomain
   if (connection?.fqdn && isValidFqdn(connection.fqdn)) {
     if (connection.ports) {
-      const port = extractPort(Object.values(connection.ports)[0]);
-      if (port != null) return `${connection.fqdn}:${port}`;
+      const firstKey = Object.keys(connection.ports)[0];
+      const containerPort = firstKey ? parseContainerPort(firstKey) : undefined;
+      // Non-HTTP service: need direct host:port access
+      if (containerPort != null && TCP_ONLY_PORTS.has(containerPort)) {
+        const hostPort = extractPort(Object.values(connection.ports)[0]);
+        if (hostPort != null) return `${connection.fqdn}:${hostPort}`;
+      }
     }
+    // HTTP service (or no ports): bare FQDN — Traefik handles routing
     return connection.fqdn;
   }
 
