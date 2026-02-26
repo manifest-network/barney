@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Loader, CheckCircle, Circle, XCircle } from 'lucide-react';
-import type { AccountSetupState, SetupPhase } from '../../hooks/useAutoRefill';
+import type { AccountSetupState, SetupPhase } from '../../hooks/useAccountSetup';
 
 interface AccountSetupOverlayProps {
   state: AccountSetupState;

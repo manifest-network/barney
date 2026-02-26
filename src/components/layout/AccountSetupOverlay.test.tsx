@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { AccountSetupOverlay } from './AccountSetupOverlay';
-import type { AccountSetupState } from '../../hooks/useAutoRefill';
+import type { AccountSetupState } from '../../hooks/useAccountSetup';
 
 let container: HTMLDivElement;
 let root: Root;
