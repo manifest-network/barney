@@ -80,7 +80,7 @@ export const AI_RETRY_BASE_DELAY_MS = 1000;
 /** Debounce delay for rapid message sends (milliseconds) */
 export const AI_MESSAGE_DEBOUNCE_MS = 300;
 
-/** Ollama connection health check interval (milliseconds) */
+/** AI API connection health check interval (milliseconds) */
 export const AI_HEALTH_CHECK_INTERVAL_MS = 30000;
 
 /** Timeout for pending confirmations before auto-cancel (milliseconds) - 5 minutes */

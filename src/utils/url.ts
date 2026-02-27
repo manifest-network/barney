@@ -24,7 +24,7 @@ export function parseHttpUrl(url: string): URL | null {
   return parsed;
 }
 
-/** Hostnames allowed through SSRF protection in DEV mode (for local Ollama, etc.) */
+/** Hostnames allowed through SSRF protection in DEV mode (for local services, etc.) */
 const DEV_ALLOWED_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
 /**

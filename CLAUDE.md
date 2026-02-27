@@ -40,7 +40,7 @@ ErrorBoundary
       ├─ MatrixRain (animated background, matrix theme only)
       └─ ChainProvider (cosmos-kit wallet abstraction)
           └─ ToastProvider (toast notifications)
-              └─ AIProvider (chat state, tool execution, Ollama streaming)
+              └─ AIProvider (chat state, tool execution, Morpheus streaming)
                   ├─ AppShell
                   │   ├─ AccountSetupOverlay (blocking stepper during first-connect provisioning)
                   │   ├─ LandingPage (when not connected)
@@ -178,7 +178,7 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 | `tx.ts` | Transaction signing client and message builders for all Manifest modules (billing, SKU, provider management) |
 | `provider-api.ts` | Payload upload with ADR-036 auth |
 | `fred.ts` | Fred deployment status polling + WebSocket streaming |
-| `ollama.ts` | LLM streaming with retry/backoff |
+| `morpheus.ts` | OpenAI-compatible SSE streaming client (Morpheus API) |
 | `config.ts` | API endpoints, denom metadata, price formatting |
 | `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
 | `queryClient.ts` | LCD query client factory (cached singleton) |
@@ -197,7 +197,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `aiActions/toolExecution.ts` | `processToolCalls`, `handleToolCall` |
 | `aiActions/streaming.ts` | `scheduleStreamingUpdate`, `flushPendingUpdate` (RAF) |
 | `aiActions/persistence.ts` | `loadSettings`, `loadHistory`, persistence subscriptions |
-| `aiActions/utils.ts` | `generateMessageId`, `trimMessages`, `createAssistantMessage`, `toOllamaMessages`, `getAppRegistryAccess` |
+| `aiActions/utils.ts` | `generateMessageId`, `trimMessages`, `createAssistantMessage`, `toChatApiMessages`, `getAppRegistryAccess` |
 
 `AIProvider` (`src/contexts/AIContext.tsx`) is a thin lifecycle wrapper that sets up persistence subscriptions, health checks, confirmation timeouts, and calls `store.getState().destroy()` on unmount.
 
@@ -275,8 +275,8 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 - **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
 - **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
 - **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs. The rsbuild proxy (`rsbuild.config.ts`) has its own SSRF validation layer (`isValidProxyTarget`) separate from runtime validation, blocking cloud metadata endpoints, dangerous IP ranges, and embedded credentials.
-- **Stream timeout**: `processStreamWithTimeout` in `src/ai/streamUtils.ts` wraps the Ollama async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely. The inner `withTimeout` generator ensures cleanup of the underlying generator via `finally` block.
-- **Tool-call leak stripping**: `stripToolCallLeaks()` in `src/ai/streamUtils.ts` filters raw `[TOOL_CALLS]` markers that some Ollama models emit as literal text instead of structured tool_calls.
+- **Stream timeout**: `processStreamWithTimeout` in `src/ai/streamUtils.ts` wraps the AI stream async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely. The inner `withTimeout` generator ensures cleanup of the underlying generator via `finally` block.
+- **Tool-call leak stripping**: `stripToolCallLeaks()` in `src/ai/streamUtils.ts` filters raw `[TOOL_CALLS]` markers that some models emit as literal text instead of structured tool_calls. Legacy safeguard from the Ollama/Mistral era, kept as defensive code for the Morpheus API.
 - **Message debouncing**: The AI store debounces rapid message sends via `AI_MESSAGE_DEBOUNCE_MS` (300ms) and aborts in-flight streams when a new message is sent.
 - **Chat persistence**: The AI store persists settings and chat history to localStorage (`barney-ai-settings`, `barney-ai-history`) via Zustand subscriptions. History is validated and sanitized on load; corrupted data is cleared. Streaming messages are excluded from persistence.
 - **Confirmation timeout**: Pending transaction confirmations auto-cancel after `AI_CONFIRMATION_TIMEOUT_MS` (5 minutes) to prevent stuck UI state.
@@ -305,7 +305,7 @@ Defined in `src/config/chain.ts`:
 
 ### Runtime Environment Variables
 
-All 9 `PUBLIC_*` variables use a 3-tier fallback defined in `src/config/runtimeConfig.ts`:
+All 11 `PUBLIC_*` variables use a 3-tier fallback defined in `src/config/runtimeConfig.ts`:
 
 1. `window.__RUNTIME_CONFIG__` — set by `public/config.js` (generated at container startup by `docker/env.sh`)
 2. `import.meta.env` — Rsbuild static replacement from `.env` files (requires static property access, not dynamic `import.meta.env[key]`)
@@ -315,4 +315,4 @@ Consumer code imports `runtimeConfig` from `src/config/runtimeConfig.ts` — nev
 
 Built-in flags (`import.meta.env.DEV` / `PROD`) remain build-time and are accessed directly where needed.
 
-Variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_OLLAMA_URL`, `PUBLIC_OLLAMA_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`, `PUBLIC_GAS_PRICE`, `PUBLIC_CHAIN_ID`
+Variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_MORPHEUS_URL`, `PUBLIC_MORPHEUS_MODEL`, `PUBLIC_MORPHEUS_API_KEY`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`, `PUBLIC_GAS_PRICE`, `PUBLIC_CHAIN_ID`, `PUBLIC_FAUCET_URL`

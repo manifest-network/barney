@@ -81,6 +81,19 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      '/proxy-morpheus': {
+        target: 'https://api.mor.org', // Default, overridden by router
+        changeOrigin: true,
+        secure: true,
+        pathRewrite: { '^/proxy-morpheus': '' },
+        router: (req) => {
+          const target = req.headers['x-proxy-target'];
+          if (target && typeof target === 'string' && isValidProxyTarget(target)) {
+            return target;
+          }
+          return 'https://api.mor.org';
+        },
+      },
       '/proxy-provider': {
         target: 'https://localhost:8080', // Default, overridden by router
         changeOrigin: true,

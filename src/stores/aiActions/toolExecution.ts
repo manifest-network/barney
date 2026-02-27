@@ -2,7 +2,7 @@
  * Tool execution actions — dispatches tool calls, handles caching and display.
  */
 
-import type { OllamaToolCall } from '../../api/ollama';
+import type { ToolCall } from '../../api/morpheus';
 import { getToolCallDescription, isValidToolName } from '../../ai/tools';
 import { executeTool, type ToolResult } from '../../ai/toolExecutor';
 import { sanitizeToolArgs } from '../../ai/validation';
@@ -25,7 +25,7 @@ export type ProcessToolCallsResult =
 async function handleToolCall(
   get: Get,
   set: Set,
-  toolCall: OllamaToolCall,
+  toolCall: ToolCall,
 ): Promise<ToolResult> {
   if (!isValidToolName(toolCall.function.name)) {
     return { success: false, error: `Unknown tool: ${toolCall.function.name}` };
@@ -64,7 +64,7 @@ async function handleToolCall(
 export async function processToolCallsFn(
   get: Get,
   set: Set,
-  toolCalls: OllamaToolCall[],
+  toolCalls: ToolCall[],
   currentAssistantMessageId: string,
   streamResult: StreamResult,
 ): Promise<ProcessToolCallsResult> {

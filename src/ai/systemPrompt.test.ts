@@ -12,13 +12,15 @@ describe('getSystemPrompt', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('deploy_app');
     expect(prompt).toContain('stop_app');
-    expect(prompt).toContain('fund_credits');
-    expect(prompt).toContain('list_apps');
     expect(prompt).toContain('app_status');
     expect(prompt).toContain('get_balance');
     expect(prompt).toContain('browse_catalog');
     expect(prompt).toContain('cosmos_query');
     expect(prompt).toContain('cosmos_tx');
+    expect(prompt).toContain('update_app');
+    expect(prompt).toContain('restart_app');
+    expect(prompt).toContain('app_diagnostics');
+    expect(prompt).toContain('request_faucet');
   });
 
   it('contains resource tiers', () => {
@@ -110,7 +112,7 @@ describe('getSystemPrompt', () => {
     expect(prompt).toContain('ghost');
   });
 
-  it('contains stack deploy example with depends_on', () => {
+  it('contains Compose features including depends_on and service_healthy', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('depends_on');
     expect(prompt).toContain('service_healthy');

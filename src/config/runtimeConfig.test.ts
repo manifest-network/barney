@@ -26,8 +26,9 @@ describe('getConfigValue', () => {
     window.__RUNTIME_CONFIG__ = {};
     expect(getConfigValue('PUBLIC_REST_URL')).toBe('http://localhost:1317');
     expect(getConfigValue('PUBLIC_RPC_URL')).toBe('http://localhost:26657');
-    expect(getConfigValue('PUBLIC_OLLAMA_URL')).toBe('http://localhost:11434');
-    expect(getConfigValue('PUBLIC_OLLAMA_MODEL')).toBe('llama3.2');
+    expect(getConfigValue('PUBLIC_MORPHEUS_URL')).toBe('https://api.mor.org/api/v1');
+    expect(getConfigValue('PUBLIC_MORPHEUS_MODEL')).toBe('minimax-m2.5');
+    expect(getConfigValue('PUBLIC_MORPHEUS_API_KEY')).toBe('');
     expect(getConfigValue('PUBLIC_WEB3AUTH_CLIENT_ID')).toBe('YOUR_WEB3AUTH_CLIENT_ID');
     expect(getConfigValue('PUBLIC_WEB3AUTH_NETWORK')).toBe('sapphire_devnet');
     expect(getConfigValue('PUBLIC_PWR_DENOM')).toBe(
@@ -50,8 +51,8 @@ describe('getConfigValue', () => {
 });
 
 describe('runtimeConfig', () => {
-  it('exports all 10 keys as strings', () => {
-    expect(Object.keys(runtimeConfig)).toHaveLength(10);
+  it('exports all 11 keys as strings', () => {
+    expect(Object.keys(runtimeConfig)).toHaveLength(11);
     for (const value of Object.values(runtimeConfig)) {
       expect(typeof value).toBe('string');
     }

@@ -3,7 +3,7 @@
  * Extracted to avoid circular dependencies between AIContext and custom hooks.
  */
 
-import type { OllamaToolCall } from '../api/ollama';
+import type { ToolCall } from '../api/morpheus';
 import type { PendingAction } from '../ai/toolExecutor';
 
 /** Data for a logs display card. */
@@ -24,7 +24,7 @@ export interface ChatMessage {
   content: string;
   thinking?: string;
   timestamp: number;
-  toolCalls?: OllamaToolCall[];
+  toolCalls?: ToolCall[];
   toolCallId?: string;
   toolName?: string;
   toolDescription?: string;

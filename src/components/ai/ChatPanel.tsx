@@ -305,9 +305,9 @@ export function ChatPanel() {
           {!isConnected && (
             <span
               className="chat-panel-offline"
-              title="Disconnected from Ollama"
+              title="Disconnected from AI"
               role="status"
-              aria-label="Disconnected from Ollama"
+              aria-label="Disconnected from AI"
             >
               <WifiOff className="w-3 h-3" aria-hidden="true" />
             </span>
@@ -481,7 +481,7 @@ export function ChatPanel() {
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder={isConnected ? "Ask me anything..." : "Connecting to Ollama..."}
+            placeholder={isConnected ? "Ask me anything..." : "Connecting to AI..."}
             disabled={!isConnected}
             className="chat-input"
             rows={1}

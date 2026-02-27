@@ -3,8 +3,8 @@ import type { StoreApi } from 'zustand';
 
 // --- Mocks ---
 
-vi.mock('../api/ollama', () => ({
-  checkOllamaHealth: vi.fn().mockResolvedValue(true),
+vi.mock('../api/morpheus', () => ({
+  checkApiHealth: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('../utils/errors', () => ({
@@ -37,18 +37,18 @@ vi.mock('../ai/validation', () => ({
 
 vi.mock('../config/runtimeConfig', () => ({
   runtimeConfig: {
-    PUBLIC_OLLAMA_URL: 'http://localhost:11434',
-    PUBLIC_OLLAMA_MODEL: 'llama3.2',
+    PUBLIC_MORPHEUS_URL: 'https://api.mor.org/api/v1',
+    PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5',
+    PUBLIC_MORPHEUS_API_KEY: 'test-key',
   },
 }));
 
 // Mock streaming, persistence, sendMessage, confirmAction, batchDeploy
 vi.mock('./aiActions/persistence', () => ({
   loadSettings: vi.fn().mockReturnValue({
-    ollamaEndpoint: 'http://localhost:11434',
-    model: 'llama3.2',
+    morpheusUrl: 'https://api.mor.org/api/v1',
+    model: 'minimax-m2.5',
     saveHistory: true,
-    enableThinking: false,
   }),
   loadHistory: vi.fn().mockReturnValue([]),
   clearHistoryStorage: vi.fn(),
@@ -241,14 +241,14 @@ describe('aiStore', () => {
 
   describe('updateSettings', () => {
     it('accepts a valid endpoint', () => {
-      store.getState().updateSettings({ ollamaEndpoint: 'http://example.com:11434' });
-      expect(store.getState().settings.ollamaEndpoint).toBe('http://example.com:11434');
+      store.getState().updateSettings({ morpheusUrl: 'http://example.com:11434' });
+      expect(store.getState().settings.morpheusUrl).toBe('http://example.com:11434');
     });
 
     it('rejects an invalid endpoint', () => {
-      const original = store.getState().settings.ollamaEndpoint;
-      store.getState().updateSettings({ ollamaEndpoint: 'not-a-url' });
-      expect(store.getState().settings.ollamaEndpoint).toBe(original);
+      const original = store.getState().settings.morpheusUrl;
+      store.getState().updateSettings({ morpheusUrl: 'not-a-url' });
+      expect(store.getState().settings.morpheusUrl).toBe(original);
     });
 
     it('accepts a valid model string', () => {
@@ -263,9 +263,8 @@ describe('aiStore', () => {
     });
 
     it('accepts boolean settings', () => {
-      store.getState().updateSettings({ saveHistory: false, enableThinking: true });
+      store.getState().updateSettings({ saveHistory: false });
       expect(store.getState().settings.saveHistory).toBe(false);
-      expect(store.getState().settings.enableThinking).toBe(true);
     });
   });
 

@@ -5,9 +5,9 @@
  * Model does intent classification; code does orchestration.
  */
 
-import type { OllamaTool } from '../api/ollama';
+import type { ToolDefinition } from '../api/morpheus';
 
-export const AI_TOOLS: OllamaTool[] = [
+export const AI_TOOLS: ToolDefinition[] = [
   // --- TX tools (require confirmation) ---
   {
     type: 'function',

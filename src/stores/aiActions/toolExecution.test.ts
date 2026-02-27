@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { OllamaToolCall } from '../../api/ollama';
+import type { ToolCall } from '../../api/morpheus';
 import type { AIStore } from '../aiStore';
 import type { ChatMessage } from '../../contexts/aiTypes';
 import type { ToolResult } from '../../ai/toolExecutor';
@@ -50,7 +50,7 @@ function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
   };
 }
 
-function makeToolCall(overrides: Partial<OllamaToolCall> = {}): OllamaToolCall {
+function makeToolCall(overrides: Partial<ToolCall> = {}): ToolCall {
   return {
     id: 'tc_1',
     type: 'function',

@@ -2,10 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createAIStore } from '../stores/aiStore';
 import type { PendingConfirmation } from '../contexts/aiTypes';
 
-vi.mock('../api/ollama', () => ({
+vi.mock('../api/morpheus', () => ({
   streamChat: vi.fn(),
-  checkOllamaHealth: vi.fn().mockResolvedValue(false),
-  listModels: vi.fn().mockResolvedValue([]),
+  checkApiHealth: vi.fn().mockResolvedValue(false),
 }));
 
 vi.mock('../ai/toolExecutor', () => ({

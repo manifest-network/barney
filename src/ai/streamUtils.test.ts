@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { stripToolCallLeaks, processStreamWithTimeout } from './streamUtils';
-import type { OllamaStreamChunk } from '../api/ollama';
+import type { StreamChunk } from '../api/morpheus';
 
 // Helper: create an async generator from an array of chunks
-async function* chunksFrom(items: OllamaStreamChunk[]): AsyncGenerator<OllamaStreamChunk> {
+async function* chunksFrom(items: StreamChunk[]): AsyncGenerator<StreamChunk> {
   for (const item of items) {
     yield item;
   }
@@ -53,7 +53,7 @@ describe('stripToolCallLeaks', () => {
 
 describe('processStreamWithTimeout', () => {
   it('accumulates content chunks and calls onChunk', async () => {
-    const chunks: OllamaStreamChunk[] = [
+    const chunks: StreamChunk[] = [
       { type: 'content', content: 'Hello ' },
       { type: 'content', content: 'world' },
     ];
@@ -69,7 +69,7 @@ describe('processStreamWithTimeout', () => {
   });
 
   it('accumulates thinking chunks', async () => {
-    const chunks: OllamaStreamChunk[] = [
+    const chunks: StreamChunk[] = [
       { type: 'thinking', content: 'Let me think...' },
       { type: 'content', content: 'Answer' },
     ];
@@ -87,7 +87,7 @@ describe('processStreamWithTimeout', () => {
       type: 'function' as const,
       function: { name: 'get_balance', arguments: {} },
     };
-    const chunks: OllamaStreamChunk[] = [
+    const chunks: StreamChunk[] = [
       { type: 'content', content: 'Checking...' },
       { type: 'tool_call', toolCall },
     ];
@@ -99,7 +99,7 @@ describe('processStreamWithTimeout', () => {
   });
 
   it('short-circuits on error chunk and returns accumulated content', async () => {
-    const chunks: OllamaStreamChunk[] = [
+    const chunks: StreamChunk[] = [
       { type: 'content', content: 'Partial ' },
       { type: 'error', error: 'connection reset' },
       { type: 'content', content: 'should not reach' },
@@ -114,7 +114,7 @@ describe('processStreamWithTimeout', () => {
   });
 
   it('strips tool call leaks from final content', async () => {
-    const chunks: OllamaStreamChunk[] = [
+    const chunks: StreamChunk[] = [
       { type: 'content', content: 'Result [TOOL_CALLS]{"x":1}' },
     ];
 
@@ -125,7 +125,7 @@ describe('processStreamWithTimeout', () => {
   });
 
   it('throws on timeout when stream stalls', async () => {
-    async function* slowStream(): AsyncGenerator<OllamaStreamChunk> {
+    async function* slowStream(): AsyncGenerator<StreamChunk> {
       yield { type: 'content', content: 'start' };
       // Sleep longer than the timeout but short enough for generator.return() cleanup
       await new Promise((resolve) => setTimeout(resolve, 500));

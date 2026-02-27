@@ -1,21 +1,24 @@
 /**
- * Stream processing utilities for Ollama chat streaming.
+ * Stream processing utilities for AI chat streaming.
  * Pure functions — no React hooks or state.
  */
 
-import type { OllamaStreamChunk, OllamaToolCall } from '../api/ollama';
+import type { StreamChunk, ToolCall } from '../api/morpheus';
 import { AI_STREAM_TIMEOUT_MS } from '../config/constants';
 
 export interface StreamResult {
   content: string;
   thinking: string;
-  toolCalls: OllamaToolCall[];
+  toolCalls: ToolCall[];
   error?: string;
 }
 
 /**
- * Strip raw tool-call leaks that some Ollama models emit as literal text
+ * Strip raw tool-call leaks that some models emit as literal text
  * instead of using the structured tool_calls field.
+ *
+ * Legacy safeguard from the Ollama/Mistral era — kept as defensive code
+ * for the Morpheus API in case upstream models regress to this behavior.
  *
  * Handles:
  *  - Paired: `[TOOL_CALLS]...json...[TOOL_CALLS]`
@@ -75,13 +78,13 @@ async function* withTimeout<T>(
  * Throws TimeoutError if no chunk received within timeout period.
  */
 export async function processStreamWithTimeout(
-  stream: AsyncGenerator<OllamaStreamChunk>,
+  stream: AsyncGenerator<StreamChunk>,
   onChunk: (content: string, thinking: string) => void,
   timeoutMs: number = AI_STREAM_TIMEOUT_MS
 ): Promise<StreamResult> {
   let accumulatedContent = '';
   let accumulatedThinking = '';
-  const toolCalls: OllamaToolCall[] = [];
+  const toolCalls: ToolCall[] = [];
 
   for await (const chunk of withTimeout(stream, timeoutMs)) {
     if (chunk.type === 'thinking' && chunk.content) {

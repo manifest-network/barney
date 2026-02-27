@@ -6,7 +6,8 @@
 import { createStore } from 'zustand/vanilla';
 import { useStore } from 'zustand';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
-import { checkOllamaHealth } from '../api/ollama';
+import { checkApiHealth } from '../api/morpheus';
+import { runtimeConfig } from '../config/runtimeConfig';
 import type { AISettings } from '../ai/validation';
 import type { SignArbitraryFn, PayloadAttachment, ToolResult } from '../ai/toolExecutor';
 import type { DeployProgress } from '../ai/progress';
@@ -201,10 +202,10 @@ export const createAIStore = () =>
       set((state) => {
         const updated = { ...state.settings };
 
-        if (newSettings.ollamaEndpoint !== undefined) {
-          const validatedUrl = validateEndpointUrl(newSettings.ollamaEndpoint);
+        if (newSettings.morpheusUrl !== undefined) {
+          const validatedUrl = validateEndpointUrl(newSettings.morpheusUrl);
           if (validatedUrl) {
-            updated.ollamaEndpoint = validatedUrl;
+            updated.morpheusUrl = validatedUrl;
           }
         }
 
@@ -213,9 +214,6 @@ export const createAIStore = () =>
         }
         if (typeof newSettings.saveHistory === 'boolean') {
           updated.saveHistory = newSettings.saveHistory;
-        }
-        if (typeof newSettings.enableThinking === 'boolean') {
-          updated.enableThinking = newSettings.enableThinking;
         }
 
         return { settings: updated };
@@ -301,10 +299,15 @@ export function getAIStore(): ReturnType<typeof createAIStore> {
   return _store;
 }
 
-/** Check Ollama connection health and update store */
+/** Check AI API connection health and update store */
 export async function checkConnection(store: ReturnType<typeof createAIStore>): Promise<void> {
   try {
-    const healthy = await checkOllamaHealth(store.getState().settings.ollamaEndpoint);
+    const apiKey = runtimeConfig.PUBLIC_MORPHEUS_API_KEY;
+    if (!apiKey) {
+      store.setState({ isConnected: false });
+      return;
+    }
+    const healthy = await checkApiHealth(store.getState().settings.morpheusUrl, apiKey);
     store.setState({ isConnected: healthy });
   } catch (error) {
     logError('aiStore.checkConnection', error);

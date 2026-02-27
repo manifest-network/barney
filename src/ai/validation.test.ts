@@ -148,35 +148,32 @@ describe('isPrivateHost (SSRF protection via ipaddr.js)', () => {
 describe('validateSettings', () => {
   it('returns defaults for null/undefined', () => {
     const defaults = validateSettings(null);
-    expect(defaults.ollamaEndpoint).toBe('http://localhost:11434');
-    expect(defaults.model).toBe('llama3.2');
+    expect(defaults.morpheusUrl).toBe('https://api.mor.org/api/v1');
+    expect(defaults.model).toBe('minimax-m2.5');
     expect(defaults.saveHistory).toBe(true);
-    expect(defaults.enableThinking).toBe(false);
   });
 
   it('validates valid settings with public URL', () => {
     const input = {
-      ollamaEndpoint: 'https://ollama.example.com:8080',
+      morpheusUrl: 'https://api.example.com:8080',
       model: 'llama3.1',
       saveHistory: false,
-      enableThinking: true,
     };
     const result = validateSettings(input);
-    expect(result.ollamaEndpoint).toBe('https://ollama.example.com:8080');
+    expect(result.morpheusUrl).toBe('https://api.example.com:8080');
     expect(result.model).toBe('llama3.1');
     expect(result.saveHistory).toBe(false);
-    expect(result.enableThinking).toBe(true);
   });
 
   it('uses defaults for invalid fields', () => {
     const input = {
-      ollamaEndpoint: 'invalid-url',
+      morpheusUrl: 'invalid-url',
       model: '',
       saveHistory: 'not-a-boolean',
     };
     const result = validateSettings(input);
-    expect(result.ollamaEndpoint).toBe('http://localhost:11434');
-    expect(result.model).toBe('llama3.2');
+    expect(result.morpheusUrl).toBe('https://api.mor.org/api/v1');
+    expect(result.model).toBe('minimax-m2.5');
     expect(result.saveHistory).toBe(true);
   });
 
@@ -185,11 +182,11 @@ describe('validateSettings', () => {
       model: 'model<script>',
     };
     const result = validateSettings(input);
-    expect(result.model).toBe('llama3.2'); // defaults
+    expect(result.model).toBe('minimax-m2.5'); // defaults
   });
 
   // Note: SSRF protection for validateSettings is tested via isPrivateHost.
-  // In dev mode, private IPs are allowed to enable local Ollama usage.
+  // In dev mode, private IPs are allowed to enable local services.
 });
 
 describe('validateChatHistory', () => {

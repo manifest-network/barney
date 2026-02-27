@@ -17,13 +17,12 @@ import type { AIStore } from '../aiStore';
 const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const STORAGE_KEY_HISTORY = 'barney-ai-history';
 
-const envEndpoint = validateEndpointUrl(runtimeConfig.PUBLIC_OLLAMA_URL);
+const envEndpoint = validateEndpointUrl(runtimeConfig.PUBLIC_MORPHEUS_URL);
 
 export const defaultSettings: AISettings = {
-  ollamaEndpoint: envEndpoint || 'http://localhost:11434',
-  model: runtimeConfig.PUBLIC_OLLAMA_MODEL,
+  morpheusUrl: envEndpoint || 'https://api.mor.org/api/v1',
+  model: runtimeConfig.PUBLIC_MORPHEUS_MODEL,
   saveHistory: true,
-  enableThinking: false,
 };
 
 export function loadSettings(): AISettings {

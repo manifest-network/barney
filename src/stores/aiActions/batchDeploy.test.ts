@@ -17,10 +17,9 @@ vi.mock('./utils', async (importOriginal) => {
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
-vi.mock('../../api/ollama', () => ({
+vi.mock('../../api/morpheus', () => ({
   streamChat: vi.fn(),
-  checkOllamaHealth: vi.fn().mockResolvedValue(true),
-  listModels: vi.fn().mockResolvedValue([]),
+  checkApiHealth: vi.fn().mockResolvedValue(true),
 }));
 
 const mockExecuteBatchDeploy = vi.fn<() => Promise<ToolResult>>();
@@ -47,8 +46,9 @@ vi.mock('../../ai/systemPrompt', () => ({
 
 vi.mock('../../config/runtimeConfig', () => ({
   runtimeConfig: {
-    PUBLIC_OLLAMA_URL: 'http://localhost:11434',
-    PUBLIC_OLLAMA_MODEL: 'llama3.2',
+    PUBLIC_MORPHEUS_URL: 'https://api.mor.org/api/v1',
+    PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5',
+    PUBLIC_MORPHEUS_API_KEY: 'test-key',
     PUBLIC_REST_URL: '',
     PUBLIC_RPC_URL: '',
     PUBLIC_WEB3AUTH_CLIENT_ID: '',
@@ -111,10 +111,9 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
     address: 'manifest1test',
     signArbitrary: vi.fn(),
     settings: {
-      ollamaEndpoint: 'http://localhost:11434',
-      model: 'llama3.2',
+      morpheusUrl: 'https://api.mor.org/api/v1',
+      model: 'minimax-m2.5',
       saveHistory: false,
-      enableThinking: false,
     },
     ...overrides,
   });
