@@ -80,6 +80,9 @@ createRoot(rootElement).render(
           signerOptions={{
             preferredSignType: () => 'direct',
           }}
+          sessionOptions={{
+            duration: 24 * 60 * 60 * 1000, // 24 hours
+          }}
         >
           <ToastProvider>
             <AIProvider>
