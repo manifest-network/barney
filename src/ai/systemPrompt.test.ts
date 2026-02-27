@@ -139,4 +139,16 @@ describe('getSystemPrompt', () => {
     expect(prompt).toContain('play doom');
     expect(prompt).toContain('demo-games:doom');
   });
+
+  it('contains multi-deploy example', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('Deploy tetris, doom and hextris');
+    expect(prompt).toContain('deploy_app once for EACH named app');
+  });
+
+  it('rule 4 prioritizes checking names before fallback message', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('FIRST check if the user names any app');
+    expect(prompt).toContain('ONLY if the user names nothing recognizable');
+  });
 });
