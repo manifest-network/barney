@@ -27,7 +27,7 @@ describe('getConfigValue', () => {
     expect(getConfigValue('PUBLIC_REST_URL')).toBe('http://localhost:1317');
     expect(getConfigValue('PUBLIC_RPC_URL')).toBe('http://localhost:26657');
     expect(getConfigValue('PUBLIC_OLLAMA_URL')).toBe('http://localhost:11434');
-    expect(getConfigValue('PUBLIC_OLLAMA_MODEL')).toBe('llama3.2');
+    expect(getConfigValue('PUBLIC_OLLAMA_MODEL')).toBe('mistral-small3.2:24b');
     expect(getConfigValue('PUBLIC_WEB3AUTH_CLIENT_ID')).toBe('YOUR_WEB3AUTH_CLIENT_ID');
     expect(getConfigValue('PUBLIC_WEB3AUTH_NETWORK')).toBe('sapphire_devnet');
     expect(getConfigValue('PUBLIC_PWR_DENOM')).toBe(

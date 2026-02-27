@@ -50,7 +50,7 @@ const DEFAULTS: RuntimeConfig = {
   PUBLIC_WEB3AUTH_CLIENT_ID: 'YOUR_WEB3AUTH_CLIENT_ID',
   PUBLIC_WEB3AUTH_NETWORK: 'sapphire_devnet',
   PUBLIC_OLLAMA_URL: 'http://localhost:11434',
-  PUBLIC_OLLAMA_MODEL: 'llama3.2',
+  PUBLIC_OLLAMA_MODEL: 'mistral-small3.2:24b',
   PUBLIC_PWR_DENOM:
     'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr',
   PUBLIC_GAS_PRICE: '0.0025umfx',

@@ -149,7 +149,7 @@ describe('validateSettings', () => {
   it('returns defaults for null/undefined', () => {
     const defaults = validateSettings(null);
     expect(defaults.ollamaEndpoint).toBe('http://localhost:11434');
-    expect(defaults.model).toBe('llama3.2');
+    expect(defaults.model).toBe('mistral-small3.2:24b');
     expect(defaults.saveHistory).toBe(true);
     expect(defaults.enableThinking).toBe(false);
   });
@@ -176,7 +176,7 @@ describe('validateSettings', () => {
     };
     const result = validateSettings(input);
     expect(result.ollamaEndpoint).toBe('http://localhost:11434');
-    expect(result.model).toBe('llama3.2');
+    expect(result.model).toBe('mistral-small3.2:24b');
     expect(result.saveHistory).toBe(true);
   });
 
@@ -185,7 +185,7 @@ describe('validateSettings', () => {
       model: 'model<script>',
     };
     const result = validateSettings(input);
-    expect(result.model).toBe('llama3.2'); // defaults
+    expect(result.model).toBe('mistral-small3.2:24b'); // defaults
   });
 
   // Note: SSRF protection for validateSettings is tested via isPrivateHost.
