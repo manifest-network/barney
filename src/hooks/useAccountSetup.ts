@@ -212,9 +212,10 @@ export function useAccountSetup({
               setSetupState({ isInitialSetup: false, phase: 'complete' });
               return;
             }
-          } catch {
-            // Credit query failed — proceed with normal setup
+          } catch (err) {
+            logError('Early credit check failed in useAccountSetup', err);
           }
+          if (signal.aborted || addressRef.current !== targetAddress) return;
           // Genuinely needs setup — now show the overlay
           setSetupState({ isInitialSetup: true, phase: 'checking' });
         }

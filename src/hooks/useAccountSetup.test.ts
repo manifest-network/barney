@@ -117,7 +117,7 @@ function hadState(predicate: (s: AccountSetupState) => boolean): boolean {
 }
 
 beforeEach(() => {
-  vi.resetAllMocks();
+  vi.resetAllMocks(); // resetAllMocks (not clearAllMocks) to clear mockResolvedValueOnce queues between tests
   mockGetOfflineSigner.mockReturnValue({ getAccounts: vi.fn() });
   vi.useFakeTimers({ shouldAdvanceTime: true });
   localStorage.clear();
