@@ -13,10 +13,13 @@ import { generateImageReferenceForPrompt, generateStackReferenceForPrompt } from
  */
 export function generateDemoGamesForPrompt(): string {
   const games = EXAMPLE_APPS.filter((app) => app.group === 'games');
-  const tags = games.map((app) => {
-    const image = app.manifest.image as string;
-    return image.split(':')[1];
-  });
+  const tags = games
+    .map((app) => {
+      const image = app.manifest.image;
+      if (typeof image !== 'string') return null;
+      return image.split(':')[1] ?? null;
+    })
+    .filter((tag): tag is string => tag !== null);
   return `All use image "docker.io/lifted/demo-games:{game}" with port 8080.
 Available: ${tags.join(', ')}
 Deploy with: deploy_app(image="docker.io/lifted/demo-games:{game}", port="8080")`;
@@ -120,29 +123,14 @@ User: "Deploy my-custom-app"
 → "What port does my-custom-app expose, and does it need any environment variables?"
 
 User: "Stop all apps" → stop_app(app_name="all")
-User: "What's running?" → list_apps(state="running")
 User: "Check my-api" → app_status(app_name="my-api")
 User: "Show redis version" / "What version is redis running?" → app_status(app_name="redis")
-User: "How much credit?" → get_balance()
-User: "Add 100 credits" → fund_credits(amount=100)
-User: "Restart my-api" → restart_app(app_name="my-api")
 User: "Update my-app (File attached: manifest.json)" → update_app(app_name="my-app")
 User: "Update redis to redis:8" → update_app(app_name="redis", image="redis:8", port="6379")
 User: "Why did my-api fail?" → app_diagnostics(app_name="my-api")
-User: "Show logs for my-api" → get_logs(app_name="my-api")
-User: "Show my lease history" → lease_history()
-User: "Show releases for my-app" → app_releases(app_name="my-app")
-User: "What are the prices?" → browse_catalog()
-User: "Give me tokens" / "I need credits" / "Use the faucet" → request_faucet()
 
-User: "Deploy WordPress with MySQL"
-→ deploy_app(app_name="wordpress", services='{"web":{"image":"wordpress","port":"80","env":{"WORDPRESS_DB_HOST":"db:3306","WORDPRESS_DB_USER":"wordpress","WORDPRESS_DB_PASSWORD":"","WORDPRESS_DB_NAME":"wordpress"}},"db":{"image":"mysql","port":"3306","env":{"MYSQL_DATABASE":"wordpress","MYSQL_USER":"wordpress","MYSQL_PASSWORD":"","MYSQL_ROOT_PASSWORD":""}}}')
-
-User: "Deploy Ghost blog"
-→ deploy_app(app_name="ghost", services='{"web":{"image":"ghost","port":"2368","env":{"database__client":"mysql","database__connection__host":"db","database__connection__user":"ghost","database__connection__password":"","database__connection__database":"ghost"}},"db":{"image":"mysql","port":"3306","env":{"MYSQL_DATABASE":"ghost","MYSQL_USER":"ghost","MYSQL_PASSWORD":"","MYSQL_ROOT_PASSWORD":""}}}')
-
-User: "Deploy nginx with postgres"
-→ deploy_app(app_name="nginx-postgres", services='{"web":{"image":"nginx","port":"80","depends_on":{"db":{"condition":"service_healthy"}}},"db":{"image":"postgres","port":"5432","env":{"POSTGRES_PASSWORD":""},"user":"999:999","tmpfs":"/var/run/postgresql"}}')
+User: "Deploy WordPress with MySQL" → deploy_app(app_name="wordpress", services=<wordpress stack from Known Stacks>)
+User: "Deploy Ghost blog" → deploy_app(app_name="ghost", services=<ghost stack from Known Stacks>)
 
 ${address ? `## Session\nWallet: ${address}` : '## Session\nNo wallet connected. Ask the user to sign in to deploy apps.'}
 `;
