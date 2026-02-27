@@ -126,9 +126,9 @@ describe('getSystemPrompt', () => {
     expect(prompt).toContain('port="8080"');
   });
 
-  it('examples reference rule 4 not rule 3', () => {
+  it('examples reference rule 5 for fallback message', () => {
     const prompt = getSystemPrompt();
-    expect(prompt).toContain('message from rule 4');
+    expect(prompt).toContain('message from rule 5');
     expect(prompt).not.toContain('message from rule 3');
   });
 
@@ -140,13 +140,27 @@ describe('getSystemPrompt', () => {
     expect(prompt).toContain('demo-games:doom');
   });
 
-  it('contains multi-deploy example', () => {
+  it('contains multi-call examples for deploy and stop', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('Deploy tetris, doom and hextris');
-    expect(prompt).toContain('deploy_app once for EACH named app');
+    expect(prompt).toContain('deploy_app once for EACH');
+    expect(prompt).toContain('Stop redis and postgres');
+    expect(prompt).toContain('stop_app twice');
   });
 
-  it('rule 4 prioritizes checking names before fallback message', () => {
+  it('contains combined-action example', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('stop my-app and show games');
+    expect(prompt).toContain('example apps below');
+  });
+
+  it('rule 4 generalizes multiple names to multiple tool calls', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('Multiple names = multiple calls');
+    expect(prompt).toContain('deploy, stop, restart, status');
+  });
+
+  it('rule 5 prioritizes checking names before fallback message', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('FIRST check if the user names any app');
     expect(prompt).toContain('ONLY if the user names nothing recognizable');
