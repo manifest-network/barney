@@ -195,6 +195,14 @@ async function fetchLeaseData(
         getLeaseConnectionInfo(updates.providerUrl, lease.uuid, authToken),
       ]);
 
+      // Log individual Fred API failures
+      if (releasesResult.status === 'rejected') {
+        logError('leaseDiscovery.fetchLeaseData.getLeaseReleases', releasesResult.reason);
+      }
+      if (connectionResult.status === 'rejected') {
+        logError('leaseDiscovery.fetchLeaseData.getLeaseConnectionInfo', connectionResult.reason);
+      }
+
       // Extract raw image name and manifest from latest release
       if (releasesResult.status === 'fulfilled' && releasesResult.value.releases.length > 0) {
         const latestRelease = releasesResult.value.releases[releasesResult.value.releases.length - 1];
@@ -309,7 +317,11 @@ export async function enrichDiscoveredLeases(
         }
 
         if (Object.keys(updates).length > 0) {
-          updateApp(address, leaseUuid, updates);
+          const updated = updateApp(address, leaseUuid, updates);
+          if (!updated) {
+            logError('leaseDiscovery.enrichDiscoveredLeases.updateApp',
+              new Error(`Failed to update lease ${leaseUuid} — entry may have been removed`));
+          }
         }
       }
     }

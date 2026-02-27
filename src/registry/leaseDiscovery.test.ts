@@ -554,6 +554,101 @@ describe('leaseDiscovery', () => {
       expect(getLeaseInfo).toHaveBeenCalledTimes(1);
     });
 
+    it('stores manifest from release and sanitizes it', async () => {
+      const lease = makeLease({ uuid: 'manifest-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-manifest',
+        leaseUuid: 'manifest-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1', apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider', payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(), active: true,
+      });
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'manifest-uuid', tenant: ADDR, provider_uuid: 'prov-uuid-1',
+        releases: [{
+          version: 1,
+          image: 'redis:8.4',
+          status: 'active',
+          created_at: '2025-01-01T00:00:00Z',
+          manifest: '{"image":"redis:8.4","ports":["6379/tcp"]}',
+        }],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('no connection'));
+
+      const leaseMap = new Map([['manifest-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['manifest-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'manifest-uuid');
+      expect(app?.manifest).toBeDefined();
+      const parsed = JSON.parse(app!.manifest!);
+      expect(parsed.image).toBe('redis:8.4');
+    });
+
+    it('handles invalid manifest JSON without crashing', async () => {
+      const { logError } = await import('../utils/errors');
+      const lease = makeLease({ uuid: 'bad-manifest-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-bad-mani',
+        leaseUuid: 'bad-manifest-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1', apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider', payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(), active: true,
+      });
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'bad-manifest-uuid', tenant: ADDR, provider_uuid: 'prov-uuid-1',
+        releases: [{
+          version: 1,
+          image: 'redis:8.4',
+          status: 'active',
+          created_at: '2025-01-01T00:00:00Z',
+          manifest: 'not-valid-json{{{',
+        }],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('no connection'));
+
+      const leaseMap = new Map([['bad-manifest-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['bad-manifest-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'bad-manifest-uuid');
+      // Should still enrich other fields (name) without crashing
+      expect(app?.name).toBe('redis-8-4');
+      expect(app?.manifest).toBeUndefined();
+      expect(logError).toHaveBeenCalledWith(
+        'leaseDiscovery.fetchLeaseData.parseManifest',
+        expect.any(SyntaxError),
+      );
+    });
+
+    it('logs error when lease UUID is not found in leaseMap', async () => {
+      const { logError } = await import('../utils/errors');
+      addApp(ADDR, makeApp({
+        name: 'lease-missing',
+        leaseUuid: 'missing-map-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      const leaseMap = new Map<string, Lease>(); // empty — UUID not present
+      await enrichDiscoveredLeases(ADDR, ['missing-map-uuid'], leaseMap, mockSignArbitrary);
+
+      expect(logError).toHaveBeenCalledWith(
+        'leaseDiscovery.enrichDiscoveredLeases',
+        expect.objectContaining({ message: expect.stringContaining('missing-map-uuid') }),
+      );
+    });
+
     it('stores connection details from getLeaseConnectionInfo', async () => {
       const lease = makeLease({ uuid: 'conn-uuid' });
       addApp(ADDR, makeApp({

@@ -64,6 +64,12 @@ describe('deriveAppNameFromImage', () => {
   it('includes alpine variant tags', () => {
     expect(deriveAppNameFromImage('node:20-alpine')).toBe('node-20-alpine');
   });
+
+  it('strips trailing hyphens after truncation to 32 chars', () => {
+    const result = deriveAppNameFromImage('my-long-application-name:v1.2.3-beta.4');
+    expect(result.length).toBeLessThanOrEqual(32);
+    expect(result).not.toMatch(/-$/);
+  });
 });
 
 describe('normalizePorts', () => {

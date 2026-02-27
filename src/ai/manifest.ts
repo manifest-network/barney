@@ -14,13 +14,15 @@ import type { PayloadAttachment } from './toolExecutor/types';
 
 /**
  * Derive an app name from a Docker image reference.
- * Strips registry prefix, tag, digest, and normalizes to valid app name chars.
+ * Strips registry prefix and digest; includes meaningful tags (not "latest").
+ * Normalizes to valid app name chars (lowercase alphanumeric + hyphens, max 32).
  *
  * Examples:
- *   "redis:8.4"                        → "redis"
- *   "docker.io/library/redis:8.4"      → "redis"
+ *   "redis:8.4"                        → "redis-8-4"
+ *   "docker.io/library/redis:8.4"      → "redis-8-4"
  *   "ghcr.io/org/my-app:latest"        → "my-app"
  *   "postgres@sha256:abc..."            → "postgres"
+ *   "node:20-alpine"                   → "node-20-alpine"
  */
 export function deriveAppNameFromImage(image: string): string {
   let name = image;
@@ -58,7 +60,8 @@ export function deriveAppNameFromImage(image: string): string {
     .replace(/[^a-z0-9-]/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
-    .slice(0, 32);
+    .slice(0, 32)
+    .replace(/-+$/, '');
 
   return name || 'app';
 }
