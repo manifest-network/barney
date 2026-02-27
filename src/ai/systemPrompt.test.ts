@@ -52,7 +52,7 @@ describe('getSystemPrompt', () => {
   it('contains behavior rules', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('On file attachment');
-    expect(prompt).toContain('Deploy by image');
+    expect(prompt).toContain('Deploy by name');
     expect(prompt).toContain('Default size');
     expect(prompt).toContain('Be concise');
   });
