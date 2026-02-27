@@ -1099,7 +1099,6 @@ export async function executeConfirmedDeployApp(
           message: `App "${name}" is live!`,
           name,
           url: connectionUrl,
-          connection,
           status: 'running',
         },
       };
