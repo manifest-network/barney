@@ -84,11 +84,11 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
       if (allLeases.length > 0) {
         discoveredUuids = discoverUnknownLeases(address, allLeases);
       }
-      // Re-read after reconciliation + discovery
-      setApps(getApps(address));
     } catch (error) {
       logError('AppsSidebar.refresh.discover', error);
     }
+    // Always re-read after reconciliation + discovery (even if discovery failed)
+    setApps(getApps(address));
 
     // Enrich discovered leases in the background
     if (discoveredUuids.length > 0) {

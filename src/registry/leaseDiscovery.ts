@@ -187,7 +187,7 @@ async function fetchLeaseData(
       updates.providerUrl = provider.apiUrl;
     }
   } catch (error) {
-    logError('leaseDiscovery.fetchLeaseData.getProvider', error);
+    logError(`leaseDiscovery.fetchLeaseData.getProvider[${lease.providerUuid}]`, error);
   }
 
   // 2. Fetch SKU → derive size from name (e.g. "docker-micro" → "micro")
@@ -199,7 +199,7 @@ async function fetchLeaseData(
         updates.size = sku.name.replace(/^docker-/, '');
       }
     } catch (error) {
-      logError('leaseDiscovery.fetchLeaseData.getSKU', error);
+      logError(`leaseDiscovery.fetchLeaseData.getSKU[${skuUuid}]`, error);
     }
   }
 
@@ -324,9 +324,10 @@ export async function enrichDiscoveredLeases(
       );
 
       // Resolve names and apply updates sequentially (no races on existingNames)
-      for (const result of results) {
+      for (let idx = 0; idx < results.length; idx++) {
+        const result = results[idx];
         if (result.status === 'rejected') {
-          logError('leaseDiscovery.enrichDiscoveredLeases.fetchLeaseData', result.reason);
+          logError(`leaseDiscovery.enrichDiscoveredLeases.fetchLeaseData[${batch[idx]}]`, result.reason);
           continue;
         }
         if (!result.value) continue;
