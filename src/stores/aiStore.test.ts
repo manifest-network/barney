@@ -5,7 +5,6 @@ import type { StoreApi } from 'zustand';
 
 vi.mock('../api/ollama', () => ({
   checkOllamaHealth: vi.fn().mockResolvedValue(true),
-  listModels: vi.fn().mockResolvedValue([{ name: 'llama3.2' }]),
 }));
 
 vi.mock('../utils/errors', () => ({
@@ -77,7 +76,6 @@ vi.mock('./aiActions/batchDeploy', () => ({
 
 // Now import
 import { createAIStore, type AIStore } from './aiStore';
-import { listModels } from '../api/ollama';
 import { logError } from '../utils/errors';
 import { validateFile } from '../utils/fileValidation';
 import { clearHistoryStorage } from './aiActions/persistence';
@@ -321,26 +319,6 @@ describe('aiStore', () => {
       const result = await store.getState().attachPayload(badFile);
       expect(result.error).toBe('Failed to read file');
       expect(logError).toHaveBeenCalled();
-    });
-  });
-
-  // ---- refreshModels ----
-
-  describe('refreshModels', () => {
-    it('populates availableModels on success', async () => {
-      vi.mocked(listModels).mockResolvedValueOnce([
-        { name: 'model-a' } as AIStore['availableModels'][0],
-      ]);
-      await store.getState().refreshModels();
-      expect(store.getState().availableModels).toHaveLength(1);
-      expect(store.getState().availableModels[0].name).toBe('model-a');
-    });
-
-    it('logs error and keeps models unchanged on failure', async () => {
-      vi.mocked(listModels).mockRejectedValueOnce(new Error('network'));
-      await store.getState().refreshModels();
-      expect(store.getState().availableModels).toHaveLength(0);
-      expect(logError).toHaveBeenCalledWith('aiStore.refreshModels', expect.any(Error));
     });
   });
 

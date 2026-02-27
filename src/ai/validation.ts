@@ -133,7 +133,7 @@ export const AISettingsSchema = z.object({
     .min(1)
     .max(256)
     .regex(/^[a-zA-Z0-9\-_.:]+$/)
-    .catch('llama3.2'),
+    .catch('mistral-small3.2:24b'),
   saveHistory: z.boolean().catch(true),
   enableThinking: z.boolean().catch(false),
 });
