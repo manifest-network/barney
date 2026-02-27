@@ -426,6 +426,134 @@ describe('leaseDiscovery', () => {
       expect(getProvider).toHaveBeenCalledTimes(1);
     });
 
+    it('assigns unique names when multiple leases derive the same image', async () => {
+      const lease1 = makeLease({ uuid: 'dup-img-uuid-1' });
+      const lease2 = makeLease({ uuid: 'dup-img-uuid-2' });
+      addApp(ADDR, makeApp({ name: 'lease-dup-img-', leaseUuid: 'dup-img-uuid-1', providerUrl: '', size: 'unknown' }));
+      addApp(ADDR, makeApp({ name: 'lease-dup-img', leaseUuid: 'dup-img-uuid-2', providerUrl: '', size: 'unknown' }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1', apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider', payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(), active: true,
+      });
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: '', tenant: ADDR, provider_uuid: 'prov-uuid-1',
+        releases: [{ version: 1, image: 'redis:8.4', status: 'active', created_at: '2025-01-01T00:00:00Z' }],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('no connection'));
+
+      const leaseMap = new Map([['dup-img-uuid-1', lease1], ['dup-img-uuid-2', lease2]]);
+      await enrichDiscoveredLeases(ADDR, ['dup-img-uuid-1', 'dup-img-uuid-2'], leaseMap, mockSignArbitrary);
+
+      const app1 = getAppByLease(ADDR, 'dup-img-uuid-1');
+      const app2 = getAppByLease(ADDR, 'dup-img-uuid-2');
+      const names = new Set([app1?.name, app2?.name]);
+      expect(names).toEqual(new Set(['redis', 'redis-2']));
+    });
+
+    it('truncates long derived names to fit within 32-char limit', async () => {
+      // Image name that produces a 32-char derived name
+      const longImage = 'my-very-long-application-name-ab:latest'; // derives "my-very-long-application-name-ab" (32 chars)
+      const lease = makeLease({ uuid: 'long-name-uuid' });
+      // Pre-add a conflicting entry so uniquifyName must append a suffix
+      addApp(ADDR, makeApp({ name: 'my-very-long-application-name-ab', leaseUuid: 'conflict-uuid' }));
+      addApp(ADDR, makeApp({ name: 'lease-long-nam', leaseUuid: 'long-name-uuid', providerUrl: '', size: 'unknown' }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1', apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider', payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(), active: true,
+      });
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'long-name-uuid', tenant: ADDR, provider_uuid: 'prov-uuid-1',
+        releases: [{ version: 1, image: longImage, status: 'active', created_at: '2025-01-01T00:00:00Z' }],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('no connection'));
+
+      const leaseMap = new Map([['long-name-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['long-name-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'long-name-uuid');
+      expect(app?.name).toBeDefined();
+      expect(app!.name.length).toBeLessThanOrEqual(32);
+      // Should be truncated base + suffix, not the full 32-char name
+      expect(app!.name).toMatch(/-\d+$/);
+    });
+
+    it('strips trailing hyphens from truncated names', async () => {
+      // Image that produces a name with a hyphen at the truncation boundary
+      // "abcdefghijklmnopqrstuvwxyz-ab" is 29 chars; truncation at 28 → "abcdefghijklmnopqrstuvwxyz-a"
+      // But we need hyphens at position 28 for the bug. Let's construct it:
+      // The image "aaaaaaaaaaaaaaaaaaaaaaaaaaa-bcd:latest" derives to "aaaaaaaaaaaaaaaaaaaaaaaaaaa-bcd" (31 chars)
+      // Truncate to 28: "aaaaaaaaaaaaaaaaaaaaaaaaaaa-" → trailing hyphen → stripped to "aaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      const lease = makeLease({ uuid: 'hyphen-uuid-1' });
+      // Pre-add a conflicting entry to force truncation path
+      addApp(ADDR, makeApp({ name: 'aaaaaaaaaaaaaaaaaaaaaaaaaaa-bcd', leaseUuid: 'conflict-uuid-2' }));
+      addApp(ADDR, makeApp({ name: 'lease-hyphen-u', leaseUuid: 'hyphen-uuid-1', providerUrl: '', size: 'unknown' }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1', apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider', payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(), active: true,
+      });
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'hyphen-uuid-1', tenant: ADDR, provider_uuid: 'prov-uuid-1',
+        releases: [{ version: 1, image: 'aaaaaaaaaaaaaaaaaaaaaaaaaaa-bcd:latest', status: 'active', created_at: '2025-01-01T00:00:00Z' }],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('no connection'));
+
+      const leaseMap = new Map([['hyphen-uuid-1', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['hyphen-uuid-1'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'hyphen-uuid-1');
+      expect(app?.name).toBeDefined();
+      // Name must not contain double hyphens or start/end with hyphens
+      expect(app!.name).not.toMatch(/--/);
+      expect(app!.name).not.toMatch(/^-/);
+      expect(app!.name).not.toMatch(/-$/);
+      expect(app!.name.length).toBeLessThanOrEqual(32);
+    });
+
+    it('falls back to getLeaseInfo when getLeaseConnectionInfo fails', async () => {
+      const lease = makeLease({ uuid: 'fallback-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-fallback',
+        leaseUuid: 'fallback-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1', apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider', payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(), active: true,
+      });
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'fallback-uuid', tenant: ADDR, provider_uuid: 'prov-uuid-1',
+        releases: [],
+      } satisfies LeaseReleasesResponse);
+      // getLeaseConnectionInfo fails → triggers fallback
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('connection unavailable'));
+      // getLeaseInfo succeeds as fallback
+      (getLeaseInfo as Mock).mockResolvedValue({
+        host: '10.0.0.1',
+        ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 30080 } },
+      });
+
+      const leaseMap = new Map([['fallback-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['fallback-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'fallback-uuid');
+      expect(app?.connection?.host).toBe('10.0.0.1');
+      expect(app?.connection?.ports).toEqual({ '80/tcp': { host_ip: '0.0.0.0', host_port: 30080 } });
+      expect(getLeaseInfo).toHaveBeenCalledTimes(1);
+    });
+
     it('stores connection details from getLeaseConnectionInfo', async () => {
       const lease = makeLease({ uuid: 'conn-uuid' });
       addApp(ADDR, makeApp({

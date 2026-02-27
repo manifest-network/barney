@@ -54,17 +54,33 @@ function leaseStateToAppStatus(state: LeaseState): AppStatus {
   }
 }
 
+/** Max app name length (matches APP_NAME_REGEX in appRegistry.ts). */
+const MAX_APP_NAME_LENGTH = 32;
+
 /**
  * Generate a unique name for a discovered lease that doesn't collide
- * with existing registry entries.
+ * with existing registry entries or already-claimed names in this batch.
  */
-function uniquifyName(baseName: string, address: string): string {
+function uniquifyName(baseName: string, address: string, extraNames?: Set<string>): string {
   const apps = getApps(address);
   const existingNames = new Set(apps.map((a) => a.name));
-  if (!existingNames.has(baseName)) return baseName;
+  if (extraNames) {
+    for (const n of extraNames) existingNames.add(n);
+  }
+
+  if (!existingNames.has(baseName) && baseName.length <= MAX_APP_NAME_LENGTH) return baseName;
+
+  // Truncate base so suffix fits within the limit (e.g. "-99" = 3 chars)
+  const maxBase = MAX_APP_NAME_LENGTH - 4; // room for "-" + up to 3 digits
+  const truncated = baseName.slice(0, maxBase).replace(/-+$/, '').replace(/^-+/, '');
+
+  // If truncation left nothing useful, go straight to UUID fallback
+  if (!truncated) {
+    return `lease-${crypto.randomUUID().slice(0, 8)}`;
+  }
 
   for (let i = 2; i <= 100; i++) {
-    const candidate = `${baseName}-${i}`;
+    const candidate = `${truncated}-${i}`;
     if (!existingNames.has(candidate)) return candidate;
   }
   // Extremely unlikely — fall back to UUID-based name
@@ -127,19 +143,22 @@ async function getAuthToken(
   return createAuthToken(address, leaseUuid, timestamp, signResult.pub_key.value, signResult.signature);
 }
 
+/** Data fetched for a single lease (before name resolution). */
+interface EnrichmentData {
+  leaseUuid: string;
+  updates: Partial<Omit<AppEntry, 'leaseUuid'>>;
+}
+
 /**
- * Enrich a single discovered lease with provider URL, size, release manifest,
- * and connection details. Silently handles errors — partial enrichment is fine.
- *
- * @param claimedNames - names already claimed by other leases in this batch,
- *   used to prevent duplicate names when concurrent enrichments derive the same image name.
+ * Fetch enrichment data for a single lease. Returns the updates without
+ * resolving the final app name — name resolution happens sequentially
+ * in the caller to avoid races on the shared claimedNames set.
  */
-async function enrichSingleLease(
+async function fetchLeaseData(
   address: string,
   lease: Lease,
   signArbitrary: SignArbitraryFn | undefined,
-  claimedNames: Set<string>
-): Promise<void> {
+): Promise<EnrichmentData> {
   const updates: Partial<Omit<AppEntry, 'leaseUuid'>> = {};
 
   // 1. Fetch provider → get apiUrl
@@ -149,7 +168,7 @@ async function enrichSingleLease(
       updates.providerUrl = provider.apiUrl;
     }
   } catch (error) {
-    logError('leaseDiscovery.enrichSingleLease.getProvider', error);
+    logError('leaseDiscovery.fetchLeaseData.getProvider', error);
   }
 
   // 2. Fetch SKU → derive size from name (e.g. "docker-micro" → "micro")
@@ -161,7 +180,7 @@ async function enrichSingleLease(
         updates.size = sku.name.replace(/^docker-/, '');
       }
     } catch (error) {
-      logError('leaseDiscovery.enrichSingleLease.getSKU', error);
+      logError('leaseDiscovery.fetchLeaseData.getSKU', error);
     }
   }
 
@@ -176,25 +195,19 @@ async function enrichSingleLease(
         getLeaseConnectionInfo(updates.providerUrl, lease.uuid, authToken),
       ]);
 
-      // Extract name and manifest from latest release
+      // Extract raw image name and manifest from latest release
       if (releasesResult.status === 'fulfilled' && releasesResult.value.releases.length > 0) {
         const latestRelease = releasesResult.value.releases[releasesResult.value.releases.length - 1];
         if (latestRelease.image) {
-          let name = deriveAppNameFromImage(latestRelease.image);
-          name = uniquifyName(name, address);
-          // Also check against names claimed by concurrent enrichments in this batch
-          while (claimedNames.has(name)) {
-            name = uniquifyName(name, address);
-          }
-          claimedNames.add(name);
-          updates.name = name;
+          // Store the derived name candidate — final dedup happens sequentially in the caller
+          updates.name = deriveAppNameFromImage(latestRelease.image);
         }
         if (latestRelease.manifest) {
           try {
             const parsed = JSON.parse(latestRelease.manifest);
             updates.manifest = sanitizeManifestForStorage(JSON.stringify(parsed, null, 2));
-          } catch {
-            // Invalid manifest JSON — skip
+          } catch (error) {
+            logError('leaseDiscovery.fetchLeaseData.parseManifest', error);
           }
         }
       }
@@ -211,7 +224,7 @@ async function enrichSingleLease(
         };
       }
     } catch (error) {
-      logError('leaseDiscovery.enrichSingleLease.fredFetch', error);
+      logError('leaseDiscovery.fetchLeaseData.fredFetch', error);
     }
   }
 
@@ -229,14 +242,11 @@ async function enrichSingleLease(
         };
       }
     } catch (error) {
-      logError('leaseDiscovery.enrichSingleLease.getLeaseInfo', error);
+      logError('leaseDiscovery.fetchLeaseData.getLeaseInfo', error);
     }
   }
 
-  // Apply updates if we got anything
-  if (Object.keys(updates).length > 0) {
-    updateApp(address, lease.uuid, updates);
-  }
+  return { leaseUuid: lease.uuid, updates };
 }
 
 /**
@@ -264,20 +274,44 @@ export async function enrichDiscoveredLeases(
   if (toEnrich.length === 0) return;
 
   try {
-    // Track names claimed during this enrichment run to prevent duplicates
-    // across concurrent enrichments within the same batch.
+    // Track names claimed during this enrichment run to prevent duplicates.
     const claimedNames = new Set<string>();
 
     // Process in batches of LEASE_DISCOVERY_MAX_CONCURRENT
     for (let i = 0; i < toEnrich.length; i += LEASE_DISCOVERY_MAX_CONCURRENT) {
       const batch = toEnrich.slice(i, i + LEASE_DISCOVERY_MAX_CONCURRENT);
-      await Promise.allSettled(
+
+      // Fetch data concurrently
+      const results = await Promise.allSettled(
         batch.map((uuid) => {
           const lease = leaseMap.get(uuid);
-          if (!lease) return Promise.resolve();
-          return enrichSingleLease(address, lease, signArbitrary, claimedNames);
+          if (!lease) {
+            logError('leaseDiscovery.enrichDiscoveredLeases', new Error(`Lease ${uuid} not found in leaseMap`));
+            return Promise.resolve(undefined);
+          }
+          return fetchLeaseData(address, lease, signArbitrary);
         })
       );
+
+      // Resolve names and apply updates sequentially (no races on claimedNames)
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          logError('leaseDiscovery.enrichDiscoveredLeases.fetchLeaseData', result.reason);
+          continue;
+        }
+        if (!result.value) continue;
+        const { leaseUuid, updates } = result.value;
+
+        // Deduplicate the derived name against registry + already-claimed names
+        if (updates.name) {
+          updates.name = uniquifyName(updates.name, address, claimedNames);
+          claimedNames.add(updates.name);
+        }
+
+        if (Object.keys(updates).length > 0) {
+          updateApp(address, leaseUuid, updates);
+        }
+      }
     }
   } finally {
     // Clean up in-flight tracking
