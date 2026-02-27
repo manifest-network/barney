@@ -245,14 +245,16 @@ async function fetchLeaseData(
 
       // Extract connection details
       if (connectionResult.status === 'fulfilled') {
-        const conn = connectionResult.value.connection;
-        updates.connection = {
-          host: conn.host,
-          fqdn: conn.fqdn,
-          ports: conn.ports,
-          instances: conn.instances,
-          services: conn.services,
-        };
+        const conn = connectionResult.value?.connection;
+        if (conn?.host) {
+          updates.connection = {
+            host: conn.host,
+            fqdn: conn.fqdn,
+            ports: conn.ports,
+            instances: conn.instances,
+            services: conn.services,
+          };
+        }
       }
     }
   }
