@@ -22,6 +22,7 @@ import {
   updateApp,
   getApps,
   sanitizeManifestForStorage,
+  MAX_APP_NAME_LENGTH,
   type AppEntry,
   type AppStatus,
 } from './appRegistry';
@@ -64,8 +65,7 @@ function leaseStateToAppStatus(state: LeaseState): AppStatus {
   }
 }
 
-/** Max app name length (matches APP_NAME_REGEX in appRegistry.ts). */
-const MAX_APP_NAME_LENGTH = 32;
+// MAX_APP_NAME_LENGTH imported from appRegistry — single source of truth.
 
 /** Build a set of all app names currently in the registry for a given address. */
 function getExistingNames(address: string): Set<string> {

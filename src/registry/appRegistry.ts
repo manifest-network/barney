@@ -33,6 +33,9 @@ export const AppEntrySchema = z.object({
 
 export type AppEntry = z.infer<typeof AppEntrySchema>;
 
+/** Maximum app name length — shared by validation and lease discovery. */
+export const MAX_APP_NAME_LENGTH = 32;
+
 /** Name validation: lowercase alphanumeric + hyphens, 1-32 chars, no leading/trailing hyphen */
 const APP_NAME_REGEX = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
 
@@ -149,7 +152,7 @@ export function validateAppName(
   if (!name) {
     return 'App name is required.';
   }
-  if (name.length > 32) {
+  if (name.length > MAX_APP_NAME_LENGTH) {
     return 'App name must be 32 characters or fewer.';
   }
   if (!APP_NAME_REGEX.test(name)) {

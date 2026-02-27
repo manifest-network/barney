@@ -820,6 +820,86 @@ describe('leaseDiscovery', () => {
       );
     });
 
+    it('skips SKU fetch when lease has no items', async () => {
+      const lease = makeLease({ uuid: 'no-items-enrich', items: [] });
+      addApp(ADDR, makeApp({
+        name: 'lease-no-items',
+        leaseUuid: 'no-items-enrich',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1', apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider', payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(), active: true,
+      });
+
+      const leaseMap = new Map([['no-items-enrich', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['no-items-enrich'], leaseMap);
+
+      expect(getSKU).not.toHaveBeenCalled();
+      const app = getAppByLease(ADDR, 'no-items-enrich');
+      expect(app?.providerUrl).toBe('https://fred.example.com');
+      expect(app?.size).toBe('unknown');
+    });
+
+    it('handles getProvider returning null gracefully', async () => {
+      const lease = makeLease({ uuid: 'null-prov-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-null-pro',
+        leaseUuid: 'null-prov-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue(null);
+      (getSKU as Mock).mockResolvedValue({
+        uuid: 'sku-uuid-1', name: 'docker-micro',
+        providerUuid: 'prov-uuid-1', active: true,
+        basePrice: { denom: 'upwr', amount: '100' }, unit: 0,
+      });
+
+      const leaseMap = new Map([['null-prov-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['null-prov-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'null-prov-uuid');
+      // SKU should still be enriched
+      expect(app?.size).toBe('micro');
+      // Provider URL remains empty since getProvider returned null
+      expect(app?.providerUrl).toBe('');
+      // No Fred calls since providerUrl is empty
+      expect(getLeaseReleases).not.toHaveBeenCalled();
+      expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
+    });
+
+    it('handles getProvider returning provider without apiUrl field', async () => {
+      const lease = makeLease({ uuid: 'no-field-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-no-field',
+        leaseUuid: 'no-field-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+        // apiUrl intentionally omitted
+      });
+      (getSKU as Mock).mockResolvedValue(null);
+
+      const leaseMap = new Map([['no-field-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['no-field-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'no-field-uuid');
+      expect(app?.providerUrl).toBe('');
+      expect(getLeaseReleases).not.toHaveBeenCalled();
+    });
+
     it('skips Fred enrichment when provider has no apiUrl', async () => {
       const lease = makeLease({ uuid: 'no-api-uuid' });
       addApp(ADDR, makeApp({
@@ -893,6 +973,33 @@ describe('leaseDiscovery', () => {
       );
 
       setItemSpy.mockRestore();
+    });
+
+    it('skips SKU lookup when lease has no items', () => {
+      const leases = [makeLease({
+        uuid: 'no-items-uuid-5678-abcdef444444',
+        items: [],
+      })];
+
+      discoverUnknownLeases(ADDR, leases);
+
+      const apps = getApps(ADDR);
+      expect(apps).toHaveLength(1);
+      expect(apps[0].size).toBe('unknown');
+    });
+
+    it('uses Date.now() when lease has no createdAt', () => {
+      const before = Date.now();
+      const leases = [makeLease({
+        uuid: 'no-date-uuid-1-5678-abcdef555555',
+        createdAt: undefined as unknown as Date,
+      })];
+
+      discoverUnknownLeases(ADDR, leases);
+
+      const apps = getApps(ADDR);
+      expect(apps[0].createdAt).toBeGreaterThanOrEqual(before);
+      expect(apps[0].createdAt).toBeLessThanOrEqual(Date.now());
     });
 
     it('maps UNSPECIFIED lease state to stopped', () => {
