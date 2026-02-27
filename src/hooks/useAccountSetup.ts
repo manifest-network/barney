@@ -149,18 +149,10 @@ export function useAccountSetup({
     if (address === lastEffectAddressRef.current) return;
     lastEffectAddressRef.current = address;
 
-    // Check if setup already completed for this address
+    // Check if setup already completed for this address.
+    // Start with overlay hidden — runSetup will show it only if work is actually needed.
     const persisted = loadSetupData(address);
-    if (persisted?.setupCompleted) {
-      // Returning wallet — no overlay (will check for stale key below)
-      setSetupState({ isInitialSetup: false, phase: 'checking' });
-    } else if (persisted && !persisted.setupCompleted) {
-      // Setup was attempted but didn't complete — re-run
-      setSetupState({ isInitialSetup: true, phase: 'checking' });
-    } else {
-      // No persisted data — first time for this wallet
-      setSetupState({ isInitialSetup: true, phase: 'checking' });
-    }
+    setSetupState({ isInitialSetup: false, phase: 'checking' });
 
     const targetAddress = address;
     const abortController = new AbortController();
@@ -204,6 +196,27 @@ export function useAccountSetup({
           // Returning wallet with balances — skip setup
           setSetupState({ isInitialSetup: false, phase: 'complete' });
           return;
+        }
+
+        // Already-initialized detection: skip setup if credits are funded.
+        // Handles connecting an existing account on a new device without localStorage.
+        if (isNewSetup) {
+          try {
+            const earlyCredit = await getCreditAccount(targetAddress);
+            if (signal.aborted || addressRef.current !== targetAddress) return;
+            const earlyPwrCredit = earlyCredit.balances.find((c) => c.denom === DENOMS.PWR);
+            const earlyValid = earlyPwrCredit ? /^\d+$/.test(earlyPwrCredit.amount) : false;
+            const earlyCreditBal = earlyValid ? fromBaseUnits(earlyPwrCredit!.amount, DENOMS.PWR) : 0;
+            if (earlyCreditBal > 0) {
+              saveSetupData(targetAddress, { setupCompleted: true });
+              setSetupState({ isInitialSetup: false, phase: 'complete' });
+              return;
+            }
+          } catch {
+            // Credit query failed — proceed with normal setup
+          }
+          // Genuinely needs setup — now show the overlay
+          setSetupState({ isInitialSetup: true, phase: 'checking' });
         }
 
         // 2. Faucet phase
