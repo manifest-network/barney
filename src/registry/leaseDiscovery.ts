@@ -37,8 +37,18 @@ const TERMINAL_STATES = new Set<LeaseState>([
   LeaseState.LEASE_STATE_EXPIRED,
 ]);
 
-/** Guard against concurrent enrichment of the same lease. */
-const enrichmentInFlight = new Set<string>();
+/** Guard against concurrent enrichment of the same lease, scoped per wallet address. */
+const enrichmentInFlight = new Map<string, Set<string>>();
+
+/** Get or create the in-flight set for a given address. */
+function getInFlightSet(address: string): Set<string> {
+  let set = enrichmentInFlight.get(address);
+  if (!set) {
+    set = new Set<string>();
+    enrichmentInFlight.set(address, set);
+  }
+  return set;
+}
 
 /**
  * Map on-chain lease state to AppStatus for registry entries.
@@ -189,50 +199,56 @@ async function fetchLeaseData(
   if (signArbitrary && updates.providerUrl) {
     try {
       authToken = await getAuthToken(address, lease.uuid, signArbitrary);
+    } catch (error) {
+      logError('leaseDiscovery.fetchLeaseData.getAuthToken', error);
+    }
 
-      const [releasesResult, connectionResult] = await Promise.allSettled([
-        getLeaseReleases(updates.providerUrl, lease.uuid, authToken),
-        getLeaseConnectionInfo(updates.providerUrl, lease.uuid, authToken),
-      ]);
+    if (authToken) {
+      try {
+        const [releasesResult, connectionResult] = await Promise.allSettled([
+          getLeaseReleases(updates.providerUrl, lease.uuid, authToken),
+          getLeaseConnectionInfo(updates.providerUrl, lease.uuid, authToken),
+        ]);
 
-      // Log individual Fred API failures
-      if (releasesResult.status === 'rejected') {
-        logError('leaseDiscovery.fetchLeaseData.getLeaseReleases', releasesResult.reason);
-      }
-      if (connectionResult.status === 'rejected') {
-        logError('leaseDiscovery.fetchLeaseData.getLeaseConnectionInfo', connectionResult.reason);
-      }
-
-      // Extract raw image name and manifest from latest release
-      if (releasesResult.status === 'fulfilled' && releasesResult.value.releases.length > 0) {
-        const latestRelease = releasesResult.value.releases[releasesResult.value.releases.length - 1];
-        if (latestRelease.image) {
-          // Store the derived name candidate — final dedup happens sequentially in the caller
-          updates.name = deriveAppNameFromImage(latestRelease.image);
+        // Log individual Fred API failures
+        if (releasesResult.status === 'rejected') {
+          logError('leaseDiscovery.fetchLeaseData.getLeaseReleases', releasesResult.reason);
         }
-        if (latestRelease.manifest) {
-          try {
-            const parsed = JSON.parse(latestRelease.manifest);
-            updates.manifest = sanitizeManifestForStorage(JSON.stringify(parsed, null, 2));
-          } catch (error) {
-            logError('leaseDiscovery.fetchLeaseData.parseManifest', error);
+        if (connectionResult.status === 'rejected') {
+          logError('leaseDiscovery.fetchLeaseData.getLeaseConnectionInfo', connectionResult.reason);
+        }
+
+        // Extract raw image name and manifest from latest release
+        if (releasesResult.status === 'fulfilled' && releasesResult.value.releases.length > 0) {
+          const latestRelease = releasesResult.value.releases[releasesResult.value.releases.length - 1];
+          if (latestRelease.image) {
+            // Store the derived name candidate — final dedup happens sequentially in the caller
+            updates.name = deriveAppNameFromImage(latestRelease.image);
+          }
+          if (latestRelease.manifest) {
+            try {
+              const parsed = JSON.parse(latestRelease.manifest);
+              updates.manifest = sanitizeManifestForStorage(JSON.stringify(parsed, null, 2));
+            } catch (error) {
+              logError('leaseDiscovery.fetchLeaseData.parseManifest', error);
+            }
           }
         }
-      }
 
-      // Extract connection details
-      if (connectionResult.status === 'fulfilled') {
-        const conn = connectionResult.value.connection;
-        updates.connection = {
-          host: conn.host,
-          fqdn: conn.fqdn,
-          ports: conn.ports,
-          instances: conn.instances,
-          services: conn.services as Record<string, unknown> | undefined,
-        };
+        // Extract connection details
+        if (connectionResult.status === 'fulfilled') {
+          const conn = connectionResult.value.connection;
+          updates.connection = {
+            host: conn.host,
+            fqdn: conn.fqdn,
+            ports: conn.ports,
+            instances: conn.instances,
+            services: conn.services as Record<string, unknown> | undefined,
+          };
+        }
+      } catch (error) {
+        logError('leaseDiscovery.fetchLeaseData.fredFetch', error);
       }
-    } catch (error) {
-      logError('leaseDiscovery.fetchLeaseData.fredFetch', error);
     }
   }
 
@@ -272,10 +288,11 @@ export async function enrichDiscoveredLeases(
   leaseMap: Map<string, Lease>,
   signArbitrary?: SignArbitraryFn
 ): Promise<void> {
-  // Filter out leases already being enriched
+  // Filter out leases already being enriched (scoped per address)
+  const inFlight = getInFlightSet(address);
   const toEnrich = leaseUuids.filter((uuid) => {
-    if (enrichmentInFlight.has(uuid)) return false;
-    enrichmentInFlight.add(uuid);
+    if (inFlight.has(uuid)) return false;
+    inFlight.add(uuid);
     return true;
   });
 
@@ -328,12 +345,12 @@ export async function enrichDiscoveredLeases(
   } finally {
     // Clean up in-flight tracking
     for (const uuid of toEnrich) {
-      enrichmentInFlight.delete(uuid);
+      inFlight.delete(uuid);
     }
   }
 }
 
-/** Visible for testing — reset the enrichment guard. */
+/** Visible for testing — reset the enrichment guard for all addresses. */
 export function _resetEnrichmentInFlight(): void {
   enrichmentInFlight.clear();
 }
