@@ -261,7 +261,7 @@ describe('leaseDiscovery', () => {
       await enrichDiscoveredLeases(ADDR, ['name-uuid-1'], leaseMap, mockSignArbitrary);
 
       const app = getAppByLease(ADDR, 'name-uuid-1');
-      expect(app?.name).toBe('redis');
+      expect(app?.name).toBe('redis-8-4');
     });
 
     it('handles missing signArbitrary gracefully (only fetches provider URL)', async () => {
@@ -450,7 +450,7 @@ describe('leaseDiscovery', () => {
       const app1 = getAppByLease(ADDR, 'dup-img-uuid-1');
       const app2 = getAppByLease(ADDR, 'dup-img-uuid-2');
       const names = new Set([app1?.name, app2?.name]);
-      expect(names).toEqual(new Set(['redis', 'redis-2']));
+      expect(names).toEqual(new Set(['redis-8-4', 'redis-8-4-2']));
     });
 
     it('truncates long derived names to fit within 32-char limit', async () => {

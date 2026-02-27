@@ -25,8 +25,15 @@ import type { PayloadAttachment } from './toolExecutor/types';
 export function deriveAppNameFromImage(image: string): string {
   let name = image;
 
-  // Strip tag (:...) or digest (@sha256:...)
+  // Strip digest (@sha256:...)
   name = name.replace(/@sha256:[a-fA-F0-9]+$/, '');
+
+  // Extract and preserve meaningful tags (not "latest")
+  let tag = '';
+  const tagMatch = name.match(/:(?<tag>[\w][\w.-]*)$/);
+  if (tagMatch?.groups?.tag && tagMatch.groups.tag !== 'latest') {
+    tag = tagMatch.groups.tag;
+  }
   name = name.replace(/:[\w][\w.-]*$/, '');
 
   // Strip registry prefix (anything before the last slash)
@@ -38,6 +45,11 @@ export function deriveAppNameFromImage(image: string): string {
   // Strip "library/" prefix (Docker Hub official images)
   if (name.startsWith('library/')) {
     name = name.slice(8);
+  }
+
+  // Append tag if present
+  if (tag) {
+    name = `${name}-${tag}`;
   }
 
   // Normalize: lowercase, replace invalid chars, collapse hyphens

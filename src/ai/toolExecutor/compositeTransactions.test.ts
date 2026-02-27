@@ -1099,7 +1099,7 @@ describe('executeDeployApp', () => {
     expect(result.requiresConfirmation).toBe(true);
     expect(result.confirmationMessage).toContain('redis');
     expect(result.pendingAction?.args._generatedManifest).toBeDefined();
-    expect(result.pendingAction?.args.app_name).toBe('redis');
+    expect(result.pendingAction?.args.app_name).toBe('redis-8-4');
   });
 
   it('derives app name from image when app_name not specified', async () => {
@@ -1117,7 +1117,7 @@ describe('executeDeployApp', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(result.pendingAction?.args.app_name).toBe('postgres');
+    expect(result.pendingAction?.args.app_name).toBe('postgres-18');
   });
 
   it('returns error for invalid env JSON', async () => {

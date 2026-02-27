@@ -12,19 +12,19 @@ import {
 } from './manifest';
 
 describe('deriveAppNameFromImage', () => {
-  it('extracts name from simple image:tag', () => {
-    expect(deriveAppNameFromImage('redis:8.4')).toBe('redis');
+  it('includes tag in derived name', () => {
+    expect(deriveAppNameFromImage('redis:8.4')).toBe('redis-8-4');
   });
 
   it('extracts name from image without tag', () => {
     expect(deriveAppNameFromImage('postgres')).toBe('postgres');
   });
 
-  it('strips registry prefix', () => {
-    expect(deriveAppNameFromImage('docker.io/library/redis:8.4')).toBe('redis');
+  it('strips registry prefix and includes tag', () => {
+    expect(deriveAppNameFromImage('docker.io/library/redis:8.4')).toBe('redis-8-4');
   });
 
-  it('strips ghcr.io registry prefix', () => {
+  it('strips ghcr.io registry prefix and excludes latest tag', () => {
     expect(deriveAppNameFromImage('ghcr.io/org/my-app:latest')).toBe('my-app');
   });
 
@@ -32,11 +32,11 @@ describe('deriveAppNameFromImage', () => {
     expect(deriveAppNameFromImage('postgres@sha256:abcdef1234567890')).toBe('postgres');
   });
 
-  it('handles multi-level path', () => {
-    expect(deriveAppNameFromImage('registry.example.com/org/sub/my-image:v1')).toBe('my-image');
+  it('handles multi-level path with tag', () => {
+    expect(deriveAppNameFromImage('registry.example.com/org/sub/my-image:v1')).toBe('my-image-v1');
   });
 
-  it('normalizes special characters', () => {
+  it('normalizes special characters and excludes latest', () => {
     expect(deriveAppNameFromImage('my_app.v2:latest')).toBe('my-app-v2');
   });
 
@@ -53,8 +53,16 @@ describe('deriveAppNameFromImage', () => {
     expect(deriveAppNameFromImage('...:latest')).toBe('app');
   });
 
-  it('handles :latest tag', () => {
+  it('excludes latest tag from name', () => {
     expect(deriveAppNameFromImage('nginx:latest')).toBe('nginx');
+  });
+
+  it('includes semver-style tags', () => {
+    expect(deriveAppNameFromImage('postgres:16.2')).toBe('postgres-16-2');
+  });
+
+  it('includes alpine variant tags', () => {
+    expect(deriveAppNameFromImage('node:20-alpine')).toBe('node-20-alpine');
   });
 });
 
@@ -99,11 +107,11 @@ describe('buildManifest', () => {
     const parsed = JSON.parse(result.json);
 
     expect(parsed.image).toBe('redis:8.4');
-    expect(result.derivedAppName).toBe('redis');
+    expect(result.derivedAppName).toBe('redis-8-4');
     expect(result.payload.hash).toHaveLength(64);
     expect(result.payload.bytes).toBeInstanceOf(Uint8Array);
     expect(result.payload.size).toBeGreaterThan(0);
-    expect(result.payload.filename).toBe('redis.json');
+    expect(result.payload.filename).toBe('redis-8-4.json');
   });
 
   it('includes ports when specified', async () => {
@@ -296,7 +304,7 @@ describe('buildManifest', () => {
     expect(parsed.env.POSTGRES_PASSWORD).toMatch(/^[A-Za-z0-9]{16}$/);
     expect(parsed.user).toBe('999:999');
     expect(parsed.tmpfs).toEqual(['/var/run/postgresql']);
-    expect(result.derivedAppName).toBe('postgres');
+    expect(result.derivedAppName).toBe('postgres-18');
   });
 });
 
