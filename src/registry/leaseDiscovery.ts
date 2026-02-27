@@ -67,17 +67,19 @@ function leaseStateToAppStatus(state: LeaseState): AppStatus {
 /** Max app name length (matches APP_NAME_REGEX in appRegistry.ts). */
 const MAX_APP_NAME_LENGTH = 32;
 
+/** Build a set of all app names currently in the registry for a given address. */
+function getExistingNames(address: string): Set<string> {
+  return new Set(getApps(address).map((a) => a.name));
+}
+
 /**
  * Generate a unique name for a discovered lease that doesn't collide
  * with existing registry entries or already-claimed names in this batch.
+ *
+ * @param baseName - the desired name before deduplication
+ * @param existingNames - pre-built set of names already taken (registry + batch-claimed)
  */
-function uniquifyName(baseName: string, address: string, extraNames?: Set<string>): string {
-  const apps = getApps(address);
-  const existingNames = new Set(apps.map((a) => a.name));
-  if (extraNames) {
-    for (const n of extraNames) existingNames.add(n);
-  }
-
+function uniquifyName(baseName: string, existingNames: Set<string>): string {
   if (!existingNames.has(baseName) && baseName.length <= MAX_APP_NAME_LENGTH) return baseName;
 
   // Truncate base so suffix fits within the limit (e.g. "-99" = 3 chars)
@@ -106,6 +108,7 @@ function uniquifyName(baseName: string, address: string, extraNames?: Set<string
  */
 export function discoverUnknownLeases(address: string, allLeases: Lease[]): string[] {
   const discovered: string[] = [];
+  const existingNames = getExistingNames(address);
 
   for (const lease of allLeases) {
     // Skip terminal states
@@ -115,7 +118,8 @@ export function discoverUnknownLeases(address: string, allLeases: Lease[]): stri
     if (getAppByLease(address, lease.uuid)) continue;
 
     const baseName = `lease-${lease.uuid.slice(0, 8)}`;
-    const name = uniquifyName(baseName, address);
+    const name = uniquifyName(baseName, existingNames);
+    existingNames.add(name);
 
     const entry: AppEntry = {
       name,
@@ -204,50 +208,46 @@ async function fetchLeaseData(
     }
 
     if (authToken) {
-      try {
-        const [releasesResult, connectionResult] = await Promise.allSettled([
-          getLeaseReleases(updates.providerUrl, lease.uuid, authToken),
-          getLeaseConnectionInfo(updates.providerUrl, lease.uuid, authToken),
-        ]);
+      const [releasesResult, connectionResult] = await Promise.allSettled([
+        getLeaseReleases(updates.providerUrl, lease.uuid, authToken),
+        getLeaseConnectionInfo(updates.providerUrl, lease.uuid, authToken),
+      ]);
 
-        // Log individual Fred API failures
-        if (releasesResult.status === 'rejected') {
-          logError('leaseDiscovery.fetchLeaseData.getLeaseReleases', releasesResult.reason);
-        }
-        if (connectionResult.status === 'rejected') {
-          logError('leaseDiscovery.fetchLeaseData.getLeaseConnectionInfo', connectionResult.reason);
-        }
+      // Log individual Fred API failures
+      if (releasesResult.status === 'rejected') {
+        logError('leaseDiscovery.fetchLeaseData.getLeaseReleases', releasesResult.reason);
+      }
+      if (connectionResult.status === 'rejected') {
+        logError('leaseDiscovery.fetchLeaseData.getLeaseConnectionInfo', connectionResult.reason);
+      }
 
-        // Extract raw image name and manifest from latest release
-        if (releasesResult.status === 'fulfilled' && releasesResult.value.releases.length > 0) {
-          const latestRelease = releasesResult.value.releases[releasesResult.value.releases.length - 1];
-          if (latestRelease.image) {
-            // Store the derived name candidate — final dedup happens sequentially in the caller
-            updates.name = deriveAppNameFromImage(latestRelease.image);
-          }
-          if (latestRelease.manifest) {
-            try {
-              const parsed = JSON.parse(latestRelease.manifest);
-              updates.manifest = sanitizeManifestForStorage(JSON.stringify(parsed, null, 2));
-            } catch (error) {
-              logError('leaseDiscovery.fetchLeaseData.parseManifest', error);
-            }
+      // Extract raw image name and manifest from latest release
+      if (releasesResult.status === 'fulfilled' && releasesResult.value.releases.length > 0) {
+        const latestRelease = releasesResult.value.releases[releasesResult.value.releases.length - 1];
+        if (latestRelease.image) {
+          // Store the derived name candidate — final dedup happens sequentially in the caller
+          updates.name = deriveAppNameFromImage(latestRelease.image);
+        }
+        if (latestRelease.manifest) {
+          try {
+            const parsed = JSON.parse(latestRelease.manifest);
+            updates.manifest = sanitizeManifestForStorage(JSON.stringify(parsed, null, 2));
+          } catch (error) {
+            logError('leaseDiscovery.fetchLeaseData.parseManifest', error);
           }
         }
+      }
 
-        // Extract connection details
-        if (connectionResult.status === 'fulfilled') {
-          const conn = connectionResult.value.connection;
-          updates.connection = {
-            host: conn.host,
-            fqdn: conn.fqdn,
-            ports: conn.ports,
-            instances: conn.instances,
-            services: conn.services as Record<string, unknown> | undefined,
-          };
-        }
-      } catch (error) {
-        logError('leaseDiscovery.fetchLeaseData.fredFetch', error);
+      // Extract connection details
+      if (connectionResult.status === 'fulfilled') {
+        const conn = connectionResult.value.connection;
+        updates.connection = {
+          host: conn.host,
+          fqdn: conn.fqdn,
+          ports: conn.ports,
+          instances: conn.instances,
+          services: conn.services,
+        };
       }
     }
   }
@@ -299,8 +299,8 @@ export async function enrichDiscoveredLeases(
   if (toEnrich.length === 0) return;
 
   try {
-    // Track names claimed during this enrichment run to prevent duplicates.
-    const claimedNames = new Set<string>();
+    // Build names set once; track names claimed during this run to prevent duplicates.
+    const existingNames = getExistingNames(address);
 
     // Process in batches of LEASE_DISCOVERY_MAX_CONCURRENT
     for (let i = 0; i < toEnrich.length; i += LEASE_DISCOVERY_MAX_CONCURRENT) {
@@ -318,7 +318,7 @@ export async function enrichDiscoveredLeases(
         })
       );
 
-      // Resolve names and apply updates sequentially (no races on claimedNames)
+      // Resolve names and apply updates sequentially (no races on existingNames)
       for (const result of results) {
         if (result.status === 'rejected') {
           logError('leaseDiscovery.enrichDiscoveredLeases.fetchLeaseData', result.reason);
@@ -329,8 +329,8 @@ export async function enrichDiscoveredLeases(
 
         // Deduplicate the derived name against registry + already-claimed names
         if (updates.name) {
-          updates.name = uniquifyName(updates.name, address, claimedNames);
-          claimedNames.add(updates.name);
+          updates.name = uniquifyName(updates.name, existingNames);
+          existingNames.add(updates.name);
         }
 
         if (Object.keys(updates).length > 0) {
@@ -346,6 +346,9 @@ export async function enrichDiscoveredLeases(
     // Clean up in-flight tracking
     for (const uuid of toEnrich) {
       inFlight.delete(uuid);
+    }
+    if (inFlight.size === 0) {
+      enrichmentInFlight.delete(address);
     }
   }
 }

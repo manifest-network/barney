@@ -426,6 +426,38 @@ describe('leaseDiscovery', () => {
       expect(getProvider).toHaveBeenCalledTimes(1);
     });
 
+    it('allows different wallets to enrich the same lease UUID concurrently', async () => {
+      const ADDR2 = 'manifest1other';
+      const lease = makeLease({ uuid: 'shared-uuid' });
+      addApp(ADDR, makeApp({ name: 'lease-shared-u', leaseUuid: 'shared-uuid', providerUrl: '' }));
+      addApp(ADDR2, makeApp({ name: 'lease-shared-u', leaseUuid: 'shared-uuid', providerUrl: '' }));
+
+      let resolveGate: () => void;
+      const gate = new Promise<void>((r) => { resolveGate = r; });
+
+      (getProvider as Mock).mockImplementation(async () => {
+        await gate;
+        return {
+          uuid: 'prov-uuid-1', apiUrl: 'https://fred.example.com',
+          address: 'manifest1provider', payoutAddress: 'manifest1payout',
+          metaHash: new Uint8Array(), active: true,
+        };
+      });
+      (getSKU as Mock).mockResolvedValue(null);
+
+      const leaseMap = new Map([['shared-uuid', lease]]);
+
+      // Both wallets enrich the same lease UUID concurrently
+      const first = enrichDiscoveredLeases(ADDR, ['shared-uuid'], leaseMap);
+      const second = enrichDiscoveredLeases(ADDR2, ['shared-uuid'], leaseMap);
+
+      resolveGate!();
+      await Promise.all([first, second]);
+
+      // getProvider should be called twice — once per wallet (not blocked)
+      expect(getProvider).toHaveBeenCalledTimes(2);
+    });
+
     it('assigns unique names when multiple leases derive the same image', async () => {
       const lease1 = makeLease({ uuid: 'dup-img-uuid-1' });
       const lease2 = makeLease({ uuid: 'dup-img-uuid-2' });

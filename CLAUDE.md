@@ -46,7 +46,7 @@ ErrorBoundary
                   │   ├─ LandingPage (when not connected)
                   │   └─ MainLayout (when connected)
                   │       ├─ ErrorBoundary (sidebar isolation)
-                  │       │   └─ AppsSidebar (wallet, credits, running apps)
+                  │       │   └─ AppsSidebar (wallet, credits, running apps, lease discovery)
                   │       ├─ Modal (mobile sidebar overlay)
                   │       └─ AIErrorBoundary
                   │           └─ ChatPanel (messages, input, settings)
@@ -104,6 +104,7 @@ Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`. Kn
 
 Builds Docker Compose-style JSON manifests for single-service and multi-service (stack) deploys.
 
+- `deriveAppNameFromImage(image)` — Derive app name from Docker image ref. Strips registry prefix/digest, includes meaningful tags (not "latest"), normalizes to lowercase alphanumeric + hyphens, max 32 chars. E.g., `redis:8.4` → `redis-8-4`, `nginx:latest` → `nginx`
 - `buildManifest(opts)` — Build single-service manifest JSON from image, port, env, user, tmpfs, command, args, health_check, etc.
 - `buildStackManifest(opts)` — Build multi-service stack manifest with a `services` map of `ServiceConfig` entries
 - `mergeManifest(newManifest, oldManifestJson)` — Merge new manifest over old, preserving env, ports, labels (merged with override), user, tmpfs, command, args, health_check, stop_grace_period, init, expose, depends_on (carried forward if not specified in new). Single-service manifests only (stack updates use full manifest replacement)
@@ -133,6 +134,15 @@ AppStatus: 'deploying' | 'running' | 'stopped' | 'failed'
 Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `validateAppName`, `sanitizeManifestForStorage`.
 
 Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
+
+### Lease Discovery (`src/registry/leaseDiscovery.ts`)
+
+Detects on-chain leases not in the local registry (e.g., deployed from another browser/device) and enriches them with provider data. Two-phase approach:
+
+1. **Phase 1 (sync)**: `discoverUnknownLeases(address, leases)` — Adds skeleton `AppEntry` records for non-terminal leases not already tracked. Returns UUIDs of newly discovered leases.
+2. **Phase 2 (async)**: `enrichDiscoveredLeases(address, uuids, leaseMap, signArbitrary?)` — Fetches provider URL, SKU size, release manifest, and connection info in batches of `LEASE_DISCOVERY_MAX_CONCURRENT`. Derives proper app names from Docker image references via `deriveAppNameFromImage`.
+
+Called from `AppsSidebar.refresh()`. Enrichment is fire-and-forget (non-blocking). Concurrent enrichment of the same lease is guarded per wallet address.
 
 ### Deploy Progress
 
@@ -256,6 +266,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `WS_LIVENESS_TIMEOUT_MS` | 45s | WebSocket data liveness timeout (Fred pings every 30s) |
 | `STORAGE_SKU_NAME` | 'docker-small' | SKU name that supports persistent disk storage |
 | `ACCOUNT_SETUP_COMPLETE_DELAY_MS` | 1.5s | Delay before dismissing account setup overlay after completion |
+| `LEASE_DISCOVERY_MAX_CONCURRENT` | 3 | Max concurrent enrichment requests during lease discovery |
 
 ## Styling
 
