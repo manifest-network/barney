@@ -115,4 +115,26 @@ describe('getSystemPrompt', () => {
     expect(prompt).toContain('depends_on');
     expect(prompt).toContain('service_healthy');
   });
+
+  it('contains Demo Games section with game tags and port 8080', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('## Demo Games');
+    expect(prompt).toContain('tetris');
+    expect(prompt).toContain('doom');
+    expect(prompt).toContain('port="8080"');
+  });
+
+  it('examples reference rule 4 not rule 3', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('message from rule 4');
+    expect(prompt).not.toContain('message from rule 3');
+  });
+
+  it('contains demo game deploy examples', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('Deploy tetris');
+    expect(prompt).toContain('demo-games:tetris');
+    expect(prompt).toContain('play doom');
+    expect(prompt).toContain('demo-games:doom');
+  });
 });
