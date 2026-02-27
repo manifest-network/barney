@@ -8,6 +8,7 @@ import { LogOut, Circle, Zap, History, RotateCcw } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { getApps, reconcileWithChain, type AppEntry } from '../../registry/appRegistry';
+import { discoverUnknownLeases, enrichDiscoveredLeases } from '../../registry/leaseDiscovery';
 import { getCreditAccount, getCreditEstimate, getLeasesByTenant, LeaseState } from '../../api/billing';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits } from '../../utils/format';
@@ -35,7 +36,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export function AppsSidebar({ onClose }: AppsSidebarProps) {
-  const { address, disconnect, wallet } = useChain(CHAIN_NAME);
+  const { address, disconnect, wallet, signArbitrary, isWalletConnected } = useChain(CHAIN_NAME);
   const { sendMessage, attachPayload } = useAI();
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [credits, setCredits] = useState<number | null>(null);
@@ -43,27 +44,52 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const [burnRate, setBurnRate] = useState<number | null>(null);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
-  // Load apps and credit info, reconcile with chain state
+  // Stable wrapper for signArbitrary (same pattern as AppShell.tsx)
+  const wrappedSignArbitrary = useCallback(
+    async (signerAddress: string, data: string) => {
+      if (typeof signArbitrary !== 'function') {
+        throw new Error('Wallet does not support signArbitrary');
+      }
+      const result = await signArbitrary(signerAddress, data);
+      return { pub_key: result.pub_key, signature: result.signature };
+    },
+    [signArbitrary]
+  );
+
+  // Load apps and credit info, reconcile with chain state, discover unknown leases
   const refresh = useCallback(async () => {
     if (!address) return;
 
-    // Reconcile registry with on-chain lease state
+    // Reconcile registry with on-chain lease state + discover unknown leases
+    let allLeases: Awaited<ReturnType<typeof getLeasesByTenant>> = [];
     try {
       const [activeLeases, pendingLeases] = await Promise.all([
         getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE),
         getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING),
       ]);
-      const activeUuids = new Set([
-        ...activeLeases.map((l) => l.uuid),
-        ...pendingLeases.map((l) => l.uuid),
-      ]);
+      allLeases = [...activeLeases, ...pendingLeases];
+      const activeUuids = new Set(allLeases.map((l) => l.uuid));
       reconcileWithChain(address, activeUuids);
     } catch (error) {
       logError('AppsSidebar.refresh.reconcile', error);
     }
 
-    // Re-read after reconciliation
+    // Discover on-chain leases not in registry → add skeleton entries
+    const discoveredUuids = allLeases.length > 0
+      ? discoverUnknownLeases(address, allLeases)
+      : [];
+
+    // Re-read after reconciliation + discovery
     setApps(getApps(address));
+
+    // Enrich discovered leases in the background
+    if (discoveredUuids.length > 0) {
+      const leaseMap = new Map(allLeases.map((l) => [l.uuid, l]));
+      const canSign = isWalletConnected && typeof wrappedSignArbitrary === 'function';
+      enrichDiscoveredLeases(address, discoveredUuids, leaseMap, canSign ? wrappedSignArbitrary : undefined)
+        .then(() => setApps(getApps(address)))
+        .catch((err) => logError('AppsSidebar.refresh.enrich', err));
+    }
 
     // Credit balance — always available via creditAccount
     try {
@@ -95,7 +121,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     } catch (error) {
       logError('AppsSidebar.refresh.estimate', error);
     }
-  }, [address]);
+  }, [address, isWalletConnected, wrappedSignArbitrary]);
 
   useEffect(() => {
     // Initial fetch — refresh is async (setState calls happen after awaits, not synchronously)
@@ -103,6 +129,13 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     refresh();
     const interval = setInterval(refresh, AUTO_REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
+  }, [refresh]);
+
+  // Re-sync when tab becomes visible (cross-browser discovery case)
+  useEffect(() => {
+    const onVisChange = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', onVisChange);
+    return () => document.removeEventListener('visibilitychange', onVisChange);
   }, [refresh]);
 
   const runningApps = apps.filter((a) => a.status === 'running' || a.status === 'deploying');

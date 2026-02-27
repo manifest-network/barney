@@ -148,3 +148,10 @@ export const ACCOUNT_SETUP_RETRY_DELAY_MS = 5_000;
 
 /** Delay before dismissing the account setup overlay when an error persists (milliseconds) */
 export const ACCOUNT_SETUP_ERROR_DELAY_MS = 5_000;
+
+// ============================================
+// Lease Discovery Constants
+// ============================================
+
+/** Maximum concurrent enrichment requests during lease discovery */
+export const LEASE_DISCOVERY_MAX_CONCURRENT = 3;
