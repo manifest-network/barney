@@ -1,7 +1,7 @@
 /**
  * AIStoreProvider — thin lifecycle wrapper around the Zustand AI store.
- * Sets up persistence subscriptions, health checks, confirmation timeouts,
- * and initial model fetch. Renders children directly (no Context.Provider).
+ * Sets up persistence subscriptions, health checks, and confirmation timeouts.
+ * Renders children directly (no Context.Provider).
  */
 
 import { useEffect, type ReactNode } from 'react';
@@ -20,7 +20,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
     // Persistence subscriptions (settings + history to localStorage)
     const unsubPersistence = setupPersistenceSubscriptions(store);
 
-    // Ollama health check
+    // AI API health check
     checkConnection(store);
     const healthInterval = setInterval(() => checkConnection(store), AI_HEALTH_CHECK_INTERVAL_MS);
 
