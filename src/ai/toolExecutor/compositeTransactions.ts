@@ -15,7 +15,8 @@ import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
-import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl } from './helpers';
+import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
+import { isValidFqdn } from '../../utils/connection';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { extractYamlServiceNames } from '../../utils/fileValidation';
@@ -355,6 +356,35 @@ export function parseAndValidateStackServices(
 }
 
 
+/** True if the hostname looks like a DNS name (not a bare IPv4 address). */
+function isDnsHostname(hostname: string): boolean {
+  return isValidFqdn(hostname) && !/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname);
+}
+
+/**
+ * Rewrite a Fred endpoint URL based on container port type and hostname.
+ *
+ * - FQDN + HTTP port  → `https://fqdn` (Traefik TLS termination)
+ * - FQDN + TCP port   → `fqdn:port`    (direct TCP, no protocol)
+ * - IP (any port)      → `ip:port`      (bare, no protocol)
+ */
+function rewriteFredEndpoint(endpointUrl: string, portKey: string): string {
+  try {
+    const parsed = new URL(endpointUrl);
+    const hostPort = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+
+    if (!isDnsHostname(parsed.hostname)) return hostPort;
+
+    const containerPort = parseContainerPort(portKey);
+    if (containerPort != null && TCP_ONLY_PORTS.has(containerPort)) {
+      return hostPort;
+    }
+    // HTTP service: https://fqdn (Traefik on 443)
+    return `https://${parsed.hostname}`;
+  } catch { /* not a valid URL — return as-is */ }
+  return endpointUrl;
+}
+
 /**
  * Extract URL from fred status data (endpoints or instances).
  * This data is already available from polling — no extra API call needed.
@@ -366,8 +396,9 @@ export function extractUrlFromFredStatus(
 ): string | undefined {
   // endpoints: Record<string, string> — full URLs like "http://host:port"
   if (fredStatus.endpoints) {
-    const firstEndpoint = Object.values(fredStatus.endpoints)[0];
-    if (firstEndpoint) return firstEndpoint;
+    const firstKey = Object.keys(fredStatus.endpoints)[0];
+    const firstEndpoint = firstKey ? fredStatus.endpoints[firstKey] : undefined;
+    if (firstKey && firstEndpoint) return rewriteFredEndpoint(firstEndpoint, firstKey);
   }
 
   // instances: ports as Record<string, number> — just port numbers
@@ -443,9 +474,10 @@ async function resolveAppUrl(
   }
 
   // 2. Fall back to fred status data (endpoints/instances)
+  // extractUrlFromFredStatus already rewrites FQDN HTTP endpoints to https://fqdn
   const fredUrl = extractUrlFromFredStatus(fredStatus);
   if (fredUrl) {
-    return { url: formatConnectionUrl(fredUrl) || fredUrl };
+    return { url: fredUrl };
   }
 
   return {};

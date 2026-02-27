@@ -88,7 +88,7 @@ function extractPort(value: unknown): number | undefined {
 // API (e.g., a protocol field on port mappings) so we don't have to maintain a
 // manual list of non-HTTP ports.
 /** Container ports that require direct TCP access (not HTTP-routable by Traefik). */
-const TCP_ONLY_PORTS = new Set([
+export const TCP_ONLY_PORTS = new Set([
   5432,  // PostgreSQL
   3306,  // MySQL / MariaDB
   6379,  // Redis / Valkey
@@ -103,7 +103,7 @@ const TCP_ONLY_PORTS = new Set([
 ]);
 
 /** Parse container port number from a Docker port key like "5432/tcp". */
-function parseContainerPort(portKey: string): number | undefined {
+export function parseContainerPort(portKey: string): number | undefined {
   const m = portKey.match(/^(\d+)/);
   return m ? parseInt(m[1], 10) : undefined;
 }
@@ -132,8 +132,8 @@ export function formatConnectionUrl(
         if (hostPort != null) return `${connection.fqdn}:${hostPort}`;
       }
     }
-    // HTTP service (or no ports): bare FQDN — Traefik handles routing
-    return connection.fqdn;
+    // HTTP service (or no ports): https://fqdn — Traefik TLS on 443
+    return `https://${connection.fqdn}`;
   }
 
   // Try port mappings — prefer connection.host (hostname) over host_ip (raw IP)

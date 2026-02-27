@@ -189,11 +189,11 @@ describe('deriveAppName', () => {
 });
 
 describe('extractUrlFromFredStatus', () => {
-  it('returns first endpoint URL', () => {
+  it('returns first endpoint URL (protocol stripped)', () => {
     expect(extractUrlFromFredStatus({
       state: LeaseState.LEASE_STATE_ACTIVE,
       endpoints: { '8080/tcp': 'http://1.2.3.4:32456' },
-    })).toBe('http://1.2.3.4:32456');
+    })).toBe('1.2.3.4:32456');
   });
 
   it('returns undefined when no endpoints', () => {
@@ -221,7 +221,7 @@ describe('extractUrlFromFredStatus', () => {
       state: LeaseState.LEASE_STATE_ACTIVE,
       endpoints: { '8080/tcp': 'http://1.2.3.4:11111' },
       instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': 22222 } }],
-    }, '1.2.3.4')).toBe('http://1.2.3.4:11111');
+    }, '1.2.3.4')).toBe('1.2.3.4:11111');
   });
 
   it('extracts URL from stack services using primary service priority', () => {
@@ -252,6 +252,27 @@ describe('extractUrlFromFredStatus', () => {
         { name: 'web-1', status: 'running', fqdn: '1-def5678.barney8.manifest0.net' },
       ],
     })).toBeUndefined();
+  });
+
+  it('rewrites FQDN HTTP endpoint to https:// without port', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      endpoints: { '80/tcp': 'http://25e0a20.barney0.manifest0.net:32772' },
+    })).toBe('https://25e0a20.barney0.manifest0.net');
+  });
+
+  it('rewrites FQDN TCP-only endpoint to bare fqdn:port', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      endpoints: { '5432/tcp': 'http://pg-abc.barney0.manifest0.net:31234' },
+    })).toBe('pg-abc.barney0.manifest0.net:31234');
+  });
+
+  it('strips protocol from IP endpoint URL', () => {
+    expect(extractUrlFromFredStatus({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      endpoints: { '80/tcp': 'http://1.2.3.4:32456' },
+    })).toBe('1.2.3.4:32456');
   });
 });
 
@@ -332,7 +353,7 @@ describe('stack FQDN promotion', () => {
     }
 
     const withPorts = { ...connection, ports: primary!.ports, fqdn };
-    expect(formatConnectionUrl(connection.host, withPorts)).toBe('wp-abc123.barney8.manifest0.net');
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('https://wp-abc123.barney8.manifest0.net');
   });
 
   it('falls back to IP:port when primary service has no fqdn', () => {
@@ -375,7 +396,7 @@ describe('stack FQDN promotion', () => {
     }
 
     const withPorts = { ...connection, ports: primary!.ports, fqdn };
-    expect(formatConnectionUrl(connection.host, withPorts)).toBe('inst-abc.barney8.manifest0.net');
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('https://inst-abc.barney8.manifest0.net');
   });
 
   it('preserves top-level fqdn over service fqdn', () => {
@@ -399,7 +420,7 @@ describe('stack FQDN promotion', () => {
     }
 
     const withPorts = { ...connection, ports: primary!.ports, fqdn };
-    expect(formatConnectionUrl(connection.host, withPorts)).toBe('top-level.barney8.manifest0.net');
+    expect(formatConnectionUrl(connection.host, withPorts)).toBe('https://top-level.barney8.manifest0.net');
   });
 });
 
@@ -458,19 +479,19 @@ describe('formatConnectionUrl', () => {
     })).toBe('127.0.0.1:12345');
   });
 
-  it('prefers bare fqdn for HTTP ports (Traefik-routed)', () => {
+  it('returns https://fqdn for HTTP ports (Traefik-routed)', () => {
     expect(formatConnectionUrl('1.2.3.4', {
       host: '1.2.3.4',
       fqdn: 'a1b2c3d.barney8.manifest0.net',
       ports: { '8080/tcp': { host_ip: '1.2.3.4', host_port: 32456 } },
-    })).toBe('a1b2c3d.barney8.manifest0.net');
+    })).toBe('https://a1b2c3d.barney8.manifest0.net');
   });
 
-  it('uses fqdn without ports', () => {
+  it('returns https://fqdn without ports', () => {
     expect(formatConnectionUrl('1.2.3.4', {
       host: '1.2.3.4',
       fqdn: 'myapp.barney7.manifest0.net',
-    })).toBe('myapp.barney7.manifest0.net');
+    })).toBe('https://myapp.barney7.manifest0.net');
   });
 
   it('rejects fqdn with userinfo injection', () => {
@@ -503,12 +524,12 @@ describe('formatConnectionUrl', () => {
     })).toBe('1.2.3.4:31234');
   });
 
-  it('returns fqdn when port mapping has no extractable value', () => {
+  it('returns https://fqdn when port mapping has no extractable value', () => {
     expect(formatConnectionUrl('1.2.3.4', {
       host: '1.2.3.4',
       fqdn: 'pg.barney8.manifest0.net',
       ports: { '5432/tcp': {} },
-    })).toBe('pg.barney8.manifest0.net');
+    })).toBe('https://pg.barney8.manifest0.net');
   });
 
   it('strips protocol from metadata url fallback', () => {
