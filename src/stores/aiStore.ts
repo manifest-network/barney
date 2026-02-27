@@ -6,8 +6,7 @@
 import { createStore } from 'zustand/vanilla';
 import { useStore } from 'zustand';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
-import type { OllamaModel } from '../api/ollama';
-import { checkOllamaHealth, listModels } from '../api/ollama';
+import { checkOllamaHealth } from '../api/ollama';
 import type { AISettings } from '../ai/validation';
 import type { SignArbitraryFn, PayloadAttachment, ToolResult } from '../ai/toolExecutor';
 import type { DeployProgress } from '../ai/progress';
@@ -42,7 +41,6 @@ export interface AIStore {
   isStreaming: boolean;
   isConnected: boolean;
   settings: AISettings;
-  availableModels: OllamaModel[];
   pendingConfirmation: PendingConfirmation | null;
   pendingPayload: PayloadAttachment | null;
   deployProgress: DeployProgress | null;
@@ -72,7 +70,6 @@ export interface AIStore {
   setSignArbitrary: (fn: SignArbitraryFn | undefined) => void;
   updateSettings: (settings: Partial<AISettings>) => void;
   clearHistory: () => void;
-  refreshModels: (endpoint?: string) => Promise<void>;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
   addLocalMessage: (content: string, card?: MessageCard) => void;
   stopStreaming: () => void;
@@ -97,7 +94,6 @@ export const createAIStore = () =>
     isStreaming: false,
     isConnected: false,
     settings: loadSettings(),
-    availableModels: [],
     pendingConfirmation: null,
     pendingPayload: null,
     deployProgress: null,
@@ -231,16 +227,6 @@ export const createAIStore = () =>
       get()._toolCache.clear();
       clearHistoryStorage();
       set({ messages: [] });
-    },
-
-    // --- Models ---
-    refreshModels: async (endpoint) => {
-      try {
-        const models = await listModels(endpoint || get().settings.ollamaEndpoint);
-        set({ availableModels: models });
-      } catch (error) {
-        logError('aiStore.refreshModels', error);
-      }
     },
 
     // --- Streaming ---

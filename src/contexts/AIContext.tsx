@@ -24,9 +24,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
     checkConnection(store);
     const healthInterval = setInterval(() => checkConnection(store), AI_HEALTH_CHECK_INTERVAL_MS);
 
-    // Initial model fetch
-    store.getState().refreshModels();
-
     // Confirmation timeout watcher
     let confirmationTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
