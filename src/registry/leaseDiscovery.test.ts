@@ -4,7 +4,7 @@ import {
   enrichDiscoveredLeases,
   _resetEnrichmentInFlight,
 } from './leaseDiscovery';
-import { getApps, getAppByLease, addApp, type AppEntry } from './appRegistry';
+import { getApps, getAppByLease, addApp, removeApp, type AppEntry } from './appRegistry';
 import { LeaseState, type Lease } from '../api/billing';
 import type { Provider } from '../api/sku';
 import type { LeaseReleasesResponse } from '../api/fred';
@@ -491,6 +491,8 @@ describe('leaseDiscovery', () => {
       const lease = makeLease({ uuid: 'long-name-uuid' });
       // Pre-add a conflicting entry so uniquifyName must append a suffix
       addApp(ADDR, makeApp({ name: 'my-very-long-application-name-ab', leaseUuid: 'conflict-uuid' }));
+      // Also conflict with the truncated base to force numeric suffix
+      addApp(ADDR, makeApp({ name: 'my-very-long-application-nam', leaseUuid: 'conflict-uuid-2' }));
       addApp(ADDR, makeApp({ name: 'lease-long-nam', leaseUuid: 'long-name-uuid', providerUrl: '', size: 'unknown' }));
 
       (getProvider as Mock).mockResolvedValue({
@@ -511,8 +513,35 @@ describe('leaseDiscovery', () => {
       const app = getAppByLease(ADDR, 'long-name-uuid');
       expect(app?.name).toBeDefined();
       expect(app!.name.length).toBeLessThanOrEqual(32);
-      // Should be truncated base + suffix, not the full 32-char name
+      // Truncated base and its bare form are both taken, so gets numeric suffix
       expect(app!.name).toMatch(/-\d+$/);
+    });
+
+    it('uses truncated base directly when only the full-length name conflicts', async () => {
+      const longImage = 'my-very-long-application-name-ab:latest'; // derives 32-char name
+      const lease = makeLease({ uuid: 'trunc-uuid-1' });
+      // Only the full 32-char name conflicts — truncated base is available
+      addApp(ADDR, makeApp({ name: 'my-very-long-application-name-ab', leaseUuid: 'conflict-uuid' }));
+      addApp(ADDR, makeApp({ name: 'lease-trunc-uu', leaseUuid: 'trunc-uuid-1', providerUrl: '', size: 'unknown' }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1', apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider', payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(), active: true,
+      });
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'trunc-uuid-1', tenant: ADDR, provider_uuid: 'prov-uuid-1',
+        releases: [{ version: 1, image: longImage, status: 'active', created_at: '2025-01-01T00:00:00Z' }],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('no connection'));
+
+      const leaseMap = new Map([['trunc-uuid-1', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['trunc-uuid-1'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'trunc-uuid-1');
+      // Should use truncated base directly without numeric suffix
+      expect(app?.name).toBe('my-very-long-application-nam');
     });
 
     it('strips trailing hyphens from truncated names', async () => {
@@ -726,6 +755,156 @@ describe('leaseDiscovery', () => {
       expect(app?.connection?.host).toBe('192.168.1.1');
       expect(app?.connection?.fqdn).toBe('myapp.provider.com');
       expect(app?.connection?.ports).toBeDefined();
+    });
+
+    it('logs error and skips Fred calls when signArbitrary throws', async () => {
+      const { logError } = await import('../utils/errors');
+      const failingSign = vi.fn().mockRejectedValue(new Error('Wallet locked'));
+      const lease = makeLease({ uuid: 'sign-fail-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-sign-fai',
+        leaseUuid: 'sign-fail-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1', apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider', payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(), active: true,
+      });
+      (getSKU as Mock).mockResolvedValue(null);
+
+      const leaseMap = new Map([['sign-fail-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['sign-fail-uuid'], leaseMap, failingSign);
+
+      // Provider URL should still be updated
+      const app = getAppByLease(ADDR, 'sign-fail-uuid');
+      expect(app?.providerUrl).toBe('https://fred.example.com');
+      // Fred APIs should not have been called (auth failed)
+      expect(getLeaseReleases).not.toHaveBeenCalled();
+      expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
+      expect(logError).toHaveBeenCalledWith(
+        'leaseDiscovery.fetchLeaseData.getAuthToken',
+        expect.any(Error),
+      );
+    });
+
+    it('logs error when entry is removed between discovery and enrichment', async () => {
+      const { logError } = await import('../utils/errors');
+      const lease = makeLease({ uuid: 'removed-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-removed-',
+        leaseUuid: 'removed-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockImplementation(async () => {
+        // Simulate the entry being removed while enrichment is in flight
+        removeApp(ADDR, 'removed-uuid');
+        return {
+          uuid: 'prov-uuid-1', apiUrl: 'https://fred.example.com',
+          address: 'manifest1provider', payoutAddress: 'manifest1payout',
+          metaHash: new Uint8Array(), active: true,
+        };
+      });
+      (getSKU as Mock).mockResolvedValue(null);
+
+      const leaseMap = new Map([['removed-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['removed-uuid'], leaseMap);
+
+      expect(logError).toHaveBeenCalledWith(
+        'leaseDiscovery.enrichDiscoveredLeases.updateApp',
+        expect.objectContaining({ message: expect.stringContaining('removed-uuid') }),
+      );
+    });
+
+    it('skips Fred enrichment when provider has no apiUrl', async () => {
+      const lease = makeLease({ uuid: 'no-api-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-no-api-u',
+        leaseUuid: 'no-api-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1', apiUrl: '',
+        address: 'manifest1provider', payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(), active: true,
+      });
+      (getSKU as Mock).mockResolvedValue({
+        uuid: 'sku-uuid-1', name: 'docker-micro',
+        providerUuid: 'prov-uuid-1', active: true,
+        basePrice: { denom: 'upwr', amount: '100' }, unit: 0,
+      });
+
+      const leaseMap = new Map([['no-api-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['no-api-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'no-api-uuid');
+      // SKU should still be enriched
+      expect(app?.size).toBe('micro');
+      // Provider URL remains empty, no Fred calls made
+      expect(app?.providerUrl).toBe('');
+      expect(getLeaseReleases).not.toHaveBeenCalled();
+      expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- discoverUnknownLeases edge cases ---
+
+  describe('discoverUnknownLeases edge cases', () => {
+    it('returns empty array for empty lease list', () => {
+      const discovered = discoverUnknownLeases(ADDR, []);
+      expect(discovered).toEqual([]);
+      expect(getApps(ADDR)).toHaveLength(0);
+    });
+
+    it('breaks loop on addApp failure and returns partial results', async () => {
+      const { logError } = await import('../utils/errors');
+
+      // Add the first lease normally so it succeeds
+      const leases = [
+        makeLease({ uuid: 'ok-uuid-1234-5678-abcdef000000' }),
+        makeLease({ uuid: 'fail-uuid-234-5678-abcdef111111' }),
+        makeLease({ uuid: 'skip-uuid-345-5678-abcdef222222' }),
+      ];
+
+      // After the first setItem succeeds, make subsequent setItem calls throw (simulating full localStorage)
+      let setItemCallCount = 0;
+      const origSetItem = localStorage.setItem.bind(localStorage);
+      const setItemSpy = vi.spyOn(localStorage, 'setItem').mockImplementation((key: string, value: string) => {
+        setItemCallCount++;
+        if (setItemCallCount > 1) {
+          throw new DOMException('QuotaExceededError', 'QuotaExceededError');
+        }
+        origSetItem(key, value);
+      });
+
+      const discovered = discoverUnknownLeases(ADDR, leases);
+
+      // First lease discovered, loop breaks on second addApp failure
+      expect(discovered).toEqual(['ok-uuid-1234-5678-abcdef000000']);
+      expect(logError).toHaveBeenCalledWith(
+        'leaseDiscovery.discoverUnknownLeases.addApp',
+        expect.any(Error),
+      );
+
+      setItemSpy.mockRestore();
+    });
+
+    it('maps UNSPECIFIED lease state to stopped', () => {
+      const leases = [makeLease({
+        uuid: 'unspec-uuid-12-5678-abcdef333333',
+        state: LeaseState.LEASE_STATE_UNSPECIFIED,
+      })];
+
+      discoverUnknownLeases(ADDR, leases);
+
+      const apps = getApps(ADDR);
+      expect(apps[0].status).toBe('stopped');
     });
   });
 });

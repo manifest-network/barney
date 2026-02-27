@@ -2,7 +2,7 @@
  * AppsSidebar — wallet info, credits, running apps list.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type RefObject } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { LogOut, Circle, Zap, History, RotateCcw } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
@@ -44,6 +44,10 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const [burnRate, setBurnRate] = useState<number | null>(null);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
+  // Track current address so fire-and-forget enrichment callbacks can detect stale closures
+  const addressRef: RefObject<string | undefined> = useRef(address);
+  useEffect(() => { addressRef.current = address; });
+
   // Stable wrapper for signArbitrary (same pattern as AppShell.tsx)
   const wrappedSignArbitrary = useCallback(
     async (signerAddress: string, data: string) => {
@@ -75,20 +79,32 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     }
 
     // Discover on-chain leases not in registry → add skeleton entries
-    const discoveredUuids = allLeases.length > 0
-      ? discoverUnknownLeases(address, allLeases)
-      : [];
-
-    // Re-read after reconciliation + discovery
-    setApps(getApps(address));
+    let discoveredUuids: string[] = [];
+    try {
+      if (allLeases.length > 0) {
+        discoveredUuids = discoverUnknownLeases(address, allLeases);
+      }
+      // Re-read after reconciliation + discovery
+      setApps(getApps(address));
+    } catch (error) {
+      logError('AppsSidebar.refresh.discover', error);
+    }
 
     // Enrich discovered leases in the background
     if (discoveredUuids.length > 0) {
       const leaseMap = new Map(allLeases.map((l) => [l.uuid, l]));
       const canSign = isWalletConnected;
-      enrichDiscoveredLeases(address, discoveredUuids, leaseMap, canSign ? wrappedSignArbitrary : undefined)
-        .then(() => setApps(getApps(address)))
-        .catch((err) => logError('AppsSidebar.refresh.enrich', err));
+      const capturedAddress = address;
+      enrichDiscoveredLeases(capturedAddress, discoveredUuids, leaseMap, canSign ? wrappedSignArbitrary : undefined)
+        .then(() => {
+          // Guard against stale closure — wallet may have changed during enrichment
+          if (addressRef.current === capturedAddress) setApps(getApps(capturedAddress));
+        })
+        .catch((err) => {
+          logError('AppsSidebar.refresh.enrich', err);
+          // Re-read to surface any partial enrichment results
+          if (addressRef.current === capturedAddress) setApps(getApps(capturedAddress));
+        });
     }
 
     // Credit balance — always available via creditAccount

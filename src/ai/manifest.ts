@@ -38,15 +38,11 @@ export function deriveAppNameFromImage(image: string): string {
   }
   name = name.replace(/:[\w][\w.-]*$/, '');
 
-  // Strip registry prefix (anything before the last slash)
+  // Strip registry prefix / org path (anything before the last slash).
+  // This also handles Docker Hub official images (docker.io/library/redis → redis).
   const lastSlash = name.lastIndexOf('/');
   if (lastSlash !== -1) {
     name = name.slice(lastSlash + 1);
-  }
-
-  // Strip "library/" prefix (Docker Hub official images)
-  if (name.startsWith('library/')) {
-    name = name.slice(8);
   }
 
   // Append tag if present

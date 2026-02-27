@@ -91,6 +91,9 @@ function uniquifyName(baseName: string, existingNames: Set<string>): string {
     return `lease-${crypto.randomUUID().slice(0, 8)}`;
   }
 
+  // Try the truncated base before appending a numeric suffix
+  if (!existingNames.has(truncated)) return truncated;
+
   for (let i = 2; i <= 100; i++) {
     const candidate = `${truncated}-${i}`;
     if (!existingNames.has(candidate)) return candidate;
@@ -136,6 +139,8 @@ export function discoverUnknownLeases(address: string, allLeases: Lease[]): stri
       discovered.push(lease.uuid);
     } catch (error) {
       logError('leaseDiscovery.discoverUnknownLeases.addApp', error);
+      // localStorage full — all subsequent writes will also fail, stop early
+      break;
     }
   }
 
