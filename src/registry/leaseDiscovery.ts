@@ -189,6 +189,7 @@ export function discoverUnknownLeases(address: string, allLeases: Lease[]): stri
     try {
       addApp(address, entry);
       discovered.push(lease.uuid);
+      trackedLeaseUuids.add(lease.uuid);
     } catch (error) {
       logError('leaseDiscovery.discoverUnknownLeases.addApp', error);
       // localStorage full — all subsequent writes will also fail, stop early

@@ -1537,6 +1537,20 @@ describe('leaseDiscovery', () => {
   // --- discoverUnknownLeases edge cases ---
 
   describe('discoverUnknownLeases edge cases', () => {
+    it('deduplicates when same UUID appears twice in allLeases', () => {
+      const uuid = 'dup-lease-uuid-5678-abcdef999999';
+      const leases = [
+        makeLease({ uuid, state: LeaseState.LEASE_STATE_PENDING }),
+        makeLease({ uuid, state: LeaseState.LEASE_STATE_ACTIVE }),
+      ];
+
+      const discovered = discoverUnknownLeases(ADDR, leases);
+
+      // Should only discover once despite appearing twice
+      expect(discovered).toEqual([uuid]);
+      expect(getApps(ADDR)).toHaveLength(1);
+    });
+
     it('returns empty array for empty lease list', () => {
       const discovered = discoverUnknownLeases(ADDR, []);
       expect(discovered).toEqual([]);
@@ -1576,7 +1590,7 @@ describe('leaseDiscovery', () => {
       setItemSpy.mockRestore();
     });
 
-    it('skips SKU lookup when lease has no items', () => {
+    it('discovers lease with empty items and sets size to unknown', () => {
       const leases = [makeLease({
         uuid: 'no-items-uuid-5678-abcdef444444',
         items: [],
