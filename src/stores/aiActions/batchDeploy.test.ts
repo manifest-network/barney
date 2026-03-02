@@ -368,7 +368,7 @@ describe('requestBatchDeploy', () => {
       // message gets updated.
       const store = setupStore();
       mockExecuteBatchDeploy.mockImplementationOnce(() => {
-        throw 'non-Error string'; // eslint-disable-line no-throw-literal
+        throw 'non-Error string';
       });
 
       await store.getState().requestBatchDeploy(makeApps());

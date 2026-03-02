@@ -1,12 +1,12 @@
 # Barney
 
-Chat-primary deployment platform for [Manifest Network](https://www.manifestai.com/). Deploy and manage applications on-chain through a conversational AI interface powered by a local Ollama LLM.
+Chat-primary deployment platform for [Manifest Network](https://www.manifestai.com/). Deploy and manage applications on-chain through a conversational AI interface powered by the Morpheus API.
 
 ## Prerequisites
 
 - Node.js >= 20
 - npm >= 10
-- [Ollama](https://ollama.ai/) running locally with a model pulled (default: `llama3.2`)
+- A Morpheus API key (for AI features)
 - A Manifest Network node (RPC + REST endpoints)
 
 ## Quick Start
@@ -37,9 +37,10 @@ Create a `.env.local` file in the project root:
 PUBLIC_REST_URL=http://localhost:1317
 PUBLIC_RPC_URL=http://localhost:26657
 
-# Ollama AI settings
-PUBLIC_OLLAMA_URL=http://localhost:11434
-PUBLIC_OLLAMA_MODEL=llama3.2
+# Morpheus AI settings
+PUBLIC_MORPHEUS_URL=https://api.mor.org/api/v1
+PUBLIC_MORPHEUS_MODEL=minimax-m2.5
+PUBLIC_MORPHEUS_API_KEY=your_api_key
 
 # Web3Auth social login (get a client ID at https://dashboard.web3auth.io)
 PUBLIC_WEB3AUTH_CLIENT_ID=your_client_id
@@ -64,8 +65,9 @@ docker run -e PUBLIC_REST_URL=https://rest.example.com \
 |----------|---------|-------------|
 | `PUBLIC_REST_URL` | `http://localhost:1317` | Blockchain LCD/REST endpoint |
 | `PUBLIC_RPC_URL` | `http://localhost:26657` | Blockchain RPC endpoint |
-| `PUBLIC_OLLAMA_URL` | `http://localhost:11434` | Ollama LLM endpoint |
-| `PUBLIC_OLLAMA_MODEL` | `llama3.2` | Default Ollama model |
+| `PUBLIC_MORPHEUS_URL` | `https://api.mor.org/api/v1` | Morpheus API endpoint |
+| `PUBLIC_MORPHEUS_MODEL` | `minimax-m2.5` | Morpheus model |
+| `PUBLIC_MORPHEUS_API_KEY` | _(empty)_ | Morpheus API key (required for AI features) |
 | `PUBLIC_WEB3AUTH_CLIENT_ID` | `YOUR_WEB3AUTH_CLIENT_ID` | Web3Auth client ID ([dashboard](https://dashboard.web3auth.io)) |
 | `PUBLIC_WEB3AUTH_NETWORK` | `sapphire_devnet` | Web3Auth network (`sapphire_devnet`, `sapphire_mainnet`, `testnet`, `mainnet`) |
 | `PUBLIC_PWR_DENOM` | Factory address | PWR token denom |
@@ -129,7 +131,7 @@ See [CLAUDE.md](./CLAUDE.md) for detailed architecture, tool definitions, and co
 
 Three-layer architecture:
 
-- **AI Store** (Zustand) — manages chat state, streams from Ollama, executes tools
+- **AI Store** (Zustand) — manages chat state, streams from Morpheus API, executes tools
 - **useManifestMCP** — bridges cosmos-kit with the MCP browser client
 - **Tool Executor** — dispatches to composite executors for queries and transactions
 
@@ -147,7 +149,7 @@ Three-layer architecture:
 - **Tailwind CSS v4** — utility-first styling with OKLCH color theme
 - **cosmos-kit** — Cosmos wallet abstraction (Web3Auth social login)
 - **manifestjs** — Manifest chain client library
-- **Ollama** — local LLM inference with tool calling
+- **Morpheus API** — OpenAI-compatible LLM inference with tool calling
 - **Vitest** + happy-dom — test runner
 - **Lucide React** — icons
 
