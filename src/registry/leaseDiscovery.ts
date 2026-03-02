@@ -53,12 +53,21 @@ function getInFlightSet(address: string): Set<string> {
   return set;
 }
 
-/** Simple IPv4 pattern for host validation. */
-const IP_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+/** Validate that a string is a valid IPv4 address (0–255 in each octet). */
+function isValidIPv4(host: string): boolean {
+  const parts = host.split('.');
+  if (parts.length !== 4) return false;
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) return false;
+    const value = Number(part);
+    if (value < 0 || value > 255) return false;
+  }
+  return true;
+}
 
 /** Validate that a host string is a reasonable hostname or IPv4 address. */
 function isValidHost(host: string): boolean {
-  return isValidFqdn(host) || IP_RE.test(host);
+  return isValidFqdn(host) || isValidIPv4(host);
 }
 
 /** Check whether an error is a provider API 401/403 authentication failure. */
@@ -241,7 +250,12 @@ async function fetchLeaseData(
       ]);
 
       // If both Fred calls failed with auth errors, skip the fallback — same token will be rejected
-      if (releasesResult.status === 'rejected' && isAuthError(releasesResult.reason)) {
+      if (
+        releasesResult.status === 'rejected' &&
+        connectionResult.status === 'rejected' &&
+        isAuthError(releasesResult.reason) &&
+        isAuthError(connectionResult.reason)
+      ) {
         logError(`leaseDiscovery.fetchLeaseData.authRejected[${lease.uuid}]`, releasesResult.reason);
         return { leaseUuid: lease.uuid, updates };
       }

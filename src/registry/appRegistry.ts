@@ -36,8 +36,10 @@ export type AppEntry = z.infer<typeof AppEntrySchema>;
 /** Maximum app name length — shared by validation and lease discovery. */
 export const MAX_APP_NAME_LENGTH = 32;
 
-/** Name validation: lowercase alphanumeric + hyphens, 1-32 chars, no leading/trailing hyphen */
-const APP_NAME_REGEX = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
+/** Name validation: lowercase alphanumeric + hyphens, 1–MAX_APP_NAME_LENGTH chars, no leading/trailing hyphen */
+const APP_NAME_REGEX = new RegExp(
+  `^[a-z0-9]([a-z0-9-]{0,${MAX_APP_NAME_LENGTH - 2}}[a-z0-9])?$`,
+);
 
 /** Pattern matching env var names that likely contain secrets */
 const SENSITIVE_ENV_PATTERN = /password|secret|token|key|credential|api[_-]?key/i;

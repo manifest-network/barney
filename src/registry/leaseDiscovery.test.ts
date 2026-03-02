@@ -1216,7 +1216,7 @@ describe('leaseDiscovery', () => {
       expect(app?.connection).toBeUndefined();
     });
 
-    it('short-circuits fallback when releases fail with auth error', async () => {
+    it('short-circuits fallback when both Fred calls fail with auth error', async () => {
       const { ProviderApiError } = await import('../api/provider-api');
       const { logError } = await import('../utils/errors');
       const lease = makeLease({ uuid: 'auth-fail-uuid' });
@@ -1256,6 +1256,51 @@ describe('leaseDiscovery', () => {
         expect.stringContaining('authRejected'),
         expect.any(ProviderApiError),
       );
+    });
+
+    it('uses connection data when only releases fail with auth error', async () => {
+      const { ProviderApiError } = await import('../api/provider-api');
+      const lease = makeLease({ uuid: 'partial-auth-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-partial-',
+        leaseUuid: 'partial-auth-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+      (validateProviderUrl as Mock).mockImplementation(() => {});
+      (getSKU as Mock).mockResolvedValue(null);
+
+      // Releases fail with auth, but connection succeeds
+      (getLeaseReleases as Mock).mockRejectedValue(
+        new ProviderApiError(403, 'Forbidden')
+      );
+      (getLeaseConnectionInfo as Mock).mockResolvedValue({
+        lease_uuid: 'partial-auth-uuid',
+        tenant: ADDR,
+        provider_uuid: 'prov-uuid-1',
+        connection: {
+          host: '10.0.0.1',
+          ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 30080 } },
+        },
+      } satisfies LeaseConnectionResponse);
+
+      const leaseMap = new Map([['partial-auth-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['partial-auth-uuid'], leaseMap, mockSignArbitrary);
+
+      // Should NOT short-circuit — connection succeeded
+      const app = getAppByLease(ADDR, 'partial-auth-uuid');
+      expect(app?.connection?.host).toBe('10.0.0.1');
+      // Fallback should not be needed since primary connection succeeded
+      expect(getLeaseInfo).not.toHaveBeenCalled();
     });
 
     it('does NOT short-circuit fallback for non-auth errors', async () => {
