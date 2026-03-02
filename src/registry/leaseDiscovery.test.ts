@@ -5,6 +5,7 @@ import {
   _resetEnrichmentInFlight,
 } from './leaseDiscovery';
 import { getApps, getAppByLease, addApp, removeApp, type AppEntry } from './appRegistry';
+import { LEASE_DISCOVERY_MAX_CONCURRENT } from '../config/constants';
 import { LeaseState, type Lease } from '../api/billing';
 import type { Provider } from '../api/sku';
 import type { LeaseReleasesResponse } from '../api/fred';
@@ -388,8 +389,8 @@ describe('leaseDiscovery', () => {
 
       await enrichDiscoveredLeases(ADDR, uuids, leaseMap);
 
-      // Should never exceed LEASE_DISCOVERY_MAX_CONCURRENT (3)
-      expect(maxConcurrent).toBeLessThanOrEqual(3);
+      // Should never exceed LEASE_DISCOVERY_MAX_CONCURRENT
+      expect(maxConcurrent).toBeLessThanOrEqual(LEASE_DISCOVERY_MAX_CONCURRENT);
     });
 
     it('prevents duplicate enrichment of the same lease', async () => {

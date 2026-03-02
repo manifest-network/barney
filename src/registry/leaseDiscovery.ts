@@ -343,11 +343,9 @@ async function fetchLeaseData(
 
   // 4. Fallback: try getLeaseInfo for basic connection details if we didn't get them above
   //    Skip if the connection endpoint already rejected with an auth error — same token will fail again.
-  if (signArbitrary && updates.providerUrl && !updates.connection && !connectionAuthFailed) {
+  //    Also only run this fallback if we already have an auth token — avoid re-triggering wallet interaction.
+  if (signArbitrary && updates.providerUrl && !updates.connection && !connectionAuthFailed && authToken) {
     try {
-      if (!authToken) {
-        authToken = await getAuthToken(address, lease.uuid, signArbitrary);
-      }
       const info = await getLeaseInfo(updates.providerUrl, lease.uuid, authToken);
       const fallbackHost = info.host ? normalizeHost(info.host) : '';
       if (fallbackHost) {
