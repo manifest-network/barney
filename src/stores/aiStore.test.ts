@@ -37,16 +37,13 @@ vi.mock('../ai/validation', () => ({
 
 vi.mock('../config/runtimeConfig', () => ({
   runtimeConfig: {
-    PUBLIC_MORPHEUS_URL: 'https://api.mor.org/api/v1',
     PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5',
-    PUBLIC_MORPHEUS_API_KEY: 'test-key',
   },
 }));
 
 // Mock streaming, persistence, sendMessage, confirmAction, batchDeploy
 vi.mock('./aiActions/persistence', () => ({
   loadSettings: vi.fn().mockReturnValue({
-    morpheusUrl: 'https://api.mor.org/api/v1',
     model: 'minimax-m2.5',
     saveHistory: true,
   }),
@@ -240,17 +237,6 @@ describe('aiStore', () => {
   // ---- Settings ----
 
   describe('updateSettings', () => {
-    it('accepts a valid endpoint', () => {
-      store.getState().updateSettings({ morpheusUrl: 'http://example.com:11434' });
-      expect(store.getState().settings.morpheusUrl).toBe('http://example.com:11434');
-    });
-
-    it('rejects an invalid endpoint', () => {
-      const original = store.getState().settings.morpheusUrl;
-      store.getState().updateSettings({ morpheusUrl: 'not-a-url' });
-      expect(store.getState().settings.morpheusUrl).toBe(original);
-    });
-
     it('accepts a valid model string', () => {
       store.getState().updateSettings({ model: 'qwen2.5' });
       expect(store.getState().settings.model).toBe('qwen2.5');

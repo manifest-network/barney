@@ -14,7 +14,7 @@ COPY --from=build /app/dist/ /usr/share/nginx/html/
 COPY docker/config.js.template /docker/config.js.template
 COPY docker/env.sh /docker/env.sh
 RUN chmod +x /docker/env.sh
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker/nginx.conf.template /docker/nginx.conf.template
 EXPOSE 80
 ENTRYPOINT ["/docker/env.sh"]
 CMD ["nginx", "-g", "daemon off;"]

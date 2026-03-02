@@ -125,10 +125,6 @@ export function validateEndpointUrl(url: string): string | null {
 }
 
 export const AISettingsSchema = z.object({
-  morpheusUrl: z.string()
-    .transform((url) => validateEndpointUrl(url))
-    .pipe(z.string())
-    .catch('https://api.mor.org/api/v1'),
   model: z.string()
     .min(1)
     .max(256)

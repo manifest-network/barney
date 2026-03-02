@@ -5,7 +5,6 @@
 import {
   validateSettings,
   validateChatHistory,
-  validateEndpointUrl,
   type AISettings,
 } from '../../ai/validation';
 import { runtimeConfig } from '../../config/runtimeConfig';
@@ -17,10 +16,7 @@ import type { AIStore } from '../aiStore';
 const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const STORAGE_KEY_HISTORY = 'barney-ai-history';
 
-const envEndpoint = validateEndpointUrl(runtimeConfig.PUBLIC_MORPHEUS_URL);
-
 export const defaultSettings: AISettings = {
-  morpheusUrl: envEndpoint || 'https://api.mor.org/api/v1',
   model: runtimeConfig.PUBLIC_MORPHEUS_MODEL,
   saveHistory: true,
 };

@@ -1,11 +1,11 @@
 /**
  * AI Streaming Client
  * OpenAI-compatible SSE streaming client for chat completions APIs.
+ * All requests go through the /api/morpheus/ proxy which injects auth server-side.
  */
 
 import { logError } from '../utils/errors';
 import { HEALTH_CHECK_TIMEOUT_MS, AI_STREAM_TIMEOUT_MS } from '../config/constants';
-import { isUrlSsrfSafe } from '../utils/url';
 
 export interface ChatApiMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -42,8 +42,6 @@ export interface ToolDefinition {
 }
 
 export interface StreamChatOptions {
-  apiUrl: string;
-  apiKey: string;
   model: string;
   messages: ChatApiMessage[];
   tools?: ToolDefinition[];
@@ -60,48 +58,6 @@ export type StreamChunk =
   | { type: 'tool_call'; toolCall: ToolCall }
   | { type: 'done' }
   | { type: 'error'; error: string };
-
-/**
- * Validates an API URL and builds the full URL for a given path.
- * Returns null if the endpoint is invalid or uses a non-http(s) protocol.
- */
-function buildApiUrl(endpoint: string, path: string): string | null {
-  try {
-    const base = endpoint.endsWith('/') ? endpoint : endpoint + '/';
-    const relative = path.startsWith('/') ? path.slice(1) : path;
-    const url = new URL(relative, base);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      logError('chatApi.buildApiUrl', new Error(`Unsupported protocol "${url.protocol}" for endpoint "${endpoint}"`));
-      return null;
-    }
-    if (!isUrlSsrfSafe(url)) {
-      logError('chatApi.buildApiUrl', new Error(`Endpoint "${endpoint}" failed SSRF validation`));
-      return null;
-    }
-    return url.href;
-  } catch (error) {
-    logError('chatApi.buildApiUrl', error);
-    return null;
-  }
-}
-
-/**
- * Build the fetch URL and extra headers for a Morpheus API request.
- * In development, routes through the /proxy-morpheus dev proxy to avoid CORS.
- */
-function buildFetchArgs(
-  url: string,
-  headers: Record<string, string>,
-): { url: string; headers: Record<string, string> } {
-  if (import.meta.env.DEV) {
-    const parsed = new URL(url);
-    return {
-      url: `/proxy-morpheus${parsed.pathname}${parsed.search}`,
-      headers: { ...headers, 'X-Proxy-Target': parsed.origin },
-    };
-  }
-  return { url, headers };
-}
 
 /**
  * Serialize messages for the OpenAI-compatible API.
@@ -196,17 +152,12 @@ async function* parseSSE(
 
 /**
  * Stream chat completion from an OpenAI-compatible API.
+ * Requests go through /api/morpheus/ proxy (auth injected server-side).
  */
 export async function* streamChat(
   options: StreamChatOptions
 ): AsyncGenerator<StreamChunk> {
-  const { apiUrl, apiKey, model, messages, tools, signal } = options;
-
-  const url = buildApiUrl(apiUrl, '/chat/completions');
-  if (!url) {
-    yield { type: 'error', error: 'Invalid AI API endpoint URL' };
-    return;
-  }
+  const { model, messages, tools, signal } = options;
 
   const body: Record<string, unknown> = {
     model,
@@ -230,13 +181,9 @@ export async function* streamChat(
   const partialToolCalls: Map<number, PartialToolCall> = new Map();
 
   try {
-    const fetchArgs = buildFetchArgs(url, {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    });
-    const response = await fetch(fetchArgs.url, {
+    const response = await fetch('/api/morpheus/chat/completions', {
       method: 'POST',
-      headers: fetchArgs.headers,
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: fetchAbort.signal,
     });
@@ -389,19 +336,12 @@ function* emitToolCalls(
 
 /**
  * Check if the AI API is available.
- * GET /models (standard OpenAI-compatible endpoint). Single attempt with timeout.
+ * GET /api/morpheus/models via the proxy (auth injected server-side).
  */
-export async function checkApiHealth(apiUrl: string, apiKey: string): Promise<boolean> {
-  const modelsUrl = buildApiUrl(apiUrl, '/models');
-  if (!modelsUrl) return false;
-
+export async function checkApiHealth(): Promise<boolean> {
   try {
-    const fetchArgs = buildFetchArgs(modelsUrl, {
-      ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
-    });
-    const response = await fetch(fetchArgs.url, {
+    const response = await fetch('/api/morpheus/models', {
       method: 'GET',
-      headers: fetchArgs.headers,
       signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
     });
     return response.ok;

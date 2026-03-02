@@ -11,9 +11,7 @@ vi.mock('../../ai/validation', () => ({
 
 vi.mock('../../config/runtimeConfig', () => ({
   runtimeConfig: {
-    PUBLIC_MORPHEUS_URL: 'https://api.mor.org/api/v1',
     PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5',
-    PUBLIC_MORPHEUS_API_KEY: 'test-key',
   },
 }));
 
@@ -66,7 +64,7 @@ describe('persistence actions', () => {
     });
 
     it('parses valid JSON from localStorage', () => {
-      const saved = { morpheusUrl: 'https://custom.example.com/v1', model: 'qwen2.5', saveHistory: false };
+      const saved = { model: 'qwen2.5', saveHistory: false };
       localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(saved));
       const result = loadSettings();
       expect(validateSettings).toHaveBeenCalledWith(saved);

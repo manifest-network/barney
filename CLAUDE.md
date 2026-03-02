@@ -178,7 +178,7 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 | `tx.ts` | Transaction signing client and message builders for all Manifest modules (billing, SKU, provider management) |
 | `provider-api.ts` | Payload upload with ADR-036 auth |
 | `fred.ts` | Fred deployment status polling + WebSocket streaming |
-| `morpheus.ts` | OpenAI-compatible SSE streaming client (Morpheus API) |
+| `morpheus.ts` | OpenAI-compatible SSE streaming client via `/api/morpheus/` proxy |
 | `config.ts` | API endpoints, denom metadata, price formatting |
 | `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
 | `queryClient.ts` | LCD query client factory (cached singleton) |
@@ -305,7 +305,7 @@ Defined in `src/config/chain.ts`:
 
 ### Runtime Environment Variables
 
-All 11 `PUBLIC_*` variables use a 3-tier fallback defined in `src/config/runtimeConfig.ts`:
+9 client-side `PUBLIC_*` variables use a 3-tier fallback defined in `src/config/runtimeConfig.ts`:
 
 1. `window.__RUNTIME_CONFIG__` — set by `public/config.js` (generated at container startup by `docker/env.sh`)
 2. `import.meta.env` — Rsbuild static replacement from `.env` files (requires static property access, not dynamic `import.meta.env[key]`)
@@ -315,4 +315,15 @@ Consumer code imports `runtimeConfig` from `src/config/runtimeConfig.ts` — nev
 
 Built-in flags (`import.meta.env.DEV` / `PROD`) remain build-time and are accessed directly where needed.
 
-Variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_MORPHEUS_URL`, `PUBLIC_MORPHEUS_MODEL`, `PUBLIC_MORPHEUS_API_KEY`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`, `PUBLIC_GAS_PRICE`, `PUBLIC_CHAIN_ID`, `PUBLIC_FAUCET_URL`
+Client-side variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_MORPHEUS_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`, `PUBLIC_GAS_PRICE`, `PUBLIC_CHAIN_ID`, `PUBLIC_FAUCET_URL`
+
+Server-side variables (never shipped to browser):
+- `MORPHEUS_API_KEY` — injected by nginx (prod) or rsbuild dev proxy into upstream Morpheus API requests via `Authorization: Bearer` header
+- `PUBLIC_MORPHEUS_URL` — upstream Morpheus API URL used as proxy target by nginx/rsbuild dev proxy
+
+### Morpheus API Proxy
+
+The client never calls the Morpheus API directly. All AI requests go through `/api/morpheus/...` (relative to origin):
+
+- **Production**: nginx reverse-proxies `/api/morpheus/` to `$PUBLIC_MORPHEUS_URL`, injecting `Authorization: Bearer $MORPHEUS_API_KEY` server-side. Configured via `docker/nginx.conf.template` (envsubst'd at container startup by `docker/env.sh`).
+- **Development**: rsbuild dev proxy does the same via `onProxyReq` callback in `rsbuild.config.ts`, reading `PUBLIC_MORPHEUS_URL` and `MORPHEUS_API_KEY` from `.env.local`.

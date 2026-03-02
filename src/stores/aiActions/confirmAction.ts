@@ -3,7 +3,6 @@
  */
 
 import { streamChat } from '../../api/morpheus';
-import { runtimeConfig } from '../../config/runtimeConfig';
 import { executeConfirmedTool } from '../../ai/toolExecutor';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
@@ -101,8 +100,6 @@ export async function confirmActionFn(get: Get, set: Set, editedManifestJson?: s
     const { settings } = get();
 
     const stream = streamChat({
-      apiUrl: settings.morpheusUrl,
-      apiKey: runtimeConfig.PUBLIC_MORPHEUS_API_KEY,
       model: settings.model,
       messages: toChatApiMessages(updatedMessages, get().address),
       signal: get().abortController?.signal,

@@ -51,8 +51,6 @@ async function collectChunks(options: Parameters<typeof streamChat>[0]): Promise
 }
 
 const BASE_OPTIONS = {
-  apiUrl: 'https://api.mor.org/api/v1',
-  apiKey: 'test-key',
   model: 'test-model',
   messages: [{ role: 'user' as const, content: 'hello' }],
 };
@@ -121,17 +119,6 @@ describe('streamChat', () => {
     vi.restoreAllMocks();
   });
 
-  it('yields error for invalid API URL', async () => {
-    const chunks = await collectChunks({
-      ...BASE_OPTIONS,
-      apiUrl: 'ftp://bad-protocol.com',
-    });
-
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].type).toBe('error');
-    expect((chunks[0] as { type: 'error'; error: string }).error).toContain('Invalid AI API endpoint URL');
-  });
-
   it('yields content chunks from SSE stream', async () => {
     vi.stubGlobal('fetch', mockFetchWithSSE([
       encode(
@@ -147,6 +134,20 @@ describe('streamChat', () => {
     expect(contentChunks[0].content).toBe('Hello');
     expect(contentChunks[1].content).toBe(' world');
     expect(chunks[chunks.length - 1].type).toBe('done');
+  });
+
+  it('sends requests to /api/morpheus/chat/completions without Authorization header', async () => {
+    vi.stubGlobal('fetch', mockFetchWithSSE([
+      encode(sseEvent(JSON.stringify({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }))),
+    ]));
+
+    await collectChunks(BASE_OPTIONS);
+
+    const fetchCall = vi.mocked(fetch).mock.calls[0];
+    expect(fetchCall[0]).toBe('/api/morpheus/chat/completions');
+    const headers = fetchCall[1]?.headers as Record<string, string>;
+    expect(headers['Authorization']).toBeUndefined();
+    expect(headers['Content-Type']).toBe('application/json');
   });
 
   it('accumulates incremental tool calls and emits on finish_reason=tool_calls', async () => {
@@ -290,19 +291,20 @@ describe('checkApiHealth', () => {
     const { checkApiHealth } = await import('./morpheus');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
 
-    const result = await checkApiHealth('https://api.mor.org/api/v1', 'test-key');
+    const result = await checkApiHealth();
     expect(result).toBe(true);
 
     const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain('/models');
-    expect((fetchCall[1]?.headers as Record<string, string>)['Authorization']).toBe('Bearer test-key');
+    expect(fetchCall[0]).toBe('/api/morpheus/models');
+    // No Authorization header — proxy adds it server-side
+    expect((fetchCall[1]?.headers as Record<string, string> | undefined)).toBeUndefined();
   });
 
   it('returns false when models endpoint responds not ok', async () => {
     const { checkApiHealth } = await import('./morpheus');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
 
-    const result = await checkApiHealth('https://api.mor.org/api/v1', 'test-key');
+    const result = await checkApiHealth();
     expect(result).toBe(false);
   });
 
@@ -310,18 +312,17 @@ describe('checkApiHealth', () => {
     const { checkApiHealth } = await import('./morpheus');
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network error')));
 
-    const result = await checkApiHealth('https://api.mor.org/api/v1', 'test-key');
+    const result = await checkApiHealth();
     expect(result).toBe(false);
   });
 
-  it('appends /models to the API URL', async () => {
+  it('fetches /api/morpheus/models', async () => {
     const { checkApiHealth } = await import('./morpheus');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
 
-    await checkApiHealth('https://api.mor.org/api/v1', 'test-key');
+    await checkApiHealth();
 
     const fetchCall = vi.mocked(fetch).mock.calls[0];
-    const url = fetchCall[0] as string;
-    expect(url).toContain('/v1/models');
+    expect(fetchCall[0]).toBe('/api/morpheus/models');
   });
 });

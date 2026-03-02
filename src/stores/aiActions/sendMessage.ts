@@ -3,7 +3,6 @@
  */
 
 import { streamChat } from '../../api/morpheus';
-import { runtimeConfig } from '../../config/runtimeConfig';
 import { AI_TOOLS } from '../../ai/tools';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { validateUserInput } from '../../ai/validation';
@@ -84,8 +83,6 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
       const apiMessages = toChatApiMessages(currentMessages, address);
 
       const stream = streamChat({
-        apiUrl: settings.morpheusUrl,
-        apiKey: runtimeConfig.PUBLIC_MORPHEUS_API_KEY,
         model: settings.model,
         messages: apiMessages,
         tools: AI_TOOLS,

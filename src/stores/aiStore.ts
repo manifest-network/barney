@@ -7,11 +7,9 @@ import { createStore } from 'zustand/vanilla';
 import { useStore } from 'zustand';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import { checkApiHealth } from '../api/morpheus';
-import { runtimeConfig } from '../config/runtimeConfig';
 import type { AISettings } from '../ai/validation';
 import type { SignArbitraryFn, PayloadAttachment, ToolResult } from '../ai/toolExecutor';
 import type { DeployProgress } from '../ai/progress';
-import { validateEndpointUrl } from '../ai/validation';
 import { validateFile, validateManifestContent } from '../utils/fileValidation';
 import { sha256, toHex } from '../utils/hash';
 import { logError } from '../utils/errors';
@@ -202,13 +200,6 @@ export const createAIStore = () =>
       set((state) => {
         const updated = { ...state.settings };
 
-        if (newSettings.morpheusUrl !== undefined) {
-          const validatedUrl = validateEndpointUrl(newSettings.morpheusUrl);
-          if (validatedUrl) {
-            updated.morpheusUrl = validatedUrl;
-          }
-        }
-
         if (typeof newSettings.model === 'string' && newSettings.model.length > 0) {
           updated.model = newSettings.model;
         }
@@ -302,12 +293,7 @@ export function getAIStore(): ReturnType<typeof createAIStore> {
 /** Check AI API connection health and update store */
 export async function checkConnection(store: ReturnType<typeof createAIStore>): Promise<void> {
   try {
-    const apiKey = runtimeConfig.PUBLIC_MORPHEUS_API_KEY;
-    if (!apiKey) {
-      store.setState({ isConnected: false });
-      return;
-    }
-    const healthy = await checkApiHealth(store.getState().settings.morpheusUrl, apiKey);
+    const healthy = await checkApiHealth();
     store.setState({ isConnected: healthy });
   } catch (error) {
     logError('aiStore.checkConnection', error);

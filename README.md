@@ -40,7 +40,7 @@ PUBLIC_RPC_URL=http://localhost:26657
 # Morpheus AI settings
 PUBLIC_MORPHEUS_URL=https://api.mor.org/api/v1
 PUBLIC_MORPHEUS_MODEL=minimax-m2.5
-PUBLIC_MORPHEUS_API_KEY=your_api_key
+MORPHEUS_API_KEY=your_api_key  # Server-side only — never sent to browser
 
 # Web3Auth social login (get a client ID at https://dashboard.web3auth.io)
 PUBLIC_WEB3AUTH_CLIENT_ID=your_client_id
@@ -65,9 +65,9 @@ docker run -e PUBLIC_REST_URL=https://rest.example.com \
 |----------|---------|-------------|
 | `PUBLIC_REST_URL` | `http://localhost:1317` | Blockchain LCD/REST endpoint |
 | `PUBLIC_RPC_URL` | `http://localhost:26657` | Blockchain RPC endpoint |
-| `PUBLIC_MORPHEUS_URL` | `https://api.mor.org/api/v1` | Morpheus API endpoint |
+| `PUBLIC_MORPHEUS_URL` | `https://api.mor.org/api/v1` | Morpheus API endpoint (server-side proxy target) |
 | `PUBLIC_MORPHEUS_MODEL` | `minimax-m2.5` | Morpheus model |
-| `PUBLIC_MORPHEUS_API_KEY` | _(empty)_ | Morpheus API key (required for AI features) |
+| `MORPHEUS_API_KEY` | _(empty)_ | Morpheus API key — server-side only, injected by nginx proxy |
 | `PUBLIC_WEB3AUTH_CLIENT_ID` | `YOUR_WEB3AUTH_CLIENT_ID` | Web3Auth client ID ([dashboard](https://dashboard.web3auth.io)) |
 | `PUBLIC_WEB3AUTH_NETWORK` | `sapphire_devnet` | Web3Auth network (`sapphire_devnet`, `sapphire_mainnet`, `testnet`, `mainnet`) |
 | `PUBLIC_PWR_DENOM` | Factory address | PWR token denom |

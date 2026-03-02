@@ -46,16 +46,7 @@ vi.mock('../../ai/systemPrompt', () => ({
 
 vi.mock('../../config/runtimeConfig', () => ({
   runtimeConfig: {
-    PUBLIC_MORPHEUS_URL: 'https://api.mor.org/api/v1',
     PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5',
-    PUBLIC_MORPHEUS_API_KEY: 'test-key',
-    PUBLIC_REST_URL: '',
-    PUBLIC_RPC_URL: '',
-    PUBLIC_WEB3AUTH_CLIENT_ID: '',
-    PUBLIC_WEB3AUTH_NETWORK: '',
-    PUBLIC_PWR_DENOM: '',
-    PUBLIC_GAS_PRICE: '',
-    PUBLIC_CHAIN_ID: '',
   },
 }));
 
@@ -111,7 +102,6 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
     address: 'manifest1test',
     signArbitrary: vi.fn(),
     settings: {
-      morpheusUrl: 'https://api.mor.org/api/v1',
       model: 'minimax-m2.5',
       saveHistory: false,
     },

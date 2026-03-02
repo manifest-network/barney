@@ -148,31 +148,26 @@ describe('isPrivateHost (SSRF protection via ipaddr.js)', () => {
 describe('validateSettings', () => {
   it('returns defaults for null/undefined', () => {
     const defaults = validateSettings(null);
-    expect(defaults.morpheusUrl).toBe('https://api.mor.org/api/v1');
     expect(defaults.model).toBe('minimax-m2.5');
     expect(defaults.saveHistory).toBe(true);
   });
 
-  it('validates valid settings with public URL', () => {
+  it('validates valid settings', () => {
     const input = {
-      morpheusUrl: 'https://api.example.com:8080',
       model: 'llama3.1',
       saveHistory: false,
     };
     const result = validateSettings(input);
-    expect(result.morpheusUrl).toBe('https://api.example.com:8080');
     expect(result.model).toBe('llama3.1');
     expect(result.saveHistory).toBe(false);
   });
 
   it('uses defaults for invalid fields', () => {
     const input = {
-      morpheusUrl: 'invalid-url',
       model: '',
       saveHistory: 'not-a-boolean',
     };
     const result = validateSettings(input);
-    expect(result.morpheusUrl).toBe('https://api.mor.org/api/v1');
     expect(result.model).toBe('minimax-m2.5');
     expect(result.saveHistory).toBe(true);
   });
@@ -184,9 +179,6 @@ describe('validateSettings', () => {
     const result = validateSettings(input);
     expect(result.model).toBe('minimax-m2.5'); // defaults
   });
-
-  // Note: SSRF protection for validateSettings is tested via isPrivateHost.
-  // In dev mode, private IPs are allowed to enable local services.
 });
 
 describe('validateChatHistory', () => {
