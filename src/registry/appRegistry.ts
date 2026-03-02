@@ -153,7 +153,7 @@ export function validateAppName(
     return 'App name is required.';
   }
   if (name.length > MAX_APP_NAME_LENGTH) {
-    return 'App name must be 32 characters or fewer.';
+    return `App name must be ${MAX_APP_NAME_LENGTH} characters or fewer.`;
   }
   if (!APP_NAME_REGEX.test(name)) {
     return 'App name must be lowercase alphanumeric with hyphens, and cannot start or end with a hyphen.';

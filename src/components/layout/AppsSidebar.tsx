@@ -2,7 +2,7 @@
  * AppsSidebar — wallet info, credits, running apps list.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef, type RefObject } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { LogOut, Circle, Zap, History, RotateCcw } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
@@ -45,7 +45,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
   // Track current address so fire-and-forget enrichment callbacks can detect stale closures
-  const addressRef: RefObject<string | undefined> = useRef(address);
+  const addressRef = useRef(address);
   useEffect(() => { addressRef.current = address; });
 
   // Stable wrapper for signArbitrary (same pattern as AppShell.tsx)

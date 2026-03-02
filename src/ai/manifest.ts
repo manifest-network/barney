@@ -10,6 +10,7 @@
 
 import { sha256, toHex, generatePassword, validatePayloadSize } from '../utils/hash';
 import { logError } from '../utils/errors';
+import { MAX_APP_NAME_LENGTH } from '../registry/appRegistry';
 import type { PayloadAttachment } from './toolExecutor/types';
 
 /**
@@ -56,7 +57,7 @@ export function deriveAppNameFromImage(image: string): string {
     .replace(/[^a-z0-9-]/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
-    .slice(0, 32)
+    .slice(0, MAX_APP_NAME_LENGTH)
     .replace(/-+$/, '');
 
   return name || 'app';
