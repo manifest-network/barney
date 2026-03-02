@@ -273,7 +273,7 @@ describe('leaseDiscovery', () => {
       expect(app?.name).toBe('redis-8-4');
     });
 
-    it('handles missing signArbitrary gracefully (only fetches provider URL)', async () => {
+    it('handles missing signArbitrary gracefully (fetches provider + SKU only)', async () => {
       const lease = makeLease({ uuid: 'no-sign-uuid' });
       addApp(ADDR, makeApp({
         name: 'lease-no-sign-',

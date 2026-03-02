@@ -93,7 +93,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     // Enrich discovered leases in the background
     if (discoveredUuids.length > 0) {
       const leaseMap = new Map(allLeases.map((l) => [l.uuid, l]));
-      const canSign = isWalletConnected;
+      const canSign = isWalletConnected && typeof signArbitrary === 'function';
       const capturedAddress = address;
       enrichDiscoveredLeases(capturedAddress, discoveredUuids, leaseMap, canSign ? wrappedSignArbitrary : undefined)
         .then(() => {

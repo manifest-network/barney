@@ -19,7 +19,6 @@ import {
 } from '../api/provider-api';
 import { validateProviderUrl } from '../api/providerFetch';
 import {
-  getAppByLease,
   addApp,
   updateApp,
   getApps,
@@ -128,13 +127,14 @@ function uniquifyName(baseName: string, existingNames: Set<string>): string {
 export function discoverUnknownLeases(address: string, allLeases: Lease[]): string[] {
   const discovered: string[] = [];
   const existingNames = getExistingNames(address);
+  const trackedLeaseUuids = new Set(getApps(address).map((a) => a.leaseUuid));
 
   for (const lease of allLeases) {
     // Skip terminal states
     if (TERMINAL_STATES.has(lease.state)) continue;
 
     // Skip if already tracked
-    if (getAppByLease(address, lease.uuid)) continue;
+    if (trackedLeaseUuids.has(lease.uuid)) continue;
 
     const baseName = `lease-${lease.uuid.slice(0, 8)}`;
     const name = uniquifyName(baseName, existingNames);
