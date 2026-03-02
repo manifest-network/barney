@@ -65,9 +65,15 @@ function isValidIPv4(host: string): boolean {
   return true;
 }
 
-/** Validate that a host string is a reasonable hostname or IPv4 address. */
-function isValidHost(host: string): boolean {
-  return isValidFqdn(host) || isValidIPv4(host);
+/** Strip URL scheme prefix (e.g. "https://app.example.com" → "app.example.com"). */
+function stripScheme(host: string): string {
+  return host.replace(/^https?:\/\//, '');
+}
+
+/** Normalize a host string: strip scheme, validate, return bare host or empty string. */
+function normalizeHost(host: string): string {
+  const bare = stripScheme(host);
+  return (isValidFqdn(bare) || isValidIPv4(bare)) ? bare : '';
 }
 
 /** Check whether an error is a provider API 401/403 authentication failure. */
@@ -227,7 +233,10 @@ async function fetchLeaseData(
     try {
       const sku = await getSKU(skuUuid);
       if (sku?.name) {
-        updates.size = sku.name.replace(/^docker-/, '').replace(/[^a-z0-9-]/g, '');
+        const sanitized = sku.name.toLowerCase().replace(/^docker-/, '').replace(/[^a-z0-9-]/g, '');
+        if (sanitized) {
+          updates.size = sanitized;
+        }
       }
     } catch (error) {
       logError(`leaseDiscovery.fetchLeaseData.getSKU[${skuUuid}]`, error);
@@ -289,16 +298,17 @@ async function fetchLeaseData(
         }
       }
 
-      // Extract connection details (validate host before storing)
+      // Extract connection details (normalize host — strip scheme before validating/storing)
       if (connectionResult.status === 'fulfilled') {
         const conn = connectionResult.value?.connection;
-        if (conn?.host && isValidHost(conn.host)) {
+        const host = conn?.host ? normalizeHost(conn.host) : '';
+        if (host) {
           updates.connection = {
-            host: conn.host,
-            fqdn: conn.fqdn,
-            ports: conn.ports,
-            instances: conn.instances,
-            services: conn.services,
+            host,
+            fqdn: conn!.fqdn,
+            ports: conn!.ports,
+            instances: conn!.instances,
+            services: conn!.services,
           };
         }
       }
@@ -312,10 +322,11 @@ async function fetchLeaseData(
         authToken = await getAuthToken(address, lease.uuid, signArbitrary);
       }
       const info = await getLeaseInfo(updates.providerUrl, lease.uuid, authToken);
-      if (info?.host && isValidHost(info.host)) {
+      const fallbackHost = info?.host ? normalizeHost(info.host) : '';
+      if (fallbackHost) {
         updates.connection = {
-          host: info.host,
-          ports: info.ports,
+          host: fallbackHost,
+          ports: info!.ports,
         };
       }
     } catch (error) {

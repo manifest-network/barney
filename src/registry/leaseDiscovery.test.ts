@@ -1216,6 +1216,115 @@ describe('leaseDiscovery', () => {
       expect(app?.connection).toBeUndefined();
     });
 
+    it('normalizes scheme-prefixed host from getLeaseConnectionInfo', async () => {
+      const lease = makeLease({ uuid: 'scheme-host-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-scheme-h',
+        leaseUuid: 'scheme-host-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+      (validateProviderUrl as Mock).mockImplementation(() => {});
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'scheme-host-uuid',
+        tenant: ADDR,
+        provider_uuid: 'prov-uuid-1',
+        releases: [],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockResolvedValue({
+        lease_uuid: 'scheme-host-uuid',
+        tenant: ADDR,
+        provider_uuid: 'prov-uuid-1',
+        connection: {
+          host: 'https://app.example.com',
+          ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 30080 } },
+        },
+      } satisfies LeaseConnectionResponse);
+
+      const leaseMap = new Map([['scheme-host-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['scheme-host-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'scheme-host-uuid');
+      // Host should be stored without scheme prefix
+      expect(app?.connection?.host).toBe('app.example.com');
+    });
+
+    it('normalizes scheme-prefixed host from getLeaseInfo fallback', async () => {
+      const lease = makeLease({ uuid: 'scheme-fb-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-scheme-f',
+        leaseUuid: 'scheme-fb-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+      (validateProviderUrl as Mock).mockImplementation(() => {});
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'scheme-fb-uuid',
+        tenant: ADDR,
+        provider_uuid: 'prov-uuid-1',
+        releases: [],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('no connection'));
+      (getLeaseInfo as Mock).mockResolvedValue({
+        host: 'http://10.0.0.1',
+        ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 30080 } },
+      });
+
+      const leaseMap = new Map([['scheme-fb-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['scheme-fb-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'scheme-fb-uuid');
+      // Host should be stored without scheme prefix
+      expect(app?.connection?.host).toBe('10.0.0.1');
+    });
+
+    it('keeps size as unknown when SKU name sanitizes to empty string', async () => {
+      const lease = makeLease({ uuid: 'empty-sku-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-empty-sk',
+        leaseUuid: 'empty-sku-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue(null);
+      (getSKU as Mock).mockResolvedValue({
+        uuid: 'sku-uuid-1',
+        name: '!!!',
+        providerUuid: 'prov-uuid-1',
+        active: true,
+        basePrice: { denom: 'upwr', amount: '100' },
+        unit: 0,
+      });
+
+      const leaseMap = new Map([['empty-sku-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['empty-sku-uuid'], leaseMap);
+
+      const app = getAppByLease(ADDR, 'empty-sku-uuid');
+      // Size should remain 'unknown' — not overwritten with empty string
+      expect(app?.size).toBe('unknown');
+    });
+
     it('short-circuits fallback when both Fred calls fail with auth error', async () => {
       const { ProviderApiError } = await import('../api/provider-api');
       const { logError } = await import('../utils/errors');
