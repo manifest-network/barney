@@ -97,7 +97,7 @@ export default defineConfig({
             if (!morpheusApiKey) {
               res.writeHead(503, { 'Content-Type': 'text/plain' });
               res.end('Morpheus API key (MORPHEUS_API_KEY) not configured');
-              return false;
+              return;
             }
           },
           onProxyReq: (proxyReq: { setHeader: (name: string, value: string) => void }) => {

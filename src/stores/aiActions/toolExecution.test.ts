@@ -389,6 +389,54 @@ describe('processToolCallsFn', () => {
     expect(errorMsg!.error).toBe('Hash computation failed');
   });
 
+  it('returns shouldContinue=true when all batch deploy entries fail', async () => {
+    const makeDeployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          skuUuid: 'sku-123',
+          providerUuid: 'prov-456',
+          providerUrl: 'https://provider.test',
+          _generatedManifest: `{"services":{"${appName}":{}}}`,
+        },
+      },
+    });
+
+    // All payload builds fail
+    vi.mocked(buildPayloadFromManifest)
+      .mockRejectedValueOnce(new Error('Hash failed 1'))
+      .mockRejectedValueOnce(new Error('Hash failed 2'));
+
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(makeDeployResult('tetris'))
+      .mockResolvedValueOnce(makeDeployResult('doom'));
+
+    const assistantMsg = makeMessage({ id: 'asst_1' });
+    state.messages = [assistantMsg];
+
+    const tc1 = makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } });
+    const tc2 = makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } });
+
+    const result = await processToolCallsFn(get, set, [tc1, tc2], 'asst_1', {
+      content: '',
+      thinking: '',
+      toolCalls: [tc1, tc2],
+    });
+
+    // Should continue so the AI can see the error messages
+    expect(result.shouldContinue).toBe(true);
+    // No confirmation should be set
+    expect(state.pendingConfirmation).toBeNull();
+    // Error messages should be preserved (not overwritten)
+    const errorMsgs = state.messages.filter(m => m.role === 'tool' && m.error);
+    expect(errorMsgs).toHaveLength(2);
+  });
+
   it('uses single confirmation for mixed TX types and marks others as skipped', async () => {
     vi.mocked(executeTool)
       .mockResolvedValueOnce({

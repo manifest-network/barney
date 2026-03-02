@@ -5,6 +5,12 @@ set -e
 PUBLIC_MORPHEUS_URL="${PUBLIC_MORPHEUS_URL%/}"
 export PUBLIC_MORPHEUS_URL
 
+# Fail fast if PUBLIC_MORPHEUS_URL is not provided
+if [ -z "$PUBLIC_MORPHEUS_URL" ]; then
+  echo "ERROR: PUBLIC_MORPHEUS_URL is required but not set or empty." >&2
+  exit 1
+fi
+
 # Generate nginx config with Morpheus proxy settings (server-side secrets)
 envsubst '$MORPHEUS_API_KEY $PUBLIC_MORPHEUS_URL' \
   < /docker/nginx.conf.template > /etc/nginx/conf.d/default.conf

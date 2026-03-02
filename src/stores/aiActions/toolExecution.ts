@@ -106,8 +106,10 @@ function setSingleConfirmation(
 
 /**
  * Merge multiple deploy_app confirmations into a single batch_deploy confirmation.
- * Returns true if a confirmation was set, false if all entries failed (caller
- * should let the AI stream continue so it can see the errors).
+ * Returns true if at least one entry succeeded and a confirmation was set.
+ * Returns false if all entries failed — caller must avoid setting a single
+ * confirmation for a broken deploy and should instead let the AI stream
+ * continue so it can see the per-entry error messages.
  */
 async function mergeBatchDeployConfirmations(
   get: Get,
@@ -312,23 +314,45 @@ export async function processToolCallsFn(
     }
 
     if (!confirmed) {
-      // Single confirmation, mixed TX types, or all batch entries failed → use first confirmation
-      setSingleConfirmation(get, set, collectedConfirmations[0]);
-    }
+      // When batch merge fails (all payloads broken), avoid overwriting error messages
+      // with a confirmation prompt for a deploy that cannot succeed.
+      const nonDeployConfs = deployConfs.length >= 2
+        ? collectedConfirmations.filter((c) => !deployConfs.includes(c))
+        : collectedConfirmations;
 
-    // Mark any unhandled confirmations as skipped
-    const handledIndex = confirmed ? -1 : 0;
-    for (let i = 0; i < collectedConfirmations.length; i++) {
-      if (i === handledIndex) continue;
-      // Skip deploy confs that were handled by batch merge
-      if (confirmed && deployConfs.includes(collectedConfirmations[i])) continue;
-      const conf = collectedConfirmations[i];
-      const updated = get().messages.map((m) =>
-        m.id === conf.toolMessageId
-          ? { ...m, content: 'Skipped: only one transaction can be confirmed at a time.', isStreaming: false }
-          : m
-      );
-      set({ messages: updated });
+      if (nonDeployConfs.length === 0) {
+        // All were failed deploys, no other TX types — let the AI see the errors
+        const newMessage = createAssistantMessage();
+        set({ messages: trimMessages([...get().messages, newMessage]) });
+        return { shouldContinue: true, nextAssistantMessageId: newMessage.id };
+      }
+
+      const handledConf = nonDeployConfs[0];
+      setSingleConfirmation(get, set, handledConf);
+
+      // Mark any unhandled confirmations as skipped
+      for (const conf of collectedConfirmations) {
+        if (conf === handledConf) continue;
+        // Failed deploy confs already have error messages set by mergeBatchDeployConfirmations
+        if (deployConfs.length >= 2 && deployConfs.includes(conf)) continue;
+        const updated = get().messages.map((m) =>
+          m.id === conf.toolMessageId
+            ? { ...m, content: 'Skipped: only one transaction can be confirmed at a time.', isStreaming: false }
+            : m
+        );
+        set({ messages: updated });
+      }
+    } else {
+      // Batch merge succeeded — mark non-deploy confirmations as skipped
+      for (const conf of collectedConfirmations) {
+        if (deployConfs.includes(conf)) continue;
+        const updated = get().messages.map((m) =>
+          m.id === conf.toolMessageId
+            ? { ...m, content: 'Skipped: only one transaction can be confirmed at a time.', isStreaming: false }
+            : m
+        );
+        set({ messages: updated });
+      }
     }
 
     return { shouldContinue: false };
