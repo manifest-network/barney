@@ -15,7 +15,9 @@ import {
   getLeaseConnectionInfo,
   createSignMessage,
   createAuthToken,
+  ProviderApiError,
 } from '../api/provider-api';
+import { validateProviderUrl } from '../api/providerFetch';
 import {
   getAppByLease,
   addApp,
@@ -26,8 +28,9 @@ import {
   type AppEntry,
   type AppStatus,
 } from './appRegistry';
-import { deriveAppNameFromImage } from '../ai/manifest';
+import { deriveAppNameFromImage, isStackManifest } from '../ai/manifest';
 import { logError } from '../utils/errors';
+import { isValidFqdn } from '../utils/connection';
 import { LEASE_DISCOVERY_MAX_CONCURRENT } from '../config/constants';
 import type { SignArbitraryFn } from '../ai/toolExecutor/types';
 
@@ -49,6 +52,19 @@ function getInFlightSet(address: string): Set<string> {
     enrichmentInFlight.set(address, set);
   }
   return set;
+}
+
+/** Simple IPv4 pattern for host validation. */
+const IP_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/** Validate that a host string is a reasonable hostname or IPv4 address. */
+function isValidHost(host: string): boolean {
+  return isValidFqdn(host) || IP_RE.test(host);
+}
+
+/** Check whether an error is a provider API 401/403 authentication failure. */
+function isAuthError(err: unknown): boolean {
+  return err instanceof ProviderApiError && (err.status === 401 || err.status === 403);
 }
 
 /**
@@ -180,11 +196,17 @@ async function fetchLeaseData(
 ): Promise<EnrichmentData> {
   const updates: Partial<Omit<AppEntry, 'leaseUuid'>> = {};
 
-  // 1. Fetch provider → get apiUrl
+  // 1. Fetch provider → get apiUrl (with SSRF validation)
   try {
     const provider = await getProvider(lease.providerUuid);
     if (provider?.apiUrl) {
-      updates.providerUrl = provider.apiUrl;
+      try {
+        validateProviderUrl(provider.apiUrl);
+        updates.providerUrl = provider.apiUrl;
+      } catch {
+        logError(`leaseDiscovery.fetchLeaseData.unsafeProviderUrl[${lease.providerUuid}]`,
+          new Error(`Provider URL failed SSRF validation: ${provider.apiUrl}`));
+      }
     }
   } catch (error) {
     logError(`leaseDiscovery.fetchLeaseData.getProvider[${lease.providerUuid}]`, error);
@@ -196,7 +218,7 @@ async function fetchLeaseData(
     try {
       const sku = await getSKU(skuUuid);
       if (sku?.name) {
-        updates.size = sku.name.replace(/^docker-/, '');
+        updates.size = sku.name.replace(/^docker-/, '').replace(/[^a-z0-9-]/g, '');
       }
     } catch (error) {
       logError(`leaseDiscovery.fetchLeaseData.getSKU[${skuUuid}]`, error);
@@ -218,6 +240,12 @@ async function fetchLeaseData(
         getLeaseConnectionInfo(updates.providerUrl, lease.uuid, authToken),
       ]);
 
+      // If both Fred calls failed with auth errors, skip the fallback — same token will be rejected
+      if (releasesResult.status === 'rejected' && isAuthError(releasesResult.reason)) {
+        logError(`leaseDiscovery.fetchLeaseData.authRejected[${lease.uuid}]`, releasesResult.reason);
+        return { leaseUuid: lease.uuid, updates };
+      }
+
       // Log individual Fred API failures
       if (releasesResult.status === 'rejected') {
         logError('leaseDiscovery.fetchLeaseData.getLeaseReleases', releasesResult.reason);
@@ -236,17 +264,21 @@ async function fetchLeaseData(
         if (latestRelease.manifest) {
           try {
             const parsed = JSON.parse(latestRelease.manifest);
-            updates.manifest = sanitizeManifestForStorage(JSON.stringify(parsed, null, 2));
+            const isValidManifest = (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) &&
+              (typeof parsed.image === 'string' || isStackManifest(parsed));
+            if (isValidManifest) {
+              updates.manifest = sanitizeManifestForStorage(JSON.stringify(parsed, null, 2));
+            }
           } catch (error) {
             logError('leaseDiscovery.fetchLeaseData.parseManifest', error);
           }
         }
       }
 
-      // Extract connection details
+      // Extract connection details (validate host before storing)
       if (connectionResult.status === 'fulfilled') {
         const conn = connectionResult.value?.connection;
-        if (conn?.host) {
+        if (conn?.host && isValidHost(conn.host)) {
           updates.connection = {
             host: conn.host,
             fqdn: conn.fqdn,
@@ -266,7 +298,7 @@ async function fetchLeaseData(
         authToken = await getAuthToken(address, lease.uuid, signArbitrary);
       }
       const info = await getLeaseInfo(updates.providerUrl, lease.uuid, authToken);
-      if (info) {
+      if (info?.host && isValidHost(info.host)) {
         updates.connection = {
           host: info.host,
           ports: info.ports,

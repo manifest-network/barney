@@ -25,17 +25,26 @@ vi.mock('../api/fred', () => ({
   getLeaseInfo: vi.fn(),
 }));
 
-vi.mock('../api/provider-api', () => ({
-  getLeaseConnectionInfo: vi.fn(),
-  createSignMessage: vi.fn(
-    (tenant: string, leaseUuid: string, ts: number) => `${tenant}:${leaseUuid}:${ts}`
-  ),
-  createAuthToken: vi.fn(() => 'mock-auth-token'),
+vi.mock('../api/provider-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api/provider-api')>();
+  return {
+    ...actual,
+    getLeaseConnectionInfo: vi.fn(),
+    createSignMessage: vi.fn(
+      (tenant: string, leaseUuid: string, ts: number) => `${tenant}:${leaseUuid}:${ts}`
+    ),
+    createAuthToken: vi.fn(() => 'mock-auth-token'),
+  };
+});
+
+vi.mock('../api/providerFetch', () => ({
+  validateProviderUrl: vi.fn(),
 }));
 
 const { getProvider, getSKU } = await import('../api/sku');
 const { getLeaseReleases, getLeaseInfo } = await import('../api/fred');
 const { getLeaseConnectionInfo } = await import('../api/provider-api');
+const { validateProviderUrl } = await import('../api/providerFetch');
 
 const ADDR = 'manifest1test';
 
@@ -930,6 +939,361 @@ describe('leaseDiscovery', () => {
       expect(app?.providerUrl).toBe('');
       expect(getLeaseReleases).not.toHaveBeenCalled();
       expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
+    });
+
+    // --- Security fix tests ---
+
+    it('rejects provider URL that fails SSRF validation', async () => {
+      const { logError } = await import('../utils/errors');
+      const lease = makeLease({ uuid: 'ssrf-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-ssrf-uui',
+        leaseUuid: 'ssrf-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'http://169.254.169.254/metadata',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+
+      // validateProviderUrl throws for unsafe URLs
+      (validateProviderUrl as Mock).mockImplementation(() => {
+        throw new Error('Provider API URL cannot point to private/internal addresses');
+      });
+
+      (getSKU as Mock).mockResolvedValue(null);
+
+      const leaseMap = new Map([['ssrf-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['ssrf-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'ssrf-uuid');
+      // Provider URL should NOT be stored
+      expect(app?.providerUrl).toBe('');
+      // Should log the SSRF validation failure
+      expect(logError).toHaveBeenCalledWith(
+        expect.stringContaining('unsafeProviderUrl'),
+        expect.any(Error),
+      );
+      // No Fred calls since providerUrl wasn't stored
+      expect(getLeaseReleases).not.toHaveBeenCalled();
+    });
+
+    it('stores provider URL when SSRF validation passes', async () => {
+      const lease = makeLease({ uuid: 'safe-url-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-safe-url',
+        leaseUuid: 'safe-url-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+
+      // validateProviderUrl succeeds (no throw)
+      (validateProviderUrl as Mock).mockImplementation(() => {});
+
+      (getSKU as Mock).mockResolvedValue(null);
+
+      const leaseMap = new Map([['safe-url-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['safe-url-uuid'], leaseMap);
+
+      const app = getAppByLease(ADDR, 'safe-url-uuid');
+      expect(app?.providerUrl).toBe('https://fred.example.com');
+    });
+
+    it('sanitizes special characters from SKU name', async () => {
+      const lease = makeLease({ uuid: 'sku-sanitize-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-sku-sani',
+        leaseUuid: 'sku-sanitize-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue(null);
+      (getSKU as Mock).mockResolvedValue({
+        uuid: 'sku-uuid-1',
+        name: 'docker-micro<script>alert(1)</script>',
+        providerUuid: 'prov-uuid-1',
+        active: true,
+        basePrice: { denom: 'upwr', amount: '100' },
+        unit: 0,
+      });
+
+      const leaseMap = new Map([['sku-sanitize-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['sku-sanitize-uuid'], leaseMap);
+
+      const app = getAppByLease(ADDR, 'sku-sanitize-uuid');
+      // Only lowercase alphanumeric and hyphens should remain
+      expect(app?.size).toBe('microscriptalert1script');
+      expect(app?.size).not.toMatch(/[<>()]/);
+    });
+
+    it('rejects manifest without image or services fields', async () => {
+      const lease = makeLease({ uuid: 'bad-struct-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-bad-stru',
+        leaseUuid: 'bad-struct-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+      (validateProviderUrl as Mock).mockImplementation(() => {});
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'bad-struct-uuid',
+        tenant: ADDR,
+        provider_uuid: 'prov-uuid-1',
+        releases: [{
+          version: 1,
+          image: 'redis:8.4',
+          status: 'active',
+          created_at: '2025-01-01T00:00:00Z',
+          manifest: '{"env":{"FOO":"bar"}}',
+        }],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('no connection'));
+
+      const leaseMap = new Map([['bad-struct-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['bad-struct-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'bad-struct-uuid');
+      // Manifest should NOT be stored (no image or services field)
+      expect(app?.manifest).toBeUndefined();
+      // Name should still be derived from the release image
+      expect(app?.name).toBe('redis-8-4');
+    });
+
+    it('accepts manifest with valid image field', async () => {
+      const lease = makeLease({ uuid: 'good-manifest-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-good-man',
+        leaseUuid: 'good-manifest-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+      (validateProviderUrl as Mock).mockImplementation(() => {});
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'good-manifest-uuid',
+        tenant: ADDR,
+        provider_uuid: 'prov-uuid-1',
+        releases: [{
+          version: 1,
+          image: 'redis:8.4',
+          status: 'active',
+          created_at: '2025-01-01T00:00:00Z',
+          manifest: '{"image":"redis:8.4","ports":["6379/tcp"]}',
+        }],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('no connection'));
+
+      const leaseMap = new Map([['good-manifest-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['good-manifest-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'good-manifest-uuid');
+      expect(app?.manifest).toBeDefined();
+      const parsed = JSON.parse(app!.manifest!);
+      expect(parsed.image).toBe('redis:8.4');
+    });
+
+    it('rejects connection with invalid host', async () => {
+      const lease = makeLease({ uuid: 'bad-host-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-bad-host',
+        leaseUuid: 'bad-host-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+      (validateProviderUrl as Mock).mockImplementation(() => {});
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'bad-host-uuid',
+        tenant: ADDR,
+        provider_uuid: 'prov-uuid-1',
+        releases: [],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockResolvedValue({
+        lease_uuid: 'bad-host-uuid',
+        tenant: ADDR,
+        provider_uuid: 'prov-uuid-1',
+        connection: {
+          host: 'javascript:alert(1)',
+          ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 30080 } },
+        },
+      } satisfies LeaseConnectionResponse);
+      // Fallback also returns invalid host to verify both paths validate
+      (getLeaseInfo as Mock).mockResolvedValue({
+        host: 'javascript:alert(1)',
+        ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 30080 } },
+      });
+
+      const leaseMap = new Map([['bad-host-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['bad-host-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'bad-host-uuid');
+      // Connection should NOT be stored (invalid host in both paths)
+      expect(app?.connection).toBeUndefined();
+    });
+
+    it('rejects fallback connection with invalid host', async () => {
+      const lease = makeLease({ uuid: 'bad-fallback-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-bad-fall',
+        leaseUuid: 'bad-fallback-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+      (validateProviderUrl as Mock).mockImplementation(() => {});
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'bad-fallback-uuid',
+        tenant: ADDR,
+        provider_uuid: 'prov-uuid-1',
+        releases: [],
+      } satisfies LeaseReleasesResponse);
+      // Primary connection fails → triggers fallback
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('no connection'));
+      // Fallback returns invalid host
+      (getLeaseInfo as Mock).mockResolvedValue({
+        host: '<script>alert(1)</script>',
+        ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 30080 } },
+      });
+
+      const leaseMap = new Map([['bad-fallback-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['bad-fallback-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'bad-fallback-uuid');
+      // Connection should NOT be stored (invalid host in fallback)
+      expect(app?.connection).toBeUndefined();
+    });
+
+    it('short-circuits fallback when releases fail with auth error', async () => {
+      const { ProviderApiError } = await import('../api/provider-api');
+      const { logError } = await import('../utils/errors');
+      const lease = makeLease({ uuid: 'auth-fail-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-auth-fai',
+        leaseUuid: 'auth-fail-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+      (validateProviderUrl as Mock).mockImplementation(() => {});
+      (getSKU as Mock).mockResolvedValue(null);
+
+      // Releases fail with 403 auth error
+      (getLeaseReleases as Mock).mockRejectedValue(
+        new ProviderApiError(403, 'Forbidden')
+      );
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(
+        new ProviderApiError(403, 'Forbidden')
+      );
+
+      const leaseMap = new Map([['auth-fail-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['auth-fail-uuid'], leaseMap, mockSignArbitrary);
+
+      // Should NOT call getLeaseInfo fallback — auth errors short-circuit
+      expect(getLeaseInfo).not.toHaveBeenCalled();
+      // Should log the auth failure with distinct tag
+      expect(logError).toHaveBeenCalledWith(
+        expect.stringContaining('authRejected'),
+        expect.any(ProviderApiError),
+      );
+    });
+
+    it('does NOT short-circuit fallback for non-auth errors', async () => {
+      const lease = makeLease({ uuid: 'non-auth-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-non-auth',
+        leaseUuid: 'non-auth-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+      (validateProviderUrl as Mock).mockImplementation(() => {});
+      (getSKU as Mock).mockResolvedValue(null);
+
+      // Both fail with generic errors (not auth)
+      (getLeaseReleases as Mock).mockRejectedValue(new Error('timeout'));
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('timeout'));
+      // Fallback succeeds
+      (getLeaseInfo as Mock).mockResolvedValue({
+        host: '10.0.0.1',
+        ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 30080 } },
+      });
+
+      const leaseMap = new Map([['non-auth-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['non-auth-uuid'], leaseMap, mockSignArbitrary);
+
+      // Should still call getLeaseInfo fallback for non-auth errors
+      expect(getLeaseInfo).toHaveBeenCalledTimes(1);
+      const app = getAppByLease(ADDR, 'non-auth-uuid');
+      expect(app?.connection?.host).toBe('10.0.0.1');
     });
   });
 
