@@ -159,9 +159,10 @@ function uniquifyName(baseName: string, existingNames: Set<string>): string {
  * already tracked in the registry.
  */
 export function discoverUnknownLeases(address: string, allLeases: Lease[]): string[] {
+  const apps = getApps(address);
   const discovered: string[] = [];
-  const existingNames = getExistingNames(address);
-  const trackedLeaseUuids = new Set(getApps(address).map((a) => a.leaseUuid));
+  const existingNames = new Set(apps.map((a) => a.name));
+  const trackedLeaseUuids = new Set(apps.map((a) => a.leaseUuid));
 
   for (const lease of allLeases) {
     // Skip terminal states
@@ -371,6 +372,8 @@ export async function enrichDiscoveredLeases(
   leaseMap: Map<string, Lease>,
   signArbitrary?: SignArbitraryFn
 ): Promise<void> {
+  if (leaseUuids.length === 0) return;
+
   // Filter out leases already being enriched (scoped per address)
   const inFlight = getInFlightSet(address);
   const toEnrich = leaseUuids.filter((uuid) => {

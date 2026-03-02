@@ -137,7 +137,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     } catch (error) {
       logError('AppsSidebar.refresh.estimate', error);
     }
-  }, [address, isWalletConnected, wrappedSignArbitrary]);
+  }, [address, isWalletConnected, signArbitrary, wrappedSignArbitrary]);
 
   useEffect(() => {
     // Initial fetch — refresh is async (setState calls happen after awaits, not synchronously)
