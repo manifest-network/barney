@@ -60,7 +60,11 @@ export function deriveAppNameFromImage(image: string): string {
     .slice(0, MAX_APP_NAME_LENGTH)
     .replace(/-+$/, '');
 
-  return name || 'app';
+  if (!name) {
+    logError('manifest.deriveAppNameFromImage', new Error(`Could not derive name from image: "${image}"`));
+    return 'app';
+  }
+  return name;
 }
 
 /**

@@ -171,6 +171,21 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     }
   }, [runningApps.length]);
 
+  // Pre-parse stack service counts so we don't JSON.parse on every render cycle
+  const stackServiceCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const app of apps) {
+      if (!app.manifest) continue;
+      try {
+        const m = JSON.parse(app.manifest);
+        if (m.services && typeof m.services === 'object' && !Array.isArray(m.services)) {
+          counts.set(app.leaseUuid, Object.keys(m.services).length);
+        }
+      } catch (error) { logError('AppsSidebar.parseManifest', error); }
+    }
+    return counts;
+  }, [apps]);
+
   const recentDeploys = useMemo(() =>
     apps
       .filter((a) => a.status === 'stopped' || a.status === 'failed')
@@ -271,16 +286,8 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                 />
                 <span className="apps-sidebar__app-name">{app.name}</span>
                 {(() => {
-                  // Show service count badge for stack deployments
-                  if (app.manifest) {
-                    try {
-                      const m = JSON.parse(app.manifest);
-                      if (m.services && typeof m.services === 'object' && !Array.isArray(m.services)) {
-                        const count = Object.keys(m.services).length;
-                        if (count > 1) return <span className="apps-sidebar__app-size">{count} svcs</span>;
-                      }
-                    } catch (error) { logError('AppsSidebar.parseManifest', error); }
-                  }
+                  const svcCount = stackServiceCounts.get(app.leaseUuid);
+                  if (svcCount && svcCount > 1) return <span className="apps-sidebar__app-size">{svcCount} svcs</span>;
                   return <span className="apps-sidebar__app-size">{app.size}</span>;
                 })()}
               </button>

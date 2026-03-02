@@ -81,7 +81,8 @@ function normalizeHost(host: string): string {
     try {
       const { hostname } = new URL(trimmed);
       return (isValidFqdn(hostname) || isValidIPv4(hostname)) ? hostname : '';
-    } catch {
+    } catch (error) {
+      logError('leaseDiscovery.normalizeHost', error);
       return '';
     }
   }
@@ -238,9 +239,8 @@ async function fetchLeaseData(
       try {
         validateProviderUrl(provider.apiUrl);
         updates.providerUrl = provider.apiUrl;
-      } catch {
-        logError(`leaseDiscovery.fetchLeaseData.unsafeProviderUrl[${lease.providerUuid}]`,
-          new Error(`Provider URL failed SSRF validation: ${provider.apiUrl}`));
+      } catch (error) {
+        logError(`leaseDiscovery.fetchLeaseData.unsafeProviderUrl[${lease.providerUuid}]`, error);
       }
     }
   } catch (error) {
@@ -265,6 +265,7 @@ async function fetchLeaseData(
 
   // 3. If signArbitrary is available, fetch releases and connection info
   let authToken: string | undefined;
+  let connectionAuthFailed = false;
   if (signArbitrary && updates.providerUrl) {
     try {
       authToken = await getAuthToken(address, lease.uuid, signArbitrary);
@@ -293,6 +294,7 @@ async function fetchLeaseData(
       if (releasesResult.status === 'rejected') {
         logError('leaseDiscovery.fetchLeaseData.getLeaseReleases', releasesResult.reason);
       }
+      connectionAuthFailed = connectionResult.status === 'rejected' && isAuthError(connectionResult.reason);
       if (connectionResult.status === 'rejected') {
         logError('leaseDiscovery.fetchLeaseData.getLeaseConnectionInfo', connectionResult.reason);
       }
@@ -319,36 +321,43 @@ async function fetchLeaseData(
       }
 
       // Extract connection details (normalize host — strip scheme before validating/storing)
-      if (connectionResult.status === 'fulfilled') {
-        const conn = connectionResult.value?.connection;
-        const host = conn?.host ? normalizeHost(conn.host) : '';
+      if (connectionResult.status === 'fulfilled' && connectionResult.value?.connection) {
+        const conn = connectionResult.value.connection;
+        const host = conn.host ? normalizeHost(conn.host) : '';
         if (host) {
           updates.connection = {
             host,
-            fqdn: conn!.fqdn,
-            ports: conn!.ports,
-            instances: conn!.instances,
-            services: conn!.services,
-            metadata: conn!.metadata,
+            fqdn: conn.fqdn,
+            ports: conn.ports,
+            instances: conn.instances,
+            services: conn.services,
+            metadata: conn.metadata,
           };
+        } else if (conn.host) {
+          logError(`leaseDiscovery.fetchLeaseData.normalizeHost[${lease.uuid}]`,
+            new Error(`Could not normalize provider host "${conn.host}" — connection details discarded`));
         }
       }
     }
   }
 
   // 4. Fallback: try getLeaseInfo for basic connection details if we didn't get them above
-  if (signArbitrary && updates.providerUrl && !updates.connection) {
+  //    Skip if the connection endpoint already rejected with an auth error — same token will fail again.
+  if (signArbitrary && updates.providerUrl && !updates.connection && !connectionAuthFailed) {
     try {
       if (!authToken) {
         authToken = await getAuthToken(address, lease.uuid, signArbitrary);
       }
       const info = await getLeaseInfo(updates.providerUrl, lease.uuid, authToken);
-      const fallbackHost = info?.host ? normalizeHost(info.host) : '';
+      const fallbackHost = info.host ? normalizeHost(info.host) : '';
       if (fallbackHost) {
         updates.connection = {
           host: fallbackHost,
-          ports: info!.ports,
+          ports: info.ports,
         };
+      } else if (info.host) {
+        logError(`leaseDiscovery.fetchLeaseData.normalizeHost.fallback[${lease.uuid}]`,
+          new Error(`Could not normalize fallback host "${info.host}" — connection details discarded`));
       }
     } catch (error) {
       logError('leaseDiscovery.fetchLeaseData.getLeaseInfo', error);
