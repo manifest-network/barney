@@ -16,7 +16,7 @@ import type { PayloadAttachment } from './toolExecutor/types';
 /**
  * Derive an app name from a Docker image reference.
  * Strips registry prefix and digest; includes meaningful tags (not "latest").
- * Normalizes to valid app name chars (lowercase alphanumeric + hyphens, max 32).
+ * Normalizes to valid app name chars (lowercase alphanumeric + hyphens, up to MAX_APP_NAME_LENGTH).
  *
  * Examples:
  *   "redis:8.4"                        → "redis-8-4"

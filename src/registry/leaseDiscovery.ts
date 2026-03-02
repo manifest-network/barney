@@ -329,6 +329,7 @@ async function fetchLeaseData(
             ports: conn!.ports,
             instances: conn!.instances,
             services: conn!.services,
+            metadata: conn!.metadata,
           };
         }
       }
