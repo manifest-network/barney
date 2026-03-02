@@ -44,7 +44,7 @@ export function toChatApiMessages(msgs: ChatMessage[], address: string | undefin
           tool_call_id: m.toolCallId,
         };
       }
-      // Some backends (e.g. litellm) require assistant messages with tool_calls
+      // Some OpenAI-compatible backends require assistant messages with tool_calls
       // to have non-empty content. Use a placeholder when content is empty.
       const content = (m.toolCalls?.length && !m.content) ? 'Calling tools.' : m.content;
       return {

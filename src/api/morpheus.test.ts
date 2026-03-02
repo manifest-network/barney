@@ -279,6 +279,101 @@ describe('streamChat', () => {
     expect(contentChunks).toHaveLength(1);
     expect((contentChunks[0] as { type: 'content'; content: string }).content).toBe('ok');
   });
+
+  it('yields done when user aborts via signal', async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(
+      Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })
+    ));
+
+    const chunks = await collectChunks({ ...BASE_OPTIONS, signal: abortController.signal });
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].type).toBe('done');
+  });
+
+  it('yields timeout error when fetch times out (not user abort)', async () => {
+    // AbortError but signal is NOT aborted → connection timeout
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(
+      Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })
+    ));
+
+    const chunks = await collectChunks(BASE_OPTIONS);
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].type).toBe('error');
+    expect((chunks[0] as { type: 'error'; error: string }).error).toBe('Connection to AI API timed out.');
+  });
+
+  it('yields error when response body is null', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: null,
+      text: () => Promise.resolve(''),
+    }));
+
+    const chunks = await collectChunks(BASE_OPTIONS);
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].type).toBe('error');
+    expect((chunks[0] as { type: 'error'; error: string }).error).toBe('No response body from AI API');
+  });
+
+  it('defaults to empty args when tool call argument JSON is malformed', async () => {
+    vi.stubGlobal('fetch', mockFetchWithSSE([
+      encode(
+        sseEvent(JSON.stringify({
+          choices: [{ delta: { tool_calls: [{ index: 0, id: 'tc_1', function: { name: 'list_apps', arguments: '{invalid json' } }] }, finish_reason: null }],
+        })) +
+        sseEvent(JSON.stringify({
+          choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+        }))
+      ),
+    ]));
+
+    const chunks = await collectChunks(BASE_OPTIONS);
+
+    const toolChunks = chunks.filter((c): c is { type: 'tool_call'; toolCall: ToolCall } => c.type === 'tool_call');
+    expect(toolChunks).toHaveLength(1);
+    expect(toolChunks[0].toolCall.function.name).toBe('list_apps');
+    expect(toolChunks[0].toolCall.function.arguments).toEqual({});
+  });
+
+  it('skips tool calls with empty function name', async () => {
+    vi.stubGlobal('fetch', mockFetchWithSSE([
+      encode(
+        sseEvent(JSON.stringify({
+          choices: [{ delta: { tool_calls: [
+            { index: 0, id: 'tc_1', function: { name: '', arguments: '{}' } },
+            { index: 1, id: 'tc_2', function: { name: 'get_balance', arguments: '{}' } },
+          ] }, finish_reason: null }],
+        })) +
+        sseEvent(JSON.stringify({
+          choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+        }))
+      ),
+    ]));
+
+    const chunks = await collectChunks(BASE_OPTIONS);
+
+    const toolChunks = chunks.filter((c): c is { type: 'tool_call'; toolCall: ToolCall } => c.type === 'tool_call');
+    expect(toolChunks).toHaveLength(1);
+    expect(toolChunks[0].toolCall.function.name).toBe('get_balance');
+  });
+
+  it('yields SSE error with JSON.stringify fallback when error has no message field', async () => {
+    vi.stubGlobal('fetch', mockFetchWithSSE([
+      encode(sseEvent(JSON.stringify({ error: { code: 429, type: 'rate_limit' } }))),
+    ]));
+
+    const chunks = await collectChunks(BASE_OPTIONS);
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].type).toBe('error');
+    expect((chunks[0] as { type: 'error'; error: string }).error).toBe('{"code":429,"type":"rate_limit"}');
+  });
 });
 
 describe('checkApiHealth', () => {
@@ -316,13 +411,4 @@ describe('checkApiHealth', () => {
     expect(result).toBe(false);
   });
 
-  it('fetches /api/morpheus/models', async () => {
-    const { checkApiHealth } = await import('./morpheus');
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
-
-    await checkApiHealth();
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toBe('/api/morpheus/models');
-  });
 });

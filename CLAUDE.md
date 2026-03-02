@@ -78,7 +78,7 @@ The AI assistant uses a 3-layer architecture:
    - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
    - **Internal**: `batch_deploy` — orchestrates multi-app deploys from the UI (not exposed to AI, used by `requestBatchDeploy` in AIContext)
 
-### 15 Composite Tools
+### 16 Composite Tools
 
 | Tool | Type | Description |
 |------|------|-------------|
@@ -95,6 +95,7 @@ The AI assistant uses a 3-layer architecture:
 | `lease_history(state?, limit?, offset?)` | Query | Paginated on-chain lease history with state filtering |
 | `app_diagnostics(app_name)` | Query | Provision diagnostics: status, fail count, last error |
 | `app_releases(app_name)` | Query | Release/version history for an app |
+| `request_faucet()` | Query | Request free MFX and PWR tokens from the faucet (24-hour cooldown per token) |
 | `cosmos_query(module, subcommand, args?)` | Query | Raw chain query escape hatch |
 | `cosmos_tx(module, subcommand, args)` | TX | Raw chain TX escape hatch |
 

@@ -71,6 +71,9 @@ docker run -e PUBLIC_REST_URL=https://rest.example.com \
 | `PUBLIC_WEB3AUTH_CLIENT_ID` | `YOUR_WEB3AUTH_CLIENT_ID` | Web3Auth client ID ([dashboard](https://dashboard.web3auth.io)) |
 | `PUBLIC_WEB3AUTH_NETWORK` | `sapphire_devnet` | Web3Auth network (`sapphire_devnet`, `sapphire_mainnet`, `testnet`, `mainnet`) |
 | `PUBLIC_PWR_DENOM` | Factory address | PWR token denom |
+| `PUBLIC_GAS_PRICE` | `0.0025umfx` | Gas price for transaction fees |
+| `PUBLIC_CHAIN_ID` | `manifest-ledger-beta` | Chain ID for cosmos-kit |
+| `PUBLIC_FAUCET_URL` | _(empty)_ | Faucet endpoint URL (enables auto-refill when set) |
 
 Built-in flags `import.meta.env.DEV` / `import.meta.env.PROD` remain build-time only and are unaffected.
 
@@ -123,7 +126,7 @@ See [CLAUDE.md](./CLAUDE.md) for detailed architecture, tool definitions, and co
 1. **Connect** a wallet via Web3Auth social login
 2. **Auto-refill** — on connect and every 60 seconds, the `useAutoRefill` hook checks MFX, PWR, and credit balances. When below threshold it requests faucet tokens and auto-funds credits (faucet-enabled deployments only; cooldowns prevent excessive requests)
 3. **Chat** with the AI assistant to deploy, manage, and monitor apps
-4. The AI calls 15 composite tools that map to on-chain transactions and queries
+4. The AI calls 16 composite tools that map to on-chain transactions and queries
 5. AI-initiated transaction tools require explicit user confirmation before broadcasting. The `useAutoRefill` background funding (`fundCredit`) is the sole exception — it runs automatically with small fixed amounts, gated by balance thresholds and cooldown timers
 6. Deploy progress is tracked in real-time through provider status polling
 

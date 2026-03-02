@@ -450,6 +450,52 @@ describe('sendMessage', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Pending payload / file attachment
+  // -----------------------------------------------------------------------
+  describe('pending payload', () => {
+    it('appends file-attached note when user provides text with payload', async () => {
+      const store = setupStore({
+        pendingPayload: { filename: 'deploy.yaml', hash: 'abc', data: new Uint8Array() },
+      });
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult({ content: 'Deploying...' }));
+
+      await store.getState().sendMessage('deploy this app');
+
+      const state = store.getState();
+      const userMsg = state.messages.find(m => m.role === 'user');
+      expect(userMsg).toBeDefined();
+      expect(userMsg!.content).toBe('deploy this app (File attached: deploy.yaml)');
+    });
+
+    it('generates default deploy message when no user text with payload', async () => {
+      const store = setupStore({
+        pendingPayload: { filename: 'stack.json', hash: 'def', data: new Uint8Array() },
+      });
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult({ content: 'Deploying...' }));
+
+      await store.getState().sendMessage('');
+
+      // Empty input + payload → effectiveContent = "Deploy this (File attached: stack.json)"
+      // validateUserInput returns the trimmed string, so message should be created
+      const state = store.getState();
+      const userMsg = state.messages.find(m => m.role === 'user');
+      expect(userMsg).toBeDefined();
+      expect(userMsg!.content).toBe('Deploy this (File attached: stack.json)');
+    });
+
+    it('clears pendingPayload in finally block', async () => {
+      const store = setupStore({
+        pendingPayload: { filename: 'app.yaml', hash: 'xyz', data: new Uint8Array() },
+      });
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult());
+
+      await store.getState().sendMessage('deploy');
+
+      expect(store.getState().pendingPayload).toBeNull();
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Message sequence
   // -----------------------------------------------------------------------
   describe('message sequence', () => {

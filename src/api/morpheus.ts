@@ -54,7 +54,7 @@ export interface StreamChatOptions {
  */
 export type StreamChunk =
   | { type: 'content'; content: string }
-  | { type: 'thinking'; content: string }
+  | { type: 'thinking'; content: string } // Reserved for models that emit chain-of-thought reasoning (not currently used by Morpheus)
   | { type: 'tool_call'; toolCall: ToolCall }
   | { type: 'done' }
   | { type: 'error'; error: string };

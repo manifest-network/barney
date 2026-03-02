@@ -209,10 +209,9 @@ async function mergeBatchDeployConfirmations(
         return argName === entries[0].app_name || (argName && entries[0].app_name.startsWith(argName));
       }
     );
-    if (surviving) {
-      setSingleConfirmation(get, set, surviving);
-      return true;
-    }
+    // Fallback to first deploy conf if dedup renamed beyond recognition
+    setSingleConfirmation(get, set, surviving ?? deployConfs[0]);
+    return true;
   }
 
   // Build batch confirmation description
