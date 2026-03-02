@@ -1298,6 +1298,88 @@ describe('leaseDiscovery', () => {
       expect(app?.connection?.host).toBe('10.0.0.1');
     });
 
+    it('normalizes host with port from getLeaseConnectionInfo (scheme + port)', async () => {
+      const lease = makeLease({ uuid: 'port-host-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-port-hos',
+        leaseUuid: 'port-host-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+      (validateProviderUrl as Mock).mockImplementation(() => {});
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'port-host-uuid',
+        tenant: ADDR,
+        provider_uuid: 'prov-uuid-1',
+        releases: [],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockResolvedValue({
+        lease_uuid: 'port-host-uuid',
+        tenant: ADDR,
+        provider_uuid: 'prov-uuid-1',
+        connection: {
+          host: 'https://app.example.com:8443',
+          ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 30080 } },
+        },
+      } satisfies LeaseConnectionResponse);
+
+      const leaseMap = new Map([['port-host-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['port-host-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'port-host-uuid');
+      // Host should be bare hostname — port stripped (lives in connection.ports)
+      expect(app?.connection?.host).toBe('app.example.com');
+    });
+
+    it('normalizes bare host with port from getLeaseInfo fallback', async () => {
+      const lease = makeLease({ uuid: 'bare-port-uuid' });
+      addApp(ADDR, makeApp({
+        name: 'lease-bare-por',
+        leaseUuid: 'bare-port-uuid',
+        providerUrl: '',
+        size: 'unknown',
+      }));
+
+      (getProvider as Mock).mockResolvedValue({
+        uuid: 'prov-uuid-1',
+        apiUrl: 'https://fred.example.com',
+        address: 'manifest1provider',
+        payoutAddress: 'manifest1payout',
+        metaHash: new Uint8Array(),
+        active: true,
+      });
+      (validateProviderUrl as Mock).mockImplementation(() => {});
+      (getSKU as Mock).mockResolvedValue(null);
+      (getLeaseReleases as Mock).mockResolvedValue({
+        lease_uuid: 'bare-port-uuid',
+        tenant: ADDR,
+        provider_uuid: 'prov-uuid-1',
+        releases: [],
+      } satisfies LeaseReleasesResponse);
+      (getLeaseConnectionInfo as Mock).mockRejectedValue(new Error('no connection'));
+      (getLeaseInfo as Mock).mockResolvedValue({
+        host: '10.0.0.1:8080',
+        ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 30080 } },
+      });
+
+      const leaseMap = new Map([['bare-port-uuid', lease]]);
+      await enrichDiscoveredLeases(ADDR, ['bare-port-uuid'], leaseMap, mockSignArbitrary);
+
+      const app = getAppByLease(ADDR, 'bare-port-uuid');
+      // Host should be bare IP — port stripped
+      expect(app?.connection?.host).toBe('10.0.0.1');
+    });
+
     it('keeps size as unknown when SKU name sanitizes to empty string', async () => {
       const lease = makeLease({ uuid: 'empty-sku-uuid' });
       addApp(ADDR, makeApp({

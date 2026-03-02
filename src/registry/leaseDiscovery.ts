@@ -65,14 +65,33 @@ function isValidIPv4(host: string): boolean {
   return true;
 }
 
-/** Strip URL scheme prefix (e.g. "https://app.example.com" → "app.example.com"). */
-function stripScheme(host: string): string {
-  return host.replace(/^https?:\/\//, '');
-}
-
-/** Normalize a host string: strip scheme, validate, return bare host or empty string. */
+/**
+ * Normalize a host string to a bare hostname suitable for registry storage.
+ * Handles scheme-prefixed URLs (via URL parser), bare hosts with trailing
+ * ports/paths, and plain hostnames. Ports are not preserved — they live in
+ * `connection.ports`. Returns empty string for anything that can't be reduced
+ * to a valid FQDN or IPv4 address.
+ */
 function normalizeHost(host: string): string {
-  const bare = stripScheme(host);
+  const trimmed = host.trim();
+  if (!trimmed) return '';
+
+  // Scheme present — use URL parser to extract hostname
+  if (/^https?:\/\//.test(trimmed)) {
+    try {
+      const { hostname } = new URL(trimmed);
+      return (isValidFqdn(hostname) || isValidIPv4(hostname)) ? hostname : '';
+    } catch {
+      return '';
+    }
+  }
+
+  // No scheme: strip path/query/fragment, then strip trailing numeric port
+  const withoutPath = trimmed.split(/[/?#]/)[0];
+  const lastColon = withoutPath.lastIndexOf(':');
+  const bare = (lastColon !== -1 && /^\d+$/.test(withoutPath.slice(lastColon + 1)))
+    ? withoutPath.slice(0, lastColon)
+    : withoutPath;
   return (isValidFqdn(bare) || isValidIPv4(bare)) ? bare : '';
 }
 
