@@ -93,11 +93,10 @@ export default defineConfig({
           secure: true,
           pathRewrite: { '^/api/morpheus': upstreamPath },
           // Fast-fail when no API key is configured (mirrors nginx 503 guard)
-          bypass: (_req: unknown, res: { writeHead: (s: number, h?: Record<string, string>) => void; end: (b?: string) => void }) => {
+          bypass: (_req: unknown, res: { writeHead: (s: number, h?: Record<string, string>) => void; end: (b?: string) => void }): undefined => {
             if (!morpheusApiKey) {
               res.writeHead(503, { 'Content-Type': 'text/plain' });
               res.end('Morpheus API key (MORPHEUS_API_KEY) not configured');
-              return;
             }
           },
           onProxyReq: (proxyReq: { setHeader: (name: string, value: string) => void }) => {
