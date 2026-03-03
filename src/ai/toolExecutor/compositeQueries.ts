@@ -253,10 +253,7 @@ export async function executeAppStatus(
       image,
       ...(serviceImages ? { serviceImages } : {}),
       url: connectionUrl || appUrl,
-      connection: appConnection,
-      ...(fredStatus?.services ? { services: fredStatus.services } : {}),
       chainState,
-      fredStatus,
       created: new Date(app.createdAt).toISOString(),
     },
   };
