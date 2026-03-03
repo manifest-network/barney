@@ -7,6 +7,9 @@
  *
  * In production, docker/env.sh generates config.js from environment variables
  * at container startup, enabling a single build artifact for all environments.
+ *
+ * Note: MORPHEUS_API_KEY and PUBLIC_MORPHEUS_URL are server-side only
+ * (injected by nginx/dev proxy), never shipped to the browser.
  */
 
 type RuntimeConfigKey =
@@ -14,8 +17,7 @@ type RuntimeConfigKey =
   | 'PUBLIC_RPC_URL'
   | 'PUBLIC_WEB3AUTH_CLIENT_ID'
   | 'PUBLIC_WEB3AUTH_NETWORK'
-  | 'PUBLIC_OLLAMA_URL'
-  | 'PUBLIC_OLLAMA_MODEL'
+  | 'PUBLIC_MORPHEUS_MODEL'
   | 'PUBLIC_PWR_DENOM'
   | 'PUBLIC_GAS_PRICE'
   | 'PUBLIC_CHAIN_ID'
@@ -36,8 +38,7 @@ const BUILD_ENV: RuntimeConfig = {
   PUBLIC_RPC_URL: import.meta.env.PUBLIC_RPC_URL ?? '',
   PUBLIC_WEB3AUTH_CLIENT_ID: import.meta.env.PUBLIC_WEB3AUTH_CLIENT_ID ?? '',
   PUBLIC_WEB3AUTH_NETWORK: import.meta.env.PUBLIC_WEB3AUTH_NETWORK ?? '',
-  PUBLIC_OLLAMA_URL: import.meta.env.PUBLIC_OLLAMA_URL ?? '',
-  PUBLIC_OLLAMA_MODEL: import.meta.env.PUBLIC_OLLAMA_MODEL ?? '',
+  PUBLIC_MORPHEUS_MODEL: import.meta.env.PUBLIC_MORPHEUS_MODEL ?? '',
   PUBLIC_PWR_DENOM: import.meta.env.PUBLIC_PWR_DENOM ?? '',
   PUBLIC_GAS_PRICE: import.meta.env.PUBLIC_GAS_PRICE ?? '',
   PUBLIC_CHAIN_ID: import.meta.env.PUBLIC_CHAIN_ID ?? '',
@@ -49,8 +50,7 @@ const DEFAULTS: RuntimeConfig = {
   PUBLIC_RPC_URL: 'http://localhost:26657',
   PUBLIC_WEB3AUTH_CLIENT_ID: 'YOUR_WEB3AUTH_CLIENT_ID',
   PUBLIC_WEB3AUTH_NETWORK: 'sapphire_devnet',
-  PUBLIC_OLLAMA_URL: 'http://localhost:11434',
-  PUBLIC_OLLAMA_MODEL: 'mistral-small3.2:24b',
+  PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5',
   PUBLIC_PWR_DENOM:
     'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr',
   PUBLIC_GAS_PRICE: '0.0025umfx',
@@ -73,8 +73,7 @@ export const runtimeConfig: Readonly<RuntimeConfig> = Object.freeze({
   PUBLIC_RPC_URL: getConfigValue('PUBLIC_RPC_URL'),
   PUBLIC_WEB3AUTH_CLIENT_ID: getConfigValue('PUBLIC_WEB3AUTH_CLIENT_ID'),
   PUBLIC_WEB3AUTH_NETWORK: getConfigValue('PUBLIC_WEB3AUTH_NETWORK'),
-  PUBLIC_OLLAMA_URL: getConfigValue('PUBLIC_OLLAMA_URL'),
-  PUBLIC_OLLAMA_MODEL: getConfigValue('PUBLIC_OLLAMA_MODEL'),
+  PUBLIC_MORPHEUS_MODEL: getConfigValue('PUBLIC_MORPHEUS_MODEL'),
   PUBLIC_PWR_DENOM: getConfigValue('PUBLIC_PWR_DENOM'),
   PUBLIC_GAS_PRICE: getConfigValue('PUBLIC_GAS_PRICE'),
   PUBLIC_CHAIN_ID: getConfigValue('PUBLIC_CHAIN_ID'),

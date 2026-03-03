@@ -2,11 +2,14 @@
  * Tool execution actions — dispatches tool calls, handles caching and display.
  */
 
-import type { OllamaToolCall } from '../../api/ollama';
+import type { ToolCall } from '../../api/morpheus';
 import { getToolCallDescription, isValidToolName } from '../../ai/tools';
 import { executeTool, type ToolResult } from '../../ai/toolExecutor';
+import { buildPayloadFromManifest, type SingleDeployEntry } from '../../ai/toolExecutor/compositeTransactions';
 import { sanitizeToolArgs } from '../../ai/validation';
 import type { StreamResult } from '../../ai/streamUtils';
+import { logError } from '../../utils/errors';
+import { validateAppName } from '../../registry/appRegistry';
 import type { AIStore } from '../aiStore';
 import {
   generateMessageId,
@@ -25,7 +28,7 @@ export type ProcessToolCallsResult =
 async function handleToolCall(
   get: Get,
   set: Set,
-  toolCall: OllamaToolCall,
+  toolCall: ToolCall,
 ): Promise<ToolResult> {
   if (!isValidToolName(toolCall.function.name)) {
     return { success: false, error: `Unknown tool: ${toolCall.function.name}` };
@@ -61,10 +64,180 @@ async function handleToolCall(
   return result;
 }
 
+/** Collected confirmation from a single tool call. */
+interface CollectedConfirmation {
+  toolCall: ToolCall;
+  toolMessageId: string;
+  result: ToolResult & { requiresConfirmation: true };
+}
+
+/** Set a single pending confirmation on the store. */
+function setSingleConfirmation(
+  get: Get,
+  set: Set,
+  conf: CollectedConfirmation,
+): void {
+  const toolName = conf.result.pendingAction?.toolName || conf.toolCall.function.name;
+  const actionPayload = (toolName === 'deploy_app' || toolName === 'create_lease' || toolName === 'update_app')
+    ? get().pendingPayload ?? undefined
+    : undefined;
+
+  set({
+    pendingConfirmation: {
+      id: generateMessageId(),
+      action: {
+        id: conf.toolCall.id,
+        toolName,
+        args: conf.result.pendingAction?.args || {},
+        description: conf.result.confirmationMessage || 'Confirm action?',
+        payload: actionPayload,
+      },
+      messageId: conf.toolMessageId,
+    },
+  });
+
+  const updated = get().messages.map((m) =>
+    m.id === conf.toolMessageId
+      ? { ...m, content: conf.result.confirmationMessage || 'Awaiting confirmation...', isStreaming: false }
+      : m
+  );
+  set({ messages: updated });
+}
+
+/**
+ * Merge multiple deploy_app confirmations into a single batch_deploy confirmation.
+ * Returns true if at least one entry succeeded and a confirmation was set.
+ * Returns false if all entries failed — caller must avoid setting a single
+ * confirmation for a broken deploy and should instead let the AI stream
+ * continue so it can see the per-entry error messages.
+ */
+async function mergeBatchDeployConfirmations(
+  get: Get,
+  set: Set,
+  deployConfs: CollectedConfirmation[],
+): Promise<boolean> {
+  const entries: SingleDeployEntry[] = [];
+  const address = get().address;
+  const usedNames = new Set<string>();
+  let pendingPayloadUsed = false;
+
+  for (const conf of deployConfs) {
+    const args = conf.result.pendingAction?.args || {};
+    try {
+      // Build payload from stored manifest (image/stack-based deploy path)
+      let payload = typeof args._generatedManifest === 'string'
+        ? await buildPayloadFromManifest(args._generatedManifest)
+        : undefined;
+
+      // Fall back to pending payload from store (file-upload path) — only once
+      if (!payload && !pendingPayloadUsed) {
+        payload = get().pendingPayload ?? undefined;
+        if (payload) pendingPayloadUsed = true;
+      }
+      if (!payload) {
+        throw new Error('Payload missing');
+      }
+
+      // Deduplicate app names within the batch
+      let name = typeof args.app_name === 'string' ? args.app_name : '';
+      if (!name) {
+        throw new Error('App name missing');
+      }
+      if (address && (usedNames.has(name) || validateAppName(name, address) !== null)) {
+        const baseName = name;
+        let suffix = 2;
+        let resolved = false;
+        while (suffix <= 99) {
+          const candidate = `${baseName}-${suffix}`.slice(0, 32);
+          if (!usedNames.has(candidate) && (!address || validateAppName(candidate, address) === null)) {
+            name = candidate;
+            resolved = true;
+            break;
+          }
+          suffix++;
+        }
+        if (!resolved) {
+          throw new Error(`Cannot find unique name for "${baseName}"`);
+        }
+      }
+      usedNames.add(name);
+
+      entries.push({
+        app_name: name,
+        size: typeof args.size === 'string' ? args.size : 'micro',
+        skuUuid: args.skuUuid as string,
+        providerUuid: args.providerUuid as string,
+        providerUrl: args.providerUrl as string,
+        payload,
+        serviceNames: args._serviceNames as string[] | undefined,
+      });
+
+      // Mark this tool message as awaiting batch confirmation
+      const updated = get().messages.map((m) =>
+        m.id === conf.toolMessageId
+          ? { ...m, content: `Batch deploy: ${name}`, isStreaming: false }
+          : m
+      );
+      set({ messages: updated });
+    } catch (error) {
+      // Mark this entry's tool message as failed, exclude from batch
+      logError('mergeBatchDeployConfirmations', error);
+      const errorMsg = error instanceof Error ? error.message : 'Failed to build payload';
+      const updated = get().messages.map((m) =>
+        m.id === conf.toolMessageId
+          ? { ...m, content: `Error: ${errorMsg}`, error: errorMsg, isStreaming: false }
+          : m
+      );
+      set({ messages: updated });
+    }
+  }
+
+  if (entries.length === 0) {
+    // All entries failed — caller should let the AI stream continue
+    return false;
+  }
+
+  // If only one survived, treat as single deploy
+  if (entries.length === 1) {
+    // Find the original confirmation that produced this surviving entry
+    const surviving = deployConfs.find(
+      (c) => {
+        const argName = typeof c.result.pendingAction?.args?.app_name === 'string'
+          ? c.result.pendingAction.args.app_name
+          : undefined;
+        // Match by original name or deduped name
+        return argName === entries[0].app_name || (argName && entries[0].app_name.startsWith(argName));
+      }
+    );
+    // Fallback to first deploy conf if dedup renamed beyond recognition
+    setSingleConfirmation(get, set, surviving ?? deployConfs[0]);
+    return true;
+  }
+
+  // Build batch confirmation description
+  const appNames = entries.map((e) => e.app_name).join(', ');
+  const description = `Deploy ${entries.length} apps: ${appNames}?`;
+  const lastConf = deployConfs[deployConfs.length - 1];
+
+  set({
+    pendingConfirmation: {
+      id: generateMessageId(),
+      action: {
+        id: lastConf.toolCall.id,
+        toolName: 'batch_deploy',
+        args: { entries } as unknown as Record<string, unknown>,
+        description,
+      },
+      messageId: lastConf.toolMessageId,
+    },
+  });
+  return true;
+}
+
 export async function processToolCallsFn(
   get: Get,
   set: Set,
-  toolCalls: OllamaToolCall[],
+  toolCalls: ToolCall[],
   currentAssistantMessageId: string,
   streamResult: StreamResult,
 ): Promise<ProcessToolCallsResult> {
@@ -77,6 +250,8 @@ export async function processToolCallsFn(
   set({ messages: updated1 });
 
   let hasDisplayCard = false;
+  const collectedConfirmations: CollectedConfirmation[] = [];
+
   for (const toolCall of toolCalls) {
     const toolDescription = getToolCallDescription(toolCall.function.name, toolCall.function.arguments);
     const toolMessageId = generateMessageId();
@@ -97,34 +272,9 @@ export async function processToolCallsFn(
     const result = await handleToolCall(get, set, toolCall);
 
     if (result.requiresConfirmation) {
-      const toolName = result.pendingAction?.toolName || toolCall.function.name;
-      const actionPayload = (toolName === 'deploy_app' || toolName === 'create_lease' || toolName === 'update_app')
-        ? get().pendingPayload ?? undefined
-        : undefined;
-
-      set({
-        pendingConfirmation: {
-          id: generateMessageId(),
-          action: {
-            id: toolCall.id,
-            toolName,
-            args: result.pendingAction?.args || {},
-            description: result.confirmationMessage || 'Confirm action?',
-            payload: actionPayload,
-          },
-          messageId: toolMessageId,
-        },
-      });
-
-      // Update tool message
-      const updated = get().messages.map((m) =>
-        m.id === toolMessageId
-          ? { ...m, content: result.confirmationMessage || 'Awaiting confirmation...', isStreaming: false }
-          : m
-      );
-      set({ messages: updated });
-
-      return { shouldContinue: false };
+      // Collect confirmation — don't return early so remaining tool calls are processed
+      collectedConfirmations.push({ toolCall, toolMessageId, result: result as CollectedConfirmation['result'] });
+      continue;
     }
 
     if (result.success && result.displayCard) {
@@ -147,6 +297,64 @@ export async function processToolCallsFn(
       );
       set({ messages: updated });
     }
+  }
+
+  // Handle collected confirmations
+  if (collectedConfirmations.length > 0) {
+    const deployConfs = collectedConfirmations.filter(
+      (c) => (c.result.pendingAction?.toolName || c.toolCall.function.name) === 'deploy_app'
+    );
+
+    let confirmed = false;
+
+    if (deployConfs.length >= 2) {
+      // Multiple deploy_app → merge into batch_deploy
+      confirmed = await mergeBatchDeployConfirmations(get, set, deployConfs);
+    }
+
+    if (!confirmed) {
+      // When batch merge fails (all payloads broken), avoid overwriting error messages
+      // with a confirmation prompt for a deploy that cannot succeed.
+      const nonDeployConfs = deployConfs.length >= 2
+        ? collectedConfirmations.filter((c) => !deployConfs.includes(c))
+        : collectedConfirmations;
+
+      if (nonDeployConfs.length === 0) {
+        // All were failed deploys, no other TX types — let the AI see the errors
+        const newMessage = createAssistantMessage();
+        set({ messages: trimMessages([...get().messages, newMessage]) });
+        return { shouldContinue: true, nextAssistantMessageId: newMessage.id };
+      }
+
+      const handledConf = nonDeployConfs[0];
+      setSingleConfirmation(get, set, handledConf);
+
+      // Mark any unhandled confirmations as skipped
+      for (const conf of collectedConfirmations) {
+        if (conf === handledConf) continue;
+        // Failed deploy confs already have error messages set by mergeBatchDeployConfirmations
+        if (deployConfs.length >= 2 && deployConfs.includes(conf)) continue;
+        const updated = get().messages.map((m) =>
+          m.id === conf.toolMessageId
+            ? { ...m, content: 'Skipped: only one transaction can be confirmed at a time.', isStreaming: false }
+            : m
+        );
+        set({ messages: updated });
+      }
+    } else {
+      // Batch merge succeeded — mark non-deploy confirmations as skipped
+      for (const conf of collectedConfirmations) {
+        if (deployConfs.includes(conf)) continue;
+        const updated = get().messages.map((m) =>
+          m.id === conf.toolMessageId
+            ? { ...m, content: 'Skipped: only one transaction can be confirmed at a time.', isStreaming: false }
+            : m
+        );
+        set({ messages: updated });
+      }
+    }
+
+    return { shouldContinue: false };
   }
 
   if (hasDisplayCard) {

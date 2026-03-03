@@ -3,8 +3,8 @@ import type { StoreApi } from 'zustand';
 
 // --- Mocks ---
 
-vi.mock('../api/ollama', () => ({
-  checkOllamaHealth: vi.fn().mockResolvedValue(true),
+vi.mock('../api/morpheus', () => ({
+  checkApiHealth: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('../utils/errors', () => ({
@@ -37,18 +37,15 @@ vi.mock('../ai/validation', () => ({
 
 vi.mock('../config/runtimeConfig', () => ({
   runtimeConfig: {
-    PUBLIC_OLLAMA_URL: 'http://localhost:11434',
-    PUBLIC_OLLAMA_MODEL: 'llama3.2',
+    PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5',
   },
 }));
 
 // Mock streaming, persistence, sendMessage, confirmAction, batchDeploy
 vi.mock('./aiActions/persistence', () => ({
   loadSettings: vi.fn().mockReturnValue({
-    ollamaEndpoint: 'http://localhost:11434',
-    model: 'llama3.2',
+    model: 'minimax-m2.5',
     saveHistory: true,
-    enableThinking: false,
   }),
   loadHistory: vi.fn().mockReturnValue([]),
   clearHistoryStorage: vi.fn(),
@@ -240,17 +237,6 @@ describe('aiStore', () => {
   // ---- Settings ----
 
   describe('updateSettings', () => {
-    it('accepts a valid endpoint', () => {
-      store.getState().updateSettings({ ollamaEndpoint: 'http://example.com:11434' });
-      expect(store.getState().settings.ollamaEndpoint).toBe('http://example.com:11434');
-    });
-
-    it('rejects an invalid endpoint', () => {
-      const original = store.getState().settings.ollamaEndpoint;
-      store.getState().updateSettings({ ollamaEndpoint: 'not-a-url' });
-      expect(store.getState().settings.ollamaEndpoint).toBe(original);
-    });
-
     it('accepts a valid model string', () => {
       store.getState().updateSettings({ model: 'qwen2.5' });
       expect(store.getState().settings.model).toBe('qwen2.5');
@@ -263,9 +249,8 @@ describe('aiStore', () => {
     });
 
     it('accepts boolean settings', () => {
-      store.getState().updateSettings({ saveHistory: false, enableThinking: true });
+      store.getState().updateSettings({ saveHistory: false });
       expect(store.getState().settings.saveHistory).toBe(false);
-      expect(store.getState().settings.enableThinking).toBe(true);
     });
   });
 

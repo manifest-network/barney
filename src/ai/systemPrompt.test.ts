@@ -12,13 +12,15 @@ describe('getSystemPrompt', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('deploy_app');
     expect(prompt).toContain('stop_app');
-    expect(prompt).toContain('fund_credits');
-    expect(prompt).toContain('list_apps');
     expect(prompt).toContain('app_status');
     expect(prompt).toContain('get_balance');
     expect(prompt).toContain('browse_catalog');
     expect(prompt).toContain('cosmos_query');
     expect(prompt).toContain('cosmos_tx');
+    expect(prompt).toContain('update_app');
+    expect(prompt).toContain('restart_app');
+    expect(prompt).toContain('app_diagnostics');
+    expect(prompt).toContain('request_faucet');
   });
 
   it('contains resource tiers', () => {
@@ -50,7 +52,7 @@ describe('getSystemPrompt', () => {
   it('contains behavior rules', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('On file attachment');
-    expect(prompt).toContain('Deploy by image');
+    expect(prompt).toContain('Deploy by name');
     expect(prompt).toContain('Default size');
     expect(prompt).toContain('Be concise');
   });
@@ -110,9 +112,57 @@ describe('getSystemPrompt', () => {
     expect(prompt).toContain('ghost');
   });
 
-  it('contains stack deploy example with depends_on', () => {
+  it('contains Compose features including depends_on and service_healthy', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('depends_on');
     expect(prompt).toContain('service_healthy');
+  });
+
+  it('contains Demo Games section with game tags and port 8080', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('## Demo Games');
+    expect(prompt).toContain('tetris');
+    expect(prompt).toContain('doom');
+    expect(prompt).toContain('port="8080"');
+  });
+
+  it('examples reference rule 5 for fallback message', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('message from rule 5');
+    expect(prompt).not.toContain('message from rule 3');
+  });
+
+  it('contains demo game deploy examples', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('Deploy tetris');
+    expect(prompt).toContain('demo-games:tetris');
+    expect(prompt).toContain('play doom');
+    expect(prompt).toContain('demo-games:doom');
+  });
+
+  it('contains multi-call examples for deploy and stop', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('Deploy tetris, doom and hextris');
+    expect(prompt).toContain('deploy_app once for EACH');
+    expect(prompt).toContain('Stop redis and postgres');
+    expect(prompt).toContain('stop_app twice');
+  });
+
+  it('contains combined-action example', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('stop my-app and show games');
+    expect(prompt).toContain('example apps below');
+  });
+
+  it('rule 4 generalizes multiple names to multiple tool calls', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('Multiple names = multiple calls');
+    expect(prompt).toContain('deploy, stop, restart, status');
+  });
+
+  it('rule 5 prioritizes checking names before fallback message', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('FIRST check if the user names any app');
+    expect(prompt).toContain('ONLY if the user names nothing recognizable');
   });
 });

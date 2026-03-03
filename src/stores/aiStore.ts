@@ -6,11 +6,10 @@
 import { createStore } from 'zustand/vanilla';
 import { useStore } from 'zustand';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
-import { checkOllamaHealth } from '../api/ollama';
+import { checkApiHealth } from '../api/morpheus';
 import type { AISettings } from '../ai/validation';
 import type { SignArbitraryFn, PayloadAttachment, ToolResult } from '../ai/toolExecutor';
 import type { DeployProgress } from '../ai/progress';
-import { validateEndpointUrl } from '../ai/validation';
 import { validateFile, validateManifestContent } from '../utils/fileValidation';
 import { sha256, toHex } from '../utils/hash';
 import { logError } from '../utils/errors';
@@ -201,21 +200,11 @@ export const createAIStore = () =>
       set((state) => {
         const updated = { ...state.settings };
 
-        if (newSettings.ollamaEndpoint !== undefined) {
-          const validatedUrl = validateEndpointUrl(newSettings.ollamaEndpoint);
-          if (validatedUrl) {
-            updated.ollamaEndpoint = validatedUrl;
-          }
-        }
-
         if (typeof newSettings.model === 'string' && newSettings.model.length > 0) {
           updated.model = newSettings.model;
         }
         if (typeof newSettings.saveHistory === 'boolean') {
           updated.saveHistory = newSettings.saveHistory;
-        }
-        if (typeof newSettings.enableThinking === 'boolean') {
-          updated.enableThinking = newSettings.enableThinking;
         }
 
         return { settings: updated };
@@ -301,10 +290,10 @@ export function getAIStore(): ReturnType<typeof createAIStore> {
   return _store;
 }
 
-/** Check Ollama connection health and update store */
+/** Check AI API connection health and update store */
 export async function checkConnection(store: ReturnType<typeof createAIStore>): Promise<void> {
   try {
-    const healthy = await checkOllamaHealth(store.getState().settings.ollamaEndpoint);
+    const healthy = await checkApiHealth();
     store.setState({ isConnected: healthy });
   } catch (error) {
     logError('aiStore.checkConnection', error);

@@ -50,7 +50,7 @@ const INTERNAL_HOSTNAME_PATTERNS = [
   /^instance-data\./i,
   /\.nip\.io$/i,  // Blocks ALL subdomains — acceptable since these services
   /\.xip\.io$/i,  // are primarily used for local dev, and the DNS rebinding
-  /\.sslip\.io$/i, // risk outweighs false positives for Ollama/provider URLs.
+  /\.sslip\.io$/i, // risk outweighs false positives for AI API/provider URLs.
 ];
 
 /**
@@ -84,7 +84,7 @@ export function isPrivateHost(hostname: string): boolean {
 }
 
 /**
- * Validate and sanitize an Ollama endpoint URL
+ * Validate and sanitize an AI API endpoint URL
  * Returns null if the URL is invalid or potentially dangerous
  *
  * Security: Blocks SSRF attacks by rejecting private/internal IP addresses
@@ -125,17 +125,12 @@ export function validateEndpointUrl(url: string): string | null {
 }
 
 export const AISettingsSchema = z.object({
-  ollamaEndpoint: z.string()
-    .transform((url) => validateEndpointUrl(url))
-    .pipe(z.string())
-    .catch('http://localhost:11434'),
   model: z.string()
     .min(1)
     .max(256)
     .regex(/^[a-zA-Z0-9\-_.:]+$/)
-    .catch('mistral-small3.2:24b'),
+    .catch('minimax-m2.5'),
   saveHistory: z.boolean().catch(true),
-  enableThinking: z.boolean().catch(false),
 });
 
 export type AISettings = z.infer<typeof AISettingsSchema>;

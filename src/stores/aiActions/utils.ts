@@ -2,7 +2,7 @@
  * Shared utilities for store actions.
  */
 
-import type { OllamaMessage } from '../../api/ollama';
+import type { ChatApiMessage } from '../../api/morpheus';
 import type { ChatMessage } from '../../contexts/aiTypes';
 import { getSystemPrompt } from '../../ai/systemPrompt';
 import { AI_MAX_MESSAGES } from '../../config/constants';
@@ -28,13 +28,13 @@ export function createAssistantMessage(): ChatMessage {
   };
 }
 
-export function toOllamaMessages(msgs: ChatMessage[], address: string | undefined): OllamaMessage[] {
-  const systemMessage: OllamaMessage = {
+export function toChatApiMessages(msgs: ChatMessage[], address: string | undefined): ChatApiMessage[] {
+  const systemMessage: ChatApiMessage = {
     role: 'system',
     content: getSystemPrompt(address),
   };
 
-  const conversationMessages: OllamaMessage[] = msgs
+  const conversationMessages: ChatApiMessage[] = msgs
     .filter((m) => !m.isStreaming)
     .map((m) => {
       if (m.role === 'tool') {
@@ -44,9 +44,12 @@ export function toOllamaMessages(msgs: ChatMessage[], address: string | undefine
           tool_call_id: m.toolCallId,
         };
       }
+      // Some OpenAI-compatible backends require assistant messages with tool_calls
+      // to have non-empty content. Use a placeholder when content is empty.
+      const content = (m.toolCalls?.length && !m.content) ? 'Calling tools.' : m.content;
       return {
         role: m.role as 'user' | 'assistant',
-        content: m.content,
+        content,
         tool_calls: m.toolCalls,
       };
     });

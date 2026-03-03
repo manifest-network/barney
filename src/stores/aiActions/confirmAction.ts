@@ -2,12 +2,12 @@
  * Confirmation flow actions — TX confirmation, cancellation, and timeout.
  */
 
-import { streamChat } from '../../api/ollama';
+import { streamChat } from '../../api/morpheus';
 import { executeConfirmedTool } from '../../ai/toolExecutor';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
 import type { AIStore } from '../aiStore';
-import { generateMessageId, toOllamaMessages, getAppRegistryAccess } from './utils';
+import { generateMessageId, toChatApiMessages, getAppRegistryAccess } from './utils';
 
 type Get = () => AIStore;
 type Set = (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) => void;
@@ -100,10 +100,8 @@ export async function confirmActionFn(get: Get, set: Set, editedManifestJson?: s
     const { settings } = get();
 
     const stream = streamChat({
-      endpoint: settings.ollamaEndpoint,
       model: settings.model,
-      messages: toOllamaMessages(updatedMessages, get().address),
-      think: settings.enableThinking,
+      messages: toChatApiMessages(updatedMessages, get().address),
       signal: get().abortController?.signal,
     });
 

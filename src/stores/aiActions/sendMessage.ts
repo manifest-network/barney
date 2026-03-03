@@ -2,7 +2,7 @@
  * sendMessage action — streaming loop for sending user messages.
  */
 
-import { streamChat } from '../../api/ollama';
+import { streamChat } from '../../api/morpheus';
 import { AI_TOOLS } from '../../ai/tools';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { validateUserInput } from '../../ai/validation';
@@ -18,7 +18,7 @@ import {
   generateMessageId,
   trimMessages,
   createAssistantMessage,
-  toOllamaMessages,
+  toChatApiMessages,
 } from './utils';
 
 type Get = () => AIStore;
@@ -80,14 +80,12 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
 
       const currentMessages = get().messages.filter((m) => m.id !== currentAssistantMessageId);
       const { settings, address } = get();
-      const ollamaMessages = toOllamaMessages(currentMessages, address);
+      const apiMessages = toChatApiMessages(currentMessages, address);
 
       const stream = streamChat({
-        endpoint: settings.ollamaEndpoint,
         model: settings.model,
-        messages: ollamaMessages,
+        messages: apiMessages,
         tools: AI_TOOLS,
-        think: settings.enableThinking,
         signal: get().abortController?.signal,
       });
 
@@ -121,7 +119,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
 
       if (streamResult.toolCalls.length === 0) {
         const finalContent = streamResult.content.trim() ||
-          'I received your message but couldn\'t generate a response. This may indicate the model doesn\'t support tool calling. Please check that your Ollama model supports function calling (e.g., llama3.1, mistral-nemo, qwen2.5).';
+          'I received your message but couldn\'t generate a response. This may indicate the model doesn\'t support tool calling.';
         const updated = get().messages.map((m) =>
           m.id === currentAssistantMessageId
             ? {
@@ -169,7 +167,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
         ? {
             ...m,
             content: error instanceof Error && error.message.includes('timeout')
-              ? 'The AI server took too long to respond. Please check that Ollama is running and try again.'
+              ? 'The AI server took too long to respond. Please try again.'
               : 'Sorry, I encountered an error. Please try again.',
             error: error instanceof Error ? error.message : 'Unknown error',
             isStreaming: false,

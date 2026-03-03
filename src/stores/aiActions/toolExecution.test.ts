@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { OllamaToolCall } from '../../api/ollama';
+import type { ToolCall } from '../../api/morpheus';
 import type { AIStore } from '../aiStore';
 import type { ChatMessage } from '../../contexts/aiTypes';
 import type { ToolResult } from '../../ai/toolExecutor';
@@ -13,6 +13,15 @@ vi.mock('../../ai/tools', () => ({
 
 vi.mock('../../ai/toolExecutor', () => ({
   executeTool: vi.fn().mockResolvedValue({ success: true, data: { result: 'ok' } }),
+}));
+
+vi.mock('../../ai/toolExecutor/compositeTransactions', () => ({
+  buildPayloadFromManifest: vi.fn().mockResolvedValue({
+    bytes: new Uint8Array([123, 125]),
+    filename: 'manifest.json',
+    size: 2,
+    hash: 'abc123',
+  }),
 }));
 
 vi.mock('../../ai/validation', () => ({
@@ -34,11 +43,13 @@ vi.mock('../../registry/appRegistry', () => ({
   getAppByLease: vi.fn().mockReturnValue(null),
   addApp: vi.fn(),
   updateApp: vi.fn(),
+  validateAppName: vi.fn().mockReturnValue(null),
 }));
 
 import { processToolCallsFn } from './toolExecution';
 import { isValidToolName } from '../../ai/tools';
 import { executeTool } from '../../ai/toolExecutor';
+import { buildPayloadFromManifest } from '../../ai/toolExecutor/compositeTransactions';
 
 function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
   return {
@@ -50,7 +61,7 @@ function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
   };
 }
 
-function makeToolCall(overrides: Partial<OllamaToolCall> = {}): OllamaToolCall {
+function makeToolCall(overrides: Partial<ToolCall> = {}): ToolCall {
   return {
     id: 'tc_1',
     type: 'function',
@@ -224,13 +235,17 @@ describe('processToolCallsFn', () => {
     expect(toolMsg!.error).toBe('Wallet not connected');
   });
 
-  it('stops at first confirmation when processing multiple tool calls', async () => {
+  it('processes all tool calls even when first requires confirmation', async () => {
     vi.mocked(executeTool)
       .mockResolvedValueOnce({
         success: true,
         requiresConfirmation: true,
         confirmationMessage: 'Confirm deploy?',
         pendingAction: { toolName: 'deploy_app', args: {} },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: { apps: [] },
       });
 
     const assistantMsg = makeMessage({ id: 'asst_1' });
@@ -245,8 +260,11 @@ describe('processToolCallsFn', () => {
     });
 
     expect(result.shouldContinue).toBe(false);
-    // Only first tool call executed
-    expect(executeTool).toHaveBeenCalledTimes(1);
+    // Both tool calls should have been executed
+    expect(executeTool).toHaveBeenCalledTimes(2);
+    // Single deploy → single pendingConfirmation (not batch)
+    expect(state.pendingConfirmation).not.toBeNull();
+    expect(state.pendingConfirmation!.action.toolName).toBe('deploy_app');
   });
 
   it('returns error for invalid tool name', async () => {
@@ -266,5 +284,194 @@ describe('processToolCallsFn', () => {
     const toolMsg = state.messages.find(m => m.role === 'tool');
     expect(toolMsg!.content).toContain('Unknown tool: fake_tool');
     expect(executeTool).not.toHaveBeenCalled();
+  });
+
+  it('merges multiple deploy_app confirmations into batch_deploy', async () => {
+    const makeDeployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          skuUuid: 'sku-123',
+          providerUuid: 'prov-456',
+          providerUrl: 'https://provider.test',
+          _generatedManifest: `{"services":{"${appName}":{}}}`,
+        },
+      },
+    });
+
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(makeDeployResult('tetris'))
+      .mockResolvedValueOnce(makeDeployResult('doom'))
+      .mockResolvedValueOnce(makeDeployResult('hextris'));
+
+    const assistantMsg = makeMessage({ id: 'asst_1' });
+    state.messages = [assistantMsg];
+
+    const tc1 = makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: { image: 'tetris' } } });
+    const tc2 = makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: { image: 'doom' } } });
+    const tc3 = makeToolCall({ id: 'tc_3', function: { name: 'deploy_app', arguments: { image: 'hextris' } } });
+
+    const result = await processToolCallsFn(get, set, [tc1, tc2, tc3], 'asst_1', {
+      content: '',
+      thinking: '',
+      toolCalls: [tc1, tc2, tc3],
+    });
+
+    expect(result.shouldContinue).toBe(false);
+    expect(executeTool).toHaveBeenCalledTimes(3);
+    expect(state.pendingConfirmation).not.toBeNull();
+    expect(state.pendingConfirmation!.action.toolName).toBe('batch_deploy');
+
+    const entries = state.pendingConfirmation!.action.args.entries as Array<{ app_name: string }>;
+    expect(entries).toHaveLength(3);
+    expect(entries.map(e => e.app_name)).toEqual(['tetris', 'doom', 'hextris']);
+    expect(buildPayloadFromManifest).toHaveBeenCalledTimes(3);
+  });
+
+  it('excludes failed entries from batch but still batches the rest', async () => {
+    const makeDeployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          skuUuid: 'sku-123',
+          providerUuid: 'prov-456',
+          providerUrl: 'https://provider.test',
+          _generatedManifest: `{"services":{"${appName}":{}}}`,
+        },
+      },
+    });
+
+    // Middle entry will fail payload build
+    vi.mocked(buildPayloadFromManifest)
+      .mockResolvedValueOnce({ bytes: new Uint8Array([1]), filename: 'manifest.json', size: 1, hash: 'a' })
+      .mockRejectedValueOnce(new Error('Hash computation failed'))
+      .mockResolvedValueOnce({ bytes: new Uint8Array([3]), filename: 'manifest.json', size: 1, hash: 'c' });
+
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(makeDeployResult('tetris'))
+      .mockResolvedValueOnce(makeDeployResult('doom'))
+      .mockResolvedValueOnce(makeDeployResult('hextris'));
+
+    const assistantMsg = makeMessage({ id: 'asst_1' });
+    state.messages = [assistantMsg];
+
+    const tc1 = makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } });
+    const tc2 = makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } });
+    const tc3 = makeToolCall({ id: 'tc_3', function: { name: 'deploy_app', arguments: {} } });
+
+    const result = await processToolCallsFn(get, set, [tc1, tc2, tc3], 'asst_1', {
+      content: '',
+      thinking: '',
+      toolCalls: [tc1, tc2, tc3],
+    });
+
+    expect(result.shouldContinue).toBe(false);
+    expect(state.pendingConfirmation).not.toBeNull();
+    expect(state.pendingConfirmation!.action.toolName).toBe('batch_deploy');
+
+    const entries = state.pendingConfirmation!.action.args.entries as Array<{ app_name: string }>;
+    expect(entries).toHaveLength(2);
+    expect(entries.map(e => e.app_name)).toEqual(['tetris', 'hextris']);
+
+    // The failed tool message should contain the error
+    const errorMsg = state.messages.find(m => m.role === 'tool' && m.error);
+    expect(errorMsg).toBeDefined();
+    expect(errorMsg!.error).toBe('Hash computation failed');
+  });
+
+  it('returns shouldContinue=true when all batch deploy entries fail', async () => {
+    const makeDeployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          skuUuid: 'sku-123',
+          providerUuid: 'prov-456',
+          providerUrl: 'https://provider.test',
+          _generatedManifest: `{"services":{"${appName}":{}}}`,
+        },
+      },
+    });
+
+    // All payload builds fail
+    vi.mocked(buildPayloadFromManifest)
+      .mockRejectedValueOnce(new Error('Hash failed 1'))
+      .mockRejectedValueOnce(new Error('Hash failed 2'));
+
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(makeDeployResult('tetris'))
+      .mockResolvedValueOnce(makeDeployResult('doom'));
+
+    const assistantMsg = makeMessage({ id: 'asst_1' });
+    state.messages = [assistantMsg];
+
+    const tc1 = makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } });
+    const tc2 = makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } });
+
+    const result = await processToolCallsFn(get, set, [tc1, tc2], 'asst_1', {
+      content: '',
+      thinking: '',
+      toolCalls: [tc1, tc2],
+    });
+
+    // Should continue so the AI can see the error messages
+    expect(result.shouldContinue).toBe(true);
+    // No confirmation should be set
+    expect(state.pendingConfirmation).toBeNull();
+    // Error messages should be preserved (not overwritten)
+    const errorMsgs = state.messages.filter(m => m.role === 'tool' && m.error);
+    expect(errorMsgs).toHaveLength(2);
+  });
+
+  it('uses single confirmation for mixed TX types and marks others as skipped', async () => {
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce({
+        success: true,
+        requiresConfirmation: true,
+        confirmationMessage: 'Deploy tetris?',
+        pendingAction: { toolName: 'deploy_app', args: { app_name: 'tetris' } },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        requiresConfirmation: true,
+        confirmationMessage: 'Stop myapp?',
+        pendingAction: { toolName: 'stop_app', args: { app_name: 'myapp' } },
+      });
+
+    const assistantMsg = makeMessage({ id: 'asst_1' });
+    state.messages = [assistantMsg];
+
+    const tc1 = makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } });
+    const tc2 = makeToolCall({ id: 'tc_2', function: { name: 'stop_app', arguments: {} } });
+
+    const result = await processToolCallsFn(get, set, [tc1, tc2], 'asst_1', {
+      content: '',
+      thinking: '',
+      toolCalls: [tc1, tc2],
+    });
+
+    expect(result.shouldContinue).toBe(false);
+    expect(executeTool).toHaveBeenCalledTimes(2);
+    // Mixed types → first confirmation wins (single, not batch)
+    expect(state.pendingConfirmation).not.toBeNull();
+    expect(state.pendingConfirmation!.action.toolName).toBe('deploy_app');
+
+    // Second confirmation should be marked as skipped
+    const skippedMsg = state.messages.find(m => m.role === 'tool' && m.content === 'Skipped: only one transaction can be confirmed at a time.');
+    expect(skippedMsg).toBeDefined();
   });
 });

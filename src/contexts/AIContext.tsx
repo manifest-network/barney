@@ -20,7 +20,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
     // Persistence subscriptions (settings + history to localStorage)
     const unsubPersistence = setupPersistenceSubscriptions(store);
 
-    // Ollama health check
+    // AI API health check
     checkConnection(store);
     const healthInterval = setInterval(() => checkConnection(store), AI_HEALTH_CHECK_INTERVAL_MS);
 

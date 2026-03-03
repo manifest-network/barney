@@ -24,10 +24,9 @@ vi.mock('./utils', async (importOriginal) => {
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
-vi.mock('../../api/ollama', () => ({
+vi.mock('../../api/morpheus', () => ({
   streamChat: vi.fn(),
-  checkOllamaHealth: vi.fn().mockResolvedValue(true),
-  listModels: vi.fn().mockResolvedValue([]),
+  checkApiHealth: vi.fn().mockResolvedValue(true),
 }));
 
 const mockProcessStream = vi.fn<() => Promise<StreamResult>>();
@@ -68,15 +67,7 @@ vi.mock('../../ai/systemPrompt', () => ({
 
 vi.mock('../../config/runtimeConfig', () => ({
   runtimeConfig: {
-    PUBLIC_OLLAMA_URL: 'http://localhost:11434',
-    PUBLIC_OLLAMA_MODEL: 'llama3.2',
-    PUBLIC_REST_URL: '',
-    PUBLIC_RPC_URL: '',
-    PUBLIC_WEB3AUTH_CLIENT_ID: '',
-    PUBLIC_WEB3AUTH_NETWORK: '',
-    PUBLIC_PWR_DENOM: '',
-    PUBLIC_GAS_PRICE: '',
-    PUBLIC_CHAIN_ID: '',
+    PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5',
   },
 }));
 
@@ -113,10 +104,8 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
     isStreaming: false,
     lastMessageTime: 0,
     settings: {
-      ollamaEndpoint: 'http://localhost:11434',
-      model: 'llama3.2',
+      model: 'minimax-m2.5',
       saveHistory: false,
-      enableThinking: false,
     },
     address: 'manifest1test',
     ...overrides,
@@ -457,6 +446,52 @@ describe('sendMessage', () => {
       const state = store.getState();
       expect(state.isStreaming).toBe(false);
       expect(state.abortController).toBeNull();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Pending payload / file attachment
+  // -----------------------------------------------------------------------
+  describe('pending payload', () => {
+    it('appends file-attached note when user provides text with payload', async () => {
+      const store = setupStore({
+        pendingPayload: { filename: 'deploy.yaml', hash: 'abc', data: new Uint8Array() },
+      });
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult({ content: 'Deploying...' }));
+
+      await store.getState().sendMessage('deploy this app');
+
+      const state = store.getState();
+      const userMsg = state.messages.find(m => m.role === 'user');
+      expect(userMsg).toBeDefined();
+      expect(userMsg!.content).toBe('deploy this app (File attached: deploy.yaml)');
+    });
+
+    it('generates default deploy message when no user text with payload', async () => {
+      const store = setupStore({
+        pendingPayload: { filename: 'stack.json', hash: 'def', data: new Uint8Array() },
+      });
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult({ content: 'Deploying...' }));
+
+      await store.getState().sendMessage('');
+
+      // Empty input + payload → effectiveContent = "Deploy this (File attached: stack.json)"
+      // validateUserInput returns the trimmed string, so message should be created
+      const state = store.getState();
+      const userMsg = state.messages.find(m => m.role === 'user');
+      expect(userMsg).toBeDefined();
+      expect(userMsg!.content).toBe('Deploy this (File attached: stack.json)');
+    });
+
+    it('clears pendingPayload in finally block', async () => {
+      const store = setupStore({
+        pendingPayload: { filename: 'app.yaml', hash: 'xyz', data: new Uint8Array() },
+      });
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult());
+
+      await store.getState().sendMessage('deploy');
+
+      expect(store.getState().pendingPayload).toBeNull();
     });
   });
 

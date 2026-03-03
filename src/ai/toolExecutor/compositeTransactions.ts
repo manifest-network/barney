@@ -163,6 +163,16 @@ function coerceTmpfsArg(value: unknown, context?: string): { value?: string; err
 }
 
 /**
+ * Build a PayloadAttachment from a manifest JSON string.
+ * Shared by deploy_app, update_app, and batch merge in toolExecution.
+ */
+export async function buildPayloadFromManifest(manifestJson: string): Promise<PayloadAttachment> {
+  const bytes = new TextEncoder().encode(manifestJson);
+  const hash = toHex(await sha256(manifestJson));
+  return { bytes, filename: 'manifest.json', size: bytes.length, hash };
+}
+
+/**
  * Validate internal stack service names persisted in pending action args.
  * These values are runtime-unknown and must be revalidated before use.
  */
@@ -972,10 +982,7 @@ export async function executeConfirmedDeployApp(
 
   // Reconstruct payload from stored manifest JSON (image-based deploy)
   if (!payload && typeof args._generatedManifest === 'string') {
-    const json = args._generatedManifest;
-    const bytes = new TextEncoder().encode(json);
-    const hash = toHex(await sha256(json));
-    payload = { bytes, filename: 'manifest.json', size: bytes.length, hash };
+    payload = await buildPayloadFromManifest(args._generatedManifest);
   }
 
   if (!payload) return { success: false, error: 'Payload missing' };
@@ -2324,10 +2331,7 @@ export async function executeConfirmedUpdateApp(
 
   // Reconstruct payload from stored manifest JSON (image-based update)
   if (!payload && typeof args._generatedManifest === 'string') {
-    const json = args._generatedManifest;
-    const bytes = new TextEncoder().encode(json);
-    const hash = toHex(await sha256(json));
-    payload = { bytes, filename: 'manifest.json', size: bytes.length, hash };
+    payload = await buildPayloadFromManifest(args._generatedManifest);
   }
 
   if (!payload) return { success: false, error: 'Payload missing' };
