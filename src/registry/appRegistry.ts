@@ -206,7 +206,11 @@ export function findApp(address: string, name: string): AppEntry | null {
   const activeSubstring = active.filter((a) => a.name.includes(lower));
   if (activeSubstring.length === 1) return activeSubstring[0];
 
-  // Fall back to all apps (any status)
+  // If active fuzzy matches exist but are ambiguous, return null
+  // to avoid returning a stopped app that shadows active ones
+  if (activeSuffix.length > 1 || activeSubstring.length > 1) return null;
+
+  // Fall back to all apps (any status) — only when no active matches exist
   const anyExact = apps.find((a) => a.name === lower);
   if (anyExact) return anyExact;
 

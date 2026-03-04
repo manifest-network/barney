@@ -463,7 +463,7 @@ export async function executeGetLogs(
   if (!app) return { success: false, error: `No app found named "${name}"` };
 
   if (app.status === 'stopped' || app.status === 'failed') {
-    return { success: false, error: `App "${app.name}" is ${app.status}. Logs are only available for running apps.` };
+    return { success: false, error: `App "${app.name}" is ${app.status}. Logs are not available for stopped or failed apps.` };
   }
 
   if (!app.providerUrl) {
@@ -607,7 +607,7 @@ export async function executeAppDiagnostics(
   if (!app) return { success: false, error: `No app found named "${name}"` };
 
   if (app.status === 'stopped' || app.status === 'failed') {
-    return { success: false, error: `App "${app.name}" is ${app.status}. Diagnostics are only available for running apps.` };
+    return { success: false, error: `App "${app.name}" is ${app.status}. Diagnostics are not available for stopped or failed apps.` };
   }
 
   if (!app.providerUrl) {
@@ -666,7 +666,7 @@ export async function executeAppReleases(
   if (!app) return { success: false, error: `No app found named "${name}"` };
 
   if (app.status === 'stopped' || app.status === 'failed') {
-    return { success: false, error: `App "${app.name}" is ${app.status}. Releases are only available for running apps.` };
+    return { success: false, error: `App "${app.name}" is ${app.status}. Releases are not available for stopped or failed apps.` };
   }
 
   if (!app.providerUrl) {

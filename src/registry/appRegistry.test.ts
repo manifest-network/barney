@@ -255,6 +255,17 @@ describe('appRegistry', () => {
       expect(result?.status).toBe('running');
     });
 
+    it('returns null when active fuzzy matches are ambiguous even if stopped exact exists', () => {
+      // Write directly to localStorage: stopped exact "doom" + two active fuzzy matches
+      const apps = [
+        makeApp({ name: 'doom', leaseUuid: 'uuid-stopped', status: 'stopped' }),
+        makeApp({ name: 'manifest-doom', leaseUuid: 'uuid-1', status: 'running' }),
+        makeApp({ name: 'super-doom', leaseUuid: 'uuid-2', status: 'running' }),
+      ];
+      localStorage.setItem(`barney-apps-${ADDR_A}`, JSON.stringify(apps));
+      expect(findApp(ADDR_A, 'doom')).toBeNull();
+    });
+
     it('falls back to stopped exact match when no active matches', () => {
       addApp(ADDR_A, makeApp({ name: 'doom', leaseUuid: 'uuid-old', status: 'stopped' }));
       const result = findApp(ADDR_A, 'doom');
