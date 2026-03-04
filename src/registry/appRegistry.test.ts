@@ -281,7 +281,7 @@ describe('appRegistry', () => {
       const app = makeApp({ status: 'running' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set());
+      reconcileWithChain(ADDR_A, new Map());
 
       const updated = getApp(ADDR_A, app.name);
       expect(updated?.status).toBe('stopped');
@@ -291,7 +291,7 @@ describe('appRegistry', () => {
       const app = makeApp({ status: 'deploying' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set());
+      reconcileWithChain(ADDR_A, new Map());
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('stopped');
     });
@@ -300,7 +300,7 @@ describe('appRegistry', () => {
       const app = makeApp({ status: 'running' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set([app.leaseUuid]));
+      reconcileWithChain(ADDR_A, new Map([[app.leaseUuid, 'active']]));
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('running');
     });
@@ -309,36 +309,54 @@ describe('appRegistry', () => {
       const app = makeApp({ status: 'stopped' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set());
+      reconcileWithChain(ADDR_A, new Map());
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('stopped');
     });
 
-    it('restores stopped apps to running when lease is still active', () => {
+    it('restores stopped apps to running when lease is active on-chain', () => {
       const app = makeApp({ status: 'stopped' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set([app.leaseUuid]));
+      reconcileWithChain(ADDR_A, new Map([[app.leaseUuid, 'active']]));
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('running');
+    });
+
+    it('restores stopped apps to deploying when lease is pending on-chain', () => {
+      const app = makeApp({ status: 'stopped' });
+      addApp(ADDR_A, app);
+
+      reconcileWithChain(ADDR_A, new Map([[app.leaseUuid, 'pending']]));
+
+      expect(getApp(ADDR_A, app.name)?.status).toBe('deploying');
     });
 
     it('keeps failed apps as failed when lease is not active', () => {
       const app = makeApp({ status: 'failed' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set());
+      reconcileWithChain(ADDR_A, new Map());
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('failed');
     });
 
-    it('restores failed apps to running when lease is still active', () => {
+    it('restores failed apps to running when lease is active on-chain', () => {
       const app = makeApp({ status: 'failed' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set([app.leaseUuid]));
+      reconcileWithChain(ADDR_A, new Map([[app.leaseUuid, 'active']]));
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('running');
+    });
+
+    it('restores failed apps to deploying when lease is pending on-chain', () => {
+      const app = makeApp({ status: 'failed' });
+      addApp(ADDR_A, app);
+
+      reconcileWithChain(ADDR_A, new Map([[app.leaseUuid, 'pending']]));
+
+      expect(getApp(ADDR_A, app.name)?.status).toBe('deploying');
     });
   });
 

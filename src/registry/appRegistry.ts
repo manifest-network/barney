@@ -279,32 +279,36 @@ export function removeApp(address: string, leaseUuid: string): boolean {
 /**
  * Reconcile registry with on-chain state.
  * Marks apps as "stopped" if their lease is closed/expired/rejected on-chain.
+ * Restores stopped/failed apps to 'running' or 'deploying' based on the
+ * on-chain lease state (active → running, pending → deploying).
  *
  * @param address - wallet address
- * @param activeLeaseUuids - set of lease UUIDs that are still active/pending on-chain
+ * @param leaseStates - map of lease UUID → 'active' | 'pending' for leases still on-chain
  */
 export function reconcileWithChain(
   address: string,
-  activeLeaseUuids: Set<string>
+  leaseStates: Map<string, 'active' | 'pending'>
 ): void {
   const apps = loadApps(address);
   let changed = false;
 
   for (const app of apps) {
+    const chainState = leaseStates.get(app.leaseUuid);
     if (
       (app.status === 'running' || app.status === 'deploying') &&
-      !activeLeaseUuids.has(app.leaseUuid)
+      !chainState
     ) {
       app.status = 'stopped';
       changed = true;
     } else if (
       (app.status === 'failed' || app.status === 'stopped') &&
-      activeLeaseUuids.has(app.leaseUuid)
+      chainState
     ) {
-      // Lease is still active on-chain — restore to running.
+      // Lease is still on-chain — restore based on chain state.
+      // Active leases → running, pending leases → deploying.
       // Covers false failures from transient issues (e.g. WebSocket/polling
       // errors during restart/update) and stale stopped status.
-      app.status = 'running';
+      app.status = chainState === 'active' ? 'running' : 'deploying';
       changed = true;
     }
   }
