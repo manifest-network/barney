@@ -467,7 +467,7 @@ export async function executeGetLogs(
   }
 
   if (!app.providerUrl) {
-    return { success: false, error: `App "${app.name}" has no provider URL (it may be stopped)` };
+    return { success: false, error: `App "${app.name}" has no provider URL` };
   }
   if (!signArbitrary) {
     return { success: false, error: 'Signing not available' };
@@ -611,7 +611,7 @@ export async function executeAppDiagnostics(
   }
 
   if (!app.providerUrl) {
-    return { success: false, error: `App "${app.name}" has no provider URL (it may be stopped)` };
+    return { success: false, error: `App "${app.name}" has no provider URL` };
   }
   if (!signArbitrary) {
     return { success: false, error: 'Signing not available' };
@@ -670,7 +670,7 @@ export async function executeAppReleases(
   }
 
   if (!app.providerUrl) {
-    return { success: false, error: `App "${app.name}" has no provider URL (it may be stopped)` };
+    return { success: false, error: `App "${app.name}" has no provider URL` };
   }
   if (!signArbitrary) {
     return { success: false, error: 'Signing not available' };
