@@ -21,7 +21,6 @@ vi.mock('../../api/billing', () => ({
   getLeasesByTenantPaginated: vi.fn(),
   getCreditAccount: vi.fn(),
   getCreditEstimate: vi.fn(),
-  getLease: vi.fn(),
   LeaseState: {
     LEASE_STATE_UNSPECIFIED: 0,
     LEASE_STATE_PENDING: 1,
@@ -109,7 +108,15 @@ function makeRegistry(apps: AppEntry[] = []): AppRegistryAccess {
     getApp: (_addr: string, name: string) => store.find((a) => a.name === name) ?? null,
     findApp: (_addr: string, name: string) => {
       const lower = name.toLowerCase();
-      return store.find((a) => a.name.endsWith(`-${lower}`)) ?? store.find((a) => a.name.includes(lower)) ?? null;
+      const active = store.filter((a) => a.status === 'running' || a.status === 'deploying');
+      // Active exact → active suffix → active substring → any exact → any suffix → any substring
+      return active.find((a) => a.name === lower)
+        ?? active.find((a) => a.name.endsWith(`-${lower}`))
+        ?? active.find((a) => a.name.includes(lower))
+        ?? store.find((a) => a.name === lower)
+        ?? store.find((a) => a.name.endsWith(`-${lower}`))
+        ?? store.find((a) => a.name.includes(lower))
+        ?? null;
     },
     getAppByLease: (_addr: string, uuid: string) => store.find((a) => a.leaseUuid === uuid) ?? null,
     addApp: (_addr: string, entry: AppEntry) => { store.push(entry); return entry; },
@@ -470,7 +477,7 @@ describe('executeGetLogs', () => {
   });
 
   it('returns error when app has no provider URL', async () => {
-    const app = makeApp({ providerUrl: undefined, status: 'stopped' });
+    const app = makeApp({ providerUrl: undefined });
     const registry = makeRegistry([app]);
     const result = await executeGetLogs(
       { app_name: 'my-app' },
@@ -478,6 +485,16 @@ describe('executeGetLogs', () => {
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('no provider URL');
+  });
+
+  it('returns error for stopped app', async () => {
+    const app = makeApp({ status: 'stopped' });
+    const result = await executeGetLogs(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]), signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('stopped');
   });
 
   it('returns error without signArbitrary', async () => {
@@ -638,8 +655,19 @@ describe('executeAppDiagnostics', () => {
     expect(result.error).toContain('No app found');
   });
 
+  it('returns error for stopped app', async () => {
+    const app = makeApp({ status: 'stopped' });
+    const registry = makeRegistry([app]);
+    const result = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('stopped');
+  });
+
   it('returns error when app has no provider URL', async () => {
-    const app = makeApp({ providerUrl: undefined, status: 'stopped' });
+    const app = makeApp({ providerUrl: undefined });
     const registry = makeRegistry([app]);
     const result = await executeAppDiagnostics(
       { app_name: 'my-app' },
@@ -712,8 +740,19 @@ describe('executeAppReleases', () => {
     expect(result.error).toContain('No app found');
   });
 
+  it('returns error for stopped app', async () => {
+    const app = makeApp({ status: 'stopped' });
+    const registry = makeRegistry([app]);
+    const result = await executeAppReleases(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('stopped');
+  });
+
   it('returns error when app has no provider URL', async () => {
-    const app = makeApp({ providerUrl: undefined, status: 'stopped' });
+    const app = makeApp({ providerUrl: undefined });
     const registry = makeRegistry([app]);
     const result = await executeAppReleases(
       { app_name: 'my-app' },

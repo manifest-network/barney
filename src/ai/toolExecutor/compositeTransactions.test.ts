@@ -113,7 +113,15 @@ function makeRegistry(apps: AppEntry[] = []): AppRegistryAccess {
     getApp: (_addr: string, name: string) => store.find((a) => a.name === name) ?? null,
     findApp: (_addr: string, name: string) => {
       const lower = name.toLowerCase();
-      return store.find((a) => a.name.endsWith(`-${lower}`)) ?? store.find((a) => a.name.includes(lower)) ?? null;
+      const active = store.filter((a) => a.status === 'running' || a.status === 'deploying');
+      // Active exact → active suffix → active substring → any exact → any suffix → any substring
+      return active.find((a) => a.name === lower)
+        ?? active.find((a) => a.name.endsWith(`-${lower}`))
+        ?? active.find((a) => a.name.includes(lower))
+        ?? store.find((a) => a.name === lower)
+        ?? store.find((a) => a.name.endsWith(`-${lower}`))
+        ?? store.find((a) => a.name.includes(lower))
+        ?? null;
     },
     getAppByLease: (_addr: string, uuid: string) => store.find((a) => a.leaseUuid === uuid) ?? null,
     addApp: vi.fn((_addr: string, entry: AppEntry) => { store.push(entry); return entry; }),

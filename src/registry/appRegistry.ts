@@ -185,28 +185,36 @@ export function getApp(address: string, name: string): AppEntry | null {
  * 2. Suffix match (e.g. "doom" matches "manifest-doom")
  * 3. Substring match (e.g. "doom" matches "my-doom-app")
  *
- * Only matches active apps (running/deploying) first; falls back to all apps.
+ * At each level, active apps (running/deploying) are preferred over
+ * stopped/failed ones. This prevents stale entries from shadowing live apps.
  * Returns null if no match or if multiple apps match ambiguously.
  */
 export function findApp(address: string, name: string): AppEntry | null {
   const apps = loadApps(address);
   const lower = name.toLowerCase();
-
-  // Exact match (any status)
-  const exact = apps.find((a) => a.name === lower);
-  if (exact) return exact;
-
-  // Prefer active apps for fuzzy matching
   const active = apps.filter((a) => a.status === 'running' || a.status === 'deploying');
-  const pool = active.length > 0 ? active : apps;
 
-  // Suffix match: app name ends with "-{input}" or equals input
-  const suffixMatches = pool.filter((a) => a.name.endsWith(`-${lower}`));
-  if (suffixMatches.length === 1) return suffixMatches[0];
+  // Exact match — active first, then any status
+  const activeExact = active.find((a) => a.name === lower);
+  if (activeExact) return activeExact;
 
-  // Substring match
-  const substringMatches = pool.filter((a) => a.name.includes(lower));
-  if (substringMatches.length === 1) return substringMatches[0];
+  // Active suffix match
+  const activeSuffix = active.filter((a) => a.name.endsWith(`-${lower}`));
+  if (activeSuffix.length === 1) return activeSuffix[0];
+
+  // Active substring match
+  const activeSubstring = active.filter((a) => a.name.includes(lower));
+  if (activeSubstring.length === 1) return activeSubstring[0];
+
+  // Fall back to all apps (any status)
+  const anyExact = apps.find((a) => a.name === lower);
+  if (anyExact) return anyExact;
+
+  const anySuffix = apps.filter((a) => a.name.endsWith(`-${lower}`));
+  if (anySuffix.length === 1) return anySuffix[0];
+
+  const anySubstring = apps.filter((a) => a.name.includes(lower));
+  if (anySubstring.length === 1) return anySubstring[0];
 
   return null;
 }
@@ -286,12 +294,12 @@ export function reconcileWithChain(
       app.status = 'stopped';
       changed = true;
     } else if (
-      app.status === 'failed' &&
+      (app.status === 'failed' || app.status === 'stopped') &&
       activeLeaseUuids.has(app.leaseUuid)
     ) {
       // Lease is still active on-chain — restore to running.
       // Covers false failures from transient issues (e.g. WebSocket/polling
-      // errors during restart/update).
+      // errors during restart/update) and stale stopped status.
       app.status = 'running';
       changed = true;
     }

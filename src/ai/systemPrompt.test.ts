@@ -163,6 +163,6 @@ describe('getSystemPrompt', () => {
   it('rule 5 prioritizes checking names before fallback message', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('FIRST check if the user names any app');
-    expect(prompt).toContain('ONLY if the user names nothing recognizable');
+    expect(prompt).toContain('ONLY if the user gives a completely generic deploy request');
   });
 });

@@ -234,6 +234,29 @@ describe('appRegistry', () => {
       addApp(ADDR_A, makeApp({ name: 'manifest-doom-2', leaseUuid: 'uuid-2', status: 'running' }));
       expect(findApp(ADDR_A, 'doom')?.name).toBe('manifest-doom-2');
     });
+
+    it('prefers active exact match over stopped exact match', () => {
+      addApp(ADDR_A, makeApp({ name: 'doom', leaseUuid: 'uuid-old', status: 'stopped' }));
+      addApp(ADDR_A, makeApp({ name: 'doom', leaseUuid: 'uuid-new', status: 'running' }));
+      const result = findApp(ADDR_A, 'doom');
+      expect(result?.leaseUuid).toBe('uuid-new');
+      expect(result?.status).toBe('running');
+    });
+
+    it('prefers active suffix match over stopped exact match', () => {
+      addApp(ADDR_A, makeApp({ name: 'doom', leaseUuid: 'uuid-old', status: 'stopped' }));
+      addApp(ADDR_A, makeApp({ name: 'manifest-doom', leaseUuid: 'uuid-new', status: 'running' }));
+      const result = findApp(ADDR_A, 'doom');
+      expect(result?.name).toBe('manifest-doom');
+      expect(result?.status).toBe('running');
+    });
+
+    it('falls back to stopped exact match when no active matches', () => {
+      addApp(ADDR_A, makeApp({ name: 'doom', leaseUuid: 'uuid-old', status: 'stopped' }));
+      const result = findApp(ADDR_A, 'doom');
+      expect(result?.name).toBe('doom');
+      expect(result?.status).toBe('stopped');
+    });
   });
 
   // --- Reconciliation ---
@@ -267,13 +290,22 @@ describe('appRegistry', () => {
       expect(getApp(ADDR_A, app.name)?.status).toBe('running');
     });
 
-    it('does not change already-stopped apps', () => {
+    it('does not change already-stopped apps when lease is not active', () => {
       const app = makeApp({ status: 'stopped' });
       addApp(ADDR_A, app);
 
       reconcileWithChain(ADDR_A, new Set());
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('stopped');
+    });
+
+    it('restores stopped apps to running when lease is still active', () => {
+      const app = makeApp({ status: 'stopped' });
+      addApp(ADDR_A, app);
+
+      reconcileWithChain(ADDR_A, new Set([app.leaseUuid]));
+
+      expect(getApp(ADDR_A, app.name)?.status).toBe('running');
     });
 
     it('keeps failed apps as failed when lease is not active', () => {
