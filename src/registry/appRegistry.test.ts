@@ -234,6 +234,44 @@ describe('appRegistry', () => {
       addApp(ADDR_A, makeApp({ name: 'manifest-doom-2', leaseUuid: 'uuid-2', status: 'running' }));
       expect(findApp(ADDR_A, 'doom')?.name).toBe('manifest-doom-2');
     });
+
+    it('prefers active exact match over stopped exact match', () => {
+      // Write directly to localStorage to bypass addApp's dedup of stopped/failed entries
+      const apps = [
+        makeApp({ name: 'doom', leaseUuid: 'uuid-old', status: 'stopped' }),
+        makeApp({ name: 'doom', leaseUuid: 'uuid-new', status: 'running' }),
+      ];
+      localStorage.setItem(`barney-apps-${ADDR_A}`, JSON.stringify(apps));
+      const result = findApp(ADDR_A, 'doom');
+      expect(result?.leaseUuid).toBe('uuid-new');
+      expect(result?.status).toBe('running');
+    });
+
+    it('prefers active suffix match over stopped exact match', () => {
+      addApp(ADDR_A, makeApp({ name: 'doom', leaseUuid: 'uuid-old', status: 'stopped' }));
+      addApp(ADDR_A, makeApp({ name: 'manifest-doom', leaseUuid: 'uuid-new', status: 'running' }));
+      const result = findApp(ADDR_A, 'doom');
+      expect(result?.name).toBe('manifest-doom');
+      expect(result?.status).toBe('running');
+    });
+
+    it('returns null when active fuzzy matches are ambiguous even if stopped exact exists', () => {
+      // Write directly to localStorage: stopped exact "doom" + two active fuzzy matches
+      const apps = [
+        makeApp({ name: 'doom', leaseUuid: 'uuid-stopped', status: 'stopped' }),
+        makeApp({ name: 'manifest-doom', leaseUuid: 'uuid-1', status: 'running' }),
+        makeApp({ name: 'super-doom', leaseUuid: 'uuid-2', status: 'running' }),
+      ];
+      localStorage.setItem(`barney-apps-${ADDR_A}`, JSON.stringify(apps));
+      expect(findApp(ADDR_A, 'doom')).toBeNull();
+    });
+
+    it('falls back to stopped exact match when no active matches', () => {
+      addApp(ADDR_A, makeApp({ name: 'doom', leaseUuid: 'uuid-old', status: 'stopped' }));
+      const result = findApp(ADDR_A, 'doom');
+      expect(result?.name).toBe('doom');
+      expect(result?.status).toBe('stopped');
+    });
   });
 
   // --- Reconciliation ---
@@ -243,7 +281,7 @@ describe('appRegistry', () => {
       const app = makeApp({ status: 'running' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set());
+      reconcileWithChain(ADDR_A, new Map());
 
       const updated = getApp(ADDR_A, app.name);
       expect(updated?.status).toBe('stopped');
@@ -253,7 +291,7 @@ describe('appRegistry', () => {
       const app = makeApp({ status: 'deploying' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set());
+      reconcileWithChain(ADDR_A, new Map());
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('stopped');
     });
@@ -262,36 +300,63 @@ describe('appRegistry', () => {
       const app = makeApp({ status: 'running' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set([app.leaseUuid]));
+      reconcileWithChain(ADDR_A, new Map([[app.leaseUuid, 'active']]));
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('running');
     });
 
-    it('does not change already-stopped apps', () => {
+    it('does not change already-stopped apps when lease is not active', () => {
       const app = makeApp({ status: 'stopped' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set());
+      reconcileWithChain(ADDR_A, new Map());
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('stopped');
+    });
+
+    it('restores stopped apps to running when lease is active on-chain', () => {
+      const app = makeApp({ status: 'stopped' });
+      addApp(ADDR_A, app);
+
+      reconcileWithChain(ADDR_A, new Map([[app.leaseUuid, 'active']]));
+
+      expect(getApp(ADDR_A, app.name)?.status).toBe('running');
+    });
+
+    it('restores stopped apps to deploying when lease is pending on-chain', () => {
+      const app = makeApp({ status: 'stopped' });
+      addApp(ADDR_A, app);
+
+      reconcileWithChain(ADDR_A, new Map([[app.leaseUuid, 'pending']]));
+
+      expect(getApp(ADDR_A, app.name)?.status).toBe('deploying');
     });
 
     it('keeps failed apps as failed when lease is not active', () => {
       const app = makeApp({ status: 'failed' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set());
+      reconcileWithChain(ADDR_A, new Map());
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('failed');
     });
 
-    it('restores failed apps to running when lease is still active', () => {
+    it('restores failed apps to running when lease is active on-chain', () => {
       const app = makeApp({ status: 'failed' });
       addApp(ADDR_A, app);
 
-      reconcileWithChain(ADDR_A, new Set([app.leaseUuid]));
+      reconcileWithChain(ADDR_A, new Map([[app.leaseUuid, 'active']]));
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('running');
+    });
+
+    it('restores failed apps to deploying when lease is pending on-chain', () => {
+      const app = makeApp({ status: 'failed' });
+      addApp(ADDR_A, app);
+
+      reconcileWithChain(ADDR_A, new Map([[app.leaseUuid, 'pending']]));
+
+      expect(getApp(ADDR_A, app.name)?.status).toBe('deploying');
     });
   });
 

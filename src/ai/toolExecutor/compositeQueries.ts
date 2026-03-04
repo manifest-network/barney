@@ -122,8 +122,8 @@ export async function executeAppStatus(
   const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
 
-  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No app found named "${name}"` };
+  const app = appRegistry.findApp(address, name);
+  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
   // Get chain state
   let chainState = 'unknown';
@@ -173,6 +173,7 @@ export async function executeAppStatus(
           currentStatus = 'running';
         }
         // Fetch connection details from provider API
+        let connectionRefreshed = false;
         if (signArbitrary && app.providerUrl) {
           try {
             const infoAuthToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
@@ -199,13 +200,17 @@ export async function executeAppStatus(
               if (conn.host) {
                 appUrl = conn.host;
               }
+              connectionRefreshed = true;
             }
           } catch (error) {
             logError('compositeQueries.executeAppStatus.connection', error);
           }
         }
-        if (app.status !== 'running' || appUrl !== app.url) {
-          appRegistry.updateApp(address, app.leaseUuid, { status: 'running', url: appUrl, connection: appConnection });
+        if (app.status !== 'running' || connectionRefreshed) {
+          appRegistry.updateApp(address, app.leaseUuid, {
+            status: 'running',
+            ...(connectionRefreshed ? { url: appUrl, connection: appConnection } : {}),
+          });
         }
       } else if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
         if (app.status !== 'failed') {
@@ -454,11 +459,15 @@ export async function executeGetLogs(
   const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
 
-  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No app found named "${name}"` };
+  const app = appRegistry.findApp(address, name);
+  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
+
+  if (app.status === 'stopped' || app.status === 'failed') {
+    return { success: false, error: `App "${app.name}" is ${app.status}. Logs are not available for stopped or failed apps.` };
+  }
 
   if (!app.providerUrl) {
-    return { success: false, error: `App "${app.name}" has no provider URL (it may be stopped)` };
+    return { success: false, error: `App "${app.name}" has no provider URL` };
   }
   if (!signArbitrary) {
     return { success: false, error: 'Signing not available' };
@@ -594,11 +603,15 @@ export async function executeAppDiagnostics(
   const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
 
-  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No app found named "${name}"` };
+  const app = appRegistry.findApp(address, name);
+  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
+
+  if (app.status === 'stopped' || app.status === 'failed') {
+    return { success: false, error: `App "${app.name}" is ${app.status}. Diagnostics are not available for stopped or failed apps.` };
+  }
 
   if (!app.providerUrl) {
-    return { success: false, error: `App "${app.name}" has no provider URL (it may be stopped)` };
+    return { success: false, error: `App "${app.name}" has no provider URL` };
   }
   if (!signArbitrary) {
     return { success: false, error: 'Signing not available' };
@@ -649,11 +662,15 @@ export async function executeAppReleases(
   const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
 
-  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No app found named "${name}"` };
+  const app = appRegistry.findApp(address, name);
+  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
+
+  if (app.status === 'stopped' || app.status === 'failed') {
+    return { success: false, error: `App "${app.name}" is ${app.status}. Releases are not available for stopped or failed apps.` };
+  }
 
   if (!app.providerUrl) {
-    return { success: false, error: `App "${app.name}" has no provider URL (it may be stopped)` };
+    return { success: false, error: `App "${app.name}" has no provider URL` };
   }
   if (!signArbitrary) {
     return { success: false, error: 'Signing not available' };

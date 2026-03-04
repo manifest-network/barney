@@ -22,9 +22,10 @@ import {
   executeConfirmedUpdateApp,
   type BatchDeployEntry,
 } from './compositeTransactions';
-import type { ToolExecutorOptions, AppRegistryAccess, PayloadAttachment } from './types';
+import type { ToolExecutorOptions, PayloadAttachment } from './types';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
 import type { AppEntry } from '../../registry/appRegistry';
+import { makeRegistry } from './testHelpers';
 import { LeaseState } from '../../api/billing';
 import { ProviderApiError } from '../../api/provider-api';
 import { logError } from '../../utils/errors';
@@ -105,26 +106,6 @@ import { resolveSkuItems } from './transactions';
 
 const ADDRESS = 'manifest1abc';
 const CLIENT_MANAGER = {} as CosmosClientManager;
-
-function makeRegistry(apps: AppEntry[] = []): AppRegistryAccess {
-  const store = [...apps];
-  return {
-    getApps: () => [...store],
-    getApp: (_addr: string, name: string) => store.find((a) => a.name === name) ?? null,
-    findApp: (_addr: string, name: string) => {
-      const lower = name.toLowerCase();
-      return store.find((a) => a.name.endsWith(`-${lower}`)) ?? store.find((a) => a.name.includes(lower)) ?? null;
-    },
-    getAppByLease: (_addr: string, uuid: string) => store.find((a) => a.leaseUuid === uuid) ?? null,
-    addApp: vi.fn((_addr: string, entry: AppEntry) => { store.push(entry); return entry; }),
-    updateApp: vi.fn((_addr: string, uuid: string, updates: Partial<Omit<AppEntry, 'leaseUuid'>>) => {
-      const idx = store.findIndex((a) => a.leaseUuid === uuid);
-      if (idx === -1) return null;
-      store[idx] = { ...store[idx], ...updates };
-      return store[idx];
-    }),
-  };
-}
 
 function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutorOptions {
   return {
@@ -2050,7 +2031,7 @@ describe('executeStopApp', () => {
   it('returns error for nonexistent app', async () => {
     const result = await executeStopApp({ app_name: 'ghost' }, makeOptions());
     expect(result.success).toBe(false);
-    expect(result.error).toContain('No app found');
+    expect(result.error).toContain('No unique app found matching');
   });
 
   it('returns error for already stopped app', async () => {
@@ -2462,7 +2443,7 @@ describe('executeRestartApp', () => {
   it('returns error when app not found', async () => {
     const result = await executeRestartApp({ app_name: 'ghost' }, makeOptions());
     expect(result.success).toBe(false);
-    expect(result.error).toContain('No app found');
+    expect(result.error).toContain('No unique app found matching');
   });
 
   it('returns error when app is not running', async () => {

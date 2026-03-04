@@ -269,8 +269,8 @@ export function ChatPanel() {
   // Show example app buttons when:
   // - the user's most recent message mentions deploy/games, OR
   // - the assistant's last response mentions "example apps below"
-  const GAME_TRIGGER_USER = /deploy an app|show\b.*\bgames|example apps|browse\b.*\bgames|more games/i;
-  const GAME_TRIGGER_AI = /example apps below/i;
+  const GAME_TRIGGER_USER = /deploy an app|show\b.*\bgames|example apps|browse\b.*\bgames|more games|recommend|suggest|what.*(games?|apps?).*(have|available|can i|do you)/i;
+  const GAME_TRIGGER_AI = /example apps below|here are.*(few|some)|which.*sounds? good|what.*looking for/i;
   const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
   const lastMsg = messages[messages.length - 1];
   const userTriggered = lastUserMsg != null

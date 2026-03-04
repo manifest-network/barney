@@ -1656,8 +1656,8 @@ export async function executeStopApp(
     };
   }
 
-  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No app found named "${name}"` };
+  const app = appRegistry.findApp(address, name);
+  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
   if (app.status === 'stopped') {
     return { success: false, error: `App "${app.name}" is already stopped.` };
@@ -1915,8 +1915,8 @@ export async function executeRestartApp(
   const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
 
-  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No app found named "${name}"` };
+  const app = appRegistry.findApp(address, name);
+  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
   if (app.status !== 'running') {
     return { success: false, error: `App "${app.name}" is not running (status: ${app.status}). Only running apps can be restarted.` };
@@ -2248,8 +2248,8 @@ export async function executeUpdateApp(
   const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
 
-  const app = appRegistry.getApp(address, name) ?? appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No app found named "${name}"` };
+  const app = appRegistry.findApp(address, name);
+  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
   if (app.status !== 'running' && app.status !== 'failed') {
     return { success: false, error: `App "${app.name}" cannot be updated (status: ${app.status}). Only running or failed apps can be updated.` };

@@ -54,7 +54,21 @@ export function toChatApiMessages(msgs: ChatMessage[], address: string | undefin
       };
     });
 
-  return [systemMessage, ...conversationMessages];
+  // Some models (e.g. Mistral) reject tool→user transitions without an
+  // intermediate assistant message. Insert a synthetic one when needed.
+  const fixed: ChatApiMessage[] = [];
+  for (let i = 0; i < conversationMessages.length; i++) {
+    fixed.push(conversationMessages[i]);
+    if (
+      conversationMessages[i].role === 'tool' &&
+      i + 1 < conversationMessages.length &&
+      conversationMessages[i + 1].role === 'user'
+    ) {
+      fixed.push({ role: 'assistant', content: 'Tool execution complete.' });
+    }
+  }
+
+  return [systemMessage, ...fixed];
 }
 
 export function getAppRegistryAccess(): AppRegistryAccess {

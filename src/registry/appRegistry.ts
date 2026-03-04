@@ -180,33 +180,49 @@ export function getApp(address: string, name: string): AppEntry | null {
 }
 
 /**
- * Find an app by fuzzy name matching. Tries in order:
- * 1. Exact match
- * 2. Suffix match (e.g. "doom" matches "manifest-doom")
- * 3. Substring match (e.g. "doom" matches "my-doom-app")
+ * Find an app by fuzzy name matching. Precedence:
+ * 1. Active (running/deploying) exact match
+ * 2. Active suffix match (e.g. "doom" matches "manifest-doom") — unique only
+ * 3. Active substring match (e.g. "doom" matches "my-doom-app") — unique only
+ * 4. If multiple active suffix/substring matches exist (ambiguous), return null
+ *    to avoid falling back to a stopped app that shadows active ones
+ * 5. Any-status exact match
+ * 6. Any-status suffix match — unique only
+ * 7. Any-status substring match — unique only
  *
- * Only matches active apps (running/deploying) first; falls back to all apps.
+ * Steps 5-7 only execute when no active fuzzy matches exist at all.
  * Returns null if no match or if multiple apps match ambiguously.
  */
 export function findApp(address: string, name: string): AppEntry | null {
   const apps = loadApps(address);
   const lower = name.toLowerCase();
-
-  // Exact match (any status)
-  const exact = apps.find((a) => a.name === lower);
-  if (exact) return exact;
-
-  // Prefer active apps for fuzzy matching
   const active = apps.filter((a) => a.status === 'running' || a.status === 'deploying');
-  const pool = active.length > 0 ? active : apps;
 
-  // Suffix match: app name ends with "-{input}" or equals input
-  const suffixMatches = pool.filter((a) => a.name.endsWith(`-${lower}`));
-  if (suffixMatches.length === 1) return suffixMatches[0];
+  // Exact match — active first, then any status
+  const activeExact = active.find((a) => a.name === lower);
+  if (activeExact) return activeExact;
 
-  // Substring match
-  const substringMatches = pool.filter((a) => a.name.includes(lower));
-  if (substringMatches.length === 1) return substringMatches[0];
+  // Active suffix match
+  const activeSuffix = active.filter((a) => a.name.endsWith(`-${lower}`));
+  if (activeSuffix.length === 1) return activeSuffix[0];
+
+  // Active substring match
+  const activeSubstring = active.filter((a) => a.name.includes(lower));
+  if (activeSubstring.length === 1) return activeSubstring[0];
+
+  // If active fuzzy matches exist but are ambiguous, return null
+  // to avoid returning a stopped app that shadows active ones
+  if (activeSuffix.length > 1 || activeSubstring.length > 1) return null;
+
+  // Fall back to all apps (any status) — only when no active matches exist
+  const anyExact = apps.find((a) => a.name === lower);
+  if (anyExact) return anyExact;
+
+  const anySuffix = apps.filter((a) => a.name.endsWith(`-${lower}`));
+  if (anySuffix.length === 1) return anySuffix[0];
+
+  const anySubstring = apps.filter((a) => a.name.includes(lower));
+  if (anySubstring.length === 1) return anySubstring[0];
 
   return null;
 }
@@ -267,32 +283,36 @@ export function removeApp(address: string, leaseUuid: string): boolean {
 /**
  * Reconcile registry with on-chain state.
  * Marks apps as "stopped" if their lease is closed/expired/rejected on-chain.
+ * Restores stopped/failed apps to 'running' or 'deploying' based on the
+ * on-chain lease state (active → running, pending → deploying).
  *
  * @param address - wallet address
- * @param activeLeaseUuids - set of lease UUIDs that are still active/pending on-chain
+ * @param leaseStates - map of lease UUID → 'active' | 'pending' for leases still on-chain
  */
 export function reconcileWithChain(
   address: string,
-  activeLeaseUuids: Set<string>
+  leaseStates: Map<string, 'active' | 'pending'>
 ): void {
   const apps = loadApps(address);
   let changed = false;
 
   for (const app of apps) {
+    const chainState = leaseStates.get(app.leaseUuid);
     if (
       (app.status === 'running' || app.status === 'deploying') &&
-      !activeLeaseUuids.has(app.leaseUuid)
+      !chainState
     ) {
       app.status = 'stopped';
       changed = true;
     } else if (
-      app.status === 'failed' &&
-      activeLeaseUuids.has(app.leaseUuid)
+      (app.status === 'failed' || app.status === 'stopped') &&
+      chainState
     ) {
-      // Lease is still active on-chain — restore to running.
+      // Lease is still on-chain — restore based on chain state.
+      // Active leases → running, pending leases → deploying.
       // Covers false failures from transient issues (e.g. WebSocket/polling
-      // errors during restart/update).
-      app.status = 'running';
+      // errors during restart/update) and stale stopped status.
+      app.status = chainState === 'active' ? 'running' : 'deploying';
       changed = true;
     }
   }
