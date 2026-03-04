@@ -180,13 +180,17 @@ export function getApp(address: string, name: string): AppEntry | null {
 }
 
 /**
- * Find an app by fuzzy name matching. Tries in order:
- * 1. Exact match
- * 2. Suffix match (e.g. "doom" matches "manifest-doom")
- * 3. Substring match (e.g. "doom" matches "my-doom-app")
+ * Find an app by fuzzy name matching. Precedence:
+ * 1. Active (running/deploying) exact match
+ * 2. Active suffix match (e.g. "doom" matches "manifest-doom") — unique only
+ * 3. Active substring match (e.g. "doom" matches "my-doom-app") — unique only
+ * 4. If multiple active suffix/substring matches exist (ambiguous), return null
+ *    to avoid falling back to a stopped app that shadows active ones
+ * 5. Any-status exact match
+ * 6. Any-status suffix match — unique only
+ * 7. Any-status substring match — unique only
  *
- * At each level, active apps (running/deploying) are preferred over
- * stopped/failed ones. This prevents stale entries from shadowing live apps.
+ * Steps 5-7 only execute when no active fuzzy matches exist at all.
  * Returns null if no match or if multiple apps match ambiguously.
  */
 export function findApp(address: string, name: string): AppEntry | null {

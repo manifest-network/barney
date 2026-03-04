@@ -110,14 +110,21 @@ function makeRegistry(apps: AppEntry[] = []): AppRegistryAccess {
     findApp: (_addr: string, name: string) => {
       const lower = name.toLowerCase();
       const active = store.filter((a) => a.status === 'running' || a.status === 'deploying');
-      // Active exact → active suffix → active substring → any exact → any suffix → any substring
-      return active.find((a) => a.name === lower)
-        ?? active.find((a) => a.name.endsWith(`-${lower}`))
-        ?? active.find((a) => a.name.includes(lower))
-        ?? store.find((a) => a.name === lower)
-        ?? store.find((a) => a.name.endsWith(`-${lower}`))
-        ?? store.find((a) => a.name.includes(lower))
-        ?? null;
+      // Mirror production precedence with ambiguity checks
+      const activeExact = active.find((a) => a.name === lower);
+      if (activeExact) return activeExact;
+      const activeSuffix = active.filter((a) => a.name.endsWith(`-${lower}`));
+      if (activeSuffix.length === 1) return activeSuffix[0];
+      const activeSubstring = active.filter((a) => a.name.includes(lower));
+      if (activeSubstring.length === 1) return activeSubstring[0];
+      if (activeSuffix.length > 1 || activeSubstring.length > 1) return null;
+      const anyExact = store.find((a) => a.name === lower);
+      if (anyExact) return anyExact;
+      const anySuffix = store.filter((a) => a.name.endsWith(`-${lower}`));
+      if (anySuffix.length === 1) return anySuffix[0];
+      const anySubstring = store.filter((a) => a.name.includes(lower));
+      if (anySubstring.length === 1) return anySubstring[0];
+      return null;
     },
     getAppByLease: (_addr: string, uuid: string) => store.find((a) => a.leaseUuid === uuid) ?? null,
     addApp: (_addr: string, entry: AppEntry) => { store.push(entry); return entry; },
