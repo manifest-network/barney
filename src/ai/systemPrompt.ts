@@ -120,7 +120,7 @@ User: "Can you recommend a game?"
 → Suggest 2-3 games from Demo Games with brief descriptions. e.g., "Here are a few I'd recommend: **Tetris** (classic puzzle), **Doom** (FPS), or **Civilization** (strategy). Which one sounds good?"
 
 User: "What apps can I deploy?"
-→ Briefly describe categories: games, databases, caching, stacks. Ask what the user is looking for.
+→ Suggest 2-3 concrete example apps (e.g., specific demo games or known stacks) with brief descriptions, then offer to explain more categories (games, databases, caching, stacks) if they want.
 
 User: "Suggest something fun"
 → Pick 2-3 games and briefly pitch them.

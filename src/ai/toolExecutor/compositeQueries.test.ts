@@ -21,6 +21,7 @@ vi.mock('../../api/billing', () => ({
   getLeasesByTenantPaginated: vi.fn(),
   getCreditAccount: vi.fn(),
   getCreditEstimate: vi.fn(),
+  getLease: vi.fn().mockResolvedValue(null),
   LeaseState: {
     LEASE_STATE_UNSPECIFIED: 0,
     LEASE_STATE_PENDING: 1,

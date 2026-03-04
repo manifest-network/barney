@@ -236,8 +236,12 @@ describe('appRegistry', () => {
     });
 
     it('prefers active exact match over stopped exact match', () => {
-      addApp(ADDR_A, makeApp({ name: 'doom', leaseUuid: 'uuid-old', status: 'stopped' }));
-      addApp(ADDR_A, makeApp({ name: 'doom', leaseUuid: 'uuid-new', status: 'running' }));
+      // Write directly to localStorage to bypass addApp's dedup of stopped/failed entries
+      const apps = [
+        makeApp({ name: 'doom', leaseUuid: 'uuid-old', status: 'stopped' }),
+        makeApp({ name: 'doom', leaseUuid: 'uuid-new', status: 'running' }),
+      ];
+      localStorage.setItem(`barney-apps-${ADDR_A}`, JSON.stringify(apps));
       const result = findApp(ADDR_A, 'doom');
       expect(result?.leaseUuid).toBe('uuid-new');
       expect(result?.status).toBe('running');

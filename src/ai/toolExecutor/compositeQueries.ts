@@ -206,14 +206,11 @@ export async function executeAppStatus(
             logError('compositeQueries.executeAppStatus.connection', error);
           }
         }
-        // Only persist connection data when it was successfully refreshed
-        const updates: Record<string, unknown> = { status: 'running' };
-        if (connectionRefreshed) {
-          updates.url = appUrl;
-          updates.connection = appConnection;
-        }
         if (app.status !== 'running' || connectionRefreshed) {
-          appRegistry.updateApp(address, app.leaseUuid, updates);
+          appRegistry.updateApp(address, app.leaseUuid, {
+            status: 'running',
+            ...(connectionRefreshed ? { url: appUrl, connection: appConnection } : {}),
+          });
         }
       } else if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
         if (app.status !== 'failed') {
