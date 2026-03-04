@@ -123,7 +123,7 @@ export async function executeAppStatus(
   if (!name) return { success: false, error: 'App name is required' };
 
   const app = appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No app found named "${name}"` };
+  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
   // Get chain state
   let chainState = 'unknown';
@@ -460,7 +460,7 @@ export async function executeGetLogs(
   if (!name) return { success: false, error: 'App name is required' };
 
   const app = appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No app found named "${name}"` };
+  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
   if (app.status === 'stopped' || app.status === 'failed') {
     return { success: false, error: `App "${app.name}" is ${app.status}. Logs are not available for stopped or failed apps.` };
@@ -604,7 +604,7 @@ export async function executeAppDiagnostics(
   if (!name) return { success: false, error: 'App name is required' };
 
   const app = appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No app found named "${name}"` };
+  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
   if (app.status === 'stopped' || app.status === 'failed') {
     return { success: false, error: `App "${app.name}" is ${app.status}. Diagnostics are not available for stopped or failed apps.` };
@@ -663,7 +663,7 @@ export async function executeAppReleases(
   if (!name) return { success: false, error: 'App name is required' };
 
   const app = appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No app found named "${name}"` };
+  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
   if (app.status === 'stopped' || app.status === 'failed') {
     return { success: false, error: `App "${app.name}" is ${app.status}. Releases are not available for stopped or failed apps.` };

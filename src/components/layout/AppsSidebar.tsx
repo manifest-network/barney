@@ -54,8 +54,8 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
         getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING),
       ]);
       const leaseStates = new Map<string, 'active' | 'pending'>();
-      for (const l of activeLeases) leaseStates.set(l.uuid, 'active');
       for (const l of pendingLeases) leaseStates.set(l.uuid, 'pending');
+      for (const l of activeLeases) leaseStates.set(l.uuid, 'active');
       reconcileWithChain(address, leaseStates);
     } catch (error) {
       logError('AppsSidebar.refresh.reconcile', error);
