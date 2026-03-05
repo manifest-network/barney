@@ -79,6 +79,17 @@ const DEFAULTS: RuntimeConfig = {
   PUBLIC_AI_MAX_MESSAGES: '200',
 };
 
+/** Upper bounds for numeric config keys to prevent misconfiguration. */
+const NUMERIC_LIMITS: Partial<Record<RuntimeConfigKey, number>> = {
+  PUBLIC_AI_STREAM_TIMEOUT_MS: 120_000,
+  PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: 600_000,
+  PUBLIC_AI_TOOL_API_TIMEOUT_MS: 60_000,
+  PUBLIC_AI_MAX_RETRIES: 10,
+  PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: 600_000,
+  PUBLIC_AI_MAX_TOOL_ITERATIONS: 50,
+  PUBLIC_AI_MAX_MESSAGES: 1000,
+};
+
 export function getConfigValue(key: RuntimeConfigKey): string {
   const runtimeVal = window.__RUNTIME_CONFIG__?.[key]?.trim();
   if (runtimeVal && runtimeVal.length > 0) return runtimeVal;
@@ -108,8 +119,16 @@ export const runtimeConfig: Readonly<RuntimeConfig> = Object.freeze({
   PUBLIC_AI_MAX_MESSAGES: getConfigValue('PUBLIC_AI_MAX_MESSAGES'),
 });
 
-/** Parse a runtime config value as a positive integer, falling back to the provided default. */
+/** Parse a string as a positive integer with optional upper-bound clamping.
+ *  Returns fallback for non-numeric, non-integer, zero, or negative values. */
+export function parsePositiveInt(value: string, fallback: number, max?: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) return fallback;
+  return max !== undefined && n > max ? max : n;
+}
+
+/** Parse a runtime config value as a positive integer, falling back to the provided default.
+ *  Values ≤ 0, non-numeric strings, and values exceeding the upper bound are rejected. */
 export function getNumericConfig(key: RuntimeConfigKey, fallback: number): number {
-  const parsed = parseInt(runtimeConfig[key], 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return parsePositiveInt(runtimeConfig[key], fallback, NUMERIC_LIMITS[key]);
 }
