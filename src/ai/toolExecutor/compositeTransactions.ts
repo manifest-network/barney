@@ -1687,14 +1687,18 @@ export async function executeConfirmedStopApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
-  // Bulk stop
+  // Bulk stop — fire close-lease TXs without waiting for on-chain
+  // confirmation (waitForConfirmation=false). This sends all TXs in
+  // quick succession (~100ms each for signing + broadcast) instead of
+  // waiting ~6s per TX for block inclusion. Registry is updated
+  // optimistically; reconcileWithChain corrects any discrepancies later.
   const entries = args.entries as Array<{ app_name: string; leaseUuid: string }> | undefined;
   if (entries && entries.length > 0) {
     const stopped: string[] = [];
     const failed: string[] = [];
 
     for (const entry of entries) {
-      const result = await cosmosTx(clientManager, 'billing', 'close-lease', [entry.leaseUuid], true);
+      const result = await cosmosTx(clientManager, 'billing', 'close-lease', [entry.leaseUuid], false);
       if (result.code === 0 || result.rawLog?.includes('lease not active')) {
         appRegistry.updateApp(address, entry.leaseUuid, { status: 'stopped' });
         stopped.push(entry.app_name);
