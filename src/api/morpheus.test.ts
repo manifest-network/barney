@@ -155,6 +155,18 @@ describe('streamChat', () => {
     expect(headers['Content-Type']).toBe('application/json');
   });
 
+  it('uses model from runtimeConfig in request body', async () => {
+    vi.stubGlobal('fetch', mockFetchWithSSE([
+      encode(sseEvent(JSON.stringify({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }))),
+    ]));
+
+    await collectChunks(BASE_OPTIONS);
+
+    const fetchCall = vi.mocked(fetch).mock.calls[0];
+    const body = JSON.parse(fetchCall[1]?.body as string);
+    expect(body.model).toBe('test-model');
+  });
+
   it('accumulates incremental tool calls and emits on finish_reason=tool_calls', async () => {
     vi.stubGlobal('fetch', mockFetchWithSSE([
       encode(

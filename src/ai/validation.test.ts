@@ -166,6 +166,16 @@ describe('validateSettings', () => {
     const result = validateSettings(input);
     expect(result.saveHistory).toBe(true);
   });
+
+  it('strips legacy model key from persisted settings', () => {
+    const input = {
+      model: 'gpt-4-legacy',
+      saveHistory: false,
+    };
+    const result = validateSettings(input);
+    expect(result.saveHistory).toBe(false);
+    expect(result).not.toHaveProperty('model');
+  });
 });
 
 describe('validateChatHistory', () => {
