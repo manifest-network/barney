@@ -121,8 +121,7 @@ describe('getNumericConfig', () => {
     expect(getNumericConfig('PUBLIC_AI_STREAM_TIMEOUT_MS', 99999)).toBe(30000);
   });
 
-  it('clamps value exceeding NUMERIC_LIMITS', () => {
-    // PUBLIC_AI_MAX_RETRIES defaults to '3', limit is 10 — default is within bounds
+  it('resolves a different numeric key correctly', () => {
     expect(getNumericConfig('PUBLIC_AI_MAX_RETRIES', 1)).toBe(3);
   });
 

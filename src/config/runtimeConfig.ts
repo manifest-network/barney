@@ -79,16 +79,16 @@ const DEFAULTS: RuntimeConfig = {
   PUBLIC_AI_MAX_MESSAGES: '200',
 };
 
-/** Keys that represent numeric (positive-integer) config values. */
-export type NumericConfigKey = Extract<RuntimeConfigKey,
+/** Keys that represent numeric (positive-integer) config values.
+ *  A typo here is caught at compile time by the `runtimeConfig[key]` access in getNumericConfig. */
+export type NumericConfigKey =
   | 'PUBLIC_AI_STREAM_TIMEOUT_MS'
   | 'PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS'
   | 'PUBLIC_AI_TOOL_API_TIMEOUT_MS'
   | 'PUBLIC_AI_MAX_RETRIES'
   | 'PUBLIC_AI_CONFIRMATION_TIMEOUT_MS'
   | 'PUBLIC_AI_MAX_TOOL_ITERATIONS'
-  | 'PUBLIC_AI_MAX_MESSAGES'
->;
+  | 'PUBLIC_AI_MAX_MESSAGES';
 
 /** Upper bounds for numeric config keys to prevent misconfiguration. */
 const NUMERIC_LIMITS: Record<NumericConfigKey, number> = {
