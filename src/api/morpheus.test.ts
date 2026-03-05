@@ -4,11 +4,10 @@ vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
-vi.mock('../config/runtimeConfig', () => ({
-  runtimeConfig: {
-    PUBLIC_MORPHEUS_MODEL: 'test-model',
-  },
-}));
+vi.mock('../config/runtimeConfig', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config/runtimeConfig')>();
+  return { ...actual, runtimeConfig: { ...actual.runtimeConfig, PUBLIC_MORPHEUS_MODEL: 'test-model' } };
+});
 
 // Must import after mocks
 import { serializeMessagesForApi, streamChat } from './morpheus';

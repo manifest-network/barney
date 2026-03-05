@@ -35,11 +35,10 @@ vi.mock('../ai/validation', () => ({
   sanitizeToolArgs: vi.fn((args: unknown) => args),
 }));
 
-vi.mock('../config/runtimeConfig', () => ({
-  runtimeConfig: {
-    PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5',
-  },
-}));
+vi.mock('../config/runtimeConfig', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config/runtimeConfig')>();
+  return { ...actual, runtimeConfig: { ...actual.runtimeConfig, PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5' } };
+});
 
 // Mock streaming, persistence, sendMessage, confirmAction, batchDeploy
 vi.mock('./aiActions/persistence', () => ({

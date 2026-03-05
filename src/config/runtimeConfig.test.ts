@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getConfigValue, runtimeConfig } from './runtimeConfig';
+import { getConfigValue, getNumericConfig, runtimeConfig } from './runtimeConfig';
 
 describe('getConfigValue', () => {
   let originalConfig: typeof window.__RUNTIME_CONFIG__;
@@ -49,8 +49,8 @@ describe('getConfigValue', () => {
 });
 
 describe('runtimeConfig', () => {
-  it('exports all 9 keys as strings', () => {
-    expect(Object.keys(runtimeConfig)).toHaveLength(9);
+  it('exports all 16 keys as strings', () => {
+    expect(Object.keys(runtimeConfig)).toHaveLength(16);
     for (const value of Object.values(runtimeConfig)) {
       expect(typeof value).toBe('string');
     }
@@ -63,5 +63,21 @@ describe('runtimeConfig', () => {
 
   it('is frozen', () => {
     expect(Object.isFrozen(runtimeConfig)).toBe(true);
+  });
+});
+
+describe('getNumericConfig', () => {
+  it('parses valid numeric string from runtime config', () => {
+    expect(getNumericConfig('PUBLIC_AI_STREAM_TIMEOUT_MS', 99999)).toBe(30000);
+  });
+
+  it('returns fallback for non-numeric values', () => {
+    // PUBLIC_REST_URL defaults to 'http://localhost:1317' which is not a number
+    expect(getNumericConfig('PUBLIC_REST_URL', 42)).toBe(42);
+  });
+
+  it('returns fallback for empty string values', () => {
+    // PUBLIC_FAUCET_URL defaults to '' — parseInt('', 10) is NaN
+    expect(getNumericConfig('PUBLIC_FAUCET_URL', 100)).toBe(100);
   });
 });

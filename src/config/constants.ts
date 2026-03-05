@@ -1,7 +1,12 @@
 /**
  * Application-wide constants.
  * Extracts magic numbers and configuration values for maintainability.
+ *
+ * AI constants marked with "runtime-configurable" can be overridden via
+ * PUBLIC_AI_* environment variables (see runtimeConfig.ts).
  */
+
+import { getNumericConfig } from './runtimeConfig';
 
 // ============================================
 // Time Constants
@@ -62,17 +67,17 @@ export const MAX_FILENAME_LENGTH = 255;
 // AI Assistant Constants
 // ============================================
 
-/** Maximum messages to keep in chat history memory */
-export const AI_MAX_MESSAGES = 200;
+/** Maximum messages to keep in chat history memory (runtime-configurable) */
+export const AI_MAX_MESSAGES = getNumericConfig('PUBLIC_AI_MAX_MESSAGES', 200);
 
-/** Maximum tool call iterations per message (prevents infinite loops) */
-export const AI_MAX_TOOL_ITERATIONS = 10;
+/** Maximum tool call iterations per message (prevents infinite loops) (runtime-configurable) */
+export const AI_MAX_TOOL_ITERATIONS = getNumericConfig('PUBLIC_AI_MAX_TOOL_ITERATIONS', 10);
 
-/** Stream chunk timeout in milliseconds (no response received) */
-export const AI_STREAM_TIMEOUT_MS = 30000;
+/** Stream chunk timeout in milliseconds (no response received) (runtime-configurable) */
+export const AI_STREAM_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_STREAM_TIMEOUT_MS', 30000);
 
-/** Maximum retry attempts for stream operations */
-export const AI_MAX_RETRIES = 3;
+/** Maximum retry attempts for stream operations (runtime-configurable) */
+export const AI_MAX_RETRIES = getNumericConfig('PUBLIC_AI_MAX_RETRIES', 3);
 
 /** Base delay for exponential backoff (milliseconds) */
 export const AI_RETRY_BASE_DELAY_MS = 1000;
@@ -83,8 +88,8 @@ export const AI_MESSAGE_DEBOUNCE_MS = 300;
 /** AI API connection health check interval (milliseconds) */
 export const AI_HEALTH_CHECK_INTERVAL_MS = 30000;
 
-/** Timeout for pending confirmations before auto-cancel (milliseconds) - 5 minutes */
-export const AI_CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000;
+/** Timeout for pending confirmations before auto-cancel (milliseconds) - 5 minutes (runtime-configurable) */
+export const AI_CONFIRMATION_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_CONFIRMATION_TIMEOUT_MS', 300000);
 
 /** Cache TTL for query tool results (milliseconds) - 10 seconds */
 export const AI_TOOL_CACHE_TTL_MS = 10000;
@@ -92,11 +97,11 @@ export const AI_TOOL_CACHE_TTL_MS = 10000;
 /** Maximum number of entries in the tool result cache */
 export const AI_TOOL_CACHE_MAX_SIZE = 50;
 
-/** Timeout for blockchain API calls during tool execution (milliseconds) */
-export const AI_TOOL_API_TIMEOUT_MS = 15000;
+/** Timeout for blockchain API calls during tool execution (milliseconds) (runtime-configurable) */
+export const AI_TOOL_API_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_TOOL_API_TIMEOUT_MS', 15000);
 
-/** Timeout for deploy provisioning polling before giving up (milliseconds) - 5 minutes */
-export const AI_DEPLOY_PROVISION_TIMEOUT_MS = 5 * 60 * 1000;
+/** Timeout for deploy provisioning polling before giving up (milliseconds) - 5 minutes (runtime-configurable) */
+export const AI_DEPLOY_PROVISION_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS', 300000);
 
 // ============================================
 // Fred WebSocket / Polling Constants

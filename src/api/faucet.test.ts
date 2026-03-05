@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getFaucetBaseUrl, isFaucetEnabled, requestFaucetTokens, requestFaucetDrip, faucetDripAndVerify, FAUCET_COOLDOWN_HOURS } from './faucet';
 
 const mockRuntimeConfig = vi.hoisted(() => ({ PUBLIC_FAUCET_URL: 'http://localhost:8000' }));
-vi.mock('../config/runtimeConfig', () => ({
-  runtimeConfig: mockRuntimeConfig,
-}));
+vi.mock('../config/runtimeConfig', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config/runtimeConfig')>();
+  return { ...actual, runtimeConfig: mockRuntimeConfig };
+});
 
 vi.mock('./config', () => ({
   DENOMS: { MFX: 'umfx', PWR: 'factory/addr/upwr' },

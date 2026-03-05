@@ -21,7 +21,14 @@ type RuntimeConfigKey =
   | 'PUBLIC_PWR_DENOM'
   | 'PUBLIC_GAS_PRICE'
   | 'PUBLIC_CHAIN_ID'
-  | 'PUBLIC_FAUCET_URL';
+  | 'PUBLIC_FAUCET_URL'
+  | 'PUBLIC_AI_STREAM_TIMEOUT_MS'
+  | 'PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS'
+  | 'PUBLIC_AI_TOOL_API_TIMEOUT_MS'
+  | 'PUBLIC_AI_MAX_RETRIES'
+  | 'PUBLIC_AI_CONFIRMATION_TIMEOUT_MS'
+  | 'PUBLIC_AI_MAX_TOOL_ITERATIONS'
+  | 'PUBLIC_AI_MAX_MESSAGES';
 
 type RuntimeConfig = Record<RuntimeConfigKey, string>;
 
@@ -43,6 +50,13 @@ const BUILD_ENV: RuntimeConfig = {
   PUBLIC_GAS_PRICE: import.meta.env.PUBLIC_GAS_PRICE ?? '',
   PUBLIC_CHAIN_ID: import.meta.env.PUBLIC_CHAIN_ID ?? '',
   PUBLIC_FAUCET_URL: import.meta.env.PUBLIC_FAUCET_URL ?? '',
+  PUBLIC_AI_STREAM_TIMEOUT_MS: import.meta.env.PUBLIC_AI_STREAM_TIMEOUT_MS ?? '',
+  PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: import.meta.env.PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS ?? '',
+  PUBLIC_AI_TOOL_API_TIMEOUT_MS: import.meta.env.PUBLIC_AI_TOOL_API_TIMEOUT_MS ?? '',
+  PUBLIC_AI_MAX_RETRIES: import.meta.env.PUBLIC_AI_MAX_RETRIES ?? '',
+  PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: import.meta.env.PUBLIC_AI_CONFIRMATION_TIMEOUT_MS ?? '',
+  PUBLIC_AI_MAX_TOOL_ITERATIONS: import.meta.env.PUBLIC_AI_MAX_TOOL_ITERATIONS ?? '',
+  PUBLIC_AI_MAX_MESSAGES: import.meta.env.PUBLIC_AI_MAX_MESSAGES ?? '',
 };
 
 const DEFAULTS: RuntimeConfig = {
@@ -56,6 +70,13 @@ const DEFAULTS: RuntimeConfig = {
   PUBLIC_GAS_PRICE: '0.0025umfx',
   PUBLIC_CHAIN_ID: 'manifest-ledger-beta',
   PUBLIC_FAUCET_URL: '',
+  PUBLIC_AI_STREAM_TIMEOUT_MS: '30000',
+  PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: '300000',
+  PUBLIC_AI_TOOL_API_TIMEOUT_MS: '15000',
+  PUBLIC_AI_MAX_RETRIES: '3',
+  PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: '300000',
+  PUBLIC_AI_MAX_TOOL_ITERATIONS: '10',
+  PUBLIC_AI_MAX_MESSAGES: '200',
 };
 
 export function getConfigValue(key: RuntimeConfigKey): string {
@@ -78,4 +99,17 @@ export const runtimeConfig: Readonly<RuntimeConfig> = Object.freeze({
   PUBLIC_GAS_PRICE: getConfigValue('PUBLIC_GAS_PRICE'),
   PUBLIC_CHAIN_ID: getConfigValue('PUBLIC_CHAIN_ID'),
   PUBLIC_FAUCET_URL: getConfigValue('PUBLIC_FAUCET_URL'),
+  PUBLIC_AI_STREAM_TIMEOUT_MS: getConfigValue('PUBLIC_AI_STREAM_TIMEOUT_MS'),
+  PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: getConfigValue('PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS'),
+  PUBLIC_AI_TOOL_API_TIMEOUT_MS: getConfigValue('PUBLIC_AI_TOOL_API_TIMEOUT_MS'),
+  PUBLIC_AI_MAX_RETRIES: getConfigValue('PUBLIC_AI_MAX_RETRIES'),
+  PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: getConfigValue('PUBLIC_AI_CONFIRMATION_TIMEOUT_MS'),
+  PUBLIC_AI_MAX_TOOL_ITERATIONS: getConfigValue('PUBLIC_AI_MAX_TOOL_ITERATIONS'),
+  PUBLIC_AI_MAX_MESSAGES: getConfigValue('PUBLIC_AI_MAX_MESSAGES'),
 });
+
+/** Parse a runtime config value as a positive integer, falling back to the provided default. */
+export function getNumericConfig(key: RuntimeConfigKey, fallback: number): number {
+  const parsed = parseInt(runtimeConfig[key], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
