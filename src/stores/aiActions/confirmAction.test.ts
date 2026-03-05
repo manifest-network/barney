@@ -55,11 +55,10 @@ vi.mock('../../ai/systemPrompt', () => ({
   getSystemPrompt: vi.fn(() => 'system prompt'),
 }));
 
-vi.mock('../../config/runtimeConfig', () => ({
-  runtimeConfig: {
-    PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5',
-  },
-}));
+vi.mock('../../config/runtimeConfig', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config/runtimeConfig')>();
+  return { ...actual, runtimeConfig: { ...actual.runtimeConfig, PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5' } };
+});
 
 vi.mock('../../ai/validation', () => ({
   validateUserInput: vi.fn((input: string) => input?.trim() || null),

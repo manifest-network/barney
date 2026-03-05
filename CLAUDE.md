@@ -239,17 +239,17 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| `AI_STREAM_TIMEOUT_MS` | 30s | Per-chunk stream timeout |
-| `AI_CONFIRMATION_TIMEOUT_MS` | 5min | Auto-cancel pending TX confirmations |
-| `AI_DEPLOY_PROVISION_TIMEOUT_MS` | 5min | Max polling time for deploy readiness |
+| `AI_STREAM_TIMEOUT_MS` | 30s | Per-chunk stream timeout (runtime-configurable) |
+| `AI_CONFIRMATION_TIMEOUT_MS` | 5min | Auto-cancel pending TX confirmations (runtime-configurable) |
+| `AI_DEPLOY_PROVISION_TIMEOUT_MS` | 5min | Max polling time for deploy readiness (runtime-configurable) |
 | `AI_MESSAGE_DEBOUNCE_MS` | 300ms | Debounce rapid message sends |
-| `AI_MAX_TOOL_ITERATIONS` | 10 | Max tool calls per message (prevents loops) |
-| `AI_MAX_MESSAGES` | 200 | Chat history memory limit |
+| `AI_MAX_TOOL_ITERATIONS` | 10 | Max tool calls per message (prevents loops) (runtime-configurable) |
+| `AI_MAX_MESSAGES` | 200 | Chat history memory limit (runtime-configurable) |
 | `AI_TOOL_CACHE_TTL_MS` | 10s | Query result cache lifetime |
 | `AI_TOOL_CACHE_MAX_SIZE` | 50 | Max cached query results |
-| `AI_MAX_RETRIES` | 3 | Max retry attempts for transient network errors |
+| `AI_MAX_RETRIES` | 3 | Max retry attempts for transient network errors (runtime-configurable) |
 | `AI_RETRY_BASE_DELAY_MS` | 1s | Base delay for exponential backoff |
-| `AI_TOOL_API_TIMEOUT_MS` | 15s | Timeout for blockchain API calls during tool execution |
+| `AI_TOOL_API_TIMEOUT_MS` | 15s | Timeout for blockchain API calls during tool execution (runtime-configurable) |
 | `MAX_PAYLOAD_SIZE` | 5KB | Maximum file upload size (in `hash.ts`) |
 | `FRED_POLL_INTERVAL_MS` | 3s | Default polling interval for Fred status checks |
 | `WS_RECONNECT_DELAY_MS` | 1s | Delay before WebSocket reconnect attempt |
@@ -306,7 +306,7 @@ Defined in `src/config/chain.ts`:
 
 ### Runtime Environment Variables
 
-9 client-side `PUBLIC_*` variables use a 3-tier fallback defined in `src/config/runtimeConfig.ts`:
+16 client-side `PUBLIC_*` variables use a 3-tier fallback defined in `src/config/runtimeConfig.ts`:
 
 1. `window.__RUNTIME_CONFIG__` — set by `public/config.js` (generated at container startup by `docker/env.sh`)
 2. `import.meta.env` — Rsbuild static replacement from `.env` files (requires static property access, not dynamic `import.meta.env[key]`)
@@ -316,7 +316,7 @@ Consumer code imports `runtimeConfig` from `src/config/runtimeConfig.ts` — nev
 
 Built-in flags (`import.meta.env.DEV` / `PROD`) remain build-time and are accessed directly where needed.
 
-Client-side variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_MORPHEUS_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`, `PUBLIC_GAS_PRICE`, `PUBLIC_CHAIN_ID`, `PUBLIC_FAUCET_URL`
+Client-side variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_MORPHEUS_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`, `PUBLIC_GAS_PRICE`, `PUBLIC_CHAIN_ID`, `PUBLIC_FAUCET_URL`, `PUBLIC_AI_STREAM_TIMEOUT_MS`, `PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS`, `PUBLIC_AI_TOOL_API_TIMEOUT_MS`, `PUBLIC_AI_MAX_RETRIES`, `PUBLIC_AI_CONFIRMATION_TIMEOUT_MS`, `PUBLIC_AI_MAX_TOOL_ITERATIONS`, `PUBLIC_AI_MAX_MESSAGES`
 
 Server-side variables (never shipped to browser):
 - `MORPHEUS_API_KEY` — injected by nginx (prod) or rsbuild dev proxy into upstream Morpheus API requests via `Authorization: Bearer` header

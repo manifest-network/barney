@@ -21,7 +21,14 @@ type RuntimeConfigKey =
   | 'PUBLIC_PWR_DENOM'
   | 'PUBLIC_GAS_PRICE'
   | 'PUBLIC_CHAIN_ID'
-  | 'PUBLIC_FAUCET_URL';
+  | 'PUBLIC_FAUCET_URL'
+  | 'PUBLIC_AI_STREAM_TIMEOUT_MS'
+  | 'PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS'
+  | 'PUBLIC_AI_TOOL_API_TIMEOUT_MS'
+  | 'PUBLIC_AI_MAX_RETRIES'
+  | 'PUBLIC_AI_CONFIRMATION_TIMEOUT_MS'
+  | 'PUBLIC_AI_MAX_TOOL_ITERATIONS'
+  | 'PUBLIC_AI_MAX_MESSAGES';
 
 type RuntimeConfig = Record<RuntimeConfigKey, string>;
 
@@ -43,6 +50,13 @@ const BUILD_ENV: RuntimeConfig = {
   PUBLIC_GAS_PRICE: import.meta.env.PUBLIC_GAS_PRICE ?? '',
   PUBLIC_CHAIN_ID: import.meta.env.PUBLIC_CHAIN_ID ?? '',
   PUBLIC_FAUCET_URL: import.meta.env.PUBLIC_FAUCET_URL ?? '',
+  PUBLIC_AI_STREAM_TIMEOUT_MS: import.meta.env.PUBLIC_AI_STREAM_TIMEOUT_MS ?? '',
+  PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: import.meta.env.PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS ?? '',
+  PUBLIC_AI_TOOL_API_TIMEOUT_MS: import.meta.env.PUBLIC_AI_TOOL_API_TIMEOUT_MS ?? '',
+  PUBLIC_AI_MAX_RETRIES: import.meta.env.PUBLIC_AI_MAX_RETRIES ?? '',
+  PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: import.meta.env.PUBLIC_AI_CONFIRMATION_TIMEOUT_MS ?? '',
+  PUBLIC_AI_MAX_TOOL_ITERATIONS: import.meta.env.PUBLIC_AI_MAX_TOOL_ITERATIONS ?? '',
+  PUBLIC_AI_MAX_MESSAGES: import.meta.env.PUBLIC_AI_MAX_MESSAGES ?? '',
 };
 
 const DEFAULTS: RuntimeConfig = {
@@ -56,6 +70,35 @@ const DEFAULTS: RuntimeConfig = {
   PUBLIC_GAS_PRICE: '0.0025umfx',
   PUBLIC_CHAIN_ID: 'manifest-ledger-beta',
   PUBLIC_FAUCET_URL: '',
+  PUBLIC_AI_STREAM_TIMEOUT_MS: '30000',
+  PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: '300000',
+  PUBLIC_AI_TOOL_API_TIMEOUT_MS: '15000',
+  PUBLIC_AI_MAX_RETRIES: '3',
+  PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: '300000',
+  PUBLIC_AI_MAX_TOOL_ITERATIONS: '10',
+  PUBLIC_AI_MAX_MESSAGES: '200',
+};
+
+/** Keys that represent numeric (positive-integer) config values.
+ *  A typo here is caught at compile time by the `runtimeConfig[key]` access in getNumericConfig. */
+export type NumericConfigKey =
+  | 'PUBLIC_AI_STREAM_TIMEOUT_MS'
+  | 'PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS'
+  | 'PUBLIC_AI_TOOL_API_TIMEOUT_MS'
+  | 'PUBLIC_AI_MAX_RETRIES'
+  | 'PUBLIC_AI_CONFIRMATION_TIMEOUT_MS'
+  | 'PUBLIC_AI_MAX_TOOL_ITERATIONS'
+  | 'PUBLIC_AI_MAX_MESSAGES';
+
+/** Upper bounds for numeric config keys to prevent misconfiguration. */
+const NUMERIC_LIMITS: Record<NumericConfigKey, number> = {
+  PUBLIC_AI_STREAM_TIMEOUT_MS: 120_000,
+  PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: 600_000,
+  PUBLIC_AI_TOOL_API_TIMEOUT_MS: 60_000,
+  PUBLIC_AI_MAX_RETRIES: 10,
+  PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: 600_000,
+  PUBLIC_AI_MAX_TOOL_ITERATIONS: 50,
+  PUBLIC_AI_MAX_MESSAGES: 1000,
 };
 
 export function getConfigValue(key: RuntimeConfigKey): string {
@@ -78,4 +121,25 @@ export const runtimeConfig: Readonly<RuntimeConfig> = Object.freeze({
   PUBLIC_GAS_PRICE: getConfigValue('PUBLIC_GAS_PRICE'),
   PUBLIC_CHAIN_ID: getConfigValue('PUBLIC_CHAIN_ID'),
   PUBLIC_FAUCET_URL: getConfigValue('PUBLIC_FAUCET_URL'),
+  PUBLIC_AI_STREAM_TIMEOUT_MS: getConfigValue('PUBLIC_AI_STREAM_TIMEOUT_MS'),
+  PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: getConfigValue('PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS'),
+  PUBLIC_AI_TOOL_API_TIMEOUT_MS: getConfigValue('PUBLIC_AI_TOOL_API_TIMEOUT_MS'),
+  PUBLIC_AI_MAX_RETRIES: getConfigValue('PUBLIC_AI_MAX_RETRIES'),
+  PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: getConfigValue('PUBLIC_AI_CONFIRMATION_TIMEOUT_MS'),
+  PUBLIC_AI_MAX_TOOL_ITERATIONS: getConfigValue('PUBLIC_AI_MAX_TOOL_ITERATIONS'),
+  PUBLIC_AI_MAX_MESSAGES: getConfigValue('PUBLIC_AI_MAX_MESSAGES'),
 });
+
+/** Parse a string as a positive integer with optional upper-bound clamping.
+ *  Returns fallback for non-numeric, non-integer, zero, or negative values. */
+export function parsePositiveInt(value: string, fallback: number, max?: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) return fallback;
+  return max !== undefined && n > max ? max : n;
+}
+
+/** Parse a runtime config value as a positive integer, falling back to the provided default.
+ *  Values ≤ 0, non-numeric strings, and values exceeding the upper bound are rejected. */
+export function getNumericConfig(key: NumericConfigKey, fallback: number): number {
+  return parsePositiveInt(runtimeConfig[key], fallback, NUMERIC_LIMITS[key]);
+}
