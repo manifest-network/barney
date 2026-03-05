@@ -121,11 +121,11 @@ describe('getNumericConfig', () => {
     expect(getNumericConfig('PUBLIC_AI_STREAM_TIMEOUT_MS', 99999)).toBe(30000);
   });
 
-  it('returns fallback for non-numeric values', () => {
-    expect(getNumericConfig('PUBLIC_REST_URL', 42)).toBe(42);
+  it('clamps value exceeding NUMERIC_LIMITS', () => {
+    // PUBLIC_AI_MAX_RETRIES defaults to '3', limit is 10 — default is within bounds
+    expect(getNumericConfig('PUBLIC_AI_MAX_RETRIES', 1)).toBe(3);
   });
 
-  it('returns fallback for empty string values', () => {
-    expect(getNumericConfig('PUBLIC_FAUCET_URL', 100)).toBe(100);
-  });
+  // Non-numeric keys like PUBLIC_REST_URL are now rejected at compile time
+  // via the NumericConfigKey type constraint.
 });

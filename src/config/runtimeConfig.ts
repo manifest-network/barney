@@ -79,8 +79,19 @@ const DEFAULTS: RuntimeConfig = {
   PUBLIC_AI_MAX_MESSAGES: '200',
 };
 
+/** Keys that represent numeric (positive-integer) config values. */
+export type NumericConfigKey = Extract<RuntimeConfigKey,
+  | 'PUBLIC_AI_STREAM_TIMEOUT_MS'
+  | 'PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS'
+  | 'PUBLIC_AI_TOOL_API_TIMEOUT_MS'
+  | 'PUBLIC_AI_MAX_RETRIES'
+  | 'PUBLIC_AI_CONFIRMATION_TIMEOUT_MS'
+  | 'PUBLIC_AI_MAX_TOOL_ITERATIONS'
+  | 'PUBLIC_AI_MAX_MESSAGES'
+>;
+
 /** Upper bounds for numeric config keys to prevent misconfiguration. */
-const NUMERIC_LIMITS: Partial<Record<RuntimeConfigKey, number>> = {
+const NUMERIC_LIMITS: Record<NumericConfigKey, number> = {
   PUBLIC_AI_STREAM_TIMEOUT_MS: 120_000,
   PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: 600_000,
   PUBLIC_AI_TOOL_API_TIMEOUT_MS: 60_000,
@@ -129,6 +140,6 @@ export function parsePositiveInt(value: string, fallback: number, max?: number):
 
 /** Parse a runtime config value as a positive integer, falling back to the provided default.
  *  Values ≤ 0, non-numeric strings, and values exceeding the upper bound are rejected. */
-export function getNumericConfig(key: RuntimeConfigKey, fallback: number): number {
+export function getNumericConfig(key: NumericConfigKey, fallback: number): number {
   return parsePositiveInt(runtimeConfig[key], fallback, NUMERIC_LIMITS[key]);
 }
