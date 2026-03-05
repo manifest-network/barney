@@ -601,6 +601,34 @@ async function waitViaWS(
       );
       everConnected = true;
 
+      // Subscribe-then-fetch: WS only delivers state *changes*. If the
+      // lease was already provisioned before we subscribed (common in batch
+      // deploys where Phase 1 takes 20-30s), we'd wait forever for an event
+      // that already fired. One status poll after connecting closes this gap.
+      // Any events emitted between this check and the WS subscription are
+      // still captured by the WS buffer (connectLeaseEvents queues messages
+      // as soon as onopen fires).
+      try {
+        const snapshot = await getLeaseStatus(providerApiUrl, leaseUuid, token);
+        if (TERMINAL_STATES.has(snapshot.state)) {
+          conn.close();
+          opts.onProgress?.(snapshot);
+          return snapshot;
+        }
+        if (snapshot.state === LeaseState.LEASE_STATE_ACTIVE &&
+            !TRANSIENT_PROVISION_STATES.has(snapshot.provision_status ?? '')) {
+          conn.close();
+          opts.onProgress?.(snapshot);
+          return snapshot;
+        }
+        // Still in progress — continue to WS event loop
+        lastStatus = snapshot;
+        opts.onProgress?.(snapshot);
+      } catch (error) {
+        // Status check failed — not fatal, continue with WS events
+        logError('fred.waitViaWS.subscribeCheck', error);
+      }
+
       // Liveness timeout: triggers reconnection if no data events arrive
       // within the window. Fred sends WebSocket ping frames every 30s which
       // keep the connection alive at the protocol level, but this timer
