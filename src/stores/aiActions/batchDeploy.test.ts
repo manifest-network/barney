@@ -102,7 +102,6 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
     address: 'manifest1test',
     signArbitrary: vi.fn(),
     settings: {
-      model: 'minimax-m2.5',
       saveHistory: false,
     },
     ...overrides,

@@ -79,11 +79,10 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
       iteration++;
 
       const currentMessages = get().messages.filter((m) => m.id !== currentAssistantMessageId);
-      const { settings, address } = get();
+      const { address } = get();
       const apiMessages = toChatApiMessages(currentMessages, address);
 
       const stream = streamChat({
-        model: settings.model,
         messages: apiMessages,
         tools: AI_TOOLS,
         signal: get().abortController?.signal,

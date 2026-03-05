@@ -104,7 +104,6 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
     isStreaming: false,
     lastMessageTime: 0,
     settings: {
-      model: 'minimax-m2.5',
       saveHistory: false,
     },
     address: 'manifest1test',

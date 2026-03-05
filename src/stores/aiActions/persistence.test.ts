@@ -9,12 +9,6 @@ vi.mock('../../ai/validation', () => ({
   }),
 }));
 
-vi.mock('../../config/runtimeConfig', () => ({
-  runtimeConfig: {
-    PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5',
-  },
-}));
-
 vi.mock('../../utils/errors', () => ({
   logError: vi.fn(),
 }));
@@ -64,11 +58,11 @@ describe('persistence actions', () => {
     });
 
     it('parses valid JSON from localStorage', () => {
-      const saved = { model: 'qwen2.5', saveHistory: false };
+      const saved = { saveHistory: false };
       localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(saved));
       const result = loadSettings();
       expect(validateSettings).toHaveBeenCalledWith(saved);
-      expect(result.model).toBe('qwen2.5');
+      expect(result.saveHistory).toBe(false);
     });
 
     it('returns defaults and clears on corrupt JSON', () => {
@@ -108,10 +102,10 @@ describe('persistence actions', () => {
 
   describe('saveSettings', () => {
     it('writes JSON to localStorage', () => {
-      const settings: AISettings = { ...defaultSettings, model: 'custom-model' };
+      const settings: AISettings = { ...defaultSettings, saveHistory: false };
       saveSettings(settings);
       const stored = JSON.parse(localStorage.getItem(STORAGE_KEY_SETTINGS)!);
-      expect(stored.model).toBe('custom-model');
+      expect(stored.saveHistory).toBe(false);
     });
   });
 
@@ -177,11 +171,11 @@ describe('persistence actions', () => {
       const miniStore = createMiniStore();
       const unsub = setupPersistenceSubscriptions(miniStore);
 
-      miniStore.setState({ settings: { ...defaultSettings, model: 'new-model' } });
+      miniStore.setState({ settings: { ...defaultSettings, saveHistory: false } });
 
       const stored = localStorage.getItem(STORAGE_KEY_SETTINGS);
       expect(stored).not.toBeNull();
-      expect(JSON.parse(stored!).model).toBe('new-model');
+      expect(JSON.parse(stored!).saveHistory).toBe(false);
 
       unsub();
     });
@@ -204,7 +198,7 @@ describe('persistence actions', () => {
       unsub();
 
       localStorage.clear();
-      miniStore.setState({ settings: { ...defaultSettings, model: 'after-unsub' } });
+      miniStore.setState({ settings: { ...defaultSettings, saveHistory: false } });
 
       expect(localStorage.getItem(STORAGE_KEY_SETTINGS)).toBeNull();
     });

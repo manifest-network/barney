@@ -4,6 +4,12 @@ vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
+vi.mock('../config/runtimeConfig', () => ({
+  runtimeConfig: {
+    PUBLIC_MORPHEUS_MODEL: 'test-model',
+  },
+}));
+
 // Must import after mocks
 import { serializeMessagesForApi, streamChat } from './morpheus';
 import type { ChatApiMessage, ToolCall, StreamChunk } from './morpheus';
@@ -51,7 +57,6 @@ async function collectChunks(options: Parameters<typeof streamChat>[0]): Promise
 }
 
 const BASE_OPTIONS = {
-  model: 'test-model',
   messages: [{ role: 'user' as const, content: 'hello' }],
 };
 
@@ -148,6 +153,18 @@ describe('streamChat', () => {
     const headers = fetchCall[1]?.headers as Record<string, string>;
     expect(headers['Authorization']).toBeUndefined();
     expect(headers['Content-Type']).toBe('application/json');
+  });
+
+  it('uses model from runtimeConfig in request body', async () => {
+    vi.stubGlobal('fetch', mockFetchWithSSE([
+      encode(sseEvent(JSON.stringify({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }))),
+    ]));
+
+    await collectChunks(BASE_OPTIONS);
+
+    const fetchCall = vi.mocked(fetch).mock.calls[0];
+    const body = JSON.parse(fetchCall[1]?.body as string);
+    expect(body.model).toBe('test-model');
   });
 
   it('accumulates incremental tool calls and emits on finish_reason=tool_calls', async () => {
