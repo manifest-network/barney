@@ -103,6 +103,10 @@ export const AI_TOOL_API_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_TOOL_API_TIMEO
 /** Timeout for deploy provisioning polling before giving up (milliseconds) - 5 minutes (runtime-configurable) */
 export const AI_DEPLOY_PROVISION_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS', 300000);
 
+/** Maximum concurrent app deploys in a batch (runtime-configurable).
+ * Limited by provider rate limiting (Fred defaults to 5 req/s per tenant, burst 10). */
+export const AI_BATCH_DEPLOY_CONCURRENCY = getNumericConfig('PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY', 4);
+
 // ============================================
 // Fred WebSocket / Polling Constants
 // ============================================

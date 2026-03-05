@@ -13,7 +13,7 @@ import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
-import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
+import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_BATCH_DEPLOY_CONCURRENCY, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
 import { isValidFqdn } from '../../utils/connection';
@@ -1581,7 +1581,7 @@ export async function executeConfirmedBatchDeploy(
     if (signal?.aborted) break;
     const p = deployOne(i).finally(() => active.delete(p));
     active.add(p);
-    if (active.size >= 2) {
+    if (active.size >= AI_BATCH_DEPLOY_CONCURRENCY) {
       await Promise.race(active);
     }
   }
