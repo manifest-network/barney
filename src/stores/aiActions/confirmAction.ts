@@ -97,10 +97,8 @@ export async function confirmActionFn(get: Get, set: Set, editedManifestJson?: s
     set({ messages: [...updatedWithAssistant, newAssistantMessage] });
 
     const updatedMessages = get().messages.filter((m) => m.id !== newAssistantMessageId);
-    const { settings } = get();
 
     const stream = streamChat({
-      model: settings.model,
       messages: toChatApiMessages(updatedMessages, get().address),
       signal: get().abortController?.signal,
     });

@@ -125,11 +125,6 @@ export function validateEndpointUrl(url: string): string | null {
 }
 
 export const AISettingsSchema = z.object({
-  model: z.string()
-    .min(1)
-    .max(256)
-    .regex(/^[a-zA-Z0-9\-_.:]+$/)
-    .catch('minimax-m2.5'),
   saveHistory: z.boolean().catch(true),
 });
 

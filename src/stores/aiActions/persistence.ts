@@ -7,7 +7,6 @@ import {
   validateChatHistory,
   type AISettings,
 } from '../../ai/validation';
-import { runtimeConfig } from '../../config/runtimeConfig';
 import { logError } from '../../utils/errors';
 import type { ChatMessage } from '../../contexts/aiTypes';
 import type { StoreApi } from 'zustand';
@@ -17,7 +16,6 @@ const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const STORAGE_KEY_HISTORY = 'barney-ai-history';
 
 export const defaultSettings: AISettings = {
-  model: runtimeConfig.PUBLIC_MORPHEUS_MODEL,
   saveHistory: true,
 };
 

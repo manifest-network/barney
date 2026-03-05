@@ -44,7 +44,6 @@ vi.mock('../config/runtimeConfig', () => ({
 // Mock streaming, persistence, sendMessage, confirmAction, batchDeploy
 vi.mock('./aiActions/persistence', () => ({
   loadSettings: vi.fn().mockReturnValue({
-    model: 'minimax-m2.5',
     saveHistory: true,
   }),
   loadHistory: vi.fn().mockReturnValue([]),
@@ -237,17 +236,6 @@ describe('aiStore', () => {
   // ---- Settings ----
 
   describe('updateSettings', () => {
-    it('accepts a valid model string', () => {
-      store.getState().updateSettings({ model: 'qwen2.5' });
-      expect(store.getState().settings.model).toBe('qwen2.5');
-    });
-
-    it('rejects an empty model string', () => {
-      const original = store.getState().settings.model;
-      store.getState().updateSettings({ model: '' });
-      expect(store.getState().settings.model).toBe(original);
-    });
-
     it('accepts boolean settings', () => {
       store.getState().updateSettings({ saveHistory: false });
       expect(store.getState().settings.saveHistory).toBe(false);

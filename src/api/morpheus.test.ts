@@ -4,6 +4,12 @@ vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
+vi.mock('../config/runtimeConfig', () => ({
+  runtimeConfig: {
+    PUBLIC_MORPHEUS_MODEL: 'test-model',
+  },
+}));
+
 // Must import after mocks
 import { serializeMessagesForApi, streamChat } from './morpheus';
 import type { ChatApiMessage, ToolCall, StreamChunk } from './morpheus';
@@ -51,7 +57,6 @@ async function collectChunks(options: Parameters<typeof streamChat>[0]): Promise
 }
 
 const BASE_OPTIONS = {
-  model: 'test-model',
   messages: [{ role: 'user' as const, content: 'hello' }],
 };
 

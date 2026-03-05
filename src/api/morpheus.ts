@@ -6,6 +6,7 @@
 
 import { logError } from '../utils/errors';
 import { HEALTH_CHECK_TIMEOUT_MS, AI_STREAM_TIMEOUT_MS } from '../config/constants';
+import { runtimeConfig } from '../config/runtimeConfig';
 
 export interface ChatApiMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -42,7 +43,6 @@ export interface ToolDefinition {
 }
 
 export interface StreamChatOptions {
-  model: string;
   messages: ChatApiMessage[];
   tools?: ToolDefinition[];
   signal?: AbortSignal;
@@ -157,7 +157,8 @@ async function* parseSSE(
 export async function* streamChat(
   options: StreamChatOptions
 ): AsyncGenerator<StreamChunk> {
-  const { model, messages, tools, signal } = options;
+  const { messages, tools, signal } = options;
+  const model = runtimeConfig.PUBLIC_MORPHEUS_MODEL;
 
   const body: Record<string, unknown> = {
     model,

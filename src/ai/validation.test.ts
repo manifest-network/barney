@@ -148,36 +148,23 @@ describe('isPrivateHost (SSRF protection via ipaddr.js)', () => {
 describe('validateSettings', () => {
   it('returns defaults for null/undefined', () => {
     const defaults = validateSettings(null);
-    expect(defaults.model).toBe('minimax-m2.5');
     expect(defaults.saveHistory).toBe(true);
   });
 
   it('validates valid settings', () => {
     const input = {
-      model: 'llama3.1',
       saveHistory: false,
     };
     const result = validateSettings(input);
-    expect(result.model).toBe('llama3.1');
     expect(result.saveHistory).toBe(false);
   });
 
   it('uses defaults for invalid fields', () => {
     const input = {
-      model: '',
       saveHistory: 'not-a-boolean',
     };
     const result = validateSettings(input);
-    expect(result.model).toBe('minimax-m2.5');
     expect(result.saveHistory).toBe(true);
-  });
-
-  it('rejects model names with invalid characters', () => {
-    const input = {
-      model: 'model<script>',
-    };
-    const result = validateSettings(input);
-    expect(result.model).toBe('minimax-m2.5'); // defaults
   });
 });
 

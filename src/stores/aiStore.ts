@@ -200,9 +200,6 @@ export const createAIStore = () =>
       set((state) => {
         const updated = { ...state.settings };
 
-        if (typeof newSettings.model === 'string' && newSettings.model.length > 0) {
-          updated.model = newSettings.model;
-        }
         if (typeof newSettings.saveHistory === 'boolean') {
           updated.saveHistory = newSettings.saveHistory;
         }
