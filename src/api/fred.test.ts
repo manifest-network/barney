@@ -998,6 +998,58 @@ describe('waitForLeaseReady', () => {
     expect(result.provision_status).toBe('ready');
   });
 
+  it('returns immediately via subscribe-then-fetch when lease is already ready', async () => {
+    // WS opens but sends no events — simulates batch deploy where the app
+    // was provisioned before Phase 2 started
+    vi.stubGlobal('WebSocket', createMockWebSocket([]));
+
+    // The subscribe-then-fetch status check finds the lease already ready
+    const active = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'ready' });
+    mockFetchSequence([{ data: active }]);
+
+    const result = await waitForLeaseReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
+      intervalMs: 100,
+      maxAttempts: 5,
+    });
+
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
+    expect(result.provision_status).toBe('ready');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls through to WS events when subscribe-then-fetch shows still provisioning', async () => {
+    const readyEvent = { lease_uuid: LEASE_UUID, status: 'ready', timestamp: '2024-01-01T00:00:00Z' };
+    vi.stubGlobal('WebSocket', createMockWebSocket([readyEvent]));
+
+    // Status check shows still provisioning — WS event loop takes over
+    const provisioning = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'provisioning' });
+    mockFetchSequence([{ data: provisioning }]);
+
+    const result = await waitForLeaseReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
+      intervalMs: 100,
+      maxAttempts: 5,
+    });
+
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
+    expect(result.provision_status).toBe('ready');
+  });
+
+  it('continues via WS events when subscribe-then-fetch fails', async () => {
+    const readyEvent = { lease_uuid: LEASE_UUID, status: 'ready', timestamp: '2024-01-01T00:00:00Z' };
+    vi.stubGlobal('WebSocket', createMockWebSocket([readyEvent]));
+
+    // Status check fails (network error) — WS event loop still works
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('network error')));
+
+    const result = await waitForLeaseReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
+      intervalMs: 100,
+      maxAttempts: 5,
+    });
+
+    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
+    expect(result.provision_status).toBe('ready');
+  });
+
   it('skips WS when disableWS is true', async () => {
     const active = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'ready' });
     mockFetchSequence([{ data: active }]);
@@ -1010,7 +1062,6 @@ describe('waitForLeaseReady', () => {
 
     expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
     expect(result.provision_status).toBe('ready');
-    // Only 1 fetch call (polling), no WS attempt
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

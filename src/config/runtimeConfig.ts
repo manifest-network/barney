@@ -28,7 +28,8 @@ type RuntimeConfigKey =
   | 'PUBLIC_AI_MAX_RETRIES'
   | 'PUBLIC_AI_CONFIRMATION_TIMEOUT_MS'
   | 'PUBLIC_AI_MAX_TOOL_ITERATIONS'
-  | 'PUBLIC_AI_MAX_MESSAGES';
+  | 'PUBLIC_AI_MAX_MESSAGES'
+  | 'PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY';
 
 type RuntimeConfig = Record<RuntimeConfigKey, string>;
 
@@ -57,6 +58,7 @@ const BUILD_ENV: RuntimeConfig = {
   PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: import.meta.env.PUBLIC_AI_CONFIRMATION_TIMEOUT_MS ?? '',
   PUBLIC_AI_MAX_TOOL_ITERATIONS: import.meta.env.PUBLIC_AI_MAX_TOOL_ITERATIONS ?? '',
   PUBLIC_AI_MAX_MESSAGES: import.meta.env.PUBLIC_AI_MAX_MESSAGES ?? '',
+  PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY: import.meta.env.PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY ?? '',
 };
 
 const DEFAULTS: RuntimeConfig = {
@@ -77,6 +79,7 @@ const DEFAULTS: RuntimeConfig = {
   PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: '300000',
   PUBLIC_AI_MAX_TOOL_ITERATIONS: '10',
   PUBLIC_AI_MAX_MESSAGES: '200',
+  PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY: '4',
 };
 
 /** Keys that represent numeric (positive-integer) config values.
@@ -88,7 +91,8 @@ export type NumericConfigKey =
   | 'PUBLIC_AI_MAX_RETRIES'
   | 'PUBLIC_AI_CONFIRMATION_TIMEOUT_MS'
   | 'PUBLIC_AI_MAX_TOOL_ITERATIONS'
-  | 'PUBLIC_AI_MAX_MESSAGES';
+  | 'PUBLIC_AI_MAX_MESSAGES'
+  | 'PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY';
 
 /** Upper bounds for numeric config keys to prevent misconfiguration. */
 const NUMERIC_LIMITS: Record<NumericConfigKey, number> = {
@@ -99,6 +103,7 @@ const NUMERIC_LIMITS: Record<NumericConfigKey, number> = {
   PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: 600_000,
   PUBLIC_AI_MAX_TOOL_ITERATIONS: 50,
   PUBLIC_AI_MAX_MESSAGES: 1000,
+  PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY: 10,
 };
 
 export function getConfigValue(key: RuntimeConfigKey): string {
@@ -128,6 +133,7 @@ export const runtimeConfig: Readonly<RuntimeConfig> = Object.freeze({
   PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: getConfigValue('PUBLIC_AI_CONFIRMATION_TIMEOUT_MS'),
   PUBLIC_AI_MAX_TOOL_ITERATIONS: getConfigValue('PUBLIC_AI_MAX_TOOL_ITERATIONS'),
   PUBLIC_AI_MAX_MESSAGES: getConfigValue('PUBLIC_AI_MAX_MESSAGES'),
+  PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY: getConfigValue('PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY'),
 });
 
 /** Parse a string as a positive integer with optional upper-bound clamping.
