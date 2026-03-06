@@ -1381,9 +1381,10 @@ export async function executeBatchDeploy(
 /**
  * Execute batch deploy after user confirmation.
  *
- * Serializes lease creation + payload upload (which need signing and
- * sequential account nonces), then parallelizes the polling phase
- * (which is the slow part and only reads chain/provider state).
+ * Runs per-app deploy pipelines concurrently (bounded by AI_BATCH_DEPLOY_CONCURRENCY).
+ * A signing mutex serializes wallet operations (cosmosTx, signArbitrary) to avoid
+ * nonce collisions, while non-signing work (HTTP uploads, WS waits, status checks)
+ * runs in parallel.
  */
 export async function executeConfirmedBatchDeploy(
   args: Record<string, unknown>,
@@ -1425,9 +1426,9 @@ export async function executeConfirmedBatchDeploy(
 
   emitProgress();
 
-  // Deploy apps end-to-end with concurrency=2. A signing mutex serializes
-  // cosmosTx / signArbitrary calls (which share wallet sequence numbers)
-  // while letting non-signing work (WS events, HTTP status checks) overlap.
+  // Deploy apps end-to-end with configurable concurrency (AI_BATCH_DEPLOY_CONCURRENCY).
+  // A signing mutex serializes cosmosTx / signArbitrary calls (which share wallet
+  // sequence numbers) while letting non-signing work (WS events, HTTP status checks) overlap.
   const deployed: Array<{ name: string; url?: string }> = [];
   const failed: string[] = [];
 
@@ -1444,6 +1445,10 @@ export async function executeConfirmedBatchDeploy(
       unlock();
     }
   };
+
+  // Mutex-wrapped signArbitrary — only signing is serialized, not the
+  // subsequent HTTP calls that use the resulting token/signature.
+  const signArbitraryWithMutex = (addr: string, data: string) => withSign(() => signArbitrary(addr, data));
 
   const deployOne = async (i: number) => {
     const entry = entries[i];
@@ -1490,14 +1495,14 @@ export async function executeConfirmedBatchDeploy(
     batchProgress[i] = { name, phase: 'uploading', detail: 'Uploading manifest...' };
     emitProgress();
 
-    const uploadResult = await withSign(() => uploadPayloadToProvider(
+    const uploadResult = await uploadPayloadToProvider(
       entry.providerUrl,
       leaseUuid,
       entry.payload.hash,
       entry.payload.bytes,
       address,
-      signArbitrary
-    ));
+      signArbitraryWithMutex
+    );
 
     if (!uploadResult.success) {
       batchProgress[i] = { name, phase: 'failed', detail: `Upload failed: ${uploadResult.error}` };
@@ -1512,7 +1517,7 @@ export async function executeConfirmedBatchDeploy(
     emitProgress();
 
     try {
-      const refreshAuthToken = () => withSign(() => getProviderAuthToken(address, leaseUuid, signArbitrary));
+      const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitraryWithMutex);
       const authToken = await refreshAuthToken();
 
       const fredStatus = await waitForLeaseReady(entry.providerUrl, leaseUuid, authToken, {
@@ -1535,10 +1540,10 @@ export async function executeConfirmedBatchDeploy(
       });
 
       if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
-        const { url: connectionUrl, connection } = await withSign(() => resolveAppUrl(
-          entry.providerUrl, leaseUuid, fredStatus, address, signArbitrary,
+        const { url: connectionUrl, connection } = await resolveAppUrl(
+          entry.providerUrl, leaseUuid, fredStatus, address, signArbitraryWithMutex,
           'executeConfirmedBatchDeploy'
-        ));
+        );
 
         appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection });
         batchProgress[i] = { name, phase: 'ready', detail: 'App is live!' };
@@ -1575,7 +1580,7 @@ export async function executeConfirmedBatchDeploy(
     }
   };
 
-  // Run with concurrency=2
+  // Run with bounded concurrency
   const active = new Set<Promise<void>>();
   for (let i = 0; i < entries.length; i++) {
     if (signal?.aborted) break;
