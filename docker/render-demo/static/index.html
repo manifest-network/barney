@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Image Generator &mdash; Powered by Render</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            render: {
+              50: '#eef9ff', 100: '#d8f1ff', 200: '#bae8ff', 300: '#8adbff',
+              400: '#52c5ff', 500: '#2aa6ff', 600: '#1488f5', 700: '#0d6fe1',
+              800: '#1259b6', 900: '#154c8f',
+            }
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+    .pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+    @keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fade-in .3s ease-out; }
+    .img-grid img { transition: transform .2s; cursor: pointer; }
+    .img-grid img:hover { transform: scale(1.03); }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen antialiased">
+
+  <header class="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-10">
+    <div class="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-render-600 flex items-center justify-center text-white font-bold text-sm">R</div>
+        <h1 class="text-lg font-semibold">Image Generator</h1>
+        <span class="text-xs text-gray-500 border border-gray-700 rounded px-1.5 py-0.5">Powered by Render</span>
+      </div>
+      <div id="connection-status" class="flex items-center gap-2 text-sm text-gray-400">
+        <span class="w-2 h-2 rounded-full bg-gray-600"></span>
+        <span>Checking...</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 py-8 space-y-8">
+
+    <!-- GPU Availability -->
+    <section>
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Available GPUs</h2>
+        <button onclick="loadGpus()" class="text-xs text-render-400 hover:text-render-300 transition">Refresh</button>
+      </div>
+      <div id="gpu-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+    </section>
+
+    <!-- Inference Server Control -->
+    <section class="bg-gray-900 rounded-xl border border-gray-800 p-6">
+      <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">Inference Server</h2>
+      <div id="server-status" class="space-y-4">
+        <div class="flex items-center gap-3">
+          <span id="server-indicator" class="w-3 h-3 rounded-full bg-gray-600"></span>
+          <span id="server-label" class="text-sm">Not deployed</span>
+        </div>
+        <div class="flex flex-wrap gap-3">
+          <select id="gpu-select" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-render-500 focus:outline-none">
+            <option value="RTX 4090">RTX 4090</option>
+          </select>
+          <button id="deploy-btn" onclick="deployServer()"
+            class="bg-render-600 hover:bg-render-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed">
+            Deploy Inference Server
+          </button>
+          <button id="stop-btn" onclick="stopServer()" class="hidden bg-red-600/20 text-red-400 hover:bg-red-600/30 px-4 py-2 rounded-lg text-sm font-medium transition">
+            Stop
+          </button>
+        </div>
+        <div id="server-details" class="hidden text-xs text-gray-500 space-y-1"></div>
+      </div>
+    </section>
+
+    <!-- Image Generation -->
+    <section class="bg-gray-900 rounded-xl border border-gray-800 p-6">
+      <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">Generate Image</h2>
+      <div class="space-y-4">
+        <div>
+          <textarea id="prompt-input" rows="3" placeholder="Describe the image you want to create..."
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-sm focus:border-render-500 focus:outline-none resize-none placeholder-gray-600"
+            disabled></textarea>
+        </div>
+        <div class="flex flex-wrap items-center gap-4">
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-gray-500">Size</label>
+            <select id="size-select" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs" disabled>
+              <option value="512">512x512</option>
+              <option value="768">768x768</option>
+              <option value="1024">1024x1024</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-gray-500">Steps</label>
+            <select id="steps-select" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs" disabled>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="4" selected>4</option>
+              <option value="6">6</option>
+              <option value="8">8</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-gray-500">Seed</label>
+            <input id="seed-input" type="number" placeholder="Random"
+              class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-24" disabled>
+          </div>
+          <button id="generate-btn" onclick="generateImage()"
+            class="ml-auto bg-render-600 hover:bg-render-700 text-white px-6 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled>
+            Generate
+          </button>
+        </div>
+        <div id="generate-status" class="hidden text-sm text-gray-400"></div>
+      </div>
+
+      <div id="current-image" class="hidden mt-6 fade-in">
+        <div class="bg-gray-800 rounded-lg overflow-hidden inline-block">
+          <img id="generated-img" class="max-w-full" alt="Generated image">
+        </div>
+        <div id="image-meta" class="mt-2 text-xs text-gray-500"></div>
+      </div>
+    </section>
+
+    <!-- Gallery -->
+    <section id="gallery-section" class="hidden">
+      <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">Gallery</h2>
+      <div id="gallery" class="img-grid grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3"></div>
+    </section>
+
+  </main>
+
+  <!-- Lightbox -->
+  <div id="lightbox" class="hidden fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-8 cursor-pointer" onclick="closeLightbox()">
+    <img id="lightbox-img" class="max-w-full max-h-full object-contain rounded-lg shadow-2xl" alt="Full-size image">
+  </div>
+
+  <script>
+    // -- State --
+    let pollInterval = null;
+    const gallery = [];
+
+    // -- Safe DOM helpers --
+    function el(tag, attrs, ...children) {
+      const node = document.createElement(tag);
+      if (attrs) {
+        for (const [k, v] of Object.entries(attrs)) {
+          if (k === 'className') node.className = v;
+          else if (k.startsWith('on')) node.addEventListener(k.slice(2).toLowerCase(), v);
+          else node.setAttribute(k, v);
+        }
+      }
+      for (const child of children) {
+        if (typeof child === 'string') node.appendChild(document.createTextNode(child));
+        else if (child) node.appendChild(child);
+      }
+      return node;
+    }
+
+    function clearChildren(node) {
+      while (node.firstChild) node.removeChild(node.firstChild);
+    }
+
+    // -- GPU listing --
+    async function loadGpus() {
+      const grid = document.getElementById('gpu-grid');
+      clearChildren(grid);
+
+      // Loading skeleton
+      for (let i = 0; i < 3; i++) {
+        grid.appendChild(el('div', { className: 'bg-gray-900 rounded-lg p-4 border border-gray-800 animate-pulse h-24' }));
+      }
+
+      try {
+        const resp = await fetch('/api/gpus');
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || 'API error: ' + resp.status);
+        }
+        const data = await resp.json();
+        const gpus = (data.data || []).filter(g => g.is_qualified);
+        const select = document.getElementById('gpu-select');
+        clearChildren(select);
+        clearChildren(grid);
+
+        if (!gpus.length) {
+          grid.appendChild(el('p', { className: 'text-sm text-gray-500 col-span-full' }, 'No GPUs available'));
+          return;
+        }
+
+        gpus.forEach(g => {
+          // GPU card
+          const badge = el('span', {
+            className: `text-xs px-2 py-0.5 rounded-full ${g.available_count > 0 ? 'bg-green-900/50 text-green-400' : 'bg-gray-700 text-gray-400'}`
+          }, `${g.available_count} avail`);
+
+          const card = el('div', { className: 'bg-gray-800/50 rounded-lg p-4 border border-gray-700/50 hover:border-gray-600 transition' },
+            el('div', { className: 'flex items-center justify-between mb-2' },
+              el('span', { className: 'font-medium text-sm' }, g.gpu_model_name),
+              badge
+            ),
+            el('div', { className: 'text-xs text-gray-500 space-y-0.5' },
+              el('div', {}, `VRAM: ${g.vram_gb} GB`),
+              el('div', {}, `Rate: $${g.hourly_rate_usd.toFixed(4)}/hr`),
+              el('div', {}, `Score: ${g.performance_score.toFixed(2)}`)
+            )
+          );
+          grid.appendChild(card);
+
+          // Select option
+          const opt = el('option', { value: g.gpu_model_name },
+            `${g.gpu_model_name} ($${g.hourly_rate_usd.toFixed(4)}/hr, ${g.available_count} avail)`
+          );
+          select.appendChild(opt);
+        });
+      } catch (err) {
+        clearChildren(grid);
+        grid.appendChild(el('p', { className: 'text-sm text-red-400 col-span-full' }, 'Failed to load GPUs: ' + err.message));
+      }
+    }
+
+    // -- Server management --
+    async function deployServer() {
+      const btn = document.getElementById('deploy-btn');
+      btn.disabled = true;
+      btn.textContent = 'Deploying...';
+
+      try {
+        const gpu = document.getElementById('gpu-select').value;
+        const resp = await fetch('/api/deploy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gpu_name: gpu }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || 'Deploy failed');
+        }
+        startPolling();
+      } catch (err) {
+        alert('Deploy failed: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = 'Deploy Inference Server';
+      }
+    }
+
+    async function stopServer() {
+      if (!confirm('Stop the inference server?')) return;
+      try {
+        const resp = await fetch('/api/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || 'Stop failed');
+        }
+        stopPolling();
+        updateServerUI('not_deployed');
+      } catch (err) {
+        alert('Stop failed: ' + err.message);
+      }
+    }
+
+    function startPolling() {
+      if (pollInterval) return;
+      pollStatus();
+      pollInterval = setInterval(pollStatus, 5000);
+    }
+
+    function stopPolling() {
+      if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    }
+
+    async function pollStatus() {
+      try {
+        const resp = await fetch('/api/status');
+        const data = await resp.json();
+        updateServerUI(data.status, data.job, data.node_urls);
+
+        if (['COMPLETED', 'CANCELLED', 'FAILED', 'not_deployed'].includes(data.status)) {
+          stopPolling();
+        }
+
+        if (data.status === 'RUNNING' && data.node_urls?.length) {
+          const health = await fetch('/api/inference-health');
+          const hData = await health.json();
+          if (hData.status === 'ready') setGenerationEnabled(true);
+        }
+      } catch (err) { console.warn('Status poll failed:', err); }
+    }
+
+    function updateServerUI(status, job, nodeUrls) {
+      const indicator = document.getElementById('server-indicator');
+      const label = document.getElementById('server-label');
+      const deployBtn = document.getElementById('deploy-btn');
+      const stopBtn = document.getElementById('stop-btn');
+      const details = document.getElementById('server-details');
+
+      const colors = {
+        'not_deployed': 'bg-gray-600', 'PENDING': 'bg-yellow-500 pulse-dot',
+        'ASSIGNED': 'bg-yellow-500 pulse-dot', 'RUNNING': 'bg-green-500',
+        'COMPLETED': 'bg-gray-600', 'CANCELLED': 'bg-gray-600',
+        'FAILED': 'bg-red-500', 'unknown': 'bg-gray-600',
+      };
+      const labels = {
+        'not_deployed': 'Not deployed', 'PENDING': 'Pending \u2014 waiting for GPU...',
+        'ASSIGNED': 'Assigned \u2014 starting container...', 'RUNNING': 'Running',
+        'COMPLETED': 'Completed', 'CANCELLED': 'Stopped',
+        'FAILED': 'Failed', 'unknown': 'Unknown',
+      };
+
+      indicator.className = `w-3 h-3 rounded-full ${colors[status] || 'bg-gray-600'}`;
+      label.textContent = labels[status] || status;
+
+      const isActive = ['PENDING', 'ASSIGNED', 'RUNNING'].includes(status);
+      deployBtn.classList.toggle('hidden', isActive);
+      deployBtn.disabled = false;
+      deployBtn.textContent = 'Deploy Inference Server';
+      stopBtn.classList.toggle('hidden', !isActive);
+
+      clearChildren(details);
+      if (job) {
+        details.classList.remove('hidden');
+        details.appendChild(el('div', {}, 'Job: ', el('span', { className: 'text-gray-300' }, job.uuid || '')));
+        details.appendChild(el('div', {}, 'GPU: ', el('span', { className: 'text-gray-300' }, job.gpu_name || 'N/A')));
+        if (job.status_reason) {
+          details.appendChild(el('div', {}, 'Reason: ', el('span', { className: 'text-gray-300' }, job.status_reason)));
+        }
+        if (nodeUrls?.length) {
+          details.appendChild(el('div', {}, 'Endpoint: ',
+            el('span', { className: 'text-render-400' }, nodeUrls[0].hostname + ':' + nodeUrls[0].port)));
+        }
+      } else {
+        details.classList.add('hidden');
+      }
+
+      if (!isActive) setGenerationEnabled(false);
+    }
+
+    function setGenerationEnabled(enabled) {
+      const disabled = !enabled;
+      document.getElementById('prompt-input').disabled = disabled;
+      document.getElementById('size-select').disabled = disabled;
+      document.getElementById('steps-select').disabled = disabled;
+      document.getElementById('seed-input').disabled = disabled;
+      document.getElementById('generate-btn').disabled = disabled;
+      updateConnectionStatus(enabled ? 'connected' : 'disconnected');
+    }
+
+    // -- Image generation --
+    async function generateImage() {
+      const prompt = document.getElementById('prompt-input').value.trim();
+      if (!prompt) return;
+
+      const btn = document.getElementById('generate-btn');
+      const statusEl = document.getElementById('generate-status');
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+      statusEl.classList.remove('hidden');
+      statusEl.textContent = 'Sending prompt to GPU...';
+
+      const size = parseInt(document.getElementById('size-select').value);
+      const steps = parseInt(document.getElementById('steps-select').value);
+      const seedVal = document.getElementById('seed-input').value;
+      const seed = seedVal ? parseInt(seedVal) : null;
+      const startTime = Date.now();
+
+      try {
+        const resp = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, width: size, height: size, steps, seed }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || 'Generation failed');
+        }
+
+        const data = await resp.json();
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+        const imgEl = document.getElementById('generated-img');
+        imgEl.src = 'data:image/png;base64,' + data.image;
+        document.getElementById('current-image').classList.remove('hidden');
+        const metaEl = document.getElementById('image-meta');
+        metaEl.textContent = `"${prompt}" | ${data.width}x${data.height} | ${steps} steps | seed: ${data.seed} | ${elapsed}s`;
+
+        statusEl.classList.add('hidden');
+
+        gallery.unshift({ image: data.image, prompt, seed: data.seed, width: data.width, height: data.height, elapsed });
+        renderGallery();
+      } catch (err) {
+        statusEl.textContent = 'Error: ' + err.message;
+        statusEl.classList.remove('hidden');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Generate';
+      }
+    }
+
+    function renderGallery() {
+      if (!gallery.length) return;
+      document.getElementById('gallery-section').classList.remove('hidden');
+      const container = document.getElementById('gallery');
+      clearChildren(container);
+
+      gallery.forEach((item, i) => {
+        const img = el('img', {
+          src: 'data:image/png;base64,' + item.image,
+          alt: item.prompt,
+          className: 'w-full aspect-square object-cover',
+          onClick: () => openLightbox(i),
+        });
+
+        const promptText = el('p', { className: 'text-xs text-gray-400 truncate', title: item.prompt }, item.prompt);
+        const metaText = el('p', { className: 'text-xs text-gray-600' }, `${item.elapsed}s | seed: ${item.seed}`);
+
+        const card = el('div', { className: 'bg-gray-800/50 rounded-lg overflow-hidden border border-gray-700/50 hover:border-gray-600 transition fade-in' },
+          img,
+          el('div', { className: 'p-2' }, promptText, metaText)
+        );
+        container.appendChild(card);
+      });
+    }
+
+    // -- Lightbox --
+    function openLightbox(idx) {
+      const item = gallery[idx];
+      if (!item) return;
+      document.getElementById('lightbox-img').src = 'data:image/png;base64,' + item.image;
+      document.getElementById('lightbox').classList.remove('hidden');
+    }
+
+    function closeLightbox() {
+      document.getElementById('lightbox').classList.add('hidden');
+    }
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') closeLightbox();
+      if (e.key === 'Enter' && !e.shiftKey && document.activeElement === document.getElementById('prompt-input')) {
+        e.preventDefault();
+        generateImage();
+      }
+    });
+
+    // -- Connection status --
+    function updateConnectionStatus(state) {
+      const container = document.getElementById('connection-status');
+      clearChildren(container);
+      const dot = el('span', { className: `w-2 h-2 rounded-full ${state === 'connected' ? 'bg-green-500' : 'bg-gray-600'}` });
+      const text = document.createTextNode(state === 'connected' ? ' Connected to Render GPU' : ' Not connected');
+      container.appendChild(dot);
+      container.appendChild(text);
+    }
+
+    // -- Init --
+    loadGpus();
+    fetch('/api/status').then(r => r.json()).then(data => {
+      if (data.status && data.status !== 'not_deployed') {
+        startPolling();
+        updateServerUI(data.status, data.job, data.node_urls);
+      }
+    }).catch(err => {
+      console.warn('Initial status check failed:', err);
+      updateConnectionStatus('disconnected');
+    });
+  </script>
+
+</body>
+</html>

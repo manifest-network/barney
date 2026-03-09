@@ -123,6 +123,22 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   // }, size: 'large', group: 'apps', category: 'Tools' },
   // { label: 'Registry 2', manifest: SERVICE_MANIFEST('registry:2', ['5000']), size: 'micro', group: 'apps', category: 'Tools' },
 
+  // --- Render Demo (user-supplied credentials, not auto-generated) ---
+  {
+    label: 'Render Image Gen',
+    manifest: SERVICE_MANIFEST('render-demo:latest', ['8000'], {
+      env: {
+        RENDER_API_KEY: 'pk_YOUR_KEY',
+        RENDER_SECRET_KEY: 'sk_YOUR_KEY',
+        RENDER_INFERENCE_IMAGE: 'your-registry/render-inference:latest',
+        RENDER_GPU_NAME: 'RTX 4090',
+      },
+    }),
+    size: 'micro',
+    group: 'apps',
+    category: 'AI',
+  },
+
   // --- Stacks (multi-service) ---
   {
     label: 'WordPress + MySQL',
