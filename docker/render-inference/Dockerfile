@@ -1,15 +1,25 @@
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+# Stage 1: install Python packages
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS builder
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends python3 python3-pip && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt \
+RUN pip3 install --no-cache-dir --prefix=/install -r requirements.txt \
     --index-url https://download.pytorch.org/whl/cu124 \
     --extra-index-url https://pypi.org/simple/
+
+# Stage 2: minimal runtime
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends python3 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /install /usr/local
+
+WORKDIR /app
 
 RUN useradd --no-create-home appuser
 
