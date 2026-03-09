@@ -1,10 +1,15 @@
-# Stage 1: install Python packages in a Python image
+# Stage 1: install Python packages + download model
 FROM python:3.12-slim AS builder
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
     --index-url https://download.pytorch.org/whl/cu124 \
     --extra-index-url https://pypi.org/simple/
+
+# Pre-download SDXL-Turbo model weights into the image
+ENV HF_HOME=/model-cache
+RUN PYTHONPATH=/install/lib/python3.12/site-packages \
+    python3 -c "from diffusers import AutoPipelineForText2Image; AutoPipelineForText2Image.from_pretrained('stabilityai/sdxl-turbo', variant='fp16')"
 
 # Stage 2: ubuntu base (matches Render's compute_examples pattern)
 FROM ubuntu:22.04
@@ -21,6 +26,10 @@ RUN mkdir -p /var/run/sshd && \
 # Copy Python packages from builder
 COPY --from=builder /install/lib /usr/local/lib
 COPY --from=builder /install/bin /usr/local/bin
+
+# Copy pre-downloaded model cache
+COPY --from=builder /model-cache /model-cache
+ENV HF_HOME=/model-cache
 
 # Follow Render's compute_examples user/workdir pattern
 RUN groupadd -r duser && \
