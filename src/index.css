@@ -4637,7 +4637,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* Touch devices: always show footer (no hover available) */
-@media (hover: none) and (max-width: 1024px) {
+@media (hover: none) {
   .message-footer {
     opacity: 1;
   }
