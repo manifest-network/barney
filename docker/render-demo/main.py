@@ -56,6 +56,7 @@ async def render_network_error_handler(
 INFERENCE_IMAGE = os.environ.get("RENDER_INFERENCE_IMAGE", "")
 INFERENCE_PORT = int(os.environ.get("RENDER_INFERENCE_PORT", "8000"))
 INFERENCE_TIMEOUT = int(os.environ.get("RENDER_INFERENCE_TIMEOUT", "120"))
+INFERENCE_SSH_PUBKEY = os.environ.get("RENDER_SSH_PUBKEY", "")
 
 # In-memory tracking of the active inference job.
 # Lost on restart — a running Render job will become orphaned.
@@ -125,6 +126,8 @@ async def deploy_inference(req: DeployRequest) -> dict:
         port=INFERENCE_PORT,
         gpu_name=req.gpu_name,
         gpu_count=1,
+        sshkey=INFERENCE_SSH_PUBKEY or None,
+        extra_ports=[22] if INFERENCE_SSH_PUBKEY else None,
     )
 
     _active_job_uuid = job.get("uuid")
