@@ -13,7 +13,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
     apt-get install -y --no-install-recommends openssh-server sudo && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir /var/run/sshd && \
+RUN mkdir -p /var/run/sshd && \
     rm -f /etc/ssh/ssh_host_*
 
 COPY --from=builder /install /usr/local
