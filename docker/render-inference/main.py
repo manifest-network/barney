@@ -1,4 +1,8 @@
-"""Minimal SDXL-Turbo inference server for the Render GPU network."""
+"""Minimal SDXL-Turbo inference server for the Render GPU network.
+
+The SDXL-Turbo model (~3.5 GB) is downloaded from HuggingFace on first
+startup. Subsequent starts use the cached model.
+"""
 
 import asyncio
 import base64
@@ -10,7 +14,7 @@ from io import BytesIO
 import torch
 from diffusers import AutoPipelineForText2Image
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO)
@@ -38,16 +42,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Render Inference Server", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 class GenerateRequest(BaseModel):
-    prompt: str
+    prompt: str = Field(min_length=1)
     width: int = Field(default=512, ge=256, le=1024)
     height: int = Field(default=512, ge=256, le=1024)
     steps: int = Field(default=4, ge=1, le=8)
@@ -64,8 +62,9 @@ class GenerateResponse(BaseModel):
 def _run_inference(
     prompt: str, width: int, height: int, steps: int, seed: int | None
 ) -> tuple[str, int]:
-    """Run the diffusion pipeline synchronously (called via asyncio.to_thread)."""
-    assert pipe is not None
+    """Run the diffusion pipeline synchronously. Must not be called from the event loop."""
+    if pipe is None:
+        raise RuntimeError("Model pipeline not loaded")
 
     generator = torch.Generator("cuda")
     if seed is not None:
@@ -80,7 +79,7 @@ def _run_inference(
         num_inference_steps=steps,
         width=width,
         height=height,
-        guidance_scale=0.0,  # SDXL-Turbo is distilled for zero-guidance inference
+        guidance_scale=0.0,  # SDXL-Turbo does not use guidance_scale — set to 0.0 per model card
         generator=generator,
     )
 
@@ -102,19 +101,27 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
         b64, actual_seed = await asyncio.to_thread(
             _run_inference, req.prompt, req.width, req.height, req.steps, req.seed
         )
-    except torch.cuda.OutOfMemoryError:
+    except torch.cuda.OutOfMemoryError as exc:
         raise HTTPException(
             507, "GPU out of memory. Try a smaller image size or fewer steps."
-        )
+        ) from exc
     except RuntimeError as exc:
         logger.error("Inference failed: %s", exc)
-        raise HTTPException(500, f"Inference failed: {exc}")
+        raise HTTPException(500, f"Inference failed: {exc}") from exc
 
     return GenerateResponse(image=b64, seed=actual_seed, width=req.width, height=req.height)
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
+async def health() -> JSONResponse:
     if _load_error:
-        return {"status": "error", "error": _load_error}
-    return {"status": "ready" if pipe is not None else "loading"}
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "error": _load_error},
+        )
+    if pipe is None:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "loading"},
+        )
+    return JSONResponse(content={"status": "ready"})

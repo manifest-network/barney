@@ -111,6 +111,9 @@ async def list_jobs() -> dict:
 async def deploy_inference(req: DeployRequest) -> dict:
     global _active_job_uuid
 
+    if _active_job_uuid:
+        raise HTTPException(409, "An inference job is already active. Stop it first.")
+
     image = req.image or INFERENCE_IMAGE
     if not image:
         raise HTTPException(400, "No inference image configured. Set RENDER_INFERENCE_IMAGE.")
@@ -140,19 +143,8 @@ async def inference_status() -> dict:
         logger.warning("Failed to fetch job %s: %s", _active_job_uuid, exc)
         return {"status": "unknown", "job": None, "node_urls": []}
 
-    result: dict = {"status": job.get("status", "unknown"), "job": job, "node_urls": []}
-
-    if job.get("status") == "RUNNING":
-        try:
-            runs = await render.list_job_runs(
-                job_uuid=_active_job_uuid, status="RUNNING"
-            )
-            if runs.get("data"):
-                result["node_urls"] = runs["data"][0].get("node_urls", [])
-        except httpx.HTTPError as exc:
-            logger.warning("Failed to list job runs for %s: %s", _active_job_uuid, exc)
-
-    return result
+    node_urls = await _get_node_urls() if job.get("status") == "RUNNING" else []
+    return {"status": job.get("status", "unknown"), "job": job, "node_urls": node_urls}
 
 
 @app.post("/api/stop")
@@ -208,36 +200,46 @@ async def inference_health() -> dict:
             resp = await client.get(f"{inference_url}/health")
             resp.raise_for_status()
             return resp.json()
-    except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException):
+    except Exception as exc:
+        logger.debug("Inference health check failed: %s", exc)
         return {"status": "unavailable"}
 
 
-def _format_node_url(node: dict) -> str:
-    proto = node.get("protocol", "https")
-    return f"{proto}://{node['hostname']}:{node['port']}"
-
-
-async def _resolve_inference_url() -> str | None:
-    """Get the HTTP URL of the running inference server from Render."""
+async def _get_node_urls() -> list[dict]:
+    """Fetch node_urls for the active job's first running run."""
     if not _active_job_uuid:
-        return None
+        return []
 
     try:
         runs = await render.list_job_runs(
             job_uuid=_active_job_uuid, status="RUNNING"
         )
     except httpx.HTTPError as exc:
-        logger.warning("Failed to resolve inference URL for job %s: %s", _active_job_uuid, exc)
-        return None
+        logger.warning("Failed to fetch job runs for %s: %s", _active_job_uuid, exc)
+        return []
 
     if not runs.get("data"):
-        return None
+        return []
 
-    node_urls = runs["data"][0].get("node_urls", [])
+    return runs["data"][0].get("node_urls", [])
+
+
+def _format_node_url(node: dict) -> str | None:
+    hostname = node.get("hostname")
+    port = node.get("port")
+    if not hostname or port is None:
+        return None
+    proto = node.get("protocol", "https")
+    return f"{proto}://{hostname}:{port}"
+
+
+async def _resolve_inference_url() -> str | None:
+    """Get the HTTP URL of the running inference server from Render."""
+    node_urls = await _get_node_urls()
     if not node_urls:
         return None
 
-    # Prefer a URL matching the expected inference port, fall back to first
+    # A Render job may expose multiple ports. Prefer the one matching INFERENCE_PORT.
     match = next(
         (n for n in node_urls if n.get("port") == INFERENCE_PORT),
         node_urls[0],

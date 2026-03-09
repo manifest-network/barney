@@ -285,6 +285,10 @@
     async function pollStatus() {
       try {
         const resp = await fetch('/api/status');
+        if (!resp.ok) {
+          console.warn('Status poll error:', resp.status);
+          return;
+        }
         const data = await resp.json();
         updateServerUI(data.status, data.job, data.node_urls);
 
@@ -293,9 +297,15 @@
         }
 
         if (data.status === 'RUNNING' && data.node_urls?.length) {
-          const health = await fetch('/api/inference-health');
-          const hData = await health.json();
-          if (hData.status === 'ready') setGenerationEnabled(true);
+          try {
+            const health = await fetch('/api/inference-health');
+            if (health.ok) {
+              const hData = await health.json();
+              if (hData.status === 'ready') setGenerationEnabled(true);
+            }
+          } catch (healthErr) {
+            console.warn('Inference health check failed:', healthErr);
+          }
         }
       } catch (err) { console.warn('Status poll failed:', err); }
     }
@@ -466,7 +476,10 @@
 
     // -- Init --
     loadGpus();
-    fetch('/api/status').then(r => r.json()).then(data => {
+    fetch('/api/status').then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }).then(data => {
       if (data.status && data.status !== 'not_deployed') {
         startPolling();
         updateServerUI(data.status, data.job, data.node_urls);

@@ -117,7 +117,16 @@ class RenderClient:
                     method, path, resp.status_code, resp.text[:500],
                 )
             resp.raise_for_status()
-            return resp.json()
+            if resp.status_code == 204 or not resp.content:
+                return {}
+            try:
+                return resp.json()
+            except ValueError:
+                logger.error(
+                    "Render API returned non-JSON: %s %s -> %d: %s",
+                    method, path, resp.status_code, resp.text[:200],
+                )
+                raise
 
     # -- GPU Registry --
 
