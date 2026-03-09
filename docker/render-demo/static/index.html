@@ -78,6 +78,7 @@
           </button>
         </div>
         <div id="server-details" class="hidden text-xs text-gray-500 space-y-1"></div>
+        <div id="model-status" class="hidden text-xs"></div>
       </div>
     </section>
 
@@ -299,13 +300,15 @@
         if (data.status === 'RUNNING' && data.node_urls?.length) {
           try {
             const health = await fetch('/api/inference-health');
-            if (health.ok) {
-              const hData = await health.json();
-              if (hData.status === 'ready') setGenerationEnabled(true);
-            }
+            const hData = health.ok ? await health.json() : { status: 'unavailable' };
+            updateModelStatus(hData.status, hData.error);
+            if (hData.status === 'ready') setGenerationEnabled(true);
           } catch (healthErr) {
+            updateModelStatus('unavailable');
             console.warn('Inference health check failed:', healthErr);
           }
+        } else if (data.status === 'RUNNING') {
+          updateModelStatus('waiting');
         }
       } catch (err) { console.warn('Status poll failed:', err); }
     }
@@ -355,7 +358,10 @@
         details.classList.add('hidden');
       }
 
-      if (!isActive) setGenerationEnabled(false);
+      if (!isActive) {
+        setGenerationEnabled(false);
+        document.getElementById('model-status').classList.add('hidden');
+      }
     }
 
     function setGenerationEnabled(enabled) {
@@ -366,6 +372,25 @@
       document.getElementById('seed-input').disabled = disabled;
       document.getElementById('generate-btn').disabled = disabled;
       updateConnectionStatus(enabled ? 'connected' : 'disconnected');
+    }
+
+    function updateModelStatus(status, error) {
+      const el_ = document.getElementById('model-status');
+      clearChildren(el_);
+      el_.classList.remove('hidden');
+
+      const configs = {
+        'loading':     { text: 'Model loading \u2014 downloading SDXL-Turbo (~3.5 GB)...', cls: 'text-yellow-400 pulse-dot' },
+        'ready':       { text: 'Model ready', cls: 'text-green-400' },
+        'error':       { text: 'Model failed to load' + (error ? ': ' + error : ''), cls: 'text-red-400' },
+        'waiting':     { text: 'Waiting for node endpoints...', cls: 'text-gray-400 pulse-dot' },
+        'unavailable': { text: 'Inference server not reachable', cls: 'text-gray-500' },
+      };
+      const cfg = configs[status] || configs['unavailable'];
+
+      const dot = el('span', { className: 'inline-block w-2 h-2 rounded-full mr-2 ' + cfg.cls });
+      el_.appendChild(dot);
+      el_.appendChild(document.createTextNode(cfg.text));
     }
 
     // -- Image generation --

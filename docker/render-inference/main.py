@@ -120,8 +120,6 @@ async def health() -> JSONResponse:
             content={"status": "error", "error": _load_error},
         )
     if pipe is None:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "loading"},
-        )
+        # 200 — loading is a healthy transitional state (model downloading)
+        return JSONResponse(content={"status": "loading"})
     return JSONResponse(content={"status": "ready"})
