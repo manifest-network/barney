@@ -9832,8 +9832,8 @@ code.lease-card-mono {
     padding-top: 3.5rem;
   }
 
-  /* Shorten input hint for mobile */
-  .chat-input-hint {
+  /* Shorten input hint for mobile (exclude error messages) */
+  .chat-input-hint:not(.text-error) {
     font-size: 0.625rem;
   }
 }
