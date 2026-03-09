@@ -1,0 +1,2 @@
+appuser ALL = NOPASSWD: /usr/sbin/sshd
+appuser ALL = NOPASSWD: /usr/sbin/dpkg-reconfigure openssh-server

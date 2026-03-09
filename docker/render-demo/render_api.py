@@ -168,7 +168,10 @@ class RenderClient:
         gpu_name: str = "RTX 4090",
         gpu_count: int = 1,
         env: dict[str, str] | None = None,
+        sshkey: str | None = None,
+        extra_ports: list[int] | None = None,
     ) -> Any:
+        ports = [port] + (extra_ports or [])
         body: dict[str, Any] = {
             "title": title,
             "task": task,
@@ -179,12 +182,14 @@ class RenderClient:
                 "type": "docker",
                 "parameters": {
                     "image": image,
-                    "ports": [port],
+                    "ports": ports,
                 },
             },
         }
         if env:
             body["parameters"]["parameters"]["env"] = env
+        if sshkey:
+            body["parameters"]["parameters"]["sshkey"] = sshkey
         return await self._request("POST", "/v1/jobs", body=body)
 
     async def cancel_job(self, uuid: str, reason: str = "Stopped by user") -> Any:
