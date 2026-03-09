@@ -534,7 +534,10 @@ export function ChatPanel() {
               {input.length.toLocaleString()} / {MAX_INPUT_LENGTH.toLocaleString()} characters
             </span>
           ) : (
-            'Enter to send \u00b7 Shift+Enter for new line \u00b7 Esc to stop \u00b7 \u2191\u2193 history \u00b7 /help \u00b7 /clear'
+            <>
+              <span className="chat-input-hint--full">Enter to send &middot; Shift+Enter for new line &middot; Esc to stop &middot; &uarr;&darr; history &middot; /help &middot; /clear</span>
+              <span className="chat-input-hint--short">Enter to send &middot; /help &middot; /clear</span>
+            </>
           )}
         </p>
       </form>
