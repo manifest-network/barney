@@ -6,7 +6,9 @@ startup. Subsequent starts use the cached model.
 
 import asyncio
 import base64
+import glob
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from io import BytesIO
@@ -20,17 +22,36 @@ from pydantic import BaseModel, Field
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+MODEL_ID = os.environ.get("MODEL_ID", "stabilityai/sdxl-turbo")
+
 pipe: AutoPipelineForText2Image | None = None
 _load_error: str | None = None
+
+
+def _find_local_snapshot(model_id: str) -> str | None:
+    """Find a local HF cache snapshot for the given model ID."""
+    hf_home = os.environ.get("HF_HOME", "")
+    if not hf_home:
+        return None
+    # HF cache layout: {HF_HOME}/hub/models--{org}--{name}/snapshots/{hash}/
+    cache_name = "models--" + model_id.replace("/", "--")
+    pattern = os.path.join(hf_home, "hub", cache_name, "snapshots", "*", "model_index.json")
+    matches = glob.glob(pattern)
+    if matches:
+        return os.path.dirname(matches[0])
+    return None
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     global pipe, _load_error
     try:
-        logger.info("Loading SDXL-Turbo model...")
+        # Prefer local snapshot if available (baked into image), fall back to HF download
+        local_path = _find_local_snapshot(MODEL_ID)
+        source = local_path or MODEL_ID
+        logger.info("Loading model from %s ...", source)
         pipe = AutoPipelineForText2Image.from_pretrained(
-            "stabilityai/sdxl-turbo",
+            source,
             torch_dtype=torch.float16,
             variant="fp16",
         ).to("cuda")
