@@ -9827,6 +9827,11 @@ code.lease-card-mono {
     padding-left: 3.5rem;
   }
 
+  /* Offset sidebar content below the fixed toggle button */
+  .main-layout__sidebar .apps-sidebar {
+    padding-top: 3.5rem;
+  }
+
   /* Shorten input hint for mobile */
   .chat-input-hint {
     font-size: 0.625rem;
