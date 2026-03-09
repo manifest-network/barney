@@ -126,11 +126,11 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   // --- Render Demo (user-supplied credentials, not auto-generated) ---
   {
     label: 'Render Image Gen',
-    manifest: SERVICE_MANIFEST('render-demo:latest', ['8000'], {
+    manifest: SERVICE_MANIFEST('docker.io/lifted/render-demo:latest', ['8000'], {
       env: {
         RENDER_API_KEY: 'pk_YOUR_KEY',
         RENDER_SECRET_KEY: 'sk_YOUR_KEY',
-        RENDER_INFERENCE_IMAGE: 'your-registry/render-inference:latest',
+        RENDER_INFERENCE_IMAGE: 'docker.io/lifted/render-inference:latest',
       },
     }),
     size: 'micro',
