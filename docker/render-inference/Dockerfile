@@ -1,30 +1,19 @@
-# Stage 1: install Python packages
-FROM ubuntu:22.04 AS builder
-
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
-    apt-get install -y --no-install-recommends python3 python3-pip && \
-    rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-RUN pip3 install --no-cache-dir --prefix=/install -r requirements.txt \
-    --index-url https://download.pytorch.org/whl/cu124 \
-    --extra-index-url https://pypi.org/simple/
-
-# Stage 2: ubuntu base (matches Render's compute_examples pattern)
 FROM ubuntu:22.04
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
     apt-get install -y --no-install-recommends \
-        python3 python3-distutils \
+        python3 python3-pip python3-distutils \
         openssh-server sudo && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /var/run/sshd && \
     rm -f /etc/ssh/ssh_host_*
 
-# Copy Python packages from builder (same Python 3.10 in both stages)
-COPY --from=builder /install/lib /usr/local/lib
-COPY --from=builder /install/bin /usr/local/bin
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt \
+    --index-url https://download.pytorch.org/whl/cu124 \
+    --extra-index-url https://pypi.org/simple/ && \
+    rm /tmp/requirements.txt
 
 # Copy pre-downloaded model (download once locally, reuse across builds)
 COPY model-cache /model-cache
