@@ -41,4 +41,8 @@ if [[ -n "${SSH_PUBKEY}" ]]; then
 fi
 
 echo "=== Starting uvicorn ==="
-exec python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 &
+
+# Keep container alive until any background process exits
+wait -n
+exit $?
