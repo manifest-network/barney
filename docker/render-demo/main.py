@@ -93,6 +93,17 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/api/debug/config")
+async def debug_config() -> dict:
+    return {
+        "RENDER_API_KEY": "set" if _render_api_key else "missing",
+        "RENDER_SECRET_KEY": "set" if _render_secret_key else "missing",
+        "RENDER_INFERENCE_IMAGE": INFERENCE_IMAGE or "missing",
+        "RENDER_SSH_PUBKEY": INFERENCE_SSH_PUBKEY[:20] + "..." if INFERENCE_SSH_PUBKEY else "missing",
+        "RENDER_INFERENCE_PORT": INFERENCE_PORT,
+    }
+
+
 @app.get("/api/gpus")
 async def list_gpus() -> dict:
     return await render.list_gpus(only_available=True)
