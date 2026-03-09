@@ -178,7 +178,7 @@ class RenderClient:
             "gpu_name": gpu_name,
             "gpu_count": gpu_count,
             "max_timeout_run_ms": None if task == "PERSISTENT" else 3600000,
-            "max_timeout_start_ms": 600000,  # 10 min — model download can be slow
+            "max_timeout_start_ms": 1800000,  # 30 min — large image pull on slow nodes
             "parameters": {
                 "type": "docker",
                 "parameters": {
