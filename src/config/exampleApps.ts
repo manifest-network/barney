@@ -131,7 +131,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
         RENDER_API_KEY: 'pk_YOUR_KEY',
         RENDER_SECRET_KEY: 'sk_YOUR_KEY',
         RENDER_INFERENCE_IMAGE: 'docker.io/lifted/render-inference:latest',
-        RENDER_SSH_PUBKEY: '',
       },
     }),
     size: 'micro',
