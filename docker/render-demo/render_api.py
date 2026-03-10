@@ -192,6 +192,7 @@ class RenderClient:
                     "image": image_name,
                     "tag": tag,
                     "ports": ports,
+                    "allowed_ips": ["0.0.0.0/0"],
                 },
             },
         }
