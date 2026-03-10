@@ -380,11 +380,11 @@
       el_.classList.remove('hidden');
 
       const configs = {
-        'loading':     { text: 'Model loading \u2014 downloading SDXL-Turbo (~3.5 GB)...', cls: 'text-yellow-400 pulse-dot' },
+        'loading':     { text: 'Loading model...', cls: 'text-yellow-400 pulse-dot' },
         'ready':       { text: 'Model ready', cls: 'text-green-400' },
         'error':       { text: 'Model failed to load' + (error ? ': ' + error : ''), cls: 'text-red-400' },
-        'waiting':     { text: 'Waiting for node endpoints...', cls: 'text-gray-400 pulse-dot' },
-        'unavailable': { text: 'Inference server not reachable', cls: 'text-gray-500' },
+        'waiting':     { text: 'Starting inference server...', cls: 'text-yellow-400 pulse-dot' },
+        'unavailable': { text: 'Starting inference server...', cls: 'text-yellow-400 pulse-dot' },
       };
       const cfg = configs[status] || configs['unavailable'];
 
