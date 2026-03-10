@@ -172,6 +172,13 @@ class RenderClient:
         extra_ports: list[int] | None = None,
     ) -> Any:
         ports = [port] + (extra_ports or [])
+
+        # Render treats image and tag as separate fields
+        image_name = image
+        tag = "latest"
+        if ":" in image:
+            image_name, tag = image.rsplit(":", 1)
+
         body: dict[str, Any] = {
             "title": title,
             "task": task,
@@ -182,7 +189,8 @@ class RenderClient:
             "parameters": {
                 "type": "docker",
                 "parameters": {
-                    "image": image,
+                    "image": image_name,
+                    "tag": tag,
                     "ports": ports,
                 },
             },
