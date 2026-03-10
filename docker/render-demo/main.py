@@ -131,8 +131,18 @@ async def list_jobs() -> dict:
 async def deploy_inference(req: DeployRequest) -> dict:
     global _active_job_uuid
 
+    # Check if the tracked job is actually still active on Render
     if _active_job_uuid:
-        raise HTTPException(409, "An inference job is already active. Stop it first.")
+        try:
+            job = await render.get_job(_active_job_uuid)
+            if job.get("status") in ("PENDING", "ASSIGNED", "RUNNING"):
+                raise HTTPException(409, "An inference job is already active. Stop it first.")
+            # Job is terminal — clear stale reference
+            logger.info("Clearing stale job reference %s (status: %s)", _active_job_uuid, job.get("status"))
+            _active_job_uuid = None
+        except httpx.HTTPError:
+            # Can't reach Render — clear stale reference and allow redeploy
+            _active_job_uuid = None
 
     image = req.image or INFERENCE_IMAGE
     if not image:
