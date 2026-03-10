@@ -101,7 +101,15 @@ async def debug_config() -> dict:
         "RENDER_INFERENCE_IMAGE": INFERENCE_IMAGE or "missing",
         "RENDER_SSH_PUBKEY": INFERENCE_SSH_PUBKEY[:20] + "..." if INFERENCE_SSH_PUBKEY else "missing",
         "RENDER_INFERENCE_PORT": INFERENCE_PORT,
+        "active_job_uuid": _active_job_uuid,
     }
+
+
+@app.get("/api/debug/runs")
+async def debug_runs() -> dict:
+    if not _active_job_uuid:
+        return {"error": "no active job"}
+    return await render.list_job_runs(job_uuid=_active_job_uuid)
 
 
 @app.get("/api/gpus")
