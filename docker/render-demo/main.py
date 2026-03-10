@@ -251,8 +251,10 @@ def _format_node_url(node: dict) -> str | None:
     port = node.get("port")
     if not hostname or port is None:
         return None
-    proto = node.get("protocol", "https")
-    return f"{proto}://{hostname}:{port}"
+    # Render uses "tcp" protocol — map to http for HTTP services
+    proto = node.get("protocol", "tcp")
+    scheme = "http" if proto == "tcp" else proto
+    return f"{scheme}://{hostname}:{port}"
 
 
 async def _resolve_inference_url() -> str | None:
@@ -261,9 +263,10 @@ async def _resolve_inference_url() -> str | None:
     if not node_urls:
         return None
 
-    # A Render job may expose multiple ports. Prefer the one matching INFERENCE_PORT.
+    # Render maps container ports to random external ports.
+    # The container port is in the "description" field, the external port in "port".
     match = next(
-        (n for n in node_urls if n.get("port") == INFERENCE_PORT),
+        (n for n in node_urls if n.get("description") == str(INFERENCE_PORT)),
         node_urls[0],
     )
     return _format_node_url(match)
