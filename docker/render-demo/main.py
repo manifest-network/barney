@@ -5,8 +5,10 @@ Serves a web UI for text-to-image generation. Uses the Render Compute API
 generation requests to it.
 """
 
+import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -57,12 +59,56 @@ INFERENCE_IMAGE = os.environ.get("RENDER_INFERENCE_IMAGE", "")
 INFERENCE_PORT = int(os.environ.get("RENDER_INFERENCE_PORT", "8000"))
 INFERENCE_TIMEOUT = int(os.environ.get("RENDER_INFERENCE_TIMEOUT", "120"))
 INFERENCE_SSH_PUBKEY = os.environ.get("RENDER_SSH_PUBKEY", "")
+IDLE_SHUTDOWN_MINUTES = int(os.environ.get("RENDER_IDLE_SHUTDOWN_MINUTES", "10"))
 
 # In-memory tracking of the active inference job.
 # Lost on restart — a running Render job will become orphaned.
 _active_job_uuid: str | None = None
+_last_activity: float = 0.0  # time.monotonic() of last generation request
+_idle_task: asyncio.Task | None = None  # background idle checker
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+async def _idle_shutdown_loop() -> None:
+    """Background task that stops the inference job after idle timeout."""
+    global _active_job_uuid, _idle_task
+    while _active_job_uuid:
+        await asyncio.sleep(60)  # check every minute
+        if not _active_job_uuid:
+            break
+        idle_seconds = time.monotonic() - _last_activity
+        if idle_seconds >= IDLE_SHUTDOWN_MINUTES * 60:
+            logger.info(
+                "Idle for %d min — stopping inference job %s",
+                IDLE_SHUTDOWN_MINUTES, _active_job_uuid,
+            )
+            try:
+                await render.cancel_job(_active_job_uuid, reason="Idle timeout")
+            except Exception as exc:
+                logger.warning("Failed to stop idle job: %s", exc)
+            _active_job_uuid = None
+            break
+    _idle_task = None
+
+
+def _start_idle_timer() -> None:
+    global _last_activity, _idle_task
+    _last_activity = time.monotonic()
+    if _idle_task is None or _idle_task.done():
+        _idle_task = asyncio.create_task(_idle_shutdown_loop())
+
+
+def _touch_activity() -> None:
+    global _last_activity
+    _last_activity = time.monotonic()
+
+
+def _cancel_idle_timer() -> None:
+    global _idle_task
+    if _idle_task and not _idle_task.done():
+        _idle_task.cancel()
+        _idle_task = None
 
 
 # -- Models --
@@ -161,6 +207,7 @@ async def deploy_inference(req: DeployRequest) -> dict:
 
     _active_job_uuid = job.get("uuid")
     logger.info("Deployed inference job: %s", _active_job_uuid)
+    _start_idle_timer()
     return job
 
 
@@ -176,7 +223,14 @@ async def inference_status() -> dict:
         return {"status": "unknown", "job": None, "node_urls": []}
 
     node_urls = await _get_node_urls() if job.get("status") == "RUNNING" else []
-    return {"status": job.get("status", "unknown"), "job": job, "node_urls": node_urls}
+    idle_seconds = int(time.monotonic() - _last_activity) if _last_activity else 0
+    idle_shutdown_at = IDLE_SHUTDOWN_MINUTES * 60 - idle_seconds if _active_job_uuid else None
+    return {
+        "status": job.get("status", "unknown"),
+        "job": job,
+        "node_urls": node_urls,
+        "idle_seconds_remaining": max(0, idle_shutdown_at) if idle_shutdown_at is not None else None,
+    }
 
 
 @app.post("/api/stop")
@@ -190,6 +244,7 @@ async def stop_inference(req: StopRequest) -> dict:
 
     logger.info("Stopped inference job: %s", _active_job_uuid)
     _active_job_uuid = None
+    _cancel_idle_timer()
     return result
 
 
@@ -197,6 +252,8 @@ async def stop_inference(req: StopRequest) -> dict:
 async def generate_image(req: GenerateRequest) -> dict:
     if not _active_job_uuid:
         raise HTTPException(400, "No inference server running. Deploy one first.")
+
+    _touch_activity()
 
     # Resolve the inference server URL from the active job's node_urls
     inference_url = await _resolve_inference_url()
