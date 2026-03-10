@@ -79,6 +79,9 @@ export const KNOWN_IMAGES: readonly KnownImageConfig[] = [
   // --- Admin Tools ---
   { image: 'adminer', port: '8080' },
   { image: 'registry', port: '5000', aliases: ['docker-registry'] },
+
+  // --- Render Demo (requires external OTOY/Render API credentials — not auto-generated) ---
+  { image: 'lifted/render-demo', port: '8000', aliases: ['render-image-gen', 'render-demo'] },
 ];
 
 /**
