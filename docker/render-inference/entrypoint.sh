@@ -28,17 +28,17 @@ except Exception as e:
     print(f'fastapi import failed: {e}')
 " 2>&1
 
-# SSH setup (Render passes SSH_PUBKEY env var for remote access)
-if [[ -n "${SSH_PUBKEY}" ]]; then
-    echo "=== Setting up SSH ==="
-    mkdir -p ~/.ssh
-    echo -e "${SSH_PUBKEY}" > ~/.ssh/authorized_keys
-    chmod 700 ~/.ssh
-    chmod 600 ~/.ssh/authorized_keys
-    /usr/bin/sudo /usr/sbin/dpkg-reconfigure openssh-server > /dev/null 2>&1
-    /usr/bin/sudo /usr/sbin/sshd -D &
-    echo "sshd started"
-fi
+# Uncomment for SSH debugging (also uncomment openssh-server in Dockerfile):
+# if [[ -n "${SSH_PUBKEY}" ]]; then
+#     echo "=== Setting up SSH ==="
+#     mkdir -p ~/.ssh
+#     echo -e "${SSH_PUBKEY}" > ~/.ssh/authorized_keys
+#     chmod 700 ~/.ssh
+#     chmod 600 ~/.ssh/authorized_keys
+#     /usr/bin/sudo /usr/sbin/dpkg-reconfigure openssh-server > /dev/null 2>&1
+#     /usr/bin/sudo /usr/sbin/sshd -D &
+#     echo "sshd started"
+# fi
 
 echo "=== Starting uvicorn ==="
 python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 &

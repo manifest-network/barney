@@ -2,12 +2,14 @@ FROM ubuntu:22.04
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
     apt-get install -y --no-install-recommends \
-        python3 python3-pip python3-distutils \
-        openssh-server sudo && \
+        python3 python3-pip python3-distutils && \
+        # Uncomment for SSH debugging:
+        # openssh-server sudo && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /var/run/sshd && \
-    rm -f /etc/ssh/ssh_host_*
+# Uncomment for SSH debugging:
+# RUN mkdir -p /var/run/sshd && \
+#     rm -f /etc/ssh/ssh_host_*
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt \
@@ -27,12 +29,15 @@ RUN groupadd -r duser && \
 
 WORKDIR /opt/dispersedworker/
 
-COPY --chown=root:root --chmod=700 10-sshd /etc/sudoers.d/10-sshd
+# Uncomment for SSH debugging:
+# COPY --chown=root:root --chmod=700 10-sshd /etc/sudoers.d/10-sshd
 COPY --chown=root:root --chmod=755 entrypoint.sh /opt/dispersedworker/entrypoint.sh
 COPY --chown=duser:duser main.py /opt/dispersedworker/main.py
 
 USER duser
 
-EXPOSE 8000 22
+EXPOSE 8000
+# Uncomment for SSH debugging:
+# EXPOSE 22
 
 ENTRYPOINT ["/opt/dispersedworker/entrypoint.sh"]
