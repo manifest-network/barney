@@ -12,6 +12,8 @@ export interface ManifestFields {
   env: Record<string, string>;
   /** Env vars hidden from the editor (e.g. large JSON blobs). Preserved during serialization. */
   hiddenEnv?: Record<string, string>;
+  /** Informational notice shown in the editor (not included in the deployed manifest). */
+  notice?: string;
   user?: string;
   tmpfs?: string[];
 }
@@ -22,6 +24,9 @@ export interface StackServiceFields {
 }
 
 export type StackManifestFields = Record<string, StackServiceFields>;
+
+import { MANIFEST_NOTICE_KEY } from '../../config/constants';
+export { MANIFEST_NOTICE_KEY };
 
 const EDITABLE_TOOL_NAMES = new Set(['deploy_app', 'update_app']);
 
@@ -64,6 +69,7 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
       ports: (parsed.ports as Record<string, Record<string, never>>) || {},
       env,
       hiddenEnv,
+      notice: typeof parsed[MANIFEST_NOTICE_KEY] === 'string' ? (parsed[MANIFEST_NOTICE_KEY] as string) : undefined,
       user: (parsed.user as string) || undefined,
       tmpfs: Array.isArray(parsed.tmpfs) ? (parsed.tmpfs as string[]) : undefined,
     };

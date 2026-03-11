@@ -4,6 +4,7 @@
  */
 
 import { generatePassword } from '../utils/hash';
+import { MANIFEST_NOTICE_KEY } from './constants';
 
 export interface ExampleApp {
   label: string;
@@ -11,6 +12,8 @@ export interface ExampleApp {
   envFactory?: () => Record<string, string>;
   /** Builds the complete manifest dynamically (overrides manifest + envFactory when present). */
   manifestFactory?: () => Record<string, unknown>;
+  /** Notice shown in the ManifestEditor during deploy/update confirmation. */
+  notice?: string;
   size?: string;
   group: 'games' | 'apps' | 'stacks';
   category?: string;
@@ -136,6 +139,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
       },
     }),
     envFactory: () => ({ INFERENCE_SECRET: generatePassword(32) }),
+    notice: 'Save your API key, Secret key, and Inference Secret — these values are not stored and must be re-entered on updates.',
     size: 'micro',
     group: 'apps',
     category: 'AI',
@@ -248,11 +252,16 @@ export function findExampleByAppName(appName: string): ExampleApp | undefined {
  * Build manifest JSON for an example app, calling envFactory if present.
  */
 export function buildExampleManifest(app: ExampleApp): string {
+  let manifest: Record<string, unknown>;
   if (app.manifestFactory) {
-    return JSON.stringify(app.manifestFactory(), null, 2);
+    manifest = app.manifestFactory();
+  } else if (app.envFactory) {
+    manifest = { ...app.manifest, env: { ...(app.manifest.env as Record<string, string> | undefined), ...app.envFactory() } };
+  } else {
+    manifest = app.manifest;
   }
-  const manifest = app.envFactory
-    ? { ...app.manifest, env: { ...(app.manifest.env as Record<string, string> | undefined), ...app.envFactory() } }
-    : app.manifest;
+  if (app.notice) {
+    manifest = { ...manifest, [MANIFEST_NOTICE_KEY]: app.notice };
+  }
   return JSON.stringify(manifest, null, 2);
 }

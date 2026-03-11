@@ -4,6 +4,7 @@ import { FocusTrap } from 'focus-trap-react';
 import type { PendingAction } from '../../ai/toolExecutor';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
+import { findExampleByAppName } from '../../config/exampleApps';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { ManifestEditor } from './ManifestEditor';
 import { StackManifestEditor } from './StackManifestEditor';
@@ -97,7 +98,15 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   const cancelRef = useRef<HTMLButtonElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const initialManifest = useMemo(() => parseEditableManifest(action), [action]);
+  const initialManifest = useMemo(() => {
+    const manifest = parseEditableManifest(action);
+    // Fallback: on updates the stored manifest lacks _notice, so look up the example app by name.
+    if (manifest && !manifest.notice && typeof action.args.app_name === 'string') {
+      const example = findExampleByAppName(action.args.app_name);
+      if (example?.notice) return { ...manifest, notice: example.notice };
+    }
+    return manifest;
+  }, [action]);
   const [editedManifest, setEditedManifest] = useState<ManifestFields | null>(initialManifest);
   const isEditable = initialManifest !== null;
 

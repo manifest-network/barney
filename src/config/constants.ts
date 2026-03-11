@@ -157,3 +157,6 @@ export const ACCOUNT_SETUP_RETRY_DELAY_MS = 5_000;
 
 /** Delay before dismissing the account setup overlay when an error persists (milliseconds) */
 export const ACCOUNT_SETUP_ERROR_DELAY_MS = 5_000;
+
+/** Key used to carry a display-only notice through manifest JSON. Stripped before upload. */
+export const MANIFEST_NOTICE_KEY = '_notice' as const;
