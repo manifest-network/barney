@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createElement } from 'react';
 import { StackManifestEditor } from './StackManifestEditor';
-import type { StackManifestFields } from './manifestEditorUtils';
+import {
+  parseEditableStackManifest,
+  serializeStackManifest,
+  type StackManifestFields,
+} from './manifestEditorUtils';
 
 function makeStack(): StackManifestFields {
   return {
@@ -52,5 +56,55 @@ describe('StackManifestEditor', () => {
     const element = createElement(StackManifestEditor, { stack, onChange });
     expect(element).toBeDefined();
     expect(Object.keys(element.props.stack)).toHaveLength(1);
+  });
+});
+
+describe('parseEditableStackManifest (hiddenEnv)', () => {
+  function makeAction(json: string) {
+    return { id: '1', toolName: 'deploy_app', args: { _generatedManifest: json }, description: '' };
+  }
+
+  it('splits JSON blob env vars into hiddenEnv per service', () => {
+    const json = JSON.stringify({
+      services: {
+        app: { image: 'app:1', env: { KEY: 'val', MODELS: '{"a":1}' } },
+        db: { image: 'pg:16', env: { PASSWORD: 'secret' } },
+      },
+    });
+    const result = parseEditableStackManifest(makeAction(json));
+    expect(result?.app.editable.env).toEqual({ KEY: 'val' });
+    expect(result?.app.editable.hiddenEnv).toEqual({ MODELS: '{"a":1}' });
+    expect(result?.db.editable.env).toEqual({ PASSWORD: 'secret' });
+    expect(result?.db.editable.hiddenEnv).toBeUndefined();
+  });
+});
+
+describe('serializeStackManifest (hiddenEnv)', () => {
+  it('merges hiddenEnv back into service env', () => {
+    const stack: StackManifestFields = {
+      app: {
+        editable: {
+          image: 'app:1', ports: {}, env: { KEY: 'val' },
+          hiddenEnv: { MODELS: '{"a":1}' },
+        },
+        passthrough: {},
+      },
+    };
+    const parsed = JSON.parse(serializeStackManifest(stack));
+    expect(parsed.services.app.env).toEqual({ MODELS: '{"a":1}', KEY: 'val' });
+  });
+
+  it('user env overrides hiddenEnv on collision', () => {
+    const stack: StackManifestFields = {
+      app: {
+        editable: {
+          image: 'app:1', ports: {}, env: { MODELS: 'override' },
+          hiddenEnv: { MODELS: '{"old":true}' },
+        },
+        passthrough: {},
+      },
+    };
+    const parsed = JSON.parse(serializeStackManifest(stack));
+    expect(parsed.services.app.env.MODELS).toBe('override');
   });
 });

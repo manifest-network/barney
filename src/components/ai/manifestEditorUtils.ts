@@ -5,6 +5,7 @@
 
 import type { PendingAction } from '../../ai/toolExecutor';
 import { logError } from '../../utils/errors';
+import { MANIFEST_NOTICE_KEY } from '../../config/constants';
 
 export interface ManifestFields {
   image: string;
@@ -24,9 +25,6 @@ export interface StackServiceFields {
 }
 
 export type StackManifestFields = Record<string, StackServiceFields>;
-
-import { MANIFEST_NOTICE_KEY } from '../../config/constants';
-export { MANIFEST_NOTICE_KEY };
 
 const EDITABLE_TOOL_NAMES = new Set(['deploy_app', 'update_app']);
 

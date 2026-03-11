@@ -135,7 +135,9 @@ export const EXAMPLE_APPS: ExampleApp[] = [
         RENDER_SECRET_KEY: 'sk_YOUR_KEY',
         RENDER_INFERENCE_MODELS: JSON.stringify({
           'SDXL-Turbo': { image: 'ghcr.io/manifest-network/render-inference:sdxl-turbo', min_vram_gb: 8 },
-          'Animagine XL 3.1': { image: 'ghcr.io/manifest-network/render-inference:animagine-xl-3.1', min_vram_gb: 8 },
+          'FLUX.1-schnell': { image: 'ghcr.io/manifest-network/render-inference:flux-schnell', min_vram_gb: 24 },
+          'Kolors': { image: 'ghcr.io/manifest-network/render-inference:kolors', min_vram_gb: 16 },
+          'SD 3.5 Large Turbo': { image: 'ghcr.io/manifest-network/render-inference:sd35-large-turbo', min_vram_gb: 24 },
         }),
       },
     }),

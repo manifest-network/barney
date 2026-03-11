@@ -177,9 +177,8 @@ export async function buildPayloadFromManifest(manifestJson: string): Promise<Pa
       cleanJson = JSON.stringify(parsed, null, 2);
     }
   } catch (err) {
-    // SyntaxError is expected for non-JSON payloads (e.g. YAML); anything else is unexpected.
-    if (err instanceof SyntaxError) logError('buildPayloadFromManifest.stripNotice', err);
-    else throw err;
+    // Input should always be JSON; re-throw unexpected errors, ignore parse failures gracefully.
+    if (!(err instanceof SyntaxError)) throw err;
   }
   const bytes = new TextEncoder().encode(cleanJson);
   const hash = toHex(await sha256(cleanJson));
