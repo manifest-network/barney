@@ -126,13 +126,16 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   // --- Render Demo (user-supplied credentials, not auto-generated) ---
   {
     label: 'Render Image Gen',
-    manifest: SERVICE_MANIFEST('docker.io/lifted/render-demo:latest', ['8000'], {
+    manifest: SERVICE_MANIFEST('docker.io/lifted/render-demo:dev', ['8000'], {
       env: {
         RENDER_API_KEY: 'pk_YOUR_KEY',
         RENDER_SECRET_KEY: 'sk_YOUR_KEY',
-        RENDER_INFERENCE_IMAGE: 'docker.io/lifted/render-inference:latest',
+        RENDER_INFERENCE_MODELS: JSON.stringify({
+          'SDXL-Turbo': { image: 'ghcr.io/manifest-network/render-inference:sdxl-turbo', min_vram_gb: 8 },
+        }),
       },
     }),
+    envFactory: () => ({ INFERENCE_SECRET: generatePassword(32) }),
     size: 'micro',
     group: 'apps',
     category: 'AI',

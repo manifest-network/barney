@@ -10,6 +10,8 @@ export interface ManifestFields {
   image: string;
   ports: Record<string, Record<string, never>>;
   env: Record<string, string>;
+  /** Env vars hidden from the editor (e.g. large JSON blobs). Preserved during serialization. */
+  hiddenEnv?: Record<string, string>;
   user?: string;
   tmpfs?: string[];
 }
@@ -22,6 +24,24 @@ export interface StackServiceFields {
 export type StackManifestFields = Record<string, StackServiceFields>;
 
 const EDITABLE_TOOL_NAMES = new Set(['deploy_app', 'update_app']);
+
+/** Returns true if the value is a JSON object or array (complex structured data). */
+function isJsonBlob(value: string): boolean {
+  const trimmed = value.trimStart();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return false;
+  try { JSON.parse(trimmed); return true; } catch { return false; }
+}
+
+/** Split env vars into editable (simple) and hidden (JSON blobs). */
+function splitEnv(env: Record<string, string>): { env: Record<string, string>; hiddenEnv?: Record<string, string> } {
+  const visible: Record<string, string> = {};
+  const hidden: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (isJsonBlob(v)) hidden[k] = v;
+    else visible[k] = v;
+  }
+  return Object.keys(hidden).length > 0 ? { env: visible, hiddenEnv: hidden } : { env: visible };
+}
 
 /**
  * Parse an editable manifest from a pending action.
@@ -38,10 +58,12 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
     if (parsed.services && typeof parsed.services === 'object' && !Array.isArray(parsed.services)) {
       return null;
     }
+    const { env, hiddenEnv } = splitEnv((parsed.env as Record<string, string>) || {});
     return {
       image: (parsed.image as string) || '',
       ports: (parsed.ports as Record<string, Record<string, never>>) || {},
-      env: (parsed.env as Record<string, string>) || {},
+      env,
+      hiddenEnv,
       user: (parsed.user as string) || undefined,
       tmpfs: Array.isArray(parsed.tmpfs) ? (parsed.tmpfs as string[]) : undefined,
     };
@@ -57,7 +79,8 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
 export function serializeManifest(manifest: ManifestFields): string {
   const obj: Record<string, unknown> = { image: manifest.image };
   if (Object.keys(manifest.ports).length > 0) obj.ports = manifest.ports;
-  if (Object.keys(manifest.env).length > 0) obj.env = manifest.env;
+  const mergedEnv = { ...manifest.hiddenEnv, ...manifest.env };
+  if (Object.keys(mergedEnv).length > 0) obj.env = mergedEnv;
   if (manifest.user) obj.user = manifest.user;
   if (manifest.tmpfs && manifest.tmpfs.length > 0) obj.tmpfs = manifest.tmpfs;
   return JSON.stringify(obj, null, 2);
@@ -97,11 +120,13 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
           passthrough[k] = v;
         }
       }
+      const { env: svcEnv, hiddenEnv: svcHiddenEnv } = splitEnv((svc.env as Record<string, string>) || {});
       result[name] = {
         editable: {
           image: (svc.image as string) || '',
           ports: (svc.ports as Record<string, Record<string, never>>) || {},
-          env: (svc.env as Record<string, string>) || {},
+          env: svcEnv,
+          hiddenEnv: svcHiddenEnv,
           user: (svc.user as string) || undefined,
           tmpfs: Array.isArray(svc.tmpfs) ? (svc.tmpfs as string[]) : undefined,
         },
@@ -125,7 +150,8 @@ export function serializeStackManifest(stack: StackManifestFields): string {
     const svc: Record<string, unknown> = { ...passthrough };
     svc.image = editable.image;
     if (Object.keys(editable.ports).length > 0) svc.ports = editable.ports;
-    if (Object.keys(editable.env).length > 0) svc.env = editable.env;
+    const svcMergedEnv = { ...editable.hiddenEnv, ...editable.env };
+    if (Object.keys(svcMergedEnv).length > 0) svc.env = svcMergedEnv;
     if (editable.user) svc.user = editable.user;
     if (editable.tmpfs && editable.tmpfs.length > 0) svc.tmpfs = editable.tmpfs;
     services[name] = svc;
