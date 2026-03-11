@@ -266,12 +266,6 @@ export function ManifestEditor({ manifest, onChange }: ManifestEditorProps) {
             ))}
           </div>
         )}
-        {manifest.hiddenEnv && Object.keys(manifest.hiddenEnv).length > 0 && (
-          <p className="manifest-editor-hidden-hint">
-            <Lock className="w-3 h-3 inline" aria-hidden="true" />
-            {Object.keys(manifest.hiddenEnv).length} complex variable{Object.keys(manifest.hiddenEnv).length !== 1 ? 's' : ''} hidden (JSON data)
-          </p>
-        )}
         <div className="manifest-editor-add-row">
           <input
             type="text"

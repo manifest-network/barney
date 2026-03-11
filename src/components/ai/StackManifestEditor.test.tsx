@@ -59,12 +59,12 @@ describe('StackManifestEditor', () => {
   });
 });
 
-describe('parseEditableStackManifest (hiddenEnv)', () => {
+describe('parseEditableStackManifest', () => {
   function makeAction(json: string) {
     return { id: '1', toolName: 'deploy_app', args: { _generatedManifest: json }, description: '' };
   }
 
-  it('splits JSON blob env vars into hiddenEnv per service', () => {
+  it('keeps all env vars including JSON blobs per service', () => {
     const json = JSON.stringify({
       services: {
         app: { image: 'app:1', env: { KEY: 'val', MODELS: '{"a":1}' } },
@@ -72,39 +72,22 @@ describe('parseEditableStackManifest (hiddenEnv)', () => {
       },
     });
     const result = parseEditableStackManifest(makeAction(json));
-    expect(result?.app.editable.env).toEqual({ KEY: 'val' });
-    expect(result?.app.editable.hiddenEnv).toEqual({ MODELS: '{"a":1}' });
+    expect(result?.app.editable.env).toEqual({ KEY: 'val', MODELS: '{"a":1}' });
     expect(result?.db.editable.env).toEqual({ PASSWORD: 'secret' });
-    expect(result?.db.editable.hiddenEnv).toBeUndefined();
   });
 });
 
-describe('serializeStackManifest (hiddenEnv)', () => {
-  it('merges hiddenEnv back into service env', () => {
+describe('serializeStackManifest', () => {
+  it('preserves all env vars in serialized output', () => {
     const stack: StackManifestFields = {
       app: {
         editable: {
-          image: 'app:1', ports: {}, env: { KEY: 'val' },
-          hiddenEnv: { MODELS: '{"a":1}' },
+          image: 'app:1', ports: {}, env: { KEY: 'val', MODELS: '{"a":1}' },
         },
         passthrough: {},
       },
     };
     const parsed = JSON.parse(serializeStackManifest(stack));
-    expect(parsed.services.app.env).toEqual({ MODELS: '{"a":1}', KEY: 'val' });
-  });
-
-  it('user env overrides hiddenEnv on collision', () => {
-    const stack: StackManifestFields = {
-      app: {
-        editable: {
-          image: 'app:1', ports: {}, env: { MODELS: 'override' },
-          hiddenEnv: { MODELS: '{"old":true}' },
-        },
-        passthrough: {},
-      },
-    };
-    const parsed = JSON.parse(serializeStackManifest(stack));
-    expect(parsed.services.app.env.MODELS).toBe('override');
+    expect(parsed.services.app.env).toEqual({ KEY: 'val', MODELS: '{"a":1}' });
   });
 });

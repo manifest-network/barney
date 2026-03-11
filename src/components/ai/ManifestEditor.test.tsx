@@ -153,23 +153,6 @@ describe('serializeManifest', () => {
     expect(parsed.env).toEqual({ KEY: 'val' });
   });
 
-  it('merges hiddenEnv back into env', () => {
-    const manifest: ManifestFields = {
-      image: 'app:1', ports: {}, env: { KEY: 'val' },
-      hiddenEnv: { JSON_BLOB: '{"a":1}' },
-    };
-    const parsed = JSON.parse(serializeManifest(manifest));
-    expect(parsed.env).toEqual({ JSON_BLOB: '{"a":1}', KEY: 'val' });
-  });
-
-  it('user env overrides hiddenEnv on key collision', () => {
-    const manifest: ManifestFields = {
-      image: 'app:1', ports: {}, env: { MODELS: 'override' },
-      hiddenEnv: { MODELS: '{"old":true}' },
-    };
-    const parsed = JSON.parse(serializeManifest(manifest));
-    expect(parsed.env.MODELS).toBe('override');
-  });
 });
 
 describe('parseEditableManifest', () => {
@@ -183,14 +166,13 @@ describe('parseEditableManifest', () => {
     expect(result?.notice).toBe('Save your keys');
   });
 
-  it('splits JSON blob env vars into hiddenEnv', () => {
+  it('keeps JSON blob env vars in env', () => {
     const json = JSON.stringify({ image: 'app', env: { KEY: 'val', BLOB: '{"a":1}' } });
     const result = parseEditableManifest(makeAction(json));
-    expect(result?.env).toEqual({ KEY: 'val' });
-    expect(result?.hiddenEnv).toEqual({ BLOB: '{"a":1}' });
+    expect(result?.env).toEqual({ KEY: 'val', BLOB: '{"a":1}' });
   });
 
-  it('round-trip strips _notice and preserves hiddenEnv', () => {
+  it('round-trip strips _notice and preserves all env', () => {
     const json = JSON.stringify({
       image: 'app', env: { KEY: 'val', BLOB: '{"a":1}' }, [MANIFEST_NOTICE_KEY]: 'notice',
     });
@@ -198,7 +180,7 @@ describe('parseEditableManifest', () => {
     expect(parsed.notice).toBe('notice');
     const serialized = JSON.parse(serializeManifest(parsed));
     expect(serialized[MANIFEST_NOTICE_KEY]).toBeUndefined();
-    expect(serialized.env).toEqual({ BLOB: '{"a":1}', KEY: 'val' });
+    expect(serialized.env).toEqual({ KEY: 'val', BLOB: '{"a":1}' });
   });
 
   it('ignores non-string _notice values', () => {
