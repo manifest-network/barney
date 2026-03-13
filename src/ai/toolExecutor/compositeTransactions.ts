@@ -171,8 +171,8 @@ export async function buildPayloadFromManifest(manifestJson: string): Promise<Pa
   // Strip UI-only sideband fields before encoding for upload
   let cleanJson = manifestJson;
   try {
-    const parsed = JSON.parse(manifestJson) as Record<string, unknown>;
-    if (MANIFEST_NOTICE_KEY in parsed) {
+    const parsed = JSON.parse(manifestJson);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && MANIFEST_NOTICE_KEY in parsed) {
       delete parsed[MANIFEST_NOTICE_KEY];
       cleanJson = JSON.stringify(parsed, null, 2);
     }

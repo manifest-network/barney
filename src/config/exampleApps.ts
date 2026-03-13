@@ -134,9 +134,9 @@ export const EXAMPLE_APPS: ExampleApp[] = [
         RENDER_API_KEY: 'pk_YOUR_KEY',
         RENDER_SECRET_KEY: 'sk_YOUR_KEY',
         RENDER_INFERENCE_MODELS: JSON.stringify({
-          'SDXL-Turbo': { image: 'ghcr.io/manifest-network/render-image-gen-inference:sdxl-turbo', min_vram_gb: 8, max_vram_gb: 12 },
+          'SDXL-Turbo': { image: 'ghcr.io/manifest-network/render-image-gen-inference:sdxl-turbo', min_vram_gb: 7, max_vram_gb: 12 },
           'FLUX.1-schnell': { image: 'ghcr.io/manifest-network/render-image-gen-inference:flux-schnell', min_vram_gb: 30, max_vram_gb: 40 },
-          'Kolors': { image: 'ghcr.io/manifest-network/render-image-gen-inference:kolors', min_vram_gb: 23, max_vram_gb: 24 },
+          'Kolors': { image: 'ghcr.io/manifest-network/render-image-gen-inference:kolors', min_vram_gb: 23, max_vram_gb: 40 },
           'SD 3.5 Large Turbo': { image: 'ghcr.io/manifest-network/render-image-gen-inference:sd35-large-turbo', min_vram_gb: 30, max_vram_gb: 40 },
         }),
       },
