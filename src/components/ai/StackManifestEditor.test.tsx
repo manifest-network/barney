@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createElement } from 'react';
 import { StackManifestEditor } from './StackManifestEditor';
-import type { StackManifestFields } from './manifestEditorUtils';
+import {
+  parseEditableStackManifest,
+  serializeStackManifest,
+  type StackManifestFields,
+} from './manifestEditorUtils';
 
 function makeStack(): StackManifestFields {
   return {
@@ -52,5 +56,38 @@ describe('StackManifestEditor', () => {
     const element = createElement(StackManifestEditor, { stack, onChange });
     expect(element).toBeDefined();
     expect(Object.keys(element.props.stack)).toHaveLength(1);
+  });
+});
+
+describe('parseEditableStackManifest', () => {
+  function makeAction(json: string) {
+    return { id: '1', toolName: 'deploy_app', args: { _generatedManifest: json }, description: '' };
+  }
+
+  it('keeps all env vars including JSON blobs per service', () => {
+    const json = JSON.stringify({
+      services: {
+        app: { image: 'app:1', env: { KEY: 'val', MODELS: '{"a":1}' } },
+        db: { image: 'pg:16', env: { PASSWORD: 'secret' } },
+      },
+    });
+    const result = parseEditableStackManifest(makeAction(json));
+    expect(result?.app.editable.env).toEqual({ KEY: 'val', MODELS: '{"a":1}' });
+    expect(result?.db.editable.env).toEqual({ PASSWORD: 'secret' });
+  });
+});
+
+describe('serializeStackManifest', () => {
+  it('preserves all env vars in serialized output', () => {
+    const stack: StackManifestFields = {
+      app: {
+        editable: {
+          image: 'app:1', ports: {}, env: { KEY: 'val', MODELS: '{"a":1}' },
+        },
+        passthrough: {},
+      },
+    };
+    const parsed = JSON.parse(serializeStackManifest(stack));
+    expect(parsed.services.app.env).toEqual({ KEY: 'val', MODELS: '{"a":1}' });
   });
 });

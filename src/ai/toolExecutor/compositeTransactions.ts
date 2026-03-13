@@ -21,6 +21,7 @@ import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { extractYamlServiceNames } from '../../utils/fileValidation';
 import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, getServiceNames, type ServiceConfig, type HealthCheckConfig } from '../manifest';
+import { MANIFEST_NOTICE_KEY } from '../../config/constants';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { DeployProgress } from '../progress';
@@ -167,8 +168,20 @@ function coerceTmpfsArg(value: unknown, context?: string): { value?: string; err
  * Shared by deploy_app, update_app, and batch merge in toolExecution.
  */
 export async function buildPayloadFromManifest(manifestJson: string): Promise<PayloadAttachment> {
-  const bytes = new TextEncoder().encode(manifestJson);
-  const hash = toHex(await sha256(manifestJson));
+  // Strip UI-only sideband fields before encoding for upload
+  let cleanJson = manifestJson;
+  try {
+    const parsed = JSON.parse(manifestJson);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && MANIFEST_NOTICE_KEY in parsed) {
+      delete parsed[MANIFEST_NOTICE_KEY];
+      cleanJson = JSON.stringify(parsed, null, 2);
+    }
+  } catch (err) {
+    // Input should always be JSON; re-throw unexpected errors, ignore parse failures gracefully.
+    if (!(err instanceof SyntaxError)) throw err;
+  }
+  const bytes = new TextEncoder().encode(cleanJson);
+  const hash = toHex(await sha256(cleanJson));
   return { bytes, filename: 'manifest.json', size: bytes.length, hash };
 }
 

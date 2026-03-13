@@ -5205,6 +5205,26 @@ h1, h2, h3, h4, h5, h6 {
   gap: 0.75rem;
 }
 
+@keyframes noticePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.manifest-editor-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--color-primary-400);
+  background: var(--color-primary-800);
+  color: var(--color-primary-200);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  font-weight: 500;
+  animation: noticePulse 1.5s ease-in-out 3;
+}
+
 .manifest-editor-section {
   display: flex;
   flex-direction: column;

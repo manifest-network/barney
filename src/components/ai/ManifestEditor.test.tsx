@@ -1,7 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createElement } from 'react';
 import { ManifestEditor } from './ManifestEditor';
-import { isValidPort, type ManifestFields } from './manifestEditorUtils';
+import {
+  isValidPort,
+  parseEditableManifest,
+  serializeManifest,
+  type ManifestFields,
+} from './manifestEditorUtils';
+import { MANIFEST_NOTICE_KEY } from '../../config/constants';
+import { buildExampleManifest, type ExampleApp } from '../../config/exampleApps';
+import { buildPayloadFromManifest } from '../../ai/toolExecutor/compositeTransactions';
 
 function makeManifest(overrides?: Partial<ManifestFields>): ManifestFields {
   return {
@@ -131,5 +139,113 @@ describe('isValidPort', () => {
   it('rejects decimal numbers', () => {
     expect(isValidPort('80.0')).toBe(false);
     expect(isValidPort('80.5')).toBe(false);
+  });
+});
+
+describe('serializeManifest', () => {
+  it('excludes notice from serialized output', () => {
+    const manifest: ManifestFields = {
+      image: 'nginx:1', ports: {}, env: { KEY: 'val' }, notice: 'Save your keys!',
+    };
+    const parsed = JSON.parse(serializeManifest(manifest));
+    expect(parsed[MANIFEST_NOTICE_KEY]).toBeUndefined();
+    expect(parsed.notice).toBeUndefined();
+    expect(parsed.env).toEqual({ KEY: 'val' });
+  });
+
+});
+
+describe('parseEditableManifest', () => {
+  function makeAction(json: string) {
+    return { id: '1', toolName: 'deploy_app', args: { _generatedManifest: json }, description: '' };
+  }
+
+  it('extracts _notice into notice', () => {
+    const json = JSON.stringify({ image: 'nginx', [MANIFEST_NOTICE_KEY]: 'Save your keys' });
+    const result = parseEditableManifest(makeAction(json));
+    expect(result?.notice).toBe('Save your keys');
+  });
+
+  it('keeps JSON blob env vars in env', () => {
+    const json = JSON.stringify({ image: 'app', env: { KEY: 'val', BLOB: '{"a":1}' } });
+    const result = parseEditableManifest(makeAction(json));
+    expect(result?.env).toEqual({ KEY: 'val', BLOB: '{"a":1}' });
+  });
+
+  it('round-trip strips _notice and preserves all env', () => {
+    const json = JSON.stringify({
+      image: 'app', env: { KEY: 'val', BLOB: '{"a":1}' }, [MANIFEST_NOTICE_KEY]: 'notice',
+    });
+    const parsed = parseEditableManifest(makeAction(json))!;
+    expect(parsed.notice).toBe('notice');
+    const serialized = JSON.parse(serializeManifest(parsed));
+    expect(serialized[MANIFEST_NOTICE_KEY]).toBeUndefined();
+    expect(serialized.env).toEqual({ KEY: 'val', BLOB: '{"a":1}' });
+  });
+
+  it('ignores non-string _notice values', () => {
+    const json = JSON.stringify({ image: 'app', [MANIFEST_NOTICE_KEY]: 42 });
+    const result = parseEditableManifest(makeAction(json));
+    expect(result?.notice).toBeUndefined();
+  });
+});
+
+describe('buildPayloadFromManifest', () => {
+  it('strips _notice from payload', async () => {
+    const json = JSON.stringify({ image: 'app', [MANIFEST_NOTICE_KEY]: 'Save keys' });
+    const payload = await buildPayloadFromManifest(json);
+    const decoded = JSON.parse(new TextDecoder().decode(payload.bytes));
+    expect(decoded[MANIFEST_NOTICE_KEY]).toBeUndefined();
+    expect(decoded.image).toBe('app');
+  });
+
+  it('passes through manifest without _notice unchanged', async () => {
+    const json = JSON.stringify({ image: 'app', env: { KEY: 'val' } });
+    const payload = await buildPayloadFromManifest(json);
+    const decoded = JSON.parse(new TextDecoder().decode(payload.bytes));
+    expect(decoded).toEqual({ image: 'app', env: { KEY: 'val' } });
+  });
+
+  it('computes hash from cleaned JSON', async () => {
+    const withNotice = JSON.stringify({ image: 'app', [MANIFEST_NOTICE_KEY]: 'x' });
+    const withoutNotice = JSON.stringify({ image: 'app' }, null, 2);
+    const payload = await buildPayloadFromManifest(withNotice);
+    const clean = await buildPayloadFromManifest(withoutNotice);
+    expect(payload.hash).toBe(clean.hash);
+  });
+});
+
+describe('buildExampleManifest', () => {
+  it('injects _notice when notice is set', () => {
+    const app: ExampleApp = { label: 'Test', manifest: { image: 'app' }, notice: 'Save it', group: 'apps' };
+    const parsed = JSON.parse(buildExampleManifest(app));
+    expect(parsed[MANIFEST_NOTICE_KEY]).toBe('Save it');
+  });
+
+  it('omits _notice when notice is not set', () => {
+    const app: ExampleApp = { label: 'Test', manifest: { image: 'app' }, group: 'apps' };
+    const parsed = JSON.parse(buildExampleManifest(app));
+    expect(parsed[MANIFEST_NOTICE_KEY]).toBeUndefined();
+  });
+
+  it('merges envFactory into manifest env', () => {
+    const app: ExampleApp = {
+      label: 'Test', manifest: { image: 'app', env: { A: '1' } },
+      envFactory: () => ({ B: '2' }), group: 'apps',
+    };
+    const parsed = JSON.parse(buildExampleManifest(app));
+    expect(parsed.env).toEqual({ A: '1', B: '2' });
+  });
+
+  it('manifestFactory overrides envFactory', () => {
+    const app: ExampleApp = {
+      label: 'Test', manifest: { image: 'app' },
+      manifestFactory: () => ({ image: 'custom', ports: {} }),
+      envFactory: () => ({ SHOULD_NOT_APPEAR: 'x' }),
+      group: 'apps',
+    };
+    const parsed = JSON.parse(buildExampleManifest(app));
+    expect(parsed.image).toBe('custom');
+    expect(parsed.env).toBeUndefined();
   });
 });

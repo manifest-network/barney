@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Plus, Trash2, Lock, Eye, EyeOff, Copy, CheckCheck } from 'lucide-react';
+import { Plus, Trash2, Lock, Eye, EyeOff, Copy, CheckCheck, Info } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { isValidPort, type ManifestFields } from './manifestEditorUtils';
 
@@ -172,6 +172,12 @@ export function ManifestEditor({ manifest, onChange }: ManifestEditorProps) {
 
   return (
     <div className="manifest-editor" data-testid="manifest-editor">
+      {manifest.notice && (
+        <div className="manifest-editor-notice" role="note">
+          <Info className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+          <span>{manifest.notice}</span>
+        </div>
+      )}
       {/* Image (read-only) */}
       <div className="manifest-editor-section">
         <p className="confirmation-details-title flex items-center gap-1.5">

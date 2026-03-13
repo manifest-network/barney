@@ -4,6 +4,7 @@
  */
 
 import { generatePassword } from '../utils/hash';
+import { MANIFEST_NOTICE_KEY } from './constants';
 
 export interface ExampleApp {
   label: string;
@@ -11,6 +12,8 @@ export interface ExampleApp {
   envFactory?: () => Record<string, string>;
   /** Builds the complete manifest dynamically (overrides manifest + envFactory when present). */
   manifestFactory?: () => Record<string, unknown>;
+  /** Notice shown in the ManifestEditor during deploy/update confirmation. */
+  notice?: string;
   size?: string;
   group: 'games' | 'apps' | 'stacks';
   category?: string;
@@ -126,13 +129,20 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   // --- Render Demo (user-supplied credentials, not auto-generated) ---
   {
     label: 'Render Image Gen',
-    manifest: SERVICE_MANIFEST('docker.io/lifted/render-demo:latest', ['8000'], {
+    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/render-image-gen:v1.0', ['8000'], {
       env: {
         RENDER_API_KEY: 'pk_YOUR_KEY',
         RENDER_SECRET_KEY: 'sk_YOUR_KEY',
-        RENDER_INFERENCE_IMAGE: 'docker.io/lifted/render-inference:latest',
+        RENDER_INFERENCE_MODELS: JSON.stringify({
+          'SDXL-Turbo': { image: 'ghcr.io/manifest-network/render-image-gen-inference:sdxl-turbo', min_vram_gb: 7, max_vram_gb: 12 },
+          'FLUX.1-schnell': { image: 'ghcr.io/manifest-network/render-image-gen-inference:flux-schnell', min_vram_gb: 30, max_vram_gb: 40 },
+          'Kolors': { image: 'ghcr.io/manifest-network/render-image-gen-inference:kolors', min_vram_gb: 23, max_vram_gb: 40 },
+          'SD 3.5 Large Turbo': { image: 'ghcr.io/manifest-network/render-image-gen-inference:sd35-large-turbo', min_vram_gb: 30, max_vram_gb: 40 },
+        }),
       },
     }),
+    envFactory: () => ({ INFERENCE_SECRET: generatePassword(32) }),
+    notice: 'Save your API key, Secret key, and Inference Secret — these values are not stored and must be re-entered on updates.',
     size: 'micro',
     group: 'apps',
     category: 'AI',
@@ -229,7 +239,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
  * e.g. "King's Quest 5" → "manifest-king-s-quest-5"
  */
 function toRegistryName(label: string): string {
-  return `manifest-${label.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+  return `manifest-${label.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')}`;
 }
 
 /**
@@ -245,11 +255,16 @@ export function findExampleByAppName(appName: string): ExampleApp | undefined {
  * Build manifest JSON for an example app, calling envFactory if present.
  */
 export function buildExampleManifest(app: ExampleApp): string {
+  let manifest: Record<string, unknown>;
   if (app.manifestFactory) {
-    return JSON.stringify(app.manifestFactory(), null, 2);
+    manifest = app.manifestFactory();
+  } else if (app.envFactory) {
+    manifest = { ...app.manifest, env: { ...(app.manifest.env as Record<string, string> | undefined), ...app.envFactory() } };
+  } else {
+    manifest = app.manifest;
   }
-  const manifest = app.envFactory
-    ? { ...app.manifest, env: { ...(app.manifest.env as Record<string, string> | undefined), ...app.envFactory() } }
-    : app.manifest;
+  if (app.notice) {
+    manifest = { ...manifest, [MANIFEST_NOTICE_KEY]: app.notice };
+  }
   return JSON.stringify(manifest, null, 2);
 }
