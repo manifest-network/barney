@@ -157,6 +157,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
         ]),
       },
     }),
+    envFactory: () => ({ DASHBOARD_API_TOKEN: generatePassword(32) }),
     notice: 'Update RENDER_ACCOUNTS with your Render Network API credentials. Each account needs a label, public_key, and secret_key.',
     size: 'micro',
     group: 'apps',
