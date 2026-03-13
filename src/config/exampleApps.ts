@@ -239,7 +239,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
  * e.g. "King's Quest 5" → "manifest-king-s-quest-5"
  */
 function toRegistryName(label: string): string {
-  return `manifest-${label.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+  return `manifest-${label.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')}`;
 }
 
 /**
