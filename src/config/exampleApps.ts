@@ -148,6 +148,25 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     category: 'AI',
   },
 
+  {
+    label: 'Render Music Gen',
+    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/render-music-gen:dev', ['8000'], {
+      env: {
+        RENDER_API_KEY: 'pk_YOUR_KEY',
+        RENDER_SECRET_KEY: 'sk_YOUR_KEY',
+        RENDER_INFERENCE_MODELS: JSON.stringify({
+          'ACE-Step': { image: 'ghcr.io/manifest-network/render-music-gen-inference:ace-step', min_vram_gb: 3 },
+          'DiffRhythm2': { image: 'ghcr.io/manifest-network/render-music-gen-inference:diffrhythm2', min_vram_gb: 7 },
+        }),
+      },
+    }),
+    envFactory: () => ({ INFERENCE_SECRET: generatePassword(32) }),
+    notice: 'Save your API key, Secret key, and Inference Secret — these values are not stored and must be re-entered on updates.',
+    size: 'micro',
+    group: 'apps',
+    category: 'AI',
+  },
+
   // --- Stacks (multi-service) ---
   {
     label: 'WordPress + MySQL',
