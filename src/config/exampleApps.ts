@@ -112,16 +112,13 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   //     env: { OPENCLAW_GATEWAY_TOKEN: token, OLLAMA_HOST: '172.17.0.1' },
   //   };
   // }, size: 'large', group: 'apps', category: 'Tools' },
-  // { label: 'EverClaw', manifest: SERVICE_MANIFEST('ghcr.io/everclaw/everclaw:2026.2.23.1', ['18789', '8083']), manifestFactory: () => {
+  // { label: 'EverClaw', manifest: SERVICE_MANIFEST('ghcr.io/everclaw/everclaw:2026.3.16', ['18789', '8083']), manifestFactory: () => {
   //   const token = generatePassword();
   //   return {
-  //     image: 'ghcr.io/everclaw/everclaw:2026.2.23.1',
+  //     image: 'ghcr.io/everclaw/everclaw:2026.3.16',
   //     ports: { '18789/tcp': {}, '8083/tcp': {} },
-  //     env: { OPENCLAW_GATEWAY_TOKEN: token, MOR_GATEWAY_API_KEY: '' },
+  //     env: { OPENCLAW_GATEWAY_TOKEN: token },
   //     command: ['/bin/sh', '-c'],
-  //     args: [
-  //       `jq '. + {"gateway":{"controlUi":{"enabled":true,"allowInsecureAuth":true}}}' /home/node/.openclaw/openclaw-default.json > /home/node/.openclaw/openclaw.json && sed -i 's/--bind lan/--bind lan --token "$OPENCLAW_GATEWAY_TOKEN"/' /app/docker-entrypoint.sh && exec /app/docker-entrypoint.sh`,
-  //     ],
   //   };
   // }, size: 'large', group: 'apps', category: 'Tools' },
   // { label: 'Registry 2', manifest: SERVICE_MANIFEST('registry:2', ['5000']), size: 'micro', group: 'apps', category: 'Tools' },
@@ -155,7 +152,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
         RENDER_API_KEY: 'pk_YOUR_KEY',
         RENDER_SECRET_KEY: 'sk_YOUR_KEY',
         RENDER_INFERENCE_MODELS: JSON.stringify({
-          'ACE-Step': { image: 'ghcr.io/manifest-network/render-music-gen-inference:ace-step', min_vram_gb: 3 },
+          'ACE-Step 1.5': { image: 'ghcr.io/manifest-network/render-music-gen-inference:ace-step', min_vram_gb: 10 },
           'DiffRhythm2': { image: 'ghcr.io/manifest-network/render-music-gen-inference:diffrhythm2', min_vram_gb: 7 },
         }),
       },
