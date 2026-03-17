@@ -153,7 +153,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
         RENDER_SECRET_KEY: 'sk_YOUR_KEY',
         RENDER_INFERENCE_MODELS: JSON.stringify({
           'ACE-Step 1.5': { image: 'ghcr.io/manifest-network/render-music-gen-inference:ace-step', min_vram_gb: 10 },
-          'DiffRhythm2': { image: 'ghcr.io/manifest-network/render-music-gen-inference:diffrhythm2', min_vram_gb: 7 },
+          'DiffRhythm2': { image: 'ghcr.io/manifest-network/render-music-gen-inference:diffrhythm2', min_vram_gb: 10 },
         }),
       },
     }),
