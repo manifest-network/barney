@@ -112,12 +112,11 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   //     env: { OPENCLAW_GATEWAY_TOKEN: token, OLLAMA_HOST: '172.17.0.1' },
   //   };
   // }, size: 'large', group: 'apps', category: 'Tools' },
-  // { label: 'EverClaw', manifest: SERVICE_MANIFEST('ghcr.io/everclaw/everclaw:2026.3.16', ['18789', '8083']), manifestFactory: () => {
-  //   const token = generatePassword();
+  // { label: 'EverClaw', manifest: SERVICE_MANIFEST('ghcr.io/everclaw/everclaw:latest', ['18789', '8083']), manifestFactory: () => {
   //   return {
-  //     image: 'ghcr.io/everclaw/everclaw:2026.3.16',
+  //     image: 'ghcr.io/everclaw/everclaw:latest',
   //     ports: { '18789/tcp': {}, '8083/tcp': {} },
-  //     env: { OPENCLAW_GATEWAY_TOKEN: token },
+  //     env: { MORPHEUS_PROXY_API_KEY: '' },
   //     command: ['/bin/sh', '-c'],
   //   };
   // }, size: 'large', group: 'apps', category: 'Tools' },
@@ -147,12 +146,12 @@ export const EXAMPLE_APPS: ExampleApp[] = [
 
   {
     label: 'Render Music Gen',
-    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/render-music-gen:dev', ['8000'], {
+    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/render-music-gen:v1.0', ['8000'], {
       env: {
         RENDER_API_KEY: 'pk_YOUR_KEY',
         RENDER_SECRET_KEY: 'sk_YOUR_KEY',
         RENDER_INFERENCE_MODELS: JSON.stringify({
-          'ACE-Step 1.5': { image: 'ghcr.io/manifest-network/render-music-gen-inference:ace-step', min_vram_gb: 10 },
+          'ACE-Step 1.5': { image: 'ghcr.io/manifest-network/render-music-gen-inference:ace-step', min_vram_gb: 15 },
           'DiffRhythm2': { image: 'ghcr.io/manifest-network/render-music-gen-inference:diffrhythm2', min_vram_gb: 10 },
         }),
       },
@@ -163,6 +162,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     group: 'apps',
     category: 'AI',
   },
+
 
   // --- Stacks (multi-service) ---
   {
