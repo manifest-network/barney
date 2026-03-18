@@ -164,6 +164,22 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   },
 
 
+  {
+    label: 'Render Dashboard',
+    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/render-dashboard:v1.0', ['8000'], {
+      env: {
+        RENDER_ACCOUNTS: JSON.stringify([
+          { label: 'Account 1', public_key: 'pk_YOUR_KEY', secret_key: 'sk_YOUR_KEY' },
+        ]),
+      },
+    }),
+    envFactory: () => ({ DASHBOARD_API_TOKEN: generatePassword(32) }),
+    notice: 'Update RENDER_ACCOUNTS with your Render Network API credentials. Each account needs a label, public_key, and secret_key.',
+    size: 'micro',
+    group: 'apps',
+    category: 'AI',
+  },
+
   // --- Stacks (multi-service) ---
   {
     label: 'WordPress + MySQL',
