@@ -82,6 +82,7 @@ export const KNOWN_IMAGES: readonly KnownImageConfig[] = [
 
   // --- Render Demo (requires external OTOY/Render API credentials — not auto-generated) ---
   { image: 'ghcr.io/manifest-network/render-image-gen', port: '8000', aliases: ['render-image-gen', 'render-demo'] },
+  { image: 'ghcr.io/manifest-network/render-music-gen', port: '8000', aliases: ['render-music-gen'] },
 ];
 
 /**
