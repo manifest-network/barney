@@ -3,8 +3,8 @@
  * These return requiresConfirmation first, then execute after user approval.
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
-import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';

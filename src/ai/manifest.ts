@@ -3,11 +3,21 @@
  * Builds a provider-compatible manifest JSON from a Docker image reference,
  * computes its SHA-256 hash, and returns a PayloadAttachment.
  *
+ * Delegates core manifest construction to @manifest-network/manifest-mcp-fred,
+ * adding Barney-specific behavior: port string normalization, password generation,
+ * tmpfs/expose string splitting, payload hashing, and error handling.
+ *
  * Supports both single-service and stack (multi-service) manifests.
  * Stack manifests use the `{ "services": { ... } }` format, where each
  * service is a named container with its own image, ports, env, etc.
  */
 
+import {
+  buildManifest as fredBuildManifest,
+  mergeManifest as fredMergeManifest,
+  validateServiceName as fredValidateServiceName,
+  type BuildManifestOptions as FredBuildManifestOptions,
+} from '@manifest-network/manifest-mcp-fred';
 import { sha256, toHex, generatePassword, validatePayloadSize } from '../utils/hash';
 import { logError } from '../utils/errors';
 import type { PayloadAttachment } from './toolExecutor/types';
@@ -125,86 +135,71 @@ export interface BuildManifestOptions {
 }
 
 /**
+ * Auto-generate passwords for empty env values and values ending with "/".
+ */
+function processEnv(env: Record<string, string>): Record<string, string> {
+  const processed: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value === '') {
+      processed[key] = generatePassword();
+    } else if (value.endsWith('/')) {
+      processed[key] = value + generatePassword();
+    } else {
+      processed[key] = value;
+    }
+  }
+  return processed;
+}
+
+/**
+ * Split a comma-separated string into a trimmed, non-empty array.
+ * Returns undefined if the result would be empty (so fred omits the field).
+ */
+function splitCsv(value: string): string[] | undefined {
+  const items = value.split(',').map((s) => s.trim()).filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
+
+/** Return the record if non-empty, undefined otherwise. */
+function nonEmpty<T extends Record<string, unknown>>(obj: T | undefined): T | undefined {
+  return obj && Object.keys(obj).length > 0 ? obj : undefined;
+}
+
+/**
+ * Convert Barney's BuildManifestOptions to fred's BuildManifestOptions.
+ * Transforms fields with different shapes: port string -> ports record,
+ * env password generation, tmpfs/expose comma-string -> arrays.
+ * Empty objects are filtered to undefined so fred omits them.
+ */
+function toFredOptions(opts: BuildManifestOptions): FredBuildManifestOptions {
+  const env = nonEmpty(opts.env);
+  return {
+    image: opts.image,
+    ports: opts.port ? normalizePorts(opts.port) : {},
+    env: env ? processEnv(env) : undefined,
+    tmpfs: opts.tmpfs ? splitCsv(opts.tmpfs) : undefined,
+    expose: opts.expose ? splitCsv(opts.expose) : undefined,
+    command: opts.command,
+    args: opts.args,
+    user: opts.user,
+    health_check: opts.health_check,
+    stop_grace_period: opts.stop_grace_period,
+    init: opts.init,
+    labels: nonEmpty(opts.labels),
+    depends_on: nonEmpty(opts.depends_on),
+  };
+}
+
+/**
  * Build a manifest JSON from Docker image parameters, compute its hash,
  * and return a PayloadAttachment ready for the deploy flow.
  *
- * Empty env values are replaced with auto-generated passwords.
+ * Delegates manifest construction to @manifest-network/manifest-mcp-fred,
+ * adding password generation, payload hashing, and size validation.
  */
 export async function buildManifest(opts: BuildManifestOptions): Promise<BuildManifestResult> {
-  const manifest: Record<string, unknown> = {
-    image: opts.image,
-  };
-
-  // Ports
-  if (opts.port) {
-    manifest.ports = normalizePorts(opts.port);
-  }
-
-  // Env — auto-generate passwords for empty values
-  if (opts.env && Object.keys(opts.env).length > 0) {
-    const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(opts.env)) {
-      env[key] = value === '' ? generatePassword() : value.endsWith('/') ? value + generatePassword() : value;
-    }
-    manifest.env = env;
-  }
-
-  // User
-  if (opts.user) {
-    manifest.user = opts.user;
-  }
-
-  // Tmpfs
-  if (opts.tmpfs) {
-    const paths = opts.tmpfs.split(',').map((p) => p.trim()).filter(Boolean);
-    if (paths.length > 0) {
-      manifest.tmpfs = paths;
-    }
-  }
-
-  // Command (entrypoint override)
-  if (opts.command && opts.command.length > 0) {
-    manifest.command = opts.command;
-  }
-
-  // Args (CMD override)
-  if (opts.args && opts.args.length > 0) {
-    manifest.args = opts.args;
-  }
-
-  // Health check
-  if (opts.health_check) {
-    manifest.health_check = opts.health_check;
-  }
-
-  // Stop grace period
-  if (opts.stop_grace_period) {
-    manifest.stop_grace_period = opts.stop_grace_period;
-  }
-
-  // Init (tini as PID 1)
-  if (opts.init !== undefined) {
-    manifest.init = opts.init;
-  }
-
-  // Expose (inter-service ports)
-  if (opts.expose) {
-    const ports = opts.expose.split(',').map((p) => p.trim()).filter(Boolean);
-    if (ports.length > 0) {
-      manifest.expose = ports;
-    }
-  }
-
-  // Labels
-  if (opts.labels && Object.keys(opts.labels).length > 0) {
-    manifest.labels = opts.labels;
-  }
-
-  // Depends-on (service startup ordering)
-  if (opts.depends_on && Object.keys(opts.depends_on).length > 0) {
-    manifest.depends_on = opts.depends_on;
-  }
-
+  const fredOpts = toFredOptions(opts);
+  const manifest = fredBuildManifest(fredOpts);
   const json = JSON.stringify(manifest, null, 2);
 
   if (!validatePayloadSize(json)) {
@@ -231,104 +226,23 @@ export async function buildManifest(opts: BuildManifestOptions): Promise<BuildMa
  * Merge old manifest fields as defaults into a new manifest.
  * Single-service manifests only (stack updates use full manifest replacement).
  *
- * - env: old vars carry forward; new values override
- * - ports: old ports carry forward; new ports override
- * - labels: old labels carry forward; new labels override
- * - user: old value used if new manifest doesn't specify one
- * - tmpfs: old value used if new manifest doesn't specify one
- * - command: old value used if new manifest doesn't specify one
- * - args: old value used if new manifest doesn't specify one
- * - health_check: old value used if new manifest doesn't specify one
- * - stop_grace_period: old value used if new manifest doesn't specify one
- * - init: old value used if new manifest doesn't specify one
- * - expose: old value used if new manifest doesn't specify one
- * - depends_on: old value used if new manifest doesn't specify one
- * - image: always from new manifest
+ * Delegates to fred's mergeManifest (env/ports/labels merge with override,
+ * other fields carry forward). Returns newManifest unchanged on parse errors.
+ *
+ * Fred's mergeManifest only throws on invalid oldManifestJson (bad JSON or
+ * non-object), so catching all errors matches the original Barney behavior
+ * of graceful fallback without fragile error message matching.
  */
 export function mergeManifest(
   newManifest: Record<string, unknown>,
   oldManifestJson: string
 ): Record<string, unknown> {
-  let oldManifest: Record<string, unknown>;
   try {
-    oldManifest = JSON.parse(oldManifestJson);
-    if (typeof oldManifest !== 'object' || oldManifest === null || Array.isArray(oldManifest)) {
-      return newManifest;
-    }
+    return fredMergeManifest(newManifest, oldManifestJson);
   } catch (error) {
     logError('manifest.mergeManifest.parseOld', error);
     return newManifest;
   }
-
-  const merged = { ...newManifest };
-
-  // env: old vars carry forward, new values override
-  const oldEnv = oldManifest.env;
-  const newEnv = newManifest.env;
-  if (oldEnv && typeof oldEnv === 'object' && !Array.isArray(oldEnv)) {
-    merged.env = { ...(oldEnv as Record<string, string>), ...(newEnv as Record<string, string> | undefined) };
-  }
-
-  // ports: old ports carry forward, new ports override
-  const oldPorts = oldManifest.ports;
-  const newPorts = newManifest.ports;
-  if (oldPorts && typeof oldPorts === 'object' && !Array.isArray(oldPorts)) {
-    merged.ports = { ...(oldPorts as Record<string, unknown>), ...(newPorts as Record<string, unknown> | undefined) };
-  }
-
-  // user: old value used if new manifest doesn't specify one
-  if (newManifest.user === undefined && oldManifest.user !== undefined) {
-    merged.user = oldManifest.user;
-  }
-
-  // tmpfs: old value used if new manifest doesn't specify one
-  if (newManifest.tmpfs === undefined && oldManifest.tmpfs !== undefined) {
-    merged.tmpfs = oldManifest.tmpfs;
-  }
-
-  // command: old value used if new manifest doesn't specify one
-  if (newManifest.command === undefined && oldManifest.command !== undefined) {
-    merged.command = oldManifest.command;
-  }
-
-  // args: old value used if new manifest doesn't specify one
-  if (newManifest.args === undefined && oldManifest.args !== undefined) {
-    merged.args = oldManifest.args;
-  }
-
-  // health_check: old value used if new manifest doesn't specify one
-  if (newManifest.health_check === undefined && oldManifest.health_check !== undefined) {
-    merged.health_check = oldManifest.health_check;
-  }
-
-  // stop_grace_period: old value used if new manifest doesn't specify one
-  if (newManifest.stop_grace_period === undefined && oldManifest.stop_grace_period !== undefined) {
-    merged.stop_grace_period = oldManifest.stop_grace_period;
-  }
-
-  // init: old value used if new manifest doesn't specify one
-  if (newManifest.init === undefined && oldManifest.init !== undefined) {
-    merged.init = oldManifest.init;
-  }
-
-  // expose: old value used if new manifest doesn't specify one
-  if (newManifest.expose === undefined && oldManifest.expose !== undefined) {
-    merged.expose = oldManifest.expose;
-  }
-
-  // labels: old labels carry forward, new labels override
-  const oldLabels = oldManifest.labels;
-  const newLabels = newManifest.labels;
-  if (oldLabels && typeof oldLabels === 'object' && !Array.isArray(oldLabels)) {
-    merged.labels = { ...(oldLabels as Record<string, string>), ...(newLabels as Record<string, string> | undefined) };
-  }
-
-  // depends_on: old value used if new manifest doesn't specify one
-  if (newManifest.depends_on === undefined && oldManifest.depends_on !== undefined) {
-    merged.depends_on = oldManifest.depends_on;
-  }
-
-  return merged;
 }
 
 // ============================================================================
@@ -349,53 +263,17 @@ export interface StackManifestOptions {
  * RFC 1123 DNS label validation for service names.
  * 1-63 chars, lowercase alphanumeric + hyphens, no leading/trailing hyphen.
  * Returns null if valid, or an error string describing the issue.
+ *
+ * Wraps @manifest-network/manifest-mcp-fred's validateServiceName (boolean)
+ * with Barney's error message convention.
  */
 export function validateServiceName(name: string): string | null {
   if (!name) return 'Service name is required.';
   if (name.length > 63) return 'Service name must be 63 characters or fewer.';
-  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(name)) {
+  if (!fredValidateServiceName(name)) {
     return 'Service name must be a valid DNS label: lowercase alphanumeric with hyphens, no leading/trailing hyphen.';
   }
   return null;
-}
-
-/**
- * Build a single service manifest object (used internally by buildStackManifest).
- * Auto-generates passwords for empty env values, same as buildManifest.
- */
-function buildServiceManifestObject(cfg: ServiceConfig): Record<string, unknown> {
-  const svc: Record<string, unknown> = { image: cfg.image };
-
-  if (cfg.port) {
-    svc.ports = normalizePorts(cfg.port);
-  }
-
-  if (cfg.env && Object.keys(cfg.env).length > 0) {
-    const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(cfg.env)) {
-      env[key] = value === '' ? generatePassword() : value.endsWith('/') ? value + generatePassword() : value;
-    }
-    svc.env = env;
-  }
-
-  if (cfg.user) svc.user = cfg.user;
-  if (cfg.tmpfs) {
-    const paths = cfg.tmpfs.split(',').map((p) => p.trim()).filter(Boolean);
-    if (paths.length > 0) svc.tmpfs = paths;
-  }
-  if (cfg.command && cfg.command.length > 0) svc.command = cfg.command;
-  if (cfg.args && cfg.args.length > 0) svc.args = cfg.args;
-  if (cfg.health_check) svc.health_check = cfg.health_check;
-  if (cfg.stop_grace_period) svc.stop_grace_period = cfg.stop_grace_period;
-  if (cfg.init !== undefined) svc.init = cfg.init;
-  if (cfg.expose) {
-    const ports = cfg.expose.split(',').map((p) => p.trim()).filter(Boolean);
-    if (ports.length > 0) svc.expose = ports;
-  }
-  if (cfg.labels && Object.keys(cfg.labels).length > 0) svc.labels = cfg.labels;
-  if (cfg.depends_on && Object.keys(cfg.depends_on).length > 0) svc.depends_on = cfg.depends_on;
-
-  return svc;
 }
 
 /**
@@ -403,6 +281,9 @@ function buildServiceManifestObject(cfg: ServiceConfig): Record<string, unknown>
  * and return a PayloadAttachment ready for the deploy flow.
  *
  * The resulting manifest format: `{ "services": { "web": {...}, "db": {...} } }`
+ *
+ * Uses @manifest-network/manifest-mcp-fred's buildManifest per service,
+ * with Barney-specific stack wrapping, password generation, and payload hashing.
  */
 export async function buildStackManifest(opts: StackManifestOptions): Promise<BuildManifestResult> {
   const serviceNames = Object.keys(opts.services);
@@ -418,7 +299,7 @@ export async function buildStackManifest(opts: StackManifestOptions): Promise<Bu
 
   const services: Record<string, Record<string, unknown>> = {};
   for (const [name, cfg] of Object.entries(opts.services)) {
-    services[name] = buildServiceManifestObject(cfg);
+    services[name] = fredBuildManifest(toFredOptions(cfg));
   }
 
   const manifest = { services };

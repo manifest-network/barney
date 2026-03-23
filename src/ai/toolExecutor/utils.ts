@@ -2,9 +2,8 @@
  * Utility functions for tool execution
  */
 
+import { sha256Hex as computePayloadHash, isValidMetaHash } from '../../utils/hash';
 import {
-  computePayloadHash,
-  isValidMetaHash,
   createLeaseDataSignMessage,
   createSignMessage,
   createAuthToken,

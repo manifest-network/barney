@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { executeTool, executeConfirmedTool } from './index';
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import type { ToolResult, ToolExecutorOptions } from './types';
 
 vi.mock('./compositeQueries', () => ({

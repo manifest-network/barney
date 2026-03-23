@@ -267,10 +267,10 @@ export { sha256Hex as computePayloadHash } from '../utils/hash';
 
 /**
  * Validates that a string is a valid SHA-256 hex hash (64 hex characters).
+ *
+ * Re-exported from utils/hash.ts for backward compatibility.
  */
-export function isValidMetaHash(hash: string): boolean {
-  return /^[0-9a-f]{64}$/i.test(hash);
-}
+export { isValidMetaHash } from '../utils/hash';
 
 
 /**

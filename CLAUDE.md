@@ -70,7 +70,7 @@ ErrorBoundary
 The AI assistant uses a 3-layer architecture:
 
 1. **AI Store** (`src/stores/aiStore.ts`) - Zustand store managing chat state, streaming, tool execution, and wallet refs. Actions in `src/stores/aiActions/`.
-2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser`
+2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-core`
 3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
    - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`
    - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`
@@ -103,13 +103,15 @@ Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`. Kn
 
 ### Manifest Generation (`src/ai/manifest.ts`)
 
-Builds Docker Compose-style JSON manifests for single-service and multi-service (stack) deploys.
+Thin wrappers around `@manifest-network/manifest-mcp-fred` manifest builders, adding Barney-specific behavior: port string normalization, password generation for empty env values, tmpfs/expose string splitting, SHA-256 payload hashing, and `BuildManifestResult` wrapping.
 
-- `buildManifest(opts)` — Build single-service manifest JSON from image, port, env, user, tmpfs, command, args, health_check, etc.
-- `buildStackManifest(opts)` — Build multi-service stack manifest with a `services` map of `ServiceConfig` entries
-- `mergeManifest(newManifest, oldManifestJson)` — Merge new manifest over old, preserving env, ports, labels (merged with override), user, tmpfs, command, args, health_check, stop_grace_period, init, expose, depends_on (carried forward if not specified in new). Single-service manifests only (stack updates use full manifest replacement)
-- `validateServiceName(name)` — RFC 1123 DNS label validation (1-63 chars, lowercase alphanumeric + hyphens)
-- `isStackManifest(manifest)` / `parseStackManifest(json)` / `getServiceNames(manifest)` — Stack manifest detection and parsing utilities
+- `buildManifest(opts)` — Build single-service manifest JSON, compute hash, return `BuildManifestResult`. Delegates to fred's `buildManifest()`
+- `buildStackManifest(opts)` — Build multi-service stack manifest with `{ services: {...} }` format, compute hash
+- `mergeManifest(newManifest, oldManifestJson)` — Merge old manifest fields into new, graceful fallback on parse error. Delegates to fred's `mergeManifest()`
+- `validateServiceName(name)` — RFC 1123 DNS label validation, returns error string or null. Wraps fred's boolean return
+- `normalizePorts(port)` — Parse port string to manifest ports record (Barney-local, no fred equivalent)
+- `deriveAppNameFromImage(image)` — Extract app name from Docker image ref (Barney-local, different from fred which includes tags)
+- `isStackManifest(manifest)` / `parseStackManifest(json)` / `getServiceNames(manifest)` — Stack manifest utilities (Barney-local, use `{ services: {...} }` format vs fred's flat format)
 - `ServiceConfig` — Type alias for `BuildManifestOptions`, used per-service in stacks
 
 ### Known Images & Stacks (`src/ai/knownImages.ts`)
@@ -161,12 +163,12 @@ Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored 
 
 ### Transaction Path
 
-AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP server that uses manifestjs internally).
+AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-core` (shared MCP library that uses manifestjs internally).
 
 ### Wallet Integration
 
 - cosmos-kit provides wallet abstraction (Web3Auth and Keplr are enabled in `src/main.tsx`; Leap, Cosmostation, Ledger packages are installed but not imported)
-- `CosmosClientManager` singleton wraps the signer for MCP operations
+- `CosmosClientManager` from `@manifest-network/manifest-mcp-core` wraps the signer for MCP operations
 - `signArbitrary` used for ADR-036 off-chain authentication (payload uploads to providers, fred status queries)
 
 ### API Layer (`src/api/`)
@@ -206,7 +208,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 
 | Hook | Purpose |
 |------|---------|
-| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser` |
+| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-mcp-core` |
 | `useAutoScroll` | MutationObserver-based auto-scroll that respects user scroll position |
 | `useInputHistory` | Arrow-key navigation through past chat inputs |
 | `useAI` | Zustand store consumer — selects all public state/actions via `useShallow` |
@@ -222,7 +224,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | Module | Purpose |
 |--------|---------|
 | `errors.ts` | `logError()` — structured error logging (use instead of raw `console.error`) |
-| `hash.ts` | `sha256()`, `toHex()`, `generatePassword()` — hashing, hex encoding, password generation; `MAX_PAYLOAD_SIZE` (5KB) |
+| `hash.ts` | `sha256()`, `sha256Hex()`, `toHex()`, `generatePassword()`, `isValidMetaHash()` — hashing, hex encoding, password generation, hash validation; `MAX_PAYLOAD_SIZE` (5KB) |
 | `format.ts` | Amount conversion (`toBaseUnits`, `fromBaseUnits`), date/duration formatting, UUID validation |
 | `fileValidation.ts` | Upload validation: size limits, allowed extensions (`.yaml`, `.yml`, `.json`, `.txt`), MIME type checks, manifest content validation (`validateManifestContent`), YAML service name extraction (`extractYamlServiceNames`) |
 | `pricing.ts` | BigInt-based cost calculations (`formatCostPerHour`, `calculateEstimatedCost`) to avoid integer overflow |

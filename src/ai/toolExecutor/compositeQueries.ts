@@ -3,8 +3,8 @@
  * These run immediately without confirmation.
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
-import { cosmosQuery } from '@manifest-network/manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import { cosmosQuery } from '@manifest-network/manifest-mcp-core';
 import {
   getLeasesByTenant,
   getLeasesByTenantPaginated,

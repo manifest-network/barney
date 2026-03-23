@@ -99,6 +99,8 @@ describe('buildManifest', () => {
     const parsed = JSON.parse(result.json);
 
     expect(parsed.image).toBe('redis:8.4');
+    // Fred always includes ports in output (empty when none specified)
+    expect(parsed.ports).toEqual({});
     expect(result.derivedAppName).toBe('redis');
     expect(result.payload.hash).toHaveLength(64);
     expect(result.payload.bytes).toBeInstanceOf(Uint8Array);
@@ -399,22 +401,24 @@ describe('mergeManifest', () => {
     expect(mergeManifest(newManifest, 'null')).toEqual(newManifest);
   });
 
-  it('skips old env when it is an array instead of an object', () => {
+  it('spreads old env array as indexed object (fred behavior)', () => {
     const newManifest = { image: 'redis:8' };
     const oldJson = JSON.stringify({ image: 'redis:7', env: ['FOO=bar'] });
 
     const merged = mergeManifest(newManifest, oldJson);
 
-    expect(merged.env).toBeUndefined();
+    // Fred spreads arrays as objects with numeric keys (no array guard)
+    expect(merged.env).toEqual({ '0': 'FOO=bar' });
   });
 
-  it('skips old ports when it is an array instead of an object', () => {
+  it('spreads old ports array as indexed object (fred behavior)', () => {
     const newManifest = { image: 'redis:8' };
     const oldJson = JSON.stringify({ image: 'redis:7', ports: ['80/tcp'] });
 
     const merged = mergeManifest(newManifest, oldJson);
 
-    expect(merged.ports).toBeUndefined();
+    // Fred spreads arrays as objects with numeric keys (no array guard)
+    expect(merged.ports).toEqual({ '0': '80/tcp' });
   });
 
   it('does not carry forward unknown old fields', () => {
@@ -478,11 +482,12 @@ describe('mergeManifest', () => {
     expect(merged.labels).toEqual({ app: 'myapp', tier: 'premium', version: '2' });
   });
 
-  it('skips old labels when it is an array instead of an object', () => {
+  it('spreads old labels array as indexed object (fred behavior)', () => {
     const newManifest = { image: 'redis:8' };
     const oldJson = JSON.stringify({ image: 'redis:7', labels: ['foo=bar'] });
     const merged = mergeManifest(newManifest, oldJson);
-    expect(merged.labels).toBeUndefined();
+    // Fred spreads arrays as objects with numeric keys (no array guard)
+    expect(merged.labels).toEqual({ '0': 'foo=bar' });
   });
 
   it('carries forward depends_on from old manifest', () => {
