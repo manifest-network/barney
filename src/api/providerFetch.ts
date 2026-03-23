@@ -1,6 +1,7 @@
 /**
- * Shared provider URL validation and fetch helpers.
- * Used by both provider-api.ts and fred.ts to avoid duplication.
+ * Provider URL validation helpers.
+ * Used by fred.ts for WebSocket URL construction (SSRF validation + base URL normalization).
+ * HTTP requests use providerFetchAdapter.ts instead.
  */
 
 import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
@@ -28,37 +29,4 @@ export function validateProviderUrl(url: string): URL {
  */
 export function normalizeBaseUrl(validated: URL): string {
   return validated.origin + validated.pathname.replace(/\/$/, '');
-}
-
-/**
- * Build a fetch URL and headers for provider API requests.
- * In development, routes through the CORS proxy with X-Proxy-Target header.
- */
-export function buildProviderFetchArgs(
-  baseUrl: string,
-  path: string,
-  extraHeaders?: Record<string, string>
-): { url: string; headers: Record<string, string> } {
-  const headers: Record<string, string> = { ...extraHeaders };
-
-  if (import.meta.env.DEV) {
-    headers['X-Proxy-Target'] = baseUrl;
-    return { url: `/proxy-provider${path}`, headers };
-  }
-
-  return { url: `${baseUrl}${path}`, headers };
-}
-
-/**
- * Validates a provider URL, normalizes it, and builds fetch args in one step.
- * Combines validateProviderUrl → normalizeBaseUrl → buildProviderFetchArgs.
- */
-export function buildValidatedProviderRequest(
-  providerApiUrl: string,
-  path: string,
-  extraHeaders?: Record<string, string>
-): { url: string; headers: Record<string, string> } {
-  const validatedUrl = validateProviderUrl(providerApiUrl);
-  const baseUrl = normalizeBaseUrl(validatedUrl);
-  return buildProviderFetchArgs(baseUrl, path, extraHeaders);
 }

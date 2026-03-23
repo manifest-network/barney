@@ -7,7 +7,7 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import { cosmosTx } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
-import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
+import { getLeaseConnectionInfo, ProviderApiError } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
@@ -461,7 +461,8 @@ async function resolveAppUrl(
   address: string,
   signArbitrary: ToolExecutorOptions['signArbitrary'],
   logContext: string
-): Promise<{ url?: string; connection?: ConnectionDetails }> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- ConnectionDetails has readonly arrays that don't match AppEntry's mutable schema
+): Promise<{ url?: string; connection?: any }> {
   // 1. Try connection endpoint (has proper host + port mappings)
   if (signArbitrary) {
     try {
@@ -1558,7 +1559,7 @@ export async function executeConfirmedBatchDeploy(
           'executeConfirmedBatchDeploy'
         );
 
-        appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection });
+        appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection: connection ? { ...connection } : undefined });
         batchProgress[i] = { name, phase: 'ready', detail: 'App is live!' };
         emitProgress();
         deployed.push({ name, url: connectionUrl });

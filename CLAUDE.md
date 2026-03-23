@@ -148,18 +148,14 @@ Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored 
 
 ### Fred API Client
 
-`src/api/fred.ts` — Polls provider's `/status/{uuid}` endpoint for deployment status. Follows `provider-api.ts` patterns (SSRF validation, dev CORS proxy, ADR-036 auth).
+`src/api/fred.ts` — Fred HTTP functions and WebSocket streaming for lease deployment status.
 
-- `getLeaseStatus()` — Single fetch
-- `pollLeaseUntilReady()` — Polling loop with configurable interval, max attempts, abort signal
-- `waitForLeaseReady()` — WebSocket-based wait with polling fallback for deploy readiness
-- `connectLeaseEvents()` — WebSocket connection to Fred's `/v1/leases/{uuid}/events` endpoint for real-time lease updates
-- `getLeaseLogs()` — Fetch container logs for a running lease
-- `getLeaseProvision()` — Fetch provision status
-- `getLeaseInfo()` — Fetch connection details (ports, URLs)
-- `restartLease()` — Restart a running lease
-- `updateLease()` — Update a lease with a new manifest payload
-- `getLeaseReleases()` — Fetch release/version history for a lease
+HTTP functions (`getLeaseStatus`, `getLeaseLogs`, `getLeaseProvision`, `getLeaseInfo`, `restartLease`, `updateLease`, `getLeaseReleases`) are thin wrappers that delegate to `@manifest-network/manifest-mcp-fred` with Barney's CORS proxy/SSRF `fetchFn` adapter injected via `src/api/providerFetchAdapter.ts`.
+
+Barney-specific code that stays local:
+- `pollLeaseUntilReady()` — Polling loop with `checkChainState`, `getAuthToken`, count-based `maxAttempts`
+- `waitForLeaseReady()` — WebSocket-based wait with polling fallback
+- `connectLeaseEvents()` — Browser WebSocket connection to Fred's `/v1/leases/{uuid}/events`
 
 ### Transaction Path
 
@@ -179,8 +175,9 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-core` (shared MCP
 | `sku.ts` | Provider catalog, SKU definitions |
 | `bank.ts` | Cosmos SDK bank queries |
 | `tx.ts` | Transaction signing client and message builders for all Manifest modules (billing, SKU, provider management) |
-| `provider-api.ts` | Payload upload with ADR-036 auth |
-| `fred.ts` | Fred deployment status polling + WebSocket streaming |
+| `provider-api.ts` | Auth helpers, health check, connection info, upload — delegates to `@manifest-network/manifest-mcp-fred` with CORS proxy/SSRF adapter. Keeps `validateAuthTimestamp` and null-returning `getProviderHealth` locally |
+| `fred.ts` | Fred HTTP wrappers (delegate to mono fred) + WebSocket streaming + Barney-specific polling |
+| `providerFetchAdapter.ts` | `fetchFn` adapter that injects DEV CORS proxy routing and PROD SSRF validation for mono's HTTP functions |
 | `morpheus.ts` | OpenAI-compatible SSE streaming client via `/api/morpheus/` proxy |
 | `config.ts` | API endpoints, denom metadata, price formatting |
 | `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
@@ -277,7 +274,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 - **Tool result caching**: Query tool results cached for 10s in the AI store to reduce redundant API calls (max 50 entries, FIFO eviction). Cache is scoped per wallet address and cleared on wallet change.
 - **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
 - **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
-- **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs. The rsbuild proxy (`rsbuild.config.ts`) has its own SSRF validation layer (`isValidProxyTarget`) separate from runtime validation, blocking cloud metadata endpoints, dangerous IP ranges, and embedded credentials.
+- **Dev CORS proxy**: `providerFetchAdapter.ts` provides a `fetchFn` adapter that routes provider HTTP requests through `/proxy-provider` in development, injecting the `X-Proxy-Target` header. All fred/provider HTTP functions receive this adapter as their `fetchFn` parameter. WebSocket connections in `fred.ts` handle their own CORS proxy routing via `providerFetch.ts`. The rsbuild proxy (`rsbuild.config.ts`) has its own SSRF validation layer (`isValidProxyTarget`) separate from runtime validation, blocking cloud metadata endpoints, dangerous IP ranges, and embedded credentials.
 - **Stream timeout**: `processStreamWithTimeout` in `src/ai/streamUtils.ts` wraps the AI stream async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely. The inner `withTimeout` generator ensures cleanup of the underlying generator via `finally` block.
 - **Tool-call leak stripping**: `stripToolCallLeaks()` in `src/ai/streamUtils.ts` filters raw `[TOOL_CALLS]` markers that some models emit as literal text instead of structured tool_calls. Legacy safeguard from the Ollama/Mistral era, kept as defensive code for the Morpheus API.
 - **Message debouncing**: The AI store debounces rapid message sends via `AI_MESSAGE_DEBOUNCE_MS` (300ms) and aborts in-flight streams when a new message is sent.

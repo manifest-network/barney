@@ -1,7 +1,31 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getLeaseStatus, pollLeaseUntilReady, getLeaseLogs, getLeaseProvision, getLeaseInfo, restartLease, updateLease, getLeaseReleases, connectLeaseEvents, waitForLeaseReady } from './fred';
+import { pollLeaseUntilReady, connectLeaseEvents, waitForLeaseReady } from './fred';
 import { LeaseState } from './billing';
 import { ProviderApiError } from './provider-api';
+
+// Mock the mono fred module to bypass checkedFetch's AbortController timeout,
+// which conflicts with vi.useFakeTimers() in polling tests.
+// The mock delegates getLeaseStatus to globalThis.fetch (stubbed per-test)
+// with the same LeaseState conversion mono does internally.
+vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@manifest-network/manifest-mcp-fred')>();
+  return {
+    ...actual,
+    getLeaseStatus: vi.fn(async (providerUrl: string, leaseUuid: string, authToken: string) => {
+      const url = `${providerUrl.replace(/\/+$/, '')}/v1/leases/${encodeURIComponent(leaseUuid)}/status`;
+      const res = await globalThis.fetch(url, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new actual.ProviderApiError(res.status, text);
+      }
+      const raw = await res.json();
+      const { leaseStateFromString: convert } = await import('./billing');
+      return { ...raw, state: convert(raw.state) };
+    }),
+  };
+});
 
 // Mock url utilities to allow test URLs through SSRF check
 vi.mock('../utils/url', () => ({
@@ -23,20 +47,6 @@ const PROVIDER_URL = 'https://fred.example.com';
 const LEASE_UUID = '550e8400-e29b-41d4-a716-446655440000';
 const AUTH_TOKEN = 'dG9rZW4=';
 
-/** Mock fetch to return a raw fred response (state as chain-style string). */
-function mockFetchResponse(data: unknown, ok = true, status = 200): void {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue({
-      ok,
-      status,
-      statusText: 'OK',
-      json: () => Promise.resolve(data),
-      text: () => Promise.resolve(JSON.stringify(data)),
-    })
-  );
-}
-
 /** Raw fred responses use chain-style state strings. */
 function fredResponse(state: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return { state, ...extra };
@@ -57,136 +67,8 @@ function mockFetchSequence(responses: Array<{ data: Record<string, unknown>; ok?
   vi.stubGlobal('fetch', mockFn);
 }
 
-describe('getLeaseStatus', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('parses LEASE_STATE_ACTIVE from fred', async () => {
-    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE', { endpoints: { web: 'https://app.example.com' } }));
-
-    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
-    expect(result.endpoints).toEqual({ web: 'https://app.example.com' });
-  });
-
-  it('parses LEASE_STATE_PENDING from fred', async () => {
-    mockFetchResponse(fredResponse('LEASE_STATE_PENDING'));
-
-    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result.state).toBe(LeaseState.LEASE_STATE_PENDING);
-  });
-
-  it('defaults to PENDING for unknown state strings', async () => {
-    mockFetchResponse(fredResponse('SOMETHING_UNKNOWN'));
-
-    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result.state).toBe(LeaseState.LEASE_STATE_PENDING);
-  });
-
-  it('passes auth header and correct URL', async () => {
-    mockFetchResponse(fredResponse('LEASE_STATE_PENDING'));
-
-    await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/status`);
-    expect(fetchCall[1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
-  });
-
-  it('throws ProviderApiError on non-ok response', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-        text: () => Promise.resolve('lease not found'),
-      })
-    );
-
-    await expect(getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      ProviderApiError
-    );
-  });
-
-  it('throws ProviderApiError on invalid JSON', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: () => Promise.reject(new Error('invalid json')),
-      })
-    );
-
-    await expect(getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      'invalid or malformed data'
-    );
-  });
-
-  it('throws on invalid provider URL', async () => {
-    // Override the mock to reject the URL
-    const urlModule = await import('../utils/url');
-    vi.spyOn(urlModule, 'parseHttpUrl').mockReturnValueOnce(null);
-
-    await expect(getLeaseStatus('', LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      'Invalid provider API URL'
-    );
-  });
-
-  it('parses stack services field from fred response', async () => {
-    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE', {
-      services: {
-        web: { instances: [{ name: 'web-0', status: 'running', ports: { '80/tcp': 32456 } }] },
-        db: { instances: [{ name: 'db-0', status: 'running' }] },
-      },
-    }));
-
-    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result.services).toBeDefined();
-    expect(Object.keys(result.services!)).toEqual(['web', 'db']);
-    expect(result.services!.web.instances).toHaveLength(1);
-    expect(result.services!.web.instances[0].name).toBe('web-0');
-    expect(result.services!.db.instances).toHaveLength(1);
-  });
-
-  it('omits services when none present', async () => {
-    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE'));
-
-    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result.services).toBeUndefined();
-  });
-
-  it('filters invalid instances in services', async () => {
-    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE', {
-      services: {
-        web: { instances: [{ name: 'web-0', status: 'running' }, 'invalid', null] },
-      },
-    }));
-
-    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result.services!.web.instances).toHaveLength(1);
-  });
-
-  it('includes services with missing instances array (early provisioning)', async () => {
-    mockFetchResponse(fredResponse('LEASE_STATE_ACTIVE', {
-      services: {
-        web: { instances: [{ name: 'web-0', status: 'running' }] },
-        db: {},
-      },
-    }));
-
-    const result = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result.services).toBeDefined();
-    expect(result.services!.web.instances).toHaveLength(1);
-    expect(result.services!.db.instances).toHaveLength(0);
-  });
-});
+// HTTP function tests (getLeaseStatus, getLeaseLogs, etc.) are in mono's test suite.
+// Tests below cover Barney-specific behavior: polling, WebSocket, and fallback logic.
 
 describe('pollLeaseUntilReady', () => {
   beforeEach(() => {
@@ -344,7 +226,7 @@ describe('pollLeaseUntilReady', () => {
 
     expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
     const fetchMock = vi.mocked(fetch);
-    expect(fetchMock.mock.calls[0][1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
+    expect(fetchMock.mock.calls[0][1]?.headers).toHaveProperty('Authorization', 'Bearer dG9rZW4=');
   });
 
   it('respects abort signal', async () => {
@@ -459,427 +341,6 @@ describe('pollLeaseUntilReady', () => {
   });
 });
 
-describe('getLeaseLogs', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('returns logs response with nested logs', async () => {
-    const response = {
-      lease_uuid: LEASE_UUID,
-      tenant: 'manifest1test',
-      provider_uuid: 'provider-uuid',
-      logs: { '0': 'Starting server...', '1': 'Worker ready' },
-    };
-    mockFetchResponse(response);
-
-    const result = await getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result.logs).toEqual({ '0': 'Starting server...', '1': 'Worker ready' });
-    expect(result.lease_uuid).toBe(LEASE_UUID);
-  });
-
-  it('uses /v1/leases/ path with tail parameter', async () => {
-    mockFetchResponse({ lease_uuid: LEASE_UUID, tenant: '', provider_uuid: '', logs: {} });
-
-    await getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, 50);
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/logs?tail=50`);
-  });
-
-  it('defaults tail to 100', async () => {
-    mockFetchResponse({ lease_uuid: LEASE_UUID, tenant: '', provider_uuid: '', logs: {} });
-
-    await getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain('?tail=100');
-  });
-
-  it('passes auth header', async () => {
-    mockFetchResponse({ lease_uuid: LEASE_UUID, tenant: '', provider_uuid: '', logs: {} });
-
-    await getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
-  });
-
-  it('throws ProviderApiError on HTTP error', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        statusText: 'Internal Server Error',
-        text: () => Promise.resolve('server error'),
-      })
-    );
-
-    await expect(getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      ProviderApiError
-    );
-  });
-
-  it('throws ProviderApiError on invalid JSON', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: () => Promise.reject(new Error('invalid json')),
-      })
-    );
-
-    await expect(getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      'invalid or malformed data'
-    );
-  });
-});
-
-describe('getLeaseProvision', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('returns provision with last_error', async () => {
-    const provision = { status: 'failed', fail_count: 3, last_error: 'OOMKilled' };
-    mockFetchResponse(provision);
-
-    const result = await getLeaseProvision(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result.last_error).toBe('OOMKilled');
-    expect(result.fail_count).toBe(3);
-    expect(result.status).toBe('failed');
-  });
-
-  it('uses /v1/leases/ path', async () => {
-    mockFetchResponse({ status: 'running', fail_count: 0, last_error: '' });
-
-    await getLeaseProvision(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/provision`);
-  });
-
-  it('throws ProviderApiError on 404', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-        text: () => Promise.resolve('not found'),
-      })
-    );
-
-    await expect(getLeaseProvision(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      ProviderApiError
-    );
-  });
-
-  it('throws ProviderApiError on HTTP error', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 502,
-        statusText: 'Bad Gateway',
-        text: () => Promise.resolve('bad gateway'),
-      })
-    );
-
-    await expect(getLeaseProvision(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      ProviderApiError
-    );
-  });
-});
-
-describe('getLeaseInfo', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('returns connection details', async () => {
-    const info = { host: 'https://app.example.com', ports: { http: 80, https: 443 } };
-    mockFetchResponse(info);
-
-    const result = await getLeaseInfo(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result.host).toBe('https://app.example.com');
-    expect(result.ports).toEqual({ http: 80, https: 443 });
-  });
-
-  it('uses /v1/leases/ info path', async () => {
-    mockFetchResponse({ host: 'https://app.example.com' });
-
-    await getLeaseInfo(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/info`);
-  });
-
-  it('throws ProviderApiError on 404', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-        text: () => Promise.resolve('not ready'),
-      })
-    );
-
-    await expect(getLeaseInfo(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      ProviderApiError
-    );
-  });
-
-  it('passes auth header', async () => {
-    mockFetchResponse({ host: 'https://app.example.com' });
-
-    await getLeaseInfo(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
-  });
-});
-
-describe('restartLease', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('sends POST to restart endpoint', async () => {
-    mockFetchResponse({ status: 'restarting' });
-
-    const result = await restartLease(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result.status).toBe('restarting');
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/restart`);
-    expect(fetchCall[1]?.method).toBe('POST');
-    expect(fetchCall[1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
-  });
-
-  it('throws ProviderApiError on 409 (wrong state)', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 409,
-        statusText: 'Conflict',
-        text: () => Promise.resolve('lease is not running'),
-      })
-    );
-
-    await expect(restartLease(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      ProviderApiError
-    );
-  });
-
-  it('throws ProviderApiError on HTTP error', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        statusText: 'Internal Server Error',
-        text: () => Promise.resolve('server error'),
-      })
-    );
-
-    await expect(restartLease(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      ProviderApiError
-    );
-  });
-
-  it('throws ProviderApiError on invalid JSON', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: () => Promise.reject(new Error('invalid json')),
-      })
-    );
-
-    await expect(restartLease(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      'invalid or malformed data'
-    );
-  });
-});
-
-describe('updateLease', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('sends POST with payload to update endpoint', async () => {
-    mockFetchResponse({ status: 'updating' });
-
-    const payload = btoa('{"image":"nginx:latest"}');
-    const result = await updateLease(PROVIDER_URL, LEASE_UUID, payload, AUTH_TOKEN);
-    expect(result.status).toBe('updating');
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/update`);
-    expect(fetchCall[1]?.method).toBe('POST');
-    expect(fetchCall[1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
-
-    const body = JSON.parse(fetchCall[1]?.body as string);
-    expect(body.payload).toBe(payload);
-  });
-
-  it('throws ProviderApiError on 409', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 409,
-        statusText: 'Conflict',
-        text: () => Promise.resolve('lease is not running'),
-      })
-    );
-
-    await expect(updateLease(PROVIDER_URL, LEASE_UUID, 'payload', AUTH_TOKEN)).rejects.toThrow(
-      ProviderApiError
-    );
-  });
-
-  it('throws ProviderApiError on HTTP error', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        statusText: 'Internal Server Error',
-        text: () => Promise.resolve('server error'),
-      })
-    );
-
-    await expect(updateLease(PROVIDER_URL, LEASE_UUID, 'payload', AUTH_TOKEN)).rejects.toThrow(
-      ProviderApiError
-    );
-  });
-
-  it('throws ProviderApiError on invalid JSON', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: () => Promise.reject(new Error('invalid json')),
-      })
-    );
-
-    await expect(updateLease(PROVIDER_URL, LEASE_UUID, 'payload', AUTH_TOKEN)).rejects.toThrow(
-      'invalid or malformed data'
-    );
-  });
-});
-
-describe('getLeaseReleases', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('returns releases response', async () => {
-    const response = {
-      lease_uuid: LEASE_UUID,
-      tenant: 'manifest1test',
-      provider_uuid: 'provider-uuid',
-      releases: [
-        { version: 1, image: 'nginx:1.0', status: 'active', created_at: '2024-01-01T00:00:00Z' },
-        { version: 2, image: 'nginx:2.0', status: 'superseded', created_at: '2024-01-02T00:00:00Z', error: 'OOM' },
-      ],
-    };
-    mockFetchResponse(response);
-
-    const result = await getLeaseReleases(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-    expect(result.releases).toHaveLength(2);
-    expect(result.releases[0].version).toBe(1);
-    expect(result.releases[1].error).toBe('OOM');
-    expect(result.lease_uuid).toBe(LEASE_UUID);
-  });
-
-  it('uses /v1/leases/ path', async () => {
-    mockFetchResponse({ lease_uuid: LEASE_UUID, tenant: '', provider_uuid: '', releases: [] });
-
-    await getLeaseReleases(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toContain(`/v1/leases/${LEASE_UUID}/releases`);
-  });
-
-  it('passes auth header', async () => {
-    mockFetchResponse({ lease_uuid: LEASE_UUID, tenant: '', provider_uuid: '', releases: [] });
-
-    await getLeaseReleases(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
-
-    const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[1]?.headers).toHaveProperty('Authorization', `Bearer ${AUTH_TOKEN}`);
-  });
-
-  it('throws ProviderApiError on HTTP error', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-        text: () => Promise.resolve('not found'),
-      })
-    );
-
-    await expect(getLeaseReleases(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      ProviderApiError
-    );
-  });
-
-  it('throws ProviderApiError on invalid JSON', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: () => Promise.reject(new Error('invalid json')),
-      })
-    );
-
-    await expect(getLeaseReleases(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN)).rejects.toThrow(
-      'invalid or malformed data'
-    );
-  });
-});
-
-// ============================================================================
-// WebSocket tests
-// ============================================================================
-
-/** Helper: create a mock WebSocket that emits events from an array. */
 function createMockWebSocket(events: unknown[], shouldFail = false) {
   return class MockWebSocket {
     static OPEN = 1;
@@ -999,11 +460,8 @@ describe('waitForLeaseReady', () => {
   });
 
   it('returns immediately via subscribe-then-fetch when lease is already ready', async () => {
-    // WS opens but sends no events — simulates batch deploy where the app
-    // was provisioned before Phase 2 started
     vi.stubGlobal('WebSocket', createMockWebSocket([]));
 
-    // The subscribe-then-fetch status check finds the lease already ready
     const active = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'ready' });
     mockFetchSequence([{ data: active }]);
 
@@ -1021,7 +479,6 @@ describe('waitForLeaseReady', () => {
     const readyEvent = { lease_uuid: LEASE_UUID, status: 'ready', timestamp: '2024-01-01T00:00:00Z' };
     vi.stubGlobal('WebSocket', createMockWebSocket([readyEvent]));
 
-    // Status check shows still provisioning — WS event loop takes over
     const provisioning = fredResponse('LEASE_STATE_ACTIVE', { provision_status: 'provisioning' });
     mockFetchSequence([{ data: provisioning }]);
 
@@ -1038,7 +495,6 @@ describe('waitForLeaseReady', () => {
     const readyEvent = { lease_uuid: LEASE_UUID, status: 'ready', timestamp: '2024-01-01T00:00:00Z' };
     vi.stubGlobal('WebSocket', createMockWebSocket([readyEvent]));
 
-    // Status check fails (network error) — WS event loop still works
     vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('network error')));
 
     const result = await waitForLeaseReady(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, {
