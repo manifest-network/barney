@@ -218,7 +218,7 @@ export async function pollLeaseUntilReady(
     }
   }
 
-  logError('fred.pollLeaseUntilReady', new Error(`Polling exhausted after ${maxAttempts} attempts`));
+  logError('fred.pollLeaseUntilReady', new Error(`Polling exhausted after ${maxAttempts} attempts (state=${lastStatus.state}, phase=${lastStatus.phase ?? 'unknown'}, provision_status=${lastStatus.provision_status ?? 'unknown'})`));
   return lastStatus;
 }
 

@@ -30,7 +30,9 @@ export function createProviderFetch(): typeof globalThis.fetch {
       throw new Error(`Provider URL blocked by SSRF validation: ${url}`);
     }
 
-    return globalThis.fetch(url, init);
+    // Reconstruct URL from parsed form to strip embedded credentials
+    const sanitizedUrl = `${parsed.origin}${parsed.pathname}${parsed.search}`;
+    return globalThis.fetch(sanitizedUrl, init);
   };
 }
 

@@ -11,6 +11,7 @@ import {
   getLeaseConnectionInfo as fredGetLeaseConnectionInfo,
   uploadLeaseData as fredUploadLeaseData,
   type ProviderHealthResponse,
+  type LeaseConnectionResponse,
 } from '@manifest-network/manifest-mcp-fred';
 import { providerFetch } from './providerFetchAdapter';
 import { logError } from '../utils/errors';
@@ -89,7 +90,7 @@ export function getLeaseConnectionInfo(
   providerApiUrl: string,
   leaseUuid: string,
   authToken: string
-) {
+): Promise<LeaseConnectionResponse> {
   return fredGetLeaseConnectionInfo(providerApiUrl, leaseUuid, authToken, providerFetch);
 }
 

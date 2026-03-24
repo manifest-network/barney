@@ -169,7 +169,8 @@ function nonEmpty<T extends Record<string, unknown>>(obj: T | undefined): T | un
  * Convert Barney's BuildManifestOptions to fred's BuildManifestOptions.
  * Transforms fields with different shapes: port string -> ports record,
  * env password generation, tmpfs/expose comma-string -> arrays.
- * Empty objects are filtered to undefined so fred omits them.
+ * `ports` is always present (empty `{}` when no port specified, as fred requires).
+ * Other empty objects are filtered to undefined so fred omits them.
  */
 function toFredOptions(opts: BuildManifestOptions): FredBuildManifestOptions {
   const env = nonEmpty(opts.env);
