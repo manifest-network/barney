@@ -190,12 +190,12 @@ export async function executeAppStatus(
                     const svc = conn.services[primary.serviceName];
                     fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
                   }
-                  appConnection = { ...conn, ports: primary.ports, fqdn } as typeof appConnection;
+                  appConnection = JSON.parse(JSON.stringify({ ...conn, ports: primary.ports, fqdn }));
                 } else {
-                  appConnection = conn as typeof appConnection;
+                  appConnection = JSON.parse(JSON.stringify(conn));
                 }
               } else {
-                appConnection = conn as typeof appConnection;
+                appConnection = JSON.parse(JSON.stringify(conn));
               }
               if (conn.host) {
                 appUrl = conn.host;

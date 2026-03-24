@@ -14,7 +14,22 @@ import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
  */
 export function createProviderFetch(): typeof globalThis.fetch {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    // Extract URL string and merge Request properties into init if needed
+    let url: string;
+    if (typeof input === 'string') {
+      url = input;
+    } else if (input instanceof URL) {
+      url = input.href;
+    } else {
+      // input is a Request — preserve its method/body/headers
+      url = input.url;
+      init = {
+        method: input.method,
+        headers: input.headers,
+        body: input.body,
+        ...init, // caller's init overrides Request defaults
+      };
+    }
 
     if (import.meta.env.DEV) {
       const parsed = new URL(url);
@@ -24,17 +39,16 @@ export function createProviderFetch(): typeof globalThis.fetch {
       return globalThis.fetch(proxyUrl, { ...init, headers });
     }
 
-    // Production: validate SSRF safety
+    // Production: validate SSRF safety and strip embedded credentials
     const parsed = parseHttpUrl(url);
     if (!parsed || !isUrlSsrfSafe(parsed)) {
       throw new Error(`Provider URL blocked by SSRF validation: ${url}`);
     }
 
-    // Reconstruct URL from parsed form to strip embedded credentials
     const sanitizedUrl = `${parsed.origin}${parsed.pathname}${parsed.search}`;
     return globalThis.fetch(sanitizedUrl, init);
   };
 }
 
-/** Module-level singleton for use in tool executors. */
+/** Module-level singleton for use in fred.ts and provider-api.ts. */
 export const providerFetch = createProviderFetch();
