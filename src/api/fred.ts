@@ -93,7 +93,7 @@ export function restartLease(
 export function updateLease(
   providerApiUrl: string, leaseUuid: string, payload: string, authToken: string
 ): Promise<FredActionResponse> {
-  return fredUpdateLease(providerApiUrl, leaseUuid, payload, authToken, providerFetch);
+  return fredUpdateLease(providerApiUrl, leaseUuid, new TextEncoder().encode(payload), authToken, providerFetch);
 }
 
 // ============================================================================
