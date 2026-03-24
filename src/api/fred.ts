@@ -23,6 +23,7 @@ import {
   type FredLeaseProvision,
   type FredActionResponse,
   type FredLeaseInfo,
+  type FredLeaseReleases,
 } from '@manifest-network/manifest-mcp-fred';
 import { providerFetch } from './providerFetchAdapter';
 import { validateProviderUrl, normalizeBaseUrl } from './providerFetch';
@@ -74,7 +75,7 @@ export function getLeaseProvision(
 
 export function getLeaseReleases(
   providerApiUrl: string, leaseUuid: string, authToken: string
-) {
+): Promise<FredLeaseReleases> {
   return fredGetLeaseReleases(providerApiUrl, leaseUuid, authToken, providerFetch);
 }
 
