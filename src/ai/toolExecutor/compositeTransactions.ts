@@ -7,7 +7,7 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import { cosmosTx } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
-import { getLeaseConnectionInfo, ProviderApiError } from '../../api/provider-api';
+import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
@@ -461,8 +461,7 @@ async function resolveAppUrl(
   address: string,
   signArbitrary: ToolExecutorOptions['signArbitrary'],
   logContext: string
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- ConnectionDetails has readonly arrays that don't match AppEntry's mutable schema
-): Promise<{ url?: string; connection?: any }> {
+): Promise<{ url?: string; connection?: ConnectionDetails }> {
   // 1. Try connection endpoint (has proper host + port mappings)
   if (signArbitrary) {
     try {
@@ -1110,7 +1109,7 @@ export async function executeConfirmedDeployApp(
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
         url: connectionUrl,
-        connection,
+        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
 
@@ -1559,7 +1558,7 @@ export async function executeConfirmedBatchDeploy(
           'executeConfirmedBatchDeploy'
         );
 
-        appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection: connection ? { ...connection } : undefined });
+        appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined });
         batchProgress[i] = { name, phase: 'ready', detail: 'App is live!' };
         emitProgress();
         deployed.push({ name, url: connectionUrl });
@@ -2032,7 +2031,7 @@ export async function executeConfirmedRestartApp(
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
         url: connectionUrl,
-        connection,
+        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
       });
       onProgress?.({ phase: 'ready', operation: 'restart' });
 
@@ -2370,9 +2369,7 @@ export async function executeConfirmedUpdateApp(
 
   try {
     const authToken = await refreshAuthToken();
-    // Base64-encode the payload for the update API
-    const base64Payload = btoa(Array.from(payload.bytes, (b) => String.fromCharCode(b)).join(''));
-    await updateLease(providerUrl, leaseUuid, base64Payload, authToken);
+    await updateLease(providerUrl, leaseUuid, payload.bytes, authToken);
   } catch (error) {
     logError('compositeTransactions.executeConfirmedUpdateApp', error);
     // 409 = lease is not in the right state for update; don't mark as failed
@@ -2464,7 +2461,7 @@ export async function executeConfirmedUpdateApp(
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
         url: finalUrl,
-        connection,
+        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
       });
       onProgress?.({ phase: 'ready', operation: 'update' });
 
