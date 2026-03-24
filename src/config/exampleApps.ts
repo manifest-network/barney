@@ -166,7 +166,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
 
   {
     label: 'Render Voice Clone',
-    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/render-voice-clone:dev', ['8000'], {
+    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/render-voice-clone:v1.0', ['8000'], {
       env: {
         RENDER_API_KEY: 'pk_YOUR_KEY',
         RENDER_SECRET_KEY: 'sk_YOUR_KEY',
