@@ -116,7 +116,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   //   return {
   //     image: 'ghcr.io/everclaw/everclaw:latest',
   //     ports: { '18789/tcp': {}, '8083/tcp': {} },
-  //     env: { MORPHEUS_PROXY_API_KEY: '' },
+  //     env: { MORPHEUS_GATEWAY_API_KEY: '', OPENCLAW_GATEWAY_TOKEN: generatePassword(64), OPENCLAW_GATEWAY_PASSWORD: generatePassword(64), EVERCLAW_AGENT_NAME: 'Barney', EVERCLAW_USER_NAME: 'Tester', TZ: 'America/New_York' },
   //     command: ['/bin/sh', '-c'],
   //   };
   // }, size: 'large', group: 'apps', category: 'Tools' },
@@ -163,6 +163,24 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     category: 'AI',
   },
 
+
+  {
+    label: 'Render Voice Clone',
+    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/render-voice-clone:dev', ['8000'], {
+      env: {
+        RENDER_API_KEY: 'pk_YOUR_KEY',
+        RENDER_SECRET_KEY: 'sk_YOUR_KEY',
+        RENDER_INFERENCE_MODELS: JSON.stringify({
+          'Voice Clone': { image: 'ghcr.io/manifest-network/render-voice-clone-inference:xtts-musetalk', min_vram_gb: 15 },
+        }),
+      },
+    }),
+    envFactory: () => ({ INFERENCE_SECRET: generatePassword(32) }),
+    notice: 'Save your API key, Secret key, and Inference Secret — these values are not stored and must be re-entered on updates.',
+    size: 'micro',
+    group: 'apps',
+    category: 'AI',
+  },
 
   {
     label: 'Render Dashboard',
