@@ -72,9 +72,13 @@ The AI assistant uses a 3-layer architecture:
 1. **AI Store** (`src/stores/aiStore.ts`) - Zustand store managing chat state, streaming, tool execution, and wallet refs. Actions in `src/stores/aiActions/`.
 2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-core`
 3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
+   - **Entry point** (`index.ts`): Contains `QUERY_TOOLS`/`TX_TOOLS` sets and `executeTool()` dispatcher
+   - **Types** (`types.ts`): `ToolResult`, `ToolExecutorOptions`, `PayloadAttachment`, etc.
    - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`
    - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`
+   - **Transactions** (`transactions.ts`): Lease creation, payload upload, transaction helpers
    - **Helpers** (`helpers.ts`): Shared functions — `extractPrimaryServicePorts`, `formatConnectionUrl`
+   - **Utils** (`utils.ts`): Auth token construction (`getProviderAuthToken`), provider fetch helpers
    - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
    - **Internal**: `batch_deploy` — orchestrates multi-app deploys from the UI (not exposed to AI, used by `requestBatchDeploy` in AIContext)
 
@@ -163,7 +167,7 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-core` (shared MCP
 
 ### Wallet Integration
 
-- cosmos-kit provides wallet abstraction (Web3Auth and Keplr are enabled in `src/main.tsx`; Leap, Cosmostation, Ledger packages are installed but not imported)
+- cosmos-kit provides wallet abstraction (Web3Auth is the only enabled wallet provider in `src/main.tsx`; Leap, Cosmostation, Ledger packages are installed but not imported)
 - `CosmosClientManager` from `@manifest-network/manifest-mcp-core` wraps the signer for MCP operations
 - `signArbitrary` used for ADR-036 off-chain authentication (payload uploads to providers, fred status queries)
 
@@ -180,6 +184,8 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-core` (shared MCP
 | `providerFetchAdapter.ts` | `fetchFn` adapter that injects DEV CORS proxy routing and PROD SSRF validation for mono's HTTP functions |
 | `morpheus.ts` | OpenAI-compatible SSE streaming client via `/api/morpheus/` proxy |
 | `config.ts` | API endpoints, denom metadata, price formatting |
+| `faucet.ts` | Faucet HTTP client — token requests, drip-and-verify with balance polling |
+| `providerFetch.ts` | Shared provider URL validation and fetch helpers (used by `provider-api.ts` and `fred.ts`) |
 | `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
 | `queryClient.ts` | LCD query client factory (cached singleton) |
 | `index.ts` | Barrel re-exports for API modules |
@@ -214,7 +220,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `useLeaseItems` | Manages lease item state in forms (add/remove/update SKU items) |
 | `useBatchSelection` | Manages batch selection state for bulk operations |
 | `useCopyToClipboard` | Clipboard copy with feedback state |
-| `useAutoRefill` | Recurring faucet + credit funding — monitors MFX/PWR/credit balances and auto-refills when below thresholds. Returns `AccountSetupState` (`isInitialSetup` + `phase`) for first-connect overlay. Cooldowns persisted to localStorage (`barney-refill-{address}`) |
+| `useAccountSetup` | One-shot sequential account setup pipeline — requests faucet tokens (MFX + PWR) and funds credits on first connect. Returns `AccountSetupState` (`isInitialSetup` + `phase`) for the `AccountSetupOverlay`. Setup data persisted to localStorage via `versionedStorage` |
 
 ### Utility Modules (`src/utils/`)
 
@@ -230,6 +236,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `url.ts` | URL validation with SSRF protection (`parseHttpUrl`, `isUrlSsrfSafe`) |
 | `connection.ts` | `collectInstanceUrls` — per-instance FQDN URL collection with hostname validation (`isValidFqdn`) |
 | `tx.ts` | Transaction event parsing utilities (extract attribute values from TX events) |
+| `versionedStorage.ts` | Versioned localStorage with schema migrations (envelope format, upgrade chain) |
 | `cn.ts` | Re-exports `clsx` as `cn`: `cn('foo', condition && 'bar')` |
 
 ### Constants (`src/config/constants.ts`)
@@ -255,6 +262,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `WS_MAX_RECONNECT_ATTEMPTS` | 2 | Max reconnects before falling back to polling |
 | `WS_LIVENESS_TIMEOUT_MS` | 45s | WebSocket data liveness timeout (Fred pings every 30s) |
 | `STORAGE_SKU_NAME` | 'docker-small' | SKU name that supports persistent disk storage |
+| `AI_BATCH_DEPLOY_CONCURRENCY` | 4 | Max concurrent batch deploys (runtime-configurable) |
 | `ACCOUNT_SETUP_COMPLETE_DELAY_MS` | 1.5s | Delay before dismissing account setup overlay after completion |
 
 ## Styling
@@ -305,7 +313,7 @@ Defined in `src/config/chain.ts`:
 
 ### Runtime Environment Variables
 
-16 client-side `PUBLIC_*` variables use a 3-tier fallback defined in `src/config/runtimeConfig.ts`:
+17 client-side `PUBLIC_*` variables use a 3-tier fallback defined in `src/config/runtimeConfig.ts`:
 
 1. `window.__RUNTIME_CONFIG__` — set by `public/config.js` (generated at container startup by `docker/env.sh`)
 2. `import.meta.env` — Rsbuild static replacement from `.env` files (requires static property access, not dynamic `import.meta.env[key]`)
@@ -315,7 +323,7 @@ Consumer code imports `runtimeConfig` from `src/config/runtimeConfig.ts` — nev
 
 Built-in flags (`import.meta.env.DEV` / `PROD`) remain build-time and are accessed directly where needed.
 
-Client-side variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_MORPHEUS_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`, `PUBLIC_GAS_PRICE`, `PUBLIC_CHAIN_ID`, `PUBLIC_FAUCET_URL`, `PUBLIC_AI_STREAM_TIMEOUT_MS`, `PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS`, `PUBLIC_AI_TOOL_API_TIMEOUT_MS`, `PUBLIC_AI_MAX_RETRIES`, `PUBLIC_AI_CONFIRMATION_TIMEOUT_MS`, `PUBLIC_AI_MAX_TOOL_ITERATIONS`, `PUBLIC_AI_MAX_MESSAGES`
+Client-side variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_MORPHEUS_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`, `PUBLIC_GAS_PRICE`, `PUBLIC_CHAIN_ID`, `PUBLIC_FAUCET_URL`, `PUBLIC_AI_STREAM_TIMEOUT_MS`, `PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS`, `PUBLIC_AI_TOOL_API_TIMEOUT_MS`, `PUBLIC_AI_MAX_RETRIES`, `PUBLIC_AI_CONFIRMATION_TIMEOUT_MS`, `PUBLIC_AI_MAX_TOOL_ITERATIONS`, `PUBLIC_AI_MAX_MESSAGES`, `PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY`
 
 Server-side variables (never shipped to browser):
 - `MORPHEUS_API_KEY` — injected by nginx (prod) or rsbuild dev proxy into upstream Morpheus API requests via `Authorization: Bearer` header

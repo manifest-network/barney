@@ -73,7 +73,7 @@ docker run -e PUBLIC_REST_URL=https://rest.example.com \
 | `PUBLIC_PWR_DENOM` | Factory address | PWR token denom |
 | `PUBLIC_GAS_PRICE` | `0.0025umfx` | Gas price for transaction fees |
 | `PUBLIC_CHAIN_ID` | `manifest-ledger-beta` | Chain ID for cosmos-kit |
-| `PUBLIC_FAUCET_URL` | _(empty)_ | Faucet endpoint URL (enables auto-refill when set) |
+| `PUBLIC_FAUCET_URL` | _(empty)_ | Faucet endpoint URL (enables account setup auto-provisioning when set) |
 | `PUBLIC_AI_STREAM_TIMEOUT_MS` | `30000` | Per-chunk stream timeout, ms (max 120000) |
 | `PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS` | `300000` | Deploy provisioning timeout, ms (max 600000) |
 | `PUBLIC_AI_TOOL_API_TIMEOUT_MS` | `15000` | Blockchain API call timeout, ms (max 60000) |
@@ -81,6 +81,7 @@ docker run -e PUBLIC_REST_URL=https://rest.example.com \
 | `PUBLIC_AI_CONFIRMATION_TIMEOUT_MS` | `300000` | TX confirmation auto-cancel, ms (max 600000) |
 | `PUBLIC_AI_MAX_TOOL_ITERATIONS` | `10` | Tool calls per message (max 50) |
 | `PUBLIC_AI_MAX_MESSAGES` | `200` | Chat history depth (max 1000) |
+| `PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY` | `4` | Max concurrent batch deploys (max 10) |
 
 Built-in flags `import.meta.env.DEV` / `import.meta.env.PROD` remain build-time only and are unaffected.
 
@@ -131,10 +132,10 @@ See [CLAUDE.md](./CLAUDE.md) for detailed architecture, tool definitions, and co
 ### How It Works
 
 1. **Connect** a wallet via Web3Auth social login
-2. **Auto-refill** — on connect and every 60 seconds, the `useAutoRefill` hook checks MFX, PWR, and credit balances. When below threshold it requests faucet tokens and auto-funds credits (faucet-enabled deployments only; cooldowns prevent excessive requests)
+2. **Account setup** — on first connect, the `useAccountSetup` hook runs a one-shot sequential pipeline: requests faucet tokens (MFX + PWR) and funds credits (faucet-enabled deployments only)
 3. **Chat** with the AI assistant to deploy, manage, and monitor apps
 4. The AI calls 16 composite tools that map to on-chain transactions and queries
-5. AI-initiated transaction tools require explicit user confirmation before broadcasting. The `useAutoRefill` background funding (`fundCredit`) is the sole exception — it runs automatically with small fixed amounts, gated by balance thresholds and cooldown timers
+5. AI-initiated transaction tools require explicit user confirmation before broadcasting
 6. Deploy progress is tracked in real-time through provider status polling
 
 ### AI Tool Execution
@@ -149,7 +150,7 @@ Three-layer architecture:
 
 - **SSRF Protection**: URL validation using `ipaddr.js` to block private/internal addresses
 - **Input Validation**: All user inputs and localStorage data are validated
-- **Transaction Confirmation**: AI-initiated transactions require explicit user approval. The sole exception is `useAutoRefill`, which auto-funds small credit amounts when balances drop below thresholds (faucet-gated, cooldown-protected)
+- **Transaction Confirmation**: AI-initiated transactions require explicit user approval
 - **ADR-036 Signatures**: Off-chain authentication for provider API interactions
 
 ## Tech Stack
@@ -179,7 +180,7 @@ npm run build          # local development
 npm run build-release  # Docker/CI — appends git commit hash to version
 ```
 
-Production builds are output to `dist/`. The `build-release` script runs `scripts/update-version.js` to stamp the short git commit hash into `package.json` version (e.g. `0.0.0-a1b2c3d`) before building, so the deployed UI displays the exact commit.
+Production builds are output to `dist/`. The `build-release` script runs `scripts/update-version.cjs` to stamp the short git commit hash into `package.json` version (e.g. `0.0.0-a1b2c3d`) before building, so the deployed UI displays the exact commit.
 
 ## License
 
