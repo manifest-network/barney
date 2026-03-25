@@ -70,7 +70,7 @@ ErrorBoundary
 The AI assistant uses a 3-layer architecture:
 
 1. **AI Store** (`src/stores/aiStore.ts`) - Zustand store managing chat state, streaming, tool execution, and wallet refs. Actions in `src/stores/aiActions/`.
-2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser`
+2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-core`
 3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
    - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`
    - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`
@@ -103,13 +103,15 @@ Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`. Kn
 
 ### Manifest Generation (`src/ai/manifest.ts`)
 
-Builds Docker Compose-style JSON manifests for single-service and multi-service (stack) deploys.
+Thin wrappers around `@manifest-network/manifest-mcp-fred` manifest builders, adding Barney-specific behavior: port string normalization, password generation for empty env values, tmpfs/expose string splitting, SHA-256 payload hashing, and `BuildManifestResult` wrapping.
 
-- `buildManifest(opts)` — Build single-service manifest JSON from image, port, env, user, tmpfs, command, args, health_check, etc.
-- `buildStackManifest(opts)` — Build multi-service stack manifest with a `services` map of `ServiceConfig` entries
-- `mergeManifest(newManifest, oldManifestJson)` — Merge new manifest over old, preserving env, ports, labels (merged with override), user, tmpfs, command, args, health_check, stop_grace_period, init, expose, depends_on (carried forward if not specified in new). Single-service manifests only (stack updates use full manifest replacement)
-- `validateServiceName(name)` — RFC 1123 DNS label validation (1-63 chars, lowercase alphanumeric + hyphens)
-- `isStackManifest(manifest)` / `parseStackManifest(json)` / `getServiceNames(manifest)` — Stack manifest detection and parsing utilities
+- `buildManifest(opts)` — Build single-service manifest JSON, compute hash, return `BuildManifestResult`. Delegates to fred's `buildManifest()`
+- `buildStackManifest(opts)` — Build multi-service stack manifest with `{ services: {...} }` format, compute hash
+- `mergeManifest(newManifest, oldManifestJson)` — Merge old manifest fields into new, graceful fallback on parse error. Delegates to fred's `mergeManifest()`
+- `validateServiceName(name)` — RFC 1123 DNS label validation, returns error string or null. Wraps fred's boolean return
+- `normalizePorts(port)` — Parse port string to manifest ports record (Barney-local, no fred equivalent)
+- `deriveAppNameFromImage(image)` — Extract app name from Docker image ref (Barney-local, different from fred which includes tags)
+- `isStackManifest(manifest)` / `parseStackManifest(json)` / `getServiceNames(manifest)` — Stack manifest utilities (Barney-local, use `{ services: {...} }` format vs fred's flat format)
 - `ServiceConfig` — Type alias for `BuildManifestOptions`, used per-service in stacks
 
 ### Known Images & Stacks (`src/ai/knownImages.ts`)
@@ -146,27 +148,23 @@ Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored 
 
 ### Fred API Client
 
-`src/api/fred.ts` — Polls provider's `/status/{uuid}` endpoint for deployment status. Follows `provider-api.ts` patterns (SSRF validation, dev CORS proxy, ADR-036 auth).
+`src/api/fred.ts` — Fred HTTP functions and WebSocket streaming for lease deployment status.
 
-- `getLeaseStatus()` — Single fetch
-- `pollLeaseUntilReady()` — Polling loop with configurable interval, max attempts, abort signal
-- `waitForLeaseReady()` — WebSocket-based wait with polling fallback for deploy readiness
-- `connectLeaseEvents()` — WebSocket connection to Fred's `/v1/leases/{uuid}/events` endpoint for real-time lease updates
-- `getLeaseLogs()` — Fetch container logs for a running lease
-- `getLeaseProvision()` — Fetch provision status
-- `getLeaseInfo()` — Fetch connection details (ports, URLs)
-- `restartLease()` — Restart a running lease
-- `updateLease()` — Update a lease with a new manifest payload
-- `getLeaseReleases()` — Fetch release/version history for a lease
+HTTP functions (`getLeaseStatus`, `getLeaseLogs`, `getLeaseProvision`, `getLeaseInfo`, `restartLease`, `updateLease`, `getLeaseReleases`) are thin wrappers that delegate to `@manifest-network/manifest-mcp-fred` with Barney's CORS proxy/SSRF `fetchFn` adapter injected via `src/api/providerFetchAdapter.ts`.
+
+Barney-specific code that stays local:
+- `pollLeaseUntilReady()` — Polling loop with `checkChainState`, `getAuthToken`, count-based `maxAttempts`
+- `waitForLeaseReady()` — WebSocket-based wait with polling fallback
+- `connectLeaseEvents()` — Browser WebSocket connection to Fred's `/v1/leases/{uuid}/events`
 
 ### Transaction Path
 
-AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP server that uses manifestjs internally).
+AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-core` (shared MCP library that uses manifestjs internally).
 
 ### Wallet Integration
 
 - cosmos-kit provides wallet abstraction (Web3Auth and Keplr are enabled in `src/main.tsx`; Leap, Cosmostation, Ledger packages are installed but not imported)
-- `CosmosClientManager` singleton wraps the signer for MCP operations
+- `CosmosClientManager` from `@manifest-network/manifest-mcp-core` wraps the signer for MCP operations
 - `signArbitrary` used for ADR-036 off-chain authentication (payload uploads to providers, fred status queries)
 
 ### API Layer (`src/api/`)
@@ -177,8 +175,9 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-browser` (MCP ser
 | `sku.ts` | Provider catalog, SKU definitions |
 | `bank.ts` | Cosmos SDK bank queries |
 | `tx.ts` | Transaction signing client and message builders for all Manifest modules (billing, SKU, provider management) |
-| `provider-api.ts` | Payload upload with ADR-036 auth |
-| `fred.ts` | Fred deployment status polling + WebSocket streaming |
+| `provider-api.ts` | Auth helpers, health check, connection info, upload — delegates to `@manifest-network/manifest-mcp-fred` with CORS proxy/SSRF adapter. Keeps `validateAuthTimestamp` and null-returning `getProviderHealth` locally |
+| `fred.ts` | Fred HTTP wrappers (delegate to mono fred) + WebSocket streaming + Barney-specific polling |
+| `providerFetchAdapter.ts` | `fetchFn` adapter that injects DEV CORS proxy routing and PROD SSRF validation for mono's HTTP functions |
 | `morpheus.ts` | OpenAI-compatible SSE streaming client via `/api/morpheus/` proxy |
 | `config.ts` | API endpoints, denom metadata, price formatting |
 | `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
@@ -206,7 +205,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 
 | Hook | Purpose |
 |------|---------|
-| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-mcp-browser` |
+| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-mcp-core` |
 | `useAutoScroll` | MutationObserver-based auto-scroll that respects user scroll position |
 | `useInputHistory` | Arrow-key navigation through past chat inputs |
 | `useAI` | Zustand store consumer — selects all public state/actions via `useShallow` |
@@ -222,7 +221,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | Module | Purpose |
 |--------|---------|
 | `errors.ts` | `logError()` — structured error logging (use instead of raw `console.error`) |
-| `hash.ts` | `sha256()`, `toHex()`, `generatePassword()` — hashing, hex encoding, password generation; `MAX_PAYLOAD_SIZE` (5KB) |
+| `hash.ts` | `sha256()`, `sha256Hex()`, `toHex()`, `generatePassword()`, `isValidMetaHash()` — hashing, hex encoding, password generation, hash validation; `MAX_PAYLOAD_SIZE` (5KB) |
 | `format.ts` | Amount conversion (`toBaseUnits`, `fromBaseUnits`), date/duration formatting, UUID validation |
 | `fileValidation.ts` | Upload validation: size limits, allowed extensions (`.yaml`, `.yml`, `.json`, `.txt`), MIME type checks, manifest content validation (`validateManifestContent`), YAML service name extraction (`extractYamlServiceNames`) |
 | `pricing.ts` | BigInt-based cost calculations (`formatCostPerHour`, `calculateEstimatedCost`) to avoid integer overflow |
@@ -275,7 +274,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 - **Tool result caching**: Query tool results cached for 10s in the AI store to reduce redundant API calls (max 50 entries, FIFO eviction). Cache is scoped per wallet address and cleared on wallet change.
 - **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
 - **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
-- **Dev CORS proxy**: `provider-api.ts` routes provider API requests through `/proxy-provider` in development (rsbuild proxy), using `X-Proxy-Target` header for dynamic routing. Use `buildProviderFetchArgs()` to construct fetch URLs. The rsbuild proxy (`rsbuild.config.ts`) has its own SSRF validation layer (`isValidProxyTarget`) separate from runtime validation, blocking cloud metadata endpoints, dangerous IP ranges, and embedded credentials.
+- **Dev CORS proxy**: `providerFetchAdapter.ts` provides a `fetchFn` adapter that routes provider HTTP requests through `/proxy-provider` in development, injecting the `X-Proxy-Target` header. All fred/provider HTTP functions receive this adapter as their `fetchFn` parameter. WebSocket connections in `fred.ts` handle their own CORS proxy routing via `providerFetch.ts`. The rsbuild proxy (`rsbuild.config.ts`) has its own SSRF validation layer (`isValidProxyTarget`) separate from runtime validation, blocking cloud metadata endpoints, dangerous IP ranges, and embedded credentials.
 - **Stream timeout**: `processStreamWithTimeout` in `src/ai/streamUtils.ts` wraps the AI stream async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely. The inner `withTimeout` generator ensures cleanup of the underlying generator via `finally` block.
 - **Tool-call leak stripping**: `stripToolCallLeaks()` in `src/ai/streamUtils.ts` filters raw `[TOOL_CALLS]` markers that some models emit as literal text instead of structured tool_calls. Legacy safeguard from the Ollama/Mistral era, kept as defensive code for the Morpheus API.
 - **Message debouncing**: The AI store debounces rapid message sends via `AI_MESSAGE_DEBOUNCE_MS` (300ms) and aborts in-flight streams when a new message is sent.

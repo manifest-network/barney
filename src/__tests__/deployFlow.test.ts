@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { executeTool, executeConfirmedTool } from '../ai/toolExecutor';
 import type { ToolExecutorOptions, PayloadAttachment } from '../ai/toolExecutor';
 import type { AppRegistryAccess } from '../ai/toolExecutor/types';
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import type { AppEntry } from '../registry/appRegistry';
 import type { DeployProgress } from '../ai/progress';
 import { LeaseState } from '../api/billing';
@@ -56,7 +56,8 @@ vi.mock('../api/fred', () => ({
   getLeaseProvision: vi.fn(),
 }));
 
-vi.mock('@manifest-network/manifest-mcp-browser', () => ({
+vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
+  ...(await importOriginal()),
   cosmosTx: vi.fn(),
   cosmosQuery: vi.fn(),
 }));
@@ -77,7 +78,7 @@ import { getAllBalances } from '../api/bank';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
 import { waitForLeaseReady } from '../api/fred';
-import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
+import { cosmosTx } from '@manifest-network/manifest-mcp-core';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from '../ai/toolExecutor/utils';
 
 const ADDRESS = 'manifest1testaddr';

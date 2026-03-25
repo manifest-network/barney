@@ -94,3 +94,10 @@ export function validatePayloadSize(data: string | Uint8Array): boolean {
 export function getPayloadSize(data: string | Uint8Array): number {
   return toBytes(data).length;
 }
+
+/**
+ * Validates that a string is a valid SHA-256 hex hash (64 hex characters).
+ */
+export function isValidMetaHash(hash: string): boolean {
+  return /^[0-9a-f]{64}$/i.test(hash);
+}

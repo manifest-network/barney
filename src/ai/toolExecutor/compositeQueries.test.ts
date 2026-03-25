@@ -12,7 +12,7 @@ import {
   executeRequestFaucet,
 } from './compositeQueries';
 import type { ToolExecutorOptions } from './types';
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
 
@@ -73,7 +73,8 @@ vi.mock('../../api/faucet', () => ({
   FAUCET_COOLDOWN_HOURS: 24,
 }));
 
-vi.mock('@manifest-network/manifest-mcp-browser', () => ({
+vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
+  ...(await importOriginal()),
   cosmosQuery: vi.fn(),
 }));
 
@@ -97,7 +98,7 @@ import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import { cosmosQuery } from '@manifest-network/manifest-mcp-browser';
+import { cosmosQuery } from '@manifest-network/manifest-mcp-core';
 import { requestFaucetTokens, isFaucetEnabled } from '../../api/faucet';
 
 const ADDRESS = 'manifest1abc';

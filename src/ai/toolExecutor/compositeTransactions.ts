@@ -3,8 +3,8 @@
  * These return requiresConfirmation first, then execute after user approval.
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
-import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
@@ -1109,7 +1109,7 @@ export async function executeConfirmedDeployApp(
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
         url: connectionUrl,
-        connection,
+        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
 
@@ -1558,7 +1558,7 @@ export async function executeConfirmedBatchDeploy(
           'executeConfirmedBatchDeploy'
         );
 
-        appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection });
+        appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined });
         batchProgress[i] = { name, phase: 'ready', detail: 'App is live!' };
         emitProgress();
         deployed.push({ name, url: connectionUrl });
@@ -2031,7 +2031,7 @@ export async function executeConfirmedRestartApp(
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
         url: connectionUrl,
-        connection,
+        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
       });
       onProgress?.({ phase: 'ready', operation: 'restart' });
 
@@ -2369,9 +2369,7 @@ export async function executeConfirmedUpdateApp(
 
   try {
     const authToken = await refreshAuthToken();
-    // Base64-encode the payload for the update API
-    const base64Payload = btoa(Array.from(payload.bytes, (b) => String.fromCharCode(b)).join(''));
-    await updateLease(providerUrl, leaseUuid, base64Payload, authToken);
+    await updateLease(providerUrl, leaseUuid, payload.bytes, authToken);
   } catch (error) {
     logError('compositeTransactions.executeConfirmedUpdateApp', error);
     // 409 = lease is not in the right state for update; don't mark as failed
@@ -2463,7 +2461,7 @@ export async function executeConfirmedUpdateApp(
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
         url: finalUrl,
-        connection,
+        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
       });
       onProgress?.({ phase: 'ready', operation: 'update' });
 

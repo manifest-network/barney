@@ -3,8 +3,8 @@
  * These run immediately without confirmation.
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
-import { cosmosQuery } from '@manifest-network/manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import { cosmosQuery } from '@manifest-network/manifest-mcp-core';
 import {
   getLeasesByTenant,
   getLeasesByTenantPaginated,
@@ -190,12 +190,12 @@ export async function executeAppStatus(
                     const svc = conn.services[primary.serviceName];
                     fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
                   }
-                  appConnection = { ...conn, ports: primary.ports, fqdn };
+                  appConnection = JSON.parse(JSON.stringify({ ...conn, ports: primary.ports, fqdn }));
                 } else {
-                  appConnection = conn;
+                  appConnection = JSON.parse(JSON.stringify(conn));
                 }
               } else {
-                appConnection = conn;
+                appConnection = JSON.parse(JSON.stringify(conn));
               }
               if (conn.host) {
                 appUrl = conn.host;

@@ -2,7 +2,7 @@
  * Type definitions for the tool executor
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import type { DeployProgress } from '../progress';
 import type { AppEntry } from '../../registry/appRegistry';
 import type { MessageCard } from '../../contexts/aiTypes';

@@ -23,7 +23,7 @@ import {
   type BatchDeployEntry,
 } from './compositeTransactions';
 import type { ToolExecutorOptions, PayloadAttachment } from './types';
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
 import { LeaseState } from '../../api/billing';
@@ -69,7 +69,8 @@ vi.mock('../../api/fred', () => ({
   updateLease: vi.fn(),
 }));
 
-vi.mock('@manifest-network/manifest-mcp-browser', () => ({
+vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
+  ...(await importOriginal()),
   cosmosTx: vi.fn(),
 }));
 
@@ -100,7 +101,7 @@ import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing
 import { getProviders, getSKUs } from '../../api/sku';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
-import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
+import { cosmosTx } from '@manifest-network/manifest-mcp-core';
 import { uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 
@@ -2816,7 +2817,8 @@ describe('executeUpdateApp', () => {
     // Env defaults should NOT be applied for updates
     expect(manifest.services.db.env).toBeUndefined();
     // Port defaults should NOT be applied to backend service names (db)
-    expect(manifest.services.db.ports).toBeUndefined();
+    // Fred always includes ports in output (empty when none specified)
+    expect(manifest.services.db.ports).toEqual({});
   });
 
   it('rejects non-string env values in stack services', async () => {

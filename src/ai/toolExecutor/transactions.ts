@@ -2,8 +2,8 @@
  * Transaction tool handlers (require user confirmation)
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
-import { cosmosTx } from '@manifest-network/manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx } from '@manifest-network/manifest-mcp-core';
 import { getLease } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { isValidUUID, parseJsonStringArray } from '../../utils/format';

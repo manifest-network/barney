@@ -6,6 +6,7 @@ import {
   validatePayloadSize,
   getPayloadSize,
   generatePassword,
+  isValidMetaHash,
   MAX_PAYLOAD_SIZE,
 } from './hash';
 
@@ -121,5 +122,35 @@ describe('generatePassword', () => {
   it('generates unique values across calls', () => {
     const passwords = new Set(Array.from({ length: 20 }, () => generatePassword()));
     expect(passwords.size).toBe(20);
+  });
+});
+
+describe('isValidMetaHash', () => {
+  it('accepts valid 64-char lowercase hex', () => {
+    expect(isValidMetaHash('a'.repeat(64))).toBe(true);
+  });
+
+  it('accepts valid 64-char uppercase hex', () => {
+    expect(isValidMetaHash('A'.repeat(64))).toBe(true);
+  });
+
+  it('accepts mixed case hex', () => {
+    expect(isValidMetaHash('aAbBcCdDeEfF00112233445566778899aAbBcCdDeEfF00112233445566778899')).toBe(true);
+  });
+
+  it('rejects too-short hash', () => {
+    expect(isValidMetaHash('a'.repeat(63))).toBe(false);
+  });
+
+  it('rejects too-long hash', () => {
+    expect(isValidMetaHash('a'.repeat(65))).toBe(false);
+  });
+
+  it('rejects non-hex characters', () => {
+    expect(isValidMetaHash('g'.repeat(64))).toBe(false);
+  });
+
+  it('rejects empty string', () => {
+    expect(isValidMetaHash('')).toBe(false);
   });
 });

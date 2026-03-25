@@ -3,7 +3,7 @@
  * Bridges AI tool calls to actual blockchain operations.
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-browser';
+import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import {
   executeListApps,
   executeAppStatus,

@@ -19,12 +19,12 @@ export const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mys
  *  3. Any service with ports
  */
 export function extractPrimaryServicePorts(
-  services: Record<string, { ports?: Record<string, unknown>; instances?: { ports?: Record<string, unknown> }[] }>
+  services: Record<string, { ports?: Record<string, unknown>; instances?: readonly { ports?: Record<string, unknown> }[] }>
 ): { serviceName: string; ports: Record<string, unknown> } | undefined {
   const entries = Object.entries(services);
   if (entries.length === 0) return undefined;
 
-  const getPorts = (svc: { ports?: Record<string, unknown>; instances?: { ports?: Record<string, unknown> }[] }): Record<string, unknown> | undefined =>
+  const getPorts = (svc: { ports?: Record<string, unknown>; instances?: readonly { ports?: Record<string, unknown> }[] }): Record<string, unknown> | undefined =>
     svc.ports ?? svc.instances?.[0]?.ports;
 
   // 1. Named primary service
