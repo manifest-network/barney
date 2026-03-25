@@ -219,7 +219,7 @@ export async function pollLeaseUntilReady(
     }
   }
 
-  logError('fred.pollLeaseUntilReady', new Error(`Polling exhausted after ${maxAttempts} attempts (state=${lastStatus.state}, phase=${lastStatus.phase ?? 'unknown'}, provision_status=${lastStatus.provision_status ?? 'unknown'})`));
+  logError('fred.pollLeaseUntilReady', new Error(`Polling exhausted after ${maxAttempts} attempts (state=${LeaseState[lastStatus.state] ?? lastStatus.state}, phase=${lastStatus.phase ?? 'unknown'}, provision_status=${lastStatus.provision_status ?? 'unknown'})`));
   return lastStatus;
 }
 
@@ -461,6 +461,7 @@ async function waitViaWS(
       let chainTerminalDetected = false;
       let chainPollTimer: ReturnType<typeof setInterval> | undefined;
       if (opts.checkChainState) {
+        let chainPollErrorLogged = false;
         chainPollTimer = setInterval(async () => {
           try {
             const chainState = await opts.checkChainState!();
@@ -473,7 +474,13 @@ async function waitViaWS(
               chainTerminalDetected = true;
               conn?.close();
             }
-          } catch (error) { logError('fred.waitViaWS.chainPollInterval', error); }
+            chainPollErrorLogged = false; // reset on success
+          } catch (error) {
+            if (!chainPollErrorLogged) {
+              logError('fred.waitViaWS.chainPollInterval', error);
+              chainPollErrorLogged = true;
+            }
+          }
         }, intervalMs);
       }
 
