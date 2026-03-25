@@ -74,13 +74,13 @@ The AI assistant uses a 3-layer architecture:
 3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
    - **Entry point** (`index.ts`): Contains `QUERY_TOOLS`/`TX_TOOLS` sets and `executeTool()` dispatcher
    - **Types** (`types.ts`): `ToolResult`, `ToolExecutorOptions`, `PayloadAttachment`, etc.
-   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`
+   - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`, `request_faucet`
    - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`
    - **Transactions** (`transactions.ts`): Lease creation, payload upload, transaction helpers
    - **Helpers** (`helpers.ts`): Shared functions — `extractPrimaryServicePorts`, `formatConnectionUrl`
-   - **Utils** (`utils.ts`): Auth token construction (`getProviderAuthToken`), provider fetch helpers
+   - **Utils** (`utils.ts`): ADR-036 auth token creation (`getProviderAuthToken`), payload upload and hashing utilities
    - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
-   - **Internal**: `batch_deploy` — orchestrates multi-app deploys from the UI (not exposed to AI, used by `requestBatchDeploy` in AIContext)
+   - **Internal**: `batch_deploy` — orchestrates multi-app deploys from the UI (not exposed to AI, used by the `requestBatchDeploy` AI store action, e.g. via `useAI().requestBatchDeploy`)
 
 ### 16 Composite Tools
 
@@ -185,7 +185,7 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-core` (shared MCP
 | `morpheus.ts` | OpenAI-compatible SSE streaming client via `/api/morpheus/` proxy |
 | `config.ts` | API endpoints, denom metadata, price formatting |
 | `faucet.ts` | Faucet HTTP client — token requests, drip-and-verify with balance polling |
-| `providerFetch.ts` | Shared provider URL validation and fetch helpers (used by `provider-api.ts` and `fred.ts`) |
+| `providerFetch.ts` | Provider URL validation helpers (`validateProviderUrl`, `normalizeBaseUrl`), used by `fred.ts` for validating provider endpoints |
 | `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
 | `queryClient.ts` | LCD query client factory (cached singleton) |
 | `index.ts` | Barrel re-exports for API modules |
