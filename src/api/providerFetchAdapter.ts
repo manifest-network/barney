@@ -41,8 +41,11 @@ export function createProviderFetch(): typeof globalThis.fetch {
 
     // Production: validate SSRF safety and strip embedded credentials
     const parsed = parseHttpUrl(url);
+    const safeUrlForError = parsed
+      ? `${parsed.origin}${parsed.pathname}${parsed.search}`
+      : '[invalid or unsupported URL]';
     if (!parsed || !isUrlSsrfSafe(parsed)) {
-      throw new Error(`Provider URL blocked by SSRF validation: ${url}`);
+      throw new Error(`Provider URL blocked by SSRF validation: ${safeUrlForError}`);
     }
 
     const sanitizedUrl = `${parsed.origin}${parsed.pathname}${parsed.search}`;
