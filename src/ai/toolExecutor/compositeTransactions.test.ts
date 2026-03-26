@@ -2066,7 +2066,7 @@ describe('executeStopApp', () => {
     const apps = [makeApp({ name: 'stopped', leaseUuid: 'uuid-1', status: 'stopped' })];
     const result = await executeStopApp({ app_name: 'all' }, makeOptions({ appRegistry: makeRegistry(apps) }));
     expect(result.success).toBe(false);
-    expect(result.error).toContain('No running apps to stop');
+    expect(result.error).toContain('No eligible apps to stop');
   });
 
   it('returns confirmation for comma-separated stop', async () => {
@@ -2643,7 +2643,7 @@ describe('executeRestartApp', () => {
     const apps = [makeApp({ name: 'stopped', leaseUuid: 'uuid-1', status: 'stopped' })];
     const result = await executeRestartApp({ app_name: 'all' }, makeOptions({ appRegistry: makeRegistry(apps) }));
     expect(result.success).toBe(false);
-    expect(result.error).toContain('No running apps to restart');
+    expect(result.error).toContain('No eligible apps to restart');
   });
 
   it('filters out apps without providerUrl for restart all', async () => {

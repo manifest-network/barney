@@ -74,7 +74,7 @@ function validateEnvNames(env: Record<string, string>): string | null {
  * `filter` selects which apps are eligible (e.g. running-only for restart).
  */
 type ResolveResult =
-  | { mode: 'single' }
+  | { mode: 'single'; name: string }
   | { mode: 'multi'; apps: AppEntry[]; skipped?: string[] }
   | { mode: 'error'; error: string };
 
@@ -90,13 +90,13 @@ function resolveMultiAppNames(
   const eligible = allApps.filter(filter);
 
   if (trimmed.toLowerCase() === 'all') {
-    if (eligible.length === 0) return { mode: 'error', error: `No running apps to ${verb}.` };
+    if (eligible.length === 0) return { mode: 'error', error: `No eligible apps to ${verb}.` };
     return { mode: 'multi', apps: eligible };
   }
 
   // Comma-separated names
   const names = trimmed.split(',').map((n) => n.trim()).filter(Boolean);
-  if (names.length <= 1) return { mode: 'single' };
+  if (names.length <= 1) return { mode: 'single', name: names[0] ?? trimmed };
 
   const resolved: AppEntry[] = [];
   const notFound: string[] = [];
@@ -1645,9 +1645,10 @@ export async function executeStopApp(
     };
   }
 
-  // Single app
-  const app = appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
+  // Single app — use normalized name from resolveMultiAppNames
+  const singleName = multi.name;
+  const app = appRegistry.findApp(address, singleName);
+  if (!app) return { success: false, error: `No unique app found matching "${singleName}"` };
 
   if (app.status === 'stopped') {
     return { success: false, error: `App "${app.name}" is already stopped.` };
@@ -1933,9 +1934,10 @@ export async function executeRestartApp(
     };
   }
 
-  // Single app
-  const app = appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
+  // Single app — use normalized name from resolveMultiAppNames
+  const singleName = multi.name;
+  const app = appRegistry.findApp(address, singleName);
+  if (!app) return { success: false, error: `No unique app found matching "${singleName}"` };
 
   if (app.status !== 'running') {
     return { success: false, error: `App "${app.name}" is not running (status: ${app.status}). Only running apps can be restarted.` };
@@ -2143,7 +2145,8 @@ async function executeConfirmedBatchRestart(
         return null;
       } catch (error) {
         logError('executeConfirmedBatchRestart.poll', error);
-        updateProgress('failed', 'Restart polling failed');
+        appRegistry.updateApp(address, entry.leaseUuid, { status: 'failed' });
+        updateProgress('failed', `Restart polling failed for "${name}". Use app_status("${name}") to check.`);
         return null;
       }
     },
