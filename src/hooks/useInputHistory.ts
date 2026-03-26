@@ -1,6 +1,11 @@
 import { useCallback, useRef, useMemo } from 'react';
 import type { ChatMessage } from '../contexts/aiTypes';
 
+/** Strip "(File attached: ...)" suffix appended by sendMessage for file uploads. */
+export function stripAttachmentNote(content: string): string {
+  return content.replace(/\s*\(File attached: .+\)$/, '');
+}
+
 /** Pure navigation logic, testable without React. */
 export class InputHistory {
   private index = -1;
@@ -53,7 +58,11 @@ export function useInputHistory(messages: ChatMessage[]) {
   const historyRef = useRef(new InputHistory());
 
   const userMessages = useMemo(
-    () => messages.filter((m) => m.role === 'user').map((m) => m.content),
+    () =>
+      messages
+        .filter((m) => m.role === 'user')
+        .map((m) => stripAttachmentNote(m.content))
+        .filter((content) => content.length > 0),
     [messages]
   );
 
@@ -70,10 +79,5 @@ export function useInputHistory(messages: ChatMessage[]) {
 
   const reset = useCallback(() => historyRef.current.reset(), []);
 
-  const isNavigating = useCallback(
-    (): boolean => historyRef.current.isNavigating(),
-    []
-  );
-
-  return { navigateUp, navigateDown, reset, isNavigating };
+  return { navigateUp, navigateDown, reset };
 }
