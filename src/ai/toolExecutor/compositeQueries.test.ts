@@ -68,9 +68,13 @@ vi.mock('../../api/fred', () => ({
 }));
 
 vi.mock('../../api/faucet', () => ({
-  requestFaucetTokens: vi.fn(),
   isFaucetEnabled: vi.fn().mockReturnValue(true),
+  getFaucetBaseUrl: vi.fn().mockReturnValue('http://localhost:8000'),
   FAUCET_COOLDOWN_HOURS: 24,
+}));
+
+vi.mock('@manifest-network/manifest-mcp-chain', () => ({
+  requestFaucet: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
@@ -99,7 +103,9 @@ import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { cosmosQuery } from '@manifest-network/manifest-mcp-core';
-import { requestFaucetTokens, isFaucetEnabled } from '../../api/faucet';
+import { isFaucetEnabled } from '../../api/faucet';
+import { requestFaucet } from '@manifest-network/manifest-mcp-chain';
+import { logError } from '../../utils/errors';
 
 const ADDRESS = 'manifest1abc';
 const CLIENT_MANAGER = {} as CosmosClientManager;
@@ -787,7 +793,7 @@ describe('executeRequestFaucet', () => {
     const result = await executeRequestFaucet(makeOptions());
     expect(result.success).toBe(false);
     expect(result.error).toContain('Faucet is not available');
-    expect(requestFaucetTokens).not.toHaveBeenCalled();
+    expect(requestFaucet).not.toHaveBeenCalled();
   });
 
   it('returns error without wallet', async () => {
@@ -797,7 +803,8 @@ describe('executeRequestFaucet', () => {
   });
 
   it('returns success when all tokens received', async () => {
-    vi.mocked(requestFaucetTokens).mockResolvedValue({
+    vi.mocked(requestFaucet).mockResolvedValue({
+      address: ADDRESS,
       results: [
         { denom: 'umfx', success: true },
         { denom: 'factory/addr/upwr', success: true },
@@ -813,7 +820,8 @@ describe('executeRequestFaucet', () => {
   });
 
   it('returns failure when all tokens fail', async () => {
-    vi.mocked(requestFaucetTokens).mockResolvedValue({
+    vi.mocked(requestFaucet).mockResolvedValue({
+      address: ADDRESS,
       results: [
         { denom: 'umfx', success: false, error: 'cooldown active' },
         { denom: 'factory/addr/upwr', success: false, error: 'cooldown active' },
@@ -827,7 +835,8 @@ describe('executeRequestFaucet', () => {
   });
 
   it('returns partial success when one token fails', async () => {
-    vi.mocked(requestFaucetTokens).mockResolvedValue({
+    vi.mocked(requestFaucet).mockResolvedValue({
+      address: ADDRESS,
       results: [
         { denom: 'umfx', success: true },
         { denom: 'factory/addr/upwr', success: false, error: 'cooldown active' },
@@ -840,5 +849,19 @@ describe('executeRequestFaucet', () => {
     expect(data.message).toContain('Partial success');
     expect(data.message).toContain('umfx');
     expect(data.message).toContain('cooldown active');
+  });
+
+  it('returns user-friendly error and logs when requestFaucet throws', async () => {
+    vi.mocked(requestFaucet).mockRejectedValue(
+      new Error('Faucet has no tokens configured')
+    );
+
+    const result = await executeRequestFaucet(makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('temporarily unavailable');
+    expect(logError).toHaveBeenCalledWith(
+      'compositeQueries.executeRequestFaucet',
+      expect.any(Error)
+    );
   });
 });

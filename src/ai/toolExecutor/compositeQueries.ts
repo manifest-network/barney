@@ -19,12 +19,13 @@ import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../../api/provider-api';
 import { getLeaseStatus, getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
-import { requestFaucetTokens, isFaucetEnabled, FAUCET_COOLDOWN_HOURS } from '../../api/faucet';
+import { requestFaucet } from '@manifest-network/manifest-mcp-chain';
+import { isFaucetEnabled, getFaucetBaseUrl, FAUCET_COOLDOWN_HOURS } from '../../api/faucet';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
-import { withTimeout } from '../../api/utils';
+import { withRetry, withTimeout } from '../../api/utils';
 import { SECONDS_PER_HOUR } from '../../config/constants';
 import { getProviderAuthToken } from './utils';
 import type { ToolResult, ToolExecutorOptions } from './types';
@@ -707,7 +708,8 @@ export async function executeAppReleases(
 }
 
 /**
- * Execute request_faucet: Request MFX and PWR tokens from the faucet.
+ * Execute request_faucet: Request available tokens from the faucet.
+ * Discovers denoms automatically via the faucet /status endpoint.
  */
 export async function executeRequestFaucet(
   options: ToolExecutorOptions
@@ -716,7 +718,20 @@ export async function executeRequestFaucet(
   const { address } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
 
-  const { results } = await requestFaucetTokens(address);
+  let faucetResult;
+  try {
+    faucetResult = await withRetry(
+      () => requestFaucet(getFaucetBaseUrl(), address),
+      { context: 'faucet.requestFaucet', maxRetries: 1 }
+    );
+  } catch (error) {
+    logError('compositeQueries.executeRequestFaucet', error);
+    return {
+      success: false,
+      error: 'Faucet is temporarily unavailable. Please try again in a few minutes.',
+    };
+  }
+  const { results } = faucetResult;
 
   const allSuccess = results.every((r) => r.success);
   const allFailed = results.every((r) => !r.success);
