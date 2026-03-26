@@ -1,22 +1,16 @@
 /**
- * Faucet HTTP client.
- * Requests MFX (gas) and PWR (credits) from the CosmJS faucet.
+ * Faucet client — thin wrapper around @manifest-network/manifest-mcp-chain
+ * faucet functions, plus Barney-specific drip-and-verify logic for account setup.
  */
+
+import { requestFaucetCredit } from '@manifest-network/manifest-mcp-chain';
 
 import { ACCOUNT_SETUP_POLL_INTERVAL_MS, ACCOUNT_SETUP_POLL_TIMEOUT_MS } from '../config/constants';
 import { runtimeConfig } from '../config/runtimeConfig';
 import { getBalance } from './bank';
-import { DENOMS } from './config';
-import { withRetry } from './utils';
 
 /** Cooldown period between faucet requests per address+denom. */
 export const FAUCET_COOLDOWN_HOURS = 24;
-
-export interface FaucetDripResult {
-  denom: string;
-  success: boolean;
-  error?: string;
-}
 
 /**
  * Returns the faucet base URL from runtime config.
@@ -32,83 +26,10 @@ export function isFaucetEnabled(): boolean {
 }
 
 /**
- * Request tokens from the faucet for both MFX and PWR denoms.
- * Each denom has an independent cooldown, so one may succeed while the other fails.
- */
-export async function requestFaucetTokens(
-  address: string
-): Promise<{ results: FaucetDripResult[] }> {
-  const baseUrl = getFaucetBaseUrl();
-  const denoms = [DENOMS.MFX, DENOMS.PWR];
-
-  const results = await Promise.all(
-    denoms.map(async (denom): Promise<FaucetDripResult> => {
-      try {
-        await withRetry(
-          async () => {
-            const res = await fetch(`${baseUrl}/credit`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ address, denom }),
-            });
-            if (!res.ok) {
-              const text = await res.text().catch(() => res.statusText);
-              throw new Error(text || `HTTP ${res.status}`);
-            }
-          },
-          { context: `faucet.requestTokens[${denom}]`, maxRetries: 1 }
-        );
-        return { denom, success: true };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        return { denom, success: false, error: message };
-      }
-    })
-  );
-
-  return { results };
-}
-
-/**
- * Request a single-denom faucet drip.
- * Extracted from the parallel logic in requestFaucetTokens for use in the
- * sequential account setup pipeline.
- */
-export async function requestFaucetDrip(
-  address: string,
-  denom: string,
-  signal?: AbortSignal
-): Promise<FaucetDripResult> {
-  const baseUrl = getFaucetBaseUrl();
-  try {
-    await withRetry(
-      async () => {
-        const res = await fetch(`${baseUrl}/credit`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ address, denom }),
-          signal,
-        });
-        if (!res.ok) {
-          const text = await res.text().catch(() => res.statusText);
-          throw new Error(text || `HTTP ${res.status}`);
-        }
-      },
-      { context: `faucet.requestDrip[${denom}]`, maxRetries: 1 }
-    );
-    return { denom, success: true };
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw error;
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return { denom, success: false, error: message };
-  }
-}
-
-/**
  * Request a faucet drip and verify that the balance increased on chain.
  *
  * 1. Read pre-drip balance
- * 2. Fire requestFaucetDrip
+ * 2. Fire requestFaucetCredit (from @manifest-network/manifest-mcp-chain)
  * 3. Poll getBalance at ACCOUNT_SETUP_POLL_INTERVAL_MS until balance > pre-drip, or timeout
  *
  * Uses BigInt comparison on raw amount strings to avoid float issues.
@@ -117,7 +38,7 @@ export async function faucetDripAndVerify(
   address: string,
   denom: string,
   options?: { pollInterval?: number; pollTimeout?: number; signal?: AbortSignal }
-): Promise<FaucetDripResult> {
+): Promise<{ denom: string; success: boolean; error?: string }> {
   const pollInterval = options?.pollInterval ?? ACCOUNT_SETUP_POLL_INTERVAL_MS;
   const pollTimeout = options?.pollTimeout ?? ACCOUNT_SETUP_POLL_TIMEOUT_MS;
   const signal = options?.signal;
@@ -136,9 +57,11 @@ export async function faucetDripAndVerify(
     return { denom, success: false, error: `Failed to read balance: ${message}` };
   }
 
-  // 2. Fire faucet drip
-  const drip = await requestFaucetDrip(address, denom, signal);
-  if (!drip.success) return drip;
+  // 2. Fire faucet drip (requestFaucetCredit never throws — returns { success: false } on error)
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  const drip = await requestFaucetCredit(getFaucetBaseUrl(), address, denom);
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  if (!drip.success) return { denom, success: false, error: drip.error };
 
   // 3. Poll until balance increases
   const deadline = Date.now() + pollTimeout;
