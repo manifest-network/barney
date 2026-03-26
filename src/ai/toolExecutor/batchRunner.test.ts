@@ -94,7 +94,7 @@ describe('computeOverallPhase', () => {
     expect(computeOverallPhase([...phases], ['provisioning', 'uploading', 'creating_lease'])).toBe('uploading');
   });
 
-  it('returns initial phase when no intermediate matches', () => {
+  it('returns phase when it is the only matching intermediate', () => {
     expect(computeOverallPhase(['restarting'], ['provisioning', 'restarting'])).toBe('restarting');
   });
 

@@ -464,9 +464,9 @@ export function getToolCallDescription(
       return `Deploying app${name}${image}${size}...`;
     }
     case 'stop_app': {
-      const stopName = args.app_name as string;
-      if (stopName === 'all') return 'Stopping all apps...';
-      if (typeof stopName === 'string' && stopName.includes(',')) return `Stopping apps ${stopName}...`;
+      const stopName = String(args.app_name ?? '').trim();
+      if (stopName.toLowerCase() === 'all') return 'Stopping all apps...';
+      if (stopName.includes(',')) return `Stopping apps ${stopName}...`;
       return `Stopping app "${stopName}"...`;
     }
     case 'fund_credits':
@@ -486,9 +486,9 @@ export function getToolCallDescription(
         ? `Fetching ${args.state} lease history...`
         : 'Fetching lease history...';
     case 'restart_app': {
-      const restartName = args.app_name as string;
-      if (restartName === 'all') return 'Restarting all apps...';
-      if (typeof restartName === 'string' && restartName.includes(',')) return `Restarting apps ${restartName}...`;
+      const restartName = String(args.app_name ?? '').trim();
+      if (restartName.toLowerCase() === 'all') return 'Restarting all apps...';
+      if (restartName.includes(',')) return `Restarting apps ${restartName}...`;
       return `Restarting app "${restartName}"...`;
     }
     case 'update_app':

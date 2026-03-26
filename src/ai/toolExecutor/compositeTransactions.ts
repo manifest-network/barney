@@ -85,16 +85,17 @@ function resolveMultiAppNames(
   filter: (a: AppEntry) => boolean,
   verb: string
 ): ResolveResult {
+  const trimmed = name.trim();
   const allApps = appRegistry.getApps(address);
   const eligible = allApps.filter(filter);
 
-  if (name.toLowerCase() === 'all') {
+  if (trimmed.toLowerCase() === 'all') {
     if (eligible.length === 0) return { mode: 'error', error: `No running apps to ${verb}.` };
     return { mode: 'multi', apps: eligible };
   }
 
   // Comma-separated names
-  const names = name.split(',').map((n) => n.trim()).filter(Boolean);
+  const names = trimmed.split(',').map((n) => n.trim()).filter(Boolean);
   if (names.length <= 1) return { mode: 'single' };
 
   const resolved: AppEntry[] = [];
