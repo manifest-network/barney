@@ -77,6 +77,7 @@ The AI assistant uses a 3-layer architecture:
    - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`, `request_faucet`
    - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`
    - **Transactions** (`transactions.ts`): Lease creation, payload upload, transaction helpers
+   - **Batch runner** (`batchRunner.ts`): Shared batch execution infrastructure — `createSigningMutex`, `runBatchWithConcurrency`, `computeOverallPhase`, `summarizeBatchResult`. Used by batch deploy and batch restart.
    - **Helpers** (`helpers.ts`): Shared functions — `extractPrimaryServicePorts`, `formatConnectionUrl`
    - **Utils** (`utils.ts`): ADR-036 auth token creation (`getProviderAuthToken`), payload upload and hashing utilities
    - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
@@ -87,9 +88,9 @@ The AI assistant uses a 3-layer architecture:
 | Tool | Type | Description |
 |------|------|-------------|
 | `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, storage?, services?, health_check?, stop_grace_period?, init?, expose?, labels?)` | TX | Deploy from attached manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image`. Defaults: size=micro, name from filename/image |
-| `stop_app(app_name)` | TX | Stop app by name, or "all" to stop all running apps |
+| `stop_app(app_name)` | TX | Stop apps by name, comma-separated list (e.g. "redis,postgres"), or "all" to stop all running apps |
 | `fund_credits(amount)` | TX | Add credits in display units |
-| `restart_app(app_name)` | TX | Restart a running app |
+| `restart_app(app_name)` | TX | Restart apps by name, comma-separated list, or "all" to restart all running apps |
 | `update_app(app_name, image?, port?, env?, user?, tmpfs?, command?, args?, services?, health_check?, stop_grace_period?, init?, expose?, labels?)` | TX | Update app with new manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image` |
 | `list_apps(state?)` | Query | List apps filtered by state (default: running) |
 | `app_status(app_name)` | Query | Detailed status: registry + chain + fred |

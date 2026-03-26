@@ -89,6 +89,17 @@ describe('getToolCallDescription', () => {
     expect(desc).toContain('my-app');
   });
 
+  it('returns "Stopping all apps..." for stop_app with all', () => {
+    const desc = getToolCallDescription('stop_app', { app_name: 'all' });
+    expect(desc).toBe('Stopping all apps...');
+  });
+
+  it('handles comma-separated names in stop_app', () => {
+    const desc = getToolCallDescription('stop_app', { app_name: 'redis,postgres' });
+    expect(desc).toContain('redis,postgres');
+    expect(desc).toContain('Stopping apps');
+  });
+
   it('interpolates amount in fund_credits', () => {
     const desc = getToolCallDescription('fund_credits', { amount: 50 });
     expect(desc).toContain('50');
@@ -179,6 +190,17 @@ describe('getToolCallDescription - new tools', () => {
     const desc = getToolCallDescription('restart_app', { app_name: 'my-api' });
     expect(desc).toContain('my-api');
     expect(desc).toContain('Restarting');
+  });
+
+  it('returns "Restarting all apps..." for restart_app with all', () => {
+    const desc = getToolCallDescription('restart_app', { app_name: 'all' });
+    expect(desc).toBe('Restarting all apps...');
+  });
+
+  it('handles comma-separated names in restart_app', () => {
+    const desc = getToolCallDescription('restart_app', { app_name: 'redis,postgres' });
+    expect(desc).toContain('redis,postgres');
+    expect(desc).toContain('Restarting apps');
   });
 
   it('interpolates name in update_app', () => {

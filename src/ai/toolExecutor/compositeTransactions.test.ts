@@ -2048,6 +2048,70 @@ describe('executeStopApp', () => {
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
   });
+
+  it('returns confirmation for stop all with multiple running apps', async () => {
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+      makeApp({ name: 'stopped-app', leaseUuid: 'uuid-3', status: 'stopped' }),
+    ];
+    const result = await executeStopApp({ app_name: 'all' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('2 apps');
+    expect(result.pendingAction?.args.entries).toHaveLength(2);
+  });
+
+  it('returns error when no running apps for stop all', async () => {
+    const apps = [makeApp({ name: 'stopped', leaseUuid: 'uuid-1', status: 'stopped' })];
+    const result = await executeStopApp({ app_name: 'all' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No running apps to stop');
+  });
+
+  it('returns confirmation for comma-separated stop', async () => {
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+      makeApp({ name: 'nginx', leaseUuid: 'uuid-3' }),
+    ];
+    const result = await executeStopApp({ app_name: 'redis,postgres' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('2 apps');
+    expect(result.pendingAction?.args.entries).toHaveLength(2);
+  });
+
+  it('returns error when comma-separated name not found', async () => {
+    const apps = [makeApp({ name: 'redis', leaseUuid: 'uuid-1' })];
+    const result = await executeStopApp({ app_name: 'redis,ghost' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not found');
+    expect(result.error).toContain('ghost');
+  });
+
+  it('returns error when all comma-separated apps are ineligible', async () => {
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', status: 'stopped' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', status: 'stopped' }),
+    ];
+    const result = await executeStopApp({ app_name: 'redis,postgres' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No eligible apps to stop');
+  });
+
+  it('includes skipped apps in confirmation when some are ineligible', async () => {
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', status: 'running' }),
+      makeApp({ name: 'stopped-app', leaseUuid: 'uuid-2', status: 'stopped' }),
+    ];
+    const result = await executeStopApp({ app_name: 'redis,stopped-app' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args.entries).toHaveLength(1);
+    expect(result.confirmationMessage).toContain('skipped');
+    expect(result.confirmationMessage).toContain('stopped-app');
+  });
 });
 
 describe('executeConfirmedStopApp', () => {
@@ -2067,6 +2131,89 @@ describe('executeConfirmedStopApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('stopped');
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'stopped' });
+  });
+
+  it('stops multiple apps in bulk and returns summary', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+    ];
+    const registry = makeRegistry(apps);
+    const entries = apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid }));
+
+    const result = await executeConfirmedStopApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).stopped).toEqual(['redis', 'postgres']);
+    expect((result.data as any).failed).toHaveLength(0);
+    expect(cosmosTx).toHaveBeenCalledTimes(2);
+  });
+
+  it('handles partial failures in bulk stop', async () => {
+    vi.mocked(cosmosTx)
+      .mockResolvedValueOnce({ code: 0, transactionHash: 'hash', rawLog: '' } as any)
+      .mockResolvedValueOnce({ code: 1, rawLog: 'some error' } as any);
+
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+    ];
+    const registry = makeRegistry(apps);
+    const entries = apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid }));
+
+    const result = await executeConfirmedStopApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).stopped).toEqual(['redis']);
+    expect((result.data as any).failed).toEqual(['postgres']);
+  });
+
+  it('treats lease-not-active as success in bulk stop', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 1, rawLog: 'lease not active' } as any);
+
+    const apps = [makeApp({ name: 'redis', leaseUuid: 'uuid-1' })];
+    const registry = makeRegistry(apps);
+    const entries = [{ app_name: 'redis', leaseUuid: 'uuid-1' }];
+
+    const result = await executeConfirmedStopApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).stopped).toEqual(['redis']);
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'uuid-1', { status: 'stopped' });
+  });
+
+  it('returns failure when all bulk stops fail', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 1, rawLog: 'error' } as any);
+
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+    ];
+    const registry = makeRegistry(apps);
+    const entries = apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid }));
+
+    const result = await executeConfirmedStopApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Failed to stop');
   });
 });
 
@@ -2478,6 +2625,81 @@ describe('executeRestartApp', () => {
     expect(result.confirmationMessage).toContain('Restart');
     expect(result.pendingAction?.toolName).toBe('restart_app');
   });
+
+  it('returns confirmation for restart all with multiple running apps', async () => {
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' }),
+      makeApp({ name: 'stopped-app', leaseUuid: 'uuid-3', status: 'stopped' }),
+    ];
+    const result = await executeRestartApp({ app_name: 'all' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('2 apps');
+    expect(result.pendingAction?.args.entries).toHaveLength(2);
+  });
+
+  it('returns error when no running apps for restart all', async () => {
+    const apps = [makeApp({ name: 'stopped', leaseUuid: 'uuid-1', status: 'stopped' })];
+    const result = await executeRestartApp({ app_name: 'all' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No running apps to restart');
+  });
+
+  it('filters out apps without providerUrl for restart all', async () => {
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred.example.com' }),
+      makeApp({ name: 'no-provider', leaseUuid: 'uuid-2', providerUrl: undefined }),
+    ];
+    const result = await executeRestartApp({ app_name: 'all' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(true);
+    expect(result.pendingAction?.args.entries).toHaveLength(1);
+    expect((result.pendingAction?.args.entries as any[])[0].app_name).toBe('redis');
+  });
+
+  it('returns confirmation for comma-separated restart', async () => {
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' }),
+      makeApp({ name: 'nginx', leaseUuid: 'uuid-3', providerUrl: 'https://fred3.example.com' }),
+    ];
+    const result = await executeRestartApp({ app_name: 'redis,postgres' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('2 apps');
+    expect(result.pendingAction?.args.entries).toHaveLength(2);
+  });
+
+  it('returns error when comma-separated name not found', async () => {
+    const apps = [makeApp({ name: 'redis', leaseUuid: 'uuid-1' })];
+    const result = await executeRestartApp({ app_name: 'redis,ghost' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not found');
+    expect(result.error).toContain('ghost');
+  });
+
+  it('returns error when all comma-separated apps are ineligible', async () => {
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', status: 'stopped' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', status: 'stopped' }),
+    ];
+    const result = await executeRestartApp({ app_name: 'redis,postgres' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No eligible apps to restart');
+  });
+
+  it('includes skipped apps in confirmation when some are ineligible', async () => {
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', status: 'running', providerUrl: 'https://fred.example.com' }),
+      makeApp({ name: 'stopped-app', leaseUuid: 'uuid-2', status: 'stopped' }),
+    ];
+    const result = await executeRestartApp({ app_name: 'redis,stopped-app' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args.entries).toHaveLength(1);
+    expect(result.confirmationMessage).toContain('skipped');
+    expect(result.confirmationMessage).toContain('stopped-app');
+  });
 });
 
 describe('executeConfirmedRestartApp', () => {
@@ -2549,6 +2771,117 @@ describe('executeConfirmedRestartApp', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('container crashed');
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+  });
+
+  it('restarts multiple apps in batch and returns summary', async () => {
+    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: '127.0.0.1',
+        ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+      },
+    });
+
+    const onProgress = vi.fn();
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' }),
+    ];
+    const registry = makeRegistry(apps);
+    const entries = apps.map((a) => ({
+      app_name: a.name,
+      leaseUuid: a.leaseUuid,
+      providerUrl: a.providerUrl!,
+    }));
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, onProgress })
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).restarted).toHaveLength(2);
+    expect((result.data as any).failed).toHaveLength(0);
+    expect(restartLease).toHaveBeenCalledTimes(2);
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'restart',
+      batch: expect.arrayContaining([
+        expect.objectContaining({ name: 'redis' }),
+        expect.objectContaining({ name: 'postgres' }),
+      ]),
+    }));
+  });
+
+  it('handles partial failures in batch restart', async () => {
+    // First app succeeds, second fails with 409
+    vi.mocked(restartLease)
+      .mockResolvedValueOnce({ status: 'restarting' })
+      .mockRejectedValueOnce(new ProviderApiError(409, 'not restartable'));
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: '127.0.0.1',
+        ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+      },
+    });
+
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' }),
+    ];
+    const registry = makeRegistry(apps);
+    const entries = apps.map((a) => ({
+      app_name: a.name,
+      leaseUuid: a.leaseUuid,
+      providerUrl: a.providerUrl!,
+    }));
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).restarted).toHaveLength(1);
+    expect((result.data as any).failed).toHaveLength(1);
+    expect((result.data as any).failed[0]).toBe('postgres');
+  });
+
+  it('returns failure when all batch restarts fail', async () => {
+    vi.mocked(restartLease).mockRejectedValue(new ProviderApiError(409, 'not restartable'));
+
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' }),
+    ];
+    const registry = makeRegistry(apps);
+    const entries = apps.map((a) => ({
+      app_name: a.name,
+      leaseUuid: a.leaseUuid,
+      providerUrl: a.providerUrl!,
+    }));
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('All restarts failed');
   });
 });
 
