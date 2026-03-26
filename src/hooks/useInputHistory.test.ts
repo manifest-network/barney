@@ -73,4 +73,26 @@ describe('InputHistory', () => {
     expect(history.navigateUp(msgs2, '')).toBe('second');
     expect(history.navigateUp(msgs2, 'second')).toBe('first');
   });
+
+  it('reports navigation state via isNavigating', () => {
+    const msgs = ['first', 'second'];
+
+    expect(history.isNavigating()).toBe(false);
+
+    history.navigateUp(msgs, '');
+    expect(history.isNavigating()).toBe(true);
+
+    history.navigateDown(msgs);
+    expect(history.isNavigating()).toBe(false);
+  });
+
+  it('resets navigation state on reset', () => {
+    const msgs = ['first'];
+
+    history.navigateUp(msgs, '');
+    expect(history.isNavigating()).toBe(true);
+
+    history.reset();
+    expect(history.isNavigating()).toBe(false);
+  });
 });

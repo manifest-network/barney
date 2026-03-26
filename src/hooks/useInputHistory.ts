@@ -37,6 +37,10 @@ export class InputHistory {
     this.index = -1;
     this.draft = '';
   }
+
+  isNavigating(): boolean {
+    return this.index > -1;
+  }
 }
 
 /**
@@ -66,5 +70,10 @@ export function useInputHistory(messages: ChatMessage[]) {
 
   const reset = useCallback(() => historyRef.current.reset(), []);
 
-  return { navigateUp, navigateDown, reset };
+  const isNavigating = useCallback(
+    (): boolean => historyRef.current.isNavigating(),
+    []
+  );
+
+  return { navigateUp, navigateDown, reset, isNavigating };
 }

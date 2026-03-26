@@ -73,7 +73,7 @@ export function ChatPanel() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const { navigateUp, navigateDown, reset: resetHistory } = useInputHistory(messages);
+  const { navigateUp, navigateDown, reset: resetHistory, isNavigating } = useInputHistory(messages);
   const { containerRef: messagesContainerRef, endRef: messagesEndRef, handleScroll, scrollToBottom } = useAutoScroll(messages.length, isStreaming);
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
 
@@ -198,7 +198,7 @@ export function ChatPanel() {
 
     const el = e.currentTarget;
 
-    if (e.key === 'ArrowUp' && el.selectionStart === 0) {
+    if (e.key === 'ArrowUp' && (el.selectionStart === 0 || isNavigating())) {
       const value = navigateUp(input);
       if (value !== null) {
         e.preventDefault();
@@ -207,7 +207,7 @@ export function ChatPanel() {
       return;
     }
 
-    if (e.key === 'ArrowDown' && el.selectionStart === input.length) {
+    if (e.key === 'ArrowDown' && (el.selectionStart === input.length || isNavigating())) {
       const value = navigateDown();
       if (value !== null) {
         e.preventDefault();
