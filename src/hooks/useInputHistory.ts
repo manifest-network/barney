@@ -12,7 +12,15 @@ export class InputHistory {
   private draft = '';
 
   navigateUp(history: string[], currentInput: string): string | null {
-    if (history.length === 0) return null;
+    if (history.length === 0) {
+      this.index = -1;
+      return null;
+    }
+
+    // Clamp index if history shrank since last navigation
+    if (this.index >= history.length) {
+      this.index = history.length - 1;
+    }
 
     if (this.index === -1) {
       this.draft = currentInput;
@@ -26,6 +34,12 @@ export class InputHistory {
   }
 
   navigateDown(history: string[]): string | null {
+    if (this.index <= -1) return null;
+
+    // Clamp index if history shrank since last navigation
+    if (this.index >= history.length) {
+      this.index = history.length > 0 ? history.length - 1 : -1;
+    }
     if (this.index <= -1) return null;
 
     const nextIndex = this.index - 1;

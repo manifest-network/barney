@@ -168,6 +168,45 @@ describe('InputHistory', () => {
     expect(history.navigateDown(msgs)).toBe('third');
     expect(history.navigateDown(msgs)).toBe('');
   });
+
+  it('clamps index when history shrinks during up-navigation', () => {
+    const msgs = ['first', 'second', 'third'];
+
+    // Navigate to oldest
+    history.navigateUp(msgs, '');
+    history.navigateUp(msgs, 'third');
+    history.navigateUp(msgs, 'second'); // index=2, at 'first'
+
+    // History shrinks (e.g., messages trimmed)
+    const shorter = ['second', 'third'];
+    // navigateUp should clamp and not return undefined
+    expect(history.navigateUp(shorter, 'first')).toBeNull();
+    // navigateDown should still work from clamped position
+    expect(history.navigateDown(shorter)).toBe('third');
+  });
+
+  it('clamps index when history shrinks during down-navigation', () => {
+    const msgs = ['first', 'second', 'third'];
+
+    history.navigateUp(msgs, '');
+    history.navigateUp(msgs, 'third');
+    history.navigateUp(msgs, 'second'); // index=2
+
+    // History shrinks to 1 entry
+    const shorter = ['third'];
+    expect(history.navigateDown(shorter)).toBe('');
+  });
+
+  it('resets when history becomes empty during navigation', () => {
+    const msgs = ['first', 'second'];
+
+    history.navigateUp(msgs, '');
+    history.navigateUp(msgs, 'second'); // index=1
+
+    // History cleared
+    expect(history.navigateUp([], 'first')).toBeNull();
+    expect(history.navigateDown([])).toBeNull();
+  });
 });
 
 describe('stripAttachmentNote', () => {
