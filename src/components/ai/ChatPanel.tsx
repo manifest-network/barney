@@ -198,20 +198,36 @@ export function ChatPanel() {
 
     const el = e.currentTarget;
 
-    if (e.key === 'ArrowUp' && el.selectionStart === 0) {
+    const hasSelection = el.selectionStart !== el.selectionEnd;
+
+    if (e.key === 'ArrowUp' && !hasSelection && el.selectionStart === 0) {
       const value = navigateUp(input);
       if (value !== null) {
         e.preventDefault();
         setInput(value);
+        // Place cursor at start so the next ArrowUp continues history navigation
+        requestAnimationFrame(() => {
+          if (inputRef.current) {
+            inputRef.current.selectionStart = 0;
+            inputRef.current.selectionEnd = 0;
+          }
+        });
       }
       return;
     }
 
-    if (e.key === 'ArrowDown' && el.selectionStart === input.length) {
+    if (e.key === 'ArrowDown' && !hasSelection && (el.selectionStart === 0 || el.selectionStart === input.length)) {
       const value = navigateDown();
       if (value !== null) {
         e.preventDefault();
         setInput(value);
+        // Place cursor at end so the next ArrowDown continues history navigation
+        requestAnimationFrame(() => {
+          if (inputRef.current) {
+            inputRef.current.selectionStart = value.length;
+            inputRef.current.selectionEnd = value.length;
+          }
+        });
       }
     }
   };

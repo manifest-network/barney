@@ -1,13 +1,26 @@
 import { useCallback, useRef, useMemo } from 'react';
 import type { ChatMessage } from '../contexts/aiTypes';
 
+/** Strip "(File attached: ...)" suffix appended by sendMessage for file uploads. */
+export function stripAttachmentNote(content: string): string {
+  return content.replace(/\s*\(File attached: .+\)$/, '');
+}
+
 /** Pure navigation logic, testable without React. */
 export class InputHistory {
   private index = -1;
   private draft = '';
 
   navigateUp(history: string[], currentInput: string): string | null {
-    if (history.length === 0) return null;
+    if (history.length === 0) {
+      this.index = -1;
+      return null;
+    }
+
+    // Clamp index if history shrank since last navigation
+    if (this.index >= history.length) {
+      this.index = history.length - 1;
+    }
 
     if (this.index === -1) {
       this.draft = currentInput;
@@ -21,6 +34,12 @@ export class InputHistory {
   }
 
   navigateDown(history: string[]): string | null {
+    if (this.index <= -1) return null;
+
+    // Clamp index if history shrank since last navigation
+    if (this.index >= history.length) {
+      this.index = history.length > 0 ? history.length - 1 : -1;
+    }
     if (this.index <= -1) return null;
 
     const nextIndex = this.index - 1;
@@ -37,6 +56,10 @@ export class InputHistory {
     this.index = -1;
     this.draft = '';
   }
+
+  isNavigating(): boolean {
+    return this.index > -1;
+  }
 }
 
 /**
@@ -49,7 +72,11 @@ export function useInputHistory(messages: ChatMessage[]) {
   const historyRef = useRef(new InputHistory());
 
   const userMessages = useMemo(
-    () => messages.filter((m) => m.role === 'user').map((m) => m.content),
+    () =>
+      messages
+        .filter((m) => m.role === 'user')
+        .map((m) => stripAttachmentNote(m.content))
+        .filter((content) => content.length > 0),
     [messages]
   );
 
