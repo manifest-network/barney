@@ -198,7 +198,9 @@ export function ChatPanel() {
 
     const el = e.currentTarget;
 
-    if (e.key === 'ArrowUp' && el.selectionStart === 0) {
+    const hasSelection = el.selectionStart !== el.selectionEnd;
+
+    if (e.key === 'ArrowUp' && !hasSelection && el.selectionStart === 0) {
       const value = navigateUp(input);
       if (value !== null) {
         e.preventDefault();
@@ -214,7 +216,7 @@ export function ChatPanel() {
       return;
     }
 
-    if (e.key === 'ArrowDown' && el.selectionStart === input.length) {
+    if (e.key === 'ArrowDown' && !hasSelection && (el.selectionStart === 0 || el.selectionStart === input.length)) {
       const value = navigateDown();
       if (value !== null) {
         e.preventDefault();

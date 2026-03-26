@@ -144,6 +144,30 @@ describe('InputHistory', () => {
     expect(history.navigateUp(msgs, 'my\nmulti-line\ndraft')).toBe('hello');
     expect(history.navigateDown(msgs)).toBe('my\nmulti-line\ndraft');
   });
+
+  it('does not navigate down when not in history mode', () => {
+    const msgs = ['first', 'second'];
+
+    // Without navigating up first, navigateDown should always return null
+    expect(history.navigateDown(msgs)).toBeNull();
+    expect(history.navigateDown(msgs)).toBeNull();
+  });
+
+  it('supports immediate down-navigation after each up-navigation', () => {
+    const msgs = ['first', 'second', 'third'];
+
+    // Navigate up one step
+    expect(history.navigateUp(msgs, '')).toBe('third');
+    // Immediately navigate back down (simulates ArrowDown right after ArrowUp)
+    expect(history.navigateDown(msgs)).toBe('');
+
+    // Navigate up two steps
+    expect(history.navigateUp(msgs, '')).toBe('third');
+    expect(history.navigateUp(msgs, 'third')).toBe('second');
+    // Immediately navigate back down
+    expect(history.navigateDown(msgs)).toBe('third');
+    expect(history.navigateDown(msgs)).toBe('');
+  });
 });
 
 describe('stripAttachmentNote', () => {
