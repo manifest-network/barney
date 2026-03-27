@@ -75,8 +75,8 @@ export function computeOverallPhase(
   for (const phase of intermediatePhases) {
     if (phases.some((p) => p === phase)) return phase;
   }
-  // Fallback to the last (least-advanced) intermediate phase
-  return intermediatePhases[intermediatePhases.length - 1];
+  // Fallback to the last (least-advanced) intermediate phase, or 'failed' if empty
+  return intermediatePhases.length > 0 ? intermediatePhases[intermediatePhases.length - 1] : 'failed';
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +234,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
       phase: failed.length === 0 ? 'ready' : succeeded.length > 0 ? 'ready' : 'failed',
       ...(operation ? { operation } : {}),
       detail: failed.length === 0
-        ? `All ${succeeded.length} apps ${verb.toLowerCase()}!`
+        ? `All ${succeeded.length} ${succeeded.length === 1 ? 'app' : 'apps'} ${verb.toLowerCase()}!`
         : `${succeeded.length} ${verb.toLowerCase()}, ${failed.length} failed`,
       ...(batchProgress ? { batch: batchProgress.map((b) => ({ ...b })) } : {}),
     });
