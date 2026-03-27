@@ -545,9 +545,6 @@ describe('ConfirmationCard with stack manifest', () => {
   });
 
   it('displays (ingress) label on ports with ingress flag in read-only stack summary', () => {
-    let container: HTMLDivElement;
-    let root: Root;
-
     // Use a non-editable tool name so the read-only parseStackManifest path renders
     const manifest = JSON.stringify({
       services: {
@@ -561,19 +558,21 @@ describe('ConfirmationCard with stack manifest', () => {
       description: 'Execute transaction?',
     });
 
-    container = document.createElement('div');
+    const container = document.createElement('div');
     document.body.appendChild(container);
-    root = createRoot(container);
+    const root = createRoot(container);
     flushSync(() => { root.render(createElement(ConfirmationCard, { action, onConfirm: vi.fn(), onCancel: vi.fn() })); });
 
-    const text = container.textContent ?? '';
-    expect(text).toContain('18789/tcp (ingress)');
-    expect(text).toContain('8083/tcp');
-    expect(text).not.toContain('8083/tcp (ingress)');
-    expect(text).toContain('5432/tcp');
-    expect(text).not.toContain('5432/tcp (ingress)');
-
-    flushSync(() => { root.unmount(); });
-    container.remove();
+    try {
+      const text = container.textContent ?? '';
+      expect(text).toContain('18789/tcp (ingress)');
+      expect(text).toContain('8083/tcp');
+      expect(text).not.toContain('8083/tcp (ingress)');
+      expect(text).toContain('5432/tcp');
+      expect(text).not.toContain('5432/tcp (ingress)');
+    } finally {
+      flushSync(() => { root.unmount(); });
+      container.remove();
+    }
   });
 });
