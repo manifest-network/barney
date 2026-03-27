@@ -41,9 +41,12 @@ function parseStackManifest(action: PendingAction): Record<string, StackServiceS
     const result: Record<string, StackServiceSummary> = {};
     for (const [name, svc] of Object.entries(parsed.services as Record<string, Record<string, unknown>>)) {
       if (!svc || typeof svc !== 'object') continue;
+      const portsRecord = svc.ports as Record<string, Record<string, unknown>> | undefined;
       result[name] = {
         image: (svc.image as string) || 'unknown',
-        ports: svc.ports ? Object.keys(svc.ports as Record<string, unknown>) : [],
+        ports: portsRecord
+          ? Object.entries(portsRecord).map(([k, v]) => v?.ingress ? `${k} (ingress)` : k)
+          : [],
         envCount: svc.env ? Object.keys(svc.env as Record<string, unknown>).length : 0,
       };
     }

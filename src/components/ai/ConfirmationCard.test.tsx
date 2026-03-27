@@ -240,7 +240,7 @@ describe('serializeManifest', () => {
   it('includes all non-empty fields', () => {
     const manifest: ManifestFields = {
       image: 'postgres:18',
-      ports: { '5432/tcp': {} as Record<string, never> },
+      ports: { '5432/tcp': {} },
       env: { POSTGRES_PASSWORD: 'secret' },
       user: '1000:1000',
       tmpfs: ['/tmp/data'],
@@ -262,7 +262,7 @@ describe('serializeManifest', () => {
   });
 
   it('omits empty env', () => {
-    const manifest: ManifestFields = { image: 'nginx', ports: { '80/tcp': {} as Record<string, never> }, env: {} };
+    const manifest: ManifestFields = { image: 'nginx', ports: { '80/tcp': {} }, env: {} };
     const parsed = JSON.parse(serializeManifest(manifest));
     expect(parsed.env).toBeUndefined();
     expect(parsed.ports).toEqual({ '80/tcp': {} });
@@ -301,7 +301,7 @@ describe('serializeManifest', () => {
   it('round-trips through parseEditableManifest', () => {
     const original: ManifestFields = {
       image: 'postgres:18',
-      ports: { '5432/tcp': {} as Record<string, never> },
+      ports: { '5432/tcp': {} },
       env: { DB_NAME: 'mydb', POSTGRES_PASSWORD: 'secret' },
       user: '999:999',
       tmpfs: ['/tmp/data', '/var/cache'],
@@ -410,7 +410,7 @@ describe('serializeStackManifest', () => {
   it('produces valid JSON with services wrapper', () => {
     const stack: StackManifestFields = {
       web: {
-        editable: { image: 'nginx', ports: { '80/tcp': {} as Record<string, never> }, env: {} },
+        editable: { image: 'nginx', ports: { '80/tcp': {} }, env: {} },
         passthrough: {},
       },
     };
@@ -433,7 +433,7 @@ describe('serializeStackManifest', () => {
   it('preserves passthrough fields in output', () => {
     const stack: StackManifestFields = {
       web: {
-        editable: { image: 'nginx', ports: { '80/tcp': {} as Record<string, never> }, env: {} },
+        editable: { image: 'nginx', ports: { '80/tcp': {} }, env: {} },
         passthrough: { command: ['nginx'], depends_on: ['db'] },
       },
     };
@@ -447,7 +447,7 @@ describe('serializeStackManifest', () => {
       wordpress: {
         editable: {
           image: 'wordpress:latest',
-          ports: { '80/tcp': {} as Record<string, never> },
+          ports: { '80/tcp': {} },
           env: { WORDPRESS_DB_HOST: 'mysql' },
         },
         passthrough: { depends_on: ['mysql'] },

@@ -5305,6 +5305,22 @@ h1, h2, h3, h4, h5, h6 {
   border-radius: var(--radius-sm);
 }
 
+.manifest-editor-ingress-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.manifest-editor-ingress-label input[type="checkbox"] {
+  accent-color: var(--color-primary);
+  cursor: pointer;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
 .manifest-editor-icon-btn {
   display: inline-flex;
   align-items: center;

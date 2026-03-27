@@ -4,12 +4,15 @@
  */
 
 import type { PendingAction } from '../../ai/toolExecutor';
+import type { PortOptions } from '../../ai/manifest';
 import { logError } from '../../utils/errors';
 import { MANIFEST_NOTICE_KEY } from '../../config/constants';
 
+export type { PortOptions };
+
 export interface ManifestFields {
   image: string;
-  ports: Record<string, Record<string, never>>;
+  ports: Record<string, PortOptions>;
   env: Record<string, string>;
   /** Informational notice shown in the editor (not included in the deployed manifest). */
   notice?: string;
@@ -43,7 +46,7 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
     }
     return {
       image: (parsed.image as string) || '',
-      ports: (parsed.ports as Record<string, Record<string, never>>) || {},
+      ports: (parsed.ports as Record<string, PortOptions>) || {},
       env: (parsed.env as Record<string, string>) || {},
       notice: typeof parsed[MANIFEST_NOTICE_KEY] === 'string' ? (parsed[MANIFEST_NOTICE_KEY] as string) : undefined,
       user: (parsed.user as string) || undefined,
@@ -104,7 +107,7 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
       result[name] = {
         editable: {
           image: (svc.image as string) || '',
-          ports: (svc.ports as Record<string, Record<string, never>>) || {},
+          ports: (svc.ports as Record<string, PortOptions>) || {},
           env: (svc.env as Record<string, string>) || {},
           user: (svc.user as string) || undefined,
           tmpfs: Array.isArray(svc.tmpfs) ? (svc.tmpfs as string[]) : undefined,

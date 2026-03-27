@@ -12,7 +12,7 @@ function makeStack(): StackManifestFields {
     wordpress: {
       editable: {
         image: 'wordpress:latest',
-        ports: { '80/tcp': {} as Record<string, never> },
+        ports: { '80/tcp': {} },
         env: { WORDPRESS_DB_HOST: 'mysql' },
       },
       passthrough: { depends_on: ['mysql'] },
@@ -49,7 +49,7 @@ describe('StackManifestEditor', () => {
     const onChange = vi.fn();
     const stack: StackManifestFields = {
       app: {
-        editable: { image: 'node:20', ports: { '3000/tcp': {} as Record<string, never> }, env: {} },
+        editable: { image: 'node:20', ports: { '3000/tcp': {} }, env: {} },
         passthrough: {},
       },
     };
@@ -89,5 +89,19 @@ describe('serializeStackManifest', () => {
     };
     const parsed = JSON.parse(serializeStackManifest(stack));
     expect(parsed.services.app.env).toEqual({ KEY: 'val', MODELS: '{"a":1}' });
+  });
+
+  it('preserves ingress flag in port values per service', () => {
+    const stack: StackManifestFields = {
+      web: {
+        editable: {
+          image: 'openclaw', ports: { '18789/tcp': { ingress: true }, '8083/tcp': {} }, env: {},
+        },
+        passthrough: {},
+      },
+    };
+    const parsed = JSON.parse(serializeStackManifest(stack));
+    expect(parsed.services.web.ports['18789/tcp']).toEqual({ ingress: true });
+    expect(parsed.services.web.ports['8083/tcp']).toEqual({});
   });
 });
