@@ -112,14 +112,14 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   //     env: { OPENCLAW_GATEWAY_TOKEN: token, OLLAMA_HOST: '172.17.0.1' },
   //   };
   // }, size: 'large', group: 'apps', category: 'Tools' },
-  // { label: 'EverClaw', manifest: SERVICE_MANIFEST('ghcr.io/everclaw/everclaw:latest', ['18789', '8083']), manifestFactory: () => {
-  //   return {
-  //     image: 'ghcr.io/everclaw/everclaw:latest',
-  //     ports: { '18789/tcp': {}, '8083/tcp': {} },
-  //     env: { MORPHEUS_GATEWAY_API_KEY: '', OPENCLAW_GATEWAY_TOKEN: generatePassword(64), OPENCLAW_GATEWAY_PASSWORD: generatePassword(64), EVERCLAW_AGENT_NAME: 'Barney', EVERCLAW_USER_NAME: 'Tester', TZ: 'America/New_York' },
-  //     command: ['/bin/sh', '-c'],
-  //   };
-  // }, size: 'large', group: 'apps', category: 'Tools' },
+  { label: 'EverClaw', manifest: SERVICE_MANIFEST('ghcr.io/everclaw/everclaw:latest', ['18789', '8083']), manifestFactory: () => {
+    return {
+      image: 'ghcr.io/everclaw/everclaw:latest',
+      ports: { '18789/tcp': {}, '8083/tcp': {} },
+      env: { MORPHEUS_GATEWAY_API_KEY: '', OPENCLAW_GATEWAY_TOKEN: generatePassword(64), OPENCLAW_GATEWAY_PASSWORD: generatePassword(64), EVERCLAW_AGENT_NAME: 'Barney', EVERCLAW_USER_NAME: 'Tester', TZ: 'America/New_York' },
+      command: ['/bin/sh', '-c'],
+    };
+  }, size: 'large', group: 'apps', category: 'Tools' },
   // { label: 'Registry 2', manifest: SERVICE_MANIFEST('registry:2', ['5000']), size: 'micro', group: 'apps', category: 'Tools' },
 
   // --- Render Demo (user-supplied credentials, not auto-generated) ---
