@@ -91,13 +91,13 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'stop_app',
-      description: 'Stop an app by name, or "all" to stop all.',
+      description: 'Stop apps by name, comma-separated list, or "all" to stop all.',
       parameters: {
         type: 'object',
         properties: {
           app_name: {
             type: 'string',
-            description: 'The name of the app to stop, or "all" to stop all running apps.',
+            description: 'App name, comma-separated names (e.g. "redis,postgres"), or "all" to stop all running apps.',
           },
         },
         required: ['app_name'],
@@ -126,13 +126,13 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'restart_app',
-      description: 'Restart a running app.',
+      description: 'Restart apps by name, comma-separated list, or "all" to restart all.',
       parameters: {
         type: 'object',
         properties: {
           app_name: {
             type: 'string',
-            description: 'The name of the app to restart.',
+            description: 'App name, comma-separated names (e.g. "redis,postgres"), or "all" to restart all running apps.',
           },
         },
         required: ['app_name'],
@@ -463,8 +463,12 @@ export function getToolCallDescription(
       const image = !args.app_name && args.image ? ` from ${args.image}` : '';
       return `Deploying app${name}${image}${size}...`;
     }
-    case 'stop_app':
-      return args.app_name === 'all' ? 'Stopping all apps...' : `Stopping app "${args.app_name}"...`;
+    case 'stop_app': {
+      const stopName = String(args.app_name ?? '').trim();
+      if (stopName.toLowerCase() === 'all') return 'Stopping all apps...';
+      if (stopName.includes(',')) return `Stopping apps ${stopName}...`;
+      return `Stopping app "${stopName}"...`;
+    }
     case 'fund_credits':
       return `Funding credits with ${args.amount} PWR...`;
     case 'list_apps':
@@ -481,8 +485,12 @@ export function getToolCallDescription(
       return args.state && args.state !== 'all'
         ? `Fetching ${args.state} lease history...`
         : 'Fetching lease history...';
-    case 'restart_app':
-      return `Restarting app "${args.app_name}"...`;
+    case 'restart_app': {
+      const restartName = String(args.app_name ?? '').trim();
+      if (restartName.toLowerCase() === 'all') return 'Restarting all apps...';
+      if (restartName.includes(',')) return `Restarting apps ${restartName}...`;
+      return `Restarting app "${restartName}"...`;
+    }
     case 'update_app':
       return args.services ? `Updating stack "${args.app_name}"...` : `Updating app "${args.app_name}"...`;
     case 'app_diagnostics':

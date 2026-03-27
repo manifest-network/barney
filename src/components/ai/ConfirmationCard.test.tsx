@@ -42,6 +42,41 @@ describe('ConfirmationCard', () => {
     expect(element.props.action.toolName).toBe('stop_app');
   });
 
+  it('can be instantiated for restart_app all action with entries', () => {
+    const action = makeAction({
+      toolName: 'restart_app',
+      args: {
+        app_name: 'all',
+        entries: [
+          { app_name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' },
+          { app_name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' },
+        ],
+      },
+      description: 'Restart 2 apps (redis, postgres)?',
+    });
+    const element = createElement(ConfirmationCard, { action, onConfirm: vi.fn(), onCancel: vi.fn() });
+    expect(element).toBeDefined();
+    expect(element.props.action.toolName).toBe('restart_app');
+    expect(element.props.action.args.entries).toHaveLength(2);
+  });
+
+  it('can be instantiated for stop_app all action with entries', () => {
+    const action = makeAction({
+      toolName: 'stop_app',
+      args: {
+        app_name: 'all',
+        entries: [
+          { app_name: 'redis', leaseUuid: 'uuid-1' },
+          { app_name: 'postgres', leaseUuid: 'uuid-2' },
+        ],
+      },
+      description: 'Stop 2 apps (redis, postgres)?',
+    });
+    const element = createElement(ConfirmationCard, { action, onConfirm: vi.fn(), onCancel: vi.fn() });
+    expect(element).toBeDefined();
+    expect(element.props.action.toolName).toBe('stop_app');
+  });
+
   it('accepts isExecuting prop', () => {
     const onConfirm = vi.fn();
     const onCancel = vi.fn();

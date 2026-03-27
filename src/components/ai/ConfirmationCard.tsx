@@ -197,12 +197,14 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                   ))}
                 </div>
               </div>
-            ) : action.args.entries && Array.isArray(action.args.entries) && action.args.entries.length > 1 ? (
+            ) : action.args.entries && Array.isArray(action.args.entries) && action.args.entries.length > 0 ? (
               <div className="confirmation-details">
-                <p className="confirmation-details-title">Apps to deploy:</p>
+                <p className="confirmation-details-title">
+                  {action.toolName === 'stop_app' ? 'Apps to stop:' : action.toolName === 'restart_app' ? 'Apps to restart:' : 'Apps to deploy:'}
+                </p>
                 <ul className="confirmation-batch-list">
                   {(action.args.entries as Array<{ app_name: string; size?: string }>).map((entry) => (
-                    <li key={entry.app_name}>{entry.app_name} ({entry.size || 'micro'})</li>
+                    <li key={entry.app_name}>{entry.app_name}{entry.size ? ` (${entry.size})` : ''}</li>
                   ))}
                 </ul>
               </div>

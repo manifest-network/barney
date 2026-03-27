@@ -145,7 +145,13 @@ describe('getSystemPrompt', () => {
     expect(prompt).toContain('Deploy tetris, doom and hextris');
     expect(prompt).toContain('deploy_app once for EACH');
     expect(prompt).toContain('Stop redis and postgres');
-    expect(prompt).toContain('stop_app twice');
+    expect(prompt).toContain('stop_app(app_name="redis,postgres")');
+  });
+
+  it('contains restart all and comma-separated rules', () => {
+    const prompt = getSystemPrompt();
+    expect(prompt).toContain('restart_app(app_name="all")');
+    expect(prompt).toContain('comma-separated');
   });
 
   it('contains combined-action example', () => {
@@ -157,7 +163,13 @@ describe('getSystemPrompt', () => {
   it('rule 4 generalizes multiple names to multiple tool calls', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('Multiple names = multiple calls');
-    expect(prompt).toContain('deploy, stop, restart, status');
+    expect(prompt).toContain('deploy, status');
+  });
+
+  it('rule 4 excludes stop and restart (handled by rule 9 comma-separated)', () => {
+    const prompt = getSystemPrompt();
+    // Rule 4 should direct stop/restart to rule 9 instead of multiple calls
+    expect(prompt).toContain('For stop and restart, use comma-separated');
   });
 
   it('rule 5 prioritizes checking names before fallback message', () => {

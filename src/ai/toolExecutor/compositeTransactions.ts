@@ -13,19 +13,19 @@ import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
-import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_BATCH_DEPLOY_CONCURRENCY, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
+import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
 import { isValidFqdn } from '../../utils/connection';
 import { resolveSkuItems } from './transactions';
-import { validateAppName, sanitizeManifestForStorage } from '../../registry/appRegistry';
+import { validateAppName, sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
 import { extractYamlServiceNames } from '../../utils/fileValidation';
 import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, getServiceNames, type ServiceConfig, type HealthCheckConfig } from '../manifest';
 import { MANIFEST_NOTICE_KEY } from '../../config/constants';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
-import type { DeployProgress } from '../progress';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
+import { createSigningMutex, runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([
@@ -66,6 +66,63 @@ function validateEnvNames(env: Record<string, string>): string | null {
     return `Blocked env variable(s): ${blocked.join(', ')}. These variables could compromise the runtime environment.`;
   }
   return null;
+}
+
+/**
+ * Parse a multi-app app_name value into resolved AppEntry[].
+ * Supports "all" (all matching apps), comma-separated names, or a single name.
+ * `filter` selects which apps are eligible (e.g. running-only for restart).
+ */
+type ResolveResult =
+  | { mode: 'single'; name: string }
+  | { mode: 'multi'; apps: AppEntry[]; skipped?: string[] }
+  | { mode: 'error'; error: string };
+
+function resolveMultiAppNames(
+  name: string,
+  address: string,
+  appRegistry: ToolExecutorOptions['appRegistry'] & object,
+  filter: (a: AppEntry) => boolean,
+  verb: string
+): ResolveResult {
+  const trimmed = name.trim();
+  const allApps = appRegistry.getApps(address);
+  const eligible = allApps.filter(filter);
+
+  if (trimmed.toLowerCase() === 'all') {
+    if (eligible.length === 0) return { mode: 'error', error: `No eligible apps to ${verb}.` };
+    return { mode: 'multi', apps: eligible };
+  }
+
+  // Comma-separated names
+  const names = trimmed.split(',').map((n) => n.trim()).filter(Boolean);
+  if (names.length <= 1) return { mode: 'single', name: names[0] ?? trimmed };
+
+  const resolved: AppEntry[] = [];
+  const notFound: string[] = [];
+  const notEligible: string[] = [];
+
+  for (const n of names) {
+    const app = appRegistry.findApp(address, n);
+    if (!app) {
+      notFound.push(n);
+    } else if (!filter(app)) {
+      notEligible.push(app.name);
+    } else {
+      // Deduplicate (same app referenced multiple ways)
+      if (!resolved.some((r) => r.leaseUuid === app.leaseUuid)) {
+        resolved.push(app);
+      }
+    }
+  }
+
+  if (notFound.length > 0) {
+    return { mode: 'error', error: `App${notFound.length > 1 ? 's' : ''} not found: ${notFound.join(', ')}` };
+  }
+  if (resolved.length === 0) {
+    return { mode: 'error', error: `No eligible apps to ${verb}: ${notEligible.join(', ')}` };
+  }
+  return { mode: 'multi', apps: resolved, skipped: notEligible.length > 0 ? notEligible : undefined };
 }
 
 /**
@@ -1414,225 +1471,139 @@ export async function executeConfirmedBatchDeploy(
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
 
-  // Per-app progress state
-  const batchProgress: Array<{ name: string; phase: DeployProgress['phase']; detail?: string }> =
-    entries.map((e) => ({ name: e.app_name, phase: 'creating_lease' as const, detail: 'Waiting...' }));
+  const { withSign, signArbitraryWithMutex } = createSigningMutex(signArbitrary);
 
-  const emitProgress = () => {
-    const phases = batchProgress.map((b) => b.phase);
-    let overallPhase: DeployProgress['phase'] = 'creating_lease';
-    if (phases.every((p) => p === 'ready')) {
-      overallPhase = 'ready';
-    } else if (phases.every((p) => p === 'ready' || p === 'failed')) {
-      overallPhase = phases.some((p) => p === 'ready') ? 'ready' : 'failed';
-    } else if (phases.some((p) => p === 'provisioning')) {
-      overallPhase = 'provisioning';
-    } else if (phases.some((p) => p === 'uploading')) {
-      overallPhase = 'uploading';
-    }
+  const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
 
-    onProgress?.({
-      phase: overallPhase,
-      batch: batchProgress.map((b) => ({ ...b })),
-    });
-  };
+  const { succeeded, failed, batchProgress } = await runBatchWithConcurrency({
+    entries: batchEntries,
+    intermediatePhases: ['provisioning', 'uploading', 'creating_lease'],
+    initialPhase: 'creating_lease',
+    signal,
+    onProgress,
+    executeOne: async (entry, _i, updateProgress) => {
+      const name = entry.app_name;
 
-  emitProgress();
+      // ---- Create lease (signing) ----
+      updateProgress('creating_lease', 'Creating lease on-chain...');
 
-  // Deploy apps end-to-end with configurable concurrency (AI_BATCH_DEPLOY_CONCURRENCY).
-  // A signing mutex serializes cosmosTx / signArbitrary calls (which share wallet
-  // sequence numbers) while letting non-signing work (WS events, HTTP status checks) overlap.
-  const deployed: Array<{ name: string; url?: string }> = [];
-  const failed: string[] = [];
+      const cmdArgs = ['--meta-hash', entry.payload.hash, ...formatLeaseItems(entry.skuUuid, entry.serviceNames)];
+      const txResult = await withSign(() => cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true));
 
-  // Signing mutex — only one wallet operation at a time
-  let signLock: Promise<void> = Promise.resolve();
-  const withSign = async <T>(fn: () => Promise<T>): Promise<T> => {
-    const prev = signLock;
-    let unlock!: () => void;
-    signLock = new Promise<void>(r => { unlock = r; });
-    await prev;
-    try {
-      return await fn();
-    } finally {
-      unlock();
-    }
-  };
+      if (txResult.code !== 0) {
+        updateProgress('failed', txResult.rawLog ?? 'Transaction failed');
+        return null;
+      }
 
-  // Mutex-wrapped signArbitrary — only signing is serialized, not the
-  // subsequent HTTP calls that use the resulting token/signature.
-  const signArbitraryWithMutex = (addr: string, data: string) => withSign(() => signArbitrary(addr, data));
+      const leaseUuid = extractLeaseUuidFromTxResult(txResult);
+      if (!leaseUuid) {
+        updateProgress('failed', 'Could not extract lease UUID');
+        return null;
+      }
 
-  const deployOne = async (i: number) => {
-    const entry = entries[i];
-    const name = entry.app_name;
+      try {
+        appRegistry.addApp(address, {
+          name,
+          leaseUuid,
+          size: entry.size,
+          providerUuid: entry.providerUuid,
+          providerUrl: entry.providerUrl,
+          createdAt: Date.now(),
+          status: 'deploying',
+          manifest: sanitizeManifestForStorage(new TextDecoder().decode(entry.payload.bytes)),
+        });
+      } catch (error) {
+        logError('compositeTransactions.executeConfirmedBatchDeploy.addApp', error);
+      }
 
-    // ---- Create lease (signing) ----
-    batchProgress[i] = { name, phase: 'creating_lease', detail: 'Creating lease on-chain...' };
-    emitProgress();
+      // ---- Upload payload (signing) ----
+      updateProgress('uploading', 'Uploading manifest...');
 
-    const cmdArgs = ['--meta-hash', entry.payload.hash, ...formatLeaseItems(entry.skuUuid, entry.serviceNames)];
-    const txResult = await withSign(() => cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true));
-
-    if (txResult.code !== 0) {
-      batchProgress[i] = { name, phase: 'failed', detail: txResult.rawLog ?? 'Transaction failed' };
-      emitProgress();
-      failed.push(name);
-      return;
-    }
-
-    const leaseUuid = extractLeaseUuidFromTxResult(txResult);
-    if (!leaseUuid) {
-      batchProgress[i] = { name, phase: 'failed', detail: 'Could not extract lease UUID' };
-      emitProgress();
-      failed.push(name);
-      return;
-    }
-
-    try {
-      appRegistry.addApp(address, {
-        name,
+      const uploadResult = await uploadPayloadToProvider(
+        entry.providerUrl,
         leaseUuid,
-        size: entry.size,
-        providerUuid: entry.providerUuid,
-        providerUrl: entry.providerUrl,
-        createdAt: Date.now(),
-        status: 'deploying',
-        manifest: sanitizeManifestForStorage(new TextDecoder().decode(entry.payload.bytes)),
-      });
-    } catch (error) {
-      logError('compositeTransactions.executeConfirmedBatchDeploy.addApp', error);
-    }
+        entry.payload.hash,
+        entry.payload.bytes,
+        address,
+        signArbitraryWithMutex
+      );
 
-    // ---- Upload payload (signing) ----
-    batchProgress[i] = { name, phase: 'uploading', detail: 'Uploading manifest...' };
-    emitProgress();
-
-    const uploadResult = await uploadPayloadToProvider(
-      entry.providerUrl,
-      leaseUuid,
-      entry.payload.hash,
-      entry.payload.bytes,
-      address,
-      signArbitraryWithMutex
-    );
-
-    if (!uploadResult.success) {
-      batchProgress[i] = { name, phase: 'failed', detail: `Upload failed: ${uploadResult.error}` };
-      emitProgress();
-      appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-      failed.push(name);
-      return;
-    }
-
-    // ---- Wait for ready (no signing except auth refresh) ----
-    batchProgress[i] = { name, phase: 'provisioning', detail: 'Waiting for deployment...' };
-    emitProgress();
-
-    try {
-      const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitraryWithMutex);
-      const authToken = await refreshAuthToken();
-
-      const fredStatus = await waitForLeaseReady(entry.providerUrl, leaseUuid, authToken, {
-        maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
-        intervalMs: FRED_POLL_INTERVAL_MS,
-        abortSignal: signal,
-        onProgress: (status) => {
-          batchProgress[i] = { name, phase: 'provisioning', detail: status.phase || 'Provisioning...' };
-          emitProgress();
-        },
-        getAuthToken: refreshAuthToken,
-        checkChainState: async (): Promise<TerminalChainState | null> => {
-          const lease = await getLease(leaseUuid);
-          if (!lease) return { state: 'closed' };
-          if (lease.state === LeaseState.LEASE_STATE_CLOSED) return { state: 'closed' };
-          if (lease.state === LeaseState.LEASE_STATE_REJECTED) return { state: 'rejected' };
-          if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return { state: 'expired' };
-          return null;
-        },
-      });
-
-      if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
-        const { url: connectionUrl, connection } = await resolveAppUrl(
-          entry.providerUrl, leaseUuid, fredStatus, address, signArbitraryWithMutex,
-          'executeConfirmedBatchDeploy'
-        );
-
-        appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined });
-        batchProgress[i] = { name, phase: 'ready', detail: 'App is live!' };
-        emitProgress();
-        deployed.push({ name, url: connectionUrl });
-        return;
-      }
-
-      if (
-        fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
-        fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
-        fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
-        fredStatus.provision_status === 'failed'
-      ) {
+      if (!uploadResult.success) {
+        updateProgress('failed', `Upload failed: ${uploadResult.error}`);
         appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-        batchProgress[i] = { name, phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' };
-        emitProgress();
-        failed.push(name);
-        return;
+        return null;
       }
 
-      const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
-        batchProgress[i] = { name, phase: p.phase, detail: p.detail };
-        emitProgress();
-      });
-      if (fbResult.success) deployed.push({ name }); else failed.push(name);
-    } catch (error) {
-      logError('executeConfirmedBatchDeploy.poll', error);
-      const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
-        batchProgress[i] = { name, phase: p.phase, detail: p.detail };
-        emitProgress();
-      });
-      if (fbResult.success) deployed.push({ name }); else failed.push(name);
-    }
-  };
+      // ---- Wait for ready (no signing except auth refresh) ----
+      updateProgress('provisioning', 'Waiting for deployment...');
 
-  // Run with bounded concurrency
-  const active = new Set<Promise<void>>();
-  for (let i = 0; i < entries.length; i++) {
-    if (signal?.aborted) break;
-    const p = deployOne(i).finally(() => active.delete(p));
-    active.add(p);
-    if (active.size >= AI_BATCH_DEPLOY_CONCURRENCY) {
-      await Promise.race(active);
-    }
-  }
-  await Promise.all(active);
+      try {
+        const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitraryWithMutex);
+        const authToken = await refreshAuthToken();
 
-  // Final progress
-  onProgress?.({
-    phase: failed.length === 0 ? 'ready' : deployed.length > 0 ? 'ready' : 'failed',
-    detail: failed.length === 0
-      ? `All ${deployed.length} apps deployed!`
-      : `${deployed.length} deployed, ${failed.length} failed`,
-    batch: batchProgress.map((b) => ({ ...b })),
+        const fredStatus = await waitForLeaseReady(entry.providerUrl, leaseUuid, authToken, {
+          maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+          intervalMs: FRED_POLL_INTERVAL_MS,
+          abortSignal: signal,
+          onProgress: (status) => {
+            updateProgress('provisioning', status.phase || 'Provisioning...');
+          },
+          getAuthToken: refreshAuthToken,
+          checkChainState: async (): Promise<TerminalChainState | null> => {
+            const lease = await getLease(leaseUuid);
+            if (!lease) return { state: 'closed' };
+            if (lease.state === LeaseState.LEASE_STATE_CLOSED) return { state: 'closed' };
+            if (lease.state === LeaseState.LEASE_STATE_REJECTED) return { state: 'rejected' };
+            if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return { state: 'expired' };
+            return null;
+          },
+        });
+
+        if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
+          const { url: connectionUrl, connection } = await resolveAppUrl(
+            entry.providerUrl, leaseUuid, fredStatus, address, signArbitraryWithMutex,
+            'executeConfirmedBatchDeploy'
+          );
+
+          appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined });
+          updateProgress('ready', 'App is live!');
+          return { name, url: connectionUrl };
+        }
+
+        if (
+          fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
+          fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
+          fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
+          fredStatus.provision_status === 'failed'
+        ) {
+          appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+          updateProgress('failed', fredStatus.last_error || 'Deployment failed');
+          return null;
+        }
+
+        const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
+          updateProgress(p.phase, p.detail);
+        });
+        return fbResult.success ? { name } : null;
+      } catch (error) {
+        logError('executeConfirmedBatchDeploy.poll', error);
+        const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
+          updateProgress(p.phase, p.detail);
+        });
+        return fbResult.success ? { name } : null;
+      }
+    },
   });
 
-  if (failed.length > 0 && deployed.length === 0) {
-    return { success: false, error: `All deploys failed: ${failed.join(', ')}` };
-  }
-
-  const parts: string[] = [];
-  if (deployed.length > 0) {
-    const lines = deployed.map((d) => d.url ? `${d.name}: ${d.url}` : d.name);
-    parts.push(`Deployed:\n${lines.map((l) => `- ${l}`).join('\n')}`);
-  }
-  if (failed.length > 0) parts.push(`Failed: ${failed.join(', ')}.`);
-
-  return {
-    success: true,
-    data: {
-      deployed,
-      failed,
-      message: parts.join('\n'),
-    },
-  };
+  return summarizeBatchResult({
+    succeeded,
+    failed,
+    dataKey: 'deployed',
+    verb: 'Deployed',
+    failedNoun: 'deploys',
+    batchProgress,
+    onProgress,
+  });
 }
 
 // ============================================================================
@@ -1654,28 +1625,30 @@ export async function executeStopApp(
   const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
 
-  // Bulk stop: gather all running/deploying apps
-  if (name.toLowerCase() === 'all') {
-    const allApps = appRegistry.getApps(address);
-    const active = allApps.filter((a) => a.status === 'running' || a.status === 'deploying');
-    if (active.length === 0) {
-      return { success: false, error: 'No running apps to stop.' };
-    }
-    const names = active.map((a) => a.name);
-    const entries = active.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid }));
+  // Multi-app stop: "all" or comma-separated names
+  const stopFilter = (a: AppEntry) => a.status === 'running' || a.status === 'deploying';
+  const multi = resolveMultiAppNames(name, address, appRegistry, stopFilter, 'stop');
+  if (multi.mode === 'error') return { success: false, error: multi.error };
+
+  if (multi.mode === 'multi') {
+    const names = multi.apps.map((a) => a.name);
+    const entries = multi.apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid }));
+    const skippedNote = multi.skipped ? ` (skipped: ${multi.skipped.join(', ')})` : '';
     return {
       success: true,
       requiresConfirmation: true,
-      confirmationMessage: `Stop ${active.length} app${active.length > 1 ? 's' : ''} (${names.join(', ')})? This will terminate all deployments and stop billing.`,
+      confirmationMessage: `Stop ${multi.apps.length} app${multi.apps.length > 1 ? 's' : ''} (${names.join(', ')})? This will terminate all deployments and stop billing.${skippedNote}`,
       pendingAction: {
         toolName: 'stop_app',
-        args: { app_name: 'all', entries },
+        args: { app_name: name, entries },
       },
     };
   }
 
-  const app = appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
+  // Single app — use normalized name from resolveMultiAppNames
+  const singleName = multi.name;
+  const app = appRegistry.findApp(address, singleName);
+  if (!app) return { success: false, error: `No unique app found matching "${singleName}"` };
 
   if (app.status === 'stopped') {
     return { success: false, error: `App "${app.name}" is already stopped.` };
@@ -1937,8 +1910,34 @@ export async function executeRestartApp(
   const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
 
-  const app = appRegistry.findApp(address, name);
-  if (!app) return { success: false, error: `No unique app found matching "${name}"` };
+  // Multi-app restart: "all" or comma-separated names
+  const restartFilter = (a: AppEntry) => a.status === 'running' && !!a.providerUrl;
+  const multi = resolveMultiAppNames(name, address, appRegistry, restartFilter, 'restart');
+  if (multi.mode === 'error') return { success: false, error: multi.error };
+
+  if (multi.mode === 'multi') {
+    const names = multi.apps.map((a) => a.name);
+    const entries = multi.apps.map((a) => ({
+      app_name: a.name,
+      leaseUuid: a.leaseUuid,
+      providerUrl: a.providerUrl!,
+    }));
+    const skippedNote = multi.skipped ? ` (skipped: ${multi.skipped.join(', ')})` : '';
+    return {
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Restart ${multi.apps.length} app${multi.apps.length > 1 ? 's' : ''} (${names.join(', ')})? All apps will be briefly unavailable during restart.${skippedNote}`,
+      pendingAction: {
+        toolName: 'restart_app',
+        args: { app_name: name, entries },
+      },
+    };
+  }
+
+  // Single app — use normalized name from resolveMultiAppNames
+  const singleName = multi.name;
+  const app = appRegistry.findApp(address, singleName);
+  if (!app) return { success: false, error: `No unique app found matching "${singleName}"` };
 
   if (app.status !== 'running') {
     return { success: false, error: `App "${app.name}" is not running (status: ${app.status}). Only running apps can be restarted.` };
@@ -1965,6 +1964,7 @@ export async function executeRestartApp(
 
 /**
  * Execute restart_app after user confirmation.
+ * Supports batch restart when args.entries is present (from app_name="all" or comma-separated).
  */
 export async function executeConfirmedRestartApp(
   args: Record<string, unknown>,
@@ -1976,6 +1976,13 @@ export async function executeConfirmedRestartApp(
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
 
+  // Batch restart
+  const entries = args.entries as Array<{ app_name: string; leaseUuid: string; providerUrl: string }> | undefined;
+  if (entries && entries.length > 0) {
+    return executeConfirmedBatchRestart(entries, address, appRegistry, signArbitrary, onProgress, signal);
+  }
+
+  // Single restart
   const name = args.app_name as string;
   const leaseUuid = args.leaseUuid as string;
   const providerUrl = args.providerUrl as string;
@@ -2055,6 +2062,106 @@ export async function executeConfirmedRestartApp(
     onProgress?.({ phase: 'failed', detail: 'Restart polling failed', operation: 'restart' });
     return { success: false, error: `Restart may still be in progress. Use app_status("${name}") to check.` };
   }
+}
+
+/**
+ * Batch restart: restart multiple apps concurrently with bounded concurrency.
+ * Uses a signing mutex to serialize signArbitrary calls (shared wallet sequence numbers).
+ */
+async function executeConfirmedBatchRestart(
+  entries: Array<{ app_name: string; leaseUuid: string; providerUrl: string }>,
+  address: string,
+  appRegistry: ToolExecutorOptions['appRegistry'] & object,
+  signArbitrary: (address: string, data: string) => Promise<{ pub_key: { type: string; value: string }; signature: string }>,
+  onProgress: ToolExecutorOptions['onProgress'],
+  signal: AbortSignal | undefined
+): Promise<ToolResult> {
+  const { signArbitraryWithMutex } = createSigningMutex(signArbitrary);
+
+  const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
+
+  const { succeeded, failed, batchProgress } = await runBatchWithConcurrency({
+    entries: batchEntries,
+    intermediatePhases: ['provisioning', 'restarting'],
+    initialPhase: 'restarting',
+    operation: 'restart',
+    signal,
+    onProgress,
+    executeOne: async (entry, _i, updateProgress) => {
+      const name = entry.app_name;
+
+      updateProgress('restarting', 'Restarting...');
+
+      const refreshAuthToken = () => getProviderAuthToken(address, entry.leaseUuid, signArbitraryWithMutex);
+
+      // Issue restart command
+      try {
+        const authToken = await refreshAuthToken();
+        await restartLease(entry.providerUrl, entry.leaseUuid, authToken);
+      } catch (error) {
+        logError('executeConfirmedBatchRestart.restart', error);
+        if (error instanceof ProviderApiError && error.status === 409) {
+          updateProgress('failed', 'Not in a restartable state');
+          return null;
+        }
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        updateProgress('failed', `Restart failed: ${errorMsg}`);
+        appRegistry.updateApp(address, entry.leaseUuid, { status: 'failed' });
+        return null;
+      }
+
+      // Poll for readiness
+      updateProgress('provisioning', 'Waiting for app to come back up...');
+
+      try {
+        const authToken = await refreshAuthToken();
+        const fredStatus = await waitForLeaseReady(entry.providerUrl, entry.leaseUuid, authToken, {
+          maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+          intervalMs: FRED_POLL_INTERVAL_MS,
+          abortSignal: signal,
+          onProgress: (status) => {
+            updateProgress('provisioning', status.phase || 'Restarting...');
+          },
+          getAuthToken: refreshAuthToken,
+        });
+
+        if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
+          const { url: connectionUrl, connection } = await resolveAppUrl(
+            entry.providerUrl, entry.leaseUuid, fredStatus, address, signArbitraryWithMutex,
+            'executeConfirmedBatchRestart'
+          );
+
+          appRegistry.updateApp(address, entry.leaseUuid, {
+            status: 'running',
+            url: connectionUrl,
+            connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+          });
+          updateProgress('ready', 'App is live!');
+          return { name, url: connectionUrl };
+        }
+
+        appRegistry.updateApp(address, entry.leaseUuid, { status: 'failed' });
+        updateProgress('failed', fredStatus.last_error || 'Restart failed');
+        return null;
+      } catch (error) {
+        logError('executeConfirmedBatchRestart.poll', error);
+        appRegistry.updateApp(address, entry.leaseUuid, { status: 'failed' });
+        updateProgress('failed', `Restart polling failed for "${name}". Use app_status("${name}") to check.`);
+        return null;
+      }
+    },
+  });
+
+  return summarizeBatchResult({
+    succeeded,
+    failed,
+    dataKey: 'restarted',
+    verb: 'Restarted',
+    failedNoun: 'restarts',
+    batchProgress,
+    operation: 'restart',
+    onProgress,
+  });
 }
 
 // ============================================================================
