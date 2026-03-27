@@ -45,7 +45,7 @@ function parseStackManifest(action: PendingAction): Record<string, StackServiceS
       result[name] = {
         image: (svc.image as string) || 'unknown',
         ports: portsRecord
-          ? Object.entries(portsRecord).map(([k, v]) => v?.ingress ? `${k} (ingress)` : k)
+          ? Object.entries(portsRecord).map(([k, v]) => v?.ingress === true ? `${k} (ingress)` : k)
           : [],
         envCount: svc.env ? Object.keys(svc.env as Record<string, unknown>).length : 0,
       };
