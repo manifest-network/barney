@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createElement } from 'react';
+import { flushSync } from 'react-dom';
+import { createRoot, type Root } from 'react-dom/client';
 import { ConfirmationCard } from './ConfirmationCard';
 import {
   parseEditableManifest, serializeManifest,
@@ -540,5 +542,38 @@ describe('ConfirmationCard with stack manifest', () => {
     expect(element).toBeDefined();
     expect(element.props.action.toolName).toBe('deploy_app');
     expect(element.props.action.args._generatedManifest).toBe(manifest);
+  });
+
+  it('displays (ingress) label on ports with ingress flag in read-only stack summary', () => {
+    let container: HTMLDivElement;
+    let root: Root;
+
+    // Use a non-editable tool name so the read-only parseStackManifest path renders
+    const manifest = JSON.stringify({
+      services: {
+        web: { image: 'openclaw', ports: { '18789/tcp': { ingress: true }, '8083/tcp': {} } },
+        db: { image: 'postgres:18', ports: { '5432/tcp': {} }, env: { POSTGRES_PASSWORD: 'secret' } },
+      },
+    });
+    const action = makeAction({
+      toolName: 'cosmos_tx',
+      args: { module: 'billing', subcommand: 'create-lease', _generatedManifest: manifest },
+      description: 'Execute transaction?',
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    flushSync(() => { root.render(createElement(ConfirmationCard, { action, onConfirm: vi.fn(), onCancel: vi.fn() })); });
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('18789/tcp (ingress)');
+    expect(text).toContain('8083/tcp');
+    expect(text).not.toContain('8083/tcp (ingress)');
+    expect(text).toContain('5432/tcp');
+    expect(text).not.toContain('5432/tcp (ingress)');
+
+    flushSync(() => { root.unmount(); });
+    container.remove();
   });
 });
