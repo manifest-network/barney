@@ -107,13 +107,10 @@ export function ManifestEditor({ manifest, onChange }: ManifestEditorProps) {
 
   const toggleIngress = useCallback((key: string) => {
     if (!(key in manifest.ports)) return;
-    const normalize = (r: unknown): PortOptions => (r && typeof r === 'object' && !Array.isArray(r)) ? r as PortOptions : {};
-    const current = normalize(manifest.ports[key]);
-    const enabling = !current.ingress;
+    const enabling = !manifest.ports[key]?.ingress;
     // At most one port may be ingress — clear others only when enabling a new one
     const updated: Record<string, PortOptions> = {};
-    for (const [k, raw] of Object.entries(manifest.ports)) {
-      const v = normalize(raw);
+    for (const [k, v] of Object.entries(manifest.ports)) {
       if (k === key) {
         updated[k] = enabling ? { ingress: true } : {};
       } else {
@@ -220,7 +217,7 @@ export function ManifestEditor({ manifest, onChange }: ManifestEditorProps) {
           <div className="manifest-editor-entries">
             {portEntries.map((key) => {
               const isTcp = key.endsWith('/tcp');
-              const isIngress = !!manifest.ports[key]?.ingress;
+              const isIngress = manifest.ports[key]?.ingress === true;
               return (
                 <div key={key} className="manifest-editor-field">
                   <code className="manifest-editor-port-label">{key}</code>
