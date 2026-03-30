@@ -5315,7 +5315,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .manifest-editor-ingress-label input[type="checkbox"] {
-  accent-color: var(--color-primary);
+  accent-color: var(--color-primary-400);
   cursor: pointer;
   width: 0.875rem;
   height: 0.875rem;
