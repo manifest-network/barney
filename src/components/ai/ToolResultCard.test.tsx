@@ -5,13 +5,10 @@ import { ToolResultCard } from './ToolResultCard';
 
 describe('ToolResultCard', () => {
   it('renders string data as-is', () => {
-    const element = createElement(ToolResultCard, {
-      toolName: 'get_balance',
-      success: true,
-      data: '{"credits": 100}',
-    });
-    expect(element).toBeDefined();
-    expect(element.props.data).toBe('{"credits": 100}');
+    const html = renderToStaticMarkup(
+      createElement(ToolResultCard, { toolName: 'get_balance', success: true, data: '{"credits": 100}' })
+    );
+    expect(html).toContain('{&quot;credits&quot;: 100}');
   });
 
   it('renders BigInt-containing data without throwing', () => {
