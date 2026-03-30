@@ -9,6 +9,7 @@ import { buildPayloadFromManifest, type SingleDeployEntry } from '../../ai/toolE
 import { sanitizeToolArgs } from '../../ai/validation';
 import type { StreamResult } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
+import { bigIntReplacer } from '../../utils/json';
 import { validateAppName } from '../../registry/appRegistry';
 import type { AIStore } from '../aiStore';
 import {
@@ -281,13 +282,13 @@ export async function processToolCallsFn(
       hasDisplayCard = true;
       const updated = get().messages.map((m) =>
         m.id === toolMessageId
-          ? { ...m, content: JSON.stringify(result.data, null, 2), card: result.displayCard, isStreaming: false }
+          ? { ...m, content: JSON.stringify(result.data, bigIntReplacer, 2), card: result.displayCard, isStreaming: false }
           : m
       );
       set({ messages: updated });
     } else {
       const resultContent = result.success
-        ? JSON.stringify(result.data, null, 2)
+        ? JSON.stringify(result.data, bigIntReplacer, 2)
         : `Error: ${result.error}`;
 
       const updated = get().messages.map((m) =>

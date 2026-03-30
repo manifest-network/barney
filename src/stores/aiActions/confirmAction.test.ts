@@ -305,6 +305,34 @@ describe('confirmAction', () => {
   });
 
   // -----------------------------------------------------------------------
+  // BigInt serialization
+  // -----------------------------------------------------------------------
+  describe('BigInt serialization', () => {
+    it('serializes BigInt values in confirmed tool result as strings', async () => {
+      const toolMsg = makeToolMessage('tool_msg_1');
+      const store = setupStore({
+        pendingConfirmation: makePendingConfirmation(),
+        messages: [toolMsg],
+      });
+
+      mockExecuteConfirmedTool.mockResolvedValueOnce({
+        success: true,
+        data: { activeLeaseCount: 3n, estimatedDurationSeconds: 86400n },
+      });
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult());
+
+      await store.getState().confirmAction();
+
+      const state = store.getState();
+      const updatedTool = state.messages.find(m => m.id === 'tool_msg_1');
+      expect(updatedTool).toBeDefined();
+      const parsed = JSON.parse(updatedTool!.content);
+      expect(parsed.data.activeLeaseCount).toBe('3');
+      expect(parsed.data.estimatedDurationSeconds).toBe('86400');
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Failure per tool type
   // -----------------------------------------------------------------------
   describe('failure per tool type', () => {
