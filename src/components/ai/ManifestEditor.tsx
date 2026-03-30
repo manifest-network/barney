@@ -111,7 +111,8 @@ export function ManifestEditor({ manifest, onChange }: ManifestEditorProps) {
     const enabling = !current.ingress;
     // At most one port may be ingress — clear others only when enabling a new one
     const updated: Record<string, PortOptions> = {};
-    for (const [k, v] of Object.entries(manifest.ports)) {
+    for (const [k, raw] of Object.entries(manifest.ports)) {
+      const v = raw ?? {};
       if (k === key) {
         updated[k] = enabling ? { ingress: true } : {};
       } else {
