@@ -116,7 +116,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   { label: 'EverClaw', manifest: SERVICE_MANIFEST('ghcr.io/everclaw/everclaw:latest', ['18789', '8083']), manifestFactory: () => {
     return {
       image: 'ghcr.io/everclaw/everclaw:latest',
-      ports: { '18789/tcp': {}, '8083/tcp': {} },
+      ports: { '18789/tcp': { ingress: true }, '8083/tcp': {} },
       env: { MORPHEUS_GATEWAY_API_KEY: '', OPENCLAW_GATEWAY_TOKEN: generatePassword(64), OPENCLAW_GATEWAY_PASSWORD: generatePassword(64), EVERCLAW_AGENT_NAME: 'Barney', EVERCLAW_USER_NAME: 'Tester', TZ: 'America/New_York' },
       command: ['/bin/sh', '-c'],
     };
