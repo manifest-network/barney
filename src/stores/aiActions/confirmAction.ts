@@ -6,7 +6,7 @@ import { streamChat } from '../../api/morpheus';
 import { executeConfirmedTool } from '../../ai/toolExecutor';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
-import { bigIntReplacer } from '../../utils/format';
+import { bigIntReplacer } from '../../utils/json';
 import type { AIStore } from '../aiStore';
 import { generateMessageId, toChatApiMessages, getAppRegistryAccess } from './utils';
 

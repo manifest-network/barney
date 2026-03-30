@@ -9,7 +9,7 @@ import { buildPayloadFromManifest, type SingleDeployEntry } from '../../ai/toolE
 import { sanitizeToolArgs } from '../../ai/validation';
 import type { StreamResult } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
-import { bigIntReplacer } from '../../utils/format';
+import { bigIntReplacer } from '../../utils/json';
 import { validateAppName } from '../../registry/appRegistry';
 import type { AIStore } from '../aiStore';
 import {

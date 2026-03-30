@@ -1,6 +1,6 @@
 import { CheckCircle, XCircle, Loader } from 'lucide-react';
 import { cn } from '../../utils/cn';
-import { bigIntReplacer } from '../../utils/format';
+import { bigIntReplacer } from '../../utils/json';
 
 interface ToolResultCardProps {
   toolName: string;
