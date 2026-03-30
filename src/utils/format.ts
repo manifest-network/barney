@@ -6,6 +6,15 @@ import { getDenomMetadata, UNIT_LABELS } from '../api/config';
 import type { Unit } from '../api/sku';
 
 // ============================================
+// JSON Serialization Helpers
+// ============================================
+
+/** JSON replacer that converts BigInt values to strings to avoid JSON.stringify errors. */
+export function bigIntReplacer(_key: string, value: unknown): unknown {
+  return typeof value === 'bigint' ? String(value) : value;
+}
+
+// ============================================
 // Amount Conversion Utilities
 // ============================================
 

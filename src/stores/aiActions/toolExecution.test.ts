@@ -437,6 +437,52 @@ describe('processToolCallsFn', () => {
     expect(errorMsgs).toHaveLength(2);
   });
 
+  it('serializes BigInt values in tool result data as strings', async () => {
+    vi.mocked(executeTool).mockResolvedValueOnce({
+      success: true,
+      data: { activeLeaseCount: 3n, nested: { total: 50n } },
+    });
+
+    const assistantMsg = makeMessage({ id: 'asst_1' });
+    state.messages = [assistantMsg];
+    const toolCall = makeToolCall();
+
+    await processToolCallsFn(get, set, [toolCall], 'asst_1', {
+      content: '',
+      thinking: '',
+      toolCalls: [toolCall],
+    });
+
+    const toolMsg = state.messages.find(m => m.role === 'tool');
+    expect(toolMsg).toBeDefined();
+    const parsed = JSON.parse(toolMsg!.content);
+    expect(parsed.activeLeaseCount).toBe('3');
+    expect(parsed.nested.total).toBe('50');
+  });
+
+  it('serializes BigInt values in displayCard result data', async () => {
+    vi.mocked(executeTool).mockResolvedValueOnce({
+      success: true,
+      data: { leaseCount: 5n },
+      displayCard: { type: 'logs', data: { app_name: 'test', logs: {}, truncated: false } },
+    });
+
+    const assistantMsg = makeMessage({ id: 'asst_1' });
+    state.messages = [assistantMsg];
+    const toolCall = makeToolCall();
+
+    await processToolCallsFn(get, set, [toolCall], 'asst_1', {
+      content: '',
+      thinking: '',
+      toolCalls: [toolCall],
+    });
+
+    const toolMsg = state.messages.find(m => m.role === 'tool');
+    expect(toolMsg).toBeDefined();
+    const parsed = JSON.parse(toolMsg!.content);
+    expect(parsed.leaseCount).toBe('5');
+  });
+
   it('uses single confirmation for mixed TX types and marks others as skipped', async () => {
     vi.mocked(executeTool)
       .mockResolvedValueOnce({

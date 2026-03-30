@@ -1,5 +1,6 @@
 import { CheckCircle, XCircle, Loader } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { bigIntReplacer } from '../../utils/format';
 
 interface ToolResultCardProps {
   toolName: string;
@@ -25,7 +26,7 @@ export function ToolResultCard({ toolName, isExecuting, success, data, error }: 
       {error && <div className="tool-result-error">{error}</div>}
       {data !== undefined && (
         <pre className="tool-result-data" tabIndex={0} aria-label="Tool result data">
-          {typeof data === 'string' ? data : JSON.stringify(data, null, 2)}
+          {typeof data === 'string' ? data : JSON.stringify(data, bigIntReplacer, 2)}
         </pre>
       )}
     </div>

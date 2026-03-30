@@ -6,6 +6,7 @@ import { streamChat } from '../../api/morpheus';
 import { executeConfirmedTool } from '../../ai/toolExecutor';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
+import { bigIntReplacer } from '../../utils/format';
 import type { AIStore } from '../aiStore';
 import { generateMessageId, toChatApiMessages, getAppRegistryAccess } from './utils';
 
@@ -75,7 +76,7 @@ export async function confirmActionFn(get: Get, set: Set, editedManifestJson?: s
       success: result.success,
       data: result.data,
       error: result.error,
-    }, null, 2);
+    }, bigIntReplacer, 2);
 
     const toolError = result.success ? undefined : result.error;
 
