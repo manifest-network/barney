@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createElement } from 'react';
+import { flushSync } from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import { ConfirmationCard } from './ConfirmationCard';
 import {
   parseEditableManifest, serializeManifest,
@@ -240,7 +242,7 @@ describe('serializeManifest', () => {
   it('includes all non-empty fields', () => {
     const manifest: ManifestFields = {
       image: 'postgres:18',
-      ports: { '5432/tcp': {} as Record<string, never> },
+      ports: { '5432/tcp': {} },
       env: { POSTGRES_PASSWORD: 'secret' },
       user: '1000:1000',
       tmpfs: ['/tmp/data'],
@@ -262,7 +264,7 @@ describe('serializeManifest', () => {
   });
 
   it('omits empty env', () => {
-    const manifest: ManifestFields = { image: 'nginx', ports: { '80/tcp': {} as Record<string, never> }, env: {} };
+    const manifest: ManifestFields = { image: 'nginx', ports: { '80/tcp': {} }, env: {} };
     const parsed = JSON.parse(serializeManifest(manifest));
     expect(parsed.env).toBeUndefined();
     expect(parsed.ports).toEqual({ '80/tcp': {} });
@@ -301,7 +303,7 @@ describe('serializeManifest', () => {
   it('round-trips through parseEditableManifest', () => {
     const original: ManifestFields = {
       image: 'postgres:18',
-      ports: { '5432/tcp': {} as Record<string, never> },
+      ports: { '5432/tcp': {} },
       env: { DB_NAME: 'mydb', POSTGRES_PASSWORD: 'secret' },
       user: '999:999',
       tmpfs: ['/tmp/data', '/var/cache'],
@@ -410,7 +412,7 @@ describe('serializeStackManifest', () => {
   it('produces valid JSON with services wrapper', () => {
     const stack: StackManifestFields = {
       web: {
-        editable: { image: 'nginx', ports: { '80/tcp': {} as Record<string, never> }, env: {} },
+        editable: { image: 'nginx', ports: { '80/tcp': {} }, env: {} },
         passthrough: {},
       },
     };
@@ -433,7 +435,7 @@ describe('serializeStackManifest', () => {
   it('preserves passthrough fields in output', () => {
     const stack: StackManifestFields = {
       web: {
-        editable: { image: 'nginx', ports: { '80/tcp': {} as Record<string, never> }, env: {} },
+        editable: { image: 'nginx', ports: { '80/tcp': {} }, env: {} },
         passthrough: { command: ['nginx'], depends_on: ['db'] },
       },
     };
@@ -447,7 +449,7 @@ describe('serializeStackManifest', () => {
       wordpress: {
         editable: {
           image: 'wordpress:latest',
-          ports: { '80/tcp': {} as Record<string, never> },
+          ports: { '80/tcp': {} },
           env: { WORDPRESS_DB_HOST: 'mysql' },
         },
         passthrough: { depends_on: ['mysql'] },
@@ -540,5 +542,37 @@ describe('ConfirmationCard with stack manifest', () => {
     expect(element).toBeDefined();
     expect(element.props.action.toolName).toBe('deploy_app');
     expect(element.props.action.args._generatedManifest).toBe(manifest);
+  });
+
+  it('displays (ingress) label on ports with ingress flag in read-only stack summary', () => {
+    // Use a non-editable tool name so the read-only parseStackManifest path renders
+    const manifest = JSON.stringify({
+      services: {
+        web: { image: 'openclaw', ports: { '18789/tcp': { ingress: true }, '8083/tcp': {} } },
+        db: { image: 'postgres:18', ports: { '5432/tcp': {} }, env: { POSTGRES_PASSWORD: 'secret' } },
+      },
+    });
+    const action = makeAction({
+      toolName: 'cosmos_tx',
+      args: { module: 'billing', subcommand: 'create-lease', _generatedManifest: manifest },
+      description: 'Execute transaction?',
+    });
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    flushSync(() => { root.render(createElement(ConfirmationCard, { action, onConfirm: vi.fn(), onCancel: vi.fn() })); });
+
+    try {
+      const text = container.textContent ?? '';
+      expect(text).toContain('18789/tcp (ingress)');
+      expect(text).toContain('8083/tcp');
+      expect(text).not.toContain('8083/tcp (ingress)');
+      expect(text).toContain('5432/tcp');
+      expect(text).not.toContain('5432/tcp (ingress)');
+    } finally {
+      flushSync(() => { root.unmount(); });
+      container.remove();
+    }
   });
 });

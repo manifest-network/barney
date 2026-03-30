@@ -23,6 +23,18 @@ import { logError } from '../utils/errors';
 import type { PayloadAttachment } from './toolExecutor/types';
 
 /**
+ * Port options within a manifest port mapping.
+ * The Go backend accepts an optional `ingress` field; fred's TS types
+ * have not yet been updated to reflect this.
+ */
+export interface PortOptions {
+  /** Marks this port as the preferred ingress port for FQDN routing.
+   *  By convention, at most one TCP port per service should set this;
+   *  the ManifestEditor enforces this constraint. */
+  ingress?: boolean;
+}
+
+/**
  * Derive an app name from a Docker image reference.
  * Strips registry prefix, tag, digest, and normalizes to valid app name chars.
  *
@@ -71,8 +83,8 @@ export function deriveAppNameFromImage(image: string): string {
  *   "53/udp"         → { "53/udp": {} }
  *   "8080/tcp,53/udp"→ { "8080/tcp": {}, "53/udp": {} }
  */
-export function normalizePorts(port: string): Record<string, Record<string, never>> {
-  const result: Record<string, Record<string, never>> = {};
+export function normalizePorts(port: string): Record<string, PortOptions> {
+  const result: Record<string, PortOptions> = {};
   const VALID_PROTOCOLS = new Set(['tcp', 'udp']);
 
   for (const raw of port.split(',')) {
@@ -176,7 +188,9 @@ function toFredOptions(opts: BuildManifestOptions): FredBuildManifestOptions {
   const env = nonEmpty(opts.env);
   return {
     image: opts.image,
-    ports: opts.port ? normalizePorts(opts.port) : {},
+    // Cast: fred TS types still declare ports as Record<string, Record<string, never>>;
+    // the Go backend already accepts { ingress?: boolean }. Remove when fred exports PortOptions.
+    ports: (opts.port ? normalizePorts(opts.port) : {}) as FredBuildManifestOptions['ports'],
     env: env ? processEnv(env) : undefined,
     tmpfs: opts.tmpfs ? splitCsv(opts.tmpfs) : undefined,
     expose: opts.expose ? splitCsv(opts.expose) : undefined,

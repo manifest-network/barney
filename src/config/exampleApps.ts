@@ -4,6 +4,7 @@
  */
 
 import { generatePassword } from '../utils/hash';
+import type { PortOptions } from '../ai/manifest';
 import { MANIFEST_NOTICE_KEY } from './constants';
 
 export interface ExampleApp {
@@ -31,7 +32,7 @@ const SERVICE_MANIFEST = (
   ports: string[],
   opts?: { env?: Record<string, string>; user?: string; tmpfs?: string[]; command?: string[]; args?: string[] },
 ) => {
-  const portMap: Record<string, Record<string, never>> = {};
+  const portMap: Record<string, PortOptions> = {};
   for (const p of ports) portMap[`${p}/tcp`] = {};
   return {
     image,

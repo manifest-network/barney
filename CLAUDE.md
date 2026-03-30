@@ -114,7 +114,7 @@ Thin wrappers around `@manifest-network/manifest-mcp-fred` manifest builders, ad
 - `buildStackManifest(opts)` — Build multi-service stack manifest with `{ services: {...} }` format, compute hash
 - `mergeManifest(newManifest, oldManifestJson)` — Merge old manifest fields into new, graceful fallback on parse error. Delegates to fred's `mergeManifest()`
 - `validateServiceName(name)` — RFC 1123 DNS label validation, returns error string or null. Wraps fred's boolean return
-- `normalizePorts(port)` — Parse port string to manifest ports record (Barney-local, no fred equivalent)
+- `normalizePorts(port)` — Parse port string to `PortOptions`-valued ports record (Barney-local, returns `PortOptions` instead of fred's `Record<string, never>`)
 - `deriveAppNameFromImage(image)` — Extract app name from Docker image ref (Barney-local, different from fred which includes tags)
 - `isStackManifest(manifest)` / `parseStackManifest(json)` / `getServiceNames(manifest)` — Stack manifest utilities (Barney-local, use `{ services: {...} }` format vs fred's flat format)
 - `ServiceConfig` — Type alias for `BuildManifestOptions`, used per-service in stacks

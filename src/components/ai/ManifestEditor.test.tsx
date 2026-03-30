@@ -1,5 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createElement } from 'react';
+import { flushSync } from 'react-dom';
+import { createRoot, type Root } from 'react-dom/client';
 import { ManifestEditor } from './ManifestEditor';
 import {
   isValidPort,
@@ -14,7 +16,7 @@ import { buildPayloadFromManifest } from '../../ai/toolExecutor/compositeTransac
 function makeManifest(overrides?: Partial<ManifestFields>): ManifestFields {
   return {
     image: 'postgres:18',
-    ports: { '5432/tcp': {} as Record<string, never> },
+    ports: { '5432/tcp': {} },
     env: { POSTGRES_PASSWORD: 'secret123' },
     user: '1000:1000',
     tmpfs: ['/tmp/data'],
@@ -50,7 +52,7 @@ describe('ManifestEditor', () => {
   it('accepts multiple ports', () => {
     const onChange = vi.fn();
     const manifest = makeManifest({
-      ports: { '5432/tcp': {} as Record<string, never>, '8080/tcp': {} as Record<string, never>, '53/udp': {} as Record<string, never> },
+      ports: { '5432/tcp': {}, '8080/tcp': {}, '53/udp': {} },
     });
     const element = createElement(ManifestEditor, { manifest, onChange });
     expect(Object.keys(element.props.manifest.ports)).toHaveLength(3);
@@ -153,6 +155,16 @@ describe('serializeManifest', () => {
     expect(parsed.env).toEqual({ KEY: 'val' });
   });
 
+  it('preserves ingress flag in port values', () => {
+    const manifest: ManifestFields = {
+      image: 'nginx:1',
+      ports: { '18789/tcp': { ingress: true }, '8083/tcp': {} },
+      env: {},
+    };
+    const parsed = JSON.parse(serializeManifest(manifest));
+    expect(parsed.ports['18789/tcp']).toEqual({ ingress: true });
+    expect(parsed.ports['8083/tcp']).toEqual({});
+  });
 });
 
 describe('parseEditableManifest', () => {
@@ -187,6 +199,28 @@ describe('parseEditableManifest', () => {
     const json = JSON.stringify({ image: 'app', [MANIFEST_NOTICE_KEY]: 42 });
     const result = parseEditableManifest(makeAction(json));
     expect(result?.notice).toBeUndefined();
+  });
+
+  it('preserves ingress flag in ports', () => {
+    const json = JSON.stringify({
+      image: 'openclaw',
+      ports: { '18789/tcp': { ingress: true }, '8083/tcp': {} },
+    });
+    const result = parseEditableManifest(makeAction(json));
+    expect(result?.ports['18789/tcp']).toEqual({ ingress: true });
+    expect(result?.ports['8083/tcp']).toEqual({});
+  });
+
+  it('round-trips ingress flag through serialize/parse', () => {
+    const json = JSON.stringify({
+      image: 'openclaw',
+      ports: { '18789/tcp': { ingress: true }, '8083/tcp': {} },
+    });
+    const parsed = parseEditableManifest(makeAction(json))!;
+    const serialized = serializeManifest(parsed);
+    const reparsed = parseEditableManifest(makeAction(serialized));
+    expect(reparsed?.ports['18789/tcp']).toEqual({ ingress: true });
+    expect(reparsed?.ports['8083/tcp']).toEqual({});
   });
 });
 
@@ -247,5 +281,78 @@ describe('buildExampleManifest', () => {
     const parsed = JSON.parse(buildExampleManifest(app));
     expect(parsed.image).toBe('custom');
     expect(parsed.env).toBeUndefined();
+  });
+});
+
+// ============================================================================
+// ManifestEditor ingress toggle (render-based tests)
+// ============================================================================
+
+describe('ManifestEditor ingress toggle', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  function renderEditor(manifest: ManifestFields, onChange: (m: ManifestFields) => void) {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    flushSync(() => { root.render(createElement(ManifestEditor, { manifest, onChange })); });
+  }
+
+  afterEach(() => {
+    flushSync(() => { root?.unmount(); });
+    container?.remove();
+  });
+
+  it('renders ingress checkbox only for TCP ports', () => {
+    const manifest = makeManifest({
+      ports: { '8080/tcp': {}, '53/udp': {} },
+    });
+    renderEditor(manifest, vi.fn());
+    const checkboxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    expect(checkboxes).toHaveLength(1);
+    expect(checkboxes[0].getAttribute('aria-label')).toBe('Ingress for 8080/tcp');
+  });
+
+  it('checking ingress sets ingress: true on that port', () => {
+    const onChange = vi.fn();
+    const manifest = makeManifest({
+      ports: { '18789/tcp': {}, '8083/tcp': {} },
+    });
+    renderEditor(manifest, onChange);
+    const checkboxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    // Click the first checkbox (18789/tcp)
+    flushSync(() => { checkboxes[0].click(); });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      ports: { '18789/tcp': { ingress: true }, '8083/tcp': {} },
+    }));
+  });
+
+  it('at most one port has ingress — enabling on one clears the other', () => {
+    const onChange = vi.fn();
+    const manifest = makeManifest({
+      ports: { '18789/tcp': { ingress: true }, '8083/tcp': {} },
+    });
+    renderEditor(manifest, onChange);
+    const checkboxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    // Click the second checkbox (8083/tcp) — should clear 18789
+    flushSync(() => { checkboxes[1].click(); });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      ports: { '18789/tcp': {}, '8083/tcp': { ingress: true } },
+    }));
+  });
+
+  it('unchecking ingress clears it without setting another', () => {
+    const onChange = vi.fn();
+    const manifest = makeManifest({
+      ports: { '18789/tcp': { ingress: true }, '8083/tcp': {} },
+    });
+    renderEditor(manifest, onChange);
+    const checkboxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    // Click the first checkbox (18789/tcp) — currently checked, should uncheck
+    flushSync(() => { checkboxes[0].click(); });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      ports: { '18789/tcp': {}, '8083/tcp': {} },
+    }));
   });
 });

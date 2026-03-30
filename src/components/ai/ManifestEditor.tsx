@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Plus, Trash2, Lock, Eye, EyeOff, Copy, CheckCheck, Info } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { isValidPort, type ManifestFields } from './manifestEditorUtils';
+import { isValidPort, type ManifestFields, type PortOptions } from './manifestEditorUtils';
 
 export type { ManifestFields };
 
@@ -95,14 +95,29 @@ export function ManifestEditor({ manifest, onChange }: ManifestEditorProps) {
     if (manifest.ports[key] !== undefined) return;
     onChange({
       ...manifest,
-      ports: { ...manifest.ports, [key]: {} as Record<string, never> },
+      ports: { ...manifest.ports, [key]: {} },
     });
     setNewPort('');
   }, [manifest, newPort, newProtocol, onChange]);
 
   const removePort = useCallback((key: string) => {
-    const rest = Object.fromEntries(Object.entries(manifest.ports).filter(([k]) => k !== key)) as Record<string, Record<string, never>>;
+    const rest = Object.fromEntries(Object.entries(manifest.ports).filter(([k]) => k !== key)) as Record<string, PortOptions>;
     onChange({ ...manifest, ports: rest });
+  }, [manifest, onChange]);
+
+  const toggleIngress = useCallback((key: string) => {
+    if (!(key in manifest.ports)) return;
+    const enabling = !manifest.ports[key]?.ingress;
+    // At most one port may be ingress — clear others only when enabling a new one
+    const updated: Record<string, PortOptions> = {};
+    for (const [k, v] of Object.entries(manifest.ports)) {
+      if (k === key) {
+        updated[k] = enabling ? { ingress: true } : {};
+      } else {
+        updated[k] = enabling && v.ingress ? {} : v;
+      }
+    }
+    onChange({ ...manifest, ports: updated });
   }, [manifest, onChange]);
 
   // --- Env vars ---
@@ -200,20 +215,35 @@ export function ManifestEditor({ manifest, onChange }: ManifestEditorProps) {
         <p className="confirmation-details-title">Ports</p>
         {portEntries.length > 0 && (
           <div className="manifest-editor-entries">
-            {portEntries.map((key) => (
-              <div key={key} className="manifest-editor-field">
-                <code className="manifest-editor-port-label">{key}</code>
-                <button
-                  type="button"
-                  onClick={() => removePort(key)}
-                  className="manifest-editor-icon-btn"
-                  aria-label={`Remove port ${key}`}
-                  title="Remove"
-                >
-                  <Trash2 className="w-3.5 h-3.5 text-muted" />
-                </button>
-              </div>
-            ))}
+            {portEntries.map((key) => {
+              const isTcp = key.endsWith('/tcp');
+              const isIngress = manifest.ports[key]?.ingress === true;
+              return (
+                <div key={key} className="manifest-editor-field">
+                  <code className="manifest-editor-port-label">{key}</code>
+                  {isTcp && (
+                    <label className="manifest-editor-ingress-label" title="Mark as ingress port for FQDN routing">
+                      <input
+                        type="checkbox"
+                        checked={isIngress}
+                        onChange={() => toggleIngress(key)}
+                        aria-label={`Ingress for ${key}`}
+                      />
+                      <span className="text-xs text-muted">ingress</span>
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removePort(key)}
+                    className="manifest-editor-icon-btn"
+                    aria-label={`Remove port ${key}`}
+                    title="Remove"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-muted" />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
         <div className="manifest-editor-add-row">
