@@ -219,7 +219,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   // --- Manifest Admin ---
   {
     label: 'Manifest Admin (mainnet)',
-    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/manifest-admin:sha-27b8b28', ['8080'], {
+    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/manifest-admin:0.1.0', ['8080'], {
       env: {
         PUBLIC_REST_URL: 'https://nodes.manifest.network/manifest/api',
         PUBLIC_RPC_URL: 'https://nodes.manifest.network/manifest/rpc',
@@ -236,7 +236,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   },
   {
     label: 'Manifest Admin (testnet)',
-    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/manifest-admin:sha-27b8b28', ['8080'], {
+    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/manifest-admin:0.1.0', ['8080'], {
       env: {
         PUBLIC_REST_URL: 'https://nodes.liftedinit.tech/manifest/testnet/api',
         PUBLIC_RPC_URL: 'https://nodes.liftedinit.tech/manifest/testnet/rpc',
