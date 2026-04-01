@@ -70,22 +70,26 @@ const PAPERCLIP_BOOTSTRAP_CMD = [
   // Check if bootstrap is needed
   'HEALTH=$(curl -sf http://localhost:3100/api/health 2>/dev/null || echo "{}");',
   'if echo "$HEALTH" | grep -q bootstrap_pending; then',
-  // Sign up admin user
+  // Sign up admin user (fail fast if sign-up fails)
   'COOKIE=/tmp/bc;',
-  'curl -sf -c "$COOKIE" -X POST http://localhost:3100/api/auth/sign-up/email',
+  'if ! curl -sf -c "$COOKIE" -X POST http://localhost:3100/api/auth/sign-up/email',
   '-H "Content-Type: application/json"',
-  '-d "{\\"name\\":\\"Admin\\",\\"email\\":\\"$PAPERCLIP_ADMIN_EMAIL\\",\\"password\\":\\"$PAPERCLIP_ADMIN_PASSWORD\\"}";',
+  '-d "{\\"name\\":\\"Admin\\",\\"email\\":\\"$PAPERCLIP_ADMIN_EMAIL\\",\\"password\\":\\"$PAPERCLIP_ADMIN_PASSWORD\\"}"; then',
+  'echo "[paperclip-bootstrap] Error: admin sign-up failed"; rm -f "$COOKIE"; fi;',
   // Bootstrap CEO role via official CLI (npx caches to /paperclip which is tmpfs-mounted)
+  'if [ -f "$COOKIE" ]; then',
   'INVITE=$(HOME=/paperclip npx --yes paperclipai auth bootstrap-ceo --data-dir /paperclip --base-url http://localhost:3100 2>&1);',
   'TOKEN=$(echo "$INVITE" | grep -o "pcp_bootstrap_[a-f0-9]*" | head -1);',
   // Accept invite if token found
   'if [ -n "$TOKEN" ]; then',
-  'curl -sf -b "$COOKIE" -X POST "http://localhost:3100/api/invites/$TOKEN/accept"',
-  '-H "Content-Type: application/json" -d "{\\"requestType\\":\\"human\\"}";',
+  'if curl -sf -b "$COOKIE" -X POST "http://localhost:3100/api/invites/$TOKEN/accept"',
+  '-H "Content-Type: application/json" -d "{\\"requestType\\":\\"human\\"}"; then',
   'echo ""; echo "=== Paperclip Ready ===";',
   'echo "Email: $PAPERCLIP_ADMIN_EMAIL"; echo "Password: $PAPERCLIP_ADMIN_PASSWORD";',
   'echo "======================="; echo "";',
-  'else echo "[paperclip-bootstrap] Warning: bootstrap failed. Output:"; echo "$INVITE"; fi; rm -f "$COOKIE"; fi;',
+  'else echo "[paperclip-bootstrap] Error: invite accept failed"; fi;',
+  'else echo "[paperclip-bootstrap] Warning: bootstrap failed. Output:"; echo "$INVITE"; fi;',
+  'rm -f "$COOKIE"; fi; fi;',
   'wait $SERVER_PID',
 ].join(' ');
 

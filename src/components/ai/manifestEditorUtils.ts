@@ -17,6 +17,16 @@ function safeRecord<T>(raw: unknown): Record<string, T> {
     : {};
 }
 
+/** Parse env vars, coercing non-string values to strings so the editor state always matches Record<string, string>. */
+function safeEnv(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const result: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    result[k] = typeof v === 'string' ? v : String(v ?? '');
+  }
+  return result;
+}
+
 export interface ManifestFields {
   image: string;
   ports: Record<string, PortOptions>;
@@ -67,9 +77,9 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
       }
     }
     return {
-      image: (parsed.image as string) || '',
+      image: typeof parsed.image === 'string' ? parsed.image : '',
       ports: safeRecord<PortOptions>(parsed.ports),
-      env: safeRecord<string>(parsed.env),
+      env: safeEnv(parsed.env),
       notice: typeof parsed[MANIFEST_NOTICE_KEY] === 'string' ? (parsed[MANIFEST_NOTICE_KEY] as string) : undefined,
       user: (parsed.user as string) || undefined,
       tmpfs: Array.isArray(parsed.tmpfs) ? (parsed.tmpfs as string[]) : undefined,
@@ -130,9 +140,9 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
       }
       result[name] = {
         editable: {
-          image: (svc.image as string) || '',
+          image: typeof svc.image === 'string' ? svc.image : '',
           ports: safeRecord<PortOptions>(svc.ports),
-          env: safeRecord<string>(svc.env),
+          env: safeEnv(svc.env),
           user: (svc.user as string) || undefined,
           tmpfs: Array.isArray(svc.tmpfs) ? (svc.tmpfs as string[]) : undefined,
         },
