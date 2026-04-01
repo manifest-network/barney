@@ -45,6 +45,49 @@ const SERVICE_MANIFEST = (
   };
 };
 
+const PAPERCLIP_IMAGE = 'ghcr.io/paperclipai/paperclip:sha-5b47965';
+
+/**
+ * Bootstrap script: seeds a config file (required by the CLI's zod schema),
+ * starts the server, waits for health, then runs the official bootstrap-ceo
+ * CLI via npx to provision the admin account. HOME=/paperclip gives npx a
+ * writable cache on the tmpfs-mounted VOLUME.
+ */
+const PAPERCLIP_BOOTSTRAP_CMD = [
+  // Seed config.json — the CLI validates via zod and requires $meta + logging + server + database
+  'mkdir -p /paperclip/instances/default &&',
+  `echo '${JSON.stringify({
+    $meta: { version: 1, updatedAt: '2026-01-01T00:00:00Z', source: 'onboard' },
+    database: { mode: 'postgres' },
+    logging: { mode: 'file', logDir: '/paperclip/logs' },
+    server: { deploymentMode: 'authenticated', exposure: 'private', host: '0.0.0.0', port: 3100 },
+  })}' > /paperclip/instances/default/config.json;`,
+  // Start server in background (runs migrations on first connect to Postgres)
+  'node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js & SERVER_PID=$!;',
+  // Wait up to 90s for healthy
+  'for i in $(seq 1 90); do curl -sf http://localhost:3100/api/health > /dev/null 2>&1 && break; sleep 1; done;',
+  // Check if bootstrap is needed
+  'HEALTH=$(curl -sf http://localhost:3100/api/health 2>/dev/null || echo "{}");',
+  'if echo "$HEALTH" | grep -q bootstrap_pending; then',
+  // Sign up admin user
+  'COOKIE=/tmp/bc;',
+  'curl -sf -c "$COOKIE" -X POST http://localhost:3100/api/auth/sign-up/email',
+  '-H "Content-Type: application/json"',
+  '-d "{\\"name\\":\\"Admin\\",\\"email\\":\\"$PAPERCLIP_ADMIN_EMAIL\\",\\"password\\":\\"$PAPERCLIP_ADMIN_PASSWORD\\"}";',
+  // Bootstrap CEO role via official CLI (npx caches to /paperclip which is tmpfs-mounted)
+  'INVITE=$(HOME=/paperclip npx --yes paperclipai auth bootstrap-ceo --data-dir /paperclip --base-url http://localhost:3100 2>&1);',
+  'TOKEN=$(echo "$INVITE" | grep -o "pcp_bootstrap_[a-f0-9]*" | head -1);',
+  // Accept invite if token found
+  'if [ -n "$TOKEN" ]; then',
+  'curl -sf -b "$COOKIE" -X POST "http://localhost:3100/api/invites/$TOKEN/accept"',
+  '-H "Content-Type: application/json" -d "{\\"requestType\\":\\"human\\"}";',
+  'echo ""; echo "=== Paperclip Ready ===";',
+  'echo "Email: $PAPERCLIP_ADMIN_EMAIL"; echo "Password: $PAPERCLIP_ADMIN_PASSWORD";',
+  'echo "======================="; echo "";',
+  'else echo "[paperclip-bootstrap] Warning: bootstrap failed. Output:"; echo "$INVITE"; fi; rm -f "$COOKIE"; fi;',
+  'wait $SERVER_PID',
+].join(' ');
+
 // const OPENCLAW_SHELL_CMD =
 //   `mkdir -p /home/node/.openclaw && echo '{"gateway":{"controlUi":{"enabled":true,"allowInsecureAuth":true}},"models":{"providers":{"ollama":{"baseUrl":"http://172.17.0.1:11434/v1","apiKey":"ollama-local","api":"openai-completions","models":[{"id":"qwen3-coder:30b","name":"Qwen3 Coder 30B","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":131072,"maxTokens":16000}]}}},"agents":{"defaults":{"model":{"primary":"ollama/qwen3-coder:30b"}}}}' > /home/node/.openclaw/openclaw.json && exec docker-entrypoint.sh node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789`;
 
@@ -122,6 +165,55 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     };
   }, size: 'large', group: 'apps', category: 'Tools' },
   // { label: 'Registry 2', manifest: SERVICE_MANIFEST('registry:2', ['5000']), size: 'micro', group: 'apps', category: 'Tools' },
+
+  // --- AI ---
+  {
+    label: 'Paperclip',
+    manifest: { services: {
+      app: { image: PAPERCLIP_IMAGE, ports: { '3100/tcp': {} }, env: {} },
+      db: { image: 'postgres:17-alpine', env: {}, user: '999:999', tmpfs: ['/var/run/postgresql'] },
+    }},
+    manifestFactory: () => {
+      const dbPass = generatePassword();
+      const authSecret = generatePassword(32);
+      const adminPass = generatePassword();
+      return { services: {
+        app: {
+          image: PAPERCLIP_IMAGE,
+          ports: { '3100/tcp': {} },
+          env: {
+            DATABASE_URL: `postgres://paperclip:${dbPass}@db:5432/paperclip`,
+            BETTER_AUTH_SECRET: authSecret,
+            PAPERCLIP_DEPLOYMENT_MODE: 'authenticated',
+            PAPERCLIP_DEPLOYMENT_EXPOSURE: 'private',
+            SERVE_UI: 'true',
+            HOST: '0.0.0.0',
+            PORT: '3100',
+            OPENAI_API_KEY: 'sk_YOUR_KEY',
+            ANTHROPIC_API_KEY: 'sk_YOUR_KEY',
+            PAPERCLIP_ADMIN_EMAIL: 'admin@paperclip.local',
+            PAPERCLIP_ADMIN_PASSWORD: adminPass,
+          },
+          user: '1000:1000',
+          command: ['/bin/sh', '-c'],
+          args: [PAPERCLIP_BOOTSTRAP_CMD],
+          tmpfs: ['/paperclip'],
+          depends_on: { db: { condition: 'service_healthy' } },
+        },
+        db: {
+          image: 'postgres:17-alpine',
+          env: { POSTGRES_USER: 'paperclip', POSTGRES_PASSWORD: dbPass, POSTGRES_DB: 'paperclip' },
+          user: '999:999',
+          tmpfs: ['/var/run/postgresql'],
+          health_check: { test: ['CMD-SHELL', 'pg_isready -U paperclip -d paperclip'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' },
+        },
+      }};
+    },
+    notice: 'Admin credentials appear in container logs after startup. Replace OPENAI_API_KEY and ANTHROPIC_API_KEY with your actual API keys.',
+    size: 'large',
+    group: 'stacks',
+    category: 'Stacks',
+  },
 
   // --- Render Demo (user-supplied credentials, not auto-generated) ---
   {

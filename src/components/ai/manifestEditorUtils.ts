@@ -25,6 +25,8 @@ export interface ManifestFields {
   notice?: string;
   user?: string;
   tmpfs?: string[];
+  /** Non-editable fields preserved from the original manifest (command, args, health_check, etc.). */
+  passthrough?: Record<string, unknown>;
 }
 
 export interface StackServiceFields {
@@ -35,6 +37,12 @@ export interface StackServiceFields {
 export type StackManifestFields = Record<string, StackServiceFields>;
 
 const EDITABLE_TOOL_NAMES = new Set(['deploy_app', 'update_app']);
+
+/** Keys that both single-service and stack editors handle (everything else is passthrough). */
+const EDITABLE_BASE_KEYS = new Set(['image', 'ports', 'env', 'user', 'tmpfs']);
+
+/** Single-service also handles the notice key (top-level only, not per-service). */
+const EDITABLE_SINGLE_KEYS = new Set([...EDITABLE_BASE_KEYS, MANIFEST_NOTICE_KEY]);
 
 /**
  * Parse an editable manifest from a pending action.
@@ -51,6 +59,12 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
     if (parsed.services && typeof parsed.services === 'object' && !Array.isArray(parsed.services)) {
       return null;
     }
+    const passthrough: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (!EDITABLE_SINGLE_KEYS.has(k)) {
+        passthrough[k] = v;
+      }
+    }
     return {
       image: (parsed.image as string) || '',
       ports: safePorts(parsed.ports),
@@ -58,6 +72,7 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
       notice: typeof parsed[MANIFEST_NOTICE_KEY] === 'string' ? (parsed[MANIFEST_NOTICE_KEY] as string) : undefined,
       user: (parsed.user as string) || undefined,
       tmpfs: Array.isArray(parsed.tmpfs) ? (parsed.tmpfs as string[]) : undefined,
+      passthrough: Object.keys(passthrough).length > 0 ? passthrough : undefined,
     };
   } catch (err) {
     logError('parseEditableManifest', err);
@@ -67,9 +82,12 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
 
 /**
  * Serialize ManifestFields back to a JSON string, omitting empty optional sections.
+ * Passthrough fields (command, args, health_check, etc.) are merged first so
+ * editable fields always take precedence.
  */
 export function serializeManifest(manifest: ManifestFields): string {
-  const obj: Record<string, unknown> = { image: manifest.image };
+  const obj: Record<string, unknown> = { ...(manifest.passthrough || {}) };
+  obj.image = manifest.image;
   if (Object.keys(manifest.ports).length > 0) obj.ports = manifest.ports;
   if (Object.keys(manifest.env).length > 0) obj.env = manifest.env;
   if (manifest.user) obj.user = manifest.user;
@@ -84,8 +102,6 @@ export function isValidPort(value: string): boolean {
   const n = parseInt(value, 10);
   return !isNaN(n) && n >= 1 && n <= 65535 && String(n) === value;
 }
-
-const EDITABLE_SERVICE_KEYS = new Set(['image', 'ports', 'env', 'user', 'tmpfs']);
 
 /**
  * Parse a stack manifest from a pending action into per-service editable + passthrough fields.
@@ -107,7 +123,7 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
       if (!svc || typeof svc !== 'object') continue;
       const passthrough: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(svc)) {
-        if (!EDITABLE_SERVICE_KEYS.has(k)) {
+        if (!EDITABLE_BASE_KEYS.has(k)) {
           passthrough[k] = v;
         }
       }

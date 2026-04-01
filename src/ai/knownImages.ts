@@ -74,6 +74,7 @@ export const KNOWN_IMAGES: readonly KnownImageConfig[] = [
   { image: 'prometheus', port: '9090', aliases: ['prom/prometheus'] },
 
   // --- AI Tools ---
+  { image: 'ghcr.io/paperclipai/paperclip', port: '3100', env: { BETTER_AUTH_SECRET: '', PAPERCLIP_DEPLOYMENT_MODE: 'authenticated', PAPERCLIP_DEPLOYMENT_EXPOSURE: 'private' }, user: '1000:1000', command: ['/bin/sh', '-c'], args: ['exec node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js'], aliases: ['paperclip'] },
   { image: 'openclaw', port: '18789', env: { OPENCLAW_GATEWAY_TOKEN: '', OLLAMA_HOST: '172.17.0.1' }, command: ['/bin/sh', '-c'], args: ['mkdir -p /home/node/.openclaw && echo \'{"gateway":{"controlUi":{"enabled":true,"allowInsecureAuth":true}},"models":{"providers":{"ollama":{"baseUrl":"http://172.17.0.1:11434/v1","apiKey":"ollama-local","api":"openai-completions","models":[{"id":"qwen3-coder:30b","name":"Qwen3 Coder 30B","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":131072,"maxTokens":16000}]}}},"agents":{"defaults":{"model":{"primary":"ollama/qwen3-coder:30b"}}}}\' > /home/node/.openclaw/openclaw.json && exec docker-entrypoint.sh node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789'], aliases: ['ghcr.io/openclaw/openclaw'] },
 
   // --- Admin Tools ---

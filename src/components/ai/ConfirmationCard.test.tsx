@@ -225,16 +225,39 @@ describe('parseEditableManifest', () => {
     });
   });
 
-  it('ignores extra unknown fields', () => {
+  it('preserves non-editable fields in passthrough', () => {
     const result = parseEditableManifest(makeAction({
       toolName: 'deploy_app',
       args: {
-        _generatedManifest: JSON.stringify({ image: 'nginx', unknownField: 'value' }),
+        _generatedManifest: JSON.stringify({
+          image: 'ghcr.io/paperclipai/paperclip:sha-5b47965',
+          ports: { '3100/tcp': {} },
+          env: { BETTER_AUTH_SECRET: 'secret' },
+          user: '1000:1000',
+          command: ['/bin/sh', '-c'],
+          args: ['exec node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js'],
+          health_check: { test: ['CMD-SHELL', 'curl -f http://localhost:3100/'], interval: '10s' },
+        }),
       },
     }));
     expect(result).not.toBeNull();
-    expect(result!.image).toBe('nginx');
-    expect((result as unknown as Record<string, unknown>)['unknownField']).toBeUndefined();
+    expect(result!.image).toBe('ghcr.io/paperclipai/paperclip:sha-5b47965');
+    expect(result!.passthrough).toEqual({
+      command: ['/bin/sh', '-c'],
+      args: ['exec node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js'],
+      health_check: { test: ['CMD-SHELL', 'curl -f http://localhost:3100/'], interval: '10s' },
+    });
+  });
+
+  it('sets passthrough to undefined when no non-editable fields exist', () => {
+    const result = parseEditableManifest(makeAction({
+      toolName: 'deploy_app',
+      args: {
+        _generatedManifest: JSON.stringify({ image: 'nginx', ports: { '80/tcp': {} } }),
+      },
+    }));
+    expect(result).not.toBeNull();
+    expect(result!.passthrough).toBeUndefined();
   });
 });
 
@@ -300,6 +323,36 @@ describe('serializeManifest', () => {
     expect(parsed).toEqual({ image: 'alpine' });
   });
 
+  it('includes passthrough fields in output', () => {
+    const manifest: ManifestFields = {
+      image: 'ghcr.io/paperclipai/paperclip:sha-5b47965',
+      ports: { '3100/tcp': {} },
+      env: { BETTER_AUTH_SECRET: 'secret' },
+      user: '1000:1000',
+      passthrough: {
+        command: ['/bin/sh', '-c'],
+        args: ['exec node server/dist/index.js'],
+      },
+    };
+    const parsed = JSON.parse(serializeManifest(manifest));
+    expect(parsed.command).toEqual(['/bin/sh', '-c']);
+    expect(parsed.args).toEqual(['exec node server/dist/index.js']);
+    expect(parsed.image).toBe('ghcr.io/paperclipai/paperclip:sha-5b47965');
+    expect(parsed.passthrough).toBeUndefined();
+  });
+
+  it('editable fields take precedence over passthrough', () => {
+    const manifest: ManifestFields = {
+      image: 'nginx:latest',
+      ports: { '80/tcp': {} },
+      env: { KEY: 'new' },
+      passthrough: { env: { KEY: 'old' }, ports: { '9090/tcp': {} } },
+    };
+    const parsed = JSON.parse(serializeManifest(manifest));
+    expect(parsed.env).toEqual({ KEY: 'new' });
+    expect(parsed.ports).toEqual({ '80/tcp': {} });
+  });
+
   it('round-trips through parseEditableManifest', () => {
     const original: ManifestFields = {
       image: 'postgres:18',
@@ -315,6 +368,27 @@ describe('serializeManifest', () => {
     });
     const roundTripped = parseEditableManifest(action);
     expect(roundTripped).toEqual(original);
+  });
+
+  it('round-trips passthrough fields through parse and serialize', () => {
+    const manifestJson = JSON.stringify({
+      image: 'ghcr.io/paperclipai/paperclip:sha-5b47965',
+      ports: { '3100/tcp': {} },
+      env: { BETTER_AUTH_SECRET: 'secret' },
+      user: '1000:1000',
+      command: ['/bin/sh', '-c'],
+      args: ['exec node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js'],
+    });
+    const parsed = parseEditableManifest(makeAction({
+      toolName: 'deploy_app',
+      args: { _generatedManifest: manifestJson },
+    }));
+    expect(parsed).not.toBeNull();
+    const serialized = JSON.parse(serializeManifest(parsed!));
+    expect(serialized.command).toEqual(['/bin/sh', '-c']);
+    expect(serialized.args).toEqual(['exec node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js']);
+    expect(serialized.image).toBe('ghcr.io/paperclipai/paperclip:sha-5b47965');
+    expect(serialized.user).toBe('1000:1000');
   });
 });
 
