@@ -19,9 +19,9 @@ function safeRecord<T>(raw: unknown): Record<string, T> {
 
 /** Parse env vars, coercing non-string values to strings so the editor state always matches Record<string, string>. */
 function safeEnv(raw: unknown): Record<string, string> {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const record = safeRecord<unknown>(raw);
   const result: Record<string, string> = {};
-  for (const [k, v] of Object.entries(raw)) {
+  for (const [k, v] of Object.entries(record)) {
     result[k] = typeof v === 'string' ? v : String(v ?? '');
   }
   return result;
@@ -48,11 +48,42 @@ export type StackManifestFields = Record<string, StackServiceFields>;
 
 const EDITABLE_TOOL_NAMES = new Set(['deploy_app', 'update_app']);
 
-/** Keys that both single-service and stack editors handle (everything else is passthrough). */
-const EDITABLE_BASE_KEYS = new Set(['image', 'ports', 'env', 'user', 'tmpfs']);
+/** Keys that the editor handles (everything else is passthrough). */
+const EDITABLE_KEYS = new Set(['image', 'ports', 'env', 'user', 'tmpfs']);
 
-/** Single-service also handles the notice key (top-level only, not per-service). */
-const EDITABLE_SINGLE_KEYS = new Set([...EDITABLE_BASE_KEYS, MANIFEST_NOTICE_KEY]);
+/** Additional keys excluded from passthrough for single-service manifests. */
+const NOTICE_KEYS = new Set([MANIFEST_NOTICE_KEY]);
+
+/** Extract editable ManifestFields from a raw parsed object. */
+function extractEditableFields(raw: Record<string, unknown>): Omit<ManifestFields, 'notice' | 'passthrough'> {
+  return {
+    image: typeof raw.image === 'string' ? raw.image : '',
+    ports: safeRecord<PortOptions>(raw.ports),
+    env: safeEnv(raw.env),
+    user: typeof raw.user === 'string' ? raw.user : undefined,
+    tmpfs: Array.isArray(raw.tmpfs) ? raw.tmpfs.filter((v): v is string => typeof v === 'string') : undefined,
+  };
+}
+
+/** Collect non-editable keys from a raw object into a passthrough record. */
+function extractPassthrough(raw: Record<string, unknown>, extraKeys?: Set<string>): Record<string, unknown> {
+  const passthrough: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (!EDITABLE_KEYS.has(k) && !extraKeys?.has(k)) {
+      passthrough[k] = v;
+    }
+  }
+  return passthrough;
+}
+
+/** Write editable fields onto a target object, omitting empty optional sections. */
+function writeEditableFields(target: Record<string, unknown>, fields: ManifestFields): void {
+  target.image = fields.image;
+  if (Object.keys(fields.ports).length > 0) target.ports = fields.ports;
+  if (Object.keys(fields.env).length > 0) target.env = fields.env;
+  if (fields.user) target.user = fields.user;
+  if (fields.tmpfs && fields.tmpfs.length > 0) target.tmpfs = fields.tmpfs;
+}
 
 /**
  * Parse an editable manifest from a pending action.
@@ -70,19 +101,10 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
     if (parsed.services && typeof parsed.services === 'object' && !Array.isArray(parsed.services)) {
       return null;
     }
-    const passthrough: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(parsed)) {
-      if (!EDITABLE_SINGLE_KEYS.has(k)) {
-        passthrough[k] = v;
-      }
-    }
+    const passthrough = extractPassthrough(parsed, NOTICE_KEYS);
     return {
-      image: typeof parsed.image === 'string' ? parsed.image : '',
-      ports: safeRecord<PortOptions>(parsed.ports),
-      env: safeEnv(parsed.env),
-      notice: typeof parsed[MANIFEST_NOTICE_KEY] === 'string' ? (parsed[MANIFEST_NOTICE_KEY] as string) : undefined,
-      user: typeof parsed.user === 'string' ? parsed.user : undefined,
-      tmpfs: Array.isArray(parsed.tmpfs) ? (parsed.tmpfs as unknown[]).filter((v): v is string => typeof v === 'string') : undefined,
+      ...extractEditableFields(parsed),
+      notice: typeof parsed[MANIFEST_NOTICE_KEY] === 'string' ? parsed[MANIFEST_NOTICE_KEY] : undefined,
       passthrough: Object.keys(passthrough).length > 0 ? passthrough : undefined,
     };
   } catch (err) {
@@ -97,12 +119,8 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
  * editable fields always take precedence.
  */
 export function serializeManifest(manifest: ManifestFields): string {
-  const obj: Record<string, unknown> = { ...(manifest.passthrough || {}) };
-  obj.image = manifest.image;
-  if (Object.keys(manifest.ports).length > 0) obj.ports = manifest.ports;
-  if (Object.keys(manifest.env).length > 0) obj.env = manifest.env;
-  if (manifest.user) obj.user = manifest.user;
-  if (manifest.tmpfs && manifest.tmpfs.length > 0) obj.tmpfs = manifest.tmpfs;
+  const obj: Record<string, unknown> = { ...(manifest.passthrough ?? {}) };
+  writeEditableFields(obj, manifest);
   return JSON.stringify(obj, null, 2);
 }
 
@@ -132,21 +150,9 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
     const result: StackManifestFields = {};
     for (const [name, svc] of Object.entries(services)) {
       if (!svc || typeof svc !== 'object') continue;
-      const passthrough: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(svc)) {
-        if (!EDITABLE_BASE_KEYS.has(k)) {
-          passthrough[k] = v;
-        }
-      }
       result[name] = {
-        editable: {
-          image: typeof svc.image === 'string' ? svc.image : '',
-          ports: safeRecord<PortOptions>(svc.ports),
-          env: safeEnv(svc.env),
-          user: typeof svc.user === 'string' ? svc.user : undefined,
-          tmpfs: Array.isArray(svc.tmpfs) ? (svc.tmpfs as unknown[]).filter((v): v is string => typeof v === 'string') : undefined,
-        },
-        passthrough,
+        editable: extractEditableFields(svc),
+        passthrough: extractPassthrough(svc),
       };
     }
     return Object.keys(result).length > 0 ? result : null;
@@ -162,13 +168,8 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
 export function serializeStackManifest(stack: StackManifestFields): string {
   const services: Record<string, Record<string, unknown>> = {};
   for (const [name, { editable, passthrough }] of Object.entries(stack)) {
-    // Spread passthrough first so editable fields always take precedence
     const svc: Record<string, unknown> = { ...passthrough };
-    svc.image = editable.image;
-    if (Object.keys(editable.ports).length > 0) svc.ports = editable.ports;
-    if (Object.keys(editable.env).length > 0) svc.env = editable.env;
-    if (editable.user) svc.user = editable.user;
-    if (editable.tmpfs && editable.tmpfs.length > 0) svc.tmpfs = editable.tmpfs;
+    writeEditableFields(svc, editable);
     services[name] = svc;
   }
   return JSON.stringify({ services }, null, 2);
