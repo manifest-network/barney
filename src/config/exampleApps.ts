@@ -66,7 +66,7 @@ const PAPERCLIP_BOOTSTRAP_CMD = [
   'node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js & SERVER_PID=$!;',
   // Wait up to 90s for healthy
   'HEALTH_OK=0; for i in $(seq 1 90); do if curl -sf http://localhost:3100/api/health > /dev/null 2>&1; then HEALTH_OK=1; break; fi; sleep 1; done;',
-  'if [ "$HEALTH_OK" -ne 1 ]; then echo "[paperclip-bootstrap] Error: health check failed after 90s"; wait $SERVER_PID; exit 1; fi;',
+  'if [ "$HEALTH_OK" -ne 1 ]; then echo "[paperclip-bootstrap] Error: health check failed after 90s"; kill "$SERVER_PID" >/dev/null 2>&1 || true; wait "$SERVER_PID" 2>/dev/null || true; exit 1; fi;',
   // Check if bootstrap is needed
   'HEALTH=$(curl -sf http://localhost:3100/api/health 2>/dev/null || echo "{}");',
   'if echo "$HEALTH" | grep -q bootstrap_pending; then',

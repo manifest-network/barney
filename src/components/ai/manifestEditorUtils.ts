@@ -10,10 +10,10 @@ import { MANIFEST_NOTICE_KEY } from '../../config/constants';
 
 export type { PortOptions };
 
-/** Safely cast a parsed value to a ports record, defaulting to {} for non-objects. */
-function safePorts(raw: unknown): Record<string, PortOptions> {
+/** Safely cast a parsed value to a record, defaulting to {} for non-objects. */
+function safeRecord<T>(raw: unknown): Record<string, T> {
   return (raw && typeof raw === 'object' && !Array.isArray(raw))
-    ? raw as Record<string, PortOptions>
+    ? raw as Record<string, T>
     : {};
 }
 
@@ -68,8 +68,8 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
     }
     return {
       image: (parsed.image as string) || '',
-      ports: safePorts(parsed.ports),
-      env: (parsed.env as Record<string, string>) || {},
+      ports: safeRecord<PortOptions>(parsed.ports),
+      env: safeRecord<string>(parsed.env),
       notice: typeof parsed[MANIFEST_NOTICE_KEY] === 'string' ? (parsed[MANIFEST_NOTICE_KEY] as string) : undefined,
       user: (parsed.user as string) || undefined,
       tmpfs: Array.isArray(parsed.tmpfs) ? (parsed.tmpfs as string[]) : undefined,
@@ -131,8 +131,8 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
       result[name] = {
         editable: {
           image: (svc.image as string) || '',
-          ports: safePorts(svc.ports),
-          env: (svc.env as Record<string, string>) || {},
+          ports: safeRecord<PortOptions>(svc.ports),
+          env: safeRecord<string>(svc.env),
           user: (svc.user as string) || undefined,
           tmpfs: Array.isArray(svc.tmpfs) ? (svc.tmpfs as string[]) : undefined,
         },
