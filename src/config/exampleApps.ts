@@ -51,7 +51,7 @@ const PAPERCLIP_IMAGE = 'ghcr.io/paperclipai/paperclip:sha-5b47965';
  * Bootstrap script: seeds a config file (required by the CLI's zod schema),
  * starts the server, waits for health, then runs the official bootstrap-ceo
  * CLI via npx to provision the admin account. HOME=/paperclip gives npx a
- * writable cache on the tmpfs-mounted VOLUME.
+ * writable cache on the tmpfs mount at /paperclip (not persisted across restarts).
  */
 const PAPERCLIP_BOOTSTRAP_CMD = [
   // Seed config.json — the CLI validates via zod and requires $meta + logging + server + database
@@ -65,7 +65,8 @@ const PAPERCLIP_BOOTSTRAP_CMD = [
   // Start server in background (runs migrations on first connect to Postgres)
   'node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js & SERVER_PID=$!;',
   // Wait up to 90s for healthy
-  'for i in $(seq 1 90); do curl -sf http://localhost:3100/api/health > /dev/null 2>&1 && break; sleep 1; done;',
+  'HEALTH_OK=0; for i in $(seq 1 90); do if curl -sf http://localhost:3100/api/health > /dev/null 2>&1; then HEALTH_OK=1; break; fi; sleep 1; done;',
+  'if [ "$HEALTH_OK" -ne 1 ]; then echo "[paperclip-bootstrap] Error: health check failed after 90s"; wait $SERVER_PID; exit 1; fi;',
   // Check if bootstrap is needed
   'HEALTH=$(curl -sf http://localhost:3100/api/health 2>/dev/null || echo "{}");',
   'if echo "$HEALTH" | grep -q bootstrap_pending; then',

@@ -54,7 +54,8 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
   if (typeof json !== 'string') return null;
 
   try {
-    const parsed = JSON.parse(json) as Record<string, unknown>;
+    const parsed = JSON.parse(json);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
     // Stack manifests are handled separately via parseEditableStackManifest
     if (parsed.services && typeof parsed.services === 'object' && !Array.isArray(parsed.services)) {
       return null;
