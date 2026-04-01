@@ -81,8 +81,8 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
       ports: safeRecord<PortOptions>(parsed.ports),
       env: safeEnv(parsed.env),
       notice: typeof parsed[MANIFEST_NOTICE_KEY] === 'string' ? (parsed[MANIFEST_NOTICE_KEY] as string) : undefined,
-      user: (parsed.user as string) || undefined,
-      tmpfs: Array.isArray(parsed.tmpfs) ? (parsed.tmpfs as string[]) : undefined,
+      user: typeof parsed.user === 'string' ? parsed.user : undefined,
+      tmpfs: Array.isArray(parsed.tmpfs) ? (parsed.tmpfs as unknown[]).filter((v): v is string => typeof v === 'string') : undefined,
       passthrough: Object.keys(passthrough).length > 0 ? passthrough : undefined,
     };
   } catch (err) {
@@ -143,8 +143,8 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
           image: typeof svc.image === 'string' ? svc.image : '',
           ports: safeRecord<PortOptions>(svc.ports),
           env: safeEnv(svc.env),
-          user: (svc.user as string) || undefined,
-          tmpfs: Array.isArray(svc.tmpfs) ? (svc.tmpfs as string[]) : undefined,
+          user: typeof svc.user === 'string' ? svc.user : undefined,
+          tmpfs: Array.isArray(svc.tmpfs) ? (svc.tmpfs as unknown[]).filter((v): v is string => typeof v === 'string') : undefined,
         },
         passthrough,
       };

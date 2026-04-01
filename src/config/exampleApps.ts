@@ -61,7 +61,7 @@ const PAPERCLIP_BOOTSTRAP_CMD = [
     database: { mode: 'postgres' },
     logging: { mode: 'file', logDir: '/paperclip/logs' },
     server: { deploymentMode: 'authenticated', exposure: 'private', host: '0.0.0.0', port: 3100 },
-  })}' > /paperclip/instances/default/config.json;`,
+  })}' > /paperclip/instances/default/config.json &&`,
   // Start server in background (runs migrations on first connect to Postgres)
   'node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js & SERVER_PID=$!;',
   // Wait up to 90s for healthy
@@ -70,12 +70,12 @@ const PAPERCLIP_BOOTSTRAP_CMD = [
   // Check if bootstrap is needed
   'HEALTH=$(curl -sf http://localhost:3100/api/health 2>/dev/null || echo "{}");',
   'if echo "$HEALTH" | grep -q bootstrap_pending; then',
-  // Sign up admin user (fail fast if sign-up fails)
+  // Attempt admin sign-up; on failure, skip automated bootstrap (server stays running for manual setup)
   'COOKIE=/tmp/bc;',
   'if ! curl -sf -c "$COOKIE" -X POST http://localhost:3100/api/auth/sign-up/email',
   '-H "Content-Type: application/json"',
   '-d "{\\"name\\":\\"Admin\\",\\"email\\":\\"$PAPERCLIP_ADMIN_EMAIL\\",\\"password\\":\\"$PAPERCLIP_ADMIN_PASSWORD\\"}"; then',
-  'echo "[paperclip-bootstrap] Error: admin sign-up failed"; rm -f "$COOKIE"; fi;',
+  'echo "[paperclip-bootstrap] Warning: admin sign-up failed; skipping automated bootstrap"; rm -f "$COOKIE"; fi;',
   // Bootstrap CEO role via official CLI (npx caches to /paperclip which is tmpfs-mounted)
   'if [ -f "$COOKIE" ]; then',
   'INVITE=$(HOME=/paperclip npx --yes paperclipai auth bootstrap-ceo --data-dir /paperclip --base-url http://localhost:3100 2>&1);',
