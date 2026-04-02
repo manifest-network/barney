@@ -91,7 +91,7 @@ export function useVisibilityPolling(
     }
 
     async function tick(): Promise<void> {
-      if (!isMounted || inFlight) return;
+      if (!isMounted || inFlight || document.hidden) return;
       inFlight = true;
       const { shouldBackoff, context } = getOpts();
       try {

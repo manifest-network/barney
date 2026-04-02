@@ -4,6 +4,8 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { useVisibilityPolling } from './useVisibilityPolling';
 
+vi.mock('../utils/errors', () => ({ logError: vi.fn() }));
+
 // Track mounted hooks for automatic cleanup in afterEach
 let currentCleanup: (() => void) | null = null;
 
