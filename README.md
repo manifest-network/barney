@@ -90,7 +90,7 @@ Built-in flags `import.meta.env.DEV` / `import.meta.env.PROD` remain build-time 
 ```bash
 npm run dev            # Start development server (Rsbuild)
 npm run build          # Type check + production build
-npm run build-release  # Stamp git hash into version + build (used by Docker/CI)
+npm run build-release  # Stamp version + build (Docker/CI)
 npm run lint           # ESLint
 npm test               # Run all tests (Vitest)
 npm run test:watch     # Tests in watch mode
@@ -177,10 +177,10 @@ Coverage reports are generated in the `coverage/` directory. Tests use happy-dom
 
 ```bash
 npm run build          # local development
-npm run build-release  # Docker/CI — appends git commit hash to version
+npm run build-release  # Docker/CI — uses RELEASE_VERSION or appends git commit hash
 ```
 
-Production builds are output to `dist/`. The `build-release` script runs `scripts/update-version.cjs` to stamp the short git commit hash into `package.json` version (e.g. `0.0.0-a1b2c3d`) before building, so the deployed UI displays the exact commit.
+Production builds are output to `dist/`. The `build-release` script runs `scripts/update-version.cjs` to stamp the version into `package.json` before building. When `RELEASE_VERSION` is set (e.g. by CI from a git tag), it uses that value directly (e.g. `1.2.3`). Otherwise it appends the short git commit hash (e.g. `0.0.0-a1b2c3d`).
 
 ## License
 

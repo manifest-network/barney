@@ -1,12 +1,13 @@
 # Stage 1 — Build
 FROM node:22-alpine3.21 AS build
 ARG GIT_COMMIT=""
+ARG RELEASE_VERSION=""
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY patches/ patches/
 RUN npm ci --legacy-peer-deps
 COPY . .
-RUN GIT_COMMIT=${GIT_COMMIT} npm run build-release
+RUN RELEASE_VERSION=${RELEASE_VERSION} GIT_COMMIT=${GIT_COMMIT} npm run build-release
 
 # Stage 2 — Runtime
 FROM nginx:1.27-alpine AS runtime
