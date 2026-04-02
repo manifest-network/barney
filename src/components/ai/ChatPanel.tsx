@@ -1,18 +1,25 @@
-import { useState, useRef, useEffect, useCallback, type FormEvent } from 'react';
+import { useState, useRef, useEffect, useCallback, lazy, Suspense, type FormEvent } from 'react';
 import { Send, Settings, X, Sparkles, WifiOff, Paperclip, HelpCircle, Square } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
 import { useAutoScroll } from '../../hooks/useAutoScroll';
 import { useInputHistory } from '../../hooks/useInputHistory';
 import { MessageBubble } from './MessageBubble';
-import { ConfirmationCard } from './ConfirmationCard';
-import { ProgressCard } from './ProgressCard';
-import { AISettings } from './AISettings';
 import { MAX_INPUT_LENGTH } from '../../ai/validation';
 import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { EXAMPLE_APPS, buildExampleManifest, type ExampleApp } from '../../config/exampleApps';
 import { HELP_TEXT } from '../../ai/helpText';
+
+const ConfirmationCard = lazy(() =>
+  import('./ConfirmationCard').then(m => ({ default: m.ConfirmationCard }))
+);
+const ProgressCard = lazy(() =>
+  import('./ProgressCard').then(m => ({ default: m.ProgressCard }))
+);
+const AISettings = lazy(() =>
+  import('./AISettings').then(m => ({ default: m.AISettings }))
+);
 
 const EXAMPLE_GAMES = EXAMPLE_APPS.filter((app) => app.group === 'games');
 const EXAMPLE_STACKS = EXAMPLE_APPS.filter((app) => app.group === 'stacks');
@@ -351,7 +358,11 @@ export function ChatPanel() {
       </div>
 
       {/* Settings Panel */}
-      {showSettings && <AISettings onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <Suspense fallback={null}>
+          <AISettings onClose={() => setShowSettings(false)} />
+        </Suspense>
+      )}
 
       {/* Messages Area */}
       <div className="chat-messages-scroll-wrapper" ref={scrollWrapperRef}>
@@ -453,16 +464,20 @@ export function ChatPanel() {
             )}
             {/* Pending Confirmation */}
             {pendingConfirmation && (
-              <ConfirmationCard
-                action={pendingConfirmation.action}
-                onConfirm={confirmAction}
-                onCancel={cancelAction}
-                isExecuting={isStreaming}
-              />
+              <Suspense fallback={null}>
+                <ConfirmationCard
+                  action={pendingConfirmation.action}
+                  onConfirm={confirmAction}
+                  onCancel={cancelAction}
+                  isExecuting={isStreaming}
+                />
+              </Suspense>
             )}
             {/* Deploy Progress */}
             {deployProgress && !pendingConfirmation && (
-              <ProgressCard progress={deployProgress} />
+              <Suspense fallback={null}>
+                <ProgressCard progress={deployProgress} />
+              </Suspense>
             )}
           </>
         )}
