@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run dev          # Start development server (Rsbuild)
 npm run build        # Type check + production build
-npm run build-release # Stamp git hash into version + build (Docker/CI)
+npm run build-release # Stamp version + build (Docker/CI)
 npm run lint         # ESLint
 npm test             # Run all tests (Vitest)
 npm run test:watch   # Tests in watch mode
