@@ -122,7 +122,8 @@ export function useVisibilityPolling(
           timeoutId = null;
         }
       } else {
-        // Resume — reset backoff and fire immediately
+        // Resume — reset backoff and fire immediately (if not already in-flight).
+        // When in-flight, the running tick will schedule the next one on completion.
         consecutiveFailures = 0;
         if (!inFlight) {
           tick();

@@ -257,7 +257,7 @@ describe('useVisibilityPolling', () => {
 
   it('does not schedule while tab is hidden (finally guard)', async () => {
     // Simulate: callback starts, tab hides mid-flight, callback completes
-    let resolveCallback: () => void;
+    let resolveCallback: () => void = () => {};
     const cb = vi.fn().mockImplementation(
       () => new Promise<boolean>((resolve) => {
         resolveCallback = () => resolve(true);
@@ -274,7 +274,7 @@ describe('useVisibilityPolling', () => {
     fireVisibilityChange();
 
     // Resolve the callback — finally block should NOT schedule (doc is hidden)
-    resolveCallback!();
+    resolveCallback();
     await vi.advanceTimersByTimeAsync(0);
 
     // Advance time — no new calls should happen
@@ -289,7 +289,7 @@ describe('useVisibilityPolling', () => {
   });
 
   it('prevents overlapping calls with in-flight guard', async () => {
-    let resolveCallback: () => void;
+    let resolveCallback: () => void = () => {};
     const cb = vi.fn().mockImplementation(
       () => new Promise<boolean>((resolve) => {
         resolveCallback = () => resolve(true);
@@ -311,7 +311,7 @@ describe('useVisibilityPolling', () => {
     expect(cb).toHaveBeenCalledTimes(1);
 
     // Resolve the in-flight callback
-    resolveCallback!();
+    resolveCallback();
     await vi.advanceTimersByTimeAsync(0);
 
     // Now it should schedule the next tick
