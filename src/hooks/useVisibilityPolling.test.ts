@@ -4,12 +4,18 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { useVisibilityPolling } from './useVisibilityPolling';
 
+// Track mounted hooks for automatic cleanup in afterEach
+let currentCleanup: (() => void) | null = null;
+
 // Helper: render a component that calls the hook, return cleanup
 function renderHook(
   callback: () => Promise<boolean | void>,
   intervalMs: number,
   options?: Parameters<typeof useVisibilityPolling>[2],
 ): { unmount: () => void } {
+  // Unmount any previous hook from this test
+  currentCleanup?.();
+
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -23,12 +29,14 @@ function renderHook(
     root.render(createElement(TestComponent));
   });
 
-  return {
-    unmount() {
-      flushSync(() => { root.unmount(); });
-      container.remove();
-    },
+  const unmount = () => {
+    flushSync(() => { root.unmount(); });
+    container.remove();
+    if (currentCleanup === unmount) currentCleanup = null;
   };
+
+  currentCleanup = unmount;
+  return { unmount };
 }
 
 function setDocumentHidden(hidden: boolean) {
@@ -50,6 +58,7 @@ describe('useVisibilityPolling', () => {
   });
 
   afterEach(() => {
+    currentCleanup?.();
     vi.useRealTimers();
     setDocumentHidden(false);
   });

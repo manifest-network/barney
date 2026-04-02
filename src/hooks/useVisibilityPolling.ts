@@ -59,18 +59,24 @@ export function useVisibilityPolling(
   useEffect(() => {
     if (!enabled) return;
 
-    const opts = optionsRef.current;
-    const shouldBackoff = opts?.backoff ?? false;
-    const maxMultiplier = opts?.maxBackoffMultiplier ?? 8;
-    const immediate = opts?.immediate ?? true;
-    const context = opts?.context ?? 'useVisibilityPolling';
-
     let isMounted = true;
     let consecutiveFailures = 0;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let inFlight = false;
 
+    // Read options from ref on each use so callers can change them freely
+    // without restarting the timer (e.g., toggling backoff at runtime).
+    function getOpts() {
+      const opts = optionsRef.current;
+      return {
+        shouldBackoff: opts?.backoff ?? false,
+        maxMultiplier: opts?.maxBackoffMultiplier ?? 8,
+        context: opts?.context ?? 'useVisibilityPolling',
+      };
+    }
+
     function getDelay(): number {
+      const { shouldBackoff, maxMultiplier } = getOpts();
       if (!shouldBackoff || consecutiveFailures === 0) return intervalMs;
       const multiplier = Math.min(
         Math.pow(2, consecutiveFailures),
@@ -87,6 +93,7 @@ export function useVisibilityPolling(
     async function tick(): Promise<void> {
       if (!isMounted || inFlight) return;
       inFlight = true;
+      const { shouldBackoff, context } = getOpts();
       try {
         const result = await callbackRef.current();
         if (result === false && shouldBackoff) {
@@ -125,11 +132,14 @@ export function useVisibilityPolling(
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Initial fire
-    if (immediate) {
-      tick();
-    } else {
-      scheduleNext();
+    // Initial fire — only start polling if the tab is currently visible
+    if (!document.hidden) {
+      const immediate = optionsRef.current?.immediate ?? true;
+      if (immediate) {
+        tick();
+      } else {
+        scheduleNext();
+      }
     }
 
     return () => {
