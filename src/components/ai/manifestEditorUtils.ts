@@ -22,7 +22,13 @@ function safeEnv(raw: unknown): Record<string, string> {
   const record = safeRecord<unknown>(raw);
   const result: Record<string, string> = {};
   for (const [k, v] of Object.entries(record)) {
-    result[k] = typeof v === 'string' ? v : String(v ?? '');
+    if (typeof v === 'string') {
+      result[k] = v;
+    } else if (v !== null && typeof v === 'object') {
+      try { result[k] = JSON.stringify(v); } catch { result[k] = String(v); }
+    } else {
+      result[k] = String(v ?? '');
+    }
   }
   return result;
 }
@@ -142,7 +148,8 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
   if (typeof json !== 'string') return null;
 
   try {
-    const parsed = JSON.parse(json) as Record<string, unknown>;
+    const parsed = JSON.parse(json);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
     if (!parsed.services || typeof parsed.services !== 'object' || Array.isArray(parsed.services)) {
       return null;
     }
