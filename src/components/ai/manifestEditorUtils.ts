@@ -153,13 +153,14 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
     if (!parsed.services || typeof parsed.services !== 'object' || Array.isArray(parsed.services)) {
       return null;
     }
-    const services = parsed.services as Record<string, Record<string, unknown>>;
+    const services = parsed.services as Record<string, unknown>;
     const result: StackManifestFields = {};
     for (const [name, svc] of Object.entries(services)) {
-      if (!svc || typeof svc !== 'object') continue;
+      if (!svc || typeof svc !== 'object' || Array.isArray(svc)) continue;
+      const service = svc as Record<string, unknown>;
       result[name] = {
-        editable: extractEditableFields(svc),
-        passthrough: extractPassthrough(svc),
+        editable: extractEditableFields(service),
+        passthrough: extractPassthrough(service),
       };
     }
     return Object.keys(result).length > 0 ? result : null;
