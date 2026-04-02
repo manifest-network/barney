@@ -142,4 +142,28 @@ export default defineConfig({
       IS_DEV: process.env.NODE_ENV !== 'production',
     },
   },
+  performance: {
+    chunkSplit: {
+      strategy: 'split-by-experience',
+      override: {
+        cacheGroups: {
+          cosmos: {
+            test: /[\\/]node_modules[\\/](@cosmos-kit|@interchain-ui|chain-registry)[\\/]/,
+            name: 'vendor-cosmos',
+            priority: 20,
+          },
+          manifest: {
+            test: /[\\/]node_modules[\\/](@cosmjs|@manifest-network)[\\/]/,
+            name: 'vendor-manifest',
+            priority: 20,
+          },
+          web3auth: {
+            test: /[\\/]node_modules[\\/](@web3auth|@toruslabs)[\\/]/,
+            name: 'vendor-web3auth',
+            priority: 20,
+          },
+        },
+      },
+    },
+  },
 });

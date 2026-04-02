@@ -10,8 +10,11 @@ server {
 
     # Gzip compression
     gzip on;
-    gzip_types text/css application/javascript application/json image/svg+xml application/wasm;
+    gzip_comp_level 6;
+    gzip_vary on;
+    gzip_buffers 16 8k;
     gzip_min_length 256;
+    gzip_types text/css application/javascript application/json image/svg+xml application/wasm text/plain text/xml application/xml;
 
     # index.html and config.js must always be fresh
     location = /index.html {

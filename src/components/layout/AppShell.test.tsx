@@ -77,7 +77,31 @@ function render() {
   flushSync(() => { root.render(createElement(AppShell)); });
 }
 
+/** Render and wait for React.lazy Suspense to resolve.
+ * React.lazy wraps import() in a thenable. We yield to the event loop via
+ * setTimeout to let vitest's module loader settle, then re-mount so Suspense
+ * renders the resolved component.
+ * NOTE: vi.useRealTimers() is required because other test files may leave
+ * fake timers active in parallel mode. */
+async function renderAsync() {
+  vi.useRealTimers();
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+
+  const el = createElement(AppShell);
+  flushSync(() => { root.render(el); });
+
+  // Yield to event loop — lets the dynamic import() promise settle
+  await new Promise<void>((r) => { setTimeout(r, 50); });
+
+  // Re-mount — React.lazy now has the resolved module cached
+  flushSync(() => { root.render(null); });
+  flushSync(() => { root.render(el); });
+}
+
 beforeEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
   mockIsWalletConnected = false;
   mockAddress = undefined;
@@ -91,16 +115,16 @@ afterEach(() => {
 });
 
 describe('AppShell', () => {
-  it('renders LandingPage when not connected', () => {
-    render();
+  it('renders LandingPage when not connected', async () => {
+    await renderAsync();
     expect(container.querySelector('[data-testid="landing"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="main-layout"]')).toBeNull();
   });
 
-  it('renders MainLayout when connected', () => {
+  it('renders MainLayout when connected', async () => {
     mockIsWalletConnected = true;
     mockAddress = 'manifest1test';
-    render();
+    await renderAsync();
     expect(container.querySelector('[data-testid="main-layout"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="landing"]')).toBeNull();
   });

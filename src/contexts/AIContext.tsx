@@ -7,22 +7,30 @@
 import { useEffect, type ReactNode } from 'react';
 import { getAIStore, checkConnection } from '../stores/aiStore';
 import { setupPersistenceSubscriptions } from '../stores/aiActions/persistence';
-import { AI_HEALTH_CHECK_INTERVAL_MS, AI_CONFIRMATION_TIMEOUT_MS, MS_PER_SECOND, SECONDS_PER_MINUTE } from '../config/constants';
+import { useVisibilityPolling } from '../hooks/useVisibilityPolling';
+import { AI_HEALTH_CHECK_INTERVAL_MS, AI_HEALTH_CHECK_MAX_BACKOFF, AI_CONFIRMATION_TIMEOUT_MS, MS_PER_SECOND, SECONDS_PER_MINUTE } from '../config/constants';
 import { logError } from '../utils/errors';
 
 // Re-export types for backward compatibility
 export type { ChatMessage, PendingConfirmation, AISettings } from '../stores/aiStore';
 
 export function AIProvider({ children }: { children: ReactNode }) {
-  useEffect(() => {
-    const store = getAIStore();
+  const store = getAIStore();
 
+  // Health check with visibility-aware polling + exponential backoff
+  useVisibilityPolling(
+    async () => {
+      await checkConnection(store);
+      return store.getState().isConnected;
+    },
+    AI_HEALTH_CHECK_INTERVAL_MS,
+    { backoff: true, maxBackoffMultiplier: AI_HEALTH_CHECK_MAX_BACKOFF, context: 'AIProvider.healthCheck' },
+  );
+
+  // Persistence subscriptions + confirmation timeout
+  useEffect(() => {
     // Persistence subscriptions (settings + history to localStorage)
     const unsubPersistence = setupPersistenceSubscriptions(store);
-
-    // AI API health check
-    checkConnection(store);
-    const healthInterval = setInterval(() => checkConnection(store), AI_HEALTH_CHECK_INTERVAL_MS);
 
     // Confirmation timeout watcher
     let confirmationTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -72,12 +80,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
 
     return () => {
       unsubPersistence();
-      clearInterval(healthInterval);
       unsubConfirmation();
       if (confirmationTimeoutId) clearTimeout(confirmationTimeoutId);
       store.getState().destroy();
     };
-  }, []);
+  }, [store]);
 
   return <>{children}</>;
 }

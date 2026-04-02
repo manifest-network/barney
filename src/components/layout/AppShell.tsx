@@ -4,17 +4,22 @@
  * Transitions between views with a fade + slide animation.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { useAI } from '../../hooks/useAI';
 import { useManifestMCP } from '../../hooks/useManifestMCP';
 import { useToast } from '../../hooks/useToast';
 import { useAccountSetup } from '../../hooks/useAccountSetup';
-import { LandingPage } from '../landing/LandingPage';
-import { MainLayout } from './MainLayout';
 import { AccountSetupOverlay } from './AccountSetupOverlay';
 import { logError } from '../../utils/errors';
 import { CHAIN_NAME } from '../../config/chain';
+
+const LandingPage = lazy(() =>
+  import('../landing/LandingPage').then(m => ({ default: m.LandingPage }))
+);
+const MainLayout = lazy(() =>
+  import('./MainLayout').then(m => ({ default: m.MainLayout }))
+);
 
 const EXIT_DURATION_MS = 150;
 
@@ -108,10 +113,12 @@ export function AppShell() {
     <>
       <AccountSetupOverlay state={setupState} />
       <div className={`app-shell__page ${exiting ? 'app-shell__page--exit' : ''}`}>
-        {renderedConnected
-          ? <MainLayout />
-          : <LandingPage onConnect={() => openView()} isConnecting={isWalletConnecting} />
-        }
+        <Suspense fallback={null}>
+          {renderedConnected
+            ? <MainLayout />
+            : <LandingPage onConnect={() => openView()} isConnecting={isWalletConnecting} />
+          }
+        </Suspense>
       </div>
     </>
   );

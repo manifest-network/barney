@@ -29,10 +29,7 @@ export const MS_PER_SECOND = 1000;
 // ============================================
 
 /** Auto-refresh interval for data polling (milliseconds) */
-export const AUTO_REFRESH_INTERVAL_MS = 10000;
-
-/** Auto-refresh interval for data polling (seconds) - for display purposes */
-export const AUTO_REFRESH_INTERVAL_SECONDS = AUTO_REFRESH_INTERVAL_MS / MS_PER_SECOND;
+export const AUTO_REFRESH_INTERVAL_MS = 15_000;
 
 /** Health check timeout */
 export const HEALTH_CHECK_TIMEOUT_MS = 5000;
@@ -86,7 +83,10 @@ export const AI_RETRY_BASE_DELAY_MS = 1000;
 export const AI_MESSAGE_DEBOUNCE_MS = 300;
 
 /** AI API connection health check interval (milliseconds) */
-export const AI_HEALTH_CHECK_INTERVAL_MS = 30000;
+export const AI_HEALTH_CHECK_INTERVAL_MS = 60_000;
+
+/** Maximum backoff multiplier for health check (base * multiplier = max interval) */
+export const AI_HEALTH_CHECK_MAX_BACKOFF = 8;
 
 /** Timeout for pending confirmations before auto-cancel (milliseconds) - 5 minutes (runtime-configurable) */
 export const AI_CONFIRMATION_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_CONFIRMATION_TIMEOUT_MS', 300000);

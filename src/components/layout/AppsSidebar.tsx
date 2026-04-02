@@ -16,6 +16,7 @@ import { logError } from '../../utils/errors';
 import { CHAIN_NAME } from '../../config/chain';
 import { findExampleByAppName, buildExampleManifest } from '../../config/exampleApps';
 import { SECONDS_PER_HOUR, AUTO_REFRESH_INTERVAL_MS } from '../../config/constants';
+import { useVisibilityPolling } from '../../hooks/useVisibilityPolling';
 import { timeAgo } from '../../utils/format';
 
 interface AppsSidebarProps {
@@ -96,12 +97,18 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     }
   }, [address]);
 
+  useVisibilityPolling(refresh, AUTO_REFRESH_INTERVAL_MS, {
+    enabled: !!address,
+    immediate: false,
+    context: 'AppsSidebar.refresh',
+  });
+
+  // Immediate fetch on mount and when address changes (wallet switch).
+  // The hook's ref sync absorbs callback changes without restarting
+  // the timer, but doesn't re-fetch — this effect handles that.
   useEffect(() => {
-    // Initial fetch — refresh is async (setState calls happen after awaits, not synchronously)
     // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
-    const interval = setInterval(refresh, AUTO_REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
   }, [refresh]);
 
   const runningApps = apps.filter((a) => a.status === 'running' || a.status === 'deploying');
