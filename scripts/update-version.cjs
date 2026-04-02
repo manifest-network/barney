@@ -21,9 +21,10 @@ try {
   const currentVersion = packageJson.version.split('-')[0];
 
   // Prefer GIT_COMMIT env var (set by Docker/CI), fall back to local git
-  const shortCommit =
+  const shortCommit = (
     process.env.GIT_COMMIT ||
-    execSync('git rev-parse --short HEAD').toString().trim();
+    execSync('git rev-parse --short HEAD').toString().trim()
+  ).slice(0, 7);
 
   packageJson.version = `${currentVersion}-${shortCommit}`;
   fs.writeFileSync('package.json', JSON.stringify(packageJson, null, 2) + '\n');
