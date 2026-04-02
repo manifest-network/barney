@@ -8,7 +8,7 @@ try {
   const rawRelease = process.env.RELEASE_VERSION?.trim();
   if (rawRelease) {
     const releaseVersion = rawRelease.replace(/^v/, '');
-    if (!/^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/.test(releaseVersion)) {
+    if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/.test(releaseVersion)) {
       console.error(`Invalid RELEASE_VERSION: "${releaseVersion}"`);
       process.exit(1);
     }
