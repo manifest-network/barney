@@ -40,10 +40,11 @@ server {
     # Morpheus API reverse proxy — injects auth header server-side.
     #
     # Uses a regex location so we can capture the path tail and put the full
-    # upstream URL in a `proxy_pass` variable. The variable form is what forces
-    # nginx to consult the resolver per request and honor DNS TTLs — with a
-    # literal hostname, nginx caches the upstream IP forever at config-load
-    # time, which broke prod whenever api.mor.org rotated its IP. The capture
+    # upstream URL in a `proxy_pass` variable. The variable form enables
+    # runtime DNS re-resolution via nginx's resolver; with `valid=30s`, nginx
+    # caches the answer for up to 30s before refreshing it. With a literal
+    # hostname, nginx caches the upstream IP forever at config-load time,
+    # which broke prod whenever api.mor.org rotated its IP. The capture
     # group + $is_args$args lets us forward both the path and query string
     # without splitting PUBLIC_MORPHEUS_URL apart in env.sh.
     location ~ ^/api/morpheus/(.*)$ {

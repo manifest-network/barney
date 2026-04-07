@@ -32,7 +32,11 @@ esac
 # (e.g. `[2001:db8::1]`), and busybox awk doesn't preserve brackets — so we
 # drop IPv6 entries and let the fallback fire if none remain.
 # `tr -d '\r'` strips CRLF that can leak in from Windows-edited bind mounts.
-NGINX_RESOLVERS="$(tr -d '\r' < /etc/resolv.conf 2>/dev/null | awk '/^nameserver[[:space:]]/ && $2 ~ /^[0-9.]+$/ { print $2 }' | tr '\n' ' ' | sed 's/ *$//')"
+if [ -r /etc/resolv.conf ]; then
+  NGINX_RESOLVERS="$(tr -d '\r' < /etc/resolv.conf | awk '/^nameserver[[:space:]]/ && $2 ~ /^[0-9.]+$/ { print $2 }' | tr '\n' ' ' | sed 's/ *$//')"
+else
+  NGINX_RESOLVERS=""
+fi
 if [ -z "$NGINX_RESOLVERS" ]; then
   NGINX_RESOLVERS="1.1.1.1 8.8.8.8"
 fi
