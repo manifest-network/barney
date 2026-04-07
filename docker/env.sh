@@ -11,8 +11,39 @@ if [ -z "$PUBLIC_MORPHEUS_URL" ]; then
   exit 1
 fi
 
+# The morpheus location block concatenates this URL with the request path tail
+# and query string ("$URL/$1$is_args$args"), so any '?' or '#' embedded in the
+# env var would silently corrupt every upstream request. Reject loudly here.
+case "$PUBLIC_MORPHEUS_URL" in
+  *[?\#]*)
+    echo "ERROR: PUBLIC_MORPHEUS_URL must not contain '?' or '#' (got: $PUBLIC_MORPHEUS_URL)" >&2
+    exit 1
+    ;;
+esac
+
+# Extract IPv4 DNS resolvers from /etc/resolv.conf for nginx's `resolver`
+# directive (used by the morpheus location block — see template). Falls back
+# to public DNS if /etc/resolv.conf is missing, empty, or has no IPv4 entries.
+# This mirrors what the upstream nginx:alpine image does in
+# /docker-entrypoint.d/15-local-resolvers.envsh, which we bypass because
+# env.sh is the entrypoint instead of docker-entrypoint.sh.
+#
+# IPv4-only filter: nginx accepts IPv6 resolvers only when bracketed
+# (e.g. `[2001:db8::1]`), and busybox awk doesn't preserve brackets — so we
+# drop IPv6 entries and let the fallback fire if none remain.
+# `tr -d '\r'` strips CRLF that can leak in from Windows-edited bind mounts.
+if [ -r /etc/resolv.conf ]; then
+  NGINX_RESOLVERS="$(tr -d '\r' < /etc/resolv.conf | awk '/^nameserver[[:space:]]/ && $2 ~ /^[0-9.]+$/ { print $2 }' | tr '\n' ' ' | sed 's/ *$//')"
+else
+  NGINX_RESOLVERS=""
+fi
+if [ -z "$NGINX_RESOLVERS" ]; then
+  NGINX_RESOLVERS="1.1.1.1 8.8.8.8"
+fi
+export NGINX_RESOLVERS
+
 # Generate nginx config with Morpheus proxy settings (server-side secrets)
-envsubst '$MORPHEUS_API_KEY $PUBLIC_MORPHEUS_URL' \
+envsubst '$MORPHEUS_API_KEY $PUBLIC_MORPHEUS_URL $NGINX_RESOLVERS' \
   < /docker/nginx.conf.template > /etc/nginx/conf.d/default.conf
 
 # Generate runtime config.js for the browser (public vars only — no secrets)
