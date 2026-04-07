@@ -37,15 +37,28 @@ server {
         add_header X-Content-Type-Options "nosniff" always;
     }
 
-    # Morpheus API reverse proxy — injects auth header server-side
-    location /api/morpheus/ {
+    # Morpheus API reverse proxy — injects auth header server-side.
+    #
+    # Uses a regex location so we can capture the path tail and put the full
+    # upstream URL in a `proxy_pass` variable. The variable form is what forces
+    # nginx to consult the resolver per request and honor DNS TTLs — with a
+    # literal hostname, nginx caches the upstream IP forever at config-load
+    # time, which broke prod whenever api.mor.org rotated its IP. The capture
+    # group + $is_args$args lets us forward both the path and query string
+    # without splitting PUBLIC_MORPHEUS_URL apart in env.sh.
+    location ~ ^/api/morpheus/(.*)$ {
         # Fast-fail when no API key is configured (envsubst replaces this at startup)
         set $morpheus_key "${MORPHEUS_API_KEY}";
         if ($morpheus_key = '') {
             return 503;
         }
 
-        proxy_pass ${PUBLIC_MORPHEUS_URL}/;
+        resolver ${NGINX_RESOLVERS} valid=30s ipv6=off;
+        resolver_timeout 5s;
+
+        set $morpheus_upstream "${PUBLIC_MORPHEUS_URL}/$1$is_args$args";
+        proxy_pass $morpheus_upstream;
+        proxy_ssl_server_name on;
         proxy_set_header Authorization "Bearer ${MORPHEUS_API_KEY}";
         proxy_set_header Host $proxy_host;
         proxy_set_header X-Real-IP $remote_addr;
