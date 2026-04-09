@@ -4,10 +4,11 @@
  * Follows the official zustand pattern for vanilla stores in React:
  *   https://zustand.docs.pmnd.rs/guides/initialize-state-with-props
  *
- * The store is created exactly once per Provider mount via `useState`'s lazy
- * initializer, so the reference is stable across renders and survives React 18
- * StrictMode's simulated unmount/remount. Consumers read it through Context, so
- * there is no module-level singleton to orphan when effects clean up.
+ * The store is created via `useState`'s lazy initializer. In React 18 dev
+ * StrictMode, that initializer may be invoked more than once, so it must be
+ * pure, but the retained store reference is stable for the Provider's
+ * lifetime. Consumers read it through Context, so there is no module-level
+ * singleton to orphan when effects clean up.
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
