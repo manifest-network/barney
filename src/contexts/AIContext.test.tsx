@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { StrictMode, createElement, useContext, useEffect } from 'react';
+import { StrictMode, createElement, useContext, useEffect, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import type { StoreApi } from 'zustand';
@@ -68,7 +68,7 @@ function StatusProbe() {
   return createElement('div', { 'data-testid': 'status' }, isConnected ? 'connected' : 'not-connected');
 }
 
-function mount(node: React.ReactNode): { container: HTMLElement; root: Root } {
+function mount(node: ReactNode): { container: HTMLElement; root: Root } {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);

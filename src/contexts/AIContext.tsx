@@ -22,9 +22,9 @@ import { logError } from '../utils/errors';
 export type { ChatMessage, PendingConfirmation, AISettings } from '../stores/aiStore';
 
 export function AIProvider({ children }: { children: ReactNode }) {
-  // Lazy initializer — runs exactly once per Provider mount. React preserves
-  // the value across StrictMode's simulated unmount/remount, so the store
-  // identity is stable.
+  // useState's lazy initializer must be pure — React may invoke it more than
+  // once in dev StrictMode — but the returned store reference is stable for
+  // the Provider's lifetime.
   const [store] = useState(() => createAIStore());
 
   // Health check with visibility-aware polling + exponential backoff.
