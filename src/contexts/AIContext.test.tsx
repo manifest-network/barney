@@ -24,6 +24,7 @@ import type { StoreApi } from 'zustand';
 
 vi.mock('../api/morpheus', () => ({
   checkApiHealth: vi.fn().mockResolvedValue(true),
+  streamChat: vi.fn(),
 }));
 
 // Mock persistence so the test doesn't depend on real localStorage state and
