@@ -1,5 +1,5 @@
 import { useShallow } from 'zustand/react/shallow';
-import { useAIStore } from '../stores/aiStore';
+import { useAIStore } from '../contexts/aiStoreContext';
 
 export function useAI() {
   return useAIStore(useShallow((s) => ({

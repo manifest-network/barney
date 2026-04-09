@@ -1,11 +1,19 @@
 /**
- * AIStoreProvider — thin lifecycle wrapper around the Zustand AI store.
- * Sets up persistence subscriptions, health checks, and confirmation timeouts.
- * Renders children directly (no Context.Provider).
+ * AIProvider — owns the AI Zustand store and exposes it via React Context.
+ *
+ * Follows the official zustand pattern for vanilla stores in React:
+ *   https://zustand.docs.pmnd.rs/guides/initialize-state-with-props
+ *
+ * The store is created via `useState`'s lazy initializer. In React 18 dev
+ * StrictMode, that initializer may be invoked more than once, so it must be
+ * pure, but the retained store reference is stable for the Provider's
+ * lifetime. Consumers read it through Context, so there is no module-level
+ * singleton to orphan when effects clean up.
  */
 
-import { useEffect, type ReactNode } from 'react';
-import { getAIStore, checkConnection } from '../stores/aiStore';
+import { useEffect, useState, type ReactNode } from 'react';
+import { createAIStore, checkConnection } from '../stores/aiStore';
+import { AIStoreContext } from './aiStoreContext';
 import { setupPersistenceSubscriptions } from '../stores/aiActions/persistence';
 import { useVisibilityPolling } from '../hooks/useVisibilityPolling';
 import { AI_HEALTH_CHECK_INTERVAL_MS, AI_HEALTH_CHECK_MAX_BACKOFF, AI_CONFIRMATION_TIMEOUT_MS, MS_PER_SECOND, SECONDS_PER_MINUTE } from '../config/constants';
@@ -15,9 +23,12 @@ import { logError } from '../utils/errors';
 export type { ChatMessage, PendingConfirmation, AISettings } from '../stores/aiStore';
 
 export function AIProvider({ children }: { children: ReactNode }) {
-  const store = getAIStore();
+  // useState's lazy initializer must be pure — React may invoke it more than
+  // once in dev StrictMode — but the returned store reference is stable for
+  // the Provider's lifetime.
+  const [store] = useState(() => createAIStore());
 
-  // Health check with visibility-aware polling + exponential backoff
+  // Health check with visibility-aware polling + exponential backoff.
   useVisibilityPolling(
     async () => {
       await checkConnection(store);
@@ -86,5 +97,5 @@ export function AIProvider({ children }: { children: ReactNode }) {
     };
   }, [store]);
 
-  return <>{children}</>;
+  return <AIStoreContext.Provider value={store}>{children}</AIStoreContext.Provider>;
 }

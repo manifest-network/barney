@@ -1,10 +1,10 @@
 /**
- * Zustand store for AI chat state.
- * Replaces AIContext + useRef mirrors + extracted hooks.
+ * Zustand vanilla store factory for AI chat state.
+ * Instances are owned by `AIProvider` and consumed via `useAIStore` from
+ * `contexts/aiStoreContext`.
  */
 
 import { createStore } from 'zustand/vanilla';
-import { useStore } from 'zustand';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import { checkApiHealth } from '../api/morpheus';
 import type { AISettings } from '../ai/validation';
@@ -273,19 +273,8 @@ export const createAIStore = () =>
       if (_rafId) cancelAnimationFrame(_rafId);
       if (abortController) abortController.abort();
       set({ _rafId: null, abortController: null });
-      _store = null;
     },
   }));
-
-// Singleton store instance
-let _store: ReturnType<typeof createAIStore> | null = null;
-
-export function getAIStore(): ReturnType<typeof createAIStore> {
-  if (!_store) {
-    _store = createAIStore();
-  }
-  return _store;
-}
 
 /** Check AI API connection health and update store */
 export async function checkConnection(store: ReturnType<typeof createAIStore>): Promise<void> {
@@ -294,11 +283,6 @@ export async function checkConnection(store: ReturnType<typeof createAIStore>): 
     store.setState({ isConnected: healthy });
   } catch (error) {
     logError('aiStore.checkConnection', error);
-    try { store.setState({ isConnected: false }); } catch { /* store destroyed */ }
+    store.setState({ isConnected: false });
   }
-}
-
-// React hook — delegates to the singleton
-export function useAIStore<T>(selector: (state: AIStore) => T): T {
-  return useStore(getAIStore(), selector);
 }
