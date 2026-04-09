@@ -52,6 +52,7 @@ import type { AIStore } from '../stores/aiStore';
 const rendered: { root: Root; container: HTMLElement }[] = [];
 
 beforeEach(() => {
+  vi.useRealTimers();
   vi.mocked(checkApiHealth).mockResolvedValue(true);
   vi.mocked(logError).mockClear();
 });
