@@ -4,6 +4,10 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # HTTP/2 cleartext (h2c) — enables multiplexing when a TLS-terminating
+    # load balancer or reverse proxy connects to this backend via h2c
+    http2 on;
+
     # Security headers
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
@@ -15,6 +19,12 @@ server {
     gzip_buffers 16 8k;
     gzip_min_length 256;
     gzip_types text/css application/javascript application/json image/svg+xml application/wasm text/plain text/xml application/xml;
+
+    # Brotli compression (~15-20% smaller than gzip at comparable CPU cost)
+    brotli on;
+    brotli_comp_level 6;
+    brotli_min_length 256;
+    brotli_types text/css application/javascript application/json image/svg+xml application/wasm text/plain text/xml application/xml;
 
     # index.html and config.js must always be fresh
     location = /index.html {

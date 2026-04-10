@@ -50,4 +50,9 @@ envsubst '$MORPHEUS_API_KEY $PUBLIC_MORPHEUS_URL $NGINX_RESOLVERS' \
 envsubst '$PUBLIC_REST_URL $PUBLIC_RPC_URL $PUBLIC_WEB3AUTH_CLIENT_ID $PUBLIC_WEB3AUTH_NETWORK $PUBLIC_MORPHEUS_MODEL $PUBLIC_PWR_DENOM $PUBLIC_GAS_PRICE $PUBLIC_CHAIN_ID $PUBLIC_FAUCET_URL $PUBLIC_AI_STREAM_TIMEOUT_MS $PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS $PUBLIC_AI_TOOL_API_TIMEOUT_MS $PUBLIC_AI_MAX_RETRIES $PUBLIC_AI_CONFIRMATION_TIMEOUT_MS $PUBLIC_AI_MAX_TOOL_ITERATIONS $PUBLIC_AI_MAX_MESSAGES $PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY' \
   < /docker/config.js.template > /usr/share/nginx/html/config.js
 
+# Validate the rendered nginx config before starting — surfaces module load
+# failures, envsubst errors, and syntax issues with a clear diagnostic
+# instead of a cryptic crash loop.
+nginx -t || { echo "ERROR: nginx config validation failed after envsubst." >&2; exit 1; }
+
 exec "$@"
