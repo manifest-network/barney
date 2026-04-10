@@ -16,7 +16,8 @@ RUN RELEASE_VERSION=${RELEASE_VERSION} GIT_COMMIT=${GIT_COMMIT} npm run build-re
 FROM nginx:1.27-alpine AS brotli-build
 RUN apk add --no-cache git gcc g++ make pcre2-dev zlib-dev brotli-dev linux-headers \
     && git clone https://github.com/google/ngx_brotli.git /tmp/ngx_brotli \
-    && cd /tmp/ngx_brotli && git checkout a71f9312c2deb28875acc7bacfdd5695a111aa53 && cd /tmp \
+    && cd /tmp/ngx_brotli && git checkout a71f9312c2deb28875acc7bacfdd5695a111aa53 \
+    && git submodule update --init && cd /tmp \
     && NGINX_VERSION=$(nginx -v 2>&1 | sed 's/^.*\///') \
     && wget -O /tmp/nginx-src.tar.gz "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" \
     && tar xzf /tmp/nginx-src.tar.gz -C /tmp \
