@@ -236,7 +236,7 @@ describe('executeGetBalance', () => {
     expect(data.mfx_balance).toBeUndefined();
   });
 
-  it('returns null hours_remaining when no running apps', async () => {
+  it('returns null hours_remaining when spending_per_hour is empty', async () => {
     vi.mocked(getBalance).mockResolvedValue({
       balances: [{ denom: 'umfx', amount: '5000000' }],
       current_balance: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],

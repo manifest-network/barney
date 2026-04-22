@@ -283,7 +283,7 @@ export async function executeGetBalance(
     };
   }
 
-  // Credit balance: PWR denom from creditAccount.balances
+  // Credit balance: PWR denom from balance.credits.balances
   let credits = 0;
   if (balance.credits?.balances) {
     for (const bal of balance.credits.balances) {
