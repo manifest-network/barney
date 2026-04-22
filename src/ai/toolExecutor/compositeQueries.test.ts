@@ -20,8 +20,6 @@ import { makeRegistry } from './testHelpers';
 vi.mock('../../api/billing', () => ({
   getLeasesByTenant: vi.fn(),
   getLeasesByTenantPaginated: vi.fn(),
-  getCreditAccount: vi.fn(),
-  getCreditEstimate: vi.fn(),
   getLease: vi.fn().mockResolvedValue(null),
   LeaseState: {
     LEASE_STATE_UNSPECIFIED: 0,
@@ -38,10 +36,6 @@ vi.mock('../../api/billing', () => ({
     rejected: 4,
     expired: 5,
   },
-}));
-
-vi.mock('../../api/bank', () => ({
-  getAllBalances: vi.fn(),
 }));
 
 vi.mock('../../api/sku', async (importOriginal) => {
@@ -80,6 +74,7 @@ vi.mock('@manifest-network/manifest-mcp-chain', () => ({
 vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   ...(await importOriginal()),
   cosmosQuery: vi.fn(),
+  getBalance: vi.fn(),
 }));
 
 vi.mock('../../utils/errors', () => ({
@@ -97,18 +92,20 @@ vi.mock('../../utils/leaseState', () => ({
   },
 }));
 
-import { getLeasesByTenant, getCreditAccount, getCreditEstimate, getLeasesByTenantPaginated } from '../../api/billing';
-import { getAllBalances } from '../../api/bank';
+import { getLeasesByTenant, getLeasesByTenantPaginated } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import { cosmosQuery } from '@manifest-network/manifest-mcp-core';
+import { cosmosQuery, getBalance } from '@manifest-network/manifest-mcp-core';
 import { isFaucetEnabled } from '../../api/faucet';
 import { requestFaucet } from '@manifest-network/manifest-mcp-chain';
 import { logError } from '../../utils/errors';
 
 const ADDRESS = 'manifest1abc';
-const CLIENT_MANAGER = {} as CosmosClientManager;
+const MOCK_QUERY_CLIENT = {} as Awaited<ReturnType<CosmosClientManager['getQueryClient']>>;
+const CLIENT_MANAGER = {
+  getQueryClient: vi.fn().mockResolvedValue(MOCK_QUERY_CLIENT),
+} as unknown as CosmosClientManager;
 
 function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutorOptions {
   return {
@@ -207,42 +204,53 @@ describe('executeGetBalance', () => {
     expect(result.success).toBe(false);
   });
 
+  it('returns error without clientManager', async () => {
+    const result = await executeGetBalance(makeOptions({ clientManager: null }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Not connected');
+  });
+
   it('returns formatted balance', async () => {
-    vi.mocked(getAllBalances).mockResolvedValue([{ denom: 'umfx', amount: '5000000' }]);
-    vi.mocked(getCreditAccount).mockResolvedValue({
-      creditAccount: { tenant: ADDRESS, creditAddress: 'credit-addr', activeLeaseCount: 1n, pendingLeaseCount: 0n, reservedAmounts: [] },
-      balances: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
-      availableBalances: [],
-    } as any);
-    vi.mocked(getCreditEstimate).mockResolvedValue({
-      currentBalance: [{ denom: 'umfx', amount: '100000000' }],
-      totalRatePerSecond: [{ denom: 'umfx', amount: '1' }],
-      estimatedDurationSeconds: 86400n,
-      activeLeaseCount: 1n,
-    } as any);
+    vi.mocked(getBalance).mockResolvedValue({
+      balances: [{ denom: 'umfx', amount: '5000000' }],
+      current_balance: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
+      spending_per_hour: [{ denom: 'umfx', amount: '3600' }],
+      hours_remaining: '24.0',
+      running_apps: '1',
+      credits: {
+        active_leases: '1',
+        pending_leases: '0',
+        reserved_amounts: [],
+        balances: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
+        available_balances: [],
+      },
+    });
 
     const result = await executeGetBalance(makeOptions());
     expect(result.success).toBe(true);
     const data = result.data as any;
     expect(data.credits).toBe(100);
-    expect(data.mfx_balance).toBe(5);
     expect(data.hours_remaining).toBe(24);
     expect(data.running_apps).toBe(1);
+    // mfx_balance field removed — not user-surfaced
+    expect(data.mfx_balance).toBeUndefined();
   });
 
   it('returns null hours_remaining when no running apps', async () => {
-    vi.mocked(getAllBalances).mockResolvedValue([{ denom: 'umfx', amount: '5000000' }]);
-    vi.mocked(getCreditAccount).mockResolvedValue({
-      creditAccount: { tenant: ADDRESS, creditAddress: 'credit-addr', activeLeaseCount: 0n, pendingLeaseCount: 0n, reservedAmounts: [] },
-      balances: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
-      availableBalances: [],
-    } as any);
-    vi.mocked(getCreditEstimate).mockResolvedValue({
-      currentBalance: [{ denom: 'umfx', amount: '100000000' }],
-      totalRatePerSecond: [],
-      estimatedDurationSeconds: 2440800n,
-      activeLeaseCount: 0n,
-    } as any);
+    vi.mocked(getBalance).mockResolvedValue({
+      balances: [{ denom: 'umfx', amount: '5000000' }],
+      current_balance: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
+      spending_per_hour: [],
+      hours_remaining: '0',
+      running_apps: '0',
+      credits: {
+        active_leases: '0',
+        pending_leases: '0',
+        reserved_amounts: [],
+        balances: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
+        available_balances: [],
+      },
+    });
 
     const result = await executeGetBalance(makeOptions());
     expect(result.success).toBe(true);
@@ -250,6 +258,28 @@ describe('executeGetBalance', () => {
     expect(data.running_apps).toBe(0);
     expect(data.spending_per_hour).toBe(0);
     expect(data.hours_remaining).toBeNull();
+  });
+
+  it('returns zero credits when credit account missing', async () => {
+    vi.mocked(getBalance).mockResolvedValue({
+      balances: [{ denom: 'umfx', amount: '5000000' }],
+      credits: null,
+    });
+
+    const result = await executeGetBalance(makeOptions());
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.credits).toBe(0);
+    expect(data.running_apps).toBe(0);
+    expect(data.hours_remaining).toBeNull();
+  });
+
+  it('returns error when getBalance throws', async () => {
+    vi.mocked(getBalance).mockRejectedValue(new Error('RPC down'));
+
+    const result = await executeGetBalance(makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('RPC down');
   });
 });
 

@@ -4,17 +4,14 @@
  */
 
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
-import { cosmosQuery } from '@manifest-network/manifest-mcp-core';
+import { cosmosQuery, getBalance } from '@manifest-network/manifest-mcp-core';
 import {
   getLeasesByTenant,
   getLeasesByTenantPaginated,
-  getCreditAccount,
-  getCreditEstimate,
   getLease,
   LeaseState,
   LEASE_STATE_MAP,
 } from '../../api/billing';
-import { getAllBalances } from '../../api/bank';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../../api/provider-api';
 import { getLeaseStatus, getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
@@ -26,7 +23,6 @@ import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withRetry, withTimeout } from '../../api/utils';
-import { SECONDS_PER_HOUR } from '../../config/constants';
 import { getProviderAuthToken } from './utils';
 import type { ToolResult, ToolExecutorOptions } from './types';
 
@@ -271,25 +267,26 @@ export async function executeAppStatus(
 export async function executeGetBalance(
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address } = options;
+  const { address, clientManager } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!clientManager) return { success: false, error: 'Not connected to blockchain' };
 
-  const [balances, creditAccount, estimate] = await Promise.all([
-    withTimeout(getAllBalances(address), undefined, 'Fetch balances'),
-    withTimeout(getCreditAccount(address), undefined, 'Fetch credit account').catch((error) => {
-      logError('compositeQueries.executeGetBalance.creditAccount', error);
-      return null;
-    }),
-    withTimeout(getCreditEstimate(address), undefined, 'Fetch credit estimate').catch((error) => {
-      logError('compositeQueries.executeGetBalance.creditEstimate', error);
-      return null;
-    }),
-  ]);
+  let balance: Awaited<ReturnType<typeof getBalance>>;
+  try {
+    const queryClient = await clientManager.getQueryClient();
+    balance = await withTimeout(getBalance(queryClient, address), undefined, 'Fetch balance');
+  } catch (error) {
+    logError('compositeQueries.executeGetBalance', error);
+    return {
+      success: false,
+      error: `Failed to fetch balance: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    };
+  }
 
-  // Format credit balance (look for PWR in credit account balances)
+  // Credit balance: PWR denom from creditAccount.balances
   let credits = 0;
-  if (creditAccount?.balances) {
-    for (const bal of creditAccount.balances) {
+  if (balance.credits?.balances) {
+    for (const bal of balance.credits.balances) {
       if (bal.denom === DENOMS.PWR || bal.denom.includes('upwr')) {
         credits = fromBaseUnits(bal.amount, bal.denom);
         break;
@@ -297,30 +294,22 @@ export async function executeGetBalance(
     }
   }
 
-  // Format burn rate
+  // Burn rate: mono already multiplied per-second -> per-hour; aggregate across denoms
   let spendingPerHour = 0;
-  if (estimate?.totalRatePerSecond) {
-    for (const rate of estimate.totalRatePerSecond) {
-      const perSecond = fromBaseUnits(rate.amount, rate.denom);
-      spendingPerHour += perSecond * SECONDS_PER_HOUR;
+  if (balance.spending_per_hour) {
+    for (const rate of balance.spending_per_hour) {
+      spendingPerHour += fromBaseUnits(rate.amount, rate.denom);
     }
   }
 
-  // Running app count
-  const runningApps = estimate?.activeLeaseCount ? Number(estimate.activeLeaseCount) : 0;
+  const runningApps = balance.running_apps ? Number(balance.running_apps) : 0;
 
-  // Time remaining (only meaningful when credits are actively being spent)
+  // Time remaining: only meaningful when credits are actively being spent
   let hoursRemaining: number | null = null;
-  if (spendingPerHour > 0 && estimate?.estimatedDurationSeconds) {
-    hoursRemaining = Math.floor(Number(estimate.estimatedDurationSeconds) / SECONDS_PER_HOUR);
-  }
-
-  // Wallet MFX balance
-  let mfxBalance = 0;
-  for (const bal of balances) {
-    if (bal.denom === DENOMS.MFX) {
-      mfxBalance = fromBaseUnits(bal.amount, bal.denom);
-      break;
+  if (spendingPerHour > 0 && balance.hours_remaining) {
+    const hours = parseFloat(balance.hours_remaining);
+    if (Number.isFinite(hours) && hours > 0) {
+      hoursRemaining = Math.floor(hours);
     }
   }
 
@@ -331,7 +320,6 @@ export async function executeGetBalance(
       spending_per_hour: Math.round(spendingPerHour * 100) / 100,
       hours_remaining: hoursRemaining,
       running_apps: runningApps,
-      mfx_balance: mfxBalance,
     },
   };
 }

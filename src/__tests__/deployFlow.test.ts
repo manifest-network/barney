@@ -60,6 +60,7 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   ...(await importOriginal()),
   cosmosTx: vi.fn(),
   cosmosQuery: vi.fn(),
+  getBalance: vi.fn(),
 }));
 
 vi.mock('../utils/errors', () => ({
@@ -73,16 +74,18 @@ vi.mock('../ai/toolExecutor/utils', () => ({
   getProviderAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
 }));
 
-import { getLeasesByTenant, getCreditAccount, getCreditEstimate, getLease } from '../api/billing';
-import { getAllBalances } from '../api/bank';
+import { getLeasesByTenant, getCreditEstimate, getLease } from '../api/billing';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
 import { waitForLeaseReady } from '../api/fred';
-import { cosmosTx } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx, getBalance } from '@manifest-network/manifest-mcp-core';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from '../ai/toolExecutor/utils';
 
 const ADDRESS = 'manifest1testaddr';
-const CLIENT_MANAGER = {} as CosmosClientManager;
+const MOCK_QUERY_CLIENT = {} as Awaited<ReturnType<CosmosClientManager['getQueryClient']>>;
+const CLIENT_MANAGER = {
+  getQueryClient: vi.fn().mockResolvedValue(MOCK_QUERY_CLIENT),
+} as unknown as CosmosClientManager;
 const LEASE_UUID = '550e8400-e29b-41d4-a716-446655440000';
 const PROVIDER_UUID = '660e8400-e29b-41d4-a716-446655440000';
 const SKU_UUID = '770e8400-e29b-41d4-a716-446655440000';
@@ -260,23 +263,25 @@ describe('Deploy Flow Integration', () => {
   });
 
   it('get_balance flow', async () => {
-    vi.mocked(getAllBalances).mockResolvedValue([{ denom: 'umfx', amount: '5000000' }]);
-    vi.mocked(getCreditAccount).mockResolvedValue({
-      creditAccount: { tenant: ADDRESS, creditAddress: 'credit-addr', activeLeaseCount: 1n, pendingLeaseCount: 0n, reservedAmounts: [] },
-      balances: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
-      availableBalances: [],
-    } as Awaited<ReturnType<typeof getCreditAccount>>);
-    vi.mocked(getCreditEstimate).mockResolvedValue({
-      currentBalance: [{ denom: 'umfx', amount: '100000000' }],
-      totalRatePerSecond: [{ denom: 'umfx', amount: '1' }],
-      estimatedDurationSeconds: 86400n,
-      activeLeaseCount: 1n,
-    } as Awaited<ReturnType<typeof getCreditEstimate>>);
+    vi.mocked(getBalance).mockResolvedValue({
+      balances: [{ denom: 'umfx', amount: '5000000' }],
+      current_balance: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
+      spending_per_hour: [{ denom: 'umfx', amount: '3600' }],
+      hours_remaining: '24.0',
+      running_apps: '1',
+      credits: {
+        active_leases: '1',
+        pending_leases: '0',
+        reserved_amounts: [],
+        balances: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
+        available_balances: [],
+      },
+    });
 
     const result = await executeTool('get_balance', {}, options);
     expect(result.success).toBe(true);
-    const data = result.data as { credits: number; mfx_balance: number; running_apps: number };
-    expect(data.mfx_balance).toBe(5);
+    const data = result.data as { credits: number; running_apps: number };
+    expect(data.credits).toBe(100);
     expect(data.running_apps).toBe(1);
   });
 
