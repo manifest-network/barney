@@ -294,7 +294,7 @@ export async function executeGetBalance(
     }
   }
 
-  // Burn rate: mono already multiplied per-second -> per-hour; aggregate across denoms
+  // Burn rate: balance.spending_per_hour is already per-hour; aggregate across denoms
   let spendingPerHour = 0;
   if (balance.spending_per_hour) {
     for (const rate of balance.spending_per_hour) {
