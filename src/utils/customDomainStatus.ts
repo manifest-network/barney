@@ -60,28 +60,33 @@ async function fetchDoh(fqdn: string, type: 'A' | 'AAAA' | 'CNAME', signal: Abor
 /** Resolve via Cloudflare DoH. Treats network errors and timeouts as `network_fail`. */
 export async function resolveDnsViaDoh(fqdn: string, signal?: AbortSignal): Promise<DnsProbeResult> {
   const ac = new AbortController();
+  // Honor an already-aborted external signal — addEventListener wouldn't fire post-hoc.
+  if (signal?.aborted) ac.abort();
   const onAbort = () => ac.abort();
-  signal?.addEventListener('abort', onAbort);
+  signal?.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
 
   try {
-    const [aRes, cnameRes] = await Promise.all([
+    const [aRes, aaaaRes, cnameRes] = await Promise.all([
       fetchDoh(fqdn, 'A', ac.signal),
+      fetchDoh(fqdn, 'AAAA', ac.signal),
       fetchDoh(fqdn, 'CNAME', ac.signal),
     ]);
 
-    if (aRes === null && cnameRes === null) {
+    if (aRes === null && aaaaRes === null && cnameRes === null) {
       return { result: 'network_fail' };
     }
 
     const cnameAnswer = cnameRes?.Answer?.find(a => a.type === 5);
     const aAnswers = (aRes?.Answer ?? []).filter(a => a.type === 1).map(a => a.data);
+    const aaaaAnswers = (aaaaRes?.Answer ?? []).filter(a => a.type === 28).map(a => a.data);
+    const allAddresses = [...aAnswers, ...aaaaAnswers];
 
-    if (aAnswers.length > 0 || cnameAnswer) {
+    if (allAddresses.length > 0 || cnameAnswer) {
       return {
         result: 'ok',
         cname: cnameAnswer?.data?.replace(/\.$/, ''),
-        addresses: aAnswers.length > 0 ? aAnswers : undefined,
+        addresses: allAddresses.length > 0 ? allAddresses : undefined,
       };
     }
 
@@ -101,8 +106,9 @@ export async function resolveDnsViaDoh(fqdn: string, signal?: AbortSignal): Prom
  */
 export async function probeHttps(fqdn: string, signal?: AbortSignal): Promise<HttpsProbeResult> {
   const ac = new AbortController();
+  if (signal?.aborted) ac.abort();
   const onAbort = () => ac.abort();
-  signal?.addEventListener('abort', onAbort);
+  signal?.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
 
   try {

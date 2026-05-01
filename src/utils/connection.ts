@@ -52,3 +52,40 @@ export function collectInstanceUrls(
   const unique = [...new Set(urls)];
   return unique.length > 1 ? unique : [];
 }
+
+/**
+ * Resolve the provider-issued CNAME target for a deployed app/service.
+ * - Stack: `connection.services[serviceName].fqdn` (or the first instance's fqdn)
+ * - Single-service: `connection.fqdn` (or the first instance's fqdn)
+ * Validates with `isValidFqdn` and strips a trailing dot. Returns undefined if
+ * no usable hostname is found.
+ */
+export function resolveExpectedCnameTarget(
+  connection:
+    | {
+        fqdn?: string;
+        instances?: { fqdn?: string }[];
+        services?: Record<string, unknown>;
+      }
+    | undefined,
+  serviceName: string,
+): string | undefined {
+  if (!connection) return undefined;
+
+  const normalize = (value?: string): string | undefined => {
+    if (!value) return undefined;
+    const stripped = value.replace(/\.$/, '');
+    return isValidFqdn(stripped) ? stripped : undefined;
+  };
+
+  if (serviceName !== '' && connection.services) {
+    const svcRaw = connection.services[serviceName];
+    if (svcRaw && typeof svcRaw === 'object') {
+      const svc = svcRaw as { fqdn?: string; instances?: { fqdn?: string }[] };
+      const svcFqdn = normalize(svc.fqdn) ?? normalize(svc.instances?.[0]?.fqdn);
+      if (svcFqdn) return svcFqdn;
+    }
+  }
+
+  return normalize(connection.fqdn) ?? normalize(connection.instances?.[0]?.fqdn);
+}

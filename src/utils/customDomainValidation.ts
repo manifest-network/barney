@@ -26,7 +26,7 @@ export function validateCustomDomainFormat(fqdn: string): string | null {
  */
 export function isApex(fqdn: string): boolean {
   const trimmed = fqdn.trim().replace(/\.$/, '').toLowerCase();
-  return trimmed.split('.').length <= 2;
+  return trimmed.split('.').length === 2;
 }
 
 /**

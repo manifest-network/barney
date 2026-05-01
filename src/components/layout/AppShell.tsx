@@ -54,19 +54,20 @@ export function AppShell() {
     [signArbitrary]
   );
 
-  // Sync wallet state with AI context
+  // Ref-backed stable getOfflineSigner — cosmos-kit returns a fresh closure on most renders.
+  const getOfflineSignerRef = useRef(getOfflineSigner);
+  useEffect(() => { getOfflineSignerRef.current = getOfflineSigner; }, [getOfflineSigner]);
+  const stableGetOfflineSigner = useCallback(() => getOfflineSignerRef.current(), []);
+
+  // Sync wallet state with AI context. `getOfflineSigner` is intentionally not in deps —
+  // we route through `stableGetOfflineSigner` (ref-backed) to avoid effect churn.
   useEffect(() => {
     setClientManager(clientManager);
     setAddress(address);
     const canSign = isWalletConnected && typeof signArbitrary === 'function';
     setSignArbitrary(canSign ? wrappedSignArbitrary : undefined);
-    setGetOfflineSigner(isWalletConnected ? getOfflineSigner : undefined);
-  }, [clientManager, address, isWalletConnected, signArbitrary, getOfflineSigner, setClientManager, setAddress, setSignArbitrary, setGetOfflineSigner, wrappedSignArbitrary]);
-
-  // Account setup: one-shot faucet + credit funding on first connect
-  // Ref avoids unstable getOfflineSigner closure in useEffect deps (same pattern as useManifestMCP)
-  const getOfflineSignerRef = useRef(getOfflineSigner);
-  useEffect(() => { getOfflineSignerRef.current = getOfflineSigner; }, [getOfflineSigner]);
+    setGetOfflineSigner(isWalletConnected ? stableGetOfflineSigner : undefined);
+  }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, setGetOfflineSigner, wrappedSignArbitrary, stableGetOfflineSigner]);
 
   // Watch for wallet connection errors (e.g. Safari popup blocking)
   const prevStatusRef = useRef(status);

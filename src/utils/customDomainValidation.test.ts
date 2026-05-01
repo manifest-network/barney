@@ -60,6 +60,10 @@ describe('isApex', () => {
   it('strips trailing dot before counting', () => {
     expect(isApex('example.com.')).toBe(true);
   });
+
+  it('returns false for single-label hostnames (no TLD)', () => {
+    expect(isApex('localhost')).toBe(false);
+  });
 });
 
 describe('isReservedSuffix', () => {

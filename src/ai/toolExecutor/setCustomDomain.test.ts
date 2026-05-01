@@ -135,6 +135,19 @@ describe('executeSetCustomDomain', () => {
     }
   });
 
+  it('rejects single-item legacy lease when service_name is provided (even if it matches app name)', async () => {
+    const app = makeApp();
+    vi.mocked(getLeaseItemsForLease).mockResolvedValue([
+      { skuUuid: 'sku-1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: '', customDomain: '' } as any,
+    ]);
+    const r = await executeSetCustomDomain(
+      { app_name: 'myapp', custom_domain: 'app.example.com', service_name: 'myapp' },
+      makeOptions(app),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/single-service|drop the service_name/i);
+  });
+
   it('rejects unknown service_name in stack', async () => {
     const app = makeApp();
     vi.mocked(getLeaseItemsForLease).mockResolvedValue([

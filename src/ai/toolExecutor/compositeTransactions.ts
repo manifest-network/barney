@@ -16,7 +16,7 @@ import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
-import { isValidFqdn } from '../../utils/connection';
+import { isValidFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
 import { setItemCustomDomain } from '../../api/tx';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
@@ -2603,34 +2603,6 @@ export async function executeConfirmedUpdateApp(
 // ============================================================================
 
 /**
- * Resolve the provider-issued CNAME target for an app.
- * Stack: connection.services[serviceName].instances[0].fqdn
- * Single-service: connection.fqdn
- */
-function resolveExpectedCnameTarget(
-  app: AppEntry,
-  serviceName: string,
-): string | undefined {
-  const conn = app.connection;
-  if (!conn) return undefined;
-
-  if (serviceName !== '' && conn.services) {
-    const svcRaw = conn.services[serviceName];
-    if (svcRaw && typeof svcRaw === 'object') {
-      const svc = svcRaw as { fqdn?: string; instances?: { fqdn?: string }[] };
-      if (svc.fqdn && isValidFqdn(svc.fqdn)) return svc.fqdn;
-      const inst = svc.instances?.[0]?.fqdn;
-      if (inst && isValidFqdn(inst)) return inst;
-    }
-  }
-
-  if (conn.fqdn && isValidFqdn(conn.fqdn)) return conn.fqdn;
-  const inst = conn.instances?.[0]?.fqdn;
-  if (inst && isValidFqdn(inst)) return inst;
-  return undefined;
-}
-
-/**
  * Pre-validation for set_custom_domain. Returns confirmation result or error.
  */
 export async function executeSetCustomDomain(
@@ -2677,8 +2649,8 @@ export async function executeSetCustomDomain(
   const unnamedItems = leaseItems.filter(i => i.serviceName === '');
 
   if (leaseItems.length === 1 && unnamedItems.length === 1) {
-    // Legacy single-item lease: serviceName = ""
-    if (explicitServiceName !== '' && explicitServiceName !== app.name) {
+    // Legacy single-item lease: serviceName must be "" on chain.
+    if (explicitServiceName !== '') {
       return {
         success: false,
         error: `"${appName}" is a single-service app — drop the service_name argument.`,
@@ -2734,7 +2706,7 @@ export async function executeSetCustomDomain(
     }
   }
 
-  const expectedCnameTarget = resolveExpectedCnameTarget(app, serviceName);
+  const expectedCnameTarget = resolveExpectedCnameTarget(app.connection, serviceName);
 
   let confirmationMessage: string;
   if (customDomain === '') {

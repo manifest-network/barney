@@ -10712,11 +10712,11 @@ code.lease-card-mono {
 }
 
 .custom-domain-card__status-dot--pending { background: var(--color-warning-400); }
-.custom-domain-card__status-dot--issuing { background: var(--color-warning-400); animation: pulse 2s ease-in-out infinite; }
+.custom-domain-card__status-dot--issuing { background: var(--color-warning-400); animation: custom-domain-status-pulse 2s ease-in-out infinite; }
 .custom-domain-card__status-dot--active  { background: var(--color-success-400); }
 .custom-domain-card__status-dot--failed   { background: var(--color-error-400); }
 
-@keyframes pulse {
+@keyframes custom-domain-status-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }

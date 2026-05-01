@@ -16,6 +16,7 @@ import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../../api/provider-api';
 import { getLeaseStatus, getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
+import { resolveExpectedCnameTarget } from '../../utils/connection';
 import { requestFaucet } from '@manifest-network/manifest-mcp-chain';
 import { isFaucetEnabled, getFaucetBaseUrl, FAUCET_COOLDOWN_HOURS } from '../../api/faucet';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
@@ -261,22 +262,7 @@ export async function executeAppStatus(
   let displayCard: MessageCard | undefined;
   if (customDomains.length === 1) {
     const { serviceName, customDomain } = customDomains[0];
-    const expectedCnameTarget = (() => {
-      if (!appConnection) return undefined;
-      if (serviceName !== '' && appConnection.services) {
-        const svcRaw = appConnection.services[serviceName];
-        if (svcRaw && typeof svcRaw === 'object') {
-          const svc = svcRaw as { fqdn?: string; instances?: { fqdn?: string }[] };
-          if (svc.fqdn) return svc.fqdn;
-          const inst = svc.instances?.[0]?.fqdn;
-          if (inst) return inst;
-        }
-      }
-      if (appConnection.fqdn) return appConnection.fqdn;
-      const inst = appConnection.instances?.[0]?.fqdn;
-      if (inst) return inst;
-      return undefined;
-    })();
+    const expectedCnameTarget = resolveExpectedCnameTarget(appConnection, serviceName);
 
     displayCard = {
       type: 'custom_domain',

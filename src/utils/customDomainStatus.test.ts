@@ -95,6 +95,43 @@ describe('resolveDnsViaDoh', () => {
     const r = await resolveDnsViaDoh('blocked.example.com');
     expect(r.result).toBe('network_fail');
   });
+
+  it('returns ok with AAAA address on IPv6-only domain', async () => {
+    fetchSpy.mockImplementation((url: string) => {
+      const isAaaa = url.includes('type=AAAA');
+      const body = isAaaa
+        ? { Status: 0, Answer: [{ name: 'v6.example.com', type: 28, data: '2606:4700::1111' }] }
+        : { Status: 0 };
+      return Promise.resolve(new Response(JSON.stringify(body)) as any);
+    });
+    const r = await resolveDnsViaDoh('v6.example.com');
+    expect(r.result).toBe('ok');
+    expect(r.addresses).toEqual(['2606:4700::1111']);
+  });
+
+  it('queries A, AAAA, and CNAME in parallel', async () => {
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify({ Status: 3 })) as any);
+    await resolveDnsViaDoh('app.example.com');
+    const types = fetchSpy.mock.calls.map((c: unknown[]) => {
+      const u = String(c[0]);
+      return u.match(/type=(\w+)/)?.[1];
+    });
+    expect(types).toContain('A');
+    expect(types).toContain('AAAA');
+    expect(types).toContain('CNAME');
+  });
+
+  it('aborts immediately when external signal is already aborted', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    fetchSpy.mockImplementation((_url: string, opts?: RequestInit) => {
+      // The propagated signal must already be aborted before fetch is called.
+      if (opts?.signal?.aborted) return Promise.reject(new DOMException('aborted', 'AbortError'));
+      return Promise.resolve(new Response(JSON.stringify({ Status: 0 })) as any);
+    });
+    const r = await resolveDnsViaDoh('app.example.com', ac.signal);
+    expect(r.result).toBe('network_fail');
+  });
 });
 
 describe('probeHttps', () => {
