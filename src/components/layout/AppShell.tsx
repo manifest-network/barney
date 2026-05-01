@@ -34,7 +34,7 @@ function isPopupClosedError(msg: string): boolean {
 }
 
 export function AppShell() {
-  const { setClientManager, setAddress, setSignArbitrary } = useAI();
+  const { setClientManager, setAddress, setSignArbitrary, setGetOfflineSigner } = useAI();
   const { clientManager, address } = useManifestMCP();
   const { signArbitrary, isWalletConnected, isWalletConnecting, openView, getOfflineSigner, status, message, disconnect } = useChain(CHAIN_NAME);
   const toast = useToast();
@@ -60,7 +60,8 @@ export function AppShell() {
     setAddress(address);
     const canSign = isWalletConnected && typeof signArbitrary === 'function';
     setSignArbitrary(canSign ? wrappedSignArbitrary : undefined);
-  }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, wrappedSignArbitrary]);
+    setGetOfflineSigner(isWalletConnected ? getOfflineSigner : undefined);
+  }, [clientManager, address, isWalletConnected, signArbitrary, getOfflineSigner, setClientManager, setAddress, setSignArbitrary, setGetOfflineSigner, wrappedSignArbitrary]);
 
   // Account setup: one-shot faucet + credit funding on first connect
   // Ref avoids unstable getOfflineSigner closure in useEffect deps (same pattern as useManifestMCP)

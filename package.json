@@ -43,7 +43,7 @@
     "@manifest-network/manifest-mcp-chain": "0.6.2",
     "@manifest-network/manifest-mcp-core": "0.6.2",
     "@manifest-network/manifest-mcp-fred": "0.6.2",
-    "@manifest-network/manifestjs": "2.3.0",
+    "@manifest-network/manifestjs": "2.4.1",
     "axios": "1.13.2",
     "chain-registry": "2.0.140",
     "clsx": "2.1.1",

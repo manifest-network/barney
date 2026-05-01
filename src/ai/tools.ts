@@ -209,6 +209,32 @@ export const AI_TOOLS: ToolDefinition[] = [
     },
   },
 
+  {
+    type: 'function',
+    function: {
+      name: 'set_custom_domain',
+      description: 'Attach or clear a custom DNS domain (e.g. "app.example.com") on a deployed app. Pass an empty string for custom_domain to clear an existing domain. For multi-service stacks, the AI must pick service_name from the stack\'s services.',
+      parameters: {
+        type: 'object',
+        properties: {
+          app_name: {
+            type: 'string',
+            description: 'The app name to attach the domain to.',
+          },
+          custom_domain: {
+            type: 'string',
+            description: 'Fully qualified domain name (e.g. "app.example.com"). Empty string clears the existing custom domain.',
+          },
+          service_name: {
+            type: 'string',
+            description: 'For multi-service stacks: which service the domain applies to. Omit for single-service apps.',
+          },
+        },
+        required: ['app_name', 'custom_domain'],
+      },
+    },
+  },
+
   // --- Query tools ---
   {
     type: 'function',
@@ -428,6 +454,7 @@ export const CONFIRMATION_TOOLS = new Set([
   'fund_credits',
   'restart_app',
   'update_app',
+  'set_custom_domain',
   'cosmos_tx',
 ]);
 
@@ -499,6 +526,12 @@ export function getToolCallDescription(
       return `Fetching releases for "${args.app_name}"...`;
     case 'request_faucet':
       return 'Requesting tokens from faucet...';
+    case 'set_custom_domain': {
+      const domain = String(args.custom_domain ?? '').trim();
+      const target = String(args.app_name ?? '').trim();
+      if (domain === '') return `Clearing custom domain for "${target}"...`;
+      return `Setting custom domain "${domain}" for "${target}"...`;
+    }
     case 'cosmos_query':
       return `Querying ${args.module} ${args.subcommand}...`;
     case 'cosmos_tx':

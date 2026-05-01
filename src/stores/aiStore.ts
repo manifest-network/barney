@@ -8,7 +8,7 @@ import { createStore } from 'zustand/vanilla';
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import { checkApiHealth } from '../api/morpheus';
 import type { AISettings } from '../ai/validation';
-import type { SignArbitraryFn, PayloadAttachment, ToolResult } from '../ai/toolExecutor';
+import type { SignArbitraryFn, GetOfflineSignerFn, PayloadAttachment, ToolResult } from '../ai/toolExecutor';
 import type { DeployProgress } from '../ai/progress';
 import { validateFile, validateManifestContent } from '../utils/fileValidation';
 import { sha256, toHex } from '../utils/hash';
@@ -48,6 +48,7 @@ export interface AIStore {
   clientManager: CosmosClientManager | null;
   address: string | undefined;
   signArbitrary: SignArbitraryFn | undefined;
+  getOfflineSigner: GetOfflineSignerFn | undefined;
   abortController: AbortController | null;
   lastMessageTime: number;
   _toolCache: Map<string, { result: ToolResult; timestamp: number }>;
@@ -67,6 +68,7 @@ export interface AIStore {
   setClientManager: (manager: CosmosClientManager | null) => void;
   setAddress: (address: string | undefined) => void;
   setSignArbitrary: (fn: SignArbitraryFn | undefined) => void;
+  setGetOfflineSigner: (fn: GetOfflineSignerFn | undefined) => void;
   updateSettings: (settings: Partial<AISettings>) => void;
   clearHistory: () => void;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
@@ -100,6 +102,7 @@ export const createAIStore = () =>
     clientManager: null,
     address: undefined,
     signArbitrary: undefined,
+    getOfflineSigner: undefined,
     abortController: null,
     lastMessageTime: 0,
     _toolCache: new Map(),
@@ -155,6 +158,10 @@ export const createAIStore = () =>
 
     setSignArbitrary: (fn) => {
       set({ signArbitrary: fn });
+    },
+
+    setGetOfflineSigner: (fn) => {
+      set({ getOfflineSigner: fn });
     },
 
     // --- Payload attachment ---

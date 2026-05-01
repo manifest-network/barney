@@ -25,6 +25,7 @@ import { logError } from '../../utils/errors';
 import { withRetry, withTimeout } from '../../api/utils';
 import { getProviderAuthToken } from './utils';
 import type { ToolResult, ToolExecutorOptions } from './types';
+import type { MessageCard } from '../../contexts/aiTypes';
 
 /**
  * Execute list_apps: Get apps from registry, reconcile with chain.
@@ -125,11 +126,16 @@ export async function executeAppStatus(
   // Get chain state
   let chainState = 'unknown';
   let leaseState: LeaseState | null = null;
+  let leaseItems: Array<{ serviceName: string; customDomain: string }> = [];
   try {
     const lease = await getLease(app.leaseUuid);
     if (lease) {
       leaseState = lease.state as LeaseState;
       chainState = LEASE_STATE_LABELS[leaseState]?.toLowerCase() ?? 'unknown';
+      leaseItems = lease.items.map(i => ({
+        serviceName: i.serviceName,
+        customDomain: i.customDomain,
+      }));
     }
   } catch (error) {
     logError('compositeQueries.executeAppStatus.chainState', error);
@@ -246,6 +252,45 @@ export async function executeAppStatus(
     }
   }
 
+  // Surface custom domains from chain
+  const customDomains = leaseItems
+    .filter(i => i.customDomain !== '')
+    .map(i => ({ serviceName: i.serviceName, customDomain: i.customDomain }));
+
+  // Compute expectedCnameTarget for the single-domain case (used for displayCard)
+  let displayCard: MessageCard | undefined;
+  if (customDomains.length === 1) {
+    const { serviceName, customDomain } = customDomains[0];
+    const expectedCnameTarget = (() => {
+      if (!appConnection) return undefined;
+      if (serviceName !== '' && appConnection.services) {
+        const svcRaw = appConnection.services[serviceName];
+        if (svcRaw && typeof svcRaw === 'object') {
+          const svc = svcRaw as { fqdn?: string; instances?: { fqdn?: string }[] };
+          if (svc.fqdn) return svc.fqdn;
+          const inst = svc.instances?.[0]?.fqdn;
+          if (inst) return inst;
+        }
+      }
+      if (appConnection.fqdn) return appConnection.fqdn;
+      const inst = appConnection.instances?.[0]?.fqdn;
+      if (inst) return inst;
+      return undefined;
+    })();
+
+    displayCard = {
+      type: 'custom_domain',
+      data: {
+        appName: app.name,
+        fqdn: customDomain,
+        leaseUuid: app.leaseUuid,
+        serviceName,
+        expectedCnameTarget,
+        expectedAddress: address,
+      },
+    };
+  }
+
   return {
     success: true,
     data: {
@@ -257,7 +302,9 @@ export async function executeAppStatus(
       url: connectionUrl || appUrl,
       chainState,
       created: new Date(app.createdAt).toISOString(),
+      ...(customDomains.length > 0 ? { customDomains } : {}),
     },
+    ...(displayCard ? { displayCard } : {}),
   };
 }
 

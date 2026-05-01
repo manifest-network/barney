@@ -92,7 +92,7 @@ vi.mock('../../utils/leaseState', () => ({
   },
 }));
 
-import { getLeasesByTenant, getLeasesByTenantPaginated } from '../../api/billing';
+import { getLeasesByTenant, getLeasesByTenantPaginated, getLease } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
@@ -193,6 +193,78 @@ describe('executeAppStatus', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).name).toBe('my-app');
     expect((result.data as any).status).toBe('running');
+  });
+
+  it('surfaces customDomains array when chain returns lease items with custom domains', async () => {
+    const app = makeApp({ connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' } });
+    vi.mocked(getLease).mockResolvedValue({
+      state: 2,
+      items: [
+        { skuUuid: 's1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: '', customDomain: 'app.example.com' },
+      ],
+    } as any);
+    const registry = makeRegistry([app]);
+    const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as any).customDomains).toEqual([
+        { serviceName: '', customDomain: 'app.example.com' },
+      ]);
+    }
+  });
+
+  it('emits CustomDomainCard displayCard when exactly one custom domain is set', async () => {
+    const app = makeApp({ connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' } });
+    vi.mocked(getLease).mockResolvedValue({
+      state: 2,
+      items: [
+        { skuUuid: 's1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: '', customDomain: 'app.example.com' },
+      ],
+    } as any);
+    const registry = makeRegistry([app]);
+    const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
+    expect(result.success).toBe(true);
+    if (result.success && !result.requiresConfirmation) {
+      expect(result.displayCard?.type).toBe('custom_domain');
+      if (result.displayCard?.type === 'custom_domain') {
+        expect(result.displayCard.data.fqdn).toBe('app.example.com');
+        expect(result.displayCard.data.expectedCnameTarget).toBe('auto.barney0.manifest0.net');
+      }
+    }
+  });
+
+  it('does not emit displayCard when multiple custom domains are set', async () => {
+    const app = makeApp();
+    vi.mocked(getLease).mockResolvedValue({
+      state: 2,
+      items: [
+        { skuUuid: 's1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: 'web', customDomain: 'web.example.com' },
+        { skuUuid: 's2', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: 'api', customDomain: 'api.example.com' },
+      ],
+    } as any);
+    const registry = makeRegistry([app]);
+    const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
+    expect(result.success).toBe(true);
+    if (result.success && !result.requiresConfirmation) {
+      expect(result.displayCard).toBeUndefined();
+      expect((result.data as any).customDomains).toHaveLength(2);
+    }
+  });
+
+  it('does not include customDomains key when no items have a custom domain', async () => {
+    const app = makeApp();
+    vi.mocked(getLease).mockResolvedValue({
+      state: 2,
+      items: [
+        { skuUuid: 's1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: '', customDomain: '' },
+      ],
+    } as any);
+    const registry = makeRegistry([app]);
+    const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as any).customDomains).toBeUndefined();
+    }
   });
 });
 

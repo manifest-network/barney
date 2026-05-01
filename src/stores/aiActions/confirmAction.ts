@@ -29,7 +29,7 @@ export async function confirmActionFn(get: Get, set: Set, editedManifestJson?: s
     return;
   }
 
-  const { address, signArbitrary } = get();
+  const { address, signArbitrary, getOfflineSigner } = get();
   const { messageId } = pendingConfirmation;
 
   // Clone action to avoid mutating React state; apply user edits if present
@@ -57,6 +57,7 @@ export async function confirmActionFn(get: Get, set: Set, editedManifestJson?: s
         clientManager,
         address,
         signArbitrary,
+        getOfflineSigner,
         onProgress: (progress) => set({ deployProgress: { ...progress } }),
         appRegistry: getAppRegistryAccess(),
         signal: get().abortController?.signal,
@@ -90,9 +91,10 @@ export async function confirmActionFn(get: Get, set: Set, editedManifestJson?: s
       isStreaming: true,
     };
 
+    const displayCard = result.success && !result.requiresConfirmation ? result.displayCard : undefined;
     const updatedWithAssistant = get().messages.map((m) =>
       m.id === messageId
-        ? { ...m, content: resultContent, isStreaming: false }
+        ? { ...m, content: resultContent, card: displayCard, isStreaming: false }
         : m
     );
     set({ messages: [...updatedWithAssistant, newAssistantMessage] });

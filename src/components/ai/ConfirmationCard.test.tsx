@@ -618,6 +618,131 @@ describe('ConfirmationCard with stack manifest', () => {
     expect(element.props.action.args._generatedManifest).toBe(manifest);
   });
 
+  describe('set_custom_domain branch', () => {
+    function renderInto(action: PendingAction) {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      flushSync(() => { root.render(createElement(ConfirmationCard, { action, onConfirm: vi.fn(), onCancel: vi.fn() })); });
+      return { container, cleanup: () => { flushSync(() => { root.unmount(); }); container.remove(); } };
+    }
+
+    it('renders DNS table with CNAME target on attach', () => {
+      const action = makeAction({
+        toolName: 'set_custom_domain',
+        args: {
+          app_name: 'my-api',
+          leaseUuid: 'lu1',
+          serviceName: '',
+          customDomain: 'app.example.com',
+          currentDomain: '',
+          expectedCnameTarget: 'auto.barney0.manifest0.net',
+        },
+        description: 'Attach "app.example.com" to "my-api"?',
+      });
+      const { container, cleanup } = renderInto(action);
+      try {
+        const text = container.textContent ?? '';
+        expect(text).toContain('CNAME');
+        expect(text).toContain('app.example.com');
+        expect(text).toContain('auto.barney0.manifest0.net');
+        expect(text).toMatch(/orange-cloud proxy/i);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('renders apex warning when warning provided', () => {
+      const action = makeAction({
+        toolName: 'set_custom_domain',
+        args: {
+          app_name: 'my-api',
+          leaseUuid: 'lu1',
+          serviceName: '',
+          customDomain: 'example.com',
+          currentDomain: '',
+          expectedCnameTarget: 'auto.barney0.manifest0.net',
+          warning: 'This is an apex domain. Use ALIAS / ANAME / CNAME-flattening.',
+        },
+        description: 'Attach "example.com"?',
+      });
+      const { container, cleanup } = renderInto(action);
+      try {
+        const text = container.textContent ?? '';
+        expect(text).toMatch(/apex/i);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('renders clear-banner when customDomain is empty', () => {
+      const action = makeAction({
+        toolName: 'set_custom_domain',
+        args: {
+          app_name: 'my-api',
+          leaseUuid: 'lu1',
+          serviceName: '',
+          customDomain: '',
+          currentDomain: 'old.example.com',
+        },
+        description: 'Clear custom domain "old.example.com" from "my-api"?',
+      });
+      const { container, cleanup } = renderInto(action);
+      try {
+        const text = container.textContent ?? '';
+        expect(text).toMatch(/clear/i);
+        expect(text).toContain('old.example.com');
+        expect(text).toContain('my-api');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('does not show CNAME table when clearing', () => {
+      const action = makeAction({
+        toolName: 'set_custom_domain',
+        args: {
+          app_name: 'my-api',
+          leaseUuid: 'lu1',
+          serviceName: '',
+          customDomain: '',
+          currentDomain: 'old.example.com',
+        },
+        description: 'Clear?',
+      });
+      const { container, cleanup } = renderInto(action);
+      try {
+        const text = container.textContent ?? '';
+        expect(text).not.toMatch(/registrar/i);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('shows replacement note when changing domain', () => {
+      const action = makeAction({
+        toolName: 'set_custom_domain',
+        args: {
+          app_name: 'my-api',
+          leaseUuid: 'lu1',
+          serviceName: '',
+          customDomain: 'new.example.com',
+          currentDomain: 'old.example.com',
+          expectedCnameTarget: 'auto.barney0.manifest0.net',
+        },
+        description: 'Replace?',
+      });
+      const { container, cleanup } = renderInto(action);
+      try {
+        const text = container.textContent ?? '';
+        expect(text).toContain('old.example.com');
+        expect(text).toContain('new.example.com');
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
   it('displays (ingress) label on ports with ingress flag in read-only stack summary', () => {
     // Use a non-editable tool name so the read-only parseStackManifest path renders
     const manifest = JSON.stringify({

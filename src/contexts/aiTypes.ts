@@ -13,10 +13,25 @@ export interface LogsCardData {
   truncated: boolean;
 }
 
+/**
+ * Data for a custom-domain status card.
+ * `expectedCnameTarget` is the provider-issued FQDN that the user's CNAME should point at.
+ * `expectedAddress` is the wallet that issued the SetItemCustomDomain TX (for cross-wallet hint).
+ */
+export interface CustomDomainCardData {
+  appName: string;
+  fqdn: string;
+  leaseUuid: string;
+  serviceName: string;
+  expectedCnameTarget?: string;
+  expectedAddress?: string;
+}
+
 /** Discriminated union for message display cards. */
 export type MessageCard =
   | { type: 'logs'; data: LogsCardData }
-  | { type: 'help'; data: null };
+  | { type: 'help'; data: null }
+  | { type: 'custom_domain'; data: CustomDomainCardData };
 
 export interface ChatMessage {
   id: string;

@@ -61,7 +61,135 @@ function parseStackManifest(action: PendingAction): Record<string, StackServiceS
 }
 
 /** Internal args that should not be shown in the confirmation parameters. */
-const INTERNAL_ARGS = new Set(['_generatedManifest', '_serviceNames', '_isStack']);
+const INTERNAL_ARGS = new Set([
+  '_generatedManifest',
+  '_serviceNames',
+  '_isStack',
+  // set_custom_domain internal-ish args (rendered in custom branch instead)
+  'leaseUuid',
+  'serviceName',
+  'customDomain',
+  'currentDomain',
+  'expectedCnameTarget',
+  'warning',
+  'address',
+]);
+
+interface CustomDomainBranchData {
+  appName: string;
+  serviceName: string;
+  customDomain: string;
+  currentDomain: string;
+  expectedCnameTarget?: string;
+  warning?: string;
+}
+
+function parseCustomDomainArgs(action: PendingAction): CustomDomainBranchData | null {
+  if (action.toolName !== 'set_custom_domain') return null;
+  const args = action.args;
+  return {
+    appName: typeof args.app_name === 'string' ? args.app_name : '',
+    serviceName: typeof args.serviceName === 'string' ? args.serviceName : '',
+    customDomain: typeof args.customDomain === 'string' ? args.customDomain : '',
+    currentDomain: typeof args.currentDomain === 'string' ? args.currentDomain : '',
+    expectedCnameTarget: typeof args.expectedCnameTarget === 'string' ? args.expectedCnameTarget : undefined,
+    warning: typeof args.warning === 'string' ? args.warning : undefined,
+  };
+}
+
+function CustomDomainBranch({ data }: { data: CustomDomainBranchData }) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
+  const isClear = data.customDomain === '';
+  const target = data.expectedCnameTarget ?? '<provider FQDN — appears once the app is running>';
+  const showTarget = !isClear && data.expectedCnameTarget;
+
+  return (
+    <div className="confirmation-details">
+      {isClear ? (
+        <div className="confirmation-payload" role="alert">
+          <p className="text-sm text-warning">
+            This will clear <code className="font-mono">{data.currentDomain}</code> from <code className="font-mono">{data.appName}</code>.
+            HTTPS at that hostname will stop working until you point it at a new lease.
+          </p>
+        </div>
+      ) : (
+        <>
+          <p className="confirmation-details-title">DNS record to add at your registrar</p>
+          <table className="custom-domain-dns-table" aria-label="DNS record">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Name</th>
+                <th>Value</th>
+                <th>TTL</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code className="font-mono">CNAME</code></td>
+                <td>
+                  <code className="font-mono">{data.customDomain}</code>
+                  {' '}
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(data.customDomain)}
+                    className="btn-icon"
+                    aria-label="Copy domain"
+                    title="Copy"
+                  >
+                    {isCopied(data.customDomain) ? (
+                      <CheckCheck className="w-3.5 h-3.5 text-success" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5 text-muted" />
+                    )}
+                  </button>
+                </td>
+                <td>
+                  <code className="font-mono">{target}</code>
+                  {showTarget && (
+                    <>
+                      {' '}
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(data.expectedCnameTarget!)}
+                        className="btn-icon"
+                        aria-label="Copy target"
+                        title="Copy"
+                      >
+                        {isCopied(data.expectedCnameTarget!) ? (
+                          <CheckCheck className="w-3.5 h-3.5 text-success" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5 text-muted" />
+                        )}
+                      </button>
+                    </>
+                  )}
+                </td>
+                <td>Auto / 300</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <p className="text-xs text-muted mt-2">
+            Cloudflare users: turn the orange-cloud proxy <strong>off</strong> for this record. Issuance won't complete with proxy on.
+          </p>
+
+          {data.currentDomain !== '' && (
+            <p className="text-xs text-muted mt-1">
+              Replacing existing domain <code className="font-mono">{data.currentDomain}</code>.
+            </p>
+          )}
+
+          {data.warning && (
+            <p className="text-sm text-warning mt-2" role="alert">
+              {data.warning}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 function InlineCopyButton({ value }: { value: string }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
@@ -130,6 +258,8 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     return parseStackManifest(action);
   }, [action, isEditable, isStackEditable]);
 
+  const customDomainData = useMemo(() => parseCustomDomainArgs(action), [action]);
+
   const handleConfirm = useCallback(() => {
     if (editedManifest) {
       onConfirm(serializeManifest(editedManifest));
@@ -173,7 +303,9 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
       <div className="confirmation-body">
         <p id="confirmation-description" className="confirmation-description">{action.description}</p>
 
-        {isStackEditable && editedStack ? (
+        {customDomainData ? (
+          <CustomDomainBranch data={customDomainData} />
+        ) : isStackEditable && editedStack ? (
           <div className="confirmation-details">
             <StackManifestEditor stack={editedStack} onChange={setEditedStack} />
           </div>

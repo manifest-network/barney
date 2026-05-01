@@ -14,7 +14,7 @@ export type { TxEvent };
 import { Unit } from './sku';
 export { Unit };
 
-const { MsgFundCredit } = liftedinit.billing.v1;
+const { MsgFundCredit, MsgSetItemCustomDomain } = liftedinit.billing.v1;
 
 /**
  * Discriminated union for transaction results.
@@ -92,6 +92,18 @@ async function signAndBroadcast(
       error: err instanceof Error ? err.message : 'Unknown error',
     };
   }
+}
+
+export async function setItemCustomDomain(
+  signer: OfflineSigner,
+  sender: string,
+  leaseUuid: string,
+  serviceName: string,
+  customDomain: string
+): Promise<TxResult> {
+  return signAndBroadcast(signer, sender, [
+    buildMsg(MsgSetItemCustomDomain, { sender, leaseUuid, serviceName, customDomain }),
+  ]);
 }
 
 export async function fundCredit(

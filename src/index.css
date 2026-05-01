@@ -10661,6 +10661,111 @@ code.lease-card-mono {
 }
 
 /* ============================================
+   CUSTOM DOMAIN CARD
+   ============================================ */
+
+.custom-domain-card {
+  margin: 0.75rem 1rem;
+  padding: 1rem;
+  background: var(--color-surface-800);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-lg);
+}
+
+.custom-domain-card__header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.custom-domain-card__title {
+  font-weight: 600;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+}
+
+.custom-domain-card__fqdn {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--color-primary-400);
+}
+
+.custom-domain-card__status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-left: auto;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: var(--color-surface-900);
+}
+
+.custom-domain-card__status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: var(--color-surface-400);
+  flex-shrink: 0;
+}
+
+.custom-domain-card__status-dot--pending { background: var(--color-warning-400); }
+.custom-domain-card__status-dot--issuing { background: var(--color-warning-400); animation: pulse 2s ease-in-out infinite; }
+.custom-domain-card__status-dot--active  { background: var(--color-success-400); }
+.custom-domain-card__status-dot--failed   { background: var(--color-error-400); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.custom-domain-card__detail {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+
+.custom-domain-card__hint {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 0.5rem;
+}
+
+.custom-domain-card__actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.custom-domain-dns-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+}
+
+.custom-domain-dns-table th,
+.custom-domain-dns-table td {
+  text-align: left;
+  padding: 0.375rem 0.5rem;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.custom-domain-dns-table th {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.custom-domain-dns-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* ============================================
    COSMOS-KIT WALLET MODAL OVERRIDES
    ============================================ */
 

@@ -17,6 +17,10 @@ import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
 import { isValidFqdn } from '../../utils/connection';
+import { setItemCustomDomain } from '../../api/tx';
+import { getLeaseItemsForLease } from '../../api/leaseItems';
+import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
+import { validateAll } from '../../utils/customDomainValidation';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
 import { extractYamlServiceNames } from '../../utils/fileValidation';
@@ -2592,4 +2596,241 @@ export async function executeConfirmedUpdateApp(
     onProgress?.({ phase: 'failed', detail: 'Update polling failed', operation: 'update' });
     return { success: false, error: `Update may still be in progress. Use app_status("${name}") to check.` };
   }
+}
+
+// ============================================================================
+// set_custom_domain
+// ============================================================================
+
+/**
+ * Resolve the provider-issued CNAME target for an app.
+ * Stack: connection.services[serviceName].instances[0].fqdn
+ * Single-service: connection.fqdn
+ */
+function resolveExpectedCnameTarget(
+  app: AppEntry,
+  serviceName: string,
+): string | undefined {
+  const conn = app.connection;
+  if (!conn) return undefined;
+
+  if (serviceName !== '' && conn.services) {
+    const svcRaw = conn.services[serviceName];
+    if (svcRaw && typeof svcRaw === 'object') {
+      const svc = svcRaw as { fqdn?: string; instances?: { fqdn?: string }[] };
+      if (svc.fqdn && isValidFqdn(svc.fqdn)) return svc.fqdn;
+      const inst = svc.instances?.[0]?.fqdn;
+      if (inst && isValidFqdn(inst)) return inst;
+    }
+  }
+
+  if (conn.fqdn && isValidFqdn(conn.fqdn)) return conn.fqdn;
+  const inst = conn.instances?.[0]?.fqdn;
+  if (inst && isValidFqdn(inst)) return inst;
+  return undefined;
+}
+
+/**
+ * Pre-validation for set_custom_domain. Returns confirmation result or error.
+ */
+export async function executeSetCustomDomain(
+  args: Record<string, unknown>,
+  options: ToolExecutorOptions,
+): Promise<ToolResult> {
+  const { address, appRegistry } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!appRegistry) return { success: false, error: 'App registry not available' };
+
+  const appName = String(args.app_name ?? '').trim();
+  const customDomainRaw = typeof args.custom_domain === 'string' ? args.custom_domain : '';
+  const customDomain = customDomainRaw.trim().replace(/\.$/, '').toLowerCase();
+  const explicitServiceName = typeof args.service_name === 'string' ? args.service_name.trim() : '';
+
+  if (!appName) return { success: false, error: 'app_name is required.' };
+
+  const app = appRegistry.findApp(address, appName);
+  if (!app) return { success: false, error: `No app found matching "${appName}".` };
+
+  // Validate format/apex/reserved when not clearing
+  let warning: string | undefined;
+  if (customDomain !== '') {
+    const validation = await validateAll(customDomain);
+    if (validation.error) return { success: false, error: validation.error };
+    warning = validation.warning;
+  }
+
+  // Resolve service_name from chain LeaseItems
+  let leaseItems: Awaited<ReturnType<typeof getLeaseItemsForLease>>;
+  try {
+    leaseItems = await getLeaseItemsForLease(app.leaseUuid);
+  } catch (err) {
+    logError('compositeTransactions.executeSetCustomDomain.getLeaseItems', err);
+    return { success: false, error: 'Failed to read lease items from chain. Try again.' };
+  }
+
+  if (leaseItems.length === 0) {
+    return { success: false, error: `No lease items found for "${appName}". The lease may have been closed.` };
+  }
+
+  let serviceName = '';
+  const namedItems = leaseItems.filter(i => i.serviceName !== '');
+  const unnamedItems = leaseItems.filter(i => i.serviceName === '');
+
+  if (leaseItems.length === 1 && unnamedItems.length === 1) {
+    // Legacy single-item lease: serviceName = ""
+    if (explicitServiceName !== '' && explicitServiceName !== app.name) {
+      return {
+        success: false,
+        error: `"${appName}" is a single-service app — drop the service_name argument.`,
+      };
+    }
+    serviceName = '';
+  } else if (unnamedItems.length > 0 && namedItems.length === 0) {
+    // Multi-item legacy lease — chain rejects these for custom_domain.
+    return {
+      success: false,
+      error: `"${appName}" predates per-service domains and has multiple items without service names. Re-deploy with explicit service names to use custom domains.`,
+    };
+  } else {
+    // Modern stack with per-service names.
+    if (!explicitServiceName) {
+      const available = namedItems.map(i => i.serviceName).join(', ');
+      return {
+        success: false,
+        error: `"${appName}" is a multi-service stack — pass service_name. Available services: ${available}.`,
+      };
+    }
+    const match = namedItems.find(i => i.serviceName === explicitServiceName);
+    if (!match) {
+      const available = namedItems.map(i => i.serviceName).join(', ');
+      return {
+        success: false,
+        error: `Service "${explicitServiceName}" not found in "${appName}". Available: ${available}.`,
+      };
+    }
+    serviceName = explicitServiceName;
+  }
+
+  // Find current domain on the matched item (for change-detection)
+  const currentDomain = leaseItems.find(i => i.serviceName === serviceName)?.customDomain ?? '';
+
+  if (customDomain === currentDomain) {
+    if (customDomain === '') {
+      return { success: false, error: `"${appName}" has no custom domain to clear.` };
+    }
+    return { success: false, error: `"${appName}" already has "${customDomain}" attached.` };
+  }
+
+  // Uniqueness pre-check (not authoritative — chain still verifies on TX).
+  if (customDomain !== '') {
+    try {
+      const existing = await queryLeaseByCustomDomain(customDomain);
+      if (existing && existing.leaseUuid !== app.leaseUuid) {
+        return { success: false, error: `"${customDomain}" is already attached to another lease. Pick a different domain.` };
+      }
+    } catch (err) {
+      logError('compositeTransactions.executeSetCustomDomain.queryLeaseByCustomDomain', err);
+      // Don't block — chain will reject if duplicate.
+    }
+  }
+
+  const expectedCnameTarget = resolveExpectedCnameTarget(app, serviceName);
+
+  let confirmationMessage: string;
+  if (customDomain === '') {
+    confirmationMessage = `Clear custom domain "${currentDomain}" from "${appName}"?`;
+  } else if (currentDomain === '') {
+    confirmationMessage = `Attach "${customDomain}" to "${appName}"?`;
+  } else {
+    confirmationMessage = `Change "${appName}" custom domain from "${currentDomain}" to "${customDomain}"?`;
+  }
+
+  return {
+    success: true,
+    requiresConfirmation: true,
+    confirmationMessage,
+    pendingAction: {
+      toolName: 'set_custom_domain',
+      args: {
+        app_name: app.name,
+        leaseUuid: app.leaseUuid,
+        serviceName,
+        customDomain,
+        currentDomain,
+        expectedCnameTarget,
+        warning,
+        address,
+      },
+    },
+  };
+}
+
+/**
+ * Execute set_custom_domain after user confirmation.
+ */
+export async function executeConfirmedSetCustomDomain(
+  args: Record<string, unknown>,
+  _clientManager: CosmosClientManager,
+  options: ToolExecutorOptions,
+): Promise<ToolResult> {
+  const { getOfflineSigner, address } = options;
+  if (!address) return { success: false, error: 'Wallet not connected.' };
+  if (!getOfflineSigner) {
+    return { success: false, error: 'Wallet signer not available — reconnect your wallet and try again.' };
+  }
+
+  const appName = args.app_name as string;
+  const leaseUuid = args.leaseUuid as string;
+  const serviceName = (args.serviceName as string) ?? '';
+  const customDomain = (args.customDomain as string) ?? '';
+  const expectedCnameTarget = args.expectedCnameTarget as string | undefined;
+
+  let signer;
+  try {
+    signer = getOfflineSigner();
+  } catch (err) {
+    logError('compositeTransactions.executeConfirmedSetCustomDomain.getOfflineSigner', err);
+    return { success: false, error: 'Failed to load wallet signer.' };
+  }
+
+  const result = await setItemCustomDomain(signer, address, leaseUuid, serviceName, customDomain);
+
+  if (!result.success) {
+    return { success: false, error: result.error };
+  }
+
+  if (customDomain === '') {
+    return {
+      success: true,
+      data: {
+        message: `Custom domain cleared for "${appName}".`,
+        app_name: appName,
+        custom_domain: null,
+        transactionHash: result.transactionHash,
+      },
+    };
+  }
+
+  return {
+    success: true,
+    data: {
+      message: `Custom domain "${customDomain}" attached to "${appName}". Add a CNAME at your registrar pointing at ${expectedCnameTarget ?? '<provider FQDN>'}.`,
+      app_name: appName,
+      custom_domain: customDomain,
+      service_name: serviceName,
+      expected_cname_target: expectedCnameTarget,
+      transactionHash: result.transactionHash,
+    },
+    displayCard: {
+      type: 'custom_domain',
+      data: {
+        appName,
+        fqdn: customDomain,
+        leaseUuid,
+        serviceName,
+        expectedCnameTarget,
+        expectedAddress: address,
+      },
+    },
+  };
 }

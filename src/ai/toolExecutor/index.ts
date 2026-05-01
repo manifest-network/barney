@@ -30,11 +30,13 @@ import {
   executeConfirmedRestartApp,
   executeUpdateApp,
   executeConfirmedUpdateApp,
+  executeSetCustomDomain,
+  executeConfirmedSetCustomDomain,
 } from './compositeTransactions';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 
 // Re-export types
-export type { ToolResult, ToolExecutorOptions, PendingAction, SignResult, SignArbitraryFn, PayloadAttachment } from './types';
+export type { ToolResult, ToolExecutorOptions, PendingAction, SignResult, SignArbitraryFn, GetOfflineSignerFn, PayloadAttachment } from './types';
 export type { AppRegistryAccess } from './types';
 
 /** Query tools that execute immediately */
@@ -57,6 +59,7 @@ const TX_TOOLS = new Set([
   'fund_credits',
   'restart_app',
   'update_app',
+  'set_custom_domain',
 ]);
 
 /**
@@ -117,6 +120,8 @@ export async function executeTool(
           return await executeRestartApp(args, options);
         case 'update_app':
           return await executeUpdateApp(args, options, payload);
+        case 'set_custom_domain':
+          return await executeSetCustomDomain(args, options);
         default:
           return { success: false, error: `Unknown TX tool: ${toolName}` };
       }
@@ -174,6 +179,8 @@ export async function executeConfirmedTool(
         return await executeConfirmedRestartApp(args, clientManager, options);
       case 'update_app':
         return await executeConfirmedUpdateApp(args, clientManager, options, payload);
+      case 'set_custom_domain':
+        return await executeConfirmedSetCustomDomain(args, clientManager, options);
       default:
         return { success: false, error: `Unknown confirmed tool: ${toolName}` };
     }

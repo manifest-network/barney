@@ -142,8 +142,13 @@ describe('AI_TOOLS', () => {
     expect(toolNames).toContain('get_logs');
   });
 
-  it('has 16 tools total', () => {
-    expect(AI_TOOLS).toHaveLength(16);
+  it('has 17 tools total', () => {
+    expect(AI_TOOLS).toHaveLength(17);
+  });
+
+  it('includes set_custom_domain tool', () => {
+    const toolNames = AI_TOOLS.map((t) => t.function.name);
+    expect(toolNames).toContain('set_custom_domain');
   });
 
   it('includes request_faucet tool', () => {
