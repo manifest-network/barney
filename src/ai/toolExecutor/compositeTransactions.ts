@@ -20,6 +20,7 @@ import { isValidFqdn, normalizeFqdn, resolveExpectedCnameTarget } from '../../ut
 import { setItemCustomDomain } from '../../api/tx';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
+import { getDomainForService } from '../../api/leaseDomains';
 import { validateAll } from '../../utils/customDomainValidation';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
@@ -2729,7 +2730,7 @@ export async function executeSetCustomDomain(
   }
 
   // Find current domain on the matched item (for change-detection)
-  const currentDomain = leaseItems.find(i => i.serviceName === serviceName)?.customDomain ?? '';
+  const currentDomain = getDomainForService(leaseItems, serviceName);
 
   if (customDomain === currentDomain) {
     if (customDomain === '') {

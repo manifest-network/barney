@@ -17,6 +17,8 @@ import { getProviderHealth, getLeaseConnectionInfo } from '../../api/provider-ap
 import { getLeaseStatus, getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
+import { getDomainAssignments } from '../../api/leaseDomains';
+import type { Lease } from '../../api/billing';
 import { requestFaucet } from '@manifest-network/manifest-mcp-chain';
 import { isFaucetEnabled, getFaucetBaseUrl, FAUCET_COOLDOWN_HOURS } from '../../api/faucet';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
@@ -127,16 +129,12 @@ export async function executeAppStatus(
   // Get chain state
   let chainState = 'unknown';
   let leaseState: LeaseState | null = null;
-  let leaseItems: Array<{ serviceName: string; customDomain: string }> = [];
+  let lease: Lease | null = null;
   try {
-    const lease = await getLease(app.leaseUuid);
+    lease = await getLease(app.leaseUuid);
     if (lease) {
       leaseState = lease.state as LeaseState;
       chainState = LEASE_STATE_LABELS[leaseState]?.toLowerCase() ?? 'unknown';
-      leaseItems = lease.items.map(i => ({
-        serviceName: i.serviceName,
-        customDomain: i.customDomain,
-      }));
     }
   } catch (error) {
     logError('compositeQueries.executeAppStatus.chainState', error);
@@ -253,20 +251,16 @@ export async function executeAppStatus(
     }
   }
 
-  // Surface custom domains from chain
-  const customDomains = leaseItems
-    .filter(i => i.customDomain !== '')
-    .map(i => ({ serviceName: i.serviceName, customDomain: i.customDomain }));
+  // Surface custom domains from chain (single seam — see leaseDomains.ts)
+  const customDomains = getDomainAssignments(lease?.items);
 
   // Compute displayCard:
   //  - exactly one custom domain: status view (the existing behavior)
   //  - no domain on a single-item lease (running): "no domain" form so the user can set one
-  //  - multi-domain stacks or stopped apps: skip (ambiguous / not actionable)
+  //  - multi-domain stacks or stopped apps: skip (ambiguous / not actionable today)
   let displayCard: MessageCard | undefined;
   if (customDomains.length === 1) {
     const { serviceName, customDomain } = customDomains[0];
-    const expectedCnameTarget = resolveExpectedCnameTarget(appConnection, serviceName);
-
     displayCard = {
       type: 'custom_domain',
       data: {
@@ -274,16 +268,16 @@ export async function executeAppStatus(
         fqdn: customDomain,
         leaseUuid: app.leaseUuid,
         serviceName,
-        expectedCnameTarget,
+        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
         expectedAddress: address,
       },
     };
   } else if (
     customDomains.length === 0 &&
-    leaseItems.length === 1 &&
+    lease?.items.length === 1 &&
     currentStatus === 'running'
   ) {
-    const serviceName = leaseItems[0].serviceName;
+    const serviceName = lease.items[0].serviceName;
     displayCard = {
       type: 'custom_domain',
       data: {
