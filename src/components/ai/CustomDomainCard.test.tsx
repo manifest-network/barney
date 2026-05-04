@@ -90,7 +90,7 @@ describe('CustomDomainCard', () => {
     vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
     vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok', cname: 'auto.barney0.manifest0.net' });
     vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' });
-    vi.mocked(computeStatus).mockReturnValue('active');
+    vi.mocked(computeStatus).mockReturnValue({ kind: 'active' });
 
     await act(async () => {
       root.render(createElement(CustomDomainCard, { data: makeData() }));
@@ -202,7 +202,7 @@ describe('CustomDomainCard', () => {
 
     vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok', cname: 'auto.barney0.manifest0.net' });
     vi.mocked(probeHttps).mockResolvedValue({ result: 'unreachable' });
-    vi.mocked(computeStatus).mockReturnValue('issuing_cert');
+    vi.mocked(computeStatus).mockReturnValue({ kind: 'issuing_cert' });
 
     await act(async () => {
       root.render(createElement(CustomDomainCard, { data: makeData() }));
@@ -213,8 +213,23 @@ describe('CustomDomainCard', () => {
 
     // Now active
     vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' });
-    vi.mocked(computeStatus).mockReturnValue('active');
+    vi.mocked(computeStatus).mockReturnValue({ kind: 'active' });
     await act(async () => { await pollFn(); });
     expect(container.textContent).toMatch(/Active/i);
+  });
+
+  it('renders status.detail as a sub-line under the pill when present', async () => {
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok' });
+    vi.mocked(probeHttps).mockResolvedValue({ result: 'unreachable' });
+    vi.mocked(computeStatus).mockReturnValue({ kind: 'issuing_cert', detail: 'Waiting for ACME challenge' });
+
+    await act(async () => {
+      root.render(createElement(CustomDomainCard, { data: makeData() }));
+    });
+    await act(async () => { await pollFn(); });
+
+    expect(container.textContent).toMatch(/Waiting for ACME challenge/);
   });
 });

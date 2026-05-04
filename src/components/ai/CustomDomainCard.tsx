@@ -18,7 +18,8 @@ import {
   computeStatus,
   probeHttps,
   resolveDnsViaDoh,
-  type CustomDomainStatus,
+  type CustomDomainStatusKind,
+  type CustomDomainStatusReport,
 } from '../../utils/customDomainStatus';
 import { isValidFqdn } from '../../utils/connection';
 import type { CustomDomainCardData } from '../../contexts/aiTypes';
@@ -26,14 +27,14 @@ import type { CustomDomainCardData } from '../../contexts/aiTypes';
 const POLL_INTERVAL_MS = 30_000;
 const STUCK_THRESHOLD_MS = 5 * 60 * 1000;
 
-const STATUS_LABELS: Record<CustomDomainStatus, string> = {
+const STATUS_LABELS: Record<CustomDomainStatusKind, string> = {
   pending_dns: 'Pending DNS',
   issuing_cert: 'Issuing certificate',
   active: 'Active',
   failed: 'Failed',
 };
 
-const STATUS_DOT_CLASS: Record<CustomDomainStatus, string> = {
+const STATUS_DOT_CLASS: Record<CustomDomainStatusKind, string> = {
   pending_dns: 'custom-domain-card__status-dot--pending',
   issuing_cert: 'custom-domain-card__status-dot--issuing',
   active: 'custom-domain-card__status-dot--active',
@@ -44,11 +45,11 @@ interface CustomDomainCardProps {
   data: CustomDomainCardData;
 }
 
-function StatusPill({ status }: { status: CustomDomainStatus }) {
+function StatusPill({ kind }: { kind: CustomDomainStatusKind }) {
   return (
-    <span className="custom-domain-card__status-pill" aria-label={`Status: ${STATUS_LABELS[status]}`}>
-      <span className={`custom-domain-card__status-dot ${STATUS_DOT_CLASS[status]}`} aria-hidden="true" />
-      <span>{STATUS_LABELS[status]}</span>
+    <span className="custom-domain-card__status-pill" aria-label={`Status: ${STATUS_LABELS[kind]}`}>
+      <span className={`custom-domain-card__status-dot ${STATUS_DOT_CLASS[kind]}`} aria-hidden="true" />
+      <span>{STATUS_LABELS[kind]}</span>
     </span>
   );
 }
@@ -124,7 +125,7 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const { sendMessage } = useAI();
 
-  const [status, setStatus] = useState<CustomDomainStatus>('pending_dns');
+  const [status, setStatus] = useState<CustomDomainStatusReport>({ kind: 'pending_dns' });
   const [showStuckHint, setShowStuckHint] = useState(false);
   const pendingSinceRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -145,7 +146,7 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
     const next = computeStatus({ dns, https, expectedCname: data.expectedCnameTarget });
     setStatus(next);
 
-    if (next === 'pending_dns') {
+    if (next.kind === 'pending_dns') {
       pendingSinceRef.current ??= Date.now();
       setShowStuckHint(Date.now() - pendingSinceRef.current > STUCK_THRESHOLD_MS);
     } else {
@@ -158,7 +159,7 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
   // an externally-broken domain needs to be re-detected.
   useVisibilityPolling(poll, POLL_INTERVAL_MS, {
     context: 'CustomDomainCard.poll',
-    enabled: status !== 'active' && status !== 'failed',
+    enabled: status.kind !== 'active' && status.kind !== 'failed',
   });
 
   const handleChange = useCallback(() => {
@@ -177,8 +178,12 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
         <span className="custom-domain-card__title">
           <span className="custom-domain-card__fqdn">{data.fqdn}</span>
         </span>
-        <StatusPill status={status} />
+        <StatusPill kind={status.kind} />
       </div>
+
+      {status.detail && (
+        <p className="custom-domain-card__detail" aria-live="polite">{status.detail}</p>
+      )}
 
       {data.expectedCnameTarget && (
         <div className="custom-domain-card__detail">

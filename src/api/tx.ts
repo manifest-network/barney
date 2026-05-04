@@ -94,6 +94,17 @@ async function signAndBroadcast(
   }
 }
 
+/**
+ * Broadcast MsgSetItemCustomDomain via the manifestjs 2.4.1 typed registry.
+ *
+ * Why this path instead of `cosmosTx(clientManager, 'billing', 'set-item-custom-domain', ...)`?
+ * As of manifest-mcp-mono 0.7.0 the helper has no `set-item-custom-domain`
+ * subcommand — the chain message landed in manifestjs 2.4.1 (ENG-58/56) ahead
+ * of mono adoption (tracked in ENG-60). Even after mono ships the subcommand,
+ * keep the typed path: it pins the field names at compile time, gives
+ * structured arguments, and avoids the string-array argument indirection that
+ * `cosmosTx` requires.
+ */
 export async function setItemCustomDomain(
   signer: OfflineSigner,
   sender: string,

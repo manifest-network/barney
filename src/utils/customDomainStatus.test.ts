@@ -7,16 +7,16 @@ import {
 
 describe('computeStatus', () => {
   it('returns pending_dns when DNS does not resolve', () => {
-    expect(computeStatus({ dns: { result: 'nxdomain' }, https: { result: 'unreachable' } })).toBe('pending_dns');
-    expect(computeStatus({ dns: { result: 'network_fail' }, https: { result: 'unreachable' } })).toBe('pending_dns');
+    expect(computeStatus({ dns: { result: 'nxdomain' }, https: { result: 'unreachable' } })).toEqual({ kind: 'pending_dns' });
+    expect(computeStatus({ dns: { result: 'network_fail' }, https: { result: 'unreachable' } })).toEqual({ kind: 'pending_dns' });
   });
 
   it('returns issuing_cert when DNS ok but HTTPS unreachable', () => {
-    expect(computeStatus({ dns: { result: 'ok', cname: 'foo.bar' }, https: { result: 'unreachable' } })).toBe('issuing_cert');
+    expect(computeStatus({ dns: { result: 'ok', cname: 'foo.bar' }, https: { result: 'unreachable' } })).toEqual({ kind: 'issuing_cert' });
   });
 
   it('returns active when both DNS and HTTPS ok', () => {
-    expect(computeStatus({ dns: { result: 'ok', cname: 'foo.bar' }, https: { result: 'ok' } })).toBe('active');
+    expect(computeStatus({ dns: { result: 'ok', cname: 'foo.bar' }, https: { result: 'ok' } })).toEqual({ kind: 'active' });
   });
 
   it('returns pending_dns when DNS points at wrong CNAME target', () => {
@@ -26,7 +26,7 @@ describe('computeStatus', () => {
         https: { result: 'ok' },
         expectedCname: 'expected.host',
       }),
-    ).toBe('pending_dns');
+    ).toEqual({ kind: 'pending_dns' });
   });
 
   it('treats matching cname (case-insensitive, trailing-dot tolerant) as active', () => {
@@ -36,7 +36,7 @@ describe('computeStatus', () => {
         https: { result: 'ok' },
         expectedCname: 'expected.host',
       }),
-    ).toBe('active');
+    ).toEqual({ kind: 'active' });
   });
 
   it('does not require cname when expectedCname is unset (A record alone is fine)', () => {
@@ -45,7 +45,12 @@ describe('computeStatus', () => {
         dns: { result: 'ok', addresses: ['1.2.3.4'] },
         https: { result: 'ok' },
       }),
-    ).toBe('active');
+    ).toEqual({ kind: 'active' });
+  });
+
+  it('leaves detail unset on the client-side compute (forward-compat for fred)', () => {
+    const r = computeStatus({ dns: { result: 'ok' }, https: { result: 'ok' } });
+    expect(r.detail).toBeUndefined();
   });
 });
 

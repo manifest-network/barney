@@ -2630,6 +2630,17 @@ export async function executeConfirmedUpdateApp(
 
 /**
  * Pre-validation for set_custom_domain. Returns confirmation result or error.
+ *
+ * **Single-domain-per-LeaseItem assumption.** The chain currently enforces a
+ * single `custom_domain` string per `LeaseItem`, and the empty string is the
+ * sentinel for "clear" (see `MsgSetItemCustomDomain` in proto). This function,
+ * the `CustomDomainCardData` shape, the AI tool schema, the success-message
+ * wording, and the `ConfirmationCard` clear/attach branching all bake that
+ * cardinality in. If the chain ever moves to `customDomains: string[]` (SAN
+ * certs, multiple aliases per service), the entry points to revisit are: this
+ * function, `executeConfirmedSetCustomDomain`, the `set_custom_domain` schema
+ * in `ai/tools.ts`, the `MessageCard` discriminated union, and the chat success
+ * message in `executeConfirmedSetCustomDomain`.
  */
 export async function executeSetCustomDomain(
   args: Record<string, unknown>,

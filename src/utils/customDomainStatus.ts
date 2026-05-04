@@ -17,7 +17,23 @@ import { normalizeFqdn } from './connection';
 const CLOUDFLARE_DOH = 'https://cloudflare-dns.com/dns-query';
 const PROBE_TIMEOUT_MS = 5000;
 
-export type CustomDomainStatus = 'pending_dns' | 'issuing_cert' | 'active' | 'failed';
+export type CustomDomainStatusKind = 'pending_dns' | 'issuing_cert' | 'active' | 'failed';
+
+/**
+ * Status report for a custom domain.
+ *
+ * `kind` is the coarse 4-state machine the UI renders. `detail` is an optional
+ * free-form sub-reason. Today the client-side compute only sets `kind`; the
+ * `detail` slot is intentional forward-compat for when fred ships a server-side
+ * `domain_status` endpoint that returns richer reasons (e.g. `acme_rate_limited`,
+ * `dns01_challenge_failed`, `cert_expired`). Card consumers should display
+ * `detail` as a sub-line under the status pill when present.
+ */
+export interface CustomDomainStatusReport {
+  kind: CustomDomainStatusKind;
+  detail?: string;
+}
+
 
 export interface DnsProbeResult {
   /** "ok" = at least one record resolved; "nxdomain"/"network_fail" = DNS not present or unreachable. */
@@ -140,21 +156,22 @@ export interface ComputeStatusInput {
  *
  * `failed` is reserved for an explicit fred status endpoint signal. Until that
  * exists, sustained `issuing_cert` is the closest approximation; the UI can
- * surface a hint after a long stall.
+ * surface a hint after a long stall. The `detail` field is left blank by the
+ * client-side compute and is the slot a future fred-backed reducer will fill.
  */
-export function computeStatus(input: ComputeStatusInput): CustomDomainStatus {
+export function computeStatus(input: ComputeStatusInput): CustomDomainStatusReport {
   const { dns, https, expectedCname } = input;
 
-  if (dns.result !== 'ok') return 'pending_dns';
+  if (dns.result !== 'ok') return { kind: 'pending_dns' };
 
   if (expectedCname) {
     const expected = normalizeFqdn(expectedCname);
     const actual = dns.cname ? normalizeFqdn(dns.cname) : undefined;
     if (actual && actual !== expected) {
-      return 'pending_dns';
+      return { kind: 'pending_dns' };
     }
   }
 
-  if (https.result === 'ok') return 'active';
-  return 'issuing_cert';
+  if (https.result === 'ok') return { kind: 'active' };
+  return { kind: 'issuing_cert' };
 }
