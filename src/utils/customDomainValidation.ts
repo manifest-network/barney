@@ -1,3 +1,4 @@
+import { parse as parseTld } from 'tldts';
 import { isValidFqdn } from './connection';
 import { getReservedDomainSuffixes } from '../api/billingParams';
 
@@ -21,12 +22,32 @@ export function validateCustomDomainFormat(fqdn: string): string | null {
 }
 
 /**
- * Apex domain detection: an apex has exactly 2 labels (e.g. `example.com`).
- * Apex CNAMEs are RFC-prohibited; use ALIAS / ANAME / flatten if registrar supports it.
+ * Apex (registerable-domain) detection backed by the Mozilla Public Suffix List
+ * via `tldts`. Returns true when `fqdn` *is* its registerable domain (no
+ * subdomain left after stripping the public suffix), e.g. `example.com`,
+ * `bbc.co.uk`, `mysite.github.io`. Returns false for subdomains and IPs.
+ *
+ * `allowPrivateDomains: true` is required so that PSL "private" entries
+ * (`github.io`, `netlify.app`, `vercel.app`, ...) are treated as public
+ * suffixes — otherwise `mysite.github.io` would be misclassified as a
+ * subdomain of `github.io`. Apex CNAMEs are RFC 1034 §3.6.2 forbidden;
+ * the caller surfaces a warning so the user reaches for ALIAS / ANAME /
+ * CNAME-flattening at their registrar instead.
  */
 export function isApex(fqdn: string): boolean {
   const trimmed = fqdn.trim().replace(/\.$/, '').toLowerCase();
-  return trimmed.split('.').length === 2;
+  if (!trimmed) return false;
+  const parsed = parseTld(trimmed, { allowPrivateDomains: true });
+  if (parsed.isIp) return false;
+  if (!parsed.domain) {
+    // No registerable domain. Two sub-cases:
+    //  - the input itself is a real public suffix (`co.uk`, `github.io`) — treat
+    //    as apex conservatively so the user is warned rather than silently let
+    //    through to a TX that registrars can't honor.
+    //  - non-PSL bare hostname (`localhost`) — not a domain at all, return false.
+    return parsed.isIcann === true || parsed.isPrivate === true;
+  }
+  return !parsed.subdomain;
 }
 
 /**

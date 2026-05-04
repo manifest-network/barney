@@ -57,12 +57,46 @@ describe('isApex', () => {
     expect(isApex('a.b.example.com')).toBe(false);
   });
 
-  it('strips trailing dot before counting', () => {
+  it('strips trailing dot', () => {
     expect(isApex('example.com.')).toBe(true);
   });
 
   it('returns false for single-label hostnames (no TLD)', () => {
     expect(isApex('localhost')).toBe(false);
+  });
+
+  it('treats apex of multi-label ICANN public suffix as apex', () => {
+    expect(isApex('bbc.co.uk')).toBe(true);
+    expect(isApex('example.co.uk')).toBe(true);
+    expect(isApex('foo.com.br')).toBe(true);
+  });
+
+  it('treats subdomain on multi-label ICANN public suffix as non-apex', () => {
+    expect(isApex('app.bbc.co.uk')).toBe(false);
+    expect(isApex('a.b.example.co.uk')).toBe(false);
+  });
+
+  it('treats apex of multi-label PRIVATE public suffix as apex', () => {
+    // Private PSL entries: github.io, netlify.app, vercel.app, etc.
+    expect(isApex('mysite.github.io')).toBe(true);
+    expect(isApex('foo.netlify.app')).toBe(true);
+    expect(isApex('bar.vercel.app')).toBe(true);
+  });
+
+  it('treats subdomain on PRIVATE public suffix as non-apex', () => {
+    expect(isApex('blog.mysite.github.io')).toBe(false);
+    expect(isApex('api.foo.netlify.app')).toBe(false);
+  });
+
+  it('returns false for IP addresses', () => {
+    expect(isApex('192.168.1.1')).toBe(false);
+    expect(isApex('10.0.0.1')).toBe(false);
+  });
+
+  it('returns true for a bare public suffix (no registerable domain)', () => {
+    // Conservative: warning rather than silent accept. The reserved-suffix
+    // and format checks earlier in the pipeline catch most of these anyway.
+    expect(isApex('co.uk')).toBe(true);
   });
 });
 
@@ -120,6 +154,18 @@ describe('validateAll', () => {
 
   it('returns apex warning for 2-label valid domain', async () => {
     const r = await validateAll('example.com');
+    expect(r.error).toBeUndefined();
+    expect(r.warning).toMatch(/apex/i);
+  });
+
+  it('returns apex warning for apex on multi-label public suffix (.co.uk)', async () => {
+    const r = await validateAll('bbc.co.uk');
+    expect(r.error).toBeUndefined();
+    expect(r.warning).toMatch(/apex/i);
+  });
+
+  it('returns apex warning for apex on private public suffix (.github.io)', async () => {
+    const r = await validateAll('mysite.github.io');
     expect(r.error).toBeUndefined();
     expect(r.warning).toMatch(/apex/i);
   });
