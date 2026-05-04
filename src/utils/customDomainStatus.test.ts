@@ -61,9 +61,13 @@ describe('resolveDnsViaDoh', () => {
   });
 
   it('returns ok with addresses on A record hit', async () => {
-    fetchSpy.mockResolvedValue(
-      new Response(JSON.stringify({ Status: 0, Answer: [{ name: 'app.example.com', type: 1, data: '1.2.3.4' }] })) as any,
-    );
+    fetchSpy.mockImplementation((url: string) => {
+      const type = url.match(/type=(\w+)/)?.[1];
+      const body = type === 'A'
+        ? { Status: 0, Answer: [{ name: 'app.example.com', type: 1, data: '1.2.3.4' }] }
+        : { Status: 0 };
+      return Promise.resolve(new Response(JSON.stringify(body)) as any);
+    });
     const r = await resolveDnsViaDoh('app.example.com');
     expect(r.result).toBe('ok');
     expect(r.addresses).toEqual(['1.2.3.4']);
@@ -83,8 +87,8 @@ describe('resolveDnsViaDoh', () => {
   });
 
   it('returns nxdomain when DoH responds with no records', async () => {
-    fetchSpy.mockResolvedValue(
-      new Response(JSON.stringify({ Status: 3 })) as any,
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ Status: 3 })) as any),
     );
     const r = await resolveDnsViaDoh('nonexistent.example.com');
     expect(r.result).toBe('nxdomain');
@@ -110,7 +114,9 @@ describe('resolveDnsViaDoh', () => {
   });
 
   it('queries A, AAAA, and CNAME in parallel', async () => {
-    fetchSpy.mockResolvedValue(new Response(JSON.stringify({ Status: 3 })) as any);
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ Status: 3 })) as any),
+    );
     await resolveDnsViaDoh('app.example.com');
     const types = fetchSpy.mock.calls.map((c: unknown[]) => {
       const u = String(c[0]);

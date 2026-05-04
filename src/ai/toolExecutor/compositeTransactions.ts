@@ -2640,8 +2640,10 @@ export async function executeSetCustomDomain(
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
   const appName = String(args.app_name ?? '').trim();
-  const customDomainRaw = typeof args.custom_domain === 'string' ? args.custom_domain : '';
-  const customDomain = customDomainRaw.trim().replace(/\.$/, '').toLowerCase();
+  if (typeof args.custom_domain !== 'string') {
+    return { success: false, error: 'custom_domain must be a string (use "" to clear).' };
+  }
+  const customDomain = args.custom_domain.trim().replace(/\.$/, '').toLowerCase();
   const explicitServiceName = typeof args.service_name === 'string' ? args.service_name.trim() : '';
 
   if (!appName) return { success: false, error: 'app_name is required.' };
@@ -2782,6 +2784,7 @@ export async function executeConfirmedSetCustomDomain(
   const serviceName = (args.serviceName as string) ?? '';
   const customDomain = (args.customDomain as string) ?? '';
   const expectedCnameTarget = args.expectedCnameTarget as string | undefined;
+  const isApexWarning = typeof args.warning === 'string' && args.warning.length > 0;
 
   let signer;
   try {
@@ -2809,14 +2812,18 @@ export async function executeConfirmedSetCustomDomain(
     };
   }
 
+  const recordKind = isApexWarning ? 'an ALIAS / ANAME / CNAME-flattened record (apex domains cannot use CNAME)' : 'a CNAME';
+  const target = expectedCnameTarget ?? '<provider FQDN>';
+
   return {
     success: true,
     data: {
-      message: `Custom domain "${customDomain}" attached to "${appName}". Add a CNAME at your registrar pointing at ${expectedCnameTarget ?? '<provider FQDN>'}.`,
+      message: `Custom domain "${customDomain}" attached to "${appName}". Add ${recordKind} at your registrar pointing at ${target}.`,
       app_name: appName,
       custom_domain: customDomain,
       service_name: serviceName,
       expected_cname_target: expectedCnameTarget,
+      is_apex: isApexWarning,
       transactionHash: result.transactionHash,
     },
     displayCard: {

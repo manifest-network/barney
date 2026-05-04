@@ -60,6 +60,24 @@ describe('executeSetCustomDomain', () => {
     expect(r.success).toBe(false);
   });
 
+  it('rejects non-string custom_domain (number)', async () => {
+    const r = await executeSetCustomDomain(
+      { app_name: 'myapp', custom_domain: 42 as unknown },
+      makeOptions(makeApp()),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/must be a string/i);
+  });
+
+  it('rejects missing custom_domain', async () => {
+    const r = await executeSetCustomDomain(
+      { app_name: 'myapp' },
+      makeOptions(makeApp()),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/must be a string/i);
+  });
+
   it('returns error when app not found', async () => {
     const r = await executeSetCustomDomain(
       { app_name: 'missing', custom_domain: 'a.example.com' },
@@ -300,6 +318,27 @@ describe('executeConfirmedSetCustomDomain', () => {
         expect(r.displayCard.data.serviceName).toBe('web');
         expect(r.displayCard.data.expectedCnameTarget).toBe('auto.foo');
       }
+    }
+  });
+
+  it('uses ALIAS / ANAME / flattened wording in success message when warning is set (apex)', async () => {
+    vi.mocked(setItemCustomDomain).mockResolvedValue({
+      success: true,
+      transactionHash: 'HASH-APEX',
+      events: [],
+    });
+    const r = await executeConfirmedSetCustomDomain(
+      {
+        app_name: 'myapp', leaseUuid: 'lu1', serviceName: '', customDomain: 'example.com',
+        expectedCnameTarget: 'auto.foo', warning: 'This is an apex domain...',
+      },
+      fakeClientManager,
+      options(),
+    );
+    expect(r.success).toBe(true);
+    if (r.success && !r.requiresConfirmation) {
+      expect((r.data as { message: string }).message).toMatch(/ALIAS \/ ANAME \/ CNAME-flattened/i);
+      expect((r.data as { is_apex: boolean }).is_apex).toBe(true);
     }
   });
 
