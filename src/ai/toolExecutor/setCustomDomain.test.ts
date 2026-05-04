@@ -258,6 +258,49 @@ describe('executeSetCustomDomain', () => {
     if (!r.success) expect(r.error).toMatch(/already has/i);
   });
 
+  it('rejects when domain is held by a different service in the SAME lease', async () => {
+    const app = makeApp();
+    vi.mocked(getLeaseItemsForLease).mockResolvedValue([
+      { skuUuid: 'sku-1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: 'web', customDomain: '' } as any,
+      { skuUuid: 'sku-2', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: 'api', customDomain: '' } as any,
+    ]);
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValue({
+      leaseUuid: LEASE_UUID,           // SAME lease
+      serviceName: 'web',              // DIFFERENT service
+      lease: {} as any,
+    });
+    const r = await executeSetCustomDomain(
+      { app_name: 'myapp', custom_domain: 'app.example.com', service_name: 'api' },
+      makeOptions(app),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error).toMatch(/already attached/i);
+      expect(r.error).toMatch(/web/);
+      expect(r.error).toMatch(/clear it from there first/i);
+    }
+  });
+
+  it('mentions "this app" when the holding service has an empty name (legacy)', async () => {
+    const app = makeApp();
+    vi.mocked(getLeaseItemsForLease).mockResolvedValue([
+      { skuUuid: 'sku-1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: 'web', customDomain: '' } as any,
+    ]);
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValue({
+      leaseUuid: LEASE_UUID,
+      serviceName: '',
+      lease: {} as any,
+    });
+    const r = await executeSetCustomDomain(
+      { app_name: 'myapp', custom_domain: 'app.example.com', service_name: 'web' },
+      makeOptions(app),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error).toMatch(/already attached to this app/i);
+    }
+  });
+
   it('rejects when domain attached to another lease', async () => {
     const app = makeApp();
     vi.mocked(getLeaseItemsForLease).mockResolvedValue([

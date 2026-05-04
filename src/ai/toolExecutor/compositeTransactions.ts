@@ -2740,11 +2740,30 @@ export async function executeSetCustomDomain(
   }
 
   // Uniqueness pre-check (not authoritative — chain still verifies on TX).
+  // Two reject cases:
+  //  1. The domain is on a *different* lease entirely.
+  //  2. The domain is on this same lease but a *different* service. The chain
+  //     also rejects this; we surface a friendlier message that names the
+  //     service currently holding it.
   if (customDomain !== '') {
     try {
       const existing = await queryLeaseByCustomDomain(customDomain);
-      if (existing && existing.leaseUuid !== app.leaseUuid) {
-        return { success: false, error: `"${customDomain}" is already attached to another lease. Pick a different domain.` };
+      if (existing) {
+        if (existing.leaseUuid !== app.leaseUuid) {
+          return {
+            success: false,
+            error: `"${customDomain}" is already attached to another lease. Pick a different domain.`,
+          };
+        }
+        if (existing.serviceName !== serviceName) {
+          const heldBy = existing.serviceName === ''
+            ? 'this app'
+            : `service "${existing.serviceName}" on this app`;
+          return {
+            success: false,
+            error: `"${customDomain}" is already attached to ${heldBy}. Clear it from there first, or pick a different domain.`,
+          };
+        }
       }
     } catch (err) {
       logError('compositeTransactions.executeSetCustomDomain.queryLeaseByCustomDomain', err);

@@ -217,7 +217,7 @@ describe('Deploy Flow Integration', () => {
     expect(listData.apps[0].status).toBe('running');
 
     // Step 4: App status
-    vi.mocked(getLease).mockResolvedValue({ state: 2, items: [] } as Awaited<ReturnType<typeof getLease>>);
+    vi.mocked(getLease).mockResolvedValue({ state: 2, items: [] } as unknown as Awaited<ReturnType<typeof getLease>>);
 
     const statusResult = await executeTool('app_status', { app_name: 'my-app' }, options);
     expect(statusResult.success).toBe(true);
