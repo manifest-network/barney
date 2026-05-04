@@ -78,6 +78,17 @@ describe('executeSetCustomDomain', () => {
     if (!r.success) expect(r.error).toMatch(/must be a string/i);
   });
 
+  it('returns a clean error when getLeaseItemsForLease throws', async () => {
+    const app = makeApp();
+    vi.mocked(getLeaseItemsForLease).mockRejectedValue(new Error('rpc unavailable'));
+    const r = await executeSetCustomDomain(
+      { app_name: 'myapp', custom_domain: 'app.example.com' },
+      makeOptions(app),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/lease items|try again/i);
+  });
+
   it('returns error when app not found', async () => {
     const r = await executeSetCustomDomain(
       { app_name: 'missing', custom_domain: 'a.example.com' },
@@ -335,8 +346,21 @@ describe('executeConfirmedSetCustomDomain', () => {
         expect(r.displayCard.data.fqdn).toBe('app.example.com');
         expect(r.displayCard.data.serviceName).toBe('web');
         expect(r.displayCard.data.expectedCnameTarget).toBe('auto.foo');
+        expect(r.displayCard.data.appName).toBe('myapp');
+        expect(r.displayCard.data.leaseUuid).toBe('lu1');
+        expect(r.displayCard.data.expectedAddress).toBe(ADDR);
       }
     }
+  });
+
+  it('rejects non-string customDomain in the confirmed path', async () => {
+    const r = await executeConfirmedSetCustomDomain(
+      { app_name: 'myapp', leaseUuid: 'lu1', serviceName: '', customDomain: null },
+      fakeClientManager,
+      options(),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/must be a string/i);
   });
 
   it('uses ALIAS / ANAME / flattened wording in success message when warning is set (apex)', async () => {

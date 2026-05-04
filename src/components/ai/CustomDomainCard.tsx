@@ -9,7 +9,7 @@
  * (validation → ConfirmationCard → broadcast) handles the chain interaction.
  */
 
-import { memo, useCallback, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Globe, Copy, Check, AlertCircle } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useVisibilityPolling } from '../../hooks/useVisibilityPolling';
@@ -127,12 +127,21 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
   const [status, setStatus] = useState<CustomDomainStatus>('pending_dns');
   const [showStuckHint, setShowStuckHint] = useState(false);
   const pendingSinceRef = useRef<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Cancel any in-flight probes when the card unmounts so they don't outlive the component.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const poll = useCallback(async () => {
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+
     const [dns, https] = await Promise.all([
-      resolveDnsViaDoh(data.fqdn),
-      probeHttps(data.fqdn),
+      resolveDnsViaDoh(data.fqdn, ac.signal),
+      probeHttps(data.fqdn, ac.signal),
     ]);
+    if (ac.signal.aborted) return;
     const next = computeStatus({ dns, https, expectedCname: data.expectedCnameTarget });
     setStatus(next);
 

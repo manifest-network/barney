@@ -172,4 +172,15 @@ describe('probeHttps', () => {
     const opts = fetchSpy.mock.calls[0][1] as RequestInit;
     expect(opts.mode).toBe('no-cors');
   });
+
+  it('aborts immediately when external signal is already aborted', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    fetchSpy.mockImplementation((_url: string, opts?: RequestInit) => {
+      if (opts?.signal?.aborted) return Promise.reject(new DOMException('aborted', 'AbortError'));
+      return Promise.resolve(new Response(null) as any);
+    });
+    const r = await probeHttps('app.example.com', ac.signal);
+    expect(r.result).toBe('unreachable');
+  });
 });

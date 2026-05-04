@@ -2787,9 +2787,12 @@ export async function executeConfirmedSetCustomDomain(
 
   const appName = args.app_name as string;
   const leaseUuid = args.leaseUuid as string;
-  const serviceName = (args.serviceName as string) ?? '';
-  const customDomain = (args.customDomain as string) ?? '';
-  const expectedCnameTarget = args.expectedCnameTarget as string | undefined;
+  const serviceName = typeof args.serviceName === 'string' ? args.serviceName : '';
+  if (typeof args.customDomain !== 'string') {
+    return { success: false, error: 'customDomain must be a string (use "" to clear).' };
+  }
+  const customDomain = args.customDomain;
+  const expectedCnameTarget = typeof args.expectedCnameTarget === 'string' ? args.expectedCnameTarget : undefined;
   const isApexWarning = typeof args.warning === 'string' && args.warning.length > 0;
 
   let signer;

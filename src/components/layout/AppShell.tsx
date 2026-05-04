@@ -13,6 +13,7 @@ import { useAccountSetup } from '../../hooks/useAccountSetup';
 import { AccountSetupOverlay } from './AccountSetupOverlay';
 import { logError } from '../../utils/errors';
 import { CHAIN_NAME } from '../../config/chain';
+import { invalidateReservedDomainSuffixesCache } from '../../api/billingParams';
 
 const LandingPage = lazy(() =>
   import('../landing/LandingPage').then(m => ({ default: m.LandingPage }))
@@ -57,7 +58,19 @@ export function AppShell() {
   // Ref-backed stable getOfflineSigner — cosmos-kit returns a fresh closure on most renders.
   const getOfflineSignerRef = useRef(getOfflineSigner);
   useEffect(() => { getOfflineSignerRef.current = getOfflineSigner; }, [getOfflineSigner]);
-  const stableGetOfflineSigner = useCallback(() => getOfflineSignerRef.current(), []);
+  const stableGetOfflineSigner = useCallback(() => {
+    const fn = getOfflineSignerRef.current;
+    if (typeof fn !== 'function') {
+      throw new Error('Wallet signer not available — reconnect your wallet.');
+    }
+    return fn();
+  }, []);
+
+  // Invalidate chain-scoped caches when the connected address changes (different
+  // wallet, possibly different chain → different governance Params).
+  useEffect(() => {
+    invalidateReservedDomainSuffixesCache();
+  }, [address]);
 
   // Sync wallet state with AI context. `getOfflineSigner` is intentionally not in deps —
   // we route through `stableGetOfflineSigner` (ref-backed) to avoid effect churn.
