@@ -1,3 +1,5 @@
+import { normalizeFqdn } from './connection';
+
 /**
  * Browser-side custom-domain status detection.
  *
@@ -146,8 +148,8 @@ export function computeStatus(input: ComputeStatusInput): CustomDomainStatus {
   if (dns.result !== 'ok') return 'pending_dns';
 
   if (expectedCname) {
-    const expected = expectedCname.toLowerCase().replace(/\.$/, '');
-    const actual = dns.cname?.toLowerCase()?.replace(/\.$/, '');
+    const expected = normalizeFqdn(expectedCname);
+    const actual = dns.cname ? normalizeFqdn(dns.cname) : undefined;
     if (actual && actual !== expected) {
       return 'pending_dns';
     }

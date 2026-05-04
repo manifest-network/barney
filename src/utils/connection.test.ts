@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { collectInstanceUrls, isValidFqdn, resolveExpectedCnameTarget } from './connection';
+import { collectInstanceUrls, isValidFqdn, normalizeFqdn, resolveExpectedCnameTarget } from './connection';
 
 describe('isValidFqdn', () => {
   it('accepts valid hostnames', () => {
@@ -158,6 +158,24 @@ describe('collectInstanceUrls', () => {
         { fqdn: 'also-evil.com/steal' },
       ],
     })).toEqual([]);
+  });
+});
+
+describe('normalizeFqdn', () => {
+  it('trims whitespace, strips trailing dot, lowercases', () => {
+    expect(normalizeFqdn('  Example.COM. ')).toBe('example.com');
+  });
+
+  it('returns empty string unchanged', () => {
+    expect(normalizeFqdn('')).toBe('');
+  });
+
+  it('handles already-normalized input', () => {
+    expect(normalizeFqdn('example.com')).toBe('example.com');
+  });
+
+  it('does not strip non-trailing dots', () => {
+    expect(normalizeFqdn('a.b.example.com.')).toBe('a.b.example.com');
   });
 });
 

@@ -16,7 +16,7 @@ import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
-import { isValidFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
+import { isValidFqdn, normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
 import { setItemCustomDomain } from '../../api/tx';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
@@ -2643,7 +2643,7 @@ export async function executeSetCustomDomain(
   if (typeof args.custom_domain !== 'string') {
     return { success: false, error: 'custom_domain must be a string (use "" to clear).' };
   }
-  const customDomain = args.custom_domain.trim().replace(/\.$/, '').toLowerCase();
+  const customDomain = normalizeFqdn(args.custom_domain);
   const explicitServiceName = typeof args.service_name === 'string' ? args.service_name.trim() : '';
 
   if (!appName) return { success: false, error: 'app_name is required.' };

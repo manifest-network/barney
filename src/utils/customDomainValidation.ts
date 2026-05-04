@@ -1,5 +1,5 @@
 import { parse as parseTld } from 'tldts';
-import { isValidFqdn } from './connection';
+import { isValidFqdn, normalizeFqdn } from './connection';
 import { getReservedDomainSuffixes } from '../api/billingParams';
 
 export interface CustomDomainValidationResult {
@@ -14,7 +14,7 @@ export interface CustomDomainValidationResult {
  * Trailing dots are stripped before validation.
  */
 export function validateCustomDomainFormat(fqdn: string): string | null {
-  const trimmed = fqdn.trim().replace(/\.$/, '');
+  const trimmed = normalizeFqdn(fqdn);
   if (trimmed.length === 0) return 'Custom domain must not be empty.';
   if (!isValidFqdn(trimmed)) return `"${fqdn}" is not a valid hostname.`;
   if (trimmed.split('.').length < 2) return `"${fqdn}" must include at least one dot (e.g. "app.example.com").`;
@@ -35,7 +35,7 @@ export function validateCustomDomainFormat(fqdn: string): string | null {
  * CNAME-flattening at their registrar instead.
  */
 export function isApex(fqdn: string): boolean {
-  const trimmed = fqdn.trim().replace(/\.$/, '').toLowerCase();
+  const trimmed = normalizeFqdn(fqdn);
   if (!trimmed) return false;
   const parsed = parseTld(trimmed, { allowPrivateDomains: true });
   if (parsed.isIp) return false;
@@ -57,7 +57,7 @@ export function isApex(fqdn: string): boolean {
  * - Also covers the apex form (e.g. "barney0.manifest0.net" itself)
  */
 export function isReservedSuffix(fqdn: string, suffixes: readonly string[]): boolean {
-  const lower = fqdn.trim().replace(/\.$/, '').toLowerCase();
+  const lower = normalizeFqdn(fqdn);
   for (const raw of suffixes) {
     const suf = raw.toLowerCase();
     if (!suf) continue;
@@ -83,8 +83,6 @@ export async function validateAll(fqdn: string): Promise<CustomDomainValidationR
   const formatError = validateCustomDomainFormat(fqdn);
   if (formatError) return { error: formatError };
 
-  const trimmed = fqdn.trim().replace(/\.$/, '').toLowerCase();
-
   let suffixes: string[] = [];
   try {
     suffixes = await getReservedDomainSuffixes();
@@ -92,13 +90,13 @@ export async function validateAll(fqdn: string): Promise<CustomDomainValidationR
     // Chain unreachable → don't block; the chain will reject authoritatively.
   }
 
-  if (isReservedSuffix(trimmed, suffixes)) {
+  if (isReservedSuffix(fqdn, suffixes)) {
     return {
       error: `"${fqdn}" falls within a provider's reserved zone — pick a domain you control.`,
     };
   }
 
-  if (isApex(trimmed)) {
+  if (isApex(fqdn)) {
     return {
       warning:
         'This is an apex domain. CNAMEs at the apex are not allowed by RFC; use ALIAS / ANAME / CNAME-flattening (Cloudflare) at your registrar.',

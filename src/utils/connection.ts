@@ -13,6 +13,16 @@ export function isValidFqdn(value: string): boolean {
 }
 
 /**
+ * Canonical FQDN normalization: trim whitespace, strip a trailing dot, lowercase.
+ * DNS hostnames are case-insensitive (RFC 4343); the trailing dot marks the root
+ * and isn't part of the relative name. Use this anywhere two FQDN strings are
+ * being compared or sent over the wire.
+ */
+export function normalizeFqdn(value: string): string {
+  return value.trim().replace(/\.$/, '').toLowerCase();
+}
+
+/**
  * Collect per-instance FQDNs from a connection object.
  * For flat leases: collects from `connection.instances`.
  * For stack leases: collects from each service's instances.
