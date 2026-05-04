@@ -117,8 +117,9 @@ export const CustomDomainCard = memo(function CustomDomainCard({ data }: CustomD
       {showStuckHint && (
         <p className="custom-domain-card__hint" role="alert">
           <AlertCircle className="w-3 h-3 inline mr-1" aria-hidden="true" />
-          DNS check unavailable from this network. Verify locally with{' '}
-          <code className="font-mono">dig {data.fqdn}</code>.
+          DNS not visible yet. Verify with{' '}
+          <code className="font-mono">dig {data.fqdn}</code>{' '}
+          locally — if the record is published but doesn't appear here, your network may be blocking the check.
         </p>
       )}
 
