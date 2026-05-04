@@ -166,6 +166,24 @@ describe('executeSetCustomDomain', () => {
     if (!r.success) expect(r.error).toMatch(/single-service|drop the service_name/i);
   });
 
+  it('auto-selects the sole service for a single-service modern lease (no service_name needed)', async () => {
+    const app = makeApp();
+    vi.mocked(getLeaseItemsForLease).mockResolvedValue([
+      { skuUuid: 'sku-1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: 'web', customDomain: '' } as any,
+    ]);
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValue(null);
+    const r = await executeSetCustomDomain(
+      { app_name: 'myapp', custom_domain: 'app.example.com' },
+      makeOptions(app),
+    );
+    expect(r.success).toBe(true);
+    if (r.success && r.requiresConfirmation) {
+      expect(r.pendingAction.args.serviceName).toBe('web');
+    } else {
+      throw new Error('Expected requiresConfirmation');
+    }
+  });
+
   it('rejects unknown service_name in stack', async () => {
     const app = makeApp();
     vi.mocked(getLeaseItemsForLease).mockResolvedValue([

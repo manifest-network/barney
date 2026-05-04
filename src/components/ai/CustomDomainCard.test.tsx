@@ -85,6 +85,24 @@ describe('CustomDomainCard', () => {
     expect(args[1]).toBe(30_000);
   });
 
+  it('disables polling once status reaches active', async () => {
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok', cname: 'auto.barney0.manifest0.net' });
+    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' });
+    vi.mocked(computeStatus).mockReturnValue('active');
+
+    await act(async () => {
+      root.render(createElement(CustomDomainCard, { data: makeData() }));
+    });
+    await act(async () => { await pollFn(); });
+
+    // The most recent useVisibilityPolling call (after the active re-render) must be enabled=false.
+    const calls = vi.mocked(useVisibilityPolling).mock.calls;
+    const lastOpts = calls[calls.length - 1][2];
+    expect(lastOpts?.enabled).toBe(false);
+  });
+
   it('shows service name when present', () => {
     flushSync(() => {
       root.render(createElement(CustomDomainCard, { data: makeData({ serviceName: 'web' }) }));

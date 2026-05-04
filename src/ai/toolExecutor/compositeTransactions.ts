@@ -2692,23 +2692,29 @@ export async function executeSetCustomDomain(
       error: `"${appName}" predates per-service domains and has multiple items without service names. Re-deploy with explicit service names to use custom domains.`,
     };
   } else {
-    // Modern stack with per-service names.
+    // Modern lease(s) with per-service names. Auto-select when there's only one
+    // (no ambiguity); only require service_name for true multi-service stacks.
     if (!explicitServiceName) {
-      const available = namedItems.map(i => i.serviceName).join(', ');
-      return {
-        success: false,
-        error: `"${appName}" is a multi-service stack — pass service_name. Available services: ${available}.`,
-      };
+      if (namedItems.length === 1) {
+        serviceName = namedItems[0].serviceName;
+      } else {
+        const available = namedItems.map(i => i.serviceName).join(', ');
+        return {
+          success: false,
+          error: `"${appName}" is a multi-service stack — pass service_name. Available services: ${available}.`,
+        };
+      }
+    } else {
+      const match = namedItems.find(i => i.serviceName === explicitServiceName);
+      if (!match) {
+        const available = namedItems.map(i => i.serviceName).join(', ');
+        return {
+          success: false,
+          error: `Service "${explicitServiceName}" not found in "${appName}". Available: ${available}.`,
+        };
+      }
+      serviceName = explicitServiceName;
     }
-    const match = namedItems.find(i => i.serviceName === explicitServiceName);
-    if (!match) {
-      const available = namedItems.map(i => i.serviceName).join(', ');
-      return {
-        success: false,
-        error: `Service "${explicitServiceName}" not found in "${appName}". Available: ${available}.`,
-      };
-    }
-    serviceName = explicitServiceName;
   }
 
   // Find current domain on the matched item (for change-detection)

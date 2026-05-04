@@ -145,7 +145,12 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
     }
   }, [data.fqdn, data.expectedCnameTarget]);
 
-  useVisibilityPolling(poll, POLL_INTERVAL_MS, { context: 'CustomDomainCard.poll' });
+  // Stop polling once we reach a terminal state. The user can refresh via app_status if
+  // an externally-broken domain needs to be re-detected.
+  useVisibilityPolling(poll, POLL_INTERVAL_MS, {
+    context: 'CustomDomainCard.poll',
+    enabled: status !== 'active' && status !== 'failed',
+  });
 
   const handleChange = useCallback(() => {
     void sendMessage(`Change the custom domain for ${data.appName}`);
