@@ -1,6 +1,12 @@
 /**
- * CustomDomainCard — rendered after a successful set_custom_domain TX (or re-emitted by app_status).
- * Self-polls DNS + HTTPS to compute a 4-state status. Polls every 30s when tab visible.
+ * CustomDomainCard — surfaces the custom-domain affordance for a deployed service.
+ *
+ * Two states:
+ *  - data.fqdn === ''  → "no domain set" form (input + Set + Ask Barney)
+ *  - data.fqdn !== ''  → status display (4-state polling, Change / Remove)
+ *
+ * Both states route through `useAI().sendMessage` so the AI tool flow
+ * (validation → ConfirmationCard → broadcast) handles the chain interaction.
  */
 
 import { memo, useCallback, useRef, useState } from 'react';
@@ -14,6 +20,7 @@ import {
   resolveDnsViaDoh,
   type CustomDomainStatus,
 } from '../../utils/customDomainStatus';
+import { isValidFqdn } from '../../utils/connection';
 import type { CustomDomainCardData } from '../../contexts/aiTypes';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -46,7 +53,74 @@ function StatusPill({ status }: { status: CustomDomainStatus }) {
   );
 }
 
-export const CustomDomainCard = memo(function CustomDomainCard({ data }: CustomDomainCardProps) {
+function NoDomainForm({ data }: { data: CustomDomainCardData }) {
+  const { sendMessage } = useAI();
+  const [input, setInput] = useState('');
+  const trimmed = input.trim().replace(/\.$/, '').toLowerCase();
+  const looksValid = trimmed.length > 0 && isValidFqdn(trimmed) && trimmed.includes('.');
+
+  const handleSet = useCallback(() => {
+    if (!looksValid) return;
+    const svcSuffix = data.serviceName ? ` (service: ${data.serviceName})` : '';
+    void sendMessage(`Point ${trimmed} at ${data.appName}${svcSuffix}`);
+    setInput('');
+  }, [sendMessage, looksValid, trimmed, data.appName, data.serviceName]);
+
+  const handleAskBarney = useCallback(() => {
+    void sendMessage(`Help me set a custom domain for ${data.appName}`);
+  }, [sendMessage, data.appName]);
+
+  return (
+    <div className="custom-domain-card" role="article" aria-label={`Custom domain for ${data.appName}`}>
+      <div className="custom-domain-card__header">
+        <Globe className="w-4 h-4 text-primary-400" aria-hidden="true" />
+        <span className="custom-domain-card__title">Custom domain</span>
+      </div>
+
+      <p className="custom-domain-card__detail">
+        Attach a hostname like <code className="font-mono">app.example.com</code> to{' '}
+        <code className="font-mono">{data.appName}</code>
+        {data.serviceName ? <> (service: <code className="font-mono">{data.serviceName}</code>)</> : null}
+        .
+      </p>
+
+      <div className="custom-domain-card__form">
+        <input
+          type="text"
+          inputMode="url"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="app.example.com"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleSet(); }}
+          className="custom-domain-card__input"
+          aria-label="Custom domain"
+        />
+        <button
+          type="button"
+          onClick={handleSet}
+          disabled={!looksValid}
+          className="btn btn-primary btn-sm"
+        >
+          Set
+        </button>
+      </div>
+
+      <div className="custom-domain-card__actions">
+        <button
+          type="button"
+          onClick={handleAskBarney}
+          className="btn btn-ghost btn-sm"
+        >
+          Ask Barney
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const { sendMessage } = useAI();
 
@@ -139,4 +213,11 @@ export const CustomDomainCard = memo(function CustomDomainCard({ data }: CustomD
       </div>
     </div>
   );
+}
+
+export const CustomDomainCard = memo(function CustomDomainCard({ data }: CustomDomainCardProps) {
+  if (data.fqdn === '') {
+    return <NoDomainForm data={data} />;
+  }
+  return <ActiveDomainView data={data} />;
 });

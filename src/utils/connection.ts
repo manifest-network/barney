@@ -63,9 +63,9 @@ export function collectInstanceUrls(
 export function resolveExpectedCnameTarget(
   connection:
     | {
-        fqdn?: string;
-        instances?: { fqdn?: string }[];
-        services?: Record<string, unknown>;
+        readonly fqdn?: string;
+        readonly instances?: readonly { readonly fqdn?: string }[];
+        readonly services?: Readonly<Record<string, unknown>>;
       }
     | undefined,
   serviceName: string,
@@ -81,7 +81,7 @@ export function resolveExpectedCnameTarget(
   if (serviceName !== '' && connection.services) {
     const svcRaw = connection.services[serviceName];
     if (svcRaw && typeof svcRaw === 'object') {
-      const svc = svcRaw as { fqdn?: string; instances?: { fqdn?: string }[] };
+      const svc = svcRaw as { readonly fqdn?: string; readonly instances?: readonly { readonly fqdn?: string }[] };
       const svcFqdn = normalize(svc.fqdn) ?? normalize(svc.instances?.[0]?.fqdn);
       if (svcFqdn) return svcFqdn;
     }

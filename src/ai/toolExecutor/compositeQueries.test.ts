@@ -266,6 +266,60 @@ describe('executeAppStatus', () => {
       expect((result.data as any).customDomains).toBeUndefined();
     }
   });
+
+  it('emits a no-domain CustomDomainCard for a single-item lease without a custom domain', async () => {
+    const app = makeApp({ status: 'running', connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' } });
+    vi.mocked(getLease).mockResolvedValue({
+      state: 2,
+      items: [
+        { skuUuid: 's1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: '', customDomain: '' },
+      ],
+    } as any);
+    const registry = makeRegistry([app]);
+    const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
+    expect(result.success).toBe(true);
+    if (result.success && !result.requiresConfirmation) {
+      expect(result.displayCard?.type).toBe('custom_domain');
+      if (result.displayCard?.type === 'custom_domain') {
+        expect(result.displayCard.data.fqdn).toBe('');
+        expect(result.displayCard.data.serviceName).toBe('');
+        expect(result.displayCard.data.expectedCnameTarget).toBe('auto.barney0.manifest0.net');
+      }
+    }
+  });
+
+  it('does NOT emit no-domain card for multi-item leases', async () => {
+    const app = makeApp({ status: 'running' });
+    vi.mocked(getLease).mockResolvedValue({
+      state: 2,
+      items: [
+        { skuUuid: 's1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: 'web', customDomain: '' },
+        { skuUuid: 's2', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: 'db', customDomain: '' },
+      ],
+    } as any);
+    const registry = makeRegistry([app]);
+    const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
+    expect(result.success).toBe(true);
+    if (result.success && !result.requiresConfirmation) {
+      expect(result.displayCard).toBeUndefined();
+    }
+  });
+
+  it('does NOT emit no-domain card for stopped apps', async () => {
+    const app = makeApp({ status: 'stopped', connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' } });
+    vi.mocked(getLease).mockResolvedValue({
+      state: 3, // CLOSED
+      items: [
+        { skuUuid: 's1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: '', customDomain: '' },
+      ],
+    } as any);
+    const registry = makeRegistry([app]);
+    const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
+    expect(result.success).toBe(true);
+    if (result.success && !result.requiresConfirmation) {
+      expect(result.displayCard).toBeUndefined();
+    }
+  });
 });
 
 describe('executeGetBalance', () => {

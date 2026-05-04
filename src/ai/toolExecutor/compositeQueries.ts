@@ -258,7 +258,10 @@ export async function executeAppStatus(
     .filter(i => i.customDomain !== '')
     .map(i => ({ serviceName: i.serviceName, customDomain: i.customDomain }));
 
-  // Compute expectedCnameTarget for the single-domain case (used for displayCard)
+  // Compute displayCard:
+  //  - exactly one custom domain: status view (the existing behavior)
+  //  - no domain on a single-item lease (running): "no domain" form so the user can set one
+  //  - multi-domain stacks or stopped apps: skip (ambiguous / not actionable)
   let displayCard: MessageCard | undefined;
   if (customDomains.length === 1) {
     const { serviceName, customDomain } = customDomains[0];
@@ -272,6 +275,23 @@ export async function executeAppStatus(
         leaseUuid: app.leaseUuid,
         serviceName,
         expectedCnameTarget,
+        expectedAddress: address,
+      },
+    };
+  } else if (
+    customDomains.length === 0 &&
+    leaseItems.length === 1 &&
+    currentStatus === 'running'
+  ) {
+    const serviceName = leaseItems[0].serviceName;
+    displayCard = {
+      type: 'custom_domain',
+      data: {
+        appName: app.name,
+        fqdn: '',
+        leaseUuid: app.leaseUuid,
+        serviceName,
+        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
         expectedAddress: address,
       },
     };

@@ -29,6 +29,7 @@ import { MANIFEST_NOTICE_KEY } from '../../config/constants';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
+import type { MessageCard } from '../../contexts/aiTypes';
 import { createSigningMutex, runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
 
 /** Env var names that could compromise the container runtime or host. */
@@ -1174,6 +1175,30 @@ export async function executeConfirmedDeployApp(
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
 
+      // Emit a "no custom domain" affordance card so the user can set one inline.
+      // Only for single-item leases (lease items is unambiguous); stacks need user
+      // to disambiguate the service via chat, so we skip the card there.
+      let displayCard: MessageCard | undefined;
+      try {
+        const lease = await getLease(leaseUuid);
+        if (lease && lease.items.length === 1) {
+          const serviceName = lease.items[0].serviceName;
+          displayCard = {
+            type: 'custom_domain',
+            data: {
+              appName: name,
+              fqdn: '',
+              leaseUuid,
+              serviceName,
+              expectedCnameTarget: resolveExpectedCnameTarget(connection, serviceName),
+              expectedAddress: address,
+            },
+          };
+        }
+      } catch (error) {
+        logError('compositeTransactions.executeConfirmedDeployApp.domainCard', error);
+      }
+
       return {
         success: true,
         data: {
@@ -1182,6 +1207,7 @@ export async function executeConfirmedDeployApp(
           url: connectionUrl,
           status: 'running',
         },
+        ...(displayCard ? { displayCard } : {}),
       };
     }
 

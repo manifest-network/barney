@@ -36,6 +36,14 @@ function makeData(overrides: Partial<CustomDomainCardData> = {}): CustomDomainCa
   };
 }
 
+/** React tracks its own input value separately, so direct .value assignment is ignored.
+ *  Use the prototype setter to trigger React's onChange handler. */
+function setReactInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+  setter.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 describe('CustomDomainCard', () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
@@ -101,6 +109,71 @@ describe('CustomDomainCard', () => {
     const buttons = Array.from(container.querySelectorAll('button')).filter(b => b.textContent === 'Remove');
     flushSync(() => { buttons[0].click(); });
     expect(sendMessage).toHaveBeenCalledWith(expect.stringMatching(/remove.*wp.*web/i));
+  });
+
+  describe('no-domain form (fqdn === "")', () => {
+    it('renders an input + Set + Ask Barney button', () => {
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '' }) }));
+      });
+      const text = container.textContent ?? '';
+      expect(text).toContain('Custom domain');
+      expect(text).toContain('Ask Barney');
+      expect(container.querySelector('input')).not.toBeNull();
+    });
+
+    it('disables Set when input is empty or invalid', () => {
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '' }) }));
+      });
+      const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
+      expect(setBtn.disabled).toBe(true);
+    });
+
+    it('enables Set after a valid fqdn is entered, then sends "Point ... at ..." on click', () => {
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '', appName: 'my-api' }) }));
+      });
+      const input = container.querySelector('input') as HTMLInputElement;
+      const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
+
+      // Type a valid FQDN
+      flushSync(() => { setReactInputValue(input, 'app.example.com'); });
+      expect(setBtn.disabled).toBe(false);
+
+      flushSync(() => { setBtn.click(); });
+      expect(sendMessage).toHaveBeenCalledWith(expect.stringMatching(/Point app\.example\.com at my-api/i));
+    });
+
+    it('passes service_name suffix when set', () => {
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '', appName: 'wp', serviceName: 'web' }) }));
+      });
+      const input = container.querySelector('input') as HTMLInputElement;
+      flushSync(() => { setReactInputValue(input, 'app.example.com'); });
+      const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
+      flushSync(() => { setBtn.click(); });
+      expect(sendMessage).toHaveBeenCalledWith(expect.stringMatching(/Point app\.example\.com at wp.*service: web/i));
+    });
+
+    it('Ask Barney sends a guided prompt regardless of input', () => {
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '', appName: 'my-api' }) }));
+      });
+      const askBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Ask Barney') as HTMLButtonElement;
+      flushSync(() => { askBtn.click(); });
+      expect(sendMessage).toHaveBeenCalledWith(expect.stringMatching(/help me set a custom domain for my-api/i));
+    });
+
+    it('rejects invalid input (no dot)', () => {
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '' }) }));
+      });
+      const input = container.querySelector('input') as HTMLInputElement;
+      flushSync(() => { setReactInputValue(input, 'localhost'); });
+      const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
+      expect(setBtn.disabled).toBe(true);
+    });
   });
 
   it('transitions through statuses based on poll callback result', async () => {

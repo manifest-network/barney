@@ -10739,6 +10739,30 @@ code.lease-card-mono {
   margin-top: 0.75rem;
 }
 
+.custom-domain-card__form {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  align-items: stretch;
+}
+
+.custom-domain-card__input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.375rem 0.625rem;
+  background: var(--color-surface-900);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.custom-domain-card__input:focus {
+  outline: none;
+  border-color: var(--color-primary-400);
+}
+
 .custom-domain-dns-table {
   width: 100%;
   border-collapse: collapse;
