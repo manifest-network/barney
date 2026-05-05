@@ -238,7 +238,7 @@ describe('confirmAction', () => {
       mockExecuteConfirmedTool.mockResolvedValueOnce({ success: true, data: { deployed: true } });
       mockProcessStream.mockResolvedValueOnce(makeStreamResult());
 
-      await store.getState().confirmAction('{"new":"manifest"}');
+      await store.getState().confirmAction({ editedManifestJson: '{"new":"manifest"}' });
 
       // The executeConfirmedTool should have been called with the edited manifest
       const callArgs = mockExecuteConfirmedTool.mock.calls[0];
@@ -265,7 +265,7 @@ describe('confirmAction', () => {
       mockExecuteConfirmedTool.mockResolvedValueOnce({ success: true, data: {} });
       mockProcessStream.mockResolvedValueOnce(makeStreamResult());
 
-      await store.getState().confirmAction('{"new":"manifest"}');
+      await store.getState().confirmAction({ editedManifestJson: '{"new":"manifest"}' });
 
       // _generatedManifest should not have been added
       const callArgs = mockExecuteConfirmedTool.mock.calls[0];

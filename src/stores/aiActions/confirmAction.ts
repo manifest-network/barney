@@ -7,13 +7,23 @@ import { executeConfirmedTool } from '../../ai/toolExecutor';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
 import { bigIntReplacer } from '../../utils/json';
+import { isApex } from '../../utils/customDomainValidation';
 import type { AIStore } from '../aiStore';
 import { generateMessageId, toChatApiMessages, getAppRegistryAccess } from './utils';
+
+const APEX_WARNING =
+  'This is an apex domain. CNAMEs at the apex are not allowed by RFC; use ALIAS / ANAME / CNAME-flattening (Cloudflare) at your registrar.';
 
 type Get = () => AIStore;
 type Set = (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) => void;
 
-export async function confirmActionFn(get: Get, set: Set, editedManifestJson?: string): Promise<void> {
+export interface ConfirmActionOverrides {
+  editedManifestJson?: string;
+  editedCustomDomain?: string;
+  editedCustomDomainServiceName?: string;
+}
+
+export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmActionOverrides): Promise<void> {
   const { pendingConfirmation, isStreaming, clientManager } = get();
   if (!pendingConfirmation || isStreaming) return;
 
@@ -32,12 +42,39 @@ export async function confirmActionFn(get: Get, set: Set, editedManifestJson?: s
   const { address, signArbitrary } = get();
   const { messageId } = pendingConfirmation;
 
-  // Clone action to avoid mutating React state; apply user edits if present
+  // Clone action to avoid mutating React state; apply user edits if present.
   let confirmedArgs = pendingConfirmation.action.args;
   let confirmedPayload = pendingConfirmation.action.payload;
-  if (editedManifestJson && confirmedArgs._generatedManifest) {
-    confirmedArgs = { ...confirmedArgs, _generatedManifest: editedManifestJson };
+  if (overrides?.editedManifestJson && confirmedArgs._generatedManifest) {
+    confirmedArgs = { ...confirmedArgs, _generatedManifest: overrides.editedManifestJson };
     confirmedPayload = undefined;
+  }
+  // For deploy_app, allow the user to add/edit/clear the custom_domain at confirm time.
+  // The pending args carry whatever the AI prefilled; the override is what's in the
+  // input field at the moment of confirmation. Empty string = no domain attached.
+  if (overrides && pendingConfirmation.action.toolName === 'deploy_app' &&
+      overrides.editedCustomDomain !== undefined) {
+    const domain = overrides.editedCustomDomain.trim().replace(/\.$/, '').toLowerCase();
+    const serviceName = overrides.editedCustomDomainServiceName ?? '';
+    if (domain === '') {
+      // Drop the domain-related keys entirely; deploy proceeds without attach.
+      const { customDomain: _cd, customDomainServiceName: _csn, customDomainWarning: _cw, ...rest } = confirmedArgs;
+      void _cd; void _csn; void _cw;
+      confirmedArgs = rest;
+    } else {
+      // Recompute the apex warning synchronously on the edited value so the
+      // post-broadcast success-message wording (and ConfirmationCard apex hint)
+      // stays in sync with whatever the user typed. The async chain-Params
+      // reserved-suffix check doesn't re-run here; the chain rejects
+      // authoritatively if the domain falls in a reserved zone.
+      const customDomainWarning = isApex(domain) ? APEX_WARNING : undefined;
+      confirmedArgs = {
+        ...confirmedArgs,
+        customDomain: domain,
+        customDomainServiceName: serviceName,
+        customDomainWarning,
+      };
+    }
   }
   const action = { ...pendingConfirmation.action, args: confirmedArgs, payload: confirmedPayload };
 

@@ -805,4 +805,123 @@ describe('ConfirmationCard with stack manifest', () => {
       container.remove();
     }
   });
+
+  describe('deploy_app editable custom domain input', () => {
+    /** React tracks input value separately; use the prototype setter so onChange fires. */
+    function setReactInputValue(input: HTMLInputElement, value: string) {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    function renderInto(action: PendingAction, onConfirm = vi.fn()) {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      flushSync(() => { root.render(createElement(ConfirmationCard, { action, onConfirm, onCancel: vi.fn() })); });
+      return { container, root, onConfirm, cleanup: () => { flushSync(() => { root.unmount(); }); container.remove(); } };
+    }
+
+    function makeDeployAction(args: Record<string, unknown> = {}): PendingAction {
+      return {
+        id: 'deploy-1',
+        toolName: 'deploy_app',
+        args: { app_name: 'redis', size: 'micro', ...args },
+        description: 'Deploy "redis" on micro tier?',
+      };
+    }
+
+    it('renders an empty editable input by default', () => {
+      const { container, cleanup } = renderInto(makeDeployAction());
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        expect(input).not.toBeNull();
+        expect(input.value).toBe('');
+        const text = container.textContent ?? '';
+        expect(text).toMatch(/Custom domain/i);
+      } finally { cleanup(); }
+    });
+
+    it('pre-fills the input from an AI-prefilled customDomain arg', () => {
+      const { container, cleanup } = renderInto(makeDeployAction({ customDomain: 'app.example.com' }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        expect(input.value).toBe('app.example.com');
+      } finally { cleanup(); }
+    });
+
+    it('passes editedCustomDomain to onConfirm when user types and confirms', () => {
+      const { container, onConfirm, cleanup } = renderInto(makeDeployAction());
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'redis.example.com'));
+        const confirmBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Confirm')) as HTMLButtonElement;
+        flushSync(() => confirmBtn.click());
+        expect(onConfirm).toHaveBeenCalledTimes(1);
+        const overrides = onConfirm.mock.calls[0][0];
+        expect(overrides.editedCustomDomain).toBe('redis.example.com');
+      } finally { cleanup(); }
+    });
+
+    it('passes editedCustomDomain="" when user clears a pre-filled domain', () => {
+      const { container, onConfirm, cleanup } = renderInto(makeDeployAction({ customDomain: 'app.example.com' }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, ''));
+        const confirmBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Confirm')) as HTMLButtonElement;
+        flushSync(() => confirmBtn.click());
+        expect(onConfirm.mock.calls[0][0].editedCustomDomain).toBe('');
+      } finally { cleanup(); }
+    });
+
+    it('disables Confirm when domain input has invalid format (IPv4)', () => {
+      const { container, cleanup } = renderInto(makeDeployAction());
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, '192.168.1.1'));
+        const confirmBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Confirm')) as HTMLButtonElement;
+        expect(confirmBtn.disabled).toBe(true);
+      } finally { cleanup(); }
+    });
+
+    it('shows a service select for multi-service stacks when domain is filled', () => {
+      const { container, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['web', 'db'] }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'app.example.com'));
+        const select = container.querySelector('select[aria-label="Service to attach domain to"]') as HTMLSelectElement;
+        expect(select).not.toBeNull();
+        const options = Array.from(select.querySelectorAll('option')).map(o => o.value);
+        expect(options).toContain('web');
+        expect(options).toContain('db');
+      } finally { cleanup(); }
+    });
+
+    it('does not show service select for single-service deploys', () => {
+      const { container, cleanup } = renderInto(makeDeployAction());
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'app.example.com'));
+        const select = container.querySelector('select[aria-label="Service to attach domain to"]');
+        expect(select).toBeNull();
+      } finally { cleanup(); }
+    });
+
+    it('threads selected service name through onConfirm for stacks', () => {
+      const { container, onConfirm, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['web', 'db'] }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'app.example.com'));
+        const select = container.querySelector('select[aria-label="Service to attach domain to"]') as HTMLSelectElement;
+        flushSync(() => {
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!;
+          setter.call(select, 'db');
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        const confirmBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Confirm')) as HTMLButtonElement;
+        flushSync(() => confirmBtn.click());
+        expect(onConfirm.mock.calls[0][0].editedCustomDomainServiceName).toBe('db');
+      } finally { cleanup(); }
+    });
+  });
 });

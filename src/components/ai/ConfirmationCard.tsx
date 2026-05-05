@@ -8,6 +8,7 @@ import { findExampleByAppName } from '../../config/exampleApps';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { ManifestEditor } from './ManifestEditor';
 import { StackManifestEditor } from './StackManifestEditor';
+import { validateCustomDomainFormat } from '../../utils/customDomainValidation';
 import {
   parseEditableManifest, serializeManifest,
   parseEditableStackManifest, serializeStackManifest,
@@ -232,9 +233,22 @@ function SensitiveValue({ value }: { value: string }) {
   );
 }
 
+export interface ConfirmActionOverrides {
+  /** When the deploy ConfirmationCard's manifest editor was used. */
+  editedManifestJson?: string;
+  /**
+   * For deploy_app: the user-entered (or AI-prefilled) custom domain. `undefined`
+   * means "leave as-is in pendingAction.args"; empty string means "user explicitly
+   * cleared / didn't provide a domain"; non-empty means attach during deploy.
+   */
+  editedCustomDomain?: string;
+  /** Service name override for stacks. Same semantics as editedCustomDomain. */
+  editedCustomDomainServiceName?: string;
+}
+
 interface ConfirmationCardProps {
   action: PendingAction;
-  onConfirm: (editedManifestJson?: string) => void;
+  onConfirm: (overrides?: ConfirmActionOverrides) => void;
   onCancel: () => void;
   isExecuting?: boolean;
 }
@@ -271,27 +285,61 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
 
   const customDomainData = useMemo(() => parseCustomDomainArgs(action), [action]);
 
-  // For deploy_app: a custom_domain may be pre-attached during deploy. Surface it
-  // in a dedicated section. The provider-issued FQDN (CNAME target) isn't known
-  // until after the create-lease TX, so the hint just says to expect it post-deploy.
-  const deployWithCustomDomain = useMemo(() => {
-    if (action.toolName !== 'deploy_app') return null;
-    const cd = action.args.customDomain;
-    if (typeof cd !== 'string' || cd === '') return null;
-    const warning = typeof action.args.customDomainWarning === 'string' ? action.args.customDomainWarning : undefined;
-    const serviceName = typeof action.args.customDomainServiceName === 'string' ? action.args.customDomainServiceName : '';
-    return { customDomain: cd, serviceName, warning };
-  }, [action]);
+  // Editable custom domain input on deploy_app ConfirmationCards. Defaults to
+  // any AI-prefilled value (`args.customDomain`) so a chat message like
+  // "deploy redis with custom domain X" pre-fills the input. Empty input means
+  // "no domain attached" — the deploy proceeds without firing the set-domain TX.
+  const isDeployApp = action.toolName === 'deploy_app';
+  const stackServiceNames = useMemo(() => {
+    if (!isDeployApp) return undefined;
+    const sn = action.args._serviceNames;
+    return Array.isArray(sn) && sn.length > 1 ? (sn as string[]) : undefined;
+  }, [isDeployApp, action.args._serviceNames]);
+
+  const initialDomain = typeof action.args.customDomain === 'string' ? action.args.customDomain : '';
+  const initialServiceName = typeof action.args.customDomainServiceName === 'string'
+    ? action.args.customDomainServiceName
+    : '';
+  const [editedCustomDomain, setEditedCustomDomain] = useState(initialDomain);
+  const [editedCustomDomainServiceName, setEditedCustomDomainServiceName] = useState(initialServiceName);
+
+  // Validate the input synchronously. validateAll's reserved-suffix check is
+  // async (chain RPC); we let the chain reject on broadcast for that case.
+  // The format/IP check is synchronous and gives fast feedback.
+  const editedDomainTrimmed = editedCustomDomain.trim();
+  const editedDomainError = editedDomainTrimmed
+    ? validateCustomDomainFormat(editedDomainTrimmed)
+    : null;
+  const editedDomainHasContent = editedDomainTrimmed.length > 0;
+
+  // The apex warning is a soft signal (validateAll runs async upstream); when
+  // the user EDITS the domain we drop the cached warning since the new input
+  // hasn't been re-validated. Confirm always runs the executor's validateAll.
+  const editedDomainChanged = editedDomainTrimmed !== initialDomain;
+  const carriedWarning = !editedDomainChanged && typeof action.args.customDomainWarning === 'string'
+    ? action.args.customDomainWarning
+    : undefined;
 
   const handleConfirm = useCallback(() => {
-    if (editedManifest) {
-      onConfirm(serializeManifest(editedManifest));
-    } else if (editedStack) {
-      onConfirm(serializeStackManifest(editedStack));
-    } else {
-      onConfirm();
+    const manifestOverride = editedManifest
+      ? serializeManifest(editedManifest)
+      : editedStack
+        ? serializeStackManifest(editedStack)
+        : undefined;
+
+    if (!isDeployApp) {
+      onConfirm(manifestOverride ? { editedManifestJson: manifestOverride } : undefined);
+      return;
     }
-  }, [editedManifest, editedStack, onConfirm]);
+
+    const overrides: ConfirmActionOverrides = {};
+    if (manifestOverride) overrides.editedManifestJson = manifestOverride;
+    overrides.editedCustomDomain = editedDomainTrimmed;
+    overrides.editedCustomDomainServiceName = editedDomainTrimmed
+      ? (stackServiceNames ? editedCustomDomainServiceName : '')
+      : '';
+    onConfirm(overrides);
+  }, [editedManifest, editedStack, isDeployApp, editedDomainTrimmed, editedCustomDomainServiceName, stackServiceNames, onConfirm]);
 
   // Filter out internal args for display
   const displayArgs = useMemo(() => {
@@ -408,23 +456,48 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           </>
         )}
 
-        {deployWithCustomDomain && (() => {
-          const isApex = !!deployWithCustomDomain.warning;
+        {isDeployApp && (() => {
+          const isApex = editedDomainHasContent && !editedDomainError && !!carriedWarning;
           const recordKind = isApex ? 'an ALIAS / ANAME / CNAME-flattened record' : 'a CNAME';
           return (
             <div className="confirmation-details">
-              <p className="confirmation-details-title">Custom domain</p>
+              <p className="confirmation-details-title">Custom domain (optional)</p>
               <div className="confirmation-payload">
-                <p className="text-sm">
-                  Will attach <code className="font-mono text-primary">{deployWithCustomDomain.customDomain}</code>
-                  {deployWithCustomDomain.serviceName ? <> to service <code className="font-mono">{deployWithCustomDomain.serviceName}</code></> : null}
-                  {' '}right after the lease is created.
-                </p>
-                <p className="text-xs text-muted mt-2">
-                  The provider FQDN appears in the status card after deploy. Add {recordKind} at your registrar pointing at it, with Cloudflare proxy/orange-cloud OFF.
-                </p>
-                {deployWithCustomDomain.warning && (
-                  <p className="text-sm text-warning mt-2" role="alert">{deployWithCustomDomain.warning}</p>
+                <input
+                  type="text"
+                  inputMode="url"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="app.example.com (leave empty to skip)"
+                  value={editedCustomDomain}
+                  onChange={(e) => setEditedCustomDomain(e.target.value)}
+                  className="custom-domain-card__input"
+                  aria-label="Custom domain"
+                  aria-invalid={editedDomainError != null}
+                />
+                {stackServiceNames && editedDomainHasContent && (
+                  <select
+                    value={editedCustomDomainServiceName}
+                    onChange={(e) => setEditedCustomDomainServiceName(e.target.value)}
+                    className="custom-domain-card__input mt-2"
+                    aria-label="Service to attach domain to"
+                  >
+                    <option value="">— pick a service —</option>
+                    {stackServiceNames.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                )}
+                {editedDomainError && (
+                  <p className="text-xs text-error mt-2" role="alert">{editedDomainError}</p>
+                )}
+                {editedDomainHasContent && !editedDomainError && (
+                  <p className="text-xs text-muted mt-2">
+                    Will attach right after the lease is created. The provider FQDN appears
+                    in the deploy result — add {recordKind} at your registrar pointing at it,
+                    with Cloudflare proxy/orange-cloud OFF.
+                  </p>
+                )}
+                {carriedWarning && editedDomainHasContent && !editedDomainError && (
+                  <p className="text-sm text-warning mt-2" role="alert">{carriedWarning}</p>
                 )}
               </div>
             </div>
@@ -445,7 +518,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         <button
           type="button"
           onClick={handleConfirm}
-          disabled={isExecuting}
+          disabled={isExecuting || (isDeployApp && editedDomainError != null)}
           className="btn btn-success btn-sm"
         >
           <Check className="w-4 h-4" />

@@ -29,7 +29,6 @@ import { MANIFEST_NOTICE_KEY } from '../../config/constants';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
-import type { MessageCard } from '../../contexts/aiTypes';
 import { createSigningMutex, runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
 
 /** Env var names that could compromise the container runtime or host. */
@@ -1243,51 +1242,29 @@ export async function executeConfirmedDeployApp(
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
 
-      // Emit a custom_domain card.
-      //  - If we attached a domain pre-upload (single-step deploy + domain),
-      //    show the *status view* keyed to the new fqdn.
-      //  - Else for single-item leases, show the *empty form* affordance.
-      //  - Skip for stacks without a pre-set domain (ambiguous service).
-      let displayCard: MessageCard | undefined;
-      if (attachedDomain) {
-        displayCard = {
-          type: 'custom_domain',
-          data: {
-            appName: name,
-            fqdn: attachedDomain.customDomain,
-            leaseUuid,
-            serviceName: attachedDomain.serviceName,
-            expectedCnameTarget: resolveExpectedCnameTarget(connection, attachedDomain.serviceName),
-            expectedAddress: address,
-          },
-        };
-      } else {
-        try {
-          const lease = await getLease(leaseUuid);
-          if (lease && lease.items.length === 1) {
-            const serviceName = lease.items[0].serviceName;
-            displayCard = {
-              type: 'custom_domain',
-              data: {
-                appName: name,
-                fqdn: '',
-                leaseUuid,
-                serviceName,
-                expectedCnameTarget: resolveExpectedCnameTarget(connection, serviceName),
-                expectedAddress: address,
-              },
-            };
-          }
-        } catch (error) {
-          logError('compositeTransactions.executeConfirmedDeployApp.domainCard', error);
-        }
-      }
+      // No CustomDomainCard auto-emission on the deploy path. The deploy result
+      // is the primary surface here. DNS progress (4-state polling) is available
+      // by running app_status (chat or sidebar click), which surfaces the
+      // CustomDomainCard for the now-attached domain — same component, just
+      // discovered separately to keep the deploy success surface uncluttered.
 
-      // If the user requested a custom domain but the set-domain TX failed, surface
-      // a non-fatal warning in the message so the AI can guide them to retry.
-      const message = attachedDomainError
-        ? `App "${name}" is live, but custom-domain attach failed (${attachedDomainError}). Use set_custom_domain to try again.`
-        : `App "${name}" is live!`;
+      const expectedCnameTarget = attachedDomain
+        ? resolveExpectedCnameTarget(connection, attachedDomain.serviceName)
+        : undefined;
+      const isApexAttached = typeof args.customDomainWarning === 'string' && args.customDomainWarning.length > 0;
+      const recordKind = isApexAttached
+        ? 'an ALIAS / ANAME / CNAME-flattened record (apex domains cannot use CNAME)'
+        : 'a CNAME';
+
+      let message: string;
+      if (attachedDomainError) {
+        message = `App "${name}" is live, but the custom-domain attach failed (${attachedDomainError}). Run \`set_custom_domain\` to try again.`;
+      } else if (attachedDomain) {
+        const target = expectedCnameTarget ?? '<provider FQDN>';
+        message = `App "${name}" is live with custom domain "${attachedDomain.customDomain}" attached. Add ${recordKind} at your registrar pointing at ${target}, then run \`app_status ${name}\` to track DNS resolution.`;
+      } else {
+        message = `App "${name}" is live!`;
+      }
 
       return {
         success: true,
@@ -1296,10 +1273,14 @@ export async function executeConfirmedDeployApp(
           name,
           url: connectionUrl,
           status: 'running',
-          ...(attachedDomain ? { custom_domain: attachedDomain.customDomain, service_name: attachedDomain.serviceName } : {}),
+          ...(attachedDomain ? {
+            custom_domain: attachedDomain.customDomain,
+            service_name: attachedDomain.serviceName,
+            expected_cname_target: expectedCnameTarget,
+            is_apex: isApexAttached,
+          } : {}),
           ...(attachedDomainError ? { custom_domain_error: attachedDomainError } : {}),
         },
-        ...(displayCard ? { displayCard } : {}),
       };
     }
 

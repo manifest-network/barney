@@ -57,7 +57,7 @@ export interface AIStore {
   // --- Actions ---
   setIsOpen: (open: boolean) => void;
   sendMessage: (content: string) => Promise<void>;
-  confirmAction: (editedManifestJson?: string) => Promise<void>;
+  confirmAction: (overrides?: { editedManifestJson?: string; editedCustomDomain?: string; editedCustomDomainServiceName?: string }) => Promise<void>;
   cancelAction: () => void;
   addMessage: (message: ChatMessage) => void;
   updateMessageById: (messageId: string, updates: Partial<ChatMessage>) => void;
@@ -226,7 +226,7 @@ export const createAIStore = () =>
 
     // --- Complex actions ---
     sendMessage: (content) => sendMessageFn(get, set, content),
-    confirmAction: (editedManifestJson) => confirmActionFn(get, set, editedManifestJson),
+    confirmAction: (overrides) => confirmActionFn(get, set, overrides),
     cancelAction: () => cancelActionFn(get, set),
     requestBatchDeploy: (apps, userMessage) => requestBatchDeployFn(get, set, apps, userMessage),
 
