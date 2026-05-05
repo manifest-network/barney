@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, useState, useCallback } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { AlertTriangle, Check, X, Paperclip, Copy, CheckCheck, Eye, EyeOff } from 'lucide-react';
 import { FocusTrap } from 'focus-trap-react';
 import type { PendingAction } from '../../ai/toolExecutor';
@@ -8,7 +8,7 @@ import { findExampleByAppName } from '../../config/exampleApps';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { ManifestEditor } from './ManifestEditor';
 import { StackManifestEditor } from './StackManifestEditor';
-import { validateCustomDomainFormat, apexRecordKindLabel } from '../../utils/customDomainValidation';
+import { validateAll, validateCustomDomainFormat, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import {
   parseEditableManifest, serializeManifest,
   parseEditableStackManifest, serializeStackManifest,
@@ -292,22 +292,63 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   const [editedCustomDomain, setEditedCustomDomain] = useState(initialDomain);
   const [editedCustomDomainServiceName, setEditedCustomDomainServiceName] = useState(initialServiceName);
 
-  // Validate the input synchronously. validateAll's reserved-suffix check is
-  // async (chain RPC); we let the chain reject on broadcast for that case.
-  // The format/IP check is synchronous and gives fast feedback.
+  // Two layers of validation:
+  //  - Synchronous (format / IP / dot count): fast feedback as user types.
+  //  - Asynchronous (`validateAll` — debounced 300ms): runs the chain
+  //    `Params.reservedDomainSuffixes` RPC + apex check. Disables Confirm
+  //    while pending or on error so a reserved-zone domain can't slip
+  //    through to a `MsgCreateLease` whose `MsgSetItemCustomDomain` will
+  //    then be rejected post-broadcast. The async result also drives the
+  //    apex warning shown in this card (kept in sync with what the user
+  //    actually typed).
   const editedDomainTrimmed = editedCustomDomain.trim();
-  const editedDomainError = editedDomainTrimmed
+  const editedDomainFormatError = editedDomainTrimmed
     ? validateCustomDomainFormat(editedDomainTrimmed)
     : null;
   const editedDomainHasContent = editedDomainTrimmed.length > 0;
 
-  // The apex warning is a soft signal (validateAll runs async upstream); when
-  // the user EDITS the domain we drop the cached warning since the new input
-  // hasn't been re-validated. Confirm always runs the executor's validateAll.
-  const editedDomainChanged = editedDomainTrimmed !== initialDomain;
-  const carriedWarning = !editedDomainChanged && typeof action.args.customDomainWarning === 'string'
-    ? action.args.customDomainWarning
-    : undefined;
+  // Last-validated marker. The cached value is only valid for `domain`; if the
+  // input has since changed, we're "pending" until the next debounce resolves.
+  // No synchronous setState in the effect body — only inside the async resolve —
+  // which keeps the React-hooks/set-state-in-effect lint happy.
+  const [lastValidated, setLastValidated] = useState<{
+    domain: string;
+    error?: string;
+    warning?: string;
+  }>({ domain: '' });
+
+  useEffect(() => {
+    if (!isDeployApp || !editedDomainHasContent || editedDomainFormatError) return;
+    if (lastValidated.domain === editedDomainTrimmed) return; // already validated
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const result = await validateAll(editedDomainTrimmed);
+        if (cancelled) return;
+        setLastValidated({ domain: editedDomainTrimmed, error: result.error, warning: result.warning });
+      } catch (err) {
+        if (cancelled) return;
+        logError('ConfirmationCard.asyncValidate', err);
+        // Chain unreachable: store as "validated, no error/warning" so the chain
+        // will reject authoritatively if it's actually a reserved zone.
+        setLastValidated({ domain: editedDomainTrimmed });
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [isDeployApp, editedDomainTrimmed, editedDomainHasContent, editedDomainFormatError, lastValidated.domain]);
+
+  // Derived async-validation state. `pending` = the current input differs from
+  // the last successfully-validated domain (and there's something to validate).
+  // The async error/warning is only meaningful when the validated domain matches
+  // the current input — otherwise display ignores it.
+  const asyncDomainPending = editedDomainHasContent && !editedDomainFormatError &&
+    lastValidated.domain !== editedDomainTrimmed;
+  const asyncDomainError = lastValidated.domain === editedDomainTrimmed ? lastValidated.error : undefined;
+  const asyncDomainWarning = lastValidated.domain === editedDomainTrimmed ? lastValidated.warning : undefined;
+  const editedDomainError = editedDomainFormatError ?? asyncDomainError ?? null;
 
   const handleConfirm = useCallback(() => {
     const manifestOverride = editedManifest
@@ -446,8 +487,9 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         )}
 
         {isDeployApp && (() => {
-          const isApex = editedDomainHasContent && !editedDomainError && !!carriedWarning;
+          const isApex = editedDomainHasContent && !editedDomainError && !!asyncDomainWarning;
           const recordKind = `${isApex ? 'an' : 'a'} ${apexRecordKindLabel(isApex)}${isApex ? ' record' : ''}`;
+          const showSuccessHint = editedDomainHasContent && !editedDomainError && !asyncDomainPending;
           return (
             <div className="confirmation-details">
               <p className="confirmation-details-title">Custom domain (optional)</p>
@@ -463,6 +505,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                   className="custom-domain-card__input"
                   aria-label="Custom domain"
                   aria-invalid={editedDomainError != null}
+                  aria-busy={asyncDomainPending}
                 />
                 {stackServiceNames && editedDomainHasContent && (
                   <select
@@ -475,18 +518,21 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                     {stackServiceNames.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                 )}
+                {asyncDomainPending && !editedDomainError && (
+                  <p className="text-xs text-muted mt-2" aria-live="polite">Checking domain…</p>
+                )}
                 {editedDomainError && (
                   <p className="text-xs text-error mt-2" role="alert">{editedDomainError}</p>
                 )}
-                {editedDomainHasContent && !editedDomainError && (
+                {showSuccessHint && (
                   <p className="text-xs text-muted mt-2">
                     Will attach right after the lease is created. The provider FQDN appears
                     in the deploy result — add {recordKind} at your registrar pointing at it,
                     with Cloudflare proxy/orange-cloud OFF.
                   </p>
                 )}
-                {carriedWarning && editedDomainHasContent && !editedDomainError && (
-                  <p className="text-sm text-warning mt-2" role="alert">{carriedWarning}</p>
+                {asyncDomainWarning && editedDomainHasContent && !editedDomainError && !asyncDomainPending && (
+                  <p className="text-sm text-warning mt-2" role="alert">{asyncDomainWarning}</p>
                 )}
               </div>
             </div>
@@ -507,7 +553,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         <button
           type="button"
           onClick={handleConfirm}
-          disabled={isExecuting || (isDeployApp && editedDomainError != null)}
+          disabled={isExecuting || (isDeployApp && (editedDomainError != null || asyncDomainPending))}
           className="btn btn-success btn-sm"
         >
           <Check className="w-4 h-4" />

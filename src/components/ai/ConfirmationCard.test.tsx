@@ -1,7 +1,24 @@
-import { describe, it, expect, vi } from 'vitest';
-import { createElement } from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
+
+// Stub validateAll so the async-validate effect resolves deterministically
+// without hitting the (mocked) chain RPC for reserved-suffix params. The
+// stub mirrors the sync validators so format / IP / apex checks still apply.
+vi.mock('../../utils/customDomainValidation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/customDomainValidation')>();
+  return {
+    ...actual,
+    validateAll: vi.fn(async (fqdn: string) => {
+      const formatError = actual.validateCustomDomainFormat(fqdn);
+      if (formatError) return { error: formatError };
+      if (actual.isApex(fqdn)) return { warning: actual.APEX_WARNING };
+      return {};
+    }),
+  };
+});
+
 import { ConfirmationCard } from './ConfirmationCard';
 import {
   parseEditableManifest, serializeManifest,
@@ -807,11 +824,21 @@ describe('ConfirmationCard with stack manifest', () => {
   });
 
   describe('deploy_app editable custom domain input', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
     /** React tracks input value separately; use the prototype setter so onChange fires. */
     function setReactInputValue(input: HTMLInputElement, value: string) {
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
       setter.call(input, value);
       input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    /** Advance past the 300ms debounce + flush microtasks so async validation resolves. */
+    async function settleAsyncValidation() {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(350);
+      });
     }
 
     function renderInto(action: PendingAction, onConfirm = vi.fn()) {
@@ -831,14 +858,17 @@ describe('ConfirmationCard with stack manifest', () => {
       };
     }
 
+    function findConfirmBtn(container: HTMLElement): HTMLButtonElement {
+      return Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Confirm')) as HTMLButtonElement;
+    }
+
     it('renders an empty editable input by default', () => {
       const { container, cleanup } = renderInto(makeDeployAction());
       try {
         const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
         expect(input).not.toBeNull();
         expect(input.value).toBe('');
-        const text = container.textContent ?? '';
-        expect(text).toMatch(/Custom domain/i);
+        expect(container.textContent ?? '').toMatch(/Custom domain/i);
       } finally { cleanup(); }
     });
 
@@ -850,37 +880,63 @@ describe('ConfirmationCard with stack manifest', () => {
       } finally { cleanup(); }
     });
 
-    it('passes editedCustomDomain to onConfirm when user types and confirms', () => {
+    it('disables Confirm while async validation is pending', async () => {
+      const { container, cleanup } = renderInto(makeDeployAction());
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'redis.example.com'));
+        // Immediately after typing, async hasn't resolved → button disabled
+        expect(findConfirmBtn(container).disabled).toBe(true);
+        expect(container.textContent ?? '').toMatch(/Checking domain/i);
+        await settleAsyncValidation();
+        // After debounce + resolve → button enabled
+        expect(findConfirmBtn(container).disabled).toBe(false);
+      } finally { cleanup(); }
+    });
+
+    it('passes editedCustomDomain to onConfirm after async validation settles', async () => {
       const { container, onConfirm, cleanup } = renderInto(makeDeployAction());
       try {
         const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
         flushSync(() => setReactInputValue(input, 'redis.example.com'));
-        const confirmBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Confirm')) as HTMLButtonElement;
-        flushSync(() => confirmBtn.click());
+        await settleAsyncValidation();
+        flushSync(() => findConfirmBtn(container).click());
         expect(onConfirm).toHaveBeenCalledTimes(1);
-        const overrides = onConfirm.mock.calls[0][0];
-        expect(overrides.editedCustomDomain).toBe('redis.example.com');
+        expect(onConfirm.mock.calls[0][0].editedCustomDomain).toBe('redis.example.com');
       } finally { cleanup(); }
     });
 
-    it('passes editedCustomDomain="" when user clears a pre-filled domain', () => {
+    it('passes editedCustomDomain="" when user clears a pre-filled domain', async () => {
       const { container, onConfirm, cleanup } = renderInto(makeDeployAction({ customDomain: 'app.example.com' }));
       try {
         const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
         flushSync(() => setReactInputValue(input, ''));
-        const confirmBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Confirm')) as HTMLButtonElement;
-        flushSync(() => confirmBtn.click());
+        // Empty input bypasses async; button immediately enabled
+        flushSync(() => findConfirmBtn(container).click());
         expect(onConfirm.mock.calls[0][0].editedCustomDomain).toBe('');
       } finally { cleanup(); }
     });
 
-    it('disables Confirm when domain input has invalid format (IPv4)', () => {
+    it('disables Confirm when domain input has invalid format (IPv4) — sync error', () => {
       const { container, cleanup } = renderInto(makeDeployAction());
       try {
         const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
         flushSync(() => setReactInputValue(input, '192.168.1.1'));
-        const confirmBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Confirm')) as HTMLButtonElement;
-        expect(confirmBtn.disabled).toBe(true);
+        // Sync error wins; button disabled without waiting for async
+        expect(findConfirmBtn(container).disabled).toBe(true);
+        expect(container.textContent ?? '').toMatch(/IP address/i);
+      } finally { cleanup(); }
+    });
+
+    it('shows apex warning after async validation resolves on a 2-label domain', async () => {
+      const { container, cleanup } = renderInto(makeDeployAction());
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'example.com'));
+        await settleAsyncValidation();
+        expect(container.textContent ?? '').toMatch(/apex/i);
+        // Apex isn't an error — Confirm stays enabled
+        expect(findConfirmBtn(container).disabled).toBe(false);
       } finally { cleanup(); }
     });
 
@@ -907,7 +963,7 @@ describe('ConfirmationCard with stack manifest', () => {
       } finally { cleanup(); }
     });
 
-    it('threads selected service name through onConfirm for stacks', () => {
+    it('threads selected service name through onConfirm for stacks', async () => {
       const { container, onConfirm, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['web', 'db'] }));
       try {
         const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
@@ -918,8 +974,8 @@ describe('ConfirmationCard with stack manifest', () => {
           setter.call(select, 'db');
           select.dispatchEvent(new Event('change', { bubbles: true }));
         });
-        const confirmBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Confirm')) as HTMLButtonElement;
-        flushSync(() => confirmBtn.click());
+        await settleAsyncValidation();
+        flushSync(() => findConfirmBtn(container).click());
         expect(onConfirm.mock.calls[0][0].editedCustomDomainServiceName).toBe('db');
       } finally { cleanup(); }
     });
