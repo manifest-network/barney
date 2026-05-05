@@ -3,6 +3,7 @@ import {
   requiresConfirmation,
   isValidToolName,
   getToolCallDescription,
+  getDisplaySafeArgs,
   AI_TOOLS,
   CONFIRMATION_TOOLS,
 } from './tools';
@@ -229,5 +230,47 @@ describe('getToolCallDescription - new tools', () => {
   it('returns description for request_faucet', () => {
     const desc = getToolCallDescription('request_faucet', {});
     expect(desc).toContain('faucet');
+  });
+});
+
+describe("getDisplaySafeArgs", () => {
+  it("returns only public schema keys for deploy_app", () => {
+    const out = getDisplaySafeArgs("deploy_app", {
+      app_name: "redis",
+      image: "redis:8",
+      // internal-only keys that should be dropped:
+      skuUuid: "sku-1",
+      providerUuid: "p-1",
+      providerUrl: "https://fred.example.com",
+      _generatedManifest: "{...}",
+      customDomainServiceName: "",
+      customDomainWarning: "",
+    });
+    expect(out).toEqual({ app_name: "redis", image: "redis:8" });
+  });
+
+  it("returns only public schema keys for set_custom_domain", () => {
+    const out = getDisplaySafeArgs("set_custom_domain", {
+      app_name: "redis",
+      custom_domain: "redis.example.com",
+      service_name: "",
+      // internal:
+      leaseUuid: "lease-1",
+      currentDomain: "",
+      expectedCnameTarget: "auto.barney0.manifest0.net",
+      warning: "",
+      address: "manifest1abc",
+    });
+    expect(Object.keys(out).sort()).toEqual(["app_name", "custom_domain", "service_name"].sort());
+  });
+
+  it("drops undefined values", () => {
+    const out = getDisplaySafeArgs("deploy_app", { app_name: "x", image: undefined });
+    expect(out).toEqual({ app_name: "x" });
+  });
+
+  it("returns {} for unknown tool names (UI-internal like batch_deploy)", () => {
+    const out = getDisplaySafeArgs("batch_deploy", { entries: [] });
+    expect(out).toEqual({});
   });
 });

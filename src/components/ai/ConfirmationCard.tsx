@@ -9,6 +9,7 @@ import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { ManifestEditor } from './ManifestEditor';
 import { StackManifestEditor } from './StackManifestEditor';
 import { validateAll, validateCustomDomainFormat, apexRecordKindLabel } from '../../utils/customDomainValidation';
+import { getDisplaySafeArgs } from '../../ai/tools';
 import {
   parseEditableManifest, serializeManifest,
   parseEditableStackManifest, serializeStackManifest,
@@ -61,27 +62,6 @@ function parseStackManifest(action: PendingAction): Record<string, StackServiceS
   }
 }
 
-/** Internal args that should not be shown in the confirmation parameters. */
-const INTERNAL_ARGS = new Set([
-  '_generatedManifest',
-  '_serviceNames',
-  '_isStack',
-  // set_custom_domain internal-ish args (rendered in custom branch instead)
-  'leaseUuid',
-  'serviceName',
-  'customDomain',
-  'currentDomain',
-  'expectedCnameTarget',
-  'warning',
-  'address',
-  // deploy_app + customDomain internal args (rendered in dedicated section)
-  'customDomainServiceName',
-  'customDomainWarning',
-  // deploy_app internal pre-confirm args
-  'skuUuid',
-  'providerUuid',
-  'providerUrl',
-]);
 
 interface CustomDomainBranchData {
   appName: string;
@@ -371,16 +351,13 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     onConfirm(overrides);
   }, [editedManifest, editedStack, isDeployApp, editedDomainTrimmed, editedCustomDomainServiceName, stackServiceNames, onConfirm]);
 
-  // Filter out internal args for display
-  const displayArgs = useMemo(() => {
-    const filtered: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(action.args)) {
-      if (!INTERNAL_ARGS.has(k)) {
-        filtered[k] = v;
-      }
-    }
-    return filtered;
-  }, [action.args]);
+  // Filter to user-facing args only. The AI tool schema in AI_TOOLS is the
+  // single source of truth — this avoids the drift bug where every new TX
+  // tool used to require a manual addition to the INTERNAL_ARGS allowlist.
+  const displayArgs = useMemo(
+    () => getDisplaySafeArgs(action.toolName, action.args),
+    [action.toolName, action.args],
+  );
 
   return (
     <FocusTrap focusTrapOptions={{

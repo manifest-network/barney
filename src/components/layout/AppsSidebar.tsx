@@ -7,7 +7,7 @@ import { useChain } from '@cosmos-kit/react';
 import { LogOut, Circle, Zap, History, RotateCcw } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { getApps, reconcileWithChain, type AppEntry } from '../../registry/appRegistry';
+import { getApps, reconcileWithChain, subscribeToRegistry, type AppEntry } from '../../registry/appRegistry';
 import { getCreditAccount, getCreditEstimate, getLeasesByTenant, LeaseState } from '../../api/billing';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits } from '../../utils/format';
@@ -128,6 +128,19 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
   }, [refresh]);
+
+  // Subscribe to in-tab registry mutations so mid-tool-execution writes
+  // (e.g. executeAppStatus refreshing customDomains, executeConfirmedDeployApp
+  // flipping status) flow into the sidebar immediately instead of waiting up
+  // to AUTO_REFRESH_INTERVAL_MS for the next poll.
+  useEffect(() => {
+    if (!address) return;
+    return subscribeToRegistry((mutatedAddress) => {
+      if (mutatedAddress === address) {
+        setApps(getApps(address));
+      }
+    });
+  }, [address]);
 
   const runningApps = apps.filter((a) => a.status === 'running' || a.status === 'deploying');
 

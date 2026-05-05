@@ -477,6 +477,40 @@ export const VALID_TOOL_NAMES: ReadonlySet<string> = new Set(
   AI_TOOLS.map((tool) => tool.function.name)
 );
 
+/** Lookup table of tool name → declared user-facing parameter keys.
+ *  Used by ConfirmationCard to filter `pendingAction.args` for display. */
+const TOOL_PUBLIC_PARAMS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  AI_TOOLS.map((tool) => [
+    tool.function.name,
+    new Set(Object.keys(tool.function.parameters.properties)),
+  ]),
+);
+
+/**
+ * Filter `pendingAction.args` to the keys that the AI tool's public schema
+ * declares. Internal-only fields stuffed into `args` by executors (skuUuid,
+ * providerUrl, _generatedManifest, customDomainServiceName, ...) are dropped.
+ *
+ * The AI tool schema in `AI_TOOLS` is the single source of truth — adding a
+ * new internal arg requires no other change; adding a new *public* arg
+ * automatically surfaces it in the confirmation card.
+ *
+ * Unknown tool names (e.g. internal `batch_deploy`) return an empty record so
+ * nothing leaks to the user.
+ */
+export function getDisplaySafeArgs(
+  toolName: string,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const publicKeys = TOOL_PUBLIC_PARAMS.get(toolName);
+  if (!publicKeys) return {};
+  const out: Record<string, unknown> = {};
+  for (const k of publicKeys) {
+    if (k in args && args[k] !== undefined) out[k] = args[k];
+  }
+  return out;
+}
+
 export function isValidToolName(name: unknown): name is string {
   return typeof name === 'string' && VALID_TOOL_NAMES.has(name);
 }

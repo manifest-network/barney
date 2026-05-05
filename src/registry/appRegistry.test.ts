@@ -10,6 +10,7 @@ import {
   reconcileWithChain,
   validateAppName,
   sanitizeManifestForStorage,
+  subscribeToRegistry,
   type AppEntry,
 } from './appRegistry';
 
@@ -386,6 +387,94 @@ describe('appRegistry', () => {
       const apps = getApps(ADDR_A);
       expect(apps).toHaveLength(1);
       expect(apps[0].name).toBe('my-app');
+    });
+  });
+
+  describe('subscribeToRegistry', () => {
+    const ADDR = 'manifest1abc';
+
+    it('fires the listener with the mutated address on addApp', () => {
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+
+      addApp(ADDR, makeApp());
+
+      expect(listener).toHaveBeenCalledWith(ADDR);
+      unsub();
+    });
+
+    it('fires on updateApp', () => {
+      const app = makeApp();
+      addApp(ADDR, app);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+
+      updateApp(ADDR, app.leaseUuid, { status: 'stopped' });
+
+      expect(listener).toHaveBeenCalledWith(ADDR);
+      unsub();
+    });
+
+    it('fires on removeApp', () => {
+      const app = makeApp();
+      addApp(ADDR, app);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+
+      removeApp(ADDR, app.leaseUuid);
+
+      expect(listener).toHaveBeenCalledWith(ADDR);
+      unsub();
+    });
+
+    it('fires on reconcileWithChain when state changes', () => {
+      addApp(ADDR, makeApp({ status: 'running' }));
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+
+      // Empty leaseStates → app marked stopped, mutation occurs.
+      reconcileWithChain(ADDR, new Map());
+
+      expect(listener).toHaveBeenCalledWith(ADDR);
+      unsub();
+    });
+
+    it('does NOT fire on reconcileWithChain when state unchanged', () => {
+      const app = makeApp({ status: 'running' });
+      addApp(ADDR, app);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      listener.mockClear(); // addApp also fires; clear before the assertion
+
+      // Existing running lease still active → no change.
+      reconcileWithChain(ADDR, new Map([[app.leaseUuid, 'active']]));
+
+      expect(listener).not.toHaveBeenCalled();
+      unsub();
+    });
+
+    it('unsubscribe stops further notifications', () => {
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      unsub();
+
+      addApp(ADDR, makeApp());
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it('listener exception does not block other listeners', () => {
+      const bad = vi.fn(() => { throw new Error('boom'); });
+      const good = vi.fn();
+      const unsubBad = subscribeToRegistry(bad);
+      const unsubGood = subscribeToRegistry(good);
+
+      addApp(ADDR, makeApp());
+
+      expect(bad).toHaveBeenCalled();
+      expect(good).toHaveBeenCalled();
+      unsubBad();
+      unsubGood();
     });
   });
 });

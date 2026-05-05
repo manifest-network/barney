@@ -103,6 +103,36 @@ function storageKey(address: string): string {
 }
 
 /**
+ * In-tab change notifications.
+ *
+ * Mid-tool-execution writes (`executeAppStatus` updating customDomains,
+ * `executeConfirmedDeployApp` flipping status) used to be invisible to the
+ * sidebar until its 60s AUTO_REFRESH_INTERVAL_MS tick. Subscribing to this
+ * pub/sub closes that gap.
+ *
+ * Only fires for the wallet whose registry was mutated, so a stale subscriber
+ * from a previous wallet (cross-wallet switch race) doesn't get spurious
+ * updates. localStorage 'storage' events handle the cross-tab case separately.
+ */
+type RegistryListener = (address: string) => void;
+const listeners = new Set<RegistryListener>();
+
+export function subscribeToRegistry(listener: RegistryListener): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+function notify(address: string): void {
+  for (const listener of listeners) {
+    try {
+      listener(address);
+    } catch (error) {
+      logError('appRegistry.notify', error);
+    }
+  }
+}
+
+/**
  * Load apps from localStorage for a wallet address.
  * Returns empty array on corruption (clears bad data).
  */
@@ -258,6 +288,7 @@ export function addApp(address: string, entry: AppEntry): AppEntry {
   if (!saveApps(address, apps)) {
     throw new Error('Failed to save app to local registry (localStorage may be full). The lease was created on-chain but may not appear in the sidebar.');
   }
+  notify(address);
   return entry;
 }
 
@@ -275,6 +306,7 @@ export function updateApp(
   if (!saveApps(address, apps)) {
     logError('appRegistry.updateApp', new Error('localStorage write failed — update may not persist across page reload'));
   }
+  notify(address);
   return apps[idx];
 }
 
@@ -286,6 +318,7 @@ export function removeApp(address: string, leaseUuid: string): boolean {
   if (!saveApps(address, filtered)) {
     logError('appRegistry.removeApp', new Error('localStorage write failed — removal may not persist across page reload'));
   }
+  notify(address);
   return true;
 }
 
@@ -330,5 +363,6 @@ export function reconcileWithChain(
     if (!saveApps(address, apps)) {
       logError('appRegistry.reconcileWithChain', new Error('localStorage write failed — reconciliation may not persist across page reload'));
     }
+    notify(address);
   }
 }
