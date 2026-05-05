@@ -20,7 +20,7 @@ import { isValidFqdn, normalizeFqdn, resolveExpectedCnameTarget } from '../../ut
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 import { getDomainForService } from '../../api/leaseDomains';
-import { validateAll } from '../../utils/customDomainValidation';
+import { validateAll, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
 import { extractYamlServiceNames } from '../../utils/fileValidation';
@@ -1029,7 +1029,7 @@ export async function executeDeployApp(
   let customDomainServiceName = '';
   let customDomainWarning: string | undefined;
   if (typeof args.custom_domain === 'string' && args.custom_domain.trim() !== '') {
-    customDomain = args.custom_domain.trim().replace(/\.$/, '').toLowerCase();
+    customDomain = normalizeFqdn(args.custom_domain);
     const validation = await validateAll(customDomain);
     if (validation.error) return { success: false, error: validation.error };
     customDomainWarning = validation.warning;
@@ -1155,9 +1155,12 @@ export async function executeConfirmedDeployApp(
   // up the per-item custom_domain label as soon as the container is up.
   // A failure here is non-fatal: the deploy proceeds, the user is left in
   // the existing 2-step state and can retry set_custom_domain standalone.
+  type DomainAttachOutcome =
+    | { kind: 'none' }
+    | { kind: 'attached'; customDomain: string; serviceName: string }
+    | { kind: 'failed'; error: string };
   const customDomainArg = typeof args.customDomain === 'string' ? args.customDomain : '';
-  let attachedDomain: { customDomain: string; serviceName: string } | undefined;
-  let attachedDomainError: string | undefined;
+  let domainAttach: DomainAttachOutcome = { kind: 'none' };
   if (customDomainArg !== '') {
     const customDomainServiceName = typeof args.customDomainServiceName === 'string' ? args.customDomainServiceName : '';
     try {
@@ -1167,14 +1170,12 @@ export async function executeConfirmedDeployApp(
         customDomainArg,
         customDomainServiceName !== '' ? { serviceName: customDomainServiceName } : {},
       );
-      if (domainResult.code === 0) {
-        attachedDomain = { customDomain: customDomainArg, serviceName: customDomainServiceName };
-      } else {
-        attachedDomainError = `chain rejected with code ${domainResult.code}`;
-      }
+      domainAttach = domainResult.code === 0
+        ? { kind: 'attached', customDomain: customDomainArg, serviceName: customDomainServiceName }
+        : { kind: 'failed', error: `chain rejected with code ${domainResult.code}` };
     } catch (err) {
       logError('compositeTransactions.executeConfirmedDeployApp.setItemCustomDomain', err);
-      attachedDomainError = err instanceof Error ? err.message : 'unknown error';
+      domainAttach = { kind: 'failed', error: err instanceof Error ? err.message : 'unknown error' };
     }
   }
 
@@ -1248,22 +1249,27 @@ export async function executeConfirmedDeployApp(
       // CustomDomainCard for the now-attached domain — same component, just
       // discovered separately to keep the deploy success surface uncluttered.
 
-      const expectedCnameTarget = attachedDomain
-        ? resolveExpectedCnameTarget(connection, attachedDomain.serviceName)
+      const expectedCnameTarget = domainAttach.kind === 'attached'
+        ? resolveExpectedCnameTarget(connection, domainAttach.serviceName)
         : undefined;
       const isApexAttached = typeof args.customDomainWarning === 'string' && args.customDomainWarning.length > 0;
       const recordKind = isApexAttached
-        ? 'an ALIAS / ANAME / CNAME-flattened record (apex domains cannot use CNAME)'
-        : 'a CNAME';
+        ? `an ${apexRecordKindLabel(true)} record (apex domains cannot use CNAME)`
+        : `a ${apexRecordKindLabel(false)}`;
 
       let message: string;
-      if (attachedDomainError) {
-        message = `App "${name}" is live, but the custom-domain attach failed (${attachedDomainError}). Run \`set_custom_domain\` to try again.`;
-      } else if (attachedDomain) {
-        const target = expectedCnameTarget ?? '<provider FQDN>';
-        message = `App "${name}" is live with custom domain "${attachedDomain.customDomain}" attached. Add ${recordKind} at your registrar pointing at ${target}, then run \`app_status ${name}\` to track DNS resolution.`;
-      } else {
-        message = `App "${name}" is live!`;
+      switch (domainAttach.kind) {
+        case 'failed':
+          message = `App "${name}" is live, but the custom-domain attach failed (${domainAttach.error}). Run \`set_custom_domain\` to try again.`;
+          break;
+        case 'attached': {
+          const target = expectedCnameTarget ?? '<provider FQDN>';
+          message = `App "${name}" is live with custom domain "${domainAttach.customDomain}" attached. Add ${recordKind} at your registrar pointing at ${target}, then run \`app_status ${name}\` to track DNS resolution.`;
+          break;
+        }
+        case 'none':
+          message = `App "${name}" is live!`;
+          break;
       }
 
       return {
@@ -1273,13 +1279,13 @@ export async function executeConfirmedDeployApp(
           name,
           url: connectionUrl,
           status: 'running',
-          ...(attachedDomain ? {
-            custom_domain: attachedDomain.customDomain,
-            service_name: attachedDomain.serviceName,
+          ...(domainAttach.kind === 'attached' ? {
+            custom_domain: domainAttach.customDomain,
+            service_name: domainAttach.serviceName,
             expected_cname_target: expectedCnameTarget,
             is_apex: isApexAttached,
           } : {}),
-          ...(attachedDomainError ? { custom_domain_error: attachedDomainError } : {}),
+          ...(domainAttach.kind === 'failed' ? { custom_domain_error: domainAttach.error } : {}),
         },
       };
     }
@@ -2939,7 +2945,9 @@ export async function executeConfirmedSetCustomDomain(
     };
   }
 
-  const recordKind = isApexWarning ? 'an ALIAS / ANAME / CNAME-flattened record (apex domains cannot use CNAME)' : 'a CNAME';
+  const recordKind = isApexWarning
+    ? `an ${apexRecordKindLabel(true)} record (apex domains cannot use CNAME)`
+    : `a ${apexRecordKindLabel(false)}`;
   const target = expectedCnameTarget ?? '<provider FQDN>';
 
   return {

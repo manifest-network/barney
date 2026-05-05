@@ -2,6 +2,19 @@ import { parse as parseTld } from 'tldts';
 import { isValidFqdn, normalizeFqdn } from './connection';
 import { getReservedDomainSuffixes } from '../api/billingParams';
 
+/** Single source of truth for the apex-domain warning copy. Used by `validateAll`,
+ *  the post-confirm domain-args merger, and any other consumer that needs to
+ *  surface the "you can't CNAME at the apex" rule. */
+export const APEX_WARNING =
+  'This is an apex domain. CNAMEs at the apex are not allowed by RFC; use ALIAS / ANAME / CNAME-flattening (Cloudflare) at your registrar.';
+
+/** DNS-record-type label used in confirmation/success copy. Branches on whether
+ *  the target is the apex (CNAME-at-apex is forbidden, ALIAS/ANAME/flattening
+ *  is the substitute). */
+export function apexRecordKindLabel(isApexDomain: boolean): string {
+  return isApexDomain ? 'ALIAS / ANAME / CNAME-flattened' : 'CNAME';
+}
+
 export interface CustomDomainValidationResult {
   /** Hard-blocking error: format invalid, reserved suffix, etc. */
   error?: string;
@@ -104,10 +117,7 @@ export async function validateAll(fqdn: string): Promise<CustomDomainValidationR
   }
 
   if (isApex(fqdn)) {
-    return {
-      warning:
-        'This is an apex domain. CNAMEs at the apex are not allowed by RFC; use ALIAS / ANAME / CNAME-flattening (Cloudflare) at your registrar.',
-    };
+    return { warning: APEX_WARNING };
   }
 
   return {};

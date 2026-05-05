@@ -22,7 +22,7 @@ import type { ChatMessage, PendingConfirmation, MessageCard } from '../contexts/
 import { loadSettings, loadHistory, clearHistoryStorage } from './aiActions/persistence';
 import { scheduleStreamingUpdateFn, flushPendingUpdateFn } from './aiActions/streaming';
 import { sendMessageFn } from './aiActions/sendMessage';
-import { confirmActionFn, cancelActionFn } from './aiActions/confirmAction';
+import { confirmActionFn, cancelActionFn, type ConfirmActionOverrides } from './aiActions/confirmAction';
 import { requestBatchDeployFn } from './aiActions/batchDeploy';
 import { generateMessageId, trimMessages } from './aiActions/utils';
 
@@ -57,7 +57,7 @@ export interface AIStore {
   // --- Actions ---
   setIsOpen: (open: boolean) => void;
   sendMessage: (content: string) => Promise<void>;
-  confirmAction: (overrides?: { editedManifestJson?: string; editedCustomDomain?: string; editedCustomDomainServiceName?: string }) => Promise<void>;
+  confirmAction: (overrides?: ConfirmActionOverrides) => Promise<void>;
   cancelAction: () => void;
   addMessage: (message: ChatMessage) => void;
   updateMessageById: (messageId: string, updates: Partial<ChatMessage>) => void;

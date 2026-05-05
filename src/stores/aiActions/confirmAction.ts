@@ -7,19 +7,50 @@ import { executeConfirmedTool } from '../../ai/toolExecutor';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
 import { bigIntReplacer } from '../../utils/json';
-import { isApex } from '../../utils/customDomainValidation';
+import { isApex, APEX_WARNING } from '../../utils/customDomainValidation';
+import { normalizeFqdn } from '../../utils/connection';
 import type { AIStore } from '../aiStore';
 import { generateMessageId, toChatApiMessages, getAppRegistryAccess } from './utils';
 
-const APEX_WARNING =
-  'This is an apex domain. CNAMEs at the apex are not allowed by RFC; use ALIAS / ANAME / CNAME-flattening (Cloudflare) at your registrar.';
+const DEPLOY_DOMAIN_KEYS = ['customDomain', 'customDomainServiceName', 'customDomainWarning'] as const;
+
+/**
+ * Apply the user's custom-domain override to the deploy_app pendingAction args.
+ *  - empty `domain` removes all domain-related keys (deploy proceeds without attach)
+ *  - non-empty `domain` writes/overwrites the keys; the apex warning is recomputed
+ *    synchronously via `isApex` so post-broadcast success copy stays in sync.
+ */
+function mergeCustomDomainOverride(
+  args: Record<string, unknown>,
+  domain: string,
+  serviceName: string,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...args };
+  for (const k of DEPLOY_DOMAIN_KEYS) delete next[k];
+  if (domain !== '') {
+    next.customDomain = domain;
+    next.customDomainServiceName = serviceName;
+    if (isApex(domain)) next.customDomainWarning = APEX_WARNING;
+  }
+  return next;
+}
 
 type Get = () => AIStore;
 type Set = (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) => void;
 
+/** User-confirmable overrides applied at confirm-time before broadcast.
+ *  Single source of truth — `ConfirmationCard.handleConfirm` and `aiStore.confirmAction`
+ *  both go through this shape. Add new override fields here.
+ *
+ *  Convention: `undefined` = leave the pendingAction.args value as-is; empty
+ *  string = explicit clear; non-empty = set/replace.
+ */
 export interface ConfirmActionOverrides {
+  /** Replaces `_generatedManifest` for deploy_app/update_app's manifest editor flow. */
   editedManifestJson?: string;
+  /** deploy_app only: user-entered (or AI-prefilled) custom domain. */
   editedCustomDomain?: string;
+  /** deploy_app only: service to attach the domain to (multi-service stacks). */
   editedCustomDomainServiceName?: string;
 }
 
@@ -49,32 +80,18 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     confirmedArgs = { ...confirmedArgs, _generatedManifest: overrides.editedManifestJson };
     confirmedPayload = undefined;
   }
-  // For deploy_app, allow the user to add/edit/clear the custom_domain at confirm time.
-  // The pending args carry whatever the AI prefilled; the override is what's in the
-  // input field at the moment of confirmation. Empty string = no domain attached.
+  // For deploy_app, allow the user to add/edit/clear the custom_domain at confirm
+  // time. The pending args carry whatever the AI prefilled; the override is what's
+  // in the input field at the moment of confirmation. Empty string = no attach.
+  // The async chain-Params reserved-suffix check doesn't re-run here; the chain
+  // rejects authoritatively if the domain falls in a reserved zone.
   if (overrides && pendingConfirmation.action.toolName === 'deploy_app' &&
       overrides.editedCustomDomain !== undefined) {
-    const domain = overrides.editedCustomDomain.trim().replace(/\.$/, '').toLowerCase();
-    const serviceName = overrides.editedCustomDomainServiceName ?? '';
-    if (domain === '') {
-      // Drop the domain-related keys entirely; deploy proceeds without attach.
-      const { customDomain: _cd, customDomainServiceName: _csn, customDomainWarning: _cw, ...rest } = confirmedArgs;
-      void _cd; void _csn; void _cw;
-      confirmedArgs = rest;
-    } else {
-      // Recompute the apex warning synchronously on the edited value so the
-      // post-broadcast success-message wording (and ConfirmationCard apex hint)
-      // stays in sync with whatever the user typed. The async chain-Params
-      // reserved-suffix check doesn't re-run here; the chain rejects
-      // authoritatively if the domain falls in a reserved zone.
-      const customDomainWarning = isApex(domain) ? APEX_WARNING : undefined;
-      confirmedArgs = {
-        ...confirmedArgs,
-        customDomain: domain,
-        customDomainServiceName: serviceName,
-        customDomainWarning,
-      };
-    }
+    confirmedArgs = mergeCustomDomainOverride(
+      confirmedArgs,
+      normalizeFqdn(overrides.editedCustomDomain),
+      overrides.editedCustomDomainServiceName ?? '',
+    );
   }
   const action = { ...pendingConfirmation.action, args: confirmedArgs, payload: confirmedPayload };
 

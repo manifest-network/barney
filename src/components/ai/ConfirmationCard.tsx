@@ -8,7 +8,7 @@ import { findExampleByAppName } from '../../config/exampleApps';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { ManifestEditor } from './ManifestEditor';
 import { StackManifestEditor } from './StackManifestEditor';
-import { validateCustomDomainFormat } from '../../utils/customDomainValidation';
+import { validateCustomDomainFormat, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import {
   parseEditableManifest, serializeManifest,
   parseEditableStackManifest, serializeStackManifest,
@@ -113,7 +113,7 @@ function CustomDomainBranch({ data }: { data: CustomDomainBranchData }) {
   // Apex domains can't take a plain CNAME (RFC 1034 §3.6.2); validateAll surfaces a
   // warning we use as the apex signal so the DNS record table reads correctly.
   const isApex = !!data.warning;
-  const recordType = isApex ? 'ALIAS / ANAME / CNAME-flattened' : 'CNAME';
+  const recordType = apexRecordKindLabel(isApex);
 
   return (
     <div className="confirmation-details">
@@ -233,18 +233,7 @@ function SensitiveValue({ value }: { value: string }) {
   );
 }
 
-export interface ConfirmActionOverrides {
-  /** When the deploy ConfirmationCard's manifest editor was used. */
-  editedManifestJson?: string;
-  /**
-   * For deploy_app: the user-entered (or AI-prefilled) custom domain. `undefined`
-   * means "leave as-is in pendingAction.args"; empty string means "user explicitly
-   * cleared / didn't provide a domain"; non-empty means attach during deploy.
-   */
-  editedCustomDomain?: string;
-  /** Service name override for stacks. Same semantics as editedCustomDomain. */
-  editedCustomDomainServiceName?: string;
-}
+import type { ConfirmActionOverrides } from '../../stores/aiActions/confirmAction';
 
 interface ConfirmationCardProps {
   action: PendingAction;
@@ -458,7 +447,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
 
         {isDeployApp && (() => {
           const isApex = editedDomainHasContent && !editedDomainError && !!carriedWarning;
-          const recordKind = isApex ? 'an ALIAS / ANAME / CNAME-flattened record' : 'a CNAME';
+          const recordKind = `${isApex ? 'an' : 'a'} ${apexRecordKindLabel(isApex)}${isApex ? ' record' : ''}`;
           return (
             <div className="confirmation-details">
               <p className="confirmation-details-title">Custom domain (optional)</p>

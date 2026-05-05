@@ -22,6 +22,7 @@ import {
   type CustomDomainStatusReport,
 } from '../../utils/customDomainStatus';
 import { validateCustomDomainFormat } from '../../utils/customDomainValidation';
+import { normalizeFqdn } from '../../utils/connection';
 import type { CustomDomainCardData } from '../../contexts/aiTypes';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -57,7 +58,7 @@ function StatusPill({ kind }: { kind: CustomDomainStatusKind }) {
 function NoDomainForm({ data }: { data: CustomDomainCardData }) {
   const { sendMessage } = useAI();
   const [input, setInput] = useState('');
-  const trimmed = input.trim().replace(/\.$/, '').toLowerCase();
+  const trimmed = normalizeFqdn(input);
   // Mirror the tool-flow validator (format + dot + IP rejection) so the Set button
   // stays disabled for any input that would later be rejected upstream.
   const looksValid = trimmed.length > 0 && validateCustomDomainFormat(trimmed) === null;
