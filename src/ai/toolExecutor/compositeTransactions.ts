@@ -1023,6 +1023,42 @@ export async function executeDeployApp(
     ? ` (~${priceDisplay}${serviceCount > 1 ? ` × ${serviceCount}` : ''})`
     : '';
 
+  // Optional custom domain: validate up front so the user gets fast feedback
+  // before any TX. The set-domain TX will be broadcast in the confirmed-deploy
+  // path, between create-lease and manifest upload.
+  let customDomain = '';
+  let customDomainServiceName = '';
+  let customDomainWarning: string | undefined;
+  if (typeof args.custom_domain === 'string' && args.custom_domain.trim() !== '') {
+    customDomain = args.custom_domain.trim().replace(/\.$/, '').toLowerCase();
+    const validation = await validateAll(customDomain);
+    if (validation.error) return { success: false, error: validation.error };
+    customDomainWarning = validation.warning;
+
+    if (serviceNames && serviceNames.length > 1) {
+      const explicit = typeof args.service_name === 'string' ? args.service_name.trim() : '';
+      if (!explicit) {
+        return {
+          success: false,
+          error: `"${name}" is a multi-service stack — pass service_name to attach the custom domain to one of: ${serviceNames.join(', ')}.`,
+        };
+      }
+      if (!serviceNames.includes(explicit)) {
+        return {
+          success: false,
+          error: `Service "${explicit}" not found in stack. Available: ${serviceNames.join(', ')}.`,
+        };
+      }
+      customDomainServiceName = explicit;
+    } else if (serviceNames && serviceNames.length === 1) {
+      // Single-service stack — auto-select.
+      customDomainServiceName = serviceNames[0];
+    } else {
+      // Image+port single-item legacy lease — chain wants serviceName=''.
+      customDomainServiceName = '';
+    }
+  }
+
   return {
     success: true,
     requiresConfirmation: true,
@@ -1037,6 +1073,11 @@ export async function executeDeployApp(
         providerUrl: provider.apiUrl,
         ...(args._generatedManifest ? { _generatedManifest: args._generatedManifest } : {}),
         ...(serviceNames && serviceNames.length > 0 ? { _serviceNames: serviceNames } : {}),
+        ...(customDomain ? {
+          customDomain,
+          customDomainServiceName,
+          ...(customDomainWarning ? { customDomainWarning } : {}),
+        } : {}),
       },
     },
   };
@@ -1111,6 +1152,33 @@ export async function executeConfirmedDeployApp(
     logError('compositeTransactions.executeConfirmedDeployApp.addApp', error);
   }
 
+  // Optional: attach custom domain BEFORE manifest upload so Traefik picks
+  // up the per-item custom_domain label as soon as the container is up.
+  // A failure here is non-fatal: the deploy proceeds, the user is left in
+  // the existing 2-step state and can retry set_custom_domain standalone.
+  const customDomainArg = typeof args.customDomain === 'string' ? args.customDomain : '';
+  let attachedDomain: { customDomain: string; serviceName: string } | undefined;
+  let attachedDomainError: string | undefined;
+  if (customDomainArg !== '') {
+    const customDomainServiceName = typeof args.customDomainServiceName === 'string' ? args.customDomainServiceName : '';
+    try {
+      const domainResult = await monoSetItemCustomDomain(
+        clientManager,
+        leaseUuid,
+        customDomainArg,
+        customDomainServiceName !== '' ? { serviceName: customDomainServiceName } : {},
+      );
+      if (domainResult.code === 0) {
+        attachedDomain = { customDomain: customDomainArg, serviceName: customDomainServiceName };
+      } else {
+        attachedDomainError = `chain rejected with code ${domainResult.code}`;
+      }
+    } catch (err) {
+      logError('compositeTransactions.executeConfirmedDeployApp.setItemCustomDomain', err);
+      attachedDomainError = err instanceof Error ? err.message : 'unknown error';
+    }
+  }
+
   // Upload payload
   onProgress?.({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
 
@@ -1175,37 +1243,61 @@ export async function executeConfirmedDeployApp(
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
 
-      // Emit a "no custom domain" affordance card so the user can set one inline.
-      // Only for single-item leases (lease items is unambiguous); stacks need user
-      // to disambiguate the service via chat, so we skip the card there.
+      // Emit a custom_domain card.
+      //  - If we attached a domain pre-upload (single-step deploy + domain),
+      //    show the *status view* keyed to the new fqdn.
+      //  - Else for single-item leases, show the *empty form* affordance.
+      //  - Skip for stacks without a pre-set domain (ambiguous service).
       let displayCard: MessageCard | undefined;
-      try {
-        const lease = await getLease(leaseUuid);
-        if (lease && lease.items.length === 1) {
-          const serviceName = lease.items[0].serviceName;
-          displayCard = {
-            type: 'custom_domain',
-            data: {
-              appName: name,
-              fqdn: '',
-              leaseUuid,
-              serviceName,
-              expectedCnameTarget: resolveExpectedCnameTarget(connection, serviceName),
-              expectedAddress: address,
-            },
-          };
+      if (attachedDomain) {
+        displayCard = {
+          type: 'custom_domain',
+          data: {
+            appName: name,
+            fqdn: attachedDomain.customDomain,
+            leaseUuid,
+            serviceName: attachedDomain.serviceName,
+            expectedCnameTarget: resolveExpectedCnameTarget(connection, attachedDomain.serviceName),
+            expectedAddress: address,
+          },
+        };
+      } else {
+        try {
+          const lease = await getLease(leaseUuid);
+          if (lease && lease.items.length === 1) {
+            const serviceName = lease.items[0].serviceName;
+            displayCard = {
+              type: 'custom_domain',
+              data: {
+                appName: name,
+                fqdn: '',
+                leaseUuid,
+                serviceName,
+                expectedCnameTarget: resolveExpectedCnameTarget(connection, serviceName),
+                expectedAddress: address,
+              },
+            };
+          }
+        } catch (error) {
+          logError('compositeTransactions.executeConfirmedDeployApp.domainCard', error);
         }
-      } catch (error) {
-        logError('compositeTransactions.executeConfirmedDeployApp.domainCard', error);
       }
+
+      // If the user requested a custom domain but the set-domain TX failed, surface
+      // a non-fatal warning in the message so the AI can guide them to retry.
+      const message = attachedDomainError
+        ? `App "${name}" is live, but custom-domain attach failed (${attachedDomainError}). Use set_custom_domain to try again.`
+        : `App "${name}" is live!`;
 
       return {
         success: true,
         data: {
-          message: `App "${name}" is live!`,
+          message,
           name,
           url: connectionUrl,
           status: 'running',
+          ...(attachedDomain ? { custom_domain: attachedDomain.customDomain, service_name: attachedDomain.serviceName } : {}),
+          ...(attachedDomainError ? { custom_domain_error: attachedDomainError } : {}),
         },
         ...(displayCard ? { displayCard } : {}),
       };

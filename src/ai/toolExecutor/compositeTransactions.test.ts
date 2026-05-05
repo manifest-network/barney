@@ -72,6 +72,7 @@ vi.mock('../../api/fred', () => ({
 vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   ...(await importOriginal()),
   cosmosTx: vi.fn(),
+  setItemCustomDomain: vi.fn(),
 }));
 
 vi.mock('../../utils/errors', () => ({
@@ -98,7 +99,8 @@ vi.mock('../../registry/appRegistry', async (importOriginal) => {
 });
 
 import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing';
-import { getProviders, getSKUs } from '../../api/sku';
+import { getProviders, getSKUs, Unit } from '../../api/sku';
+import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-core';
@@ -3451,5 +3453,137 @@ describe('executeConfirmedUpdateApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
     expect(updateLease).toHaveBeenCalled();
+  });
+});
+
+describe('deploy_app with custom_domain (Pass B)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', address: 'p-addr', payoutAddress: 'p-addr', metaHash: new Uint8Array(), active: true, apiUrl: 'https://prov.example' },
+    ]);
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-micro', providerUuid: 'p1', name: 'docker-micro', basePrice: { amount: '10', denom: 'upwr' }, unit: Unit.UNIT_PER_DAY } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-micro', quantity: 1 }] });
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      creditAccount: { tenant: 'addr', creditAddress: 'caddr', activeLeaseCount: 0n, pendingLeaseCount: 0n, reservedAmounts: [] },
+      balances: [{ denom: DENOMS.PWR, amount: '999000000' }],
+      availableBalances: [{ denom: DENOMS.PWR, amount: '999000000' }],
+    });
+  });
+
+  it('executeDeployApp validates custom_domain format', async () => {
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'not a domain' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/not a valid hostname/i);
+  });
+
+  it('executeDeployApp passes custom_domain through to pendingAction.args for single-service deploy', async () => {
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'redis.example.com' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(true);
+    if (r.success && r.requiresConfirmation) {
+      expect(r.pendingAction.args.customDomain).toBe('redis.example.com');
+      expect(r.pendingAction.args.customDomainServiceName).toBe('');
+    }
+  });
+
+  it('executeDeployApp rejects multi-service stack without service_name', async () => {
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const services = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+      db: { image: 'postgres', port: '5432' },
+    });
+    const r = await executeDeployApp(
+      { app_name: 'stack', services, custom_domain: 'app.example.com' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error).toMatch(/multi-service stack.*service_name/i);
+      expect(r.error).toMatch(/web/);
+      expect(r.error).toMatch(/db/);
+    }
+  });
+
+  it('executeDeployApp accepts service_name when matching a stack service', async () => {
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const services = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+      db: { image: 'postgres', port: '5432' },
+    });
+    const r = await executeDeployApp(
+      { app_name: 'stack', services, custom_domain: 'app.example.com', service_name: 'web' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(true);
+    if (r.success && r.requiresConfirmation) {
+      expect(r.pendingAction.args.customDomain).toBe('app.example.com');
+      expect(r.pendingAction.args.customDomainServiceName).toBe('web');
+    }
+  });
+
+  it('executeDeployApp rejects unknown service_name in stack', async () => {
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const services = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+    });
+    // Single-service stack auto-selects, so use multi-service to trigger the not-found path
+    const services2 = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+      db: { image: 'postgres', port: '5432' },
+    });
+    const r = await executeDeployApp(
+      { app_name: 'stack', services: services2, custom_domain: 'app.example.com', service_name: 'bogus' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/not found/i);
+    void services;
+  });
+
+  it('executeDeployApp threads apex warning into customDomainWarning', async () => {
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'example.com' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(true);
+    if (r.success && r.requiresConfirmation) {
+      expect(typeof r.pendingAction.args.customDomainWarning).toBe('string');
+      expect(r.pendingAction.args.customDomainWarning).toMatch(/apex/i);
+    }
   });
 });

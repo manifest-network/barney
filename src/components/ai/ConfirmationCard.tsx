@@ -73,6 +73,13 @@ const INTERNAL_ARGS = new Set([
   'expectedCnameTarget',
   'warning',
   'address',
+  // deploy_app + customDomain internal args (rendered in dedicated section)
+  'customDomainServiceName',
+  'customDomainWarning',
+  // deploy_app internal pre-confirm args
+  'skuUuid',
+  'providerUuid',
+  'providerUrl',
 ]);
 
 interface CustomDomainBranchData {
@@ -260,6 +267,18 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
 
   const customDomainData = useMemo(() => parseCustomDomainArgs(action), [action]);
 
+  // For deploy_app: a custom_domain may be pre-attached during deploy. Surface it
+  // in a dedicated section. The provider-issued FQDN (CNAME target) isn't known
+  // until after the create-lease TX, so the hint just says to expect it post-deploy.
+  const deployWithCustomDomain = useMemo(() => {
+    if (action.toolName !== 'deploy_app') return null;
+    const cd = action.args.customDomain;
+    if (typeof cd !== 'string' || cd === '') return null;
+    const warning = typeof action.args.customDomainWarning === 'string' ? action.args.customDomainWarning : undefined;
+    const serviceName = typeof action.args.customDomainServiceName === 'string' ? action.args.customDomainServiceName : '';
+    return { customDomain: cd, serviceName, warning };
+  }, [action]);
+
   const handleConfirm = useCallback(() => {
     if (editedManifest) {
       onConfirm(serializeManifest(editedManifest));
@@ -383,6 +402,25 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
               </div>
             )}
           </>
+        )}
+
+        {deployWithCustomDomain && (
+          <div className="confirmation-details">
+            <p className="confirmation-details-title">Custom domain</p>
+            <div className="confirmation-payload">
+              <p className="text-sm">
+                Will attach <code className="font-mono text-primary">{deployWithCustomDomain.customDomain}</code>
+                {deployWithCustomDomain.serviceName ? <> to service <code className="font-mono">{deployWithCustomDomain.serviceName}</code></> : null}
+                {' '}right after the lease is created.
+              </p>
+              <p className="text-xs text-muted mt-2">
+                The provider FQDN (CNAME target) appears in the status card after deploy. Add a CNAME at your registrar pointing at it, with Cloudflare proxy/orange-cloud OFF.
+              </p>
+              {deployWithCustomDomain.warning && (
+                <p className="text-sm text-warning mt-2" role="alert">{deployWithCustomDomain.warning}</p>
+              )}
+            </div>
+          </div>
         )}
       </div>
       <div className="confirmation-actions">

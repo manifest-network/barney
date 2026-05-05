@@ -82,6 +82,14 @@ export const AI_TOOLS: ToolDefinition[] = [
             type: 'string',
             description: 'Container labels as JSON (e.g. \'{"app":"myapp"}\').',
           },
+          custom_domain: {
+            type: 'string',
+            description: 'Optional FQDN to attach to the lease item right after the create-lease TX confirms. The set-domain TX is broadcast before the manifest upload so Traefik has the domain available when provisioning the container.',
+          },
+          service_name: {
+            type: 'string',
+            description: 'Required when "custom_domain" is set on a stack ("services" provided). Must match one of the service keys. Omit for image+port single-service deploys.',
+          },
         },
         required: [],
       },
@@ -484,11 +492,12 @@ export function getToolCallDescription(
     case 'deploy_app': {
       const name = args.app_name ? ` "${args.app_name}"` : '';
       const size = args.size ? ` (${args.size})` : '';
+      const domain = typeof args.custom_domain === 'string' && args.custom_domain ? ` with custom domain ${args.custom_domain}` : '';
       if (args.services) {
-        return `Deploying stack${name}${size}...`;
+        return `Deploying stack${name}${size}${domain}...`;
       }
       const image = !args.app_name && args.image ? ` from ${args.image}` : '';
-      return `Deploying app${name}${image}${size}...`;
+      return `Deploying app${name}${image}${size}${domain}...`;
     }
     case 'stop_app': {
       const stopName = String(args.app_name ?? '').trim();
