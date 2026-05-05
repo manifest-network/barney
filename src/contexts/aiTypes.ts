@@ -124,6 +124,13 @@ export interface ChatMessage {
    *  in chat but must NOT be replayed back to the model on the next turn,
    *  otherwise the model treats its own UI canned text as real assistant output. */
   local?: boolean;
+  /** True for tool messages that are currently displaying a confirmation
+   *  prompt and waiting on the paired `pendingConfirmation`. Set when the
+   *  store transitions a tool message into the awaiting state; cleared on
+   *  confirm/cancel/abort. Persistence rehydrate uses this flag to mark
+   *  interrupted confirmations after a reload (since `pendingConfirmation`
+   *  is intentionally not persisted). */
+  awaitingConfirmation?: boolean;
 }
 
 export interface PendingConfirmation {

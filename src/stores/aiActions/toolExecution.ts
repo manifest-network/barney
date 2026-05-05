@@ -99,7 +99,7 @@ function setSingleConfirmation(
 
   const updated = get().messages.map((m) =>
     m.id === conf.toolMessageId
-      ? { ...m, content: conf.result.confirmationMessage || 'Awaiting confirmation...', isStreaming: false }
+      ? { ...m, content: conf.result.confirmationMessage || 'Awaiting confirmation...', isStreaming: false, awaitingConfirmation: true }
       : m
   );
   set({ messages: updated });

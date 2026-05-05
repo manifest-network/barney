@@ -62,24 +62,29 @@ export function loadHistory(): ChatMessage[] {
  */
 function rehydrateChatHistory(msgs: ChatMessage[]): ChatMessage[] {
   return msgs.map((m) => {
-    // Streaming-in-progress on disk → interrupted. Drop the streaming flag
-    // and surface a closure marker on the message itself.
+    // Streaming-in-progress on disk → interrupted. Drop the streaming flag,
+    // strip any partial toolCalls (they may contain truncated JSON in
+    // function.arguments and would confuse the model on replay), and
+    // surface a closure marker on the message itself.
     if (m.isStreaming) {
       return {
         ...m,
         isStreaming: false,
+        toolCalls: undefined,
         error: m.error ?? 'Interrupted — message was incomplete when the page reloaded.',
       };
     }
-    // Tool message that was awaiting confirmation (content set by
-    // confirmAction's pre-broadcast pending state) — there's no
-    // pendingConfirmation on reload so the user can't confirm. Mark
-    // interrupted so the chat reads cleanly.
-    if (m.role === 'tool' && /awaiting confirmation/i.test(m.content) && !m.error) {
+    // Tool message awaiting confirmation when the tab died. The paired
+    // pendingConfirmation is intentionally not persisted, so on reload there
+    // is nothing to confirm against. Use the structural flag rather than
+    // pattern-matching content (executors emit tool-specific
+    // confirmationMessage strings that don't share any keyword).
+    if (m.role === 'tool' && m.awaitingConfirmation && !m.error) {
       return {
         ...m,
         content: 'Interrupted — confirmation was pending when the page reloaded.',
         error: 'Interrupted',
+        awaitingConfirmation: false,
       };
     }
     return m;

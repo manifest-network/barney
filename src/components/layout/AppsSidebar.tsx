@@ -17,7 +17,6 @@ import { CHAIN_NAME } from '../../config/chain';
 import { findExampleByAppName, buildExampleManifest } from '../../config/exampleApps';
 import { SECONDS_PER_HOUR, AUTO_REFRESH_INTERVAL_MS } from '../../config/constants';
 import { useVisibilityPolling } from '../../hooks/useVisibilityPolling';
-import { useDnsStatusPolling } from '../../hooks/useDnsStatusPolling';
 import { dnsStatusKey, type DnsStatusEntry } from '../../stores/aiStore';
 import type { CustomDomainStatusKind } from '../../utils/customDomainStatus';
 import { aggregateDnsKind } from './aggregateDnsKind';
@@ -144,9 +143,8 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
 
   const runningApps = apps.filter((a) => a.status === 'running' || a.status === 'deploying');
 
-  // Single source of truth for DNS status across the app — sidebar dot here +
-  // inline deploy_dns_status pill in chat both read from the same store slice.
-  useDnsStatusPolling(runningApps);
+  // DNS status polling is mounted in MainLayout (outside the sidebar's
+  // ErrorBoundary). All custom-domain surfaces read from `aiStore.dnsStatuses`.
 
   const countRef = useRef(runningApps.length);
   const badgeRef = useRef<HTMLSpanElement>(null);

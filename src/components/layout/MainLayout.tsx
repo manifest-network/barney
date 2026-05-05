@@ -4,12 +4,16 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { useChain } from '@cosmos-kit/react';
 import { Menu, X } from 'lucide-react';
 import { AppsSidebar } from './AppsSidebar';
 import { ChatPanel } from '../ai/ChatPanel';
 import { AIErrorBoundary } from '../ai/AIErrorBoundary';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
 import { Modal } from '../ui/Modal';
+import { useRegistryApps } from '../../hooks/useRegistryApps';
+import { useDnsStatusPolling } from '../../hooks/useDnsStatusPolling';
+import { CHAIN_NAME } from '../../config/chain';
 
 const SWIPE_THRESHOLD = 80;
 
@@ -29,6 +33,15 @@ export function MainLayout() {
   const touchStartX = useRef(0);
   const lastDelta = useRef(0);
   const isSwiping = useRef(false);
+
+  // Mount the DNS-status polling driver here, outside the sidebar's
+  // ErrorBoundary, so a sidebar render error doesn't take DNS state down
+  // with it. All custom-domain surfaces (sidebar dot, deploy pill, AppCard,
+  // CustomDomainCard) read from the resulting `dnsStatuses` slice.
+  const { address } = useChain(CHAIN_NAME);
+  const allApps = useRegistryApps(address);
+  const runningApps = allApps.filter((a) => a.status === 'running' || a.status === 'deploying');
+  useDnsStatusPolling(runningApps);
 
   // Close sidebar on Escape
   useEffect(() => {

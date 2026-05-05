@@ -67,6 +67,7 @@ export async function executeListApps(
       }
     }
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
     logError('compositeQueries.executeListApps.reconcile', error);
   }
 

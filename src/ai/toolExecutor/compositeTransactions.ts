@@ -1236,15 +1236,22 @@ export async function executeConfirmedDeployApp(
         'compositeTransactions.executeConfirmedDeployApp'
       );
 
+      // Cache the just-attached custom domain so the sidebar polling driver
+      // sees it without waiting for the user to run `app_status`. Merge
+      // against existing entries — multi-service stacks can have N domains.
+      let customDomainsUpdate: { customDomains: { serviceName: string; customDomain: string }[] } | object = {};
+      if (domainAttach.kind === 'attached') {
+        const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
+        const others = prior.filter((d) => d.serviceName !== domainAttach.serviceName);
+        customDomainsUpdate = {
+          customDomains: [...others, { serviceName: domainAttach.serviceName, customDomain: domainAttach.customDomain }],
+        };
+      }
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
         url: connectionUrl,
         connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
-        // Cache the just-attached custom domain so the sidebar polling driver
-        // sees it without waiting for the user to run `app_status`.
-        ...(domainAttach.kind === 'attached'
-          ? { customDomains: [{ serviceName: domainAttach.serviceName, customDomain: domainAttach.customDomain }] }
-          : {}),
+        ...customDomainsUpdate,
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
 
@@ -2931,7 +2938,7 @@ export async function executeConfirmedSetCustomDomain(
   clientManager: CosmosClientManager,
   options: ToolExecutorOptions,
 ): Promise<ToolResult> {
-  const { address } = options;
+  const { address, appRegistry } = options;
   if (!address) return { success: false, error: 'Wallet not connected.' };
 
   const appName = args.app_name as string;
@@ -2963,6 +2970,21 @@ export async function executeConfirmedSetCustomDomain(
 
   if (result.code !== 0) {
     return { success: false, error: `Transaction failed with code ${result.code}.` };
+  }
+
+  // Refresh the AppEntry's customDomains cache so the polling driver can pick
+  // up the new state without waiting for the next `app_status` call. Mirrors
+  // the cache write in executeConfirmedDeployApp. Merge against the existing
+  // cache: in a multi-service stack, attaching a domain to one service must
+  // not clobber a domain previously attached to a different service.
+  if (appRegistry) {
+    const app = appRegistry.getAppByLease(address, leaseUuid);
+    const prior = app?.customDomains ?? [];
+    const others = prior.filter((d) => d.serviceName !== serviceName);
+    const customDomains = clearing
+      ? others
+      : [...others, { serviceName, customDomain }];
+    appRegistry.updateApp(address, leaseUuid, { customDomains });
   }
 
   if (clearing) {

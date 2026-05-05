@@ -105,16 +105,43 @@ describe('persistence actions', () => {
       expect(result[0].error).toMatch(/interrupted/i);
     });
 
-    it('rewrites tool messages stuck in "awaiting confirmation" with an interrupted error', () => {
+    it('rewrites tool messages with awaitingConfirmation=true with an interrupted error', () => {
       const msgs = [makeMessage({
         id: 'm1',
         role: 'tool',
-        content: 'Awaiting confirmation for deploy_app...',
+        content: 'Deploy "redis" on micro tier?',
+        awaitingConfirmation: true,
       })];
       localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
       const result = loadHistory();
       expect(result[0].error).toBe('Interrupted');
       expect(result[0].content).toMatch(/interrupted/i);
+      expect(result[0].awaitingConfirmation).toBe(false);
+    });
+
+    it('does NOT rewrite tool messages with confirmation-prompt content but no awaitingConfirmation flag', () => {
+      const msgs = [makeMessage({
+        id: 'm1',
+        role: 'tool',
+        content: 'Deploy "redis" on micro tier?',
+      })];
+      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
+      const result = loadHistory();
+      expect(result[0].error).toBeUndefined();
+      expect(result[0].content).toBe('Deploy "redis" on micro tier?');
+    });
+
+    it('strips toolCalls from interrupted streaming messages', () => {
+      const msgs = [makeMessage({
+        id: 'm1',
+        role: 'assistant',
+        content: '',
+        isStreaming: true,
+        toolCalls: [{ id: 'tc_1', type: 'function', function: { name: 'deploy_app', arguments: { partial: 'truncated' } } }] as any,
+      })];
+      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
+      const result = loadHistory();
+      expect(result[0].toolCalls).toBeUndefined();
     });
 
     it('leaves normal completed messages untouched', () => {

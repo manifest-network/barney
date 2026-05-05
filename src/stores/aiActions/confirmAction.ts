@@ -63,7 +63,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     set({ pendingConfirmation: null });
     const updated = get().messages.map((m) =>
       m.id === messageId
-        ? { ...m, content: 'Wallet disconnected. Please reconnect your wallet and try again.', error: 'wallet_disconnected', isStreaming: false }
+        ? { ...m, content: 'Wallet disconnected. Please reconnect your wallet and try again.', error: 'wallet_disconnected', isStreaming: false, awaitingConfirmation: false }
         : m
     );
     set({ messages: updated });
@@ -147,7 +147,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     const displayCard = result.success && !result.requiresConfirmation ? result.displayCard : undefined;
     const updatedWithAssistant = get().messages.map((m) =>
       m.id === messageId
-        ? { ...m, content: resultContent, card: displayCard, isStreaming: false }
+        ? { ...m, content: resultContent, card: displayCard, isStreaming: false, awaitingConfirmation: false }
         : m
     );
     set({ messages: [...updatedWithAssistant, newAssistantMessage] });
@@ -189,7 +189,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
 
     const updated = get().messages.map((m) =>
       m.id === messageId
-        ? { ...m, content: errorMessage, error: error instanceof Error ? error.message : 'Unknown error', isStreaming: false }
+        ? { ...m, content: errorMessage, error: error instanceof Error ? error.message : 'Unknown error', isStreaming: false, awaitingConfirmation: false }
         : m
     );
     set({ messages: updated });
@@ -213,7 +213,7 @@ export function cancelActionFn(get: Get, set: Set): void {
 
   const updated = get().messages.map((m) =>
     m.id === messageId
-      ? { ...m, content: 'Action cancelled by user.', isStreaming: false }
+      ? { ...m, content: 'Action cancelled by user.', isStreaming: false, awaitingConfirmation: false }
       : m
   );
   set({ messages: updated });

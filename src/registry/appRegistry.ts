@@ -305,6 +305,9 @@ export function updateApp(
   apps[idx] = { ...apps[idx], ...updates };
   if (!saveApps(address, apps)) {
     logError('appRegistry.updateApp', new Error('localStorage write failed — update may not persist across page reload'));
+    // Don't notify on save failure: subscribers re-read from localStorage and
+    // would see stale state, masking the failure with a no-op refresh.
+    return apps[idx];
   }
   notify(address);
   return apps[idx];
@@ -317,6 +320,8 @@ export function removeApp(address: string, leaseUuid: string): boolean {
   if (filtered.length === apps.length) return false;
   if (!saveApps(address, filtered)) {
     logError('appRegistry.removeApp', new Error('localStorage write failed — removal may not persist across page reload'));
+    // See updateApp note: skip notify on save failure to avoid stale-read masking.
+    return true;
   }
   notify(address);
   return true;
@@ -362,6 +367,8 @@ export function reconcileWithChain(
   if (changed) {
     if (!saveApps(address, apps)) {
       logError('appRegistry.reconcileWithChain', new Error('localStorage write failed — reconciliation may not persist across page reload'));
+      // See updateApp note: skip notify on save failure to avoid stale-read masking.
+      return;
     }
     notify(address);
   }
