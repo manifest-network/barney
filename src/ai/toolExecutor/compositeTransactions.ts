@@ -2729,10 +2729,16 @@ export async function executeConfirmedUpdateApp(
  * the `CustomDomainCardData` shape, the AI tool schema, the success-message
  * wording, and the `ConfirmationCard` clear/attach branching all bake that
  * cardinality in. If the chain ever moves to `customDomains: string[]` (SAN
- * certs, multiple aliases per service), the entry points to revisit are: this
- * function, `executeConfirmedSetCustomDomain`, the `set_custom_domain` schema
- * in `ai/tools.ts`, the `MessageCard` discriminated union, and the chat success
- * message in `executeConfirmedSetCustomDomain`.
+ * certs, multiple aliases per service), the entry points to revisit are:
+ *   - this function (`executeSetCustomDomain`) and `executeConfirmedSetCustomDomain`
+ *   - `executeDeployApp` and `executeConfirmedDeployApp` (the `customDomain` /
+ *     `customDomainServiceName` pre-attach path added in Pass B)
+ *   - the `set_custom_domain` and `deploy_app` schemas in `ai/tools.ts`
+ *   - the `MessageCard` discriminated union and `CustomDomainCardData`
+ *   - the chat success messages in `executeConfirmedSetCustomDomain` and
+ *     `executeConfirmedDeployApp`
+ *   - the `ConfirmationCard` `CustomDomainBranch` and `deployWithCustomDomain`
+ *     sections (clear/attach branching, DNS table)
  */
 export async function executeSetCustomDomain(
   args: Record<string, unknown>,

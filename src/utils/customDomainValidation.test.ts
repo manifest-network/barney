@@ -45,6 +45,24 @@ describe('validateCustomDomainFormat', () => {
   it('rejects spaces', () => {
     expect(validateCustomDomainFormat('app .example.com')).not.toBeNull();
   });
+
+  it('rejects IPv4 literals', () => {
+    expect(validateCustomDomainFormat('192.168.1.1')).toMatch(/IP address/i);
+    expect(validateCustomDomainFormat('1.2.3.4')).toMatch(/IP address/i);
+    expect(validateCustomDomainFormat('10.0.0.1')).toMatch(/IP address/i);
+  });
+
+  it('rejects IPv6 literals', () => {
+    expect(validateCustomDomainFormat('2606:4700::1111')).not.toBeNull();
+  });
+
+  it('does not confuse domains that look like IPs (numeric labels)', () => {
+    // 4 numeric-only labels that fit in 0-255 — would parse as IP.
+    expect(validateCustomDomainFormat('192.168.1.1')).toMatch(/IP address/i);
+    // Domains with numeric subdomains under a real TLD are fine.
+    expect(validateCustomDomainFormat('1.example.com')).toBeNull();
+    expect(validateCustomDomainFormat('1.2.example.com')).toBeNull();
+  });
 });
 
 describe('isApex', () => {

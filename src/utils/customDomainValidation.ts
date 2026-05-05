@@ -10,14 +10,21 @@ export interface CustomDomainValidationResult {
 }
 
 /**
- * Pure format check: must be a valid FQDN (RFC 952/1123 hostname).
+ * Pure format check: must be a valid FQDN (RFC 952/1123 hostname), not an IP.
  * Trailing dots are stripped before validation.
+ *
+ * Custom domains attach via DNS — they need a real hostname that resolves to a
+ * provider FQDN, so IPv4 / IPv6 literals (which the hostname regex happens to
+ * accept syntactically) are rejected up front.
  */
 export function validateCustomDomainFormat(fqdn: string): string | null {
   const trimmed = normalizeFqdn(fqdn);
   if (trimmed.length === 0) return 'Custom domain must not be empty.';
   if (!isValidFqdn(trimmed)) return `"${fqdn}" is not a valid hostname.`;
   if (trimmed.split('.').length < 2) return `"${fqdn}" must include at least one dot (e.g. "app.example.com").`;
+  if (parseTld(trimmed, { allowPrivateDomains: true }).isIp) {
+    return `"${fqdn}" is an IP address — custom domains must be hostnames (e.g. "app.example.com"), not IPs.`;
+  }
   return null;
 }
 

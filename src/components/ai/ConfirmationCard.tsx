@@ -109,6 +109,10 @@ function CustomDomainBranch({ data }: { data: CustomDomainBranchData }) {
   const isClear = data.customDomain === '';
   const target = data.expectedCnameTarget ?? '<provider FQDN — appears once the app is running>';
   const showTarget = !isClear && data.expectedCnameTarget;
+  // Apex domains can't take a plain CNAME (RFC 1034 §3.6.2); validateAll surfaces a
+  // warning we use as the apex signal so the DNS record table reads correctly.
+  const isApex = !!data.warning;
+  const recordType = isApex ? 'ALIAS / ANAME / CNAME-flattened' : 'CNAME';
 
   return (
     <div className="confirmation-details">
@@ -133,7 +137,7 @@ function CustomDomainBranch({ data }: { data: CustomDomainBranchData }) {
             </thead>
             <tbody>
               <tr>
-                <td><code className="font-mono">CNAME</code></td>
+                <td><code className="font-mono">{recordType}</code></td>
                 <td>
                   <code className="font-mono">{data.customDomain}</code>
                   {' '}
@@ -404,24 +408,28 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           </>
         )}
 
-        {deployWithCustomDomain && (
-          <div className="confirmation-details">
-            <p className="confirmation-details-title">Custom domain</p>
-            <div className="confirmation-payload">
-              <p className="text-sm">
-                Will attach <code className="font-mono text-primary">{deployWithCustomDomain.customDomain}</code>
-                {deployWithCustomDomain.serviceName ? <> to service <code className="font-mono">{deployWithCustomDomain.serviceName}</code></> : null}
-                {' '}right after the lease is created.
-              </p>
-              <p className="text-xs text-muted mt-2">
-                The provider FQDN (CNAME target) appears in the status card after deploy. Add a CNAME at your registrar pointing at it, with Cloudflare proxy/orange-cloud OFF.
-              </p>
-              {deployWithCustomDomain.warning && (
-                <p className="text-sm text-warning mt-2" role="alert">{deployWithCustomDomain.warning}</p>
-              )}
+        {deployWithCustomDomain && (() => {
+          const isApex = !!deployWithCustomDomain.warning;
+          const recordKind = isApex ? 'an ALIAS / ANAME / CNAME-flattened record' : 'a CNAME';
+          return (
+            <div className="confirmation-details">
+              <p className="confirmation-details-title">Custom domain</p>
+              <div className="confirmation-payload">
+                <p className="text-sm">
+                  Will attach <code className="font-mono text-primary">{deployWithCustomDomain.customDomain}</code>
+                  {deployWithCustomDomain.serviceName ? <> to service <code className="font-mono">{deployWithCustomDomain.serviceName}</code></> : null}
+                  {' '}right after the lease is created.
+                </p>
+                <p className="text-xs text-muted mt-2">
+                  The provider FQDN appears in the status card after deploy. Add {recordKind} at your registrar pointing at it, with Cloudflare proxy/orange-cloud OFF.
+                </p>
+                {deployWithCustomDomain.warning && (
+                  <p className="text-sm text-warning mt-2" role="alert">{deployWithCustomDomain.warning}</p>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
       <div className="confirmation-actions">
         <button

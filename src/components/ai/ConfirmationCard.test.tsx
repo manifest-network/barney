@@ -652,7 +652,7 @@ describe('ConfirmationCard with stack manifest', () => {
       }
     });
 
-    it('renders apex warning when warning provided', () => {
+    it('renders apex warning when warning provided AND switches Type cell to ALIAS / ANAME / CNAME-flattened', () => {
       const action = makeAction({
         toolName: 'set_custom_domain',
         args: {
@@ -670,6 +670,37 @@ describe('ConfirmationCard with stack manifest', () => {
       try {
         const text = container.textContent ?? '';
         expect(text).toMatch(/apex/i);
+        // Type cell must reflect the apex constraint, not "CNAME".
+        expect(text).toMatch(/ALIAS \/ ANAME \/ CNAME-flattened/);
+        // Verify the bare "CNAME" text doesn't appear in the Type cell — the only
+        // remaining "CNAME" mentions are inside the apex warning string.
+        const typeCells = Array.from(container.querySelectorAll('table.custom-domain-dns-table tbody td'))
+          .map(td => td.textContent ?? '');
+        expect(typeCells[0]).not.toBe('CNAME');
+        expect(typeCells[0]).toContain('ALIAS');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('renders Type cell as plain CNAME for non-apex (subdomain) attaches', () => {
+      const action = makeAction({
+        toolName: 'set_custom_domain',
+        args: {
+          app_name: 'my-api',
+          leaseUuid: 'lu1',
+          serviceName: '',
+          customDomain: 'app.example.com',
+          currentDomain: '',
+          expectedCnameTarget: 'auto.barney0.manifest0.net',
+        },
+        description: 'Attach "app.example.com"?',
+      });
+      const { container, cleanup } = renderInto(action);
+      try {
+        const typeCells = Array.from(container.querySelectorAll('table.custom-domain-dns-table tbody td'))
+          .map(td => td.textContent ?? '');
+        expect(typeCells[0]).toBe('CNAME');
       } finally {
         cleanup();
       }
