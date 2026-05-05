@@ -233,8 +233,17 @@ describe('executeAppStatus', () => {
     }
   });
 
-  it('does not emit displayCard when multiple custom domains are set', async () => {
-    const app = makeApp();
+  it('emits a consolidated multi-domain CustomDomainCard when multiple custom domains are set', async () => {
+    const app = makeApp({
+      manifest: JSON.stringify({ services: { web: { image: 'nginx' }, api: { image: 'node' } } }),
+      connection: {
+        host: 'fred.example.com',
+        services: {
+          web: { fqdn: 'web.auto.barney0.manifest0.net' },
+          api: { fqdn: 'api.auto.barney0.manifest0.net' },
+        },
+      },
+    });
     vi.mocked(getLease).mockResolvedValue({
       state: 2,
       items: [
@@ -246,7 +255,16 @@ describe('executeAppStatus', () => {
     const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
     expect(result.success).toBe(true);
     if (result.success && !result.requiresConfirmation) {
-      expect(result.displayCard).toBeUndefined();
+      expect(result.displayCard?.type).toBe('custom_domain');
+      if (result.displayCard?.type === 'custom_domain') {
+        expect(result.displayCard.data.fqdn).toBe('');
+        expect(result.displayCard.data.domains).toHaveLength(2);
+        expect(result.displayCard.data.domains).toEqual([
+          { serviceName: 'web', customDomain: 'web.example.com', expectedCnameTarget: 'web.auto.barney0.manifest0.net' },
+          { serviceName: 'api', customDomain: 'api.example.com', expectedCnameTarget: 'api.auto.barney0.manifest0.net' },
+        ]);
+        expect(result.displayCard.data.serviceNames).toEqual(['web', 'api']);
+      }
       expect((result.data as any).customDomains).toHaveLength(2);
     }
   });
@@ -284,6 +302,33 @@ describe('executeAppStatus', () => {
         expect(result.displayCard.data.fqdn).toBe('');
         expect(result.displayCard.data.serviceName).toBe('');
         expect(result.displayCard.data.expectedCnameTarget).toBe('auto.barney0.manifest0.net');
+      }
+    }
+  });
+
+  it('emits a no-domain card with serviceNames picker for a stack with no domains', async () => {
+    const app = makeApp({
+      status: 'running',
+      manifest: JSON.stringify({ services: { web: { image: 'nginx' }, api: { image: 'node' } } }),
+      connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' },
+    });
+    vi.mocked(getLease).mockResolvedValue({
+      state: 2,
+      items: [
+        { skuUuid: 's1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: 'web', customDomain: '' },
+        { skuUuid: 's2', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: 'api', customDomain: '' },
+      ],
+    } as any);
+    const registry = makeRegistry([app]);
+    const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
+    expect(result.success).toBe(true);
+    if (result.success && !result.requiresConfirmation) {
+      expect(result.displayCard?.type).toBe('custom_domain');
+      if (result.displayCard?.type === 'custom_domain') {
+        expect(result.displayCard.data.fqdn).toBe('');
+        expect(result.displayCard.data.serviceName).toBe('');
+        expect(result.displayCard.data.serviceNames).toEqual(['web', 'api']);
+        expect(result.displayCard.data.domains).toBeUndefined();
       }
     }
   });

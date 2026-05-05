@@ -18,6 +18,22 @@ import {
   AI_TOOL_CACHE_MAX_SIZE,
 } from '../config/constants';
 import type { ChatMessage, PendingConfirmation, MessageCard } from '../contexts/aiTypes';
+import type { CustomDomainStatusKind } from '../utils/customDomainStatus';
+
+/** Per-domain status report stored in the dnsStatuses map. The map key is
+ *  `${leaseUuid}::${customDomain}` so multi-domain stacks don't collide. */
+export interface DnsStatusEntry {
+  leaseUuid: string;
+  customDomain: string;
+  serviceName: string;
+  kind: CustomDomainStatusKind;
+  /** The provider FQDN the user's CNAME should point at. May be undefined
+   *  briefly while connection metadata refreshes. */
+  expectedCnameTarget?: string;
+}
+
+export const dnsStatusKey = (leaseUuid: string, customDomain: string) =>
+  `${leaseUuid}::${customDomain}`;
 
 import { loadSettings, loadHistory, clearHistoryStorage } from './aiActions/persistence';
 import { scheduleStreamingUpdateFn, flushPendingUpdateFn } from './aiActions/streaming';
@@ -44,6 +60,11 @@ export interface AIStore {
   pendingPayload: PayloadAttachment | null;
   deployProgress: DeployProgress | null;
 
+  /** DNS resolution status by `dnsStatusKey(leaseUuid, customDomain)`. Driven
+   *  by the per-tab polling loop in MainLayout; consumed by AppsSidebar (dot)
+   *  and the inline deploy_dns_status pill. */
+  dnsStatuses: ReadonlyMap<string, DnsStatusEntry>;
+
   // --- Internal state (only accessed via get() in actions) ---
   clientManager: CosmosClientManager | null;
   address: string | undefined;
@@ -67,6 +88,7 @@ export interface AIStore {
   setClientManager: (manager: CosmosClientManager | null) => void;
   setAddress: (address: string | undefined) => void;
   setSignArbitrary: (fn: SignArbitraryFn | undefined) => void;
+  setDnsStatuses: (statuses: ReadonlyMap<string, DnsStatusEntry>) => void;
   updateSettings: (settings: Partial<AISettings>) => void;
   clearHistory: () => void;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
@@ -96,6 +118,7 @@ export const createAIStore = () =>
     pendingConfirmation: null,
     pendingPayload: null,
     deployProgress: null,
+    dnsStatuses: new Map<string, DnsStatusEntry>(),
 
     clientManager: null,
     address: undefined,
@@ -155,6 +178,10 @@ export const createAIStore = () =>
 
     setSignArbitrary: (fn) => {
       set({ signArbitrary: fn });
+    },
+
+    setDnsStatuses: (statuses) => {
+      set({ dnsStatuses: statuses });
     },
 
     // --- Payload attachment ---

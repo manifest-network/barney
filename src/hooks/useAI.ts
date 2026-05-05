@@ -11,6 +11,8 @@ export function useAI() {
     pendingConfirmation: s.pendingConfirmation,
     pendingPayload: s.pendingPayload,
     deployProgress: s.deployProgress,
+    dnsStatuses: s.dnsStatuses,
+    setDnsStatuses: s.setDnsStatuses,
     setIsOpen: s.setIsOpen,
     sendMessage: s.sendMessage,
     updateSettings: s.updateSettings,

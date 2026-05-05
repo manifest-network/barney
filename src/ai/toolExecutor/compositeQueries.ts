@@ -251,15 +251,43 @@ export async function executeAppStatus(
     }
   }
 
-  // Surface custom domains from chain (single seam — see leaseDomains.ts)
+  // Surface custom domains from chain (single seam — see leaseDomains.ts) and
+  // refresh the AppEntry cache so the sidebar polling driver knows what to watch
+  // without an extra chain round-trip per render.
   const customDomains = getDomainAssignments(lease?.items);
+  if (lease) {
+    appRegistry.updateApp(address, app.leaseUuid, { customDomains });
+  }
+
+  // Stack service names — drive the empty-form service picker on stacks where no
+  // domain is set yet, and feed the multi-domain consolidated view when multiple
+  // domains are attached.
+  const stackServiceNames: string[] = serviceImages ? Object.keys(serviceImages) : [];
 
   // Compute displayCard:
-  //  - exactly one custom domain: status view (the existing behavior)
-  //  - no domain on a single-item lease (running): "no domain" form so the user can set one
-  //  - multi-domain stacks or stopped apps: skip (ambiguous / not actionable today)
+  //  - >=2 custom domains: consolidated multi-domain view
+  //  - exactly one custom domain: single-domain status view
+  //  - no domain on a running app: "no domain" form (with picker on stacks)
+  //  - stopped apps with no domains: skip (not actionable)
   let displayCard: MessageCard | undefined;
-  if (customDomains.length === 1) {
+  if (customDomains.length >= 2) {
+    displayCard = {
+      type: 'custom_domain',
+      data: {
+        appName: app.name,
+        fqdn: '',
+        leaseUuid: app.leaseUuid,
+        serviceName: '',
+        expectedAddress: address,
+        domains: customDomains.map(({ serviceName, customDomain }) => ({
+          serviceName,
+          customDomain,
+          expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
+        })),
+        ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
+      },
+    };
+  } else if (customDomains.length === 1) {
     const { serviceName, customDomain } = customDomains[0];
     displayCard = {
       type: 'custom_domain',
@@ -270,14 +298,17 @@ export async function executeAppStatus(
         serviceName,
         expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
         expectedAddress: address,
+        ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
       },
     };
   } else if (
     customDomains.length === 0 &&
-    lease?.items.length === 1 &&
-    currentStatus === 'running'
+    currentStatus === 'running' &&
+    (lease?.items.length === 1 || stackServiceNames.length >= 1)
   ) {
-    const serviceName = lease.items[0].serviceName;
+    // Single-service legacy lease: pre-fill the picker-less form.
+    // Stack: AI hasn't disambiguated; the picker prompts the user.
+    const serviceName = lease?.items.length === 1 ? lease.items[0].serviceName : '';
     displayCard = {
       type: 'custom_domain',
       data: {
@@ -287,6 +318,7 @@ export async function executeAppStatus(
         serviceName,
         expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
         expectedAddress: address,
+        ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
       },
     };
   }

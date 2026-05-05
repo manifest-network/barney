@@ -29,6 +29,15 @@ export const AppEntrySchema = z.object({
   }).optional(),
   status: z.enum(APP_STATUSES),
   manifest: z.string().optional(),
+  /** Cached chain state for the lease's `LeaseItem.custom_domain` fields.
+   *  Written by `executeConfirmedDeployApp` on successful attach and refreshed by
+   *  `executeAppStatus` on every status check. Survives across page refreshes
+   *  via localStorage; the polling driver in MainLayout uses it to know which
+   *  apps to monitor without an extra chain round-trip per render. */
+  customDomains: z.array(z.object({
+    serviceName: z.string(),
+    customDomain: z.string(),
+  })).optional(),
 });
 
 export type AppEntry = z.infer<typeof AppEntrySchema>;

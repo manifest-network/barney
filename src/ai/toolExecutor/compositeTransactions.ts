@@ -1240,6 +1240,11 @@ export async function executeConfirmedDeployApp(
         status: 'running',
         url: connectionUrl,
         connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+        // Cache the just-attached custom domain so the sidebar polling driver
+        // sees it without waiting for the user to run `app_status`.
+        ...(domainAttach.kind === 'attached'
+          ? { customDomains: [{ serviceName: domainAttach.serviceName, customDomain: domainAttach.customDomain }] }
+          : {}),
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
 
@@ -1264,13 +1269,31 @@ export async function executeConfirmedDeployApp(
           break;
         case 'attached': {
           const target = expectedCnameTarget ?? '<provider FQDN>';
-          message = `App "${name}" is live with custom domain "${domainAttach.customDomain}" attached. Add ${recordKind} at your registrar pointing at ${target}, then run \`app_status ${name}\` to track DNS resolution.`;
+          message = `App "${name}" is live. Custom domain "${domainAttach.customDomain}" attached — add ${recordKind} at your registrar pointing at ${target}.`;
           break;
         }
         case 'none':
           message = `App "${name}" is live!`;
           break;
       }
+
+      // Inline DNS pill on the deploy result for the attached-domain case. Reads
+      // status from the shared store slice driven by the sidebar polling loop —
+      // no per-pill polling. The deploy result itself is the primary surface;
+      // this is a small chat-local feedback element, not a full CustomDomainCard.
+      const displayCard = domainAttach.kind === 'attached'
+        ? {
+            type: 'deploy_dns_status' as const,
+            data: {
+              appName: name,
+              fqdn: domainAttach.customDomain,
+              leaseUuid,
+              serviceName: domainAttach.serviceName,
+              expectedCnameTarget,
+              isApex: isApexAttached,
+            },
+          }
+        : undefined;
 
       return {
         success: true,
@@ -1287,6 +1310,7 @@ export async function executeConfirmedDeployApp(
           } : {}),
           ...(domainAttach.kind === 'failed' ? { custom_domain_error: domainAttach.error } : {}),
         },
+        ...(displayCard ? { displayCard } : {}),
       };
     }
 

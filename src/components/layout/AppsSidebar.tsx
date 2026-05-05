@@ -17,6 +17,24 @@ import { CHAIN_NAME } from '../../config/chain';
 import { findExampleByAppName, buildExampleManifest } from '../../config/exampleApps';
 import { SECONDS_PER_HOUR, AUTO_REFRESH_INTERVAL_MS } from '../../config/constants';
 import { useVisibilityPolling } from '../../hooks/useVisibilityPolling';
+import { useDnsStatusPolling } from '../../hooks/useDnsStatusPolling';
+import { dnsStatusKey, type DnsStatusEntry } from '../../stores/aiStore';
+import type { CustomDomainStatusKind } from '../../utils/customDomainStatus';
+import { aggregateDnsKind } from './aggregateDnsKind';
+
+const DNS_LABELS: Record<CustomDomainStatusKind, string> = {
+  pending_dns: 'Pending DNS',
+  issuing_cert: 'Issuing certificate',
+  active: 'Active',
+  failed: 'Failed',
+};
+
+const DNS_DOT_CLASS: Record<CustomDomainStatusKind, string> = {
+  pending_dns: 'apps-sidebar__dns-dot--pending',
+  issuing_cert: 'apps-sidebar__dns-dot--issuing',
+  active: 'apps-sidebar__dns-dot--active',
+  failed: 'apps-sidebar__dns-dot--failed',
+};
 import { timeAgo } from '../../utils/format';
 
 interface AppsSidebarProps {
@@ -37,7 +55,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const { address, disconnect, wallet } = useChain(CHAIN_NAME);
-  const { sendMessage, attachPayload } = useAI();
+  const { sendMessage, attachPayload, dnsStatuses } = useAI();
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [credits, setCredits] = useState<number | null>(null);
   const [hoursRemaining, setHoursRemaining] = useState<number | null>(null);
@@ -112,6 +130,10 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   }, [refresh]);
 
   const runningApps = apps.filter((a) => a.status === 'running' || a.status === 'deploying');
+
+  // Single source of truth for DNS status across the app — sidebar dot here +
+  // inline deploy_dns_status pill in chat both read from the same store slice.
+  useDnsStatusPolling(runningApps);
 
   const countRef = useRef(runningApps.length);
   const badgeRef = useRef<HTMLSpanElement>(null);
@@ -212,36 +234,70 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
           {runningApps.length === 0 ? (
             <p className="apps-sidebar__apps-empty">No running apps</p>
           ) : (
-            runningApps.map((app) => (
-              <button
-                key={app.leaseUuid}
-                type="button"
-                onClick={() => {
-                  sendMessage(`app_status("${app.name}")`);
-                  onClose?.();
-                }}
-                className="apps-sidebar__app-item"
-              >
-                <Circle
-                  className={`w-2.5 h-2.5 fill-current ${STATUS_COLORS[app.status] || 'text-surface-400'}`}
-                  aria-hidden="true"
-                />
-                <span className="apps-sidebar__app-name">{app.name}</span>
-                {(() => {
-                  // Show service count badge for stack deployments
-                  if (app.manifest) {
-                    try {
-                      const m = JSON.parse(app.manifest);
-                      if (m.services && typeof m.services === 'object' && !Array.isArray(m.services)) {
-                        const count = Object.keys(m.services).length;
-                        if (count > 1) return <span className="apps-sidebar__app-size">{count} svcs</span>;
-                      }
-                    } catch (error) { logError('AppsSidebar.parseManifest', error); }
-                  }
-                  return <span className="apps-sidebar__app-size">{app.size}</span>;
-                })()}
-              </button>
-            ))
+            runningApps.map((app) => {
+              // Per-app DNS status: collect this app's domain reports from the
+              // shared store and aggregate. Worst-state-wins. Count badge appears
+              // on the dot when an app has multiple domains so the user sees
+              // "drill in for details" without needing to hover for the tooltip.
+              const domainReports: DnsStatusEntry[] = (app.customDomains ?? [])
+                .map((d) => dnsStatuses.get(dnsStatusKey(app.leaseUuid, d.customDomain)))
+                .filter((r): r is DnsStatusEntry => !!r);
+              const hasDomains = (app.customDomains?.length ?? 0) > 0;
+              // While the polling loop hasn't reported yet, default to pending.
+              const dnsKind = domainReports.length > 0
+                ? aggregateDnsKind(domainReports)
+                : 'pending_dns' as CustomDomainStatusKind;
+              const domainCount = app.customDomains?.length ?? 0;
+              const tooltip = hasDomains
+                ? (app.customDomains ?? [])
+                    .map((d) => {
+                      const r = dnsStatuses.get(dnsStatusKey(app.leaseUuid, d.customDomain));
+                      return `${d.customDomain}: ${r ? DNS_LABELS[r.kind] : 'checking…'}`;
+                    })
+                    .join('\n')
+                : undefined;
+              return (
+                <button
+                  key={app.leaseUuid}
+                  type="button"
+                  onClick={() => {
+                    sendMessage(`app_status("${app.name}")`);
+                    onClose?.();
+                  }}
+                  className="apps-sidebar__app-item"
+                >
+                  <Circle
+                    className={`w-2.5 h-2.5 fill-current ${STATUS_COLORS[app.status] || 'text-surface-400'}`}
+                    aria-hidden="true"
+                  />
+                  <span className="apps-sidebar__app-name">{app.name}</span>
+                  {hasDomains && (
+                    <span
+                      className={`apps-sidebar__dns-dot ${DNS_DOT_CLASS[dnsKind]}`}
+                      title={tooltip}
+                      aria-label={`DNS: ${DNS_LABELS[dnsKind]}${domainCount > 1 ? ` (${domainCount} domains)` : ''}`}
+                    >
+                      {domainCount > 1 && (
+                        <span className="apps-sidebar__dns-count">{domainCount}</span>
+                      )}
+                    </span>
+                  )}
+                  {(() => {
+                    // Show service count badge for stack deployments
+                    if (app.manifest) {
+                      try {
+                        const m = JSON.parse(app.manifest);
+                        if (m.services && typeof m.services === 'object' && !Array.isArray(m.services)) {
+                          const count = Object.keys(m.services).length;
+                          if (count > 1) return <span className="apps-sidebar__app-size">{count} svcs</span>;
+                        }
+                      } catch (error) { logError('AppsSidebar.parseManifest', error); }
+                    }
+                    return <span className="apps-sidebar__app-size">{app.size}</span>;
+                  })()}
+                </button>
+              );
+            })
           )}
         </div>
       </div>

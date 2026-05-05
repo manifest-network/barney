@@ -8,9 +8,10 @@ vi.mock('../../hooks/useVisibilityPolling', () => ({
 }));
 
 const sendMessage = vi.fn();
+let dnsStatuses: Map<string, { kind: string; expectedCnameTarget?: string }> = new Map();
 
 vi.mock('../../hooks/useAI', () => ({
-  useAI: () => ({ sendMessage }),
+  useAI: () => ({ sendMessage, dnsStatuses }),
 }));
 
 vi.mock('../../utils/customDomainStatus', () => ({
@@ -50,6 +51,7 @@ describe('CustomDomainCard', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    dnsStatuses = new Map();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -211,6 +213,119 @@ describe('CustomDomainCard', () => {
       flushSync(() => { setReactInputValue(input, '2606:4700::1111'); });
       const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
       expect(setBtn.disabled).toBe(true);
+    });
+
+    describe('stack service picker', () => {
+      it('renders a service picker when serviceNames has multiple entries', () => {
+        flushSync(() => {
+          root.render(createElement(CustomDomainCard, {
+            data: makeData({ fqdn: '', serviceNames: ['web', 'api'] }),
+          }));
+        });
+        const select = container.querySelector('select');
+        expect(select).not.toBeNull();
+        const options = Array.from(select!.querySelectorAll('option')).map((o) => o.textContent);
+        expect(options).toContain('web');
+        expect(options).toContain('api');
+      });
+
+      it('does not render a picker when only one service exists', () => {
+        flushSync(() => {
+          root.render(createElement(CustomDomainCard, {
+            data: makeData({ fqdn: '', serviceNames: ['web'] }),
+          }));
+        });
+        expect(container.querySelector('select')).toBeNull();
+      });
+
+      it('blocks Set until a service is picked on a stack', () => {
+        flushSync(() => {
+          root.render(createElement(CustomDomainCard, {
+            data: makeData({ fqdn: '', appName: 'stack', serviceNames: ['web', 'api'] }),
+          }));
+        });
+        const input = container.querySelector('input') as HTMLInputElement;
+        flushSync(() => { setReactInputValue(input, 'app.example.com'); });
+        const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
+        // No service selected yet — disabled
+        expect(setBtn.disabled).toBe(true);
+
+        const select = container.querySelector('select') as HTMLSelectElement;
+        flushSync(() => {
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!;
+          setter.call(select, 'web');
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        expect(setBtn.disabled).toBe(false);
+
+        flushSync(() => { setBtn.click(); });
+        expect(sendMessage).toHaveBeenCalledWith(expect.stringMatching(/Point app\.example\.com at stack.*service: web/i));
+      });
+    });
+  });
+
+  describe('multi-domain consolidated view', () => {
+    it('renders one DomainRow per domain with their status from dnsStatuses', () => {
+      dnsStatuses = new Map([
+        ['lease-1::web.example.com', { kind: 'active', expectedCnameTarget: 'web.auto.barney0.manifest0.net' }],
+        ['lease-1::api.example.com', { kind: 'pending_dns', expectedCnameTarget: 'api.auto.barney0.manifest0.net' }],
+      ]);
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, {
+          data: makeData({
+            fqdn: '',
+            domains: [
+              { serviceName: 'web', customDomain: 'web.example.com', expectedCnameTarget: 'web.auto.barney0.manifest0.net' },
+              { serviceName: 'api', customDomain: 'api.example.com', expectedCnameTarget: 'api.auto.barney0.manifest0.net' },
+            ],
+          }),
+        }));
+      });
+      const text = container.textContent ?? '';
+      expect(text).toContain('web.example.com');
+      expect(text).toContain('api.example.com');
+      expect(text).toMatch(/Active/);
+      expect(text).toMatch(/Pending DNS/);
+    });
+
+    it('falls back to pending_dns when no status entry exists', () => {
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, {
+          data: makeData({
+            fqdn: '',
+            domains: [
+              { serviceName: 'web', customDomain: 'web.example.com', expectedCnameTarget: 'web.auto.barney0.manifest0.net' },
+            ],
+          }),
+        }));
+      });
+      expect(container.textContent).toMatch(/Pending DNS/);
+    });
+
+    it('Change/Remove dispatch with the correct service name', () => {
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, {
+          data: makeData({
+            appName: 'stack',
+            fqdn: '',
+            domains: [
+              { serviceName: 'web', customDomain: 'web.example.com' },
+              { serviceName: 'api', customDomain: 'api.example.com' },
+            ],
+          }),
+        }));
+      });
+      const allButtons = Array.from(container.querySelectorAll('button'));
+      const changeButtons = allButtons.filter((b) => b.textContent === 'Change');
+      const removeButtons = allButtons.filter((b) => b.textContent === 'Remove');
+      expect(changeButtons.length).toBe(2);
+      expect(removeButtons.length).toBe(2);
+
+      flushSync(() => { changeButtons[0].click(); });
+      expect(sendMessage).toHaveBeenCalledWith(expect.stringMatching(/change.*stack.*service: web/i));
+
+      flushSync(() => { removeButtons[1].click(); });
+      expect(sendMessage).toHaveBeenCalledWith(expect.stringMatching(/remove.*stack.*service: api/i));
     });
   });
 
