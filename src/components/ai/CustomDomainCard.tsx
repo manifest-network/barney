@@ -21,23 +21,14 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Globe, Copy, Check, AlertCircle } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { useVisibilityPolling } from '../../hooks/useVisibilityPolling';
 import { useAI } from '../../hooks/useAI';
-import {
-  computeStatus,
-  probeHttps,
-  resolveDnsViaDoh,
-  type CustomDomainStatusKind,
-  type CustomDomainStatusReport,
-} from '../../utils/customDomainStatus';
+import type { CustomDomainStatusKind } from '../../utils/customDomainStatus';
 import { validateCustomDomainFormat } from '../../utils/customDomainValidation';
 import { normalizeFqdn } from '../../utils/connection';
 import { dnsStatusKey } from '../../stores/aiStore';
 import { DomainRow } from './DomainRow';
 import type { CustomDomainCardData } from '../../contexts/aiTypes';
-
-const POLL_INTERVAL_MS = 30_000;
-const STUCK_THRESHOLD_MS = 5 * 60 * 1000;
+import { DNS_STUCK_THRESHOLD_MS } from '../../config/constants';
 
 const STATUS_LABELS: Record<CustomDomainStatusKind, string> = {
   pending_dns: 'Pending DNS',
@@ -157,46 +148,36 @@ function NoDomainForm({ data }: { data: CustomDomainCardData }) {
 
 function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
-  const { sendMessage } = useAI();
+  const { sendMessage, dnsStatuses } = useAI();
 
-  const [status, setStatus] = useState<CustomDomainStatusReport>({ kind: 'pending_dns' });
-  const [showStuckHint, setShowStuckHint] = useState(false);
+  // Read from the shared slice driven by the sidebar's `useDnsStatusPolling`
+  // — no local poll loop, no double-probing.
+  const report = dnsStatuses.get(dnsStatusKey(data.leaseUuid, data.fqdn));
+  const kind = report?.kind ?? 'pending_dns';
+  const detail = report?.detail;
+  const target = report?.expectedCnameTarget ?? data.expectedCnameTarget;
+
+  // The stuck hint is purely a UI-side derivation: how long has this domain
+  // been showing as pending_dns *since this card mounted*. The slice itself
+  // doesn't carry that timestamp, and we don't need cross-component coherence
+  // — each rendering of the card can re-arm.
   const pendingSinceRef = useRef<number | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-
-  // Cancel any in-flight probes when the card unmounts so they don't outlive the component.
-  useEffect(() => () => abortRef.current?.abort(), []);
-
-  const poll = useCallback(async () => {
-    abortRef.current?.abort();
-    const ac = new AbortController();
-    abortRef.current = ac;
-
-    const [dns, https] = await Promise.all([
-      resolveDnsViaDoh(data.fqdn, ac.signal),
-      probeHttps(data.fqdn, ac.signal),
-    ]);
-    if (ac.signal.aborted) return;
-    const next = computeStatus({ dns, https, expectedCname: data.expectedCnameTarget });
-    setStatus(next);
-
-    if (next.kind === 'pending_dns') {
-      pendingSinceRef.current ??= Date.now();
-      // If the reducer attached a `detail` (e.g. wrong-target diff), it has
-      // already told the user what's wrong — the "verify with dig" hint reads
-      // as a network problem and is misleading here.
-      const stuck = !next.detail && Date.now() - pendingSinceRef.current > STUCK_THRESHOLD_MS;
-      setShowStuckHint(stuck);
-    } else {
+  const [showStuckHint, setShowStuckHint] = useState(false);
+  useEffect(() => {
+    if (kind !== 'pending_dns' || detail) {
       pendingSinceRef.current = null;
       setShowStuckHint(false);
+      return;
     }
-  }, [data.fqdn, data.expectedCnameTarget]);
-
-  useVisibilityPolling(poll, POLL_INTERVAL_MS, {
-    context: 'CustomDomainCard.poll',
-    enabled: status.kind !== 'active' && status.kind !== 'failed',
-  });
+    pendingSinceRef.current ??= Date.now();
+    const elapsed = Date.now() - pendingSinceRef.current;
+    if (elapsed >= DNS_STUCK_THRESHOLD_MS) {
+      setShowStuckHint(true);
+      return;
+    }
+    const t = setTimeout(() => setShowStuckHint(true), DNS_STUCK_THRESHOLD_MS - elapsed);
+    return () => clearTimeout(t);
+  }, [kind, detail]);
 
   const handleChange = useCallback(() => {
     void sendMessage(`Change the custom domain for ${data.appName}`);
@@ -214,27 +195,27 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
         <span className="custom-domain-card__title">
           <span className="custom-domain-card__fqdn">{data.fqdn}</span>
         </span>
-        <StatusPill kind={status.kind} />
+        <StatusPill kind={kind} />
       </div>
 
-      {status.detail && (
-        <p className="custom-domain-card__detail" aria-live="polite">{status.detail}</p>
+      {detail && (
+        <p className="custom-domain-card__detail" aria-live="polite">{detail}</p>
       )}
 
-      {data.expectedCnameTarget && (
+      {target && (
         <div className="custom-domain-card__detail">
           CNAME{' '}
           <code className="font-mono">{data.fqdn}</code>{' '}
           &rarr;{' '}
-          <code className="font-mono">{data.expectedCnameTarget}</code>{' '}
+          <code className="font-mono">{target}</code>{' '}
           <button
             type="button"
-            onClick={() => copyToClipboard(data.expectedCnameTarget!)}
+            onClick={() => copyToClipboard(target)}
             className="btn-icon"
             aria-label="Copy CNAME target"
             title="Copy"
           >
-            {isCopied(data.expectedCnameTarget) ? (
+            {isCopied(target) ? (
               <Check className="w-3 h-3 text-success-400" />
             ) : (
               <Copy className="w-3 h-3" />

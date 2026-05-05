@@ -26,8 +26,7 @@ import { resolveExpectedCnameTarget } from '../utils/connection';
 import { logError } from '../utils/errors';
 import type { AppEntry } from '../registry/appRegistry';
 import { dnsStatusKey, type DnsStatusEntry } from '../stores/aiStore';
-
-const POLL_INTERVAL_MS = 30_000;
+import { DNS_POLL_INTERVAL_MS } from '../config/constants';
 
 export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
   const { dnsStatuses, setDnsStatuses } = useAI();
@@ -82,7 +81,7 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
     setDnsStatuses(next);
   }, [targets, dnsStatuses, setDnsStatuses]);
 
-  useVisibilityPolling(poll, POLL_INTERVAL_MS, {
+  useVisibilityPolling(poll, DNS_POLL_INTERVAL_MS, {
     enabled: targets.length > 0,
     context: 'useDnsStatusPolling',
   });

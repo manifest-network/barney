@@ -266,7 +266,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                   key={app.leaseUuid}
                   type="button"
                   onClick={() => {
-                    sendMessage(`app_status("${app.name}")`);
+                    sendMessage(`What's the status of ${app.name}?`);
                     onClose?.();
                   }}
                   className="apps-sidebar__app-item"

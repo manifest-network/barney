@@ -1,28 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, createElement } from 'react';
+import { createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 
-vi.mock('../../hooks/useVisibilityPolling', () => ({
-  useVisibilityPolling: vi.fn(),
-}));
-
 const sendMessage = vi.fn();
-let dnsStatuses: Map<string, { kind: string; expectedCnameTarget?: string }> = new Map();
+let dnsStatuses: Map<string, { kind: string; expectedCnameTarget?: string; detail?: string }> = new Map();
 
 vi.mock('../../hooks/useAI', () => ({
   useAI: () => ({ sendMessage, dnsStatuses }),
 }));
 
-vi.mock('../../utils/customDomainStatus', () => ({
-  resolveDnsViaDoh: vi.fn(),
-  probeHttps: vi.fn(),
-  computeStatus: vi.fn(),
-}));
-
 import { CustomDomainCard } from './CustomDomainCard';
-import { useVisibilityPolling } from '../../hooks/useVisibilityPolling';
-import { computeStatus, resolveDnsViaDoh, probeHttps } from '../../utils/customDomainStatus';
 import type { CustomDomainCardData } from '../../contexts/aiTypes';
 
 function makeData(overrides: Partial<CustomDomainCardData> = {}): CustomDomainCardData {
@@ -71,38 +59,42 @@ describe('CustomDomainCard', () => {
     expect(text).toContain('auto.barney0.manifest0.net');
   });
 
-  it('renders pending_dns status by default', () => {
+  it('defaults to pending_dns when no slice entry exists', () => {
     flushSync(() => {
       root.render(createElement(CustomDomainCard, { data: makeData() }));
     });
     expect(container.textContent).toMatch(/Pending DNS/i);
   });
 
-  it('subscribes to useVisibilityPolling at 30s', () => {
+  it('reflects active status from the shared slice', () => {
+    dnsStatuses = new Map([
+      ['lease-1::app.example.com', { kind: 'active', expectedCnameTarget: 'auto.barney0.manifest0.net' }],
+    ]);
     flushSync(() => {
       root.render(createElement(CustomDomainCard, { data: makeData() }));
     });
-    expect(useVisibilityPolling).toHaveBeenCalled();
-    const args = vi.mocked(useVisibilityPolling).mock.calls[0];
-    expect(args[1]).toBe(30_000);
+    expect(container.textContent).toMatch(/Active/);
   });
 
-  it('disables polling once status reaches active', async () => {
-    let pollFn: () => Promise<unknown> = async () => undefined;
-    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
-    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok', cname: 'auto.barney0.manifest0.net' });
-    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' });
-    vi.mocked(computeStatus).mockReturnValue({ kind: 'active' });
-
-    await act(async () => {
+  it('reflects issuing_cert status from the shared slice', () => {
+    dnsStatuses = new Map([
+      ['lease-1::app.example.com', { kind: 'issuing_cert', expectedCnameTarget: 'auto.barney0.manifest0.net' }],
+    ]);
+    flushSync(() => {
       root.render(createElement(CustomDomainCard, { data: makeData() }));
     });
-    await act(async () => { await pollFn(); });
+    expect(container.textContent).toMatch(/Issuing certificate/);
+  });
 
-    // The most recent useVisibilityPolling call (after the active re-render) must be enabled=false.
-    const calls = vi.mocked(useVisibilityPolling).mock.calls;
-    const lastOpts = calls[calls.length - 1][2];
-    expect(lastOpts?.enabled).toBe(false);
+  it('uses the slice expectedCnameTarget when present (preferred over data fallback)', () => {
+    dnsStatuses = new Map([
+      ['lease-1::app.example.com', { kind: 'active', expectedCnameTarget: 'live.target.host' }],
+    ]);
+    flushSync(() => {
+      root.render(createElement(CustomDomainCard, { data: makeData({ expectedCnameTarget: 'stale.target.host' }) }));
+    });
+    expect(container.textContent).toContain('live.target.host');
+    expect(container.textContent).not.toContain('stale.target.host');
   });
 
   it('shows service name when present', () => {
@@ -157,7 +149,6 @@ describe('CustomDomainCard', () => {
       const input = container.querySelector('input') as HTMLInputElement;
       const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
 
-      // Type a valid FQDN
       flushSync(() => { setReactInputValue(input, 'app.example.com'); });
       expect(setBtn.disabled).toBe(false);
 
@@ -247,7 +238,6 @@ describe('CustomDomainCard', () => {
         const input = container.querySelector('input') as HTMLInputElement;
         flushSync(() => { setReactInputValue(input, 'app.example.com'); });
         const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
-        // No service selected yet — disabled
         expect(setBtn.disabled).toBe(true);
 
         const select = container.querySelector('select') as HTMLSelectElement;
@@ -262,6 +252,41 @@ describe('CustomDomainCard', () => {
         expect(sendMessage).toHaveBeenCalledWith(expect.stringMatching(/Point app\.example\.com at stack.*service: web/i));
       });
     });
+  });
+
+  it('renders detail from the slice as a sub-line under the pill', () => {
+    dnsStatuses = new Map([
+      ['lease-1::app.example.com', {
+        kind: 'pending_dns',
+        expectedCnameTarget: 'auto.barney0.manifest0.net',
+        detail: 'Pointed at wrong.host — expected auto.barney0.manifest0.net',
+      }],
+    ]);
+    flushSync(() => {
+      root.render(createElement(CustomDomainCard, { data: makeData() }));
+    });
+    expect(container.textContent).toMatch(/Pointed at wrong\.host/);
+  });
+
+  it('suppresses the stuck-hint when the slice entry has a detail (mismatch)', () => {
+    dnsStatuses = new Map([
+      ['lease-1::app.example.com', {
+        kind: 'pending_dns',
+        expectedCnameTarget: 'auto.barney0.manifest0.net',
+        detail: 'Pointed at wrong.host — expected auto.barney0.manifest0.net',
+      }],
+    ]);
+    // Far in the future so the threshold has long elapsed.
+    const realNow = Date.now;
+    Date.now = () => realNow() + 10 * 60 * 1000;
+    try {
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData() }));
+      });
+      expect(container.textContent).not.toMatch(/verify with/i);
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   describe('multi-domain consolidated view', () => {
@@ -327,77 +352,7 @@ describe('CustomDomainCard', () => {
       flushSync(() => { removeButtons[1].click(); });
       expect(sendMessage).toHaveBeenCalledWith(expect.stringMatching(/remove.*stack.*service: api/i));
     });
-  });
 
-  it('transitions through statuses based on poll callback result', async () => {
-    let pollFn: () => Promise<unknown> = async () => undefined;
-    vi.mocked(useVisibilityPolling).mockImplementation((cb) => {
-      pollFn = cb;
-    });
-
-    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok', cname: 'auto.barney0.manifest0.net' });
-    vi.mocked(probeHttps).mockResolvedValue({ result: 'unreachable' });
-    vi.mocked(computeStatus).mockReturnValue({ kind: 'issuing_cert' });
-
-    await act(async () => {
-      root.render(createElement(CustomDomainCard, { data: makeData() }));
-    });
-
-    await act(async () => { await pollFn(); });
-    expect(container.textContent).toMatch(/Issuing certificate/i);
-
-    // Now active
-    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' });
-    vi.mocked(computeStatus).mockReturnValue({ kind: 'active' });
-    await act(async () => { await pollFn(); });
-    expect(container.textContent).toMatch(/Active/i);
-  });
-
-  it('renders status.detail as a sub-line under the pill when present', async () => {
-    let pollFn: () => Promise<unknown> = async () => undefined;
-    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
-    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok' });
-    vi.mocked(probeHttps).mockResolvedValue({ result: 'unreachable' });
-    vi.mocked(computeStatus).mockReturnValue({ kind: 'issuing_cert', detail: 'Waiting for ACME challenge' });
-
-    await act(async () => {
-      root.render(createElement(CustomDomainCard, { data: makeData() }));
-    });
-    await act(async () => { await pollFn(); });
-
-    expect(container.textContent).toMatch(/Waiting for ACME challenge/);
-  });
-
-  it('shows the wrong-target diff and suppresses the stuck-hint when detail is set', async () => {
-    let pollFn: () => Promise<unknown> = async () => undefined;
-    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
-    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok', cname: 'wrong.host' });
-    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' });
-    vi.mocked(computeStatus).mockReturnValue({
-      kind: 'pending_dns',
-      detail: 'Pointed at wrong.host — expected auto.barney0.manifest0.net',
-    });
-
-    // Force the "stuck threshold has elapsed" branch — Date.now() far in the future.
-    const realNow = Date.now;
-    Date.now = () => realNow() + 10 * 60 * 1000;
-
-    try {
-      await act(async () => {
-        root.render(createElement(CustomDomainCard, { data: makeData() }));
-      });
-      await act(async () => { await pollFn(); });
-
-      // Detail is rendered…
-      expect(container.textContent).toMatch(/Pointed at wrong\.host/);
-      // …but the misleading "verify with dig" hint is not.
-      expect(container.textContent).not.toMatch(/verify with/i);
-    } finally {
-      Date.now = realNow;
-    }
-  });
-
-  describe('multi-domain consolidated view detail', () => {
     it('surfaces the wrong-target detail per row from dnsStatuses', () => {
       dnsStatuses = new Map([
         ['lease-1::web.example.com', {
