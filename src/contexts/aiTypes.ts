@@ -44,7 +44,11 @@ export interface CustomDomainCardData {
 
 /** Compact inline pill emitted by `executeConfirmedDeployApp` when a single
  *  custom domain was attached during deploy. Reads DNS status from the shared
- *  `dnsStatuses` slice — no per-pill polling. */
+ *  `dnsStatuses` slice — no per-pill polling.
+ *
+ *  Deprecated for new emissions — `executeConfirmedDeployApp` now emits the
+ *  richer `app` card with the DNS row embedded. The variant remains so chat
+ *  history persisted before the switch still renders. */
 export interface DeployDnsStatusCardData {
   appName: string;
   fqdn: string;
@@ -54,12 +58,54 @@ export interface DeployDnsStatusCardData {
   isApex: boolean;
 }
 
+/** Port mapping shape returned by the provider connection info. */
+export interface AppCardPortMapping {
+  host_ip: string;
+  host_port: number;
+}
+
+/** Per-service connection info for stack deployments. */
+export interface AppCardServiceInfo {
+  ports?: Record<string, AppCardPortMapping>;
+  instances?: { fqdn?: string; ports?: Record<string, AppCardPortMapping> }[];
+}
+
+/** Connection metadata embedded in an AppCard. Mirrors `AppEntry.connection`
+ *  but typed to what AppCard actually uses. */
+export interface AppCardConnection {
+  host: string;
+  fqdn?: string;
+  ports?: Record<string, AppCardPortMapping>;
+  instances?: { fqdn?: string; ports?: Record<string, AppCardPortMapping> }[];
+  services?: Record<string, AppCardServiceInfo>;
+}
+
+/** Embedded custom-domain row for AppCard. Reads its live status from the
+ *  shared `dnsStatuses` slice. */
+export interface AppCardCustomDomain {
+  fqdn: string;
+  leaseUuid: string;
+  serviceName: string;
+  expectedCnameTarget?: string;
+  isApex: boolean;
+}
+
+/** Data for the `app` deploy-success card. */
+export interface AppCardData {
+  name: string;
+  url?: string;
+  connection?: AppCardConnection;
+  status: string;
+  customDomain?: AppCardCustomDomain;
+}
+
 /** Discriminated union for message display cards. */
 export type MessageCard =
   | { type: 'logs'; data: LogsCardData }
   | { type: 'help'; data: null }
   | { type: 'custom_domain'; data: CustomDomainCardData }
-  | { type: 'deploy_dns_status'; data: DeployDnsStatusCardData };
+  | { type: 'deploy_dns_status'; data: DeployDnsStatusCardData }
+  | { type: 'app'; data: AppCardData };
 
 export interface ChatMessage {
   id: string;
@@ -74,6 +120,10 @@ export interface ChatMessage {
   isStreaming?: boolean;
   error?: string;
   card?: MessageCard;
+  /** True for messages synthesized by the UI (e.g. /help text) — they render
+   *  in chat but must NOT be replayed back to the model on the next turn,
+   *  otherwise the model treats its own UI canned text as real assistant output. */
+  local?: boolean;
 }
 
 export interface PendingConfirmation {

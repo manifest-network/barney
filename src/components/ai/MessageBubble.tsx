@@ -6,6 +6,7 @@ import { LogCard } from './LogCard';
 import { HelpCard } from './HelpCard';
 import { CustomDomainCard } from './CustomDomainCard';
 import { DeployDnsStatusPill } from './DeployDnsStatusPill';
+import { AppCard } from './AppCard';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useAI } from '../../hooks/useAI';
 
@@ -128,6 +129,9 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
         )}
         {isTool && message.card?.type === 'deploy_dns_status' && (
           <DeployDnsStatusPill data={message.card.data} />
+        )}
+        {isTool && message.card?.type === 'app' && (
+          <AppCard data={message.card.data} />
         )}
         {isTool && !message.card && (
           <div className="message-tool-block">

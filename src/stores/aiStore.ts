@@ -158,6 +158,7 @@ export const createAIStore = () =>
         content,
         timestamp: Date.now(),
         card,
+        local: true,
       };
       set({ messages: trimMessages([...get().messages, msg]) });
     },

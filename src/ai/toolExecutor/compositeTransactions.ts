@@ -1277,23 +1277,31 @@ export async function executeConfirmedDeployApp(
           break;
       }
 
-      // Inline DNS pill on the deploy result for the attached-domain case. Reads
-      // status from the shared store slice driven by the sidebar polling loop —
-      // no per-pill polling. The deploy result itself is the primary surface;
-      // this is a small chat-local feedback element, not a full CustomDomainCard.
-      const displayCard = domainAttach.kind === 'attached'
-        ? {
-            type: 'deploy_dns_status' as const,
-            data: {
-              appName: name,
-              fqdn: domainAttach.customDomain,
-              leaseUuid,
-              serviceName: domainAttach.serviceName,
-              expectedCnameTarget,
-              isApex: isApexAttached,
-            },
-          }
-        : undefined;
+      // Emit a single rich `app` displayCard. When a custom domain attached,
+      // the AppCard embeds a DomainRow (status comes from the shared
+      // `dnsStatuses` slice — no per-card polling). The standalone
+      // deploy_dns_status pill is no longer emitted; its data lives on the
+      // AppCard's `customDomain` field.
+      const displayCard = {
+        type: 'app' as const,
+        data: {
+          name,
+          url: connectionUrl,
+          status: 'running',
+          connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+          ...(domainAttach.kind === 'attached'
+            ? {
+                customDomain: {
+                  fqdn: domainAttach.customDomain,
+                  leaseUuid,
+                  serviceName: domainAttach.serviceName,
+                  expectedCnameTarget,
+                  isApex: isApexAttached,
+                },
+              }
+            : {}),
+        },
+      };
 
       return {
         success: true,
@@ -1310,7 +1318,7 @@ export async function executeConfirmedDeployApp(
           } : {}),
           ...(domainAttach.kind === 'failed' ? { custom_domain_error: domainAttach.error } : {}),
         },
-        ...(displayCard ? { displayCard } : {}),
+        displayCard,
       };
     }
 

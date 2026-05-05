@@ -35,7 +35,10 @@ export function toChatApiMessages(msgs: ChatMessage[], address: string | undefin
   };
 
   const conversationMessages: ChatApiMessage[] = msgs
-    .filter((m) => !m.isStreaming)
+    // Drop streaming-in-progress messages and UI-synthesized messages (e.g. /help text).
+    // Local messages render in chat but must not be replayed to the model — otherwise
+    // the model treats its own canned UI strings as prior assistant output.
+    .filter((m) => !m.isStreaming && !m.local)
     .map((m) => {
       if (m.role === 'tool') {
         return {

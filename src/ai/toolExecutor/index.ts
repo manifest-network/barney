@@ -86,7 +86,7 @@ export async function executeTool(
         case 'get_balance':
           return await executeGetBalance(options);
         case 'browse_catalog':
-          return await executeBrowseCatalog();
+          return await executeBrowseCatalog(options);
         case 'lease_history':
           return await executeLeaseHistory(args, options);
         case 'app_diagnostics':

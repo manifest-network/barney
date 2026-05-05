@@ -25,7 +25,7 @@ import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
-import { withRetry, withTimeout } from '../../api/utils';
+import { withRetry, withTimeout, throwIfAborted } from '../../api/utils';
 import { getProviderAuthToken } from './utils';
 import type { ToolResult, ToolExecutorOptions } from './types';
 import type { MessageCard } from '../../contexts/aiTypes';
@@ -37,7 +37,8 @@ export async function executeListApps(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry } = options;
+  const { address, appRegistry, signal } = options;
+  throwIfAborted(signal, 'list_apps');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -48,8 +49,9 @@ export async function executeListApps(
 
   // Reconcile with chain: mark apps as stopped if lease is gone
   try {
-    const activeLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE), undefined, 'Fetch active leases');
-    const pendingLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING), undefined, 'Fetch pending leases');
+    const activeLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE), undefined, 'Fetch active leases', signal);
+    throwIfAborted(signal, 'list_apps');
+    const pendingLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING), undefined, 'Fetch pending leases', signal);
     const activeUuids = new Set([
       ...activeLeases.map((l) => l.uuid),
       ...pendingLeases.map((l) => l.uuid),
@@ -116,7 +118,8 @@ export async function executeAppStatus(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary } = options;
+  const { address, appRegistry, signArbitrary, signal } = options;
+  throwIfAborted(signal, 'app_status');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -132,11 +135,13 @@ export async function executeAppStatus(
   let lease: Lease | null = null;
   try {
     lease = await getLease(app.leaseUuid);
+    throwIfAborted(signal, 'app_status');
     if (lease) {
       leaseState = lease.state as LeaseState;
       chainState = LEASE_STATE_LABELS[leaseState]?.toLowerCase() ?? 'unknown';
     }
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
     logError('compositeQueries.executeAppStatus.chainState', error);
   }
 
@@ -149,8 +154,10 @@ export async function executeAppStatus(
   ) {
     try {
       const authToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
+      throwIfAborted(signal, 'app_status');
       fredStatus = await getLeaseStatus(app.providerUrl, app.leaseUuid, authToken);
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error;
       logError('compositeQueries.executeAppStatus.fredStatus', error);
     }
   }
@@ -346,14 +353,15 @@ export async function executeAppStatus(
 export async function executeGetBalance(
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, clientManager } = options;
+  const { address, clientManager, signal } = options;
+  throwIfAborted(signal, 'get_balance');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!clientManager) return { success: false, error: 'Not connected to blockchain' };
 
   let balance: Awaited<ReturnType<typeof getBalance>>;
   try {
     const queryClient = await clientManager.getQueryClient();
-    balance = await withTimeout(getBalance(queryClient, address), undefined, 'Fetch balance');
+    balance = await withTimeout(getBalance(queryClient, address), undefined, 'Fetch balance', signal);
   } catch (error) {
     logError('compositeQueries.executeGetBalance', error);
     return {
@@ -406,11 +414,16 @@ export async function executeGetBalance(
 /**
  * Execute browse_catalog: Providers + SKUs grouped by tier.
  */
-export async function executeBrowseCatalog(): Promise<ToolResult> {
+export async function executeBrowseCatalog(
+  options: ToolExecutorOptions = { clientManager: null, address: undefined },
+): Promise<ToolResult> {
+  const { signal } = options;
+  throwIfAborted(signal, 'browse_catalog');
   const [providers, skus] = await Promise.all([
-    withTimeout(getProviders(true), undefined, 'Fetch providers'),
-    withTimeout(getSKUs(true), undefined, 'Fetch SKUs'),
+    withTimeout(getProviders(true), undefined, 'Fetch providers', signal),
+    withTimeout(getSKUs(true), undefined, 'Fetch SKUs', signal),
   ]);
+  throwIfAborted(signal, 'browse_catalog');
 
   // Check provider health in parallel
   const providersWithHealth = await Promise.all(
@@ -418,9 +431,10 @@ export async function executeBrowseCatalog(): Promise<ToolResult> {
       let healthy = false;
       if (p.apiUrl) {
         try {
-          const health = await getProviderHealth(p.apiUrl);
+          const health = await withTimeout(getProviderHealth(p.apiUrl), undefined, `Provider health (${p.uuid})`, signal);
           healthy = health?.status === 'healthy';
         } catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError') throw error;
           logError(`compositeQueries.executeBrowseCatalog.healthCheck[${p.uuid}]`, error);
         }
       }
@@ -431,6 +445,7 @@ export async function executeBrowseCatalog(): Promise<ToolResult> {
       };
     })
   );
+  throwIfAborted(signal, 'browse_catalog');
 
   // Group SKUs by name (tier)
   const tiers: Record<string, Array<{ provider: string; price: string; unit: string }>> = {};
@@ -520,7 +535,8 @@ export async function executeGetLogs(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary } = options;
+  const { address, appRegistry, signArbitrary, signal } = options;
+  throwIfAborted(signal, 'get_logs');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -613,7 +629,8 @@ export async function executeLeaseHistory(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry } = options;
+  const { address, appRegistry, signal } = options;
+  throwIfAborted(signal, 'lease_history');
   if (!address) return { success: false, error: 'Wallet not connected' };
 
   const stateArg = (args.state as string | undefined)?.toLowerCase() || 'all';
@@ -664,7 +681,8 @@ export async function executeAppDiagnostics(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary } = options;
+  const { address, appRegistry, signArbitrary, signal } = options;
+  throwIfAborted(signal, 'app_diagnostics');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -723,7 +741,8 @@ export async function executeAppReleases(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary } = options;
+  const { address, appRegistry, signArbitrary, signal } = options;
+  throwIfAborted(signal, 'app_releases');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -782,7 +801,8 @@ export async function executeRequestFaucet(
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
   if (!isFaucetEnabled()) return { success: false, error: 'Faucet is not available on this network' };
-  const { address } = options;
+  const { address, signal } = options;
+  throwIfAborted(signal, 'request_faucet');
   if (!address) return { success: false, error: 'Wallet not connected' };
 
   let faucetResult;

@@ -37,13 +37,53 @@ export function loadHistory(): ChatMessage[] {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_HISTORY);
     if (saved) {
-      return validateChatHistory(JSON.parse(saved)) as ChatMessage[];
+      const validated = validateChatHistory(JSON.parse(saved)) as ChatMessage[];
+      return rehydrateChatHistory(validated);
     }
   } catch (error) {
     logError('AIContext.loadHistory', error);
     localStorage.removeItem(STORAGE_KEY_HISTORY);
   }
   return [];
+}
+
+/**
+ * Scrub transient runtime state from messages loaded from localStorage.
+ *
+ * The persistence subscription already excludes streaming messages from being
+ * saved (`saveHistory` filters them), but defensive scrubbing here protects
+ * against:
+ *   - Tab killed mid-stream → stale persisted message had `isStreaming: true`
+ *   - Tab killed mid-confirmation → tool message paired with a now-gone
+ *     pendingConfirmation (the confirmation state is intentionally not
+ *     persisted, so on reload it can't be confirmed against)
+ *
+ * Both cases are marked as interrupted so the user sees clear closure.
+ */
+function rehydrateChatHistory(msgs: ChatMessage[]): ChatMessage[] {
+  return msgs.map((m) => {
+    // Streaming-in-progress on disk → interrupted. Drop the streaming flag
+    // and surface a closure marker on the message itself.
+    if (m.isStreaming) {
+      return {
+        ...m,
+        isStreaming: false,
+        error: m.error ?? 'Interrupted — message was incomplete when the page reloaded.',
+      };
+    }
+    // Tool message that was awaiting confirmation (content set by
+    // confirmAction's pre-broadcast pending state) — there's no
+    // pendingConfirmation on reload so the user can't confirm. Mark
+    // interrupted so the chat reads cleanly.
+    if (m.role === 'tool' && /awaiting confirmation/i.test(m.content) && !m.error) {
+      return {
+        ...m,
+        content: 'Interrupted — confirmation was pending when the page reloaded.',
+        error: 'Interrupted',
+      };
+    }
+    return m;
+  });
 }
 
 export function saveSettings(settings: AISettings): void {

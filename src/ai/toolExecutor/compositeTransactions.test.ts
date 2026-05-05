@@ -1746,6 +1746,14 @@ describe('executeConfirmedDeployApp', () => {
     const pollCall = vi.mocked(waitForLeaseReady).mock.calls[0];
     expect(pollCall[3]).toHaveProperty('getAuthToken');
     expect(typeof pollCall[3]!.getAuthToken).toBe('function');
+
+    // Emits an `app` displayCard with url/status and connection
+    expect(result.success && !result.requiresConfirmation && result.displayCard?.type).toBe('app');
+    if (result.success && !result.requiresConfirmation && result.displayCard?.type === 'app') {
+      expect(result.displayCard.data.url).toBe('127.0.0.1:32456');
+      expect(result.displayCard.data.status).toBe('running');
+      expect(result.displayCard.data.customDomain).toBeUndefined();
+    }
   });
 
   it('creates lease, uploads, and polls to ready — extracts port from top-level ports', async () => {

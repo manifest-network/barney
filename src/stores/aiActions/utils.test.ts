@@ -73,6 +73,21 @@ describe('toChatApiMessages', () => {
     expect(result[1].tool_calls).toEqual(msgs[0].toolCalls);
   });
 
+  it('drops local-only synthesized messages from the API stream', () => {
+    const msgs: ChatMessage[] = [
+      { id: '1', role: 'user', content: 'hi', timestamp: 1 },
+      { id: '2', role: 'assistant', content: 'UI canned help text', timestamp: 2, local: true },
+      { id: '3', role: 'user', content: 'next', timestamp: 3 },
+    ];
+
+    const result = toChatApiMessages(msgs, undefined);
+
+    // System prompt + user + user — the local assistant message is filtered out.
+    expect(result.length).toBe(3);
+    expect(result.map((m) => m.role)).toEqual(['system', 'user', 'user']);
+    expect(result.some((m) => 'content' in m && m.content === 'UI canned help text')).toBe(false);
+  });
+
   it('preserves content for assistant messages with tool_calls and non-empty content', () => {
     const msgs: ChatMessage[] = [
       {
