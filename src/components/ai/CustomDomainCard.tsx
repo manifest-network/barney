@@ -21,7 +21,7 @@ import {
   type CustomDomainStatusKind,
   type CustomDomainStatusReport,
 } from '../../utils/customDomainStatus';
-import { isValidFqdn } from '../../utils/connection';
+import { validateCustomDomainFormat } from '../../utils/customDomainValidation';
 import type { CustomDomainCardData } from '../../contexts/aiTypes';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -58,7 +58,9 @@ function NoDomainForm({ data }: { data: CustomDomainCardData }) {
   const { sendMessage } = useAI();
   const [input, setInput] = useState('');
   const trimmed = input.trim().replace(/\.$/, '').toLowerCase();
-  const looksValid = trimmed.length > 0 && isValidFqdn(trimmed) && trimmed.includes('.');
+  // Mirror the tool-flow validator (format + dot + IP rejection) so the Set button
+  // stays disabled for any input that would later be rejected upstream.
+  const looksValid = trimmed.length > 0 && validateCustomDomainFormat(trimmed) === null;
 
   const handleSet = useCallback(() => {
     if (!looksValid) return;

@@ -105,6 +105,43 @@ describe('resolveDnsViaDoh', () => {
     expect(r.result).toBe('network_fail');
   });
 
+  it('returns nxdomain on Status 0 (NoError) with no answers (NODATA case)', async () => {
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ Status: 0 })) as any),
+    );
+    const r = await resolveDnsViaDoh('nodata.example.com');
+    expect(r.result).toBe('nxdomain');
+  });
+
+  it('returns network_fail on SERVFAIL (Status 2)', async () => {
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ Status: 2 })) as any),
+    );
+    const r = await resolveDnsViaDoh('servfail.example.com');
+    expect(r.result).toBe('network_fail');
+  });
+
+  it('returns network_fail on REFUSED (Status 5)', async () => {
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ Status: 5 })) as any),
+    );
+    const r = await resolveDnsViaDoh('refused.example.com');
+    expect(r.result).toBe('network_fail');
+  });
+
+  it('still returns ok when one query succeeds and another SERVFAILs', async () => {
+    fetchSpy.mockImplementation((url: string) => {
+      const type = url.match(/type=(\w+)/)?.[1];
+      const body = type === 'A'
+        ? { Status: 0, Answer: [{ name: 'mixed.example.com', type: 1, data: '1.2.3.4' }] }
+        : { Status: 2 }; // SERVFAIL on AAAA + CNAME
+      return Promise.resolve(new Response(JSON.stringify(body)) as any);
+    });
+    const r = await resolveDnsViaDoh('mixed.example.com');
+    expect(r.result).toBe('ok');
+    expect(r.addresses).toEqual(['1.2.3.4']);
+  });
+
   it('returns ok with AAAA address on IPv6-only domain', async () => {
     fetchSpy.mockImplementation((url: string) => {
       const isAaaa = url.includes('type=AAAA');

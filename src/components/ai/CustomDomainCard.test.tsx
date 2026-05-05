@@ -192,6 +192,26 @@ describe('CustomDomainCard', () => {
       const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
       expect(setBtn.disabled).toBe(true);
     });
+
+    it('keeps Set disabled for IPv4 literals (matches validator)', () => {
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '' }) }));
+      });
+      const input = container.querySelector('input') as HTMLInputElement;
+      flushSync(() => { setReactInputValue(input, '192.168.1.1'); });
+      const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
+      expect(setBtn.disabled).toBe(true);
+    });
+
+    it('keeps Set disabled for IPv6 literals', () => {
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '' }) }));
+      });
+      const input = container.querySelector('input') as HTMLInputElement;
+      flushSync(() => { setReactInputValue(input, '2606:4700::1111'); });
+      const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
+      expect(setBtn.disabled).toBe(true);
+    });
   });
 
   it('transitions through statuses based on poll callback result', async () => {

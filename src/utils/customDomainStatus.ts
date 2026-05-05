@@ -108,8 +108,17 @@ export async function resolveDnsViaDoh(fqdn: string, signal?: AbortSignal): Prom
       };
     }
 
-    // Status 3 = NXDOMAIN. Other no-answer cases also treated as nxdomain (no record yet).
-    return { result: 'nxdomain' };
+    // No answers — disambiguate by DoH Status (RFC 1035 §4.1.1):
+    //   0 NoError  + empty Answer → NODATA (domain exists but no record of that type) → nxdomain
+    //   3 NXDOMAIN                                                                    → nxdomain
+    //   2 SERVFAIL, 5 REFUSED, others                                                 → network_fail
+    // Treating SERVFAIL/REFUSED as nxdomain would lock the card in pending_dns when the
+    // problem is actually a transient resolver issue — keep the state honest.
+    const statuses = [aRes?.Status, aaaaRes?.Status, cnameRes?.Status].filter(
+      (s): s is number => typeof s === 'number',
+    );
+    const allBenign = statuses.length > 0 && statuses.every((s) => s === 0 || s === 3);
+    return { result: allBenign ? 'nxdomain' : 'network_fail' };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
