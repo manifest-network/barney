@@ -4,7 +4,7 @@
  */
 
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
-import { cosmosTx } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx, setItemCustomDomain as monoSetItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
@@ -17,7 +17,6 @@ import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
 import { isValidFqdn, normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
-import { setItemCustomDomain } from '../../api/tx';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 import { getDomainForService } from '../../api/leaseDomains';
@@ -2804,17 +2803,19 @@ export async function executeSetCustomDomain(
 
 /**
  * Execute set_custom_domain after user confirmation.
+ *
+ * Delegates the broadcast to mono's `core.setItemCustomDomain` helper (which
+ * routes through `cosmosTx` + `set-item-custom-domain` CLI form) so validation,
+ * canonicalization, and the result shape stay consistent with the MCP surface
+ * and direct-CLI users.
  */
 export async function executeConfirmedSetCustomDomain(
   args: Record<string, unknown>,
-  _clientManager: CosmosClientManager,
+  clientManager: CosmosClientManager,
   options: ToolExecutorOptions,
 ): Promise<ToolResult> {
-  const { getOfflineSigner, address } = options;
+  const { address } = options;
   if (!address) return { success: false, error: 'Wallet not connected.' };
-  if (!getOfflineSigner) {
-    return { success: false, error: 'Wallet signer not available — reconnect your wallet and try again.' };
-  }
 
   const appName = args.app_name as string;
   const leaseUuid = args.leaseUuid as string;
@@ -2825,22 +2826,29 @@ export async function executeConfirmedSetCustomDomain(
   const customDomain = args.customDomain;
   const expectedCnameTarget = typeof args.expectedCnameTarget === 'string' ? args.expectedCnameTarget : undefined;
   const isApexWarning = typeof args.warning === 'string' && args.warning.length > 0;
+  const clearing = customDomain === '';
 
-  let signer;
+  let result: Awaited<ReturnType<typeof monoSetItemCustomDomain>>;
   try {
-    signer = getOfflineSigner();
+    result = await monoSetItemCustomDomain(
+      clientManager,
+      leaseUuid,
+      clearing ? '' : customDomain,
+      {
+        ...(serviceName !== '' ? { serviceName } : {}),
+        ...(clearing ? { clear: true } : {}),
+      },
+    );
   } catch (err) {
-    logError('compositeTransactions.executeConfirmedSetCustomDomain.getOfflineSigner', err);
-    return { success: false, error: 'Failed to load wallet signer.' };
+    logError('compositeTransactions.executeConfirmedSetCustomDomain', err);
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to set custom domain.' };
   }
 
-  const result = await setItemCustomDomain(signer, address, leaseUuid, serviceName, customDomain);
-
-  if (!result.success) {
-    return { success: false, error: result.error };
+  if (result.code !== 0) {
+    return { success: false, error: `Transaction failed with code ${result.code}.` };
   }
 
-  if (customDomain === '') {
+  if (clearing) {
     return {
       success: true,
       data: {

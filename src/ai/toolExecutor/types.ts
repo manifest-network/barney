@@ -3,7 +3,6 @@
  */
 
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
-import type { OfflineSigner } from '@cosmjs/proto-signing';
 import type { DeployProgress } from '../progress';
 import type { AppEntry } from '../../registry/appRegistry';
 import type { MessageCard } from '../../contexts/aiTypes';
@@ -79,16 +78,10 @@ export interface AppRegistryAccess {
   updateApp: (address: string, leaseUuid: string, updates: Partial<Omit<AppEntry, 'leaseUuid'>>) => AppEntry | null;
 }
 
-export type GetOfflineSignerFn = () => OfflineSigner;
-
 export interface ToolExecutorOptions {
   clientManager: CosmosClientManager | null;
   address: string | undefined;
   signArbitrary?: (address: string, data: string) => Promise<SignResult>;
-  /** Synchronous accessor for the cosmos-kit OfflineSigner.
-   *  Required for tools that broadcast typed messages outside mono's known set
-   *  (e.g. `set_custom_domain` until mono ships a subcommand for it). */
-  getOfflineSigner?: GetOfflineSignerFn;
   onProgress?: (progress: DeployProgress) => void;
   appRegistry?: AppRegistryAccess;
   signal?: AbortSignal;

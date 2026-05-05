@@ -15,14 +15,15 @@ vi.mock('../../api/billingParams', () => ({
   getReservedDomainSuffixes: vi.fn().mockResolvedValue([]),
   invalidateReservedDomainSuffixesCache: vi.fn(),
 }));
-vi.mock('../../api/tx', () => ({
+vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
+  ...(await importOriginal()),
   setItemCustomDomain: vi.fn(),
 }));
 vi.mock('../../utils/errors', () => ({ logError: vi.fn() }));
 
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
-import { setItemCustomDomain } from '../../api/tx';
+import { setItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 
 const ADDR = 'manifest1tenant';
 const LEASE_UUID = 'lease-uuid-1';
@@ -341,13 +342,22 @@ describe('executeConfirmedSetCustomDomain', () => {
   beforeEach(() => vi.clearAllMocks());
 
   const fakeClientManager = {} as CosmosClientManager;
-  const fakeSigner = { getAccounts: vi.fn() };
 
   function options(): ToolExecutorOptions {
     return {
       clientManager: fakeClientManager,
       address: ADDR,
-      getOfflineSigner: () => fakeSigner as any,
+    };
+  }
+
+  function monoResult(overrides: Partial<{ lease_uuid: string; service_name: string; custom_domain: string; transactionHash: string; code: number }> = {}) {
+    return {
+      lease_uuid: 'lu1',
+      service_name: '',
+      custom_domain: 'app.example.com',
+      transactionHash: 'HASH123',
+      code: 0,
+      ...overrides,
     };
   }
 
@@ -360,29 +370,15 @@ describe('executeConfirmedSetCustomDomain', () => {
     expect(r.success).toBe(false);
   });
 
-  it('returns error if getOfflineSigner missing', async () => {
-    const r = await executeConfirmedSetCustomDomain(
-      { app_name: 'a', leaseUuid: 'l', serviceName: '', customDomain: 'a.example.com' },
-      fakeClientManager,
-      { clientManager: fakeClientManager, address: ADDR },
-    );
-    expect(r.success).toBe(false);
-    if (!r.success) expect(r.error).toMatch(/signer/i);
-  });
-
-  it('broadcasts setItemCustomDomain and returns displayCard on success', async () => {
-    vi.mocked(setItemCustomDomain).mockResolvedValue({
-      success: true,
-      transactionHash: 'HASH123',
-      events: [],
-    });
+  it('delegates to mono setItemCustomDomain and returns displayCard on success', async () => {
+    vi.mocked(setItemCustomDomain).mockResolvedValue(monoResult({ service_name: 'web' }));
     const r = await executeConfirmedSetCustomDomain(
       { app_name: 'myapp', leaseUuid: 'lu1', serviceName: 'web', customDomain: 'app.example.com', expectedCnameTarget: 'auto.foo' },
       fakeClientManager,
       options(),
     );
     expect(r.success).toBe(true);
-    expect(setItemCustomDomain).toHaveBeenCalledWith(fakeSigner, ADDR, 'lu1', 'web', 'app.example.com');
+    expect(setItemCustomDomain).toHaveBeenCalledWith(fakeClientManager, 'lu1', 'app.example.com', { serviceName: 'web' });
     if (r.success && !r.requiresConfirmation) {
       expect(r.displayCard?.type).toBe('custom_domain');
       if (r.displayCard?.type === 'custom_domain') {
@@ -396,6 +392,28 @@ describe('executeConfirmedSetCustomDomain', () => {
     }
   });
 
+  it('passes clear: true when customDomain is empty', async () => {
+    vi.mocked(setItemCustomDomain).mockResolvedValue(monoResult({ custom_domain: '' }));
+    const r = await executeConfirmedSetCustomDomain(
+      { app_name: 'myapp', leaseUuid: 'lu1', serviceName: '', customDomain: '' },
+      fakeClientManager,
+      options(),
+    );
+    expect(r.success).toBe(true);
+    expect(setItemCustomDomain).toHaveBeenCalledWith(fakeClientManager, 'lu1', '', { clear: true });
+  });
+
+  it('does not pass serviceName option when empty (legacy 1-item lease)', async () => {
+    vi.mocked(setItemCustomDomain).mockResolvedValue(monoResult());
+    await executeConfirmedSetCustomDomain(
+      { app_name: 'myapp', leaseUuid: 'lu1', serviceName: '', customDomain: 'a.example.com' },
+      fakeClientManager,
+      options(),
+    );
+    const callArgs = vi.mocked(setItemCustomDomain).mock.calls[0];
+    expect(callArgs[3]).toEqual({});
+  });
+
   it('rejects non-string customDomain in the confirmed path', async () => {
     const r = await executeConfirmedSetCustomDomain(
       { app_name: 'myapp', leaseUuid: 'lu1', serviceName: '', customDomain: null },
@@ -407,11 +425,7 @@ describe('executeConfirmedSetCustomDomain', () => {
   });
 
   it('uses ALIAS / ANAME / flattened wording in success message when warning is set (apex)', async () => {
-    vi.mocked(setItemCustomDomain).mockResolvedValue({
-      success: true,
-      transactionHash: 'HASH-APEX',
-      events: [],
-    });
+    vi.mocked(setItemCustomDomain).mockResolvedValue(monoResult({ custom_domain: 'example.com', transactionHash: 'HASH-APEX' }));
     const r = await executeConfirmedSetCustomDomain(
       {
         app_name: 'myapp', leaseUuid: 'lu1', serviceName: '', customDomain: 'example.com',
@@ -428,11 +442,7 @@ describe('executeConfirmedSetCustomDomain', () => {
   });
 
   it('does not include displayCard when clearing', async () => {
-    vi.mocked(setItemCustomDomain).mockResolvedValue({
-      success: true,
-      transactionHash: 'HASH456',
-      events: [],
-    });
+    vi.mocked(setItemCustomDomain).mockResolvedValue(monoResult({ custom_domain: '', transactionHash: 'HASH456' }));
     const r = await executeConfirmedSetCustomDomain(
       { app_name: 'myapp', leaseUuid: 'lu1', serviceName: '', customDomain: '' },
       fakeClientManager,
@@ -445,11 +455,8 @@ describe('executeConfirmedSetCustomDomain', () => {
     }
   });
 
-  it('returns error on broadcast failure', async () => {
-    vi.mocked(setItemCustomDomain).mockResolvedValue({
-      success: false,
-      error: 'reserved suffix',
-    });
+  it('returns error when mono helper throws (validation or network)', async () => {
+    vi.mocked(setItemCustomDomain).mockRejectedValue(new Error('reserved suffix'));
     const r = await executeConfirmedSetCustomDomain(
       { app_name: 'myapp', leaseUuid: 'lu1', serviceName: '', customDomain: 'a.example.com' },
       fakeClientManager,
@@ -457,5 +464,16 @@ describe('executeConfirmedSetCustomDomain', () => {
     );
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error).toBe('reserved suffix');
+  });
+
+  it('returns error when mono helper resolves with non-zero code (chain rejection)', async () => {
+    vi.mocked(setItemCustomDomain).mockResolvedValue(monoResult({ code: 5 }));
+    const r = await executeConfirmedSetCustomDomain(
+      { app_name: 'myapp', leaseUuid: 'lu1', serviceName: '', customDomain: 'a.example.com' },
+      fakeClientManager,
+      options(),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/code 5/);
   });
 });

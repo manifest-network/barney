@@ -9,14 +9,12 @@ import { AppShell } from './AppShell';
 const mockSetClientManager = vi.fn();
 const mockSetAddress = vi.fn();
 const mockSetSignArbitrary = vi.fn();
-const mockSetGetOfflineSigner = vi.fn();
 
 vi.mock('../../hooks/useAI', () => ({
   useAI: () => ({
     setClientManager: mockSetClientManager,
     setAddress: mockSetAddress,
     setSignArbitrary: mockSetSignArbitrary,
-    setGetOfflineSigner: mockSetGetOfflineSigner,
   }),
 }));
 

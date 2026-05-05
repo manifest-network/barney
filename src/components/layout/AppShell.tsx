@@ -35,7 +35,7 @@ function isPopupClosedError(msg: string): boolean {
 }
 
 export function AppShell() {
-  const { setClientManager, setAddress, setSignArbitrary, setGetOfflineSigner } = useAI();
+  const { setClientManager, setAddress, setSignArbitrary } = useAI();
   const { clientManager, address } = useManifestMCP();
   const { signArbitrary, isWalletConnected, isWalletConnecting, openView, getOfflineSigner, status, message, disconnect } = useChain(CHAIN_NAME);
   const toast = useToast();
@@ -55,16 +55,9 @@ export function AppShell() {
     [signArbitrary]
   );
 
-  // Ref-backed stable getOfflineSigner — cosmos-kit returns a fresh closure on most renders.
+  // Account-setup flow needs direct getOfflineSigner access via a ref.
   const getOfflineSignerRef = useRef(getOfflineSigner);
   useEffect(() => { getOfflineSignerRef.current = getOfflineSigner; }, [getOfflineSigner]);
-  const stableGetOfflineSigner = useCallback(() => {
-    const fn = getOfflineSignerRef.current;
-    if (typeof fn !== 'function') {
-      throw new Error('Wallet signer not available — reconnect your wallet.');
-    }
-    return fn();
-  }, []);
 
   // Invalidate chain-scoped caches when the connected address changes (different
   // wallet, possibly different chain → different governance Params).
@@ -72,15 +65,13 @@ export function AppShell() {
     invalidateReservedDomainSuffixesCache();
   }, [address]);
 
-  // Sync wallet state with AI context. `getOfflineSigner` is intentionally not in deps —
-  // we route through `stableGetOfflineSigner` (ref-backed) to avoid effect churn.
+  // Sync wallet state with AI context.
   useEffect(() => {
     setClientManager(clientManager);
     setAddress(address);
     const canSign = isWalletConnected && typeof signArbitrary === 'function';
     setSignArbitrary(canSign ? wrappedSignArbitrary : undefined);
-    setGetOfflineSigner(isWalletConnected ? stableGetOfflineSigner : undefined);
-  }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, setGetOfflineSigner, wrappedSignArbitrary, stableGetOfflineSigner]);
+  }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, wrappedSignArbitrary]);
 
   // Watch for wallet connection errors (e.g. Safari popup blocking)
   const prevStatusRef = useRef(status);

@@ -14,7 +14,7 @@ export type { TxEvent };
 import { Unit } from './sku';
 export { Unit };
 
-const { MsgFundCredit, MsgSetItemCustomDomain } = liftedinit.billing.v1;
+const { MsgFundCredit } = liftedinit.billing.v1;
 
 /**
  * Discriminated union for transaction results.
@@ -94,28 +94,10 @@ async function signAndBroadcast(
   }
 }
 
-/**
- * Broadcast MsgSetItemCustomDomain via the manifestjs 2.4.1 typed registry.
- *
- * Why this path instead of `cosmosTx(clientManager, 'billing', 'set-item-custom-domain', ...)`?
- * As of manifest-mcp-mono 0.7.0 the helper has no `set-item-custom-domain`
- * subcommand — the chain message landed in manifestjs 2.4.1 (ENG-58/56) ahead
- * of mono adoption (tracked in ENG-60). Even after mono ships the subcommand,
- * keep the typed path: it pins the field names at compile time, gives
- * structured arguments, and avoids the string-array argument indirection that
- * `cosmosTx` requires.
- */
-export async function setItemCustomDomain(
-  signer: OfflineSigner,
-  sender: string,
-  leaseUuid: string,
-  serviceName: string,
-  customDomain: string
-): Promise<TxResult> {
-  return signAndBroadcast(signer, sender, [
-    buildMsg(MsgSetItemCustomDomain, { sender, leaseUuid, serviceName, customDomain }),
-  ]);
-}
+// MsgSetItemCustomDomain broadcasts now go through mono's
+// `core.setItemCustomDomain(clientManager, ...)` helper (mono 0.8.0+) so
+// validation, canonicalization, and result shape stay consistent with the MCP
+// surface and CLI. See executeConfirmedSetCustomDomain in compositeTransactions.
 
 export async function fundCredit(
   signer: OfflineSigner,

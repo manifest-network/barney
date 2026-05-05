@@ -29,7 +29,7 @@ export async function confirmActionFn(get: Get, set: Set, editedManifestJson?: s
     return;
   }
 
-  const { address, signArbitrary, getOfflineSigner } = get();
+  const { address, signArbitrary } = get();
   const { messageId } = pendingConfirmation;
 
   // Clone action to avoid mutating React state; apply user edits if present
@@ -57,7 +57,6 @@ export async function confirmActionFn(get: Get, set: Set, editedManifestJson?: s
         clientManager,
         address,
         signArbitrary,
-        getOfflineSigner,
         onProgress: (progress) => set({ deployProgress: { ...progress } }),
         appRegistry: getAppRegistryAccess(),
         signal: get().abortController?.signal,
