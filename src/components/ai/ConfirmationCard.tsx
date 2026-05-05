@@ -10,6 +10,8 @@ import { ManifestEditor } from './ManifestEditor';
 import { StackManifestEditor } from './StackManifestEditor';
 import { validateAll, validateCustomDomainFormat, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { getDisplaySafeArgs } from '../../ai/tools';
+import { CustomDomainBranch, CloudflareProxyHint } from './ConfirmationCardCustomDomain';
+import { parseCustomDomainArgs } from './customDomainBranchData';
 import {
   parseEditableManifest, serializeManifest,
   parseEditableStackManifest, serializeStackManifest,
@@ -63,125 +65,6 @@ function parseStackManifest(action: PendingAction): Record<string, StackServiceS
 }
 
 
-interface CustomDomainBranchData {
-  appName: string;
-  serviceName: string;
-  customDomain: string;
-  currentDomain: string;
-  expectedCnameTarget?: string;
-  warning?: string;
-}
-
-function parseCustomDomainArgs(action: PendingAction): CustomDomainBranchData | null {
-  if (action.toolName !== 'set_custom_domain') return null;
-  const args = action.args;
-  return {
-    appName: typeof args.app_name === 'string' ? args.app_name : '',
-    serviceName: typeof args.serviceName === 'string' ? args.serviceName : '',
-    customDomain: typeof args.customDomain === 'string' ? args.customDomain : '',
-    currentDomain: typeof args.currentDomain === 'string' ? args.currentDomain : '',
-    expectedCnameTarget: typeof args.expectedCnameTarget === 'string' ? args.expectedCnameTarget : undefined,
-    warning: typeof args.warning === 'string' ? args.warning : undefined,
-  };
-}
-
-function CustomDomainBranch({ data }: { data: CustomDomainBranchData }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard();
-  const isClear = data.customDomain === '';
-  const target = data.expectedCnameTarget ?? '<provider FQDN — appears once the app is running>';
-  const showTarget = !isClear && data.expectedCnameTarget;
-  // Apex domains can't take a plain CNAME (RFC 1034 §3.6.2); validateAll surfaces a
-  // warning we use as the apex signal so the DNS record table reads correctly.
-  const isApex = !!data.warning;
-  const recordType = apexRecordKindLabel(isApex);
-
-  return (
-    <div className="confirmation-details">
-      {isClear ? (
-        <div className="confirmation-payload" role="alert">
-          <p className="text-sm text-warning">
-            This will clear <code className="font-mono">{data.currentDomain}</code> from <code className="font-mono">{data.appName}</code>.
-            HTTPS at that hostname will stop working until you point it at a new lease.
-          </p>
-        </div>
-      ) : (
-        <>
-          <p className="confirmation-details-title">DNS record to add at your registrar</p>
-          <table className="custom-domain-dns-table" aria-label="DNS record">
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Name</th>
-                <th>Value</th>
-                <th>TTL</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><code className="font-mono">{recordType}</code></td>
-                <td>
-                  <code className="font-mono">{data.customDomain}</code>
-                  {' '}
-                  <button
-                    type="button"
-                    onClick={() => copyToClipboard(data.customDomain)}
-                    className="btn-icon"
-                    aria-label="Copy domain"
-                    title="Copy"
-                  >
-                    {isCopied(data.customDomain) ? (
-                      <CheckCheck className="w-3.5 h-3.5 text-success" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5 text-muted" />
-                    )}
-                  </button>
-                </td>
-                <td>
-                  <code className="font-mono">{target}</code>
-                  {showTarget && (
-                    <>
-                      {' '}
-                      <button
-                        type="button"
-                        onClick={() => copyToClipboard(data.expectedCnameTarget!)}
-                        className="btn-icon"
-                        aria-label="Copy target"
-                        title="Copy"
-                      >
-                        {isCopied(data.expectedCnameTarget!) ? (
-                          <CheckCheck className="w-3.5 h-3.5 text-success" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5 text-muted" />
-                        )}
-                      </button>
-                    </>
-                  )}
-                </td>
-                <td>Auto / 300</td>
-              </tr>
-            </tbody>
-          </table>
-
-          <p className="text-xs text-muted mt-2">
-            Cloudflare users: turn the orange-cloud proxy <strong>off</strong> for this record. Issuance won't complete with proxy on.
-          </p>
-
-          {data.currentDomain !== '' && (
-            <p className="text-xs text-muted mt-1">
-              Replacing existing domain <code className="font-mono">{data.currentDomain}</code>.
-            </p>
-          )}
-
-          {data.warning && (
-            <p className="text-sm text-warning mt-2" role="alert">
-              {data.warning}
-            </p>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
 
 function InlineCopyButton({ value }: { value: string }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
@@ -502,11 +385,13 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                   <p className="text-xs text-error mt-2" role="alert">{editedDomainError}</p>
                 )}
                 {showSuccessHint && (
-                  <p className="text-xs text-muted mt-2">
-                    Will attach right after the lease is created. The provider FQDN appears
-                    in the deploy result — add {recordKind} at your registrar pointing at it,
-                    with Cloudflare proxy/orange-cloud OFF.
-                  </p>
+                  <>
+                    <p className="text-xs text-muted mt-2">
+                      Will attach right after the lease is created. The provider FQDN appears
+                      in the deploy result — add {recordKind} at your registrar pointing at it.
+                    </p>
+                    <CloudflareProxyHint inline />
+                  </>
                 )}
                 {asyncDomainWarning && editedDomainHasContent && !editedDomainError && !asyncDomainPending && (
                   <p className="text-sm text-warning mt-2" role="alert">{asyncDomainWarning}</p>

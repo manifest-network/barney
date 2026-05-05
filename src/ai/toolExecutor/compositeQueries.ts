@@ -27,7 +27,7 @@ import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withRetry, withTimeout, throwIfAborted } from '../../api/utils';
 import { getProviderAuthToken } from './utils';
-import type { ToolResult, ToolExecutorOptions } from './types';
+import type { ToolResult, ToolExecutorOptions, ToolData } from './types';
 import type { MessageCard } from '../../contexts/aiTypes';
 
 /**
@@ -75,39 +75,37 @@ export async function executeListApps(
     apps = apps.filter((a) => a.status === stateFilter);
   }
 
-  return {
-    success: true,
-    data: {
-      apps: apps.map((a) => {
-        let image: string | undefined;
-        if (a.manifest) {
-          try {
-            const manifest = JSON.parse(a.manifest);
-            if (typeof manifest.image === 'string') {
-              image = manifest.image;
-            } else if (manifest.services && typeof manifest.services === 'object') {
-              // Stack: join service images (e.g. "nginx + postgres")
-              const images = Object.values(manifest.services as Record<string, Record<string, unknown>>)
-                .map((svc) => typeof svc.image === 'string' ? svc.image : null)
-                .filter(Boolean);
-              if (images.length > 0) image = images.join(' + ');
-            }
-          } catch (error) {
-            logError('compositeQueries.executeListApps.parseManifest', error);
+  const data: ToolData<'list_apps'> = {
+    apps: apps.map((a) => {
+      let image: string | undefined;
+      if (a.manifest) {
+        try {
+          const manifest = JSON.parse(a.manifest);
+          if (typeof manifest.image === 'string') {
+            image = manifest.image;
+          } else if (manifest.services && typeof manifest.services === 'object') {
+            // Stack: join service images (e.g. "nginx + postgres")
+            const images = Object.values(manifest.services as Record<string, Record<string, unknown>>)
+              .map((svc) => typeof svc.image === 'string' ? svc.image : null)
+              .filter(Boolean);
+            if (images.length > 0) image = images.join(' + ');
           }
+        } catch (error) {
+          logError('compositeQueries.executeListApps.parseManifest', error);
         }
-        return {
-          name: a.name,
-          status: a.status,
-          size: a.size,
-          image,
-          url: a.url,
-          created: new Date(a.createdAt).toISOString(),
-        };
-      }),
-      count: apps.length,
-    },
+      }
+      return {
+        name: a.name,
+        status: a.status,
+        size: a.size,
+        image,
+        url: a.url,
+        created: new Date(a.createdAt).toISOString(),
+      };
+    }),
+    count: apps.length,
   };
+  return { success: true, data };
 }
 
 /**
@@ -330,19 +328,20 @@ export async function executeAppStatus(
     };
   }
 
+  const data: ToolData<'app_status'> = {
+    name: app.name,
+    status: currentStatus,
+    size: app.size,
+    image,
+    ...(serviceImages ? { serviceImages } : {}),
+    url: connectionUrl || appUrl,
+    chainState,
+    created: new Date(app.createdAt).toISOString(),
+    ...(customDomains.length > 0 ? { customDomains } : {}),
+  };
   return {
     success: true,
-    data: {
-      name: app.name,
-      status: currentStatus,
-      size: app.size,
-      image,
-      ...(serviceImages ? { serviceImages } : {}),
-      url: connectionUrl || appUrl,
-      chainState,
-      created: new Date(app.createdAt).toISOString(),
-      ...(customDomains.length > 0 ? { customDomains } : {}),
-    },
+    data,
     ...(displayCard ? { displayCard } : {}),
   };
 }
@@ -400,15 +399,13 @@ export async function executeGetBalance(
     }
   }
 
-  return {
-    success: true,
-    data: {
-      credits,
-      spending_per_hour: Math.round(spendingPerHour * 100) / 100,
-      hours_remaining: hoursRemaining,
-      running_apps: runningApps,
-    },
+  const data: ToolData<'get_balance'> = {
+    credits,
+    spending_per_hour: Math.round(spendingPerHour * 100) / 100,
+    hours_remaining: hoursRemaining,
+    running_apps: runningApps,
   };
+  return { success: true, data };
 }
 
 /**
@@ -604,13 +601,14 @@ export async function executeGetLogs(
     }
   }
 
+  const data: ToolData<'get_logs'> = {
+    app_name: app.name,
+    logs: llmLogs,
+    truncated,
+  };
   return {
     success: true,
-    data: {
-      app_name: app.name,
-      logs: llmLogs,
-      truncated,
-    },
+    data,
     displayCard: {
       type: 'logs',
       data: {
