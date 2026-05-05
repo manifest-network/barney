@@ -97,4 +97,39 @@ describe('DomainRow', () => {
     const group = container.querySelector('[role="group"]') as HTMLElement;
     expect(group.getAttribute('aria-label')).toMatch(/app\.example\.com.*Issuing certificate/);
   });
+
+  it('renders the detail line under the row when set', () => {
+    flushSync(() => {
+      root.render(createElement(DomainRow, {
+        fqdn: 'app.example.com',
+        status: 'pending_dns',
+        detail: 'Pointed at wrong.host — expected auto.barney0.manifest0.net',
+      }));
+    });
+    const detail = container.querySelector('.domain-row__detail');
+    expect(detail).not.toBeNull();
+    expect(detail?.textContent).toMatch(/Pointed at wrong\.host/);
+  });
+
+  it('omits the detail element when detail is unset', () => {
+    flushSync(() => {
+      root.render(createElement(DomainRow, {
+        fqdn: 'app.example.com',
+        status: 'pending_dns',
+      }));
+    });
+    expect(container.querySelector('.domain-row__detail')).toBeNull();
+  });
+
+  it('includes the detail in the aria-label for screen readers', () => {
+    flushSync(() => {
+      root.render(createElement(DomainRow, {
+        fqdn: 'app.example.com',
+        status: 'pending_dns',
+        detail: 'Pointed at wrong.host — expected good.host',
+      }));
+    });
+    const group = container.querySelector('[role="group"]') as HTMLElement;
+    expect(group.getAttribute('aria-label')).toMatch(/Pending DNS\. Pointed at wrong\.host/);
+  });
 });

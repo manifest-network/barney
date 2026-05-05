@@ -86,4 +86,18 @@ describe('DeployDnsStatusPill', () => {
     });
     expect(container.textContent).toMatch(/web/);
   });
+
+  it('surfaces the wrong-target detail from the dnsStatuses slice', () => {
+    dnsStatuses = new Map([
+      ['lease-1::app.example.com', {
+        kind: 'pending_dns',
+        expectedCnameTarget: 'auto.barney0.manifest0.net',
+        detail: 'Pointed at wrong.host — expected auto.barney0.manifest0.net',
+      }],
+    ]);
+    flushSync(() => {
+      root.render(createElement(DeployDnsStatusPill, { data: makeData() }));
+    });
+    expect(container.textContent).toMatch(/Pointed at wrong\.host/);
+  });
 });

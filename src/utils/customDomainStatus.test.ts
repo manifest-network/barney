@@ -19,14 +19,27 @@ describe('computeStatus', () => {
     expect(computeStatus({ dns: { result: 'ok', cname: 'foo.bar' }, https: { result: 'ok' } })).toEqual({ kind: 'active' });
   });
 
-  it('returns pending_dns when DNS points at wrong CNAME target', () => {
+  it('returns pending_dns with mismatch detail when DNS points at wrong CNAME target', () => {
     expect(
       computeStatus({
         dns: { result: 'ok', cname: 'wrong.host' },
         https: { result: 'ok' },
         expectedCname: 'expected.host',
       }),
-    ).toEqual({ kind: 'pending_dns' });
+    ).toEqual({
+      kind: 'pending_dns',
+      detail: 'Pointed at wrong.host — expected expected.host',
+    });
+  });
+
+  it('uses the normalized actual/expected (case-insensitive, trailing-dot stripped) in the detail', () => {
+    const r = computeStatus({
+      dns: { result: 'ok', cname: 'Wrong.Host.' },
+      https: { result: 'ok' },
+      expectedCname: 'Expected.Host',
+    });
+    expect(r.kind).toBe('pending_dns');
+    expect(r.detail).toBe('Pointed at wrong.host — expected expected.host');
   });
 
   it('treats matching cname (case-insensitive, trailing-dot tolerant) as active', () => {
@@ -48,7 +61,7 @@ describe('computeStatus', () => {
     ).toEqual({ kind: 'active' });
   });
 
-  it('leaves detail unset on the client-side compute (forward-compat for fred)', () => {
+  it('leaves detail unset when there is no mismatch to report', () => {
     const r = computeStatus({ dns: { result: 'ok' }, https: { result: 'ok' } });
     expect(r.detail).toBeUndefined();
   });

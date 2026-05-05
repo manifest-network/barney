@@ -182,7 +182,11 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
 
     if (next.kind === 'pending_dns') {
       pendingSinceRef.current ??= Date.now();
-      setShowStuckHint(Date.now() - pendingSinceRef.current > STUCK_THRESHOLD_MS);
+      // If the reducer attached a `detail` (e.g. wrong-target diff), it has
+      // already told the user what's wrong — the "verify with dig" hint reads
+      // as a network problem and is misleading here.
+      const stuck = !next.detail && Date.now() - pendingSinceRef.current > STUCK_THRESHOLD_MS;
+      setShowStuckHint(stuck);
     } else {
       pendingSinceRef.current = null;
       setShowStuckHint(false);
@@ -303,6 +307,7 @@ function MultiDomainView({ data }: { data: CustomDomainCardData }) {
               fqdn={d.customDomain}
               expectedCnameTarget={d.expectedCnameTarget ?? report?.expectedCnameTarget}
               status={report?.kind ?? 'pending_dns'}
+              detail={report?.detail}
               serviceName={d.serviceName !== '' ? d.serviceName : undefined}
               actions={(
                 <>

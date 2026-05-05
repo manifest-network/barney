@@ -65,6 +65,7 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
           serviceName,
           kind: report.kind,
           expectedCnameTarget,
+          ...(report.detail ? { detail: report.detail } : {}),
         };
         return entry;
       } catch (err) {

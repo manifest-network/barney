@@ -33,6 +33,7 @@ export const DeployDnsStatusPill = memo(function DeployDnsStatusPill({ data }: D
         fqdn={data.fqdn}
         expectedCnameTarget={target}
         status={status}
+        detail={report?.detail}
         serviceName={data.serviceName !== '' ? data.serviceName : undefined}
         inline
       />

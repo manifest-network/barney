@@ -30,6 +30,9 @@ export interface DnsStatusEntry {
   /** The provider FQDN the user's CNAME should point at. May be undefined
    *  briefly while connection metadata refreshes. */
   expectedCnameTarget?: string;
+  /** Free-form sub-reason from `computeStatus` (today: only set on the
+   *  wrong-target case, future: server-side reasons like "acme_rate_limited"). */
+  detail?: string;
 }
 
 export const dnsStatusKey = (leaseUuid: string, customDomain: string) =>

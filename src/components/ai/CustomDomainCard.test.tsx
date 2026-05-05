@@ -367,4 +367,61 @@ describe('CustomDomainCard', () => {
 
     expect(container.textContent).toMatch(/Waiting for ACME challenge/);
   });
+
+  it('shows the wrong-target diff and suppresses the stuck-hint when detail is set', async () => {
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok', cname: 'wrong.host' });
+    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' });
+    vi.mocked(computeStatus).mockReturnValue({
+      kind: 'pending_dns',
+      detail: 'Pointed at wrong.host — expected auto.barney0.manifest0.net',
+    });
+
+    // Force the "stuck threshold has elapsed" branch — Date.now() far in the future.
+    const realNow = Date.now;
+    Date.now = () => realNow() + 10 * 60 * 1000;
+
+    try {
+      await act(async () => {
+        root.render(createElement(CustomDomainCard, { data: makeData() }));
+      });
+      await act(async () => { await pollFn(); });
+
+      // Detail is rendered…
+      expect(container.textContent).toMatch(/Pointed at wrong\.host/);
+      // …but the misleading "verify with dig" hint is not.
+      expect(container.textContent).not.toMatch(/verify with/i);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  describe('multi-domain consolidated view detail', () => {
+    it('surfaces the wrong-target detail per row from dnsStatuses', () => {
+      dnsStatuses = new Map([
+        ['lease-1::web.example.com', {
+          kind: 'active',
+          expectedCnameTarget: 'web.auto.barney0.manifest0.net',
+        }],
+        ['lease-1::api.example.com', {
+          kind: 'pending_dns',
+          expectedCnameTarget: 'api.auto.barney0.manifest0.net',
+          detail: 'Pointed at wrong.host — expected api.auto.barney0.manifest0.net',
+        }],
+      ]);
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, {
+          data: makeData({
+            fqdn: '',
+            domains: [
+              { serviceName: 'web', customDomain: 'web.example.com' },
+              { serviceName: 'api', customDomain: 'api.example.com' },
+            ],
+          }),
+        }));
+      });
+      expect(container.textContent).toMatch(/Pointed at wrong\.host/);
+    });
+  });
 });

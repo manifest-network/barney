@@ -177,7 +177,13 @@ export function computeStatus(input: ComputeStatusInput): CustomDomainStatusRepo
     const expected = normalizeFqdn(expectedCname);
     const actual = dns.cname ? normalizeFqdn(dns.cname) : undefined;
     if (actual && actual !== expected) {
-      return { kind: 'pending_dns' };
+      // Wrong target: tell the user *what* they typed and *what we want*.
+      // Without this, the card is indistinguishable from "no record at all"
+      // and the 5-min "verify with dig" hint reads as a network problem.
+      return {
+        kind: 'pending_dns',
+        detail: `Pointed at ${actual} — expected ${expected}`,
+      };
     }
   }
 

@@ -252,7 +252,12 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                 ? (app.customDomains ?? [])
                     .map((d) => {
                       const r = dnsStatuses.get(dnsStatusKey(app.leaseUuid, d.customDomain));
-                      return `${d.customDomain}: ${r ? DNS_LABELS[r.kind] : 'checking…'}`;
+                      const label = r ? DNS_LABELS[r.kind] : 'checking…';
+                      // Surface mismatch detail in the tooltip so users see
+                      // "wrong target" without needing to open the card.
+                      return r?.detail
+                        ? `${d.customDomain}: ${label} — ${r.detail}`
+                        : `${d.customDomain}: ${label}`;
                     })
                     .join('\n')
                 : undefined;

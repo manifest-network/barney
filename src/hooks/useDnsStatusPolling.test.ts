@@ -121,4 +121,23 @@ describe('useDnsStatusPolling', () => {
     const next = setDnsStatuses.mock.calls[0][0] as Map<string, { kind: string }>;
     expect(next.get('lease-1::app.example.com')?.kind).toBe('active');
   });
+
+  it('propagates the report detail (e.g. wrong-target diff) into the store entry', async () => {
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok', cname: 'wrong.host' } as any);
+    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' } as any);
+    vi.mocked(computeStatus).mockReturnValue({
+      kind: 'pending_dns',
+      detail: 'Pointed at wrong.host — expected auto.barney0.manifest0.net',
+    } as any);
+
+    mounted = mountWith([makeApp()]);
+    await pollFn();
+
+    const next = setDnsStatuses.mock.calls[0][0] as Map<string, { kind: string; detail?: string }>;
+    const entry = next.get('lease-1::app.example.com');
+    expect(entry?.kind).toBe('pending_dns');
+    expect(entry?.detail).toBe('Pointed at wrong.host — expected auto.barney0.manifest0.net');
+  });
 });
