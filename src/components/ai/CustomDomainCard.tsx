@@ -229,9 +229,11 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
       {showStuckHint && (
         <p className="custom-domain-card__hint" role="alert">
           <AlertCircle className="w-3 h-3 inline mr-1" aria-hidden="true" />
-          DNS not visible yet. Verify with{' '}
+          DNS not visible yet. Public resolvers cache "not found" responses for several minutes
+          after a record is created — this often resolves itself. If{' '}
           <code className="font-mono">dig {data.fqdn}</code>{' '}
-          locally — if the record is published but doesn't appear here, your network may be blocking the check.
+          shows the record locally but Barney still doesn't see it, your network may be blocking
+          the check.
         </p>
       )}
 

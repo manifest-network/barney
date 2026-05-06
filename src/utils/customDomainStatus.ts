@@ -5,16 +5,51 @@ import { normalizeFqdn } from './connection';
  *
  * Until fred ships a server-side `domain_status` endpoint, status is
  * computed from two probes:
- *   1. DNS resolution via Cloudflare DoH (CNAME / A / AAAA)
+ *   1. DNS resolution via DoH against multiple public resolvers (CNAME / A / AAAA)
  *   2. Opaque HTTPS probe (`fetch(..., { mode: 'no-cors' })`)
+ *
+ * **Why multiple DoH providers.** Public recursive resolvers do RFC 2308
+ * negative caching: an `NXDOMAIN` is cached for `min(SOA.MINIMUM, SOA.TTL)`,
+ * which on a cheap registrar's SOA can be 30 min. If we polled only one
+ * provider, a user who added the record T seconds after we first queried
+ * would be stuck on `pending_dns` until that provider's cache expired.
+ *
+ * Querying Cloudflare AND Google in parallel gives us two independent caches.
+ * If either resolver sees the record, we take its answer — the other's stale
+ * NXDOMAIN doesn't matter. Worst case (both have it cached) only happens if
+ * both polled at nearly the same instant pre-create, which is much narrower
+ * than a single provider's window. (Quad9's JSON DoH retired 2025-05; we'd
+ * add a third when another no-auth JSON resolver becomes stable.)
  *
  * A `pending_dns` state means "DNS not visible yet" — could be because:
  *   - The user hasn't added the CNAME
+ *   - Both providers have a stale NXDOMAIN cache (resolves itself within minutes)
  *   - DoH or HTTPS probes are blocked by their network
- * The card surfaces a "verify locally with `dig`" hint after sustained `pending_dns`.
+ * The card surfaces a hint after sustained `pending_dns`.
  */
 
-const CLOUDFLARE_DOH = 'https://cloudflare-dns.com/dns-query';
+interface DohProvider {
+  /** Short identifier for logs. */
+  name: string;
+  /** Endpoint URL; receives `?name=&type=` query params. */
+  url: string;
+  /** Per-provider headers (e.g. Accept: application/dns-json for Cloudflare). */
+  headers: HeadersInit;
+}
+
+/**
+ * Resolvers we fan out to. Both speak the same JSON response shape (the
+ * de-facto standard from Google's pre-RFC-8484 spec, also implemented by
+ * Cloudflare). Adding a provider: append a `DohProvider` here — no other
+ * change required.
+ */
+const DOH_PROVIDERS: readonly DohProvider[] = [
+  // Cloudflare 1.1.1.1 — JSON via `Accept: application/dns-json`
+  { name: 'cloudflare', url: 'https://cloudflare-dns.com/dns-query', headers: { Accept: 'application/dns-json' } },
+  // Google 8.8.8.8 — JSON natively at /resolve (independent cache from Cloudflare)
+  { name: 'google', url: 'https://dns.google/resolve', headers: {} },
+];
+
 const PROBE_TIMEOUT_MS = 5000;
 
 export type CustomDomainStatusKind = 'pending_dns' | 'issuing_cert' | 'active' | 'failed';
@@ -60,12 +95,12 @@ interface DohResponse {
   Answer?: DohAnswer[];
 }
 
-async function fetchDoh(fqdn: string, type: 'A' | 'AAAA' | 'CNAME', signal: AbortSignal): Promise<DohResponse | null> {
-  const url = `${CLOUDFLARE_DOH}?name=${encodeURIComponent(fqdn)}&type=${type}`;
+async function fetchDoh(provider: DohProvider, fqdn: string, type: 'A' | 'AAAA' | 'CNAME', signal: AbortSignal): Promise<DohResponse | null> {
+  const url = `${provider.url}?name=${encodeURIComponent(fqdn)}&type=${type}`;
   try {
     const resp = await fetch(url, {
       method: 'GET',
-      headers: { Accept: 'application/dns-json' },
+      headers: provider.headers,
       signal,
     });
     if (!resp.ok) return null;
@@ -75,50 +110,79 @@ async function fetchDoh(fqdn: string, type: 'A' | 'AAAA' | 'CNAME', signal: Abor
   }
 }
 
-/** Resolve via Cloudflare DoH. Treats network errors and timeouts as `network_fail`. */
+/** Probe one DoH provider for A + AAAA + CNAME and reduce to a DnsProbeResult. */
+async function probeOneProvider(provider: DohProvider, fqdn: string, signal: AbortSignal): Promise<DnsProbeResult> {
+  const [aRes, aaaaRes, cnameRes] = await Promise.all([
+    fetchDoh(provider, fqdn, 'A', signal),
+    fetchDoh(provider, fqdn, 'AAAA', signal),
+    fetchDoh(provider, fqdn, 'CNAME', signal),
+  ]);
+
+  if (aRes === null && aaaaRes === null && cnameRes === null) {
+    return { result: 'network_fail' };
+  }
+
+  const cnameAnswer = cnameRes?.Answer?.find(a => a.type === 5);
+  const aAnswers = (aRes?.Answer ?? []).filter(a => a.type === 1).map(a => a.data);
+  const aaaaAnswers = (aaaaRes?.Answer ?? []).filter(a => a.type === 28).map(a => a.data);
+  const allAddresses = [...aAnswers, ...aaaaAnswers];
+
+  if (allAddresses.length > 0 || cnameAnswer) {
+    return {
+      result: 'ok',
+      cname: cnameAnswer?.data?.replace(/\.$/, ''),
+      addresses: allAddresses.length > 0 ? allAddresses : undefined,
+    };
+  }
+
+  // No answers — disambiguate by DoH Status (RFC 1035 §4.1.1):
+  //   0 NoError  + empty Answer → NODATA (domain exists but no record of that type) → nxdomain
+  //   3 NXDOMAIN                                                                    → nxdomain
+  //   2 SERVFAIL, 5 REFUSED, others                                                 → network_fail
+  // Treating SERVFAIL/REFUSED as nxdomain would lock the card in pending_dns when the
+  // problem is actually a transient resolver issue — keep the state honest.
+  const statuses = [aRes?.Status, aaaaRes?.Status, cnameRes?.Status].filter(
+    (s): s is number => typeof s === 'number',
+  );
+  const allBenign = statuses.length > 0 && statuses.every((s) => s === 0 || s === 3);
+  return { result: allBenign ? 'nxdomain' : 'network_fail' };
+}
+
+/**
+ * Resolve DNS via multiple public DoH resolvers in parallel.
+ *
+ * Reduction rules:
+ *   - Any provider returns `ok` → take that one (the others' stale NXDOMAIN
+ *     caches are irrelevant once one resolver has the record).
+ *   - All providers return `nxdomain` (or a mix of nxdomain / network_fail
+ *     where at least one is nxdomain) → `nxdomain`. A definitive
+ *     "doesn't exist" from any provider is more authoritative than a
+ *     network failure on the others.
+ *   - All providers return `network_fail` → `network_fail`.
+ *
+ * For multiple `ok` results, we prefer the one with a CNAME answer
+ * (the wrong-target detection in `computeStatus` needs the CNAME to do
+ * anything useful); otherwise the first.
+ */
 export async function resolveDnsViaDoh(fqdn: string, signal?: AbortSignal): Promise<DnsProbeResult> {
   const ac = new AbortController();
   // Honor an already-aborted external signal — addEventListener wouldn't fire post-hoc.
   if (signal?.aborted) ac.abort();
   const onAbort = () => ac.abort();
-  signal?.addEventListener('abort', onAbort, { once: true });
+  signal?.addEventListener('abort', onAbort);
   const timer = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
 
   try {
-    const [aRes, aaaaRes, cnameRes] = await Promise.all([
-      fetchDoh(fqdn, 'A', ac.signal),
-      fetchDoh(fqdn, 'AAAA', ac.signal),
-      fetchDoh(fqdn, 'CNAME', ac.signal),
-    ]);
-
-    if (aRes === null && aaaaRes === null && cnameRes === null) {
-      return { result: 'network_fail' };
-    }
-
-    const cnameAnswer = cnameRes?.Answer?.find(a => a.type === 5);
-    const aAnswers = (aRes?.Answer ?? []).filter(a => a.type === 1).map(a => a.data);
-    const aaaaAnswers = (aaaaRes?.Answer ?? []).filter(a => a.type === 28).map(a => a.data);
-    const allAddresses = [...aAnswers, ...aaaaAnswers];
-
-    if (allAddresses.length > 0 || cnameAnswer) {
-      return {
-        result: 'ok',
-        cname: cnameAnswer?.data?.replace(/\.$/, ''),
-        addresses: allAddresses.length > 0 ? allAddresses : undefined,
-      };
-    }
-
-    // No answers — disambiguate by DoH Status (RFC 1035 §4.1.1):
-    //   0 NoError  + empty Answer → NODATA (domain exists but no record of that type) → nxdomain
-    //   3 NXDOMAIN                                                                    → nxdomain
-    //   2 SERVFAIL, 5 REFUSED, others                                                 → network_fail
-    // Treating SERVFAIL/REFUSED as nxdomain would lock the card in pending_dns when the
-    // problem is actually a transient resolver issue — keep the state honest.
-    const statuses = [aRes?.Status, aaaaRes?.Status, cnameRes?.Status].filter(
-      (s): s is number => typeof s === 'number',
+    const results = await Promise.all(
+      DOH_PROVIDERS.map((p) => probeOneProvider(p, fqdn, ac.signal)),
     );
-    const allBenign = statuses.length > 0 && statuses.every((s) => s === 0 || s === 3);
-    return { result: allBenign ? 'nxdomain' : 'network_fail' };
+
+    const positive = results.filter((r) => r.result === 'ok');
+    if (positive.length > 0) {
+      return positive.find((r) => r.cname) ?? positive[0];
+    }
+    const anyNxdomain = results.some((r) => r.result === 'nxdomain');
+    return { result: anyNxdomain ? 'nxdomain' : 'network_fail' };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);

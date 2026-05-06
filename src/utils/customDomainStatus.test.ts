@@ -193,6 +193,82 @@ describe('resolveDnsViaDoh', () => {
     const r = await resolveDnsViaDoh('app.example.com', ac.signal);
     expect(r.result).toBe('network_fail');
   });
+
+  describe('multi-provider rotation', () => {
+    it('queries both Cloudflare and Google in parallel', async () => {
+      fetchSpy.mockImplementation(() =>
+        Promise.resolve(new Response(JSON.stringify({ Status: 3 })) as any),
+      );
+      await resolveDnsViaDoh('app.example.com');
+      const hosts = fetchSpy.mock.calls.map((c: unknown[]) => new URL(String(c[0])).host);
+      expect(hosts).toContain('cloudflare-dns.com');
+      expect(hosts).toContain('dns.google');
+      // Each provider gets its own A + AAAA + CNAME burst → 6 calls total.
+      expect(fetchSpy.mock.calls.length).toBe(6);
+    });
+
+    it('takes a positive answer from one provider when the other returns NXDOMAIN (defeats negative caching)', async () => {
+      fetchSpy.mockImplementation((url: string) => {
+        const u = new URL(url);
+        const isCloudflare = u.host === 'cloudflare-dns.com';
+        // Cloudflare has stale NXDOMAIN cached. Google sees the just-published record.
+        if (isCloudflare) return Promise.resolve(new Response(JSON.stringify({ Status: 3 })) as any);
+        const type = u.searchParams.get('type');
+        const body = type === 'CNAME'
+          ? { Status: 0, Answer: [{ name: 'app.example.com', type: 5, data: 'target.example.net.' }] }
+          : { Status: 0 };
+        return Promise.resolve(new Response(JSON.stringify(body)) as any);
+      });
+      const r = await resolveDnsViaDoh('app.example.com');
+      expect(r.result).toBe('ok');
+      expect(r.cname).toBe('target.example.net');
+    });
+
+    it('prefers the provider answer carrying a CNAME when multiple are positive', async () => {
+      fetchSpy.mockImplementation((url: string) => {
+        const u = new URL(url);
+        const isCloudflare = u.host === 'cloudflare-dns.com';
+        const type = u.searchParams.get('type');
+        // Cloudflare: A only. Google: A + CNAME.
+        if (isCloudflare) {
+          const body = type === 'A'
+            ? { Status: 0, Answer: [{ name: 'app.example.com', type: 1, data: '1.2.3.4' }] }
+            : { Status: 0 };
+          return Promise.resolve(new Response(JSON.stringify(body)) as any);
+        }
+        const body = type === 'CNAME'
+          ? { Status: 0, Answer: [{ name: 'app.example.com', type: 5, data: 'target.example.net.' }] }
+          : type === 'A'
+            ? { Status: 0, Answer: [{ name: 'app.example.com', type: 1, data: '5.6.7.8' }] }
+            : { Status: 0 };
+        return Promise.resolve(new Response(JSON.stringify(body)) as any);
+      });
+      const r = await resolveDnsViaDoh('app.example.com');
+      expect(r.result).toBe('ok');
+      // The CNAME-bearing provider (Google) wins, so we get its cname even
+      // though the other provider also resolved positively.
+      expect(r.cname).toBe('target.example.net');
+    });
+
+    it('returns nxdomain when one provider says NXDOMAIN and the other network_fails (definitive negative wins)', async () => {
+      fetchSpy.mockImplementation((url: string) => {
+        const u = new URL(url);
+        if (u.host === 'cloudflare-dns.com') {
+          return Promise.resolve(new Response(JSON.stringify({ Status: 3 })) as any);
+        }
+        // Google unreachable.
+        return Promise.reject(new TypeError('Failed to fetch'));
+      });
+      const r = await resolveDnsViaDoh('app.example.com');
+      expect(r.result).toBe('nxdomain');
+    });
+
+    it('returns network_fail only when ALL providers fail', async () => {
+      fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'));
+      const r = await resolveDnsViaDoh('app.example.com');
+      expect(r.result).toBe('network_fail');
+    });
+  });
 });
 
 describe('probeHttps', () => {
