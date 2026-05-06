@@ -4,7 +4,7 @@
  * A single-line pill (DomainRow atom) emitted as a `displayCard` from
  * `executeConfirmedDeployApp` when a custom domain was attached during deploy.
  * Reads DNS status from the shared `dnsStatuses` store slice driven by the
- * sidebar's polling loop — no per-message poll loops, no double-polling.
+ * polling loop in MainLayout — no per-message poll loops, no double-polling.
  *
  * The user sees real-time DNS state right where the deploy success lands,
  * without needing to scroll up to the sidebar or run `app_status`.

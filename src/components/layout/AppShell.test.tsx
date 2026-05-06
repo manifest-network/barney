@@ -91,8 +91,10 @@ function render() {
  * `vi.dynamicImportSettled()`, the canonical vitest helper that awaits all
  * in-flight dynamic imports — no fixed timeout, no race.
  *
- * NOTE: vi.useRealTimers() is required because other test files may leave
- * fake timers active in parallel mode. */
+ * The `vi.useRealTimers()` call below is defensive: another test file in
+ * parallel mode may have left fake timers active. It's no longer required
+ * by the import-wait itself (dynamicImportSettled doesn't depend on the
+ * timer queue), but it stays as a cheap safeguard against the surprise. */
 async function renderAsync() {
   vi.useRealTimers();
   container = document.createElement('div');

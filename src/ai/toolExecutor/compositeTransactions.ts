@@ -1236,9 +1236,10 @@ export async function executeConfirmedDeployApp(
         'compositeTransactions.executeConfirmedDeployApp'
       );
 
-      // Cache the just-attached custom domain so the sidebar polling driver
-      // sees it without waiting for the user to run `app_status`. Merge
-      // against existing entries — multi-service stacks can have N domains.
+      // Cache the just-attached custom domain so the DNS polling driver
+      // (mounted in MainLayout) sees it without waiting for the user to run
+      // `app_status`. Merge against existing entries — multi-service stacks
+      // can have N domains.
       let customDomainsUpdate: { customDomains: { serviceName: string; customDomain: string }[] } | object = {};
       if (domainAttach.kind === 'attached') {
         const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];

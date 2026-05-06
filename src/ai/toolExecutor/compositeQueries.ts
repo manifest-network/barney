@@ -258,7 +258,7 @@ export async function executeAppStatus(
   }
 
   // Surface custom domains from chain (single seam — see leaseDomains.ts) and
-  // refresh the AppEntry cache so the sidebar polling driver knows what to watch
+  // refresh the AppEntry cache so the DNS polling driver (mounted in MainLayout) knows what to watch
   // without an extra chain round-trip per render.
   const customDomains = getDomainAssignments(lease?.items);
   if (lease) {

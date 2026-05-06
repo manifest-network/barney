@@ -152,7 +152,7 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const { sendMessage, dnsStatuses } = useAI();
 
-  // Read from the shared slice driven by the sidebar's `useDnsStatusPolling`
+  // Read from the shared slice driven by `useDnsStatusPolling` in MainLayout
   // — no local poll loop, no double-probing.
   const report = dnsStatuses.get(dnsStatusKey(data.leaseUuid, data.fqdn));
   const kind = report?.kind ?? 'pending_dns';
