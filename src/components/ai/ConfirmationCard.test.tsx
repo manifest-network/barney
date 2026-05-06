@@ -979,5 +979,46 @@ describe('ConfirmationCard with stack manifest', () => {
         expect(onConfirm.mock.calls[0][0].editedCustomDomainServiceName).toBe('db');
       } finally { cleanup(); }
     });
+
+    it('disables Confirm when a stack has a domain entered but no service picked', async () => {
+      const { container, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['web', 'db'] }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'app.example.com'));
+        await settleAsyncValidation();
+        // Picker stays at the default empty option — Confirm should be disabled.
+        const select = container.querySelector('select[aria-label="Service to attach domain to"]') as HTMLSelectElement;
+        expect(select.value).toBe('');
+        expect(findConfirmBtn(container).disabled).toBe(true);
+      } finally { cleanup(); }
+    });
+
+    it('shows an inline error next to the picker when a stack service is required but unset', async () => {
+      const { container, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['web', 'db'] }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'app.example.com'));
+        await settleAsyncValidation();
+        expect(container.textContent).toMatch(/pick a service/i);
+      } finally { cleanup(); }
+    });
+
+    it('re-enables Confirm once the user picks a service', async () => {
+      const { container, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['web', 'db'] }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'app.example.com'));
+        await settleAsyncValidation();
+        expect(findConfirmBtn(container).disabled).toBe(true);
+
+        const select = container.querySelector('select[aria-label="Service to attach domain to"]') as HTMLSelectElement;
+        flushSync(() => {
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!;
+          setter.call(select, 'web');
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        expect(findConfirmBtn(container).disabled).toBe(false);
+      } finally { cleanup(); }
+    });
   });
 });

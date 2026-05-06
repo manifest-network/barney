@@ -213,6 +213,17 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   const asyncDomainWarning = lastValidated.domain === editedDomainTrimmed ? lastValidated.warning : undefined;
   const editedDomainError = editedDomainFormatError ?? asyncDomainError ?? null;
 
+  // Multi-service stacks need an explicit service selection: without one the
+  // chain receives `MsgSetItemCustomDomain` with no `service_name` and rejects.
+  // The deploy_app TX would still go through, but the domain attach surfaces as
+  // a post-broadcast "attach failed, retry" message — wasted UX. Block confirm
+  // until the user picks one. We don't auto-pick the first service: which item
+  // a domain attaches to is a meaningful choice that should be explicit.
+  const stackServicePickerError = stackServiceNames !== undefined
+    && editedDomainHasContent
+    && !editedDomainFormatError
+    && editedCustomDomainServiceName === '';
+
   const handleConfirm = useCallback(() => {
     const manifestOverride = editedManifest
       ? serializeManifest(editedManifest)
@@ -368,15 +379,23 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                   aria-busy={asyncDomainPending}
                 />
                 {stackServiceNames && editedDomainHasContent && (
-                  <select
-                    value={editedCustomDomainServiceName}
-                    onChange={(e) => setEditedCustomDomainServiceName(e.target.value)}
-                    className="custom-domain-card__input mt-2"
-                    aria-label="Service to attach domain to"
-                  >
-                    <option value="">— pick a service —</option>
-                    {stackServiceNames.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
+                  <>
+                    <select
+                      value={editedCustomDomainServiceName}
+                      onChange={(e) => setEditedCustomDomainServiceName(e.target.value)}
+                      className="custom-domain-card__input mt-2"
+                      aria-label="Service to attach domain to"
+                      aria-invalid={stackServicePickerError}
+                    >
+                      <option value="">— pick a service —</option>
+                      {stackServiceNames.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    {stackServicePickerError && (
+                      <p className="text-xs text-error mt-1" role="alert">
+                        Pick a service to attach the domain to.
+                      </p>
+                    )}
+                  </>
                 )}
                 {asyncDomainPending && !editedDomainError && (
                   <p className="text-xs text-muted mt-2" aria-live="polite">Checking domain…</p>
@@ -415,7 +434,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         <button
           type="button"
           onClick={handleConfirm}
-          disabled={isExecuting || (isDeployApp && (editedDomainError != null || asyncDomainPending))}
+          disabled={isExecuting || (isDeployApp && (editedDomainError != null || asyncDomainPending || stackServicePickerError))}
           className="btn btn-success btn-sm"
         >
           <Check className="w-4 h-4" />
