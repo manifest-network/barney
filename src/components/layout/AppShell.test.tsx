@@ -78,9 +78,19 @@ function render() {
 }
 
 /** Render and wait for React.lazy Suspense to resolve.
- * React.lazy wraps import() in a thenable. We yield to the event loop via
- * setTimeout to let vitest's module loader settle, then re-mount so Suspense
- * renders the resolved component.
+ *
+ * AppShell uses `React.lazy(() => import(...))` for both LandingPage and
+ * MainLayout. The first render triggers the dynamic import; React renders
+ * the Suspense fallback (`null` here) until the import resolves. Once
+ * resolved, the lazy wrapper caches the module and the next render shows
+ * the actual component.
+ *
+ * Earlier this used a 50ms `setTimeout` to "wait for the import" — flaky
+ * under parallel test load because vitest's transformer + transitive imports
+ * (cosmos-kit, ChatPanel, etc.) can settle past that ceiling. Replaced with
+ * `vi.dynamicImportSettled()`, the canonical vitest helper that awaits all
+ * in-flight dynamic imports — no fixed timeout, no race.
+ *
  * NOTE: vi.useRealTimers() is required because other test files may leave
  * fake timers active in parallel mode. */
 async function renderAsync() {
@@ -92,8 +102,8 @@ async function renderAsync() {
   const el = createElement(AppShell);
   flushSync(() => { root.render(el); });
 
-  // Yield to event loop — lets the dynamic import() promise settle
-  await new Promise<void>((r) => { setTimeout(r, 50); });
+  // Wait for the React.lazy dynamic import() to settle.
+  await vi.dynamicImportSettled();
 
   // Re-mount — React.lazy now has the resolved module cached
   flushSync(() => { root.render(null); });
