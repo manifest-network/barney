@@ -9,9 +9,11 @@
  *  - `data.fqdn !== ''` (single-domain) → status display (4-state polling pill,
  *    CNAME line, Change / Remove).
  *
- * Multi-domain reads DNS status from the shared `dnsStatuses` store slice
- * (driven by the sidebar's `useDnsStatusPolling`). Single-domain runs its own
- * polling loop to remain self-contained when mounted in chat history.
+ * Both single-domain and multi-domain views read DNS status from the shared
+ * `dnsStatuses` store slice — the sole writer is `useDnsStatusPolling`,
+ * mounted in `MainLayout`. No per-card polling loops. The single-domain card
+ * additionally tracks its own "stuck" timer locally (a UI-only concern that
+ * doesn't need cross-surface coherence).
  *
  * All three states route mutations through `useAI().sendMessage` so the AI
  * tool flow (validation → ConfirmationCard → broadcast) handles the chain

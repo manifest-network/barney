@@ -84,6 +84,12 @@ export async function withTimeout<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  // The signal can outlive this call (a single AbortController is shared
+  // across many withTimeout calls within a stream cycle). Capture the abort
+  // handler so we can detach it on the success/timeout paths — without this
+  // cleanup, listeners accumulate proportional to the number of withTimeout
+  // calls and only fire (harmlessly) when the controller is finally aborted.
+  let onAbort: (() => void) | undefined;
 
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(
@@ -98,11 +104,8 @@ export async function withTimeout<T>(
           reject(new DOMException(`${label} aborted`, 'AbortError'));
           return;
         }
-        signal.addEventListener(
-          'abort',
-          () => reject(new DOMException(`${label} aborted`, 'AbortError')),
-          { once: true },
-        );
+        onAbort = () => reject(new DOMException(`${label} aborted`, 'AbortError'));
+        signal.addEventListener('abort', onAbort);
       })
     : null;
 
@@ -111,6 +114,9 @@ export async function withTimeout<T>(
   } finally {
     if (timeoutId !== undefined) {
       clearTimeout(timeoutId);
+    }
+    if (signal && onAbort) {
+      signal.removeEventListener('abort', onAbort);
     }
   }
 }

@@ -91,6 +91,35 @@ describe('withTimeout', () => {
     const result = await withTimeout(Promise.resolve('done'), 5000, 'Test', ac.signal);
     expect(result).toBe('done');
   });
+
+  it('removes the abort listener on success path (no leak across repeated calls)', async () => {
+    const ac = new AbortController();
+    const addSpy = vi.spyOn(ac.signal, 'addEventListener');
+    const removeSpy = vi.spyOn(ac.signal, 'removeEventListener');
+
+    // 5 successful calls sharing one signal
+    for (let i = 0; i < 5; i++) {
+      await withTimeout(Promise.resolve(i), 5000, 'Test', ac.signal);
+    }
+
+    // Each attached listener must be detached.
+    const abortAdds = addSpy.mock.calls.filter((c) => c[0] === 'abort');
+    const abortRemoves = removeSpy.mock.calls.filter((c) => c[0] === 'abort');
+    expect(abortAdds.length).toBe(5);
+    expect(abortRemoves.length).toBe(5);
+  });
+
+  it('removes the abort listener on timeout path', async () => {
+    const ac = new AbortController();
+    const removeSpy = vi.spyOn(ac.signal, 'removeEventListener');
+
+    await expect(
+      withTimeout(new Promise(() => undefined), 1, 'Test', ac.signal),
+    ).rejects.toThrow(/timed out/);
+
+    const abortRemoves = removeSpy.mock.calls.filter((c) => c[0] === 'abort');
+    expect(abortRemoves.length).toBe(1);
+  });
 });
 
 describe('throwIfAborted', () => {

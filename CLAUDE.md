@@ -45,8 +45,9 @@ ErrorBoundary
                   │   ├─ AccountSetupOverlay (blocking stepper during first-connect provisioning)
                   │   ├─ LandingPage (when not connected)
                   │   └─ MainLayout (when connected)
+                  │       ├─ useDnsStatusPolling (mounted here, OUTSIDE the sidebar's ErrorBoundary)
                   │       ├─ ErrorBoundary (sidebar isolation)
-                  │       │   └─ AppsSidebar (wallet, credits, running apps; mounts useDnsStatusPolling)
+                  │       │   └─ AppsSidebar (wallet, credits, running apps)
                   │       ├─ Modal (mobile sidebar overlay)
                   │       └─ AIErrorBoundary
                   │           └─ ChatPanel (messages, input, settings)
@@ -225,7 +226,8 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `useBatchSelection` | Manages batch selection state for bulk operations |
 | `useCopyToClipboard` | Clipboard copy with feedback state |
 | `useAccountSetup` | One-shot sequential account setup pipeline — requests faucet tokens (MFX + PWR) and funds credits on first connect. Returns `AccountSetupState` (`isInitialSetup` + `phase`) for the `AccountSetupOverlay`. Setup data persisted to localStorage via `versionedStorage` |
-| `useDnsStatusPolling` | Single polling driver for custom-domain DNS state. Mounted in `AppsSidebar`; iterates running apps with `customDomains` and writes per-domain `DnsStatusEntry` rows into `aiStore.dnsStatuses`. All custom-domain surfaces (sidebar dot, deploy pill, single-domain card, multi-domain card) read from this slice — no per-component poll loops |
+| `useDnsStatusPolling` | Single polling driver for custom-domain DNS state. Mounted in `MainLayout` (outside the sidebar's `ErrorBoundary`, so a sidebar render error doesn't take DNS state down with it). Iterates running apps with `customDomains` and writes per-domain `DnsStatusEntry` rows into `aiStore.dnsStatuses`. All custom-domain surfaces (sidebar dot, deploy pill, single-domain card, multi-domain card) read from this slice — no per-component poll loops |
+| `useRegistryApps` | `useSyncExternalStore` view of the wallet's app registry, kept live via `subscribeToRegistry`. Used by `MainLayout` to feed the DNS polling driver |
 | `useVisibilityPolling` | Tab-aware polling primitive. Pauses while the tab is hidden, resumes on visibility change |
 
 ### Utility Modules (`src/utils/`)
@@ -298,7 +300,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 - **Confirmation timeout**: Pending transaction confirmations auto-cancel after `AI_CONFIRMATION_TIMEOUT_MS` (5 minutes) to prevent stuck UI state.
 - **App registry scoping**: Registry is per-wallet in localStorage. `AppShell` syncs wallet changes and clears deploy progress on disconnect.
 - **Error UX boundary**: Two error surfaces by design. **Toasts** (`useToast` + `ToastContainer`) are reserved for surfaces that exist *before* the chat panel mounts — wallet connection errors (popup blocked / closed / network) in `AppShell`. Once the user is connected, all errors flow through **chat messages** (`error` field on `ChatMessage`, surfaced as inline alerts with `ERROR_PATTERNS` regex-matched "Try again" suggestion buttons in `MessageBubble.tsx`). Tool failures, deploy failures, signing rejections, payload validation, manifest parse errors all land in chat. Don't add new toasts post-connect — push errors into chat.
-- **Custom-domain DNS state**: All four custom-domain surfaces (sidebar dot, deploy success pill, single-domain card, multi-domain consolidated card) read DNS status from a single source — `aiStore.dnsStatuses`. The map is populated by `useDnsStatusPolling`, mounted exactly once in `AppsSidebar`. No surface runs its own polling loop. Adding a new surface means reading `dnsStatuses.get(dnsStatusKey(leaseUuid, fqdn))`, not adding another `useVisibilityPolling`.
+- **Custom-domain DNS state**: All four custom-domain surfaces (sidebar dot, deploy success pill, single-domain card, multi-domain consolidated card) read DNS status from a single source — `aiStore.dnsStatuses`. The map is populated by `useDnsStatusPolling`, mounted exactly once in `MainLayout` (deliberately outside the sidebar's `ErrorBoundary` — a sidebar render error must not take DNS state down with it). No surface runs its own polling loop. Adding a new surface means reading `dnsStatuses.get(dnsStatusKey(leaseUuid, fqdn))`, not adding another `useVisibilityPolling`.
 
 ### Example Apps
 
