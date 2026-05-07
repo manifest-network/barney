@@ -41,7 +41,7 @@ Nothing else leaves the browser unencrypted. The only outbound calls are to the 
 
 ## First-time account setup
 
-On first connect, Barney can auto-provision your account so you can deploy immediately. This step is enabled when the deployment is configured with a faucet (`PUBLIC_FAUCET_URL`). Both hosted instances enable it.
+On first connect, Barney can auto-provision your account so you can deploy immediately. This step is enabled when the deployment is configured with a faucet (`PUBLIC_FAUCET_URL`). The hosted **testnet** has a faucet; the hosted **mainnet** does not.
 
 The `AccountSetupOverlay` runs a sequential pipeline:
 

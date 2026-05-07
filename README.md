@@ -113,7 +113,7 @@ PUBLIC_WEB3AUTH_NETWORK=sapphire_devnet
 
 ### Production
 
-Set environment variables on the container. The `docker/env.sh` entrypoint uses `envsubst` to render `/etc/nginx/conf.d/default.conf` (from `docker/nginx.conf.template`) and `/usr/share/nginx/html/config.js` (from `docker/config.js.template`) before starting nginx. Unset values fall through to the hardcoded defaults.
+Set environment variables on the container. The `docker/env.sh` entrypoint uses `envsubst` to render `/etc/nginx/conf.d/default.conf` (from `docker/nginx.conf.template`) and `/usr/share/nginx/html/config.js` (from `docker/config.js.template`) before starting nginx. Most `PUBLIC_*` values fall back to the hardcoded defaults in `runtimeConfig.ts` when unset, but two settings are required for the container to function: `PUBLIC_MORPHEUS_URL` (`env.sh` exits at startup if empty) and `MORPHEUS_API_KEY` (nginx returns 503 from `/api/morpheus/...` if empty).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
