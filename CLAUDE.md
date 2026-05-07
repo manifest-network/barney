@@ -36,8 +36,8 @@ Chat-primary deployment platform:
 
 ```
 ErrorBoundary
-  └─ ThemeProvider (next-themes, multi-theme support)
-      ├─ MatrixRain (animated background, matrix theme only)
+  └─ ThemeProvider (next-themes, 7 themes registered)
+      ├─ MatrixRain (renders the canvas only when theme === 'matrix'; returns null otherwise)
       └─ ChainProvider (cosmos-kit wallet abstraction)
           └─ ToastProvider (toast notifications)
               └─ AIProvider (chat state, tool execution, Morpheus streaming)
@@ -47,19 +47,19 @@ ErrorBoundary
                   │   └─ MainLayout (when connected)
                   │       ├─ ErrorBoundary (sidebar isolation)
                   │       │   └─ AppsSidebar (wallet, credits, running apps)
-                  │       ├─ Modal (mobile sidebar overlay)
-                  │       └─ AIErrorBoundary
-                  │           └─ ChatPanel (messages, input, settings)
-                  │               ├─ MessageBubble (per-message rendering)
-                  │               │   └─ StreamingText (typewriter effect with link detection)
-                  │               ├─ ProgressCard (during deploy)
-                  │               ├─ AppCard (deploy success)
-                  │               ├─ ConfirmationCard (TX approval)
-                  │               │   ├─ ManifestEditor (single-service manifest editing)
-                  │               │   └─ StackManifestEditor (multi-service stack editing)
-                  │               ├─ ToolResultCard / LogCard
-                  │               ├─ HelpCard (/help display)
-                  │               └─ AISettings (inline settings panel)
+                  │       ├─ AIErrorBoundary
+                  │       │   └─ ChatPanel (messages, input, settings)
+                  │       │       ├─ MessageBubble (per-message rendering)
+                  │       │       │   └─ StreamingText (typewriter effect with link detection)
+                  │       │       ├─ ProgressCard (during deploy)
+                  │       │       ├─ AppCard (deploy success)
+                  │       │       ├─ ConfirmationCard (TX approval)
+                  │       │       │   ├─ ManifestEditor (single-service manifest editing)
+                  │       │       │   └─ StackManifestEditor (multi-service stack editing)
+                  │       │       ├─ ToolResultCard / LogCard
+                  │       │       ├─ HelpCard (/help display)
+                  │       │       └─ AISettings (inline settings panel)
+                  │       └─ Modal (keyboard-shortcuts help, opens on `?`)
                   └─ ToastContainer (toast rendering)
 ```
 
@@ -81,7 +81,7 @@ The AI assistant uses a 3-layer architecture:
    - **Helpers** (`helpers.ts`): Shared functions — `extractPrimaryServicePorts`, `formatConnectionUrl`
    - **Utils** (`utils.ts`): ADR-036 auth token creation (`getProviderAuthToken`), payload upload and hashing utilities
    - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
-   - **Internal**: `batch_deploy` — orchestrates multi-app deploys from the UI (not exposed to AI, used by the `requestBatchDeploy` AI store action, e.g. via `useAI().requestBatchDeploy`)
+   - **Internal pseudo-tool**: `batch_deploy` — orchestrates multi-app deploys from the UI. Not declared in `AI_TOOLS` and never exposed to the model; routed through `executeConfirmedTool` (case `'batch_deploy'`) by the `requestBatchDeploy` AI store action (e.g. `useAI().requestBatchDeploy`)
 
 ### 16 Composite Tools
 
@@ -104,7 +104,7 @@ The AI assistant uses a 3-layer architecture:
 | `cosmos_query(module, subcommand, args?)` | Query | Raw chain query escape hatch |
 | `cosmos_tx(module, subcommand, args)` | TX | Raw chain TX escape hatch |
 
-Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`. Known Docker images and stacks: `src/ai/knownImages.ts`.
+Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`. Known Docker images and stacks: `src/ai/knownImages.ts`. In-app `/help` content: `src/ai/helpText.ts`.
 
 ### Manifest Generation (`src/ai/manifest.ts`)
 
@@ -134,7 +134,7 @@ Thin wrappers around `@manifest-network/manifest-mcp-fred` manifest builders, ad
 ```
 Key: barney-apps-{address}
 AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, connection?, manifest?, status }
-  connection? { host, fqdn?, ports?, instances?: { fqdn? }[], metadata?, services? }
+  connection? { host, fqdn?, ports?, instances?: { fqdn?, ports? }[], metadata?, services? }
 AppStatus: 'deploying' | 'running' | 'stopped' | 'failed'
 ```
 
@@ -217,18 +217,19 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `useInputHistory` | Arrow-key navigation through past chat inputs |
 | `useAI` | Zustand store consumer — selects all public state/actions via `useShallow` |
 | `useToast` | Context consumer hook for ToastContext |
-| `useTxHandler` | Transaction submission handler with cosmos-kit integration and toast notifications |
-| `useLeaseItems` | Manages lease item state in forms (add/remove/update SKU items) |
-| `useBatchSelection` | Manages batch selection state for bulk operations |
+| `useVisibilityPolling` | Visibility-aware polling with optional exponential backoff. Pauses on tab hidden, resumes on focus. Used by `AIProvider` (health check) and `AppsSidebar` (refresh) |
 | `useCopyToClipboard` | Clipboard copy with feedback state |
 | `useAccountSetup` | One-shot sequential account setup pipeline — requests faucet tokens (MFX + PWR) and funds credits on first connect. Returns `AccountSetupState` (`isInitialSetup` + `phase`) for the `AccountSetupOverlay`. Setup data persisted to localStorage via `versionedStorage` |
+
+> Note: `useConfirmationFlow.test.tsx`, `useMessageManager.test.ts`, and `useToolCache.test.ts` are pure-logic test files for behaviour now living in `src/stores/aiActions/` and `src/stores/aiStore.ts`. They retain the original hook names because the underlying contracts haven't changed; no source hook file exists.
 
 ### Utility Modules (`src/utils/`)
 
 | Module | Purpose |
 |--------|---------|
 | `errors.ts` | `logError()` — structured error logging (use instead of raw `console.error`) |
-| `hash.ts` | `sha256()`, `sha256Hex()`, `toHex()`, `generatePassword()`, `isValidMetaHash()` — hashing, hex encoding, password generation, hash validation; `MAX_PAYLOAD_SIZE` (5KB) |
+| `hash.ts` | `sha256()`, `sha256Hex()`, `toHex()`, `toBytes()`, `generatePassword()`, `validatePayloadSize()`, `getPayloadSize()`, `isValidMetaHash()`; `MAX_PAYLOAD_SIZE` (5KB) |
+| `json.ts` | `bigIntReplacer` — `JSON.stringify` replacer that converts `bigint` values to strings to avoid serialization errors |
 | `format.ts` | Amount conversion (`toBaseUnits`, `fromBaseUnits`), date/duration formatting, UUID validation |
 | `fileValidation.ts` | Upload validation: size limits, allowed extensions (`.yaml`, `.yml`, `.json`, `.txt`), MIME type checks, manifest content validation (`validateManifestContent`), YAML service name extraction (`extractYamlServiceNames`) |
 | `pricing.ts` | BigInt-based cost calculations (`formatCostPerHour`, `calculateEstimatedCost`) to avoid integer overflow |
@@ -257,14 +258,33 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `AI_MAX_RETRIES` | 3 | Max retry attempts for transient network errors (runtime-configurable) |
 | `AI_RETRY_BASE_DELAY_MS` | 1s | Base delay for exponential backoff |
 | `AI_TOOL_API_TIMEOUT_MS` | 15s | Timeout for blockchain API calls during tool execution (runtime-configurable) |
+| `AI_HEALTH_CHECK_INTERVAL_MS` | 60s | Base interval for Morpheus connectivity checks |
+| `AI_HEALTH_CHECK_MAX_BACKOFF` | 8 | Max backoff multiplier (×60s = 8min ceiling) when health checks repeatedly fail |
+| `AI_BATCH_DEPLOY_CONCURRENCY` | 4 | Max concurrent batch deploys (runtime-configurable) |
 | `MAX_PAYLOAD_SIZE` | 5KB | Maximum file upload size (in `hash.ts`) |
 | `FRED_POLL_INTERVAL_MS` | 3s | Default polling interval for Fred status checks |
 | `WS_RECONNECT_DELAY_MS` | 1s | Delay before WebSocket reconnect attempt |
 | `WS_MAX_RECONNECT_ATTEMPTS` | 2 | Max reconnects before falling back to polling |
 | `WS_LIVENESS_TIMEOUT_MS` | 45s | WebSocket data liveness timeout (Fred pings every 30s) |
 | `STORAGE_SKU_NAME` | 'docker-small' | SKU name that supports persistent disk storage |
-| `AI_BATCH_DEPLOY_CONCURRENCY` | 4 | Max concurrent batch deploys (runtime-configurable) |
+| `AUTO_REFRESH_INTERVAL_MS` | 15s | Auto-refresh interval for sidebar data polling |
+| `HEALTH_CHECK_TIMEOUT_MS` | 5s | Timeout for individual health-check requests |
+| `POST_TX_REFETCH_DELAY_MS` | 1s | Delay before refetching state after a transaction |
+| `COPY_FEEDBACK_DURATION_MS` | 2s | "Copied" feedback display duration |
+| `DEFAULT_PAGE_SIZE` | 10 | Default page size for paginated lists |
+| `TX_HASH_DISPLAY_LENGTH` | 16 | Truncated tx-hash display length |
+| `MAX_REASON_LENGTH` | 256 | Max length for reason/description fields |
+| `MAX_FILENAME_LENGTH` | 255 | Max filename length for uploads |
+| `ACCOUNT_SETUP_MFX_THRESHOLD` | 0.5 | MFX balance below which faucet is requested (display units) |
+| `ACCOUNT_SETUP_PWR_THRESHOLD` | 5 | PWR balance below which faucet is requested (display units) |
+| `ACCOUNT_SETUP_CREDIT_THRESHOLD` | 5 | Credit balance below which credits are funded (display units) |
+| `ACCOUNT_SETUP_CREDIT_AMOUNT` | 10 | PWR amount funded into credits per setup pass (display units) |
+| `ACCOUNT_SETUP_POLL_INTERVAL_MS` | 2s | Poll cadence for balance verification after faucet drip |
+| `ACCOUNT_SETUP_POLL_TIMEOUT_MS` | 10s | Timeout for balance verification poll loop |
 | `ACCOUNT_SETUP_COMPLETE_DELAY_MS` | 1.5s | Delay before dismissing account setup overlay after completion |
+| `ACCOUNT_SETUP_RETRY_DELAY_MS` | 5s | Delay before retrying a failed setup step |
+| `ACCOUNT_SETUP_ERROR_DELAY_MS` | 5s | Delay before dismissing the overlay when an error persists |
+| `MANIFEST_NOTICE_KEY` | `'_notice'` | Key used to carry a display-only notice through manifest JSON; stripped before upload |
 
 ## Styling
 
@@ -280,10 +300,14 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 - **SSRF protection**: `src/utils/url.ts` provides `parseHttpUrl` and `isUrlSsrfSafe` (DEV mode allows localhost via `isUrlSsrfSafe`); `src/ai/validation.ts` adds `isPrivateHost()` with `ipaddr.js` for IP range classification
 - **Error utilities**: Use `logError()` from `src/utils/errors.ts` instead of raw `console.error`
 - **Retry logic**: Use `withRetry()` from `src/api/utils.ts` for transient network error recovery with exponential backoff
-- **Tool result caching**: Query tool results cached for 10s in the AI store to reduce redundant API calls (max 50 entries, FIFO eviction). Cache is scoped per wallet address and cleared on wallet change.
+- **Tool result caching**: Query tool results cached for 10s in the AI store to reduce redundant API calls (max 50 entries; when full, the 10% oldest by insert timestamp — minimum 5 — are evicted in one batch). Cache is scoped per wallet address and cleared on wallet change.
 - **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
 - **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
-- **Dev CORS proxy**: `providerFetchAdapter.ts` provides a `fetchFn` adapter that routes provider HTTP requests through `/proxy-provider` in development, injecting the `X-Proxy-Target` header. All fred/provider HTTP functions receive this adapter as their `fetchFn` parameter. WebSocket connections in `fred.ts` handle their own CORS proxy routing via `providerFetch.ts`. The rsbuild proxy (`rsbuild.config.ts`) has its own SSRF validation layer (`isValidProxyTarget`) separate from runtime validation, blocking cloud metadata endpoints, dangerous IP ranges, and embedded credentials.
+- **Dev CORS proxy** (`providerFetchAdapter.ts`):
+  - **DEV**: routes every provider HTTP request through `/proxy-provider`, sets the `X-Proxy-Target` header to the real upstream, and the rsbuild dev proxy uses that header to route the request after passing it through `isValidProxyTarget` (cloud-metadata blocks, dangerous IP ranges, embedded credentials).
+  - **PROD**: skips the dev proxy entirely; runs `parseHttpUrl` + `isUrlSsrfSafe` and fetches the URL directly (no `X-Proxy-Target`, no `/proxy-provider`).
+  - Every fred/provider HTTP function from `manifest-mcp-fred` accepts a `fetchFn` parameter; Barney always passes `providerFetch` (the singleton from `providerFetchAdapter.ts`). New functions that talk to providers must do the same or they will work in dev (CORS) but break in prod (SSRF), or vice versa.
+  - **WebSockets** can't set headers, so `fred.ts`'s `buildFredWsUrl` switches on `import.meta.env.DEV`: in dev it routes via `wss?://<host>/proxy-provider/...?target=<upstream>`; in prod it connects directly. The rsbuild proxy router accepts the `target` query string when `X-Proxy-Target` is absent.
 - **Stream timeout**: `processStreamWithTimeout` in `src/ai/streamUtils.ts` wraps the AI stream async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely. The inner `withTimeout` generator ensures cleanup of the underlying generator via `finally` block.
 - **Tool-call leak stripping**: `stripToolCallLeaks()` in `src/ai/streamUtils.ts` filters raw `[TOOL_CALLS]` markers that some models emit as literal text instead of structured tool_calls. Legacy safeguard from the Ollama/Mistral era, kept as defensive code for the Morpheus API.
 - **Message debouncing**: The AI store debounces rapid message sends via `AI_MESSAGE_DEBOUNCE_MS` (300ms) and aborts in-flight streams when a new message is sent.
