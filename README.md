@@ -113,7 +113,7 @@ PUBLIC_WEB3AUTH_NETWORK=sapphire_devnet
 
 ### Production
 
-Set environment variables on the container. The `docker/env.sh` entrypoint uses `envsubst` to render `nginx.conf` and `config.js` from templates before starting nginx. Unset values fall through to the hardcoded defaults.
+Set environment variables on the container. The `docker/env.sh` entrypoint uses `envsubst` to render `/etc/nginx/conf.d/default.conf` (from `docker/nginx.conf.template`) and `/usr/share/nginx/html/config.js` (from `docker/config.js.template`) before starting nginx. Unset values fall through to the hardcoded defaults.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
