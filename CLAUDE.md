@@ -37,7 +37,7 @@ Chat-primary deployment platform:
 ```
 ErrorBoundary
   └─ ThemeProvider (next-themes, 7 themes registered)
-      ├─ MatrixRain (canvas always mounted; animation runs only when theme === 'matrix')
+      ├─ MatrixRain (renders the canvas only when theme === 'matrix'; returns null otherwise)
       └─ ChainProvider (cosmos-kit wallet abstraction)
           └─ ToastProvider (toast notifications)
               └─ AIProvider (chat state, tool execution, Morpheus streaming)

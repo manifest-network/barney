@@ -263,7 +263,7 @@ Run cosmos_tx bank send with [...]
 - **For bulk stop/restart**, use comma-separated lists or `all`. The AI will fall back to `list_apps` first if you ask by pattern (e.g. "stop all tetris apps").
 - **The `/help` slash command** prints the in-app cheat sheet.
 - **The `/clear` slash command** wipes chat history (the on-chain state is unaffected).
-- **If a tool fails transiently**, the AI retries once. If it still fails, you get a plain-language error and a suggested next step.
+- **If a tool fails transiently**, the underlying network calls retry automatically with exponential backoff (`AI_MAX_RETRIES`, default 3 attempts on top of the initial call) before the failure is surfaced. If the tool still returns a transient error, the AI is instructed to retry the call once more before giving up. The next message you see is a plain-language error and a suggested next step.
 
 ## What the AI will not do
 

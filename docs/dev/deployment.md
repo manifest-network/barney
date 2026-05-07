@@ -1,6 +1,6 @@
 # Deployment
 
-This guide describes how to deploy Barney in production. The canonical artifact is the `linux/amd64` Docker image published on every release tag to `ghcr.io/manifest-network/barney`. ARM64 hosts (Apple Silicon, Graviton) are not currently supported by the published image.
+This guide describes how to deploy Barney in production. The canonical artifact is the Docker image published on every release tag to `ghcr.io/manifest-network/barney`. The build does not pin a target platform, so the published image's architecture matches the CI runner — currently `linux/amd64` on `ubuntu-latest`. ARM64 hosts (Apple Silicon, Graviton) need to build the image themselves.
 
 For build-system details (the multi-stage Dockerfile, the Brotli compile step, version stamping) see [ARCHITECTURE.md → Build and deployment](../../ARCHITECTURE.md#build-and-deployment).
 
@@ -177,7 +177,7 @@ The Dockerfile compiles nginx Brotli modules from source against the matching ng
 The [release workflow](../../.github/workflows/release.yml) runs on tag pushes matching `v[0-9]*.[0-9]*.[0-9]*`:
 
 1. Validates the tag against semver.
-2. Builds and pushes a `linux/amd64` image to GHCR with semver-derived tags.
+2. Builds and pushes a single-platform image (whichever architecture the runner provides — `linux/amd64` on `ubuntu-latest`) to GHCR with semver-derived tags.
 3. Publishes provenance and SBOM attestations.
 4. Creates a GitHub Release with auto-generated notes and the image digest.
 

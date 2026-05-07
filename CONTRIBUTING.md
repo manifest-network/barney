@@ -6,7 +6,7 @@ For an overview of the codebase, read [ARCHITECTURE.md](ARCHITECTURE.md). For un
 
 ## Prerequisites
 
-- **Node.js >= 20** (the project pins Node 22 in CI)
+- **Node.js >= 20** (the production Docker build pins Node 22 via `Dockerfile`'s `node:22-alpine3.21` base; there is no general PR/CI workflow today)
 - **npm >= 10**
 - A **Morpheus API key** (request access from [mor.org](https://mor.org)) — required to test AI features
 - Optional: a local Manifest Network node, or use the public testnet endpoints (`https://nodes.liftedinit.tech/manifest/testnet/api`, `https://nodes.liftedinit.tech/manifest/testnet/rpc`)
@@ -140,7 +140,7 @@ The default is *no comment*. Add a comment only when the *why* is non-obvious �
 Releases are tagged on `main` with a semver tag (`v0.2.0`, `v1.0.0-rc.1`, …). The [release workflow](.github/workflows/release.yml) then:
 
 1. Validates the tag against semver.
-2. Builds and pushes the `linux/amd64` Docker image to `ghcr.io/manifest-network/barney:{version,major.minor,major,latest}`.
+2. Builds and pushes the Docker image (architecture matches the CI runner — `linux/amd64` on `ubuntu-latest`) to `ghcr.io/manifest-network/barney:{version,major.minor,major,latest}`.
 3. Creates a GitHub Release with auto-generated notes and the image digest.
 
 Pre-release tags (e.g. `v1.0.0-rc.1`) are pushed as pre-releases and do not move the `:latest` tag. Only maintainers should push tags.

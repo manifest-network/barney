@@ -58,7 +58,7 @@ Provider tree (from `src/main.tsx`):
 ```
 ErrorBoundary
 └─ ThemeProvider (next-themes — 7 themes)
-   ├─ MatrixRain (canvas always mounted; runs only on theme === 'matrix')
+   ├─ MatrixRain (renders the canvas only when theme === 'matrix'; returns null otherwise)
    └─ ChainProvider (cosmos-kit; Web3Auth wallet)
       └─ ToastProvider
          └─ AIProvider (owns the Zustand store)
@@ -295,7 +295,7 @@ Numeric values are clamped (`getNumericConfig` → `parsePositiveInt`). A single
 
 ## Build and deployment
 
-The release artifact is a Docker image (`ghcr.io/manifest-network/barney`, `linux/amd64`):
+The release artifact is a Docker image (`ghcr.io/manifest-network/barney`; single-platform, currently `linux/amd64` because that's what `ubuntu-latest` provides):
 
 1. **Stage 1** — `node:22-alpine3.21` builds the SPA (`npm ci --legacy-peer-deps && npm run build-release`). Version is stamped from `RELEASE_VERSION` (set by CI from a git tag) or, when unset, the script strips any prerelease suffix from `package.json`'s `version` and appends the short git commit hash (e.g. `0.1.0` → `0.1.0-a1b2c3d`).
 2. **Stage 2** — `nginx:1.27-alpine` source-builds the Brotli dynamic modules against the matching nginx version (Alpine's prebuilt `nginx-mod-http-brotli` targets a different ABI).

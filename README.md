@@ -44,7 +44,7 @@ The dev server starts at <http://localhost:3000>.
 
 ## Running with Docker
 
-A `linux/amd64` image is published on every release tag to GHCR. This is the canonical deployment artifact.
+An image is published on every release tag to GHCR. This is the canonical deployment artifact. The build does not pin a target platform, so the architecture matches the CI runner — currently `linux/amd64` on `ubuntu-latest`.
 
 ```bash
 docker run --rm -p 8080:80 \
