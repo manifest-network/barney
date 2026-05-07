@@ -126,9 +126,9 @@ If you fork Barney and add a third-party script, widen the CSP minimally (specif
 
 ### 7. Chat history hygiene
 
-- **Schema validation on load.** `versionedStorage` rejects malformed envelopes and runs migrations. Corrupted entries are dropped silently rather than crashing the app.
+- **Validation on load.** `barney-ai-history` is plain JSON validated by `validateChatHistory` (`src/ai/validation.ts`); on `JSON.parse` failure or invalid shape the catch block removes the key and the app starts with an empty history. There is no version envelope and no migration chain — that pattern (`src/utils/versionedStorage.ts`) is used by the app registry and the account-setup flag, not by chat history or settings.
 - **Streaming messages excluded from persistence.** Half-finished assistant messages don't make it to localStorage; only completed messages do.
-- **Per-wallet scoping.** App registry, account-setup state, and AI history are keyed by wallet address. Switching wallets isolates state.
+- **Storage scoping.** The app registry (`barney-apps-{address}`) and the account-setup flag (`barney-refill-{address}`) are keyed by wallet address; chat history (`barney-ai-history`), AI settings (`barney-ai-settings`), and theme (`barney-theme`) are global to the browser profile. Switching wallets isolates per-wallet state but does not clear global state.
 
 ## Cosmos-side trust
 

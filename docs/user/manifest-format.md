@@ -209,8 +209,8 @@ Barney validates manifests at three stages:
 1. **Client-side, before upload** (`src/utils/fileValidation.ts`):
    - File extension and MIME type.
    - File size ≤ 5 KB.
-   - JSON structural validity.
-   - YAML parses to a top-level object.
+   - JSON: full `JSON.parse` plus structural validation (top-level object; if `services` is present, each entry must be an object with an `image` key).
+   - YAML: lightweight regex check — no parser is invoked. The file must contain a top-level `image:` line, or a top-level `services:` block whose immediate child keys parse out to RFC 1123 service names. Anything more sophisticated is left to the provider.
 2. **Manifest construction** (`src/ai/manifest.ts`):
    - Port numbers are integers in `[1, 65535]`.
    - Protocols are `tcp` or `udp`.

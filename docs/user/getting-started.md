@@ -29,13 +29,18 @@ Sessions last 24 hours. Disconnecting clears the session locally; your on-chain 
 
 ### What lives in your browser
 
-The following data is stored in `localStorage`, scoped per wallet address:
+Barney stores a small set of values in `localStorage`. Some are global to the browser profile; others are scoped per connected wallet address:
+
+**Global (shared across wallets):**
 
 - Chat history (`barney-ai-history`)
 - Tunable AI settings (`barney-ai-settings`)
+- Theme selection (`barney-theme`)
+
+**Per-wallet (keyed by connected address):**
+
 - Your registered apps and their manifests, with secret-shaped env values scrubbed (`barney-apps-{address}`)
 - One-shot account-setup flag (`barney-refill-{address}`)
-- Theme selection (`barney-theme`)
 
 Nothing else leaves the browser unencrypted. The only outbound calls are to the configured Manifest RPC/REST node, the providers your apps run on, and the Morpheus inference API (proxied through the Barney server so your wallet never sees the API key).
 

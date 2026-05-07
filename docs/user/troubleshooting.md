@@ -147,9 +147,9 @@ The chat input enforces a hard 64 KB ceiling per message (`MAX_INPUT_LENGTH` in 
 
 ### Chat history disappears
 
-Chat history is stored in `barney-ai-history` in localStorage. It is wiped if:
+Chat history is stored in `barney-ai-history` in localStorage as plain JSON validated on load by `validateChatHistory`. It is wiped if:
 
-- The schema version changes and migration cannot recover data (corrupted entries are dropped).
+- A persisted entry fails JSON parsing or schema validation — the key is removed and the app starts with an empty history. (There is no version envelope or migration chain; corrupted entries are simply dropped.)
 - You switched browsers or cleared site data.
 - You ran `/clear`.
 
