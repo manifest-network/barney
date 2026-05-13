@@ -161,10 +161,28 @@ const PersistedMessageSchema = z.object({
   toolCallId: z.string().max(64).optional().catch(undefined),
   toolName: z.string().max(64).optional().catch(undefined),
   error: z.string().max(2048).optional().catch(undefined),
+  // Transient/UI markers preserved through validation so filters and
+  // rehydrate branches downstream can act on them. Whitelist explicitly —
+  // every new flag on ChatMessage must be decided about here:
+  //  - isStreaming → `rehydrateChatHistory` in persistence.ts marks the
+  //    message Interrupted on reload
+  //  - awaitingConfirmation → same, for tool messages without a paired
+  //    pendingConfirmation (intentionally not persisted)
+  //  - local → toChatApiMessages filter; synthesized UI text (e.g. /help)
+  //    must not be replayed back to the model after reload
+  // Note: `card` is intentionally NOT whitelisted (cards snapshot live state
+  // that goes stale across reloads — see saveHistory comment in persistence.ts).
+  isStreaming: z.boolean().optional().catch(undefined),
+  awaitingConfirmation: z.boolean().optional().catch(undefined),
+  local: z.boolean().optional().catch(undefined),
 }).transform((msg): ChatMessage => ({
   ...msg,
-  // Don't restore isStreaming state (should always start as false)
-  isStreaming: false,
+  // Normalize undefined → false so downstream truthiness checks behave.
+  // The old transform hard-set `isStreaming: false`, which clobbered a
+  // persisted `true` and short-circuited the rehydrate Interrupted branch.
+  isStreaming: msg.isStreaming ?? false,
+  awaitingConfirmation: msg.awaitingConfirmation ?? false,
+  local: msg.local ?? false,
   // Don't restore toolCalls from localStorage - they're user-controlled and could be
   // malformed/oversized. Historical tool calls aren't needed for conversation continuity.
 }));
