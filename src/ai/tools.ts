@@ -88,7 +88,7 @@ export const AI_TOOLS: ToolDefinition[] = [
           },
           service_name: {
             type: 'string',
-            description: 'Required when "custom_domain" is set on a stack ("services" provided). Must match one of the service keys. Omit for image+port single-service deploys.',
+            description: 'Service to target inside a multi-service stack. Required when "services" is provided alongside "custom_domain" (deploy + attach in one step), and used by the set_custom_domain tool as the per-LeaseItem picker. Must match one of the service keys. Omit for image+port single-service deploys.',
           },
         },
         required: [],

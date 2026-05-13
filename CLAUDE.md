@@ -91,7 +91,7 @@ The AI assistant uses a 3-layer architecture:
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, storage?, services?, health_check?, stop_grace_period?, init?, expose?, labels?, custom_domain?, custom_domain_service?)` | TX | Deploy from attached manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image`. `custom_domain` attaches a domain in the same TX flow (single-step deploy + DNS). Defaults: size=micro, name from filename/image |
+| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, storage?, services?, health_check?, stop_grace_period?, init?, expose?, labels?, custom_domain?, service_name?)` | TX | Deploy from attached manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image`. `custom_domain` attaches a domain in the same TX flow (single-step deploy + DNS); `service_name` picks the target service in a multi-service stack. Defaults: size=micro, name from filename/image |
 | `stop_app(app_name)` | TX | Stop apps by name, comma-separated list (e.g. "redis,postgres"), or "all" to stop all running apps |
 | `fund_credits(amount)` | TX | Add credits in display units |
 | `restart_app(app_name)` | TX | Restart apps by name, comma-separated list, or "all" to restart all running apps |
