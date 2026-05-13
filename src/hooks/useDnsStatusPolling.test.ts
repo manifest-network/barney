@@ -211,6 +211,105 @@ describe('useDnsStatusPolling', () => {
     const opts = calls[calls.length - 1][2];
     expect(opts?.enabled).toBe(false);
   });
+
+  // Regression: prior to this fix, the cleanup effect at useDnsStatusPolling.ts:99
+  // had an empty dep array — it only fired on hook unmount. Wallet switches
+  // (which change `allTargets` but don't unmount) left in-flight DoH probes
+  // running. They'd resolve naturally and write the prior wallet's lease/domain
+  // entries into the new wallet's dnsStatuses. See PR #93 Copilot 3237018271.
+  it('aborts in-flight probes when the candidate target list changes', async () => {
+    const abortSpy = vi.spyOn(AbortController.prototype, 'abort');
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok' } as any);
+    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' } as any);
+    vi.mocked(computeStatus).mockReturnValue({ kind: 'pending_dns' } as any);
+
+    mounted = mountWith([makeApp()]);
+    await pollFn();          // creates an AbortController for the first poll
+    abortSpy.mockClear();    // ignore any aborts from the poll itself
+
+    // Switch to a different candidate set — re-render with empty apps. This
+    // must trigger the cleanup-effect's abort on the prior in-flight controller.
+    flushSync(() => { mounted!.root.render(createElement(Wrapper, { apps: [] })); });
+
+    expect(abortSpy).toHaveBeenCalled();
+    abortSpy.mockRestore();
+  });
+
+  it('does not leak stale probe results into the next wallet\'s dnsStatuses on wallet switch', async () => {
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+
+    // Controlled promise so we can re-render mid-await before resolving.
+    let resolveProbe: (v: { result: string }) => void = () => {};
+    const pending = new Promise<{ result: string }>((r) => { resolveProbe = r; });
+    vi.mocked(resolveDnsViaDoh).mockReturnValueOnce(pending as any);
+    vi.mocked(probeHttps).mockReturnValueOnce(pending as any);
+    vi.mocked(computeStatus).mockReturnValue({ kind: 'pending_dns' } as any);
+
+    mounted = mountWith([makeApp({
+      customDomains: [{ serviceName: '', customDomain: 'wallet-a.example.com' }],
+    })]);
+    const pollPromise = pollFn();
+
+    // Wallet switch: re-render with no apps. Cleanup-effect aborts the
+    // in-flight probe; signal.aborted check at the top of the merge bails out.
+    flushSync(() => { mounted!.root.render(createElement(Wrapper, { apps: [] })); });
+
+    // Resolve the pending probe so the awaited Promise.all settles.
+    resolveProbe({ result: 'ok' });
+    await pollPromise;
+
+    // No write should land for wallet-a's domain after the candidate set went empty.
+    const writtenKeys = setDnsStatuses.mock.calls.flatMap(
+      (c) => Array.from((c[0] as Map<string, unknown>).keys()),
+    );
+    expect(writtenKeys).not.toContain('lease-1::wallet-a.example.com');
+  });
+
+  // Documents the no-orphan invariant for the merge loop's defensive filter.
+  // With the abort-on-candidate-change in place, the abort fires before the
+  // merge runs in scenarios constructible from the test surface, so this test
+  // would also pass with abort-only. The defensive filter exists to close a
+  // narrow microtask race between the ref-update effect (line 91-92) and the
+  // cleanup-effect (line 99) — it's belt-and-suspenders insurance against
+  // future regressions weakening the abort semantics.
+  it('discards probe results for targets no longer in the candidate set', async () => {
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+
+    let resolveProbe: (v: { result: string }) => void = () => {};
+    const pending = new Promise<{ result: string }>((r) => { resolveProbe = r; });
+    vi.mocked(resolveDnsViaDoh).mockReturnValue(pending as any);
+    vi.mocked(probeHttps).mockReturnValue(pending as any);
+    vi.mocked(computeStatus).mockReturnValue({ kind: 'pending_dns' } as any);
+
+    const appWithTwo = makeApp({
+      customDomains: [
+        { serviceName: '', customDomain: 'kept.example.com' },
+        { serviceName: '', customDomain: 'detached.example.com' },
+      ],
+    });
+    mounted = mountWith([appWithTwo]);
+    const pollPromise = pollFn();
+
+    // Re-render with one domain removed. The detached entry must NOT show up
+    // in any subsequent dnsStatuses write — either via abort (primary) or
+    // via the merge-loop's defensive filter (belt-and-suspenders).
+    const appWithOne = makeApp({
+      customDomains: [{ serviceName: '', customDomain: 'kept.example.com' }],
+    });
+    flushSync(() => { mounted!.root.render(createElement(Wrapper, { apps: [appWithOne] })); });
+
+    resolveProbe({ result: 'ok' });
+    await pollPromise;
+
+    const writtenKeys = setDnsStatuses.mock.calls.flatMap(
+      (c) => Array.from((c[0] as Map<string, unknown>).keys()),
+    );
+    expect(writtenKeys).not.toContain('lease-1::detached.example.com');
+  });
 });
 
 describe('deriveCandidateTargets', () => {

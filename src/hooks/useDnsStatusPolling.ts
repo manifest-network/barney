@@ -93,10 +93,17 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
 
   const abortRef = useRef<AbortController | null>(null);
 
-  // Cancel any in-flight probes when the hook unmounts (wallet switch, route
-  // change, ErrorBoundary fallback). Without this, a 5s DoH fetch keeps
-  // running and resolves onto a stale store.
-  useEffect(() => () => abortRef.current?.abort(), []);
+  // Cancel any in-flight probes when the candidate set changes (wallet switch,
+  // app attach/detach) or when the hook unmounts. React's effect-cleanup
+  // semantics: cleanup runs before next effect setup OR on unmount, so this
+  // fires on every `allTargets` change AND on hook teardown — one effect
+  // covers all three transitions.
+  //
+  // Without this, a 5s DoH fetch kicked off for the previous candidate set
+  // could resolve after `setAddress` reset `dnsStatuses` and repopulate it
+  // with stale lease/domain entries — especially when the new wallet has
+  // zero targets so the next poll() tick never fires to call `abort()` itself.
+  useEffect(() => () => abortRef.current?.abort(), [allTargets]);
 
   const poll = useCallback(async () => {
     // Filter terminal targets at the moment polling fires, using the freshest
@@ -149,8 +156,23 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
     // executor write) may have updated the slice. Merging from the closure
     // snapshot would clobber those.
     const next = new Map(dnsStatusesRef.current);
+    // Defensive: re-verify each result's (leaseUuid, customDomain) tuple is
+    // still in the live candidate set before writing. Closes a narrow race:
+    // the ref-update effect (line 91-92) and the cleanup-effect's abort
+    // (line 99) both fire on render, in registration order. There's a
+    // microtask gap between them where `Promise.all` could settle with the
+    // ref freshly updated to a new candidate set but `signal.aborted` still
+    // false (the abort fires after the merge runs). Without this, an
+    // in-flight probe from the prior candidate set could land in the new
+    // wallet's dnsStatuses. Linear scan; both lists are small.
+    const liveTargets = allTargetsRef.current;
     for (const u of updates) {
-      if (u) next.set(dnsStatusKey(u.leaseUuid, u.customDomain), u);
+      if (!u) continue;
+      const stillTargeted = liveTargets.some(
+        (t) => t.app.leaseUuid === u.leaseUuid && t.domain === u.customDomain,
+      );
+      if (!stillTargeted) continue;
+      next.set(dnsStatusKey(u.leaseUuid, u.customDomain), u);
     }
     setDnsStatuses(next);
   }, [setDnsStatuses]);
