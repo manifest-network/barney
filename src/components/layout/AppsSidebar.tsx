@@ -250,15 +250,24 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
               // shared store and aggregate. Worst-state-wins. Count badge appears
               // on the dot when an app has multiple domains so the user sees
               // "drill in for details" without needing to hover for the tooltip.
-              const domainReports: DnsStatusEntry[] = (app.customDomains ?? [])
-                .map((d) => dnsStatuses.get(dnsStatusKey(app.leaseUuid, d.customDomain)))
-                .filter((r): r is DnsStatusEntry => !!r);
-              const hasDomains = (app.customDomains?.length ?? 0) > 0;
-              // While the polling loop hasn't reported yet, default to pending.
-              const dnsKind = domainReports.length > 0
+              //
+              // Pass the full report list — including `undefined` for any
+              // domain the polling driver hasn't probed yet — into the
+              // aggregator. `aggregateDnsKind` treats `undefined` as pending,
+              // so a multi-domain app won't flash green during the
+              // partial-probe window (one of N landing active first, others
+              // still in-flight). Note this is a behavior change for the
+              // single-domain not-yet-probed case too: dot now correctly
+              // shows pending instead of being driven by the old
+              // `length === 0 → pending` fallback.
+              const customDomains = app.customDomains ?? [];
+              const hasDomains = customDomains.length > 0;
+              const domainReports: (DnsStatusEntry | undefined)[] = customDomains
+                .map((d) => dnsStatuses.get(dnsStatusKey(app.leaseUuid, d.customDomain)));
+              const dnsKind: CustomDomainStatusKind = hasDomains
                 ? aggregateDnsKind(domainReports)
-                : 'pending_dns' as CustomDomainStatusKind;
-              const domainCount = app.customDomains?.length ?? 0;
+                : 'pending_dns';
+              const domainCount = customDomains.length;
               const tooltip = hasDomains
                 ? (app.customDomains ?? [])
                     .map((d) => {

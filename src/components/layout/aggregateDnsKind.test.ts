@@ -31,4 +31,25 @@ describe('aggregateDnsKind', () => {
     expect(aggregateDnsKind([entry('pending_dns'), entry('failed')])).toBe('failed');
     expect(aggregateDnsKind([entry('issuing_cert'), entry('pending_dns')])).toBe('pending_dns');
   });
+
+  // Regression: un-probed domains (no entry in dnsStatuses yet) must be
+  // treated as pending so a multi-domain app's dot doesn't flash green
+  // when only one of N has been probed. The sidebar callsite now passes
+  // the full report array — including undefined — into the aggregator,
+  // rather than filtering them out and letting worst-state-wins lose
+  // its conservative arm. See PR #93 Copilot 3236552129.
+  it('treats undefined entries as pending_dns (un-probed)', () => {
+    expect(aggregateDnsKind([entry('active'), undefined])).toBe('pending_dns');
+  });
+
+  it('prefers failed over undefined when both present', () => {
+    expect(aggregateDnsKind([entry('failed'), undefined, entry('active')])).toBe('failed');
+  });
+
+  it('returns active only when every entry is defined and active', () => {
+    // All-defined-active baseline preserved.
+    expect(aggregateDnsKind([entry('active'), entry('active')])).toBe('active');
+    // A single undefined among actives pulls the result back to pending.
+    expect(aggregateDnsKind([entry('active'), undefined, entry('active')])).toBe('pending_dns');
+  });
 });
