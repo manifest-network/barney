@@ -1155,12 +1155,10 @@ export async function executeConfirmedDeployApp(
   // up the per-item custom_domain label as soon as the container is up.
   // A failure here is non-fatal: the deploy proceeds, the user is left in
   // the existing 2-step state and can retry set_custom_domain standalone.
-  type DomainAttachOutcome =
-    | { kind: 'none' }
-    | { kind: 'attached'; customDomain: string; serviceName: string }
-    | { kind: 'failed'; error: string };
+  // Type is module-scoped (`DomainAttachResult`) so the batch path and
+  // `fallbackToChainState` can use the same shape.
   const customDomainArg = typeof args.customDomain === 'string' ? args.customDomain : '';
-  let domainAttach: DomainAttachOutcome = { kind: 'none' };
+  let domainAttach: DomainAttachResult = { kind: 'none' };
   if (customDomainArg !== '') {
     const customDomainServiceName = typeof args.customDomainServiceName === 'string' ? args.customDomainServiceName : '';
     try {
@@ -1348,19 +1346,39 @@ export async function executeConfirmedDeployApp(
       };
     }
 
-    // Fred didn't confirm — fall back to chain state
-    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress);
+    // Fred didn't confirm — fall back to chain state. Thread domainAttach so
+    // the fallback can preserve customDomains cache + message detail.
+    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress, domainAttach);
   } catch (error) {
     logError('compositeTransactions.executeConfirmedDeployApp.polling', error);
     // Polling failed but lease+upload succeeded — check chain state to determine actual status.
     // Don't use diagnostics alone to decide failure: they may describe a still-running app.
-    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress);
+    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress, domainAttach);
   }
 }
 
 /**
+ * Custom-domain attach outcome carried from the deploy executor through to
+ * `fallbackToChainState`. The success branch (line :1233+) reads this to
+ * tailor the result message and registry write; the fallback path mirrors
+ * that behavior so a fred-times-out + chain-ACTIVE case doesn't silently
+ * drop the customDomains cache (sidebar dot would go blank).
+ */
+type DomainAttachResult =
+  | { kind: 'none' }
+  | { kind: 'attached'; customDomain: string; serviceName: string }
+  | { kind: 'failed'; error: string };
+
+/**
  * When fred polling doesn't confirm readiness, check the chain state.
  * If the lease is ACTIVE on chain, trust it and mark the app as running.
+ *
+ * `domainAttach` is threaded from the caller so this path preserves the
+ * customDomains cache (DNS polling driver + sidebar dot need it) and the
+ * "domain attached" message detail. Without it, fred-times-out becomes a
+ * silent UX loss: the user sees "live!" with no clue the domain attached.
+ * Defaults to `{ kind: 'none' }` so future callers don't have to thread it
+ * if they have no domain to preserve.
  */
 async function fallbackToChainState(
   name: string,
@@ -1368,19 +1386,55 @@ async function fallbackToChainState(
   appRegistry: ToolExecutorOptions['appRegistry'],
   address: string,
   onProgress?: ToolExecutorOptions['onProgress'],
+  domainAttach: DomainAttachResult = { kind: 'none' },
 ): Promise<ToolResult> {
   try {
     const lease = await getLease(leaseUuid);
     if (lease && lease.state === LeaseState.LEASE_STATE_ACTIVE) {
-      // Chain says ACTIVE — trust it
-      appRegistry?.updateApp(address, leaseUuid, { status: 'running' });
+      // Chain says ACTIVE — trust it. When a custom domain attached on the
+      // way in, mirror the success-branch behavior at :1243-1255: keep the
+      // customDomains cache populated so the DNS polling driver and the
+      // sidebar dot see the attached domain. Without this, fred-timeout
+      // silently drops customDomains and the user sees "live app" with no
+      // sign the domain attached.
+      let customDomainsUpdate: object = {};
+      if (domainAttach.kind === 'attached' && appRegistry) {
+        const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
+        const others = prior.filter((d) => d.serviceName !== domainAttach.serviceName);
+        customDomainsUpdate = {
+          customDomains: [
+            ...others,
+            { serviceName: domainAttach.serviceName, customDomain: domainAttach.customDomain },
+          ],
+        };
+      }
+      appRegistry?.updateApp(address, leaseUuid, { status: 'running', ...customDomainsUpdate });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
+
+      let message: string;
+      switch (domainAttach.kind) {
+        case 'attached':
+          message = `App "${name}" is live. Custom domain "${domainAttach.customDomain}" attached — check the sidebar for DNS status, or run app_status for record details.`;
+          break;
+        case 'failed':
+          message = `App "${name}" is live, but the custom-domain attach failed (${domainAttach.error}). Run \`set_custom_domain\` to try again.`;
+          break;
+        case 'none':
+          message = `App "${name}" is live!`;
+          break;
+      }
+
       return {
         success: true,
         data: {
-          message: `App "${name}" is live!`,
+          message,
           name,
           status: 'running',
+          ...(domainAttach.kind === 'attached' ? {
+            custom_domain: domainAttach.customDomain,
+            service_name: domainAttach.serviceName,
+          } : {}),
+          ...(domainAttach.kind === 'failed' ? { custom_domain_error: domainAttach.error } : {}),
         },
       };
     }
@@ -1388,7 +1442,9 @@ async function fallbackToChainState(
     logError('compositeTransactions.fallbackToChainState', error);
   }
 
-  // Chain state unknown or not active — keep as deploying
+  // Chain state unknown or not active — keep as deploying. Domain attach
+  // outcome doesn't surface here: the deploy itself didn't conclude, so
+  // surfacing "attached!" would mislead.
   appRegistry?.updateApp(address, leaseUuid, { status: 'deploying' });
   onProgress?.({ phase: 'failed', detail: `Provisioning timed out. Use app_status("${name}") to check progress.` });
   return {
@@ -1678,7 +1734,10 @@ export async function executeConfirmedBatchDeploy(
       // container comes up. Failure is non-fatal: the deploy proceeds and
       // the failure surfaces via `customDomainError` on the returned
       // BatchSuccessItem (rendered in summary by summarizeBatchResult).
-      let customDomainError: string | undefined;
+      // `domainAttach` is also threaded into the fallback path below so a
+      // fred-times-out + chain-ACTIVE case preserves the customDomains
+      // cache (same shape as the single-deploy attach outcome at :1163).
+      let domainAttach: DomainAttachResult = { kind: 'none' };
       if (entry.customDomain) {
         const requestedDomain = entry.customDomain;
         const requestedService = entry.customDomainServiceName ?? '';
@@ -1690,10 +1749,17 @@ export async function executeConfirmedBatchDeploy(
             requestedService !== '' ? { serviceName: requestedService } : {},
           ));
           if (domainResult.code === 0) {
+            domainAttach = { kind: 'attached', customDomain: requestedDomain, serviceName: requestedService };
             // Cache the just-attached domain so the DNS polling driver sees
             // it without waiting for the user to run `app_status`. Merge
             // against existing entries — multi-service stacks can have
             // N domains. Mirrors single-deploy at :1243-1255.
+            //
+            // This happy-path write is mutually exclusive with the new
+            // customDomains merge in `fallbackToChainState`: that path only
+            // fires when fred doesn't confirm, at which point the cache
+            // here is already correct and the fallback's write is
+            // idempotent against it.
             try {
               const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
               const others = prior.filter((d) => d.serviceName !== requestedService);
@@ -1704,11 +1770,11 @@ export async function executeConfirmedBatchDeploy(
               logError('compositeTransactions.executeConfirmedBatchDeploy.cacheCustomDomain', error);
             }
           } else {
-            customDomainError = `chain rejected with code ${domainResult.code}`;
+            domainAttach = { kind: 'failed', error: `chain rejected with code ${domainResult.code}` };
           }
         } catch (err) {
           logError('compositeTransactions.executeConfirmedBatchDeploy.setItemCustomDomain', err);
-          customDomainError = err instanceof Error ? err.message : 'unknown error';
+          domainAttach = { kind: 'failed', error: err instanceof Error ? err.message : 'unknown error' };
         }
       }
 
@@ -1763,7 +1829,11 @@ export async function executeConfirmedBatchDeploy(
 
           appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined });
           updateProgress('ready', 'App is live!');
-          return { name, url: connectionUrl, ...(customDomainError ? { customDomainError } : {}) };
+          return {
+            name,
+            url: connectionUrl,
+            ...(domainAttach.kind === 'failed' ? { customDomainError: domainAttach.error } : {}),
+          };
         }
 
         if (
@@ -1779,14 +1849,20 @@ export async function executeConfirmedBatchDeploy(
 
         const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
           updateProgress(p.phase, p.detail);
-        });
-        return fbResult.success ? { name, ...(customDomainError ? { customDomainError } : {}) } : null;
+        }, domainAttach);
+        return fbResult.success ? {
+          name,
+          ...(domainAttach.kind === 'failed' ? { customDomainError: domainAttach.error } : {}),
+        } : null;
       } catch (error) {
         logError('executeConfirmedBatchDeploy.poll', error);
         const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
           updateProgress(p.phase, p.detail);
-        });
-        return fbResult.success ? { name, ...(customDomainError ? { customDomainError } : {}) } : null;
+        }, domainAttach);
+        return fbResult.success ? {
+          name,
+          ...(domainAttach.kind === 'failed' ? { customDomainError: domainAttach.error } : {}),
+        } : null;
       }
     },
   });

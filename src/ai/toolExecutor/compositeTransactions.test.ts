@@ -2034,6 +2034,55 @@ describe('executeConfirmedDeployApp', () => {
     expect((result.data as any).url).toBe('1.2.3.4:32200');
     expect((result.data as any).status).toBe('running');
   });
+
+  // Regression: when fred throws (or times out) and chain confirms ACTIVE,
+  // fallbackToChainState used to write `{ status: 'running' }` only — the
+  // customDomains cache was dropped (sidebar dot blank) and the result
+  // message said "live!" with no clue the domain attached. Threading
+  // domainAttach through preserves both. See PR #93 Copilot 3236837791.
+  it('preserves customDomain in fallbackToChainState when fred throws but chain is ACTIVE', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'h', rawLog: '' } as any);
+    vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    // Fred throws (network error / connection refused) — drops into the
+    // catch arm at compositeTransactions.ts :1357 → fallbackToChainState.
+    vi.mocked(waitForLeaseReady).mockRejectedValue(new Error('fred unreachable'));
+    // Chain says ACTIVE → fallback takes the recovery branch.
+    vi.mocked(getLease).mockResolvedValue({
+      leaseUuid: 'new-lease-uuid', tenant: ADDRESS, state: LeaseState.LEASE_STATE_ACTIVE, items: [],
+    } as any);
+
+    const registry = makeRegistry();
+    const updateSpy = vi.spyOn(registry, 'updateApp');
+
+    const result = await executeConfirmedDeployApp(
+      {
+        app_name: 'redis', skuUuid: 'sku-1', providerUuid: 'p1',
+        providerUrl: 'https://fred.example.com',
+        _generatedManifest: '{"image":"redis"}',
+        customDomain: 'redis.example.com',
+        customDomainServiceName: '',
+      },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.status).toBe('running');
+    expect(data.custom_domain).toBe('redis.example.com');
+    expect(data.message).toMatch(/redis\.example\.com/);
+    // Sidebar dot depends on this cache write — fallback must mirror the
+    // success branch's :1243-1255 customDomains merge.
+    const cacheWrite = updateSpy.mock.calls.find(
+      (c) => Array.isArray((c[2] as any).customDomains)
+    );
+    expect(cacheWrite).toBeDefined();
+    expect((cacheWrite![2] as any).customDomains).toEqual([
+      { serviceName: '', customDomain: 'redis.example.com' },
+    ]);
+  });
 });
 
 describe('executeStopApp', () => {
@@ -2677,6 +2726,51 @@ describe('executeConfirmedBatchDeploy', () => {
       expect(domainUpdate).toBeDefined();
       expect((domainUpdate![2] as any).customDomains).toEqual([
         { serviceName: '', customDomain: 'cached.example.com' },
+      ]);
+    });
+
+    // Regression: when fred throws (or times out) and chain confirms ACTIVE,
+    // the batch fallback path used to drop the customDomains cache. The
+    // happy-path inline write at :1700 has already run by then, so the
+    // fallback's new merge is idempotent against it. This test verifies
+    // both writes happen and the entry still lands in deployed[].
+    // See PR #93 Copilot 3236837791.
+    it('preserves customDomains in fallback path when fred throws but chain is ACTIVE', async () => {
+      vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'h', rawLog: '' } as any);
+      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
+      vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+      vi.mocked(waitForLeaseReady).mockRejectedValue(new Error('fred unreachable'));
+      vi.mocked(getLease).mockResolvedValue({
+        leaseUuid: 'new-lease-uuid', tenant: ADDRESS, state: LeaseState.LEASE_STATE_ACTIVE, items: [],
+      } as any);
+
+      const reg = makeRegistry();
+      const updateSpy = vi.spyOn(reg, 'updateApp');
+      const entries = [{
+        app_name: 'redis', size: 'micro',
+        skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com',
+        payload: makePayload(),
+        customDomain: 'redis.example.com',
+      }];
+
+      const result = await executeConfirmedBatchDeploy(
+        { entries },
+        CLIENT_MANAGER,
+        makeOptions({ appRegistry: reg }),
+      );
+
+      expect(result.success).toBe(true);
+      // Entry still in deployed[] — chain ACTIVE via fallback.
+      expect((result.data as any).deployed.map((d: any) => d.name)).toContain('redis');
+      // Both the happy-path inline write (:1700) and the fallback merge
+      // produce customDomains writes. At least one must be present and
+      // carry the attached entry — sidebar dot depends on it.
+      const cacheWrites = updateSpy.mock.calls.filter(
+        (c) => Array.isArray((c[2] as any).customDomains)
+      );
+      expect(cacheWrites.length).toBeGreaterThanOrEqual(1);
+      expect((cacheWrites[cacheWrites.length - 1][2] as any).customDomains).toEqual([
+        { serviceName: '', customDomain: 'redis.example.com' },
       ]);
     });
   });
