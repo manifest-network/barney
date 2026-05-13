@@ -102,9 +102,29 @@ export function saveSettings(settings: AISettings): void {
 export function saveHistory(messages: ChatMessage[], saveHistory: boolean): void {
   if (saveHistory) {
     try {
+      // Strip `card` and `toolCalls` from messages before persisting.
+      //
+      // The strip is INTENTIONAL — do not "fix" it by adding `card` to
+      // PersistedMessageSchema in `ai/validation.ts`. Cards snapshot live
+      // state (DNS status, lease shape, balances) at the moment the message
+      // was emitted. Rehydrating them after a reload would surface stale
+      // data that disagrees with the chain.
+      //
+      // Recovery path for custom-domain cards specifically:
+      //   - The sidebar custom-domain dot stays live because
+      //     `useDnsStatusPolling` iterates the wallet's app registry,
+      //     not chat history.
+      //   - The inline `CustomDomainCard` re-emits when the user runs
+      //     `app_status` — `compositeQueries.executeAppStatus` already
+      //     attaches `displayCard: { type: 'custom_domain' }` for
+      //     single-domain leases.
+      //
+      // Belt-and-suspenders: PersistedMessageSchema doesn't whitelist
+      // `card` either, so anything that leaks through this filter is
+      // dropped by Zod on rehydrate.
       const toSave = messages
         .filter((m) => !m.isStreaming)
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Intentionally stripping card/toolCalls from persisted messages
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars -- see comment above
         .map(({ card, toolCalls, ...rest }) =>
           card ? { ...rest, content: `[${card.type} displayed to user]` } : rest
         );
