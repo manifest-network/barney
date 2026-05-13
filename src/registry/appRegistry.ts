@@ -133,6 +133,44 @@ function notify(address: string): void {
 }
 
 /**
+ * Cross-tab synchronization via the localStorage `storage` event.
+ *
+ * Fires only in OTHER tabs (not the one that wrote), so this composes
+ * cleanly with the in-tab `notify` path: a deploy in Tab A notifies via
+ * the in-tab Set AND fires a `storage` event that Tab B picks up here.
+ *
+ * Filter on the `barney-apps-` prefix so foreign keys (`barney-ai-*`,
+ * unrelated app keys) don't spuriously notify. Extract the address from
+ * the key and route through `notify(address)` — subscribers already
+ * filter by their own address (`mutated === address`), so cross-wallet
+ * traffic from another tab on a different wallet is harmless.
+ *
+ * `newValue === null` (the other tab cleared its registry / disconnected)
+ * is intentionally NOT special-cased: subscribers re-read via `getApps`,
+ * which returns `[]` on missing key. The notify-then-reread pattern stays
+ * uniform.
+ *
+ * `event.key === null` (devtools `localStorage.clear()`) is skipped — no
+ * address info to route with, and subscribers will re-read on their next
+ * interaction anyway.
+ */
+const STORAGE_KEY_PREFIX = 'barney-apps-';
+
+function handleStorageEvent(event: StorageEvent): void {
+  if (event.storageArea !== null && event.storageArea !== localStorage) return;
+  const key = event.key;
+  if (key === null) return;
+  if (!key.startsWith(STORAGE_KEY_PREFIX)) return;
+  const address = key.slice(STORAGE_KEY_PREFIX.length);
+  if (!address) return;
+  notify(address);
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', handleStorageEvent);
+}
+
+/**
  * Load apps from localStorage for a wallet address.
  * Returns empty array on corruption (clears bad data).
  */

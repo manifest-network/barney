@@ -499,6 +499,75 @@ describe('appRegistry', () => {
       unsubGood();
     });
   });
+
+  // ---- Cross-tab sync ----
+  //
+  // The module-top `storage` event listener bridges localStorage writes from
+  // other tabs into the existing `notify(address)` pub/sub. Both registered
+  // consumers (`useRegistryApps`, `AppsSidebar`) get cross-tab updates for
+  // free without subscribing to `storage` themselves.
+  describe('cross-tab storage event sync', () => {
+    it('notifies subscribers when another tab writes the wallet registry key', () => {
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      try {
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: `barney-apps-${ADDR_A}`,
+          newValue: JSON.stringify([makeApp()]),
+          oldValue: null,
+          storageArea: localStorage,
+        }));
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect(listener).toHaveBeenCalledWith(ADDR_A);
+      } finally { unsub(); }
+    });
+
+    it('routes notify by the address parsed out of the storage key (cross-wallet)', () => {
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      try {
+        // Another tab on a DIFFERENT wallet — listener should still fire with
+        // that wallet's address; per-subscriber address filters handle the
+        // ignore-if-not-mine logic (see AppsSidebar.tsx:138, useRegistryApps.ts:30).
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: `barney-apps-${ADDR_B}`,
+          newValue: null,  // simulate disconnect / clear
+          oldValue: JSON.stringify([makeApp()]),
+          storageArea: localStorage,
+        }));
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect(listener).toHaveBeenCalledWith(ADDR_B);
+      } finally { unsub(); }
+    });
+
+    it('does not notify on foreign localStorage keys', () => {
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      try {
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: 'barney-ai-history',
+          newValue: '[]',
+          oldValue: null,
+          storageArea: localStorage,
+        }));
+        expect(listener).not.toHaveBeenCalled();
+      } finally { unsub(); }
+    });
+
+    it('ignores storage events without a key (global localStorage.clear)', () => {
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      try {
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: null,
+          newValue: null,
+          oldValue: null,
+          storageArea: localStorage,
+        }));
+        expect(listener).not.toHaveBeenCalled();
+      } finally { unsub(); }
+    });
+  });
 });
 
 describe('sanitizeManifestForStorage', () => {
