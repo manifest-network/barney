@@ -105,6 +105,28 @@ describe('appRegistry', () => {
     it('removeApp returns false for unknown lease', () => {
       expect(removeApp(ADDR_A, 'nonexistent')).toBe(false);
     });
+
+    it('round-trips customDomains across save/load via localStorage', () => {
+      // Verifies that neither AppEntrySchema.safeParse on reload nor
+      // sanitizeManifestForStorage (which only touches manifest env) drops
+      // the customDomains field. Locks in the chain-cache shape that the
+      // polling driver and the AppCard / CustomDomainCard rely on.
+      const app = makeApp({
+        customDomains: [
+          { serviceName: '', customDomain: 'app.example.com' },
+          { serviceName: 'web', customDomain: 'api.example.com' },
+        ],
+      });
+      addApp(ADDR_A, app);
+
+      // Fresh read goes through getApps → loadApps → AppEntrySchema.safeParse.
+      const reloaded = getApps(ADDR_A);
+      expect(reloaded).toHaveLength(1);
+      expect(reloaded[0].customDomains).toEqual([
+        { serviceName: '', customDomain: 'app.example.com' },
+        { serviceName: 'web', customDomain: 'api.example.com' },
+      ]);
+    });
   });
 
   // --- Multi-wallet isolation ---
