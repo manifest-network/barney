@@ -283,7 +283,13 @@ describe('probeHttps', () => {
   });
 
   it('returns ok on opaque success', async () => {
-    fetchSpy.mockResolvedValue(new Response(null, { status: 0 }) as any);
+    // Real browsers return an opaque Response (status=0) for cross-origin
+    // mode:'no-cors' fetches, but the Response constructor only accepts
+    // 200-599 per WHATWG Fetch. happy-dom is lax today; jsdom and real
+    // browsers reject status=0. Drop the init arg — `probeHttps` doesn't
+    // inspect status anyway (sibling test below covers the 5xx-still-ok
+    // contract explicitly).
+    fetchSpy.mockResolvedValue(new Response(null) as any);
     expect((await probeHttps('app.example.com')).result).toBe('ok');
   });
 
