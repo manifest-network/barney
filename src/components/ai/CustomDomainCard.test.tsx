@@ -59,6 +59,32 @@ describe('CustomDomainCard', () => {
     expect(text).toContain('auto.barney0.manifest0.net');
   });
 
+  // Apex CNAMEs are RFC-forbidden; the apex warning flow lets the user
+  // proceed anyway, but the status view here must surface the right
+  // record type so the user doesn't paste a CNAME at the apex into their
+  // registrar and get rejected. See PR #93 Copilot 3236552231.
+  it('renders ALIAS / ANAME label for apex domains in single-domain view', () => {
+    flushSync(() => {
+      root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: 'example.com' }) }));
+    });
+    const text = container.textContent ?? '';
+    expect(text).toMatch(/ALIAS/);
+    expect(text).not.toMatch(/^CNAME/m); // visible label line shouldn't start with CNAME
+    const copyBtn = container.querySelector('button[aria-label*="Copy ALIAS"]');
+    expect(copyBtn).not.toBeNull();
+  });
+
+  it('renders CNAME label for subdomains in single-domain view', () => {
+    flushSync(() => {
+      root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: 'app.example.com' }) }));
+    });
+    const text = container.textContent ?? '';
+    expect(text).toMatch(/CNAME/);
+    expect(text).not.toMatch(/ALIAS/);
+    const copyBtn = container.querySelector('button[aria-label*="Copy CNAME"]');
+    expect(copyBtn).not.toBeNull();
+  });
+
   it('defaults to pending_dns when no slice entry exists', () => {
     flushSync(() => {
       root.render(createElement(CustomDomainCard, { data: makeData() }));

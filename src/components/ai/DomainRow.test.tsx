@@ -132,4 +132,34 @@ describe('DomainRow', () => {
     const group = container.querySelector('[role="group"]') as HTMLElement;
     expect(group.getAttribute('aria-label')).toMatch(/Pending DNS\. Pointed at wrong\.host/);
   });
+
+  // Apex CNAMEs are RFC-forbidden; the Copy button's aria-label must flip
+  // to ALIAS/ANAME for apex fqdns so a screen-reader user isn't pointed at
+  // the wrong record type. See PR #93 Copilot 3236552231.
+  it('uses ALIAS / ANAME in copy aria-label for apex domains', () => {
+    flushSync(() => {
+      root.render(createElement(DomainRow, {
+        fqdn: 'example.com',
+        status: 'pending_dns',
+        expectedCnameTarget: 'host.provider.com',
+      }));
+    });
+    const btn = container.querySelector('button[aria-label*="Copy"]') as HTMLElement;
+    expect(btn).not.toBeNull();
+    expect(btn.getAttribute('aria-label')).toMatch(/ALIAS/);
+  });
+
+  it('uses CNAME in copy aria-label for subdomains', () => {
+    flushSync(() => {
+      root.render(createElement(DomainRow, {
+        fqdn: 'app.example.com',
+        status: 'pending_dns',
+        expectedCnameTarget: 'host.provider.com',
+      }));
+    });
+    const btn = container.querySelector('button[aria-label*="Copy"]') as HTMLElement;
+    expect(btn).not.toBeNull();
+    expect(btn.getAttribute('aria-label')).toMatch(/CNAME/);
+    expect(btn.getAttribute('aria-label')).not.toMatch(/ALIAS/);
+  });
 });

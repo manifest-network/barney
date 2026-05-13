@@ -25,7 +25,7 @@ import { Globe, Copy, Check, AlertCircle } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useAI } from '../../hooks/useAI';
 import type { CustomDomainStatusKind } from '../../utils/customDomainStatus';
-import { validateCustomDomainFormat } from '../../utils/customDomainValidation';
+import { validateCustomDomainFormat, isApex, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { normalizeFqdn } from '../../utils/connection';
 import { dnsStatusKey } from '../../stores/aiStore';
 import { DomainRow } from './DomainRow';
@@ -191,6 +191,13 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
     void sendMessage(`Remove the custom domain from ${data.appName}${svcArg}`);
   }, [sendMessage, data.appName, data.serviceName]);
 
+  // Apex CNAMEs are RFC-forbidden; the user can still accept the apex warning
+  // in the ConfirmationCard, but the status view here must surface the right
+  // record type so they don't paste a CNAME into their registrar and get
+  // rejected. Pure sync — `isApex` uses tldts + Mozilla PSL with
+  // `allowPrivateDomains: true` (covers github.io, netlify.app, vercel.app).
+  const recordKind = apexRecordKindLabel(isApex(data.fqdn));
+
   return (
     <div className="custom-domain-card" role="article" aria-label={`Custom domain: ${data.fqdn}`}>
       <div className="custom-domain-card__header">
@@ -207,7 +214,7 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
 
       {target && (
         <div className="custom-domain-card__detail">
-          CNAME{' '}
+          {recordKind}{' '}
           <code className="font-mono">{data.fqdn}</code>{' '}
           &rarr;{' '}
           <code className="font-mono">{target}</code>{' '}
@@ -215,7 +222,7 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
             type="button"
             onClick={() => copyToClipboard(target)}
             className="btn-icon"
-            aria-label="Copy CNAME target"
+            aria-label={`Copy ${recordKind} target`}
             title="Copy"
           >
             {isCopied(target) ? (
@@ -280,8 +287,9 @@ function MultiDomainView({ data }: { data: CustomDomainCardData }) {
       </div>
 
       <p className="custom-domain-card__detail">
-        Add a CNAME at your registrar for each domain pointing at the corresponding provider FQDN.
-        Cloudflare proxy/orange-cloud OFF.
+        Add the DNS record shown for each domain at your registrar — CNAME for
+        subdomains, ALIAS / ANAME / CNAME-flattened for apex domains. Cloudflare
+        proxy/orange-cloud OFF.
       </p>
 
       <div className="custom-domain-card__rows">

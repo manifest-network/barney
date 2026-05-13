@@ -14,6 +14,7 @@ import { memo } from 'react';
 import { Copy, Check, ArrowRight } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import type { CustomDomainStatusKind } from '../../utils/customDomainStatus';
+import { isApex, apexRecordKindLabel } from '../../utils/customDomainValidation';
 
 const STATUS_LABELS: Record<CustomDomainStatusKind, string> = {
   pending_dns: 'Pending DNS',
@@ -56,6 +57,11 @@ export const DomainRow = memo(function DomainRow({
 }: DomainRowProps) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const target = expectedCnameTarget;
+  // Apex CNAMEs are RFC-forbidden; flip the screen-reader label so users
+  // hearing the row don't get pointed at the wrong record type. The visible
+  // row chrome doesn't render the record type itself — only the Copy button's
+  // aria-label needs the per-domain branch.
+  const recordKind = apexRecordKindLabel(isApex(fqdn));
 
   return (
     <div
@@ -76,7 +82,7 @@ export const DomainRow = memo(function DomainRow({
               type="button"
               onClick={() => copyToClipboard(target)}
               className="domain-row__target-btn"
-              aria-label={`Copy CNAME target ${target}`}
+              aria-label={`Copy ${recordKind} target ${target}`}
               title={isCopied(target) ? 'Copied' : 'Click to copy'}
             >
               <code className="font-mono">{target}</code>
