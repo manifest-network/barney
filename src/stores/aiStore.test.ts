@@ -208,6 +208,24 @@ describe('aiStore', () => {
       expect(store.getState().deployProgress).toBeNull();
     });
 
+    it('clears dnsStatuses on change', () => {
+      store.getState().setDnsStatuses(
+        new Map([
+          [
+            'L1::a.example.com',
+            {
+              leaseUuid: 'L1',
+              customDomain: 'a.example.com',
+              serviceName: '',
+              kind: 'pending_dns',
+            },
+          ],
+        ]) as AIStore['dnsStatuses'],
+      );
+      store.getState().setAddress('manifest1abc');
+      expect(store.getState().dnsStatuses.size).toBe(0);
+    });
+
     it('does not clear cache if address is unchanged', () => {
       store.getState().setAddress('manifest1abc');
       store.getState().cacheToolResult('key1', { success: true, data: 'x' });

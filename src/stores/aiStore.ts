@@ -175,7 +175,12 @@ export const createAIStore = () =>
     setAddress: (address) => {
       if (address !== get().address) {
         get()._toolCache.clear();
-        set({ deployProgress: null });
+        // Drop dnsStatuses too — entries belong to the prior wallet's running
+        // apps and would otherwise leak across wallets and grow the map on
+        // every switch. Also bounds (does not fully eliminate) the race where
+        // an in-flight DoH probe from the prior wallet resolves after this
+        // call; any post-reset resolution is overwritten on the next 30s tick.
+        set({ deployProgress: null, dnsStatuses: new Map() });
       }
       set({ address });
     },
