@@ -42,22 +42,6 @@ export interface CustomDomainCardData {
   serviceNames?: readonly string[];
 }
 
-/** Compact inline pill emitted by `executeConfirmedDeployApp` when a single
- *  custom domain was attached during deploy. Reads DNS status from the shared
- *  `dnsStatuses` slice — no per-pill polling.
- *
- *  Deprecated for new emissions — `executeConfirmedDeployApp` now emits the
- *  richer `app` card with the DNS row embedded. The variant remains so chat
- *  history persisted before the switch still renders. */
-export interface DeployDnsStatusCardData {
-  appName: string;
-  fqdn: string;
-  leaseUuid: string;
-  serviceName: string;
-  expectedCnameTarget?: string;
-  isApex: boolean;
-}
-
 /** Port mapping shape returned by the provider connection info. */
 export interface AppCardPortMapping {
   host_ip: string;
@@ -104,7 +88,6 @@ export type MessageCard =
   | { type: 'logs'; data: LogsCardData }
   | { type: 'help'; data: null }
   | { type: 'custom_domain'; data: CustomDomainCardData }
-  | { type: 'deploy_dns_status'; data: DeployDnsStatusCardData }
   | { type: 'app'; data: AppCardData };
 
 export interface ChatMessage {

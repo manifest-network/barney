@@ -10804,23 +10804,7 @@ code.lease-card-mono {
   text-align: center;
 }
 
-/* DeployDnsStatusPill — chat-local DNS pill after a deploy that attached a domain.
-   Single-line; reads from shared dnsStatuses slice. */
-.deploy-dns-status-pill {
-  margin: 0.5rem 1rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--color-surface-800);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-md);
-}
-
-.deploy-dns-status-pill__apex {
-  margin-top: 0.375rem;
-  font-size: 0.6875rem;
-  color: var(--color-warning-400);
-}
-
-/* DomainRow atom — used by sidebar tooltip, inline pill, and consolidated card */
+/* DomainRow atom — used by sidebar tooltip and consolidated card */
 .domain-row {
   display: flex;
   flex-direction: column;

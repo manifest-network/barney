@@ -1286,10 +1286,8 @@ export async function executeConfirmedDeployApp(
       }
 
       // Emit a single rich `app` displayCard. When a custom domain attached,
-      // the AppCard embeds a DomainRow (status comes from the shared
-      // `dnsStatuses` slice — no per-card polling). The standalone
-      // deploy_dns_status pill is no longer emitted; its data lives on the
-      // AppCard's `customDomain` field.
+      // the AppCard embeds a DomainRow that reads its live DNS status from
+      // the shared `dnsStatuses` slice (no per-card polling).
       const displayCard = {
         type: 'app' as const,
         data: {

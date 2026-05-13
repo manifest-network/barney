@@ -64,8 +64,8 @@ export interface AIStore {
   deployProgress: DeployProgress | null;
 
   /** DNS resolution status by `dnsStatusKey(leaseUuid, customDomain)`. Driven
-   *  by the per-tab polling loop in MainLayout; consumed by AppsSidebar (dot)
-   *  and the inline deploy_dns_status pill. */
+   *  by the per-tab polling loop in MainLayout; consumed by AppsSidebar (dot),
+   *  the CustomDomainCard, and the AppCard's embedded custom-domain row. */
   dnsStatuses: ReadonlyMap<string, DnsStatusEntry>;
 
   // --- Internal state (only accessed via get() in actions) ---

@@ -8,9 +8,9 @@
  * DoH + HTTPS probes for each, and writes per-domain `DnsStatusEntry` rows
  * into the AI store.
  *
- * Sidebar dots, the inline deploy_dns_status pill, and any future surface that
- * wants to display DNS status read from the same store slice — no
- * per-component poll loops, no double-polling.
+ * Sidebar dots, the CustomDomainCard, AppCard's embedded custom-domain row,
+ * and any future surface that wants to display DNS status read from the same
+ * store slice — no per-component poll loops, no double-polling.
  *
  * Polling pauses when the tab is hidden (via `useVisibilityPolling`) and skips
  * apps whose domains have all reached a terminal state (`active` or `failed`).

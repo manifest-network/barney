@@ -3,8 +3,8 @@
  *
  * Used by:
  *  - AppsSidebar tooltip (per-domain detail when an app has multiple)
- *  - The inline deploy_dns_status pill (chat-local feedback after deploy)
  *  - The consolidated CustomDomainCard (one row per domain)
+ *  - AppCard's embedded custom-domain row (deploy success card)
  *
  * Same OKLCH status tokens, same IBM Plex Mono for the FQDN, same arrow.
  * Single visual vocabulary for custom domains across the app.
