@@ -243,6 +243,21 @@ async function mergeBatchDeployConfirmations(
       messageId: lastConf.toolMessageId,
     },
   });
+  // Mark the owning message as awaiting batch confirmation — same invariant
+  // `setSingleConfirmation` already maintains at the top of this file. Only
+  // the owning tool message (last batch entry — its messageId is what we
+  // stored in pendingConfirmation.messageId) gets the flag. The other batch
+  // entries are status placeholders ("Batch deploy: <name>"), not awaiting
+  // any confirmation themselves; flagging them would make rehydrate write
+  // Interrupted markers on N-1 messages that never had a pending confirm.
+  //
+  // Schema preserves the flag through Zod since 87b22b2; rehydrate at
+  // persistence.ts:82-89 reads it on reload to emit the closure marker.
+  const owningId = lastConf.toolMessageId;
+  const withFlag = get().messages.map((m) =>
+    m.id === owningId ? { ...m, awaitingConfirmation: true } : m
+  );
+  set({ messages: withFlag });
   return true;
 }
 

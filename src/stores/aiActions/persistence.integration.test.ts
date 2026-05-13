@@ -36,6 +36,28 @@ describe('persistence integration with real PersistedMessageSchema', () => {
     expect(result[0].awaitingConfirmation).toBe(false);
   });
 
+  // Batch surface follow-up to 87b22b2. Persisted shape is identical to the
+  // single-confirm round-trip — schema + rehydrate are agnostic to which
+  // confirm flow set the flag. This test documents that the batch surface
+  // (toolName: 'batch_deploy', "Deploy N apps: ..." content) is covered too.
+  it('round-trips awaitingConfirmation on a batch_deploy owning message into rehydrate marker', () => {
+    const persisted = [{
+      id: 'm1',
+      role: 'tool',
+      content: 'Deploy 3 apps: alpha, beta, gamma?',
+      timestamp: 1,
+      toolCallId: 'tc_3',
+      toolName: 'batch_deploy',
+      awaitingConfirmation: true,
+    }];
+    localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(persisted));
+    const result = loadHistory();
+    expect(result).toHaveLength(1);
+    expect(result[0].error).toBe('Interrupted');
+    expect(result[0].content).toBe('Interrupted — confirmation was pending when the page reloaded.');
+    expect(result[0].awaitingConfirmation).toBe(false);
+  });
+
   it('round-trips isStreaming=true into the interrupted-stream rehydrate branch', () => {
     const persisted = [{
       id: 'm1',
