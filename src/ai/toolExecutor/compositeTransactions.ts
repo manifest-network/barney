@@ -1413,6 +1413,15 @@ export interface SingleDeployEntry {
   providerUrl: string;
   payload: PayloadAttachment;
   serviceNames?: string[];
+  // Per-LeaseItem custom domain attached between create-lease and payload
+  // upload, mirroring the single-deploy contract (see :1154-1180). Missing
+  // or empty `customDomain` = no attach. `customDomainServiceName` selects
+  // the target LeaseItem in a multi-service stack; empty string = the
+  // single-item-lease default. `customDomainWarning` is the apex warning
+  // surfaced post-broadcast (computed at deploy_app validation time).
+  customDomain?: string;
+  customDomainServiceName?: string;
+  customDomainWarning?: string;
 }
 
 // ============================================================================
@@ -1663,6 +1672,46 @@ export async function executeConfirmedBatchDeploy(
         logError('compositeTransactions.executeConfirmedBatchDeploy.addApp', error);
       }
 
+      // ---- Attach custom domain (signing) ----
+      // Mirrors single-deploy ordering at :1154-1180. Attach BEFORE upload so
+      // Traefik picks up the per-item custom_domain label as soon as the
+      // container comes up. Failure is non-fatal: the deploy proceeds and
+      // the failure surfaces via `customDomainError` on the returned
+      // BatchSuccessItem (rendered in summary by summarizeBatchResult).
+      let customDomainError: string | undefined;
+      if (entry.customDomain) {
+        const requestedDomain = entry.customDomain;
+        const requestedService = entry.customDomainServiceName ?? '';
+        try {
+          const domainResult = await withSign(() => monoSetItemCustomDomain(
+            clientManager,
+            leaseUuid,
+            requestedDomain,
+            requestedService !== '' ? { serviceName: requestedService } : {},
+          ));
+          if (domainResult.code === 0) {
+            // Cache the just-attached domain so the DNS polling driver sees
+            // it without waiting for the user to run `app_status`. Merge
+            // against existing entries — multi-service stacks can have
+            // N domains. Mirrors single-deploy at :1243-1255.
+            try {
+              const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
+              const others = prior.filter((d) => d.serviceName !== requestedService);
+              appRegistry.updateApp(address, leaseUuid, {
+                customDomains: [...others, { serviceName: requestedService, customDomain: requestedDomain }],
+              });
+            } catch (error) {
+              logError('compositeTransactions.executeConfirmedBatchDeploy.cacheCustomDomain', error);
+            }
+          } else {
+            customDomainError = `chain rejected with code ${domainResult.code}`;
+          }
+        } catch (err) {
+          logError('compositeTransactions.executeConfirmedBatchDeploy.setItemCustomDomain', err);
+          customDomainError = err instanceof Error ? err.message : 'unknown error';
+        }
+      }
+
       // ---- Upload payload (signing) ----
       updateProgress('uploading', 'Uploading manifest...');
 
@@ -1714,7 +1763,7 @@ export async function executeConfirmedBatchDeploy(
 
           appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined });
           updateProgress('ready', 'App is live!');
-          return { name, url: connectionUrl };
+          return { name, url: connectionUrl, ...(customDomainError ? { customDomainError } : {}) };
         }
 
         if (
@@ -1731,13 +1780,13 @@ export async function executeConfirmedBatchDeploy(
         const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
           updateProgress(p.phase, p.detail);
         });
-        return fbResult.success ? { name } : null;
+        return fbResult.success ? { name, ...(customDomainError ? { customDomainError } : {}) } : null;
       } catch (error) {
         logError('executeConfirmedBatchDeploy.poll', error);
         const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
           updateProgress(p.phase, p.detail);
         });
-        return fbResult.success ? { name } : null;
+        return fbResult.success ? { name, ...(customDomainError ? { customDomainError } : {}) } : null;
       }
     },
   });

@@ -171,6 +171,17 @@ async function mergeBatchDeployConfirmations(
         providerUrl: args.providerUrl as string,
         payload,
         serviceNames: args._serviceNames as string[] | undefined,
+        // Thread per-entry custom domain through into the batch. Without this
+        // the batch path used to silently drop the attach — both deploys
+        // succeeded but no MsgSetItemCustomDomain ever broadcast, leaving the
+        // user to discover the missing domain when DNS didn't resolve.
+        ...(typeof args.customDomain === 'string' && args.customDomain ? {
+          customDomain: args.customDomain,
+          customDomainServiceName: typeof args.customDomainServiceName === 'string'
+            ? args.customDomainServiceName : '',
+          ...(typeof args.customDomainWarning === 'string' && args.customDomainWarning
+            ? { customDomainWarning: args.customDomainWarning } : {}),
+        } : {}),
       });
 
       // Mark this tool message as awaiting batch confirmation

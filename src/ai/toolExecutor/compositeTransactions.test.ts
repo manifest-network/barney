@@ -103,7 +103,7 @@ import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
-import { cosmosTx } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx, setItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 import { uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 
@@ -2582,6 +2582,103 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(cmdArgs).toContain('sku-1:1:db');
     // Should NOT contain the single-service format
     expect(cmdArgs).not.toContain('sku-1:1');
+  });
+
+  // Regression: prior to this fix, mergeBatchDeployConfirmations coalesced
+  // multi-app AI deploys with custom_domain into a single batch_deploy, but
+  // SingleDeployEntry didn't carry the domain fields, so the attach TX was
+  // silently dropped. Deploys succeeded; user only noticed when DNS failed.
+  // See PR #93 Copilot comment 3236552254.
+  describe('custom domain attach', () => {
+    function makeDomainOptions(reg = makeRegistry()) {
+      vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+      vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+      vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+      vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+        lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+        connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
+      });
+      return { reg, opts: makeOptions({ appRegistry: reg }) };
+    }
+
+    it('attaches custom domains for entries that include them', async () => {
+      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
+      const { opts } = makeDomainOptions();
+      const entries = [
+        { app_name: 'a1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'a1.example.com' },
+        { app_name: 'a2', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'a2.example.com' },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+
+      const calls = vi.mocked(setItemCustomDomain).mock.calls;
+      expect(calls).toHaveLength(2);
+      const domains = calls.map((c) => c[2]);
+      expect(domains).toContain('a1.example.com');
+      expect(domains).toContain('a2.example.com');
+    });
+
+    it('passes serviceName option when entry.customDomainServiceName is non-empty', async () => {
+      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
+      const { opts } = makeDomainOptions();
+      const entries = [
+        { app_name: 'wp', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), serviceNames: ['web', 'db'], customDomain: 'wp.example.com', customDomainServiceName: 'web' },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+
+      const call = vi.mocked(setItemCustomDomain).mock.calls[0];
+      expect(call[2]).toBe('wp.example.com');
+      expect(call[3]).toEqual({ serviceName: 'web' });
+    });
+
+    it('does not call setItemCustomDomain when entry has no customDomain', async () => {
+      const { opts } = makeDomainOptions();
+      const entries = [
+        { app_name: 'plain', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+      expect(setItemCustomDomain).not.toHaveBeenCalled();
+    });
+
+    it('surfaces domain attach failure in summary without aborting the batch', async () => {
+      // One success, one chain-rejection (code !== 0). Deploy itself still succeeds.
+      vi.mocked(setItemCustomDomain)
+        .mockResolvedValueOnce({ code: 0, transactionHash: 'dh1', rawLog: '' } as any)
+        .mockResolvedValueOnce({ code: 7, transactionHash: 'dh2', rawLog: 'reserved zone' } as any);
+      const { opts } = makeDomainOptions();
+      const entries = [
+        { app_name: 'ok', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'ok.example.com' },
+        { app_name: 'rej', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'rej.example.com' },
+      ];
+      const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+
+      expect(result.success).toBe(true);
+      const data = result.data as any;
+      // Both deploys still in the deployed list — domain failure doesn't promote to deploy failure.
+      expect(data.deployed.map((d: any) => d.name)).toEqual(expect.arrayContaining(['ok', 'rej']));
+      expect(data.failed).toHaveLength(0);
+      // Summary message calls out the domain failure distinctly.
+      expect(data.message).toMatch(/Custom domain attach failed for: rej \(chain rejected with code 7\)/);
+    });
+
+    it('caches customDomains in registry after successful attach', async () => {
+      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
+      const { reg, opts } = makeDomainOptions();
+      const updateSpy = vi.spyOn(reg, 'updateApp');
+      const entries = [
+        { app_name: 'cached', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'cached.example.com' },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+
+      // Among the multiple updateApp calls during the deploy, one must include
+      // the just-attached customDomains entry.
+      const domainUpdate = updateSpy.mock.calls.find(
+        (c) => Array.isArray((c[2] as any).customDomains)
+      );
+      expect(domainUpdate).toBeDefined();
+      expect((domainUpdate![2] as any).customDomains).toEqual([
+        { serviceName: '', customDomain: 'cached.example.com' },
+      ]);
+    });
   });
 });
 
