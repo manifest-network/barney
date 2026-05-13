@@ -39,6 +39,7 @@ vi.mock('../utils/errors', () => ({
 import { useDnsStatusPolling, deriveCandidateTargets } from './useDnsStatusPolling';
 import { useVisibilityPolling } from './useVisibilityPolling';
 import { resolveDnsViaDoh, probeHttps, computeStatus } from '../utils/customDomainStatus';
+import { resolveExpectedCnameTarget } from '../utils/connection';
 import type { AppEntry } from '../registry/appRegistry';
 
 function makeApp(overrides: Partial<AppEntry> = {}): AppEntry {
@@ -147,6 +148,48 @@ describe('useDnsStatusPolling', () => {
     const entry = next.get('lease-1::app.example.com');
     expect(entry?.kind).toBe('pending_dns');
     expect(entry?.detail).toBe('Pointed at wrong.host — expected auto.barney0.manifest0.net');
+  });
+
+  // Regression: prior to the customDomainStatus gate at known-target, an
+  // undefined `expectedCnameTarget` on tick 1 produced `active` via the
+  // no-cors HTTPS probe, and the polling driver's terminal filter (line 108)
+  // locked it in. Tick 2 (after the target appeared in `app.connection` —
+  // e.g. a successful Fred round-trip after a fallback path) was skipped
+  // because `isTerminal` filtered the entry out of the polling set.
+  // After the fix, tick 1 stays `pending_dns` (non-terminal), so tick 2 is
+  // still in the polling set and can transition to `active`. See PR #93
+  // Copilot 3237018335.
+  it('transitions out of pending_dns once expectedCnameTarget becomes available', async () => {
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok' } as any);
+    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' } as any);
+
+    // Tick 1: target undefined → reducer returns pending_dns (mocked).
+    vi.mocked(resolveExpectedCnameTarget).mockReturnValueOnce(undefined);
+    vi.mocked(computeStatus).mockReturnValueOnce({
+      kind: 'pending_dns',
+      detail: 'Waiting for provider info…',
+    } as any);
+
+    mounted = mountWith([makeApp()]);
+    await pollFn();
+    const firstCall = setDnsStatuses.mock.calls[0][0] as Map<string, { kind: string }>;
+    expect(firstCall.get('lease-1::app.example.com')?.kind).toBe('pending_dns');
+
+    // Simulate the slice update landing — the next tick's terminal filter
+    // (`isTerminal` at line 108) reads from this map. `pending_dns` is
+    // non-terminal, so the entry STAYS in the polling set.
+    dnsStatuses = firstCall;
+
+    // Tick 2: target now populated → reducer returns active.
+    vi.mocked(resolveExpectedCnameTarget).mockReturnValueOnce('auto.barney0.manifest0.net');
+    vi.mocked(computeStatus).mockReturnValueOnce({ kind: 'active' } as any);
+
+    flushSync(() => { mounted!.root.render(createElement(Wrapper, { apps: [makeApp()] })); });
+    await pollFn();
+    const lastCall = setDnsStatuses.mock.calls[setDnsStatuses.mock.calls.length - 1][0] as Map<string, { kind: string }>;
+    expect(lastCall.get('lease-1::app.example.com')?.kind).toBe('active');
   });
 
   it('flips polling off when a slice update marks the only domain terminal', () => {

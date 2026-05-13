@@ -12,11 +12,25 @@ describe('computeStatus', () => {
   });
 
   it('returns issuing_cert when DNS ok but HTTPS unreachable', () => {
-    expect(computeStatus({ dns: { result: 'ok', cname: 'foo.bar' }, https: { result: 'unreachable' } })).toEqual({ kind: 'issuing_cert' });
+    // Fixture updated: provide expectedCname so the new known-target gate
+    // doesn't short-circuit to pending. Test intent (DNS resolves to the
+    // right target but HTTPS handshake hasn't completed → issuing) is
+    // unchanged.
+    expect(computeStatus({
+      dns: { result: 'ok', cname: 'foo.bar' },
+      https: { result: 'unreachable' },
+      expectedCname: 'foo.bar',
+    })).toEqual({ kind: 'issuing_cert' });
   });
 
   it('returns active when both DNS and HTTPS ok', () => {
-    expect(computeStatus({ dns: { result: 'ok', cname: 'foo.bar' }, https: { result: 'ok' } })).toEqual({ kind: 'active' });
+    // Fixture updated: provide expectedCname matching the resolved cname so
+    // the new known-target gate doesn't short-circuit to pending.
+    expect(computeStatus({
+      dns: { result: 'ok', cname: 'foo.bar' },
+      https: { result: 'ok' },
+      expectedCname: 'foo.bar',
+    })).toEqual({ kind: 'active' });
   });
 
   it('returns pending_dns with mismatch detail when DNS points at wrong CNAME target', () => {
@@ -95,17 +109,47 @@ describe('computeStatus', () => {
     expect(r.detail).toBe('Pointed at wrong.host — expected expected.host');
   });
 
-  it('does not require cname when expectedCname is unset (A record alone is fine)', () => {
-    expect(
-      computeStatus({
-        dns: { result: 'ok', addresses: ['1.2.3.4'] },
-        https: { result: 'ok' },
-      }),
-    ).toEqual({ kind: 'active' });
+  // Regression: without an expected CNAME target the reducer can't validate
+  // the user's DNS config, and the no-cors HTTPS probe succeeds for any
+  // responsive host. Reaching `active` here would terminal-lock a
+  // false-positive (useDnsStatusPolling.ts:108 filters terminal entries out
+  // of subsequent polls — even after the target appears in the registry).
+  // See PR #93 Copilot 3237018335.
+  it('returns pending_dns when expectedCname is undefined (target not yet known)', () => {
+    const r = computeStatus({
+      dns: { result: 'ok', addresses: ['1.2.3.4'] },
+      https: { result: 'ok' },
+    });
+    expect(r.kind).toBe('pending_dns');
+    expect(r.detail).toMatch(/Waiting for provider/);
+  });
+
+  // Apex domains skip the A-only gate (RFC 1912 / RFC 1034 §3.6.2 — apex
+  // CNAMEs are forbidden, so apex configs legitimately resolve via A/AAAA).
+  // But without an expected target, there's no oracle to validate against
+  // — same terminal-lock hazard as non-apex. Both arms gate on target
+  // availability before reaching active.
+  it('apex domain with undefined target still pending_dns (no oracle to check against)', () => {
+    const r = computeStatus({
+      dns: { result: 'ok', addresses: ['1.2.3.4'] },
+      https: { result: 'ok' },
+      isApex: true,
+    });
+    expect(r.kind).toBe('pending_dns');
+    expect(r.detail).toMatch(/Waiting for provider/);
   });
 
   it('leaves detail unset when there is no mismatch to report', () => {
-    const r = computeStatus({ dns: { result: 'ok' }, https: { result: 'ok' } });
+    // Fixture updated post-`5656d94`: undefined `expectedCname` now sets a
+    // "Waiting for provider…" detail by design. The "no detail when nothing
+    // to report" assertion stays valid in the known-target-matching-CNAME
+    // path, which is what this test now exercises.
+    const r = computeStatus({
+      dns: { result: 'ok', cname: 'expected.host' },
+      https: { result: 'ok' },
+      expectedCname: 'expected.host',
+    });
+    expect(r.kind).toBe('active');
     expect(r.detail).toBeUndefined();
   });
 });

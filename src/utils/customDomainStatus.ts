@@ -246,38 +246,59 @@ export function computeStatus(input: ComputeStatusInput): CustomDomainStatusRepo
 
   if (dns.result !== 'ok') return { kind: 'pending_dns' };
 
-  if (expectedCname) {
-    const expected = normalizeFqdn(expectedCname);
-    const actual = dns.cname ? normalizeFqdn(dns.cname) : undefined;
-    if (actual && actual !== expected) {
-      // Wrong CNAME target: tell the user *what* they typed and *what we want*.
-      // Without this, the card is indistinguishable from "no record at all"
-      // and the 5-min "verify with dig" hint reads as a network problem.
-      return {
-        kind: 'pending_dns',
-        detail: `Pointed at ${actual} — expected ${expected}`,
-      };
-    }
-    if (!actual && !isApex) {
-      // No CNAME, expected one, and not an apex. The user pointed A/AAAA at
-      // an unrelated host. Without this branch, the HTTPS no-cors probe
-      // below would let ANY responsive endpoint flash `active` and the
-      // sidebar dot would go green for someone else's app.
-      //
-      // Apex domains skip this check because RFC 1912 / RFC 1034 §3.6.2
-      // forbid CNAME at the apex — apexes legitimately serve from A/AAAA
-      // via ALIAS / ANAME / CNAME-flattening. There IS a residual hole on
-      // the apex side: a user who points the apex A record at an unrelated
-      // responsive HTTPS host still gets a false `active` here, because
-      // browser fetch with `mode: 'no-cors'` can't verify which origin
-      // actually answered. The authoritative fix is a fred read-side
-      // status endpoint (ENG-59 follow-up); this reducer only closes the
-      // non-apex hole, which is the larger blast radius today.
-      return {
-        kind: 'pending_dns',
-        detail: `Expected a CNAME to ${expected} — got an A/AAAA record. Replace with a CNAME (apex domains: use ALIAS / ANAME instead).`,
-      };
-    }
+  // Without an expected CNAME target we can't validate the user's DNS
+  // configuration. Reaching `active` here would terminal-lock a false-positive:
+  // the HTTPS no-cors probe succeeds for any responsive HTTPS host, and the
+  // polling driver filters terminal entries out at useDnsStatusPolling.ts:108,
+  // so a later registry update populating `connection`/the target wouldn't
+  // trigger a re-poll. Stay in `pending_dns` until the target is known.
+  //
+  // Common windows where target is undefined:
+  //  - `fallbackToChainState` (fred timeout / fred throws) doesn't populate
+  //    `connection` — Task #36 ships customDomains via fallback but the
+  //    connection object stays undefined until a successful Fred round-trip.
+  //  - Stack deploys before the service-level fqdn has landed.
+  //  - Any path that calls `resolveExpectedCnameTarget` before a successful
+  //    `getLeaseConnectionInfo` returns.
+  //
+  // Apex domains don't bypass this gate either — without an oracle to
+  // validate against, there's no way to distinguish a correctly-configured
+  // apex from a misconfigured one (same terminal-lock hazard as non-apex).
+  if (!expectedCname) {
+    return { kind: 'pending_dns', detail: 'Waiting for provider info…' };
+  }
+
+  const expected = normalizeFqdn(expectedCname);
+  const actual = dns.cname ? normalizeFqdn(dns.cname) : undefined;
+
+  if (actual && actual !== expected) {
+    // Wrong CNAME target: tell the user *what* they typed and *what we want*.
+    // Without this, the card is indistinguishable from "no record at all"
+    // and the 5-min "verify with dig" hint reads as a network problem.
+    return {
+      kind: 'pending_dns',
+      detail: `Pointed at ${actual} — expected ${expected}`,
+    };
+  }
+  if (!actual && !isApex) {
+    // No CNAME, expected one, and not an apex. The user pointed A/AAAA at
+    // an unrelated host. Without this branch, the HTTPS no-cors probe
+    // below would let ANY responsive endpoint flash `active` and the
+    // sidebar dot would go green for someone else's app.
+    //
+    // Apex domains skip this check because RFC 1912 / RFC 1034 §3.6.2
+    // forbid CNAME at the apex — apexes legitimately serve from A/AAAA
+    // via ALIAS / ANAME / CNAME-flattening. There IS a residual hole on
+    // the apex side: a user who points the apex A record at an unrelated
+    // responsive HTTPS host still gets a false `active` here, because
+    // browser fetch with `mode: 'no-cors'` can't verify which origin
+    // actually answered. The authoritative fix is a fred read-side
+    // status endpoint (ENG-59 follow-up); this reducer only closes the
+    // non-apex hole, which is the larger blast radius today.
+    return {
+      kind: 'pending_dns',
+      detail: `Expected a CNAME to ${expected} — got an A/AAAA record. Replace with a CNAME (apex domains: use ALIAS / ANAME instead).`,
+    };
   }
 
   if (https.result === 'ok') return { kind: 'active' };
