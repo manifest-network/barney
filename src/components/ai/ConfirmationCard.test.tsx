@@ -980,6 +980,34 @@ describe('ConfirmationCard with stack manifest', () => {
       } finally { cleanup(); }
     });
 
+    // Regression: single-service stacks have no picker (intentional — a
+    // 1-option dropdown is just noise), so `handleConfirm` used to clobber
+    // the service name to ''. The downstream set-domain TX then went out
+    // with service_name='' and got rejected against the named LeaseItem.
+    // Both the AI-prefill path and the user-types-it-themselves path need
+    // to preserve the lone service name through to onConfirm.
+    it('preserves the auto-selected service name for single-service stack deploys', async () => {
+      const { container, onConfirm, cleanup } = renderInto(
+        makeDeployAction({ _serviceNames: ['wp'], customDomain: 'foo.com', customDomainServiceName: 'wp' })
+      );
+      try {
+        await settleAsyncValidation();
+        flushSync(() => findConfirmBtn(container).click());
+        expect(onConfirm.mock.calls[0][0].editedCustomDomainServiceName).toBe('wp');
+      } finally { cleanup(); }
+    });
+
+    it('auto-selects the lone service when user types a domain into a single-service stack', async () => {
+      const { container, onConfirm, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['wp'] }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'foo.com'));
+        await settleAsyncValidation();
+        flushSync(() => findConfirmBtn(container).click());
+        expect(onConfirm.mock.calls[0][0].editedCustomDomainServiceName).toBe('wp');
+      } finally { cleanup(); }
+    });
+
     it('disables Confirm when a stack has a domain entered but no service picked', async () => {
       const { container, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['web', 'db'] }));
       try {

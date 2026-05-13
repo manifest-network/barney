@@ -142,16 +142,31 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   // "deploy redis with custom domain X" pre-fills the input. Empty input means
   // "no domain attached" — the deploy proceeds without firing the set-domain TX.
   const isDeployApp = action.toolName === 'deploy_app';
-  const stackServiceNames = useMemo(() => {
+  const allStackServiceNames = useMemo(() => {
     if (!isDeployApp) return undefined;
     const sn = action.args._serviceNames;
-    return Array.isArray(sn) && sn.length > 1 ? (sn as string[]) : undefined;
+    return Array.isArray(sn) ? (sn as string[]) : undefined;
   }, [isDeployApp, action.args._serviceNames]);
+  // Multi-service stacks expose the picker; single-service stacks auto-select
+  // (see `singleStackService` below) so the user doesn't have to pick from a
+  // 1-option dropdown. Image+port deploys have no `_serviceNames` at all.
+  const stackServiceNames = useMemo(
+    () => (allStackServiceNames && allStackServiceNames.length > 1 ? allStackServiceNames : undefined),
+    [allStackServiceNames],
+  );
+  const singleStackService = allStackServiceNames && allStackServiceNames.length === 1
+    ? allStackServiceNames[0]
+    : '';
 
   const initialDomain = typeof action.args.customDomain === 'string' ? action.args.customDomain : '';
+  // Fall back to the lone stack service so a user typing a domain into a
+  // single-service stack card (no picker shown) still threads the service
+  // name through to confirm. Without this fallback, `handleConfirm` used to
+  // overwrite the AI-prefilled service name to '' and the post-broadcast
+  // set-domain TX got rejected against the named LeaseItem.
   const initialServiceName = typeof action.args.customDomainServiceName === 'string'
     ? action.args.customDomainServiceName
-    : '';
+    : singleStackService;
   const [editedCustomDomain, setEditedCustomDomain] = useState(initialDomain);
   const [editedCustomDomainServiceName, setEditedCustomDomainServiceName] = useState(initialServiceName);
 
@@ -239,11 +254,14 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     const overrides: ConfirmActionOverrides = {};
     if (manifestOverride) overrides.editedManifestJson = manifestOverride;
     overrides.editedCustomDomain = editedDomainTrimmed;
-    overrides.editedCustomDomainServiceName = editedDomainTrimmed
-      ? (stackServiceNames ? editedCustomDomainServiceName : '')
-      : '';
+    // State already carries the right value across all code paths:
+    //  - image+port (no _serviceNames): initialServiceName = ''
+    //  - single-service stack: initialServiceName = singleStackService (or AI-prefilled)
+    //  - multi-service stack: initialServiceName = AI-prefilled or '' (picker fills it,
+    //    and stackServicePickerError blocks confirm when still '')
+    overrides.editedCustomDomainServiceName = editedDomainTrimmed ? editedCustomDomainServiceName : '';
     onConfirm(overrides);
-  }, [editedManifest, editedStack, isDeployApp, editedDomainTrimmed, editedCustomDomainServiceName, stackServiceNames, onConfirm]);
+  }, [editedManifest, editedStack, isDeployApp, editedDomainTrimmed, editedCustomDomainServiceName, onConfirm]);
 
   // Filter to user-facing args only. The AI tool schema in AI_TOOLS is the
   // single source of truth — this avoids the drift bug where every new TX
