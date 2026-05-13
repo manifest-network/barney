@@ -333,8 +333,40 @@ describe('executeAppStatus', () => {
     }
   });
 
-  it('does NOT emit no-domain card for multi-item leases', async () => {
-    const app = makeApp({ status: 'running' });
+  it('does NOT emit no-domain card for legacy multi-item leases with all-unnamed items', async () => {
+    // Pre-ENG-56 stacks: chain LeaseItems lack service names. The stored
+    // manifest still claims named services, but `executeSetCustomDomain`
+    // rejects these with "predates per-service domains and has multiple
+    // items without service names" (compositeTransactions.ts:2871-2876).
+    // Gate must read from chain truth, not the manifest — otherwise the
+    // user fills a doomed form and only sees the error at TX time.
+    // See PR #93 Copilot 3236552275.
+    const app = makeApp({
+      status: 'running',
+      manifest: JSON.stringify({ services: { web: { image: 'nginx' }, db: { image: 'postgres' } } }),
+    });
+    vi.mocked(getLease).mockResolvedValue({
+      state: 2,
+      items: [
+        { skuUuid: 's1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: '', customDomain: '' },
+        { skuUuid: 's2', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: '', customDomain: '' },
+      ],
+    } as any);
+    const registry = makeRegistry([app]);
+    const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
+    expect(result.success).toBe(true);
+    if (result.success && !result.requiresConfirmation) {
+      expect(result.displayCard).toBeUndefined();
+    }
+  });
+
+  it('emits no-domain card with chain-derived picker for modern multi-item named stacks', async () => {
+    // Happy path for modern stacks: chain has named items, attach is allowed,
+    // picker offers the chain-derived service names.
+    const app = makeApp({
+      status: 'running',
+      connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' },
+    });
     vi.mocked(getLease).mockResolvedValue({
       state: 2,
       items: [
@@ -346,7 +378,40 @@ describe('executeAppStatus', () => {
     const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
     expect(result.success).toBe(true);
     if (result.success && !result.requiresConfirmation) {
-      expect(result.displayCard).toBeUndefined();
+      expect(result.displayCard?.type).toBe('custom_domain');
+      if (result.displayCard?.type === 'custom_domain') {
+        expect(result.displayCard.data.fqdn).toBe('');
+        expect(result.displayCard.data.serviceNames).toEqual(['web', 'db']);
+      }
+    }
+  });
+
+  it('drops unnamed items from picker for mixed named/unnamed lease items', async () => {
+    // Edge case: chain has one named + one unnamed item. The chain accepts
+    // attach to the named one (executeSetCustomDomain auto-selects when only
+    // one named item exists). Picker must NOT include the unnamed sibling —
+    // the chain has no way to address it for set-domain.
+    const app = makeApp({
+      status: 'running',
+      // Manifest claims both services, but chain truth says only one is named.
+      manifest: JSON.stringify({ services: { web: { image: 'nginx' }, db: { image: 'postgres' } } }),
+      connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' },
+    });
+    vi.mocked(getLease).mockResolvedValue({
+      state: 2,
+      items: [
+        { skuUuid: 's1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: 'web', customDomain: '' },
+        { skuUuid: 's2', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: '', customDomain: '' },
+      ],
+    } as any);
+    const registry = makeRegistry([app]);
+    const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
+    expect(result.success).toBe(true);
+    if (result.success && !result.requiresConfirmation) {
+      expect(result.displayCard?.type).toBe('custom_domain');
+      if (result.displayCard?.type === 'custom_domain') {
+        expect(result.displayCard.data.serviceNames).toEqual(['web']);
+      }
     }
   });
 

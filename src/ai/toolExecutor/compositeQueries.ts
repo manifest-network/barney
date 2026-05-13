@@ -307,26 +307,37 @@ export async function executeAppStatus(
         ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
       },
     };
-  } else if (
-    customDomains.length === 0 &&
-    currentStatus === 'running' &&
-    (lease?.items.length === 1 || stackServiceNames.length >= 1)
-  ) {
-    // Single-service legacy lease: pre-fill the picker-less form.
-    // Stack: AI hasn't disambiguated; the picker prompts the user.
-    const serviceName = lease?.items.length === 1 ? lease.items[0].serviceName : '';
-    displayCard = {
-      type: 'custom_domain',
-      data: {
-        appName: app.name,
-        fqdn: '',
-        leaseUuid: app.leaseUuid,
-        serviceName,
-        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
-        expectedAddress: address,
-        ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
-      },
-    };
+  } else if (customDomains.length === 0 && currentStatus === 'running') {
+    // Gate on chain LeaseItem service names, not the stored manifest. The
+    // manifest-derived `stackServiceNames` would let pre-ENG-56 legacy stacks
+    // (all-unnamed chain items but a stored manifest claiming named services)
+    // reach the no-domain form — the user would happily fill it in, then
+    // `executeSetCustomDomain` rejects at TX time with "predates per-service
+    // domains". This gate mirrors the chain truth table at
+    // `compositeTransactions.ts:2858-2901`:
+    //   - single-item (any name shape): attach allowed, auto-pick the lone item
+    //   - multi-item with ≥1 named: attach allowed, picker shows named only
+    //   - multi-item, all unnamed: chain rejects → don't show form
+    const leaseItems = lease?.items ?? [];
+    const namedServiceNames = leaseItems
+      .filter((i) => i.serviceName !== '')
+      .map((i) => i.serviceName);
+    const canAttachDomain = leaseItems.length === 1 || namedServiceNames.length > 0;
+    if (canAttachDomain) {
+      const serviceName = leaseItems.length === 1 ? leaseItems[0].serviceName : '';
+      displayCard = {
+        type: 'custom_domain',
+        data: {
+          appName: app.name,
+          fqdn: '',
+          leaseUuid: app.leaseUuid,
+          serviceName,
+          expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
+          expectedAddress: address,
+          ...(namedServiceNames.length > 0 ? { serviceNames: namedServiceNames } : {}),
+        },
+      };
+    }
   }
 
   const data: ToolData<'app_status'> = {
