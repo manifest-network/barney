@@ -62,8 +62,9 @@ function StatusPill({ kind }: { kind: CustomDomainStatusKind }) {
 function NoDomainForm({ data }: { data: CustomDomainCardData }) {
   const { sendMessage } = useAI();
   const [input, setInput] = useState('');
-  // Service picker for stacks — initial = AI-prefilled serviceName, falls back
-  // to first stack service if empty.
+  // Service picker for stacks — initial = AI-prefilled serviceName, else the
+  // lone stack service when there's only one. Multi-service stacks start empty
+  // to force an explicit pick (enforced by `stackNeedsService` below).
   const stackServices = data.serviceNames ?? [];
   const showServicePicker = stackServices.length > 1;
   const [selectedService, setSelectedService] = useState(
