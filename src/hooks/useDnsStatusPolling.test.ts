@@ -28,7 +28,7 @@ vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
-import { useDnsStatusPolling } from './useDnsStatusPolling';
+import { useDnsStatusPolling, deriveCandidateTargets } from './useDnsStatusPolling';
 import { useVisibilityPolling } from './useVisibilityPolling';
 import { resolveDnsViaDoh, probeHttps, computeStatus } from '../utils/customDomainStatus';
 import type { AppEntry } from '../registry/appRegistry';
@@ -139,5 +139,70 @@ describe('useDnsStatusPolling', () => {
     const entry = next.get('lease-1::app.example.com');
     expect(entry?.kind).toBe('pending_dns');
     expect(entry?.detail).toBe('Pointed at wrong.host — expected auto.barney0.manifest0.net');
+  });
+
+  it('flips polling off when a slice update marks the only domain terminal', () => {
+    mounted = mountWith([makeApp()]);
+    {
+      const calls = vi.mocked(useVisibilityPolling).mock.calls;
+      const opts = calls[calls.length - 1][2];
+      expect(opts?.enabled).toBe(true);
+    }
+
+    // Mutate the slice the hook sees and force a re-render. Mirrors the real
+    // effect of `setDnsStatuses` landing in the store between polls.
+    dnsStatuses = new Map([
+      ['lease-1::app.example.com', { kind: 'active' }],
+    ]);
+    flushSync(() => { mounted!.root.render(createElement(Wrapper, { apps: [makeApp()] })); });
+
+    const calls = vi.mocked(useVisibilityPolling).mock.calls;
+    const opts = calls[calls.length - 1][2];
+    expect(opts?.enabled).toBe(false);
+  });
+});
+
+describe('deriveCandidateTargets', () => {
+  it('returns an empty list for no apps', () => {
+    expect(deriveCandidateTargets([])).toEqual([]);
+  });
+
+  it('returns one entry per (running-app, customDomain) pair', () => {
+    const apps = [
+      makeApp({
+        leaseUuid: 'lease-A',
+        customDomains: [
+          { serviceName: '', customDomain: 'a.example.com' },
+          { serviceName: 'web', customDomain: 'b.example.com' },
+        ],
+      }),
+      makeApp({ leaseUuid: 'lease-B', customDomains: [{ serviceName: '', customDomain: 'c.example.com' }] }),
+    ];
+    const targets = deriveCandidateTargets(apps);
+    expect(targets).toHaveLength(3);
+    expect(targets.map((t) => t.domain).sort()).toEqual([
+      'a.example.com', 'b.example.com', 'c.example.com',
+    ]);
+  });
+
+  it('excludes stopped apps', () => {
+    const apps = [
+      makeApp({ status: 'stopped' }),
+      makeApp({ leaseUuid: 'lease-2', status: 'running' }),
+    ];
+    const targets = deriveCandidateTargets(apps);
+    expect(targets).toHaveLength(1);
+    expect(targets[0].app.leaseUuid).toBe('lease-2');
+  });
+
+  it('excludes apps with no customDomains', () => {
+    const apps = [
+      makeApp({ customDomains: undefined }),
+      makeApp({ leaseUuid: 'lease-2', customDomains: [] }),
+      makeApp({ leaseUuid: 'lease-3', customDomains: [{ serviceName: '', customDomain: 'x.example.com' }] }),
+    ];
+    const targets = deriveCandidateTargets(apps);
+    expect(targets).toHaveLength(1);
+    expect(targets[0].app.leaseUuid).toBe('lease-3');
   });
 });

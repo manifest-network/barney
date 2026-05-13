@@ -34,34 +34,61 @@ import type { AppEntry } from '../registry/appRegistry';
 import { dnsStatusKey, type DnsStatusEntry } from '../stores/aiStore';
 import { DNS_POLL_INTERVAL_MS } from '../config/constants';
 
+/** Candidate polling target — one per (app, custom-domain) pair. */
+export interface DnsPollingTarget {
+  app: AppEntry;
+  domain: string;
+  serviceName: string;
+}
+
+/** Pure derivation of polling candidates from the registry. Does NOT consult
+ *  `dnsStatuses` — terminal-state filtering happens later, at poll-fire time,
+ *  against the freshest slice via `dnsStatusesRef`. Exported for direct unit
+ *  testing.
+ *
+ *  Keeping this pure-by-construction means the memo that wraps it only
+ *  recomputes when the registry mutates, not on every probe write. */
+export function deriveCandidateTargets(apps: readonly AppEntry[]): DnsPollingTarget[] {
+  const list: DnsPollingTarget[] = [];
+  for (const app of apps) {
+    if (!app.customDomains || app.customDomains.length === 0) continue;
+    if (app.status !== 'running') continue;
+    for (const dom of app.customDomains) {
+      list.push({ app, domain: dom.customDomain, serviceName: dom.serviceName });
+    }
+  }
+  return list;
+}
+
+/** Predicate: is this domain in a terminal state (active or failed)?
+ *  Encapsulates the once-active-stop-polling rule. */
+function isTerminal(entry: DnsStatusEntry | undefined): boolean {
+  return entry?.kind === 'active' || entry?.kind === 'failed';
+}
+
 export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
   const { dnsStatuses, setDnsStatuses } = useAI();
 
-  /** Apps that have at least one domain whose status isn't yet terminal.
-   *  Once every domain is `active` or `failed` we don't need to keep polling
-   *  — the user can refresh via `app_status` to re-detect. */
-  const targets = useMemo(() => {
-    const list: { app: AppEntry; domain: string; serviceName: string }[] = [];
-    for (const app of apps) {
-      if (!app.customDomains || app.customDomains.length === 0) continue;
-      if (app.status !== 'running') continue;
-      for (const dom of app.customDomains) {
-        const cur = dnsStatuses.get(dnsStatusKey(app.leaseUuid, dom.customDomain));
-        if (cur && (cur.kind === 'active' || cur.kind === 'failed')) continue;
-        list.push({ app, domain: dom.customDomain, serviceName: dom.serviceName });
-      }
-    }
-    return list;
-  }, [apps, dnsStatuses]);
+  /** All candidate (app, domain) pairs from the running registry. Stable
+   *  across `dnsStatuses` writes — re-derived only when `apps` changes. */
+  const allTargets = useMemo(() => deriveCandidateTargets(apps), [apps]);
+
+  /** Cheap inline reduce — drives `enabled` for the visibility hook. Reads
+   *  the live `dnsStatuses` so polling actually stops once every candidate
+   *  hits a terminal state. No allocation; the candidate list itself is
+   *  reference-stable. */
+  const hasNonTerminalTarget = allTargets.some(({ app, domain }) =>
+    !isTerminal(dnsStatuses.get(dnsStatusKey(app.leaseUuid, domain))),
+  );
 
   // Refs so the poll callback doesn't depend on dnsStatuses/targets directly
   // — `dnsStatuses` updates every successful poll (this very hook writes to
   // it), and depending on it would rebuild the callback on every cycle.
   // The callback reads via these refs to merge against the freshest map.
   const dnsStatusesRef = useRef(dnsStatuses);
-  const targetsRef = useRef(targets);
+  const allTargetsRef = useRef(allTargets);
   useEffect(() => { dnsStatusesRef.current = dnsStatuses; });
-  useEffect(() => { targetsRef.current = targets; });
+  useEffect(() => { allTargetsRef.current = allTargets; });
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -71,7 +98,14 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
   useEffect(() => () => abortRef.current?.abort(), []);
 
   const poll = useCallback(async () => {
-    const current = targetsRef.current;
+    // Filter terminal targets at the moment polling fires, using the freshest
+    // map (not the closure-captured snapshot from when the callback was
+    // memoized). The candidate list itself never carries this filter, so
+    // its memo doesn't churn on slice writes.
+    const liveDns = dnsStatusesRef.current;
+    const current = allTargetsRef.current.filter(
+      ({ app, domain }) => !isTerminal(liveDns.get(dnsStatusKey(app.leaseUuid, domain))),
+    );
     if (current.length === 0) return;
 
     abortRef.current?.abort();
@@ -116,7 +150,7 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
   }, [setDnsStatuses]);
 
   useVisibilityPolling(poll, DNS_POLL_INTERVAL_MS, {
-    enabled: targets.length > 0,
+    enabled: hasNonTerminalTarget,
     context: 'useDnsStatusPolling',
   });
 }
