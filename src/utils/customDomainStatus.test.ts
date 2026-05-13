@@ -52,6 +52,49 @@ describe('computeStatus', () => {
     ).toEqual({ kind: 'active' });
   });
 
+  // Regression: a user points an A record (no CNAME) at an unrelated HTTPS
+  // host. Without the apex-aware mismatch check, the no-cors HTTPS probe
+  // lets ANY responsive endpoint flash `active` and the sidebar dot would
+  // go green for the wrong app. See PR #93 Copilot 3236837816.
+  it('flags A-only DNS as pending_dns for non-apex with expected CNAME', () => {
+    const r = computeStatus({
+      dns: { result: 'ok', addresses: ['1.2.3.4'] },
+      https: { result: 'ok' },
+      expectedCname: 'auto.barney0.manifest0.net',
+      isApex: false,
+    });
+    expect(r.kind).toBe('pending_dns');
+    expect(r.detail).toMatch(/CNAME/);
+    expect(r.detail).toMatch(/auto\.barney0\.manifest0\.net/);
+  });
+
+  // Apex domains can't use CNAME per RFC 1912 — legitimate apex configs
+  // resolve via A/AAAA from ALIAS / ANAME / CNAME-flattening. Skip the new
+  // missing-CNAME check for apex; the HTTPS probe still decides active vs
+  // issuing.
+  it('allows A-only DNS for apex domains with expected CNAME (ALIAS / ANAME legal)', () => {
+    const r = computeStatus({
+      dns: { result: 'ok', addresses: ['1.2.3.4'] },
+      https: { result: 'ok' },
+      expectedCname: 'auto.barney0.manifest0.net',
+      isApex: true,
+    });
+    expect(r.kind).toBe('active');
+  });
+
+  // Regression baseline: the existing wrong-CNAME mismatch path is
+  // unchanged regardless of apex status — wrong target is wrong target.
+  it('still detects CNAME mismatch for non-apex when CNAME present', () => {
+    const r = computeStatus({
+      dns: { result: 'ok', cname: 'wrong.host' },
+      https: { result: 'ok' },
+      expectedCname: 'expected.host',
+      isApex: false,
+    });
+    expect(r.kind).toBe('pending_dns');
+    expect(r.detail).toBe('Pointed at wrong.host — expected expected.host');
+  });
+
   it('does not require cname when expectedCname is unset (A record alone is fine)', () => {
     expect(
       computeStatus({

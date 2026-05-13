@@ -29,6 +29,7 @@ import {
   resolveDnsViaDoh,
 } from '../utils/customDomainStatus';
 import { resolveExpectedCnameTarget } from '../utils/connection';
+import { isApex } from '../utils/customDomainValidation';
 import { logError } from '../utils/errors';
 import type { AppEntry } from '../registry/appRegistry';
 import { dnsStatusKey, type DnsStatusEntry } from '../stores/aiStore';
@@ -119,7 +120,12 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
           resolveDnsViaDoh(domain, ac.signal),
           probeHttps(domain, ac.signal),
         ]);
-        const report = computeStatus({ dns, https, expectedCname: expectedCnameTarget });
+        const report = computeStatus({
+          dns,
+          https,
+          expectedCname: expectedCnameTarget,
+          isApex: isApex(domain),
+        });
         const entry: DnsStatusEntry = {
           leaseUuid: app.leaseUuid,
           customDomain: domain,

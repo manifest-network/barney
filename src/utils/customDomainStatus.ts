@@ -218,6 +218,15 @@ export interface ComputeStatusInput {
   https: HttpsProbeResult;
   /** Provider-issued FQDN we expect the user's CNAME to point at. */
   expectedCname?: string;
+  /** True iff `fqdn` is the zone apex. Apex domains legitimately resolve to
+   *  A/AAAA via ALIAS / ANAME / CNAME-flattening (RFC 1912 / RFC 1034 §3.6.2
+   *  forbid CNAME at apex). Without this flag, computeStatus can't tell a
+   *  correctly-configured apex from a non-apex pointed via A at an unrelated
+   *  HTTPS host — the latter would fall through to the no-cors HTTPS probe,
+   *  which lets any responsive endpoint flash `active`. Caller should compute
+   *  via `isApex()` from `customDomainValidation.ts`. Defaults to non-apex
+   *  (the more conservative require-CNAME path) when omitted. */
+  isApex?: boolean;
 }
 
 /**
@@ -225,7 +234,7 @@ export interface ComputeStatusInput {
  *   - DNS not present       → pending_dns
  *   - DNS resolves but HTTPS unreachable → issuing_cert (Traefik resolver in flight)
  *   - DNS + HTTPS ok        → active
- *   - DNS doesn't match expected target → pending_dns (user pointed at the wrong host)
+ *   - DNS doesn't match expected target → pending_dns (wrong CNAME, or A-only on non-apex)
  *
  * `failed` is reserved for an explicit fred status endpoint signal. Until that
  * exists, sustained `issuing_cert` is the closest approximation; the UI can
@@ -233,7 +242,7 @@ export interface ComputeStatusInput {
  * client-side compute and is the slot a future fred-backed reducer will fill.
  */
 export function computeStatus(input: ComputeStatusInput): CustomDomainStatusReport {
-  const { dns, https, expectedCname } = input;
+  const { dns, https, expectedCname, isApex } = input;
 
   if (dns.result !== 'ok') return { kind: 'pending_dns' };
 
@@ -241,12 +250,32 @@ export function computeStatus(input: ComputeStatusInput): CustomDomainStatusRepo
     const expected = normalizeFqdn(expectedCname);
     const actual = dns.cname ? normalizeFqdn(dns.cname) : undefined;
     if (actual && actual !== expected) {
-      // Wrong target: tell the user *what* they typed and *what we want*.
+      // Wrong CNAME target: tell the user *what* they typed and *what we want*.
       // Without this, the card is indistinguishable from "no record at all"
       // and the 5-min "verify with dig" hint reads as a network problem.
       return {
         kind: 'pending_dns',
         detail: `Pointed at ${actual} — expected ${expected}`,
+      };
+    }
+    if (!actual && !isApex) {
+      // No CNAME, expected one, and not an apex. The user pointed A/AAAA at
+      // an unrelated host. Without this branch, the HTTPS no-cors probe
+      // below would let ANY responsive endpoint flash `active` and the
+      // sidebar dot would go green for someone else's app.
+      //
+      // Apex domains skip this check because RFC 1912 / RFC 1034 §3.6.2
+      // forbid CNAME at the apex — apexes legitimately serve from A/AAAA
+      // via ALIAS / ANAME / CNAME-flattening. There IS a residual hole on
+      // the apex side: a user who points the apex A record at an unrelated
+      // responsive HTTPS host still gets a false `active` here, because
+      // browser fetch with `mode: 'no-cors'` can't verify which origin
+      // actually answered. The authoritative fix is a fred read-side
+      // status endpoint (ENG-59 follow-up); this reducer only closes the
+      // non-apex hole, which is the larger blast radius today.
+      return {
+        kind: 'pending_dns',
+        detail: `Expected a CNAME to ${expected} — got an A/AAAA record. Replace with a CNAME (apex domains: use ALIAS / ANAME instead).`,
       };
     }
   }

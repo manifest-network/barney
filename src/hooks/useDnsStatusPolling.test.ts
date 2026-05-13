@@ -24,6 +24,14 @@ vi.mock('../utils/connection', () => ({
   resolveExpectedCnameTarget: vi.fn().mockReturnValue('auto.barney0.manifest0.net'),
 }));
 
+// Stub isApex so the new computeStatus signature is exercised deterministically
+// and `tldts` stays out of the polling test's import graph. The polling test
+// mocks `computeStatus` itself (above), so the return value here doesn't
+// propagate to assertions — but the call must succeed.
+vi.mock('../utils/customDomainValidation', () => ({
+  isApex: vi.fn().mockReturnValue(false),
+}));
+
 vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
