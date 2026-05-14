@@ -40,8 +40,10 @@ export function MainLayout() {
   // CustomDomainCard) read from the resulting `dnsStatuses` slice.
   const { address } = useChain(CHAIN_NAME);
   const allApps = useRegistryApps(address);
-  const runningApps = allApps.filter((a) => a.status === 'running' || a.status === 'deploying');
-  useDnsStatusPolling(runningApps);
+  // `useRegistryApps` returns a reference-stable array; `useDnsStatusPolling`
+  // relies on that stability (its internal `deriveCandidateTargets` does its
+  // own status+customDomains filtering). Do not pre-filter here.
+  useDnsStatusPolling(allApps);
 
   // Close sidebar on Escape
   useEffect(() => {

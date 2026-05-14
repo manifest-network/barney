@@ -212,6 +212,36 @@ describe('useDnsStatusPolling', () => {
     expect(opts?.enabled).toBe(false);
   });
 
+  // Contract: useDnsStatusPolling treats a reference-stable `apps` array as a
+  // no-op for the abort-on-change cleanup effect. The hook memoizes
+  // `allTargets` on `[apps]` and the cleanup effect on line ~106 keys off
+  // `[allTargets]`. If a future change removes the `useMemo` (line ~75), every
+  // render produces a fresh `allTargets` array, fires the cleanup, and aborts
+  // every in-flight DoH/HTTPS probe on every parent re-render. This test goes
+  // red in that scenario. Forward-looking contract guard — not a behavior
+  // check on current code (the memo is in place; this passes today).
+  it('contract: does not abort in-flight probes when re-rendered with the same apps reference (memo guard)', async () => {
+    const abortSpy = vi.spyOn(AbortController.prototype, 'abort');
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok' } as any);
+    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' } as any);
+    vi.mocked(computeStatus).mockReturnValue({ kind: 'pending_dns' } as any);
+
+    const apps = [makeApp()]; // stable reference held across renders
+    mounted = mountWith(apps);
+    await pollFn();          // creates an AbortController for the first poll
+    abortSpy.mockClear();    // ignore any aborts from the poll itself
+
+    // Re-render with the EXACT same `apps` array reference. With the
+    // memo in place this is a no-op for `allTargets`; the cleanup effect
+    // doesn't fire; no abort.
+    flushSync(() => { mounted!.root.render(createElement(Wrapper, { apps })); });
+
+    expect(abortSpy).not.toHaveBeenCalled();
+    abortSpy.mockRestore();
+  });
+
   // Regression: prior to this fix, the cleanup effect at useDnsStatusPolling.ts:99
   // had an empty dep array — it only fired on hook unmount. Wallet switches
   // (which change `allTargets` but don't unmount) left in-flight DoH probes
