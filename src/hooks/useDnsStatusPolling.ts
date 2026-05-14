@@ -105,6 +105,43 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
   // zero targets so the next poll() tick never fires to call `abort()` itself.
   useEffect(() => () => abortRef.current?.abort(), [allTargets]);
 
+  // Prune stale `dnsStatuses` entries whose keys are no longer in the live
+  // candidate set. Runs reactively on `[allTargets]` because the canonical
+  // trap (clear-then-reattach the same (lease, domain)) holds polling
+  // DISABLED for its entire duration: `hasNonTerminalTarget` reads the stale
+  // terminal `active` entry at line ~81 during render, `useVisibilityPolling`
+  // is told `enabled=false`, and no poll fires while the trap is set — so
+  // any prune logic inside the poll callback would never run. This effect is
+  // the only place that can fire during the trap: a registry mutation
+  // triggers a re-render, this effect runs after commit, evicts the stale
+  // key, and the *next* render's `hasNonTerminalTarget` sees the empty slice
+  // and re-enables polling. Registered AFTER the ref-sync effect (line 91)
+  // so `dnsStatusesRef.current` is fresh — React runs effects in
+  // registration order.
+  //
+  // No-op guard: scan keys first and bail without calling `setDnsStatuses`
+  // when nothing needs eviction (the common case for an additive registry
+  // mutation — adds a new domain without removing any). Avoids a re-render
+  // on every `allTargets` change.
+  //
+  // Refs: PR #93 Copilot review comment 3243486930.
+  useEffect(() => {
+    const liveKeys = new Set(
+      allTargets.map((t) => dnsStatusKey(t.app.leaseUuid, t.domain)),
+    );
+    let needsPrune = false;
+    for (const key of dnsStatusesRef.current.keys()) {
+      if (!liveKeys.has(key)) { needsPrune = true; break; }
+    }
+    if (!needsPrune) return;
+
+    const next = new Map(dnsStatusesRef.current);
+    for (const key of next.keys()) {
+      if (!liveKeys.has(key)) next.delete(key);
+    }
+    setDnsStatuses(next);
+  }, [allTargets, setDnsStatuses]);
+
   const poll = useCallback(async () => {
     // Filter terminal targets at the moment polling fires, using the freshest
     // map (not the closure-captured snapshot from when the callback was

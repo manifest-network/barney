@@ -340,6 +340,67 @@ describe('useDnsStatusPolling', () => {
     );
     expect(writtenKeys).not.toContain('lease-1::detached.example.com');
   });
+
+  // Fix #2 — registry-change pruning effect. See PR #93 Copilot 3243486930.
+  //
+  // Test A: direct prune on candidate-set shrink. When a domain is dropped
+  // from the registry, the stale `dnsStatuses` entry for it must be evicted
+  // by the reactive `useEffect([allTargets])` so future renders don't see a
+  // ghost terminal row.
+  it('prunes stale dnsStatuses entries when a domain is removed from the candidate set', () => {
+    dnsStatuses = new Map([['lease-1::app.example.com', { kind: 'active' }]]);
+    mounted = mountWith([makeApp()]);
+    setDnsStatuses.mockClear();
+    flushSync(() => {
+      mounted!.root.render(createElement(Wrapper, { apps: [makeApp({ customDomains: [] })] }));
+    });
+    expect(setDnsStatuses).toHaveBeenCalledTimes(1);
+    const pruned = setDnsStatuses.mock.calls[0][0] as Map<string, unknown>;
+    expect(pruned.has('lease-1::app.example.com')).toBe(false);
+  });
+
+  // Test B (hero test for fix #2): canonical re-engagement after
+  // clear-then-reattach of the same (lease, domain). Before the fix, the
+  // stale terminal `active` entry from the prior attachment survived in
+  // `dnsStatuses`. `hasNonTerminalTarget` (hook line ~81) read it on every
+  // render, `useVisibilityPolling.enabled` stayed `false`, and the new
+  // attachment was never re-verified — polling was disabled for the entire
+  // duration of the trap. The reactive prune effect breaks the trap by
+  // evicting the stale key when the candidate set goes empty.
+  it('re-enables polling after clear-then-reattach of the same (lease, domain)', () => {
+    dnsStatuses = new Map([['lease-1::app.example.com', { kind: 'active' }]]);
+    mounted = mountWith([makeApp()]);
+    // Initially trapped (stale active): polling should be disabled.
+    let calls = vi.mocked(useVisibilityPolling).mock.calls;
+    expect(calls[calls.length - 1][2]?.enabled).toBe(false);
+
+    // Clear — pruning effect fires.
+    flushSync(() => {
+      mounted!.root.render(createElement(Wrapper, { apps: [makeApp({ customDomains: [] })] }));
+    });
+    // Simulate the slice update landing (mirrors existing test pattern).
+    const prunedCall = setDnsStatuses.mock.calls[setDnsStatuses.mock.calls.length - 1][0] as Map<string, { kind: string }>;
+    dnsStatuses = prunedCall;
+
+    // Reattach the same domain.
+    flushSync(() => { mounted!.root.render(createElement(Wrapper, { apps: [makeApp()] })); });
+
+    calls = vi.mocked(useVisibilityPolling).mock.calls;
+    expect(calls[calls.length - 1][2]?.enabled).toBe(true);
+  });
+
+  // Test C: no-op guard. Re-rendering with an unchanged candidate set (and
+  // no missing entries to evict) must NOT call `setDnsStatuses` — otherwise
+  // additive registry mutations would churn the store and re-render every
+  // consumer on every render. Locks in operator's no-op guard amendment.
+  it('does not call setDnsStatuses on re-render when the candidate set is unchanged', () => {
+    dnsStatuses = new Map([['lease-1::app.example.com', { kind: 'pending_dns' }]]);
+    const apps = [makeApp()];
+    mounted = mountWith(apps);
+    setDnsStatuses.mockClear();
+    flushSync(() => { mounted!.root.render(createElement(Wrapper, { apps })); });
+    expect(setDnsStatuses).not.toHaveBeenCalled();
+  });
 });
 
 describe('deriveCandidateTargets', () => {
