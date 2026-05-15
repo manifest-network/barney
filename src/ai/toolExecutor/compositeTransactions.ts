@@ -1034,6 +1034,33 @@ export async function executeDeployApp(
     if (validation.error) return { success: false, error: validation.error };
     customDomainWarning = validation.warning;
 
+    // Uniqueness pre-check. The set_custom_domain path does this at line ~2997;
+    // without it, a deploy can confirm and pay for a lease before the post-
+    // broadcast MsgSetItemCustomDomain is chain-rejected as duplicate, leaving
+    // the user charged for a non-functional deploy. Wrap in withTimeout to
+    // bound the latency cost — consistent with other LCD calls in this
+    // executor (compositeQueries.ts:52,54 and billingParams.ts).
+    // On error/timeout: fall through, chain remains authoritative.
+    // See PR #93 Copilot 3248436488.
+    try {
+      const existing = await withTimeout(
+        queryLeaseByCustomDomain(customDomain),
+        undefined,
+        'queryLeaseByCustomDomain',
+      );
+      if (existing) {
+        const heldByApp = appRegistry.getAppByLease(address, existing.leaseUuid);
+        const friendly = heldByApp ? `"${heldByApp.name}"` : 'another lease';
+        return {
+          success: false,
+          error: `"${customDomain}" is already attached to ${friendly}. Pick a different domain or detach it first.`,
+        };
+      }
+    } catch (err) {
+      logError('compositeTransactions.executeDeployApp.queryLeaseByCustomDomain', err);
+      // Don't block — chain remains authoritative.
+    }
+
     if (serviceNames && serviceNames.length > 1) {
       const explicit = typeof args.service_name === 'string' ? args.service_name.trim() : '';
       if (!explicit) {

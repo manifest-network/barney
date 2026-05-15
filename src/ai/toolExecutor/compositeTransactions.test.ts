@@ -98,6 +98,12 @@ vi.mock('../../registry/appRegistry', async (importOriginal) => {
   };
 });
 
+// Default: no collision. Tests that exercise the dedupe pre-check
+// override with `.mockResolvedValueOnce(...)` or `.mockRejectedValueOnce(...)`.
+vi.mock('../../api/leaseByCustomDomain', () => ({
+  queryLeaseByCustomDomain: vi.fn().mockResolvedValue(null),
+}));
+
 import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { DENOMS } from '../../api/config';
@@ -106,6 +112,7 @@ import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updat
 import { cosmosTx, setItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 import { uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
+import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
 const ADDRESS = 'manifest1abc';
 const CLIENT_MANAGER = {} as CosmosClientManager;
@@ -3784,5 +3791,94 @@ describe('deploy_app with custom_domain (Pass B)', () => {
       expect(typeof r.pendingAction.args.customDomainWarning).toBe('string');
       expect(r.pendingAction.args.customDomainWarning).toMatch(/apex/i);
     }
+  });
+
+  // Hero (red → green) for PR #93 Copilot 3248436488: pre-fix code never
+  // queries leaseByCustomDomain on the deploy path, so a duplicate domain
+  // slips through and the deploy confirmation proceeds, charging for a
+  // non-functional lease. Post-fix: pre-confirmation rejection.
+  it('rejects deploy when the custom domain is already attached to another lease', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValueOnce({
+      lease: { uuid: 'lease-occupied' } as any,
+      leaseUuid: 'lease-occupied',
+      serviceName: '',
+    });
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'taken.example.com' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error).toMatch(/already attached/i);
+      expect(r.error).toMatch(/taken\.example\.com/);
+    }
+  });
+
+  it('names the holding app in the error when the local registry knows it', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValueOnce({
+      lease: { uuid: 'lease-X' } as any,
+      leaseUuid: 'lease-X',
+      serviceName: '',
+    });
+    // Seed the registry so getAppByLease('lease-X') returns 'web-prod'.
+    const registry = makeRegistry([{
+      name: 'web-prod',
+      leaseUuid: 'lease-X',
+      size: 'micro',
+      providerUuid: 'p-1',
+      providerUrl: 'https://fred.example.com',
+      createdAt: 0,
+      status: 'running',
+    }]);
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'taken.example.com' },
+      makeOptions({ appRegistry: registry }),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error).toMatch(/"web-prod"/);   // friendly: names the app
+      expect(r.error).not.toMatch(/another lease/);
+    }
+  });
+
+  // No-regression: queryLeaseByCustomDomain returns null → existing happy
+  // path. customDomain MUST still land in pendingAction.args.
+  it('does not block deploy when the domain is unattached on the chain', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValueOnce(null);
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'fresh.example.com' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(true);
+    if (r.success && r.requiresConfirmation) {
+      expect(r.pendingAction.args.customDomain).toBe('fresh.example.com');
+    }
+  });
+
+  // No-regression: chain query throws → fallback to "don't block", chain
+  // remains authoritative. Matches the existing set_custom_domain pattern.
+  it('does not block deploy when queryLeaseByCustomDomain throws (chain authoritative)', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockRejectedValueOnce(new Error('LCD timeout'));
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'maybe-fresh.example.com' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(true);
+    expect(logError).toHaveBeenCalledWith(
+      'compositeTransactions.executeDeployApp.queryLeaseByCustomDomain',
+      expect.any(Error),
+    );
   });
 });
