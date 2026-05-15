@@ -19,8 +19,14 @@ type Get = () => AIStore;
 type Set = (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) => void;
 
 export function requestStopAppFn(get: Get, set: Set, appName: string): void {
-  const { isStreaming, isConnected, address } = get();
-  if (isStreaming || !isConnected || !address) return;
+  const { isStreaming, isConnected, address, pendingConfirmation } = get();
+  // Silent no-op while another confirmation card is open. Without this gate,
+  // clicking Stop on app B while a Stop-A / Deploy-X confirmation is already
+  // pending overwrites `pendingConfirmation` and orphans the prior tool
+  // message (`awaitingConfirmation: true`, no confirm/cancel path — chat
+  // wedged). Matches the standard modal-overlay UX: background clicks are
+  // inert. See PR #93 Copilot 3248436550.
+  if (isStreaming || !isConnected || !address || pendingConfirmation !== null) return;
 
   const registry = getAppRegistryAccess();
   const app = registry.findApp(address, appName);

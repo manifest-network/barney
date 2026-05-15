@@ -169,6 +169,37 @@ describe('requestStopApp', () => {
     expect(findApp).not.toHaveBeenCalled();
   });
 
+  // Regression: PR #93 Copilot 3248436550. Without this gate, clicking Stop
+  // while another confirmation is open would overwrite pendingConfirmation
+  // and orphan the prior tool message (awaitingConfirmation: true, no
+  // confirm/cancel path → chat wedged). The fix matches standard modal
+  // overlay UX: background clicks while a modal is open are inert. The
+  // referential `.toBe(priorConfirmation)` assertion is the strongest
+  // form — guarantees no overwrite at all, not just same-shape.
+  it('is a silent no-op when another confirmation is already pending', () => {
+    findApp.mockReturnValue(makeApp({ name: 'redis' }));
+    const store = setupStore();
+    const priorConfirmation = {
+      id: 'prior-1',
+      action: {
+        id: 'prior-action',
+        toolName: 'deploy_app',
+        args: { app_name: 'web' },
+        description: 'Deploy web?',
+      },
+      messageId: 'msg-prior',
+    };
+    store.setState({ pendingConfirmation: priorConfirmation });
+
+    store.getState().requestStopApp('redis');
+
+    expect(store.getState().messages).toHaveLength(0);
+    // Critically: the prior confirmation is preserved by reference, not
+    // overwritten with a new stop_app one.
+    expect(store.getState().pendingConfirmation).toBe(priorConfirmation);
+    expect(findApp).not.toHaveBeenCalled();  // bail-out before registry lookup
+  });
+
   it('is a silent no-op when not connected or address is missing', () => {
     findApp.mockReturnValue(makeApp());
 
