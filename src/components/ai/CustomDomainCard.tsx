@@ -299,7 +299,7 @@ function MultiDomainView({ data }: { data: CustomDomainCardData }) {
             <DomainRow
               key={d.customDomain}
               fqdn={d.customDomain}
-              expectedCnameTarget={d.expectedCnameTarget ?? report?.expectedCnameTarget}
+              expectedCnameTarget={report?.expectedCnameTarget ?? d.expectedCnameTarget}
               status={report?.kind ?? 'pending_dns'}
               detail={report?.detail}
               serviceName={d.serviceName !== '' ? d.serviceName : undefined}

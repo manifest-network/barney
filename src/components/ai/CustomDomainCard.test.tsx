@@ -316,6 +316,37 @@ describe('CustomDomainCard', () => {
   });
 
   describe('multi-domain consolidated view', () => {
+    // Symmetry regression: PR #93 Copilot 3248436527. The multi-domain view
+    // previously inverted the single-view precedence on line 302, displaying
+    // a stale snapshot when the live `dnsStatuses` entry carried a refreshed
+    // target. Both views must prefer the LIVE target. The single-view side
+    // of this contract is locked by the existing "uses the slice
+    // expectedCnameTarget when present (preferred over data fallback)" test.
+    it('multi-domain view prefers the live dnsStatuses target over the snapshot when both are present', () => {
+      dnsStatuses = new Map([
+        ['lease-1::web.example.com', {
+          kind: 'pending_dns',
+          expectedCnameTarget: 'web.refreshed.barney0.manifest0.net',  // live
+        }],
+      ]);
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, {
+          data: makeData({
+            fqdn: '',
+            domains: [
+              {
+                serviceName: 'web',
+                customDomain: 'web.example.com',
+                expectedCnameTarget: 'web.stale.barney0.manifest0.net',  // snapshot
+              },
+            ],
+          }),
+        }));
+      });
+      expect(container.textContent).toContain('web.refreshed.barney0.manifest0.net');
+      expect(container.textContent).not.toContain('web.stale');
+    });
+
     it('renders one DomainRow per domain with their status from dnsStatuses', () => {
       dnsStatuses = new Map([
         ['lease-1::web.example.com', { kind: 'active', expectedCnameTarget: 'web.auto.barney0.manifest0.net' }],
