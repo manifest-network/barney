@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginNodePolyfill } from '@rsbuild/plugin-node-polyfill';
-import * as ipaddr from 'ipaddr.js';
+import ipaddr from 'ipaddr.js';
 
 const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
 /**
