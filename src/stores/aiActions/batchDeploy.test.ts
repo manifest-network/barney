@@ -153,6 +153,39 @@ describe('requestBatchDeploy', () => {
       // isStreaming should remain true (guard returned before changing it)
       expect(store.getState().isStreaming).toBe(true);
     });
+
+    // Parallel hazard to 7ae6958 (which closed the same gap on
+    // requestStopAppFn). Without this gate, an example-app Deploy click
+    // while another confirmation card is open would overwrite
+    // pendingConfirmation and orphan the prior tool message
+    // (awaitingConfirmation: true, no confirm/cancel path → chat wedged).
+    // The referential `.toBe(priorConfirmation)` assertion is the strongest
+    // form — guarantees no overwrite at all, not just same-shape.
+    it('no-ops when another confirmation is already pending', async () => {
+      const store = setupStore();
+      const priorConfirmation = {
+        id: 'prior-1',
+        action: {
+          id: 'prior-action',
+          toolName: 'deploy_app',
+          args: { app_name: 'web' },
+          description: 'Deploy web?',
+        },
+        messageId: 'msg-prior',
+      };
+      store.setState({ pendingConfirmation: priorConfirmation });
+
+      await store.getState().requestBatchDeploy(makeApps());
+
+      expect(store.getState().messages).toHaveLength(0);
+      // Critically: prior confirmation preserved by reference, not overwritten.
+      expect(store.getState().pendingConfirmation).toBe(priorConfirmation);
+      // Internal work (hashing, batch executor) must not fire — early bail-out.
+      expect(mockExecuteBatchDeploy).not.toHaveBeenCalled();
+      expect(sha256).not.toHaveBeenCalled();
+      // isStreaming preserved (guard returned before the `set({ isStreaming: true })`).
+      expect(store.getState().isStreaming).toBe(false);
+    });
   });
 
   // -----------------------------------------------------------------------
