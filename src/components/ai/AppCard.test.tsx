@@ -4,10 +4,11 @@ import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 
 const sendMessage = vi.fn();
+const requestStopApp = vi.fn();
 let dnsStatuses: Map<string, { kind: string; expectedCnameTarget?: string; detail?: string }> = new Map();
 
 vi.mock('../../hooks/useAI', () => ({
-  useAI: () => ({ sendMessage, dnsStatuses }),
+  useAI: () => ({ sendMessage, dnsStatuses, requestStopApp }),
 }));
 
 import { AppCard } from './AppCard';
@@ -137,13 +138,32 @@ describe('AppCard', () => {
     expect(items).toHaveLength(2);
   });
 
-  describe('Stop button', () => {
-    it('dispatches "Stop <appName>" via sendMessage', () => {
+  describe('handleStop', () => {
+    // RED-THEN-GREEN: with the pre-fix production code (sendMessage(`Stop ${name}`)),
+    // these tests FAIL — sendMessage is called with 'Stop all' but requestStopApp
+    // isn't. After the fix, sendMessage is NOT called and requestStopApp IS called
+    // with the literal app name. App names matching stop_app's bulk-stop sentinel
+    // (`"all"`) used to trigger the model's bulk-stop intent via NL routing;
+    // the direct action bypasses the model entirely. See PR #93 Copilot 3244138206.
+    it('routes Stop through requestStopApp with the literal name when the app is named "all"', () => {
+      render(makeData({ name: 'all' }));
+      const stop = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('Stop'));
+      expect(stop).toBeDefined();
+      flushSync(() => { stop!.click(); });
+
+      expect(requestStopApp).toHaveBeenCalledTimes(1);
+      expect(requestStopApp).toHaveBeenCalledWith('all');
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('routes Stop through requestStopApp for a non-sentinel name (no regression)', () => {
       render(makeData({ name: 'redis' }));
       const stop = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('Stop'));
       expect(stop).toBeDefined();
       flushSync(() => { stop!.click(); });
-      expect(sendMessage).toHaveBeenCalledWith('Stop redis');
+
+      expect(requestStopApp).toHaveBeenCalledWith('redis');
+      expect(sendMessage).not.toHaveBeenCalled();
     });
   });
 

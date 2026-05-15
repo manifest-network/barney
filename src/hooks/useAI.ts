@@ -25,6 +25,7 @@ export function useAI() {
     attachPayload: s.attachPayload,
     clearPayload: s.clearPayload,
     requestBatchDeploy: s.requestBatchDeploy,
+    requestStopApp: s.requestStopApp,
     addLocalMessage: s.addLocalMessage,
     stopStreaming: s.stopStreaming,
   })));

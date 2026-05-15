@@ -43,6 +43,7 @@ import { scheduleStreamingUpdateFn, flushPendingUpdateFn } from './aiActions/str
 import { sendMessageFn } from './aiActions/sendMessage';
 import { confirmActionFn, cancelActionFn, type ConfirmActionOverrides } from './aiActions/confirmAction';
 import { requestBatchDeployFn } from './aiActions/batchDeploy';
+import { requestStopAppFn } from './aiActions/stopApp';
 import { generateMessageId, trimMessages } from './aiActions/utils';
 
 // Re-export for use by action modules and consumers
@@ -95,6 +96,7 @@ export interface AIStore {
   updateSettings: (settings: Partial<AISettings>) => void;
   clearHistory: () => void;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
+  requestStopApp: (appName: string) => void;
   addLocalMessage: (content: string, card?: MessageCard) => void;
   stopStreaming: () => void;
   scheduleStreamingUpdate: (messageId: string, content: string, thinking?: string) => void;
@@ -265,6 +267,7 @@ export const createAIStore = () =>
     confirmAction: (overrides) => confirmActionFn(get, set, overrides),
     cancelAction: () => cancelActionFn(get, set),
     requestBatchDeploy: (apps, userMessage) => requestBatchDeployFn(get, set, apps, userMessage),
+    requestStopApp: (appName) => requestStopAppFn(get, set, appName),
 
     // --- Tool cache ---
     getToolCacheKey: (toolName, args) => {

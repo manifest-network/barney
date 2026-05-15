@@ -24,7 +24,7 @@ interface AppCardProps {
 export const AppCard = memo(function AppCard({ data }: AppCardProps) {
   const { name, url, connection, status, customDomain } = data;
   const { copyToClipboard, isCopied } = useCopyToClipboard();
-  const { sendMessage, dnsStatuses } = useAI();
+  const { requestStopApp, dnsStatuses } = useAI();
 
   const instanceUrls = collectInstanceUrls(connection);
   const portEntries = connection?.ports ? Object.entries(connection.ports) : [];
@@ -59,7 +59,11 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
   };
 
   const handleStop = () => {
-    void sendMessage(`Stop ${name}`);
+    // Route directly to the store action — bypassing the natural-language
+    // `sendMessage("Stop ${name}")` prompt — so app names that collide with
+    // `stop_app`'s bulk-stop sentinel (e.g. `"all"`) don't trigger
+    // stop-everything intent on the model side. See PR #93 Copilot 3244138206.
+    requestStopApp(name);
   };
 
   const domainReport = customDomain
