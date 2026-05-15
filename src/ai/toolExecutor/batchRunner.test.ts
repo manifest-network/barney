@@ -321,4 +321,27 @@ describe('summarizeBatchResult', () => {
 
     expect((result.data as any).message).toContain('app1: http://app1.example.com');
   });
+
+  // Distinct surface: the deploy itself succeeded, but the per-LeaseItem
+  // custom domain attach failed. Surfaced separately from `Failed: ...` so
+  // the user retries with set_custom_domain instead of redeploying.
+  // Restart path never sets customDomainError, so the filter is a no-op there.
+  it('surfaces customDomainError annotations from succeeded entries in message', () => {
+    const result = summarizeBatchResult({
+      succeeded: [
+        { name: 'ok', url: 'http://ok.example.com' },
+        { name: 'rej', url: 'http://rej.example.com', customDomainError: 'chain rejected with code 7' },
+      ],
+      failed: [],
+      dataKey: 'deployed',
+      verb: 'Deployed',
+      failedNoun: 'deploys',
+    });
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).message).toMatch(/Custom domain attach failed for: rej \(chain rejected with code 7\)/);
+    // Entry still in deployed[] — annotation does not promote to deploy failure.
+    expect((result.data as any).deployed.map((d: any) => d.name)).toEqual(['ok', 'rej']);
+    expect((result.data as any).failed).toEqual([]);
+  });
 });

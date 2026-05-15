@@ -18,8 +18,16 @@ export async function requestBatchDeployFn(
   apps: Array<{ label: string; manifest: object }>,
   originalMessage?: string,
 ): Promise<void> {
-  const { isStreaming, isConnected } = get();
-  if (isStreaming || !isConnected) return;
+  const { isStreaming, isConnected, pendingConfirmation } = get();
+  // Silent no-op while another confirmation card is open. Without this gate,
+  // clicking an example-app Deploy button (which routes through this
+  // UI-direct action) while a Stop / Deploy / other confirmation is already
+  // pending overwrites `pendingConfirmation` and orphans the prior tool
+  // message (`awaitingConfirmation: true`, no confirm/cancel path — chat
+  // wedged). Matches the standard modal-overlay UX: background clicks are
+  // inert. Parallel hazard to 7ae6958 (which closed the same gap for
+  // `requestStopAppFn`); found by architect's cycle-4 pattern scan.
+  if (isStreaming || !isConnected || pendingConfirmation !== null) return;
 
   set({ isStreaming: true });
 

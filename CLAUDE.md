@@ -45,6 +45,7 @@ ErrorBoundary
                   │   ├─ AccountSetupOverlay (blocking stepper during first-connect provisioning)
                   │   ├─ LandingPage (when not connected)
                   │   └─ MainLayout (when connected)
+                  │       ├─ useDnsStatusPolling (mounted here, OUTSIDE the sidebar's ErrorBoundary)
                   │       ├─ ErrorBoundary (sidebar isolation)
                   │       │   └─ AppsSidebar (wallet, credits, running apps)
                   │       ├─ AIErrorBoundary
@@ -52,11 +53,13 @@ ErrorBoundary
                   │       │       ├─ MessageBubble (per-message rendering)
                   │       │       │   └─ StreamingText (typewriter effect with link detection)
                   │       │       ├─ ProgressCard (during deploy)
-                  │       │       ├─ AppCard (deploy success)
-                  │       │       ├─ ConfirmationCard (TX approval)
+                  │       │       ├─ AppCard (deploy success — wired via MessageCard `app` variant; embeds custom-domain row)
+                  │       │       ├─ ConfirmationCard (TX approval; covers deploy/restart/update/stop/fund/set_custom_domain)
                   │       │       │   ├─ ManifestEditor (single-service manifest editing)
                   │       │       │   └─ StackManifestEditor (multi-service stack editing)
-                  │       │       ├─ ToolResultCard / LogCard
+                  │       │       ├─ LogCard (tool result for `get_logs`)
+                  │       │       ├─ CustomDomainCard (single-domain status / multi-domain consolidated / no-domain form)
+                  │       │       │   └─ DomainRow (cross-cutting atom — also used by sidebar tooltip and AppCard's deploy-success row)
                   │       │       ├─ HelpCard (/help display)
                   │       │       └─ AISettings (inline settings panel)
                   │       └─ Modal (keyboard-shortcuts help, opens on `?`)
@@ -83,17 +86,18 @@ The AI assistant uses a 3-layer architecture:
    - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
    - **Internal pseudo-tool**: `batch_deploy` — orchestrates multi-app deploys from the UI. Not declared in `AI_TOOLS` and never exposed to the model; routed through `executeConfirmedTool` (case `'batch_deploy'`) by the `requestBatchDeploy` AI store action (e.g. `useAI().requestBatchDeploy`)
 
-### 16 Composite Tools
+### 17 Composite Tools
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, storage?, services?, health_check?, stop_grace_period?, init?, expose?, labels?)` | TX | Deploy from attached manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image`. Defaults: size=micro, name from filename/image |
+| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, storage?, services?, health_check?, stop_grace_period?, init?, expose?, labels?, custom_domain?, service_name?)` | TX | Deploy from attached manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image`. `custom_domain` attaches a domain in the same TX flow (single-step deploy + DNS); `service_name` picks the target service in a multi-service stack. Defaults: size=micro, name from filename/image |
 | `stop_app(app_name)` | TX | Stop apps by name, comma-separated list (e.g. "redis,postgres"), or "all" to stop all running apps |
 | `fund_credits(amount)` | TX | Add credits in display units |
 | `restart_app(app_name)` | TX | Restart apps by name, comma-separated list, or "all" to restart all running apps |
 | `update_app(app_name, image?, port?, env?, user?, tmpfs?, command?, args?, services?, health_check?, stop_grace_period?, init?, expose?, labels?)` | TX | Update app with new manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image` |
+| `set_custom_domain(app_name, custom_domain, service_name?)` | TX | Attach, change, or clear (`custom_domain=""`) a per-LeaseItem custom domain. Surfaces a `CustomDomainCard` post-broadcast with DNS status polling |
 | `list_apps(state?)` | Query | List apps filtered by state (default: running) |
-| `app_status(app_name)` | Query | Detailed status: registry + chain + fred |
+| `app_status(app_name)` | Query | Detailed status: registry + chain + fred. Emits a `CustomDomainCard` (single-domain status / consolidated multi-domain / no-domain form with stack picker) |
 | `get_logs(app_name, tail?)` | Query | Container logs for a running app |
 | `get_balance()` | Query | Credits, spending rate, time remaining |
 | `browse_catalog()` | Query | Providers + SKU tiers with health checks |
@@ -217,9 +221,11 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `useInputHistory` | Arrow-key navigation through past chat inputs |
 | `useAI` | Zustand store consumer — selects all public state/actions via `useShallow` |
 | `useToast` | Context consumer hook for ToastContext |
-| `useVisibilityPolling` | Visibility-aware polling with optional exponential backoff. Pauses on tab hidden, resumes on focus. Used by `AIProvider` (health check) and `AppsSidebar` (refresh) |
 | `useCopyToClipboard` | Clipboard copy with feedback state |
 | `useAccountSetup` | One-shot sequential account setup pipeline — requests faucet tokens (MFX + PWR) and funds credits on first connect. Returns `AccountSetupState` (`isInitialSetup` + `phase`) for the `AccountSetupOverlay`. Setup data persisted to localStorage via `versionedStorage` |
+| `useDnsStatusPolling` | Single polling driver for custom-domain DNS state. Mounted in `MainLayout` (outside the sidebar's `ErrorBoundary`, so a sidebar render error doesn't take DNS state down with it). Iterates running apps with `customDomains` and writes per-domain `DnsStatusEntry` rows into `aiStore.dnsStatuses`. All custom-domain surfaces (sidebar dot, single-domain card, multi-domain card, AppCard's deploy-success row) read from this slice — no per-component poll loops |
+| `useRegistryApps` | `useSyncExternalStore` view of the wallet's app registry, kept live via `subscribeToRegistry`. Used by `MainLayout` to feed the DNS polling driver |
+| `useVisibilityPolling` | Visibility-aware polling with optional exponential backoff. Pauses on tab hidden, resumes on focus. Used by `AIProvider` (health check) and `AppsSidebar` (refresh) |
 
 > Note: `useConfirmationFlow.test.tsx`, `useMessageManager.test.ts`, and `useToolCache.test.ts` are pure-logic test files for behaviour now living in `src/stores/aiActions/` and `src/stores/aiStore.ts`. They retain the original hook names because the underlying contracts haven't changed; no source hook file exists.
 
@@ -267,6 +273,8 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `WS_MAX_RECONNECT_ATTEMPTS` | 2 | Max reconnects before falling back to polling |
 | `WS_LIVENESS_TIMEOUT_MS` | 45s | WebSocket data liveness timeout (Fred pings every 30s) |
 | `STORAGE_SKU_NAME` | 'docker-small' | SKU name that supports persistent disk storage |
+| `DNS_POLL_INTERVAL_MS` | 30s | Polling interval for browser-side DNS / HTTPS probes (`useDnsStatusPolling`) |
+| `DNS_STUCK_THRESHOLD_MS` | 5min | Show "verify with dig locally" hint after sustained `pending_dns` (only when slice has no `detail`) |
 | `AUTO_REFRESH_INTERVAL_MS` | 15s | Auto-refresh interval for sidebar data polling |
 | `HEALTH_CHECK_TIMEOUT_MS` | 5s | Timeout for individual health-check requests |
 | `POST_TX_REFETCH_DELAY_MS` | 1s | Delay before refetching state after a transaction |
@@ -313,7 +321,10 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 - **Message debouncing**: The AI store debounces rapid message sends via `AI_MESSAGE_DEBOUNCE_MS` (300ms) and aborts in-flight streams when a new message is sent.
 - **Chat persistence**: The AI store persists settings and chat history to localStorage (`barney-ai-settings`, `barney-ai-history`) via Zustand subscriptions. History is validated and sanitized on load; corrupted data is cleared. Streaming messages are excluded from persistence.
 - **Confirmation timeout**: Pending transaction confirmations auto-cancel after `AI_CONFIRMATION_TIMEOUT_MS` (5 minutes) to prevent stuck UI state.
+- **UI-direct store actions**: Actions that synthesize a `pendingConfirmation` from a UI surface (e.g. `requestStopApp`, `requestBatchDeploy` in `src/stores/aiActions/`) MUST gate on `pendingConfirmation !== null` before constructing the new action. Without the gate, a click while another confirmation card is open silently overwrites the store's pending action and orphans the prior tool message (`awaitingConfirmation: true`, no path to confirm/cancel — chat wedged). Matches the standard modal-overlay UX: background clicks are inert at the action layer.
 - **App registry scoping**: Registry is per-wallet in localStorage. `AppShell` syncs wallet changes and clears deploy progress on disconnect.
+- **Error UX boundary**: Two error surfaces by design. **Toasts** (`useToast` + `ToastContainer`) are reserved for surfaces that exist *before* the chat panel mounts — wallet connection errors (popup blocked / closed / network) in `AppShell`. Once the user is connected, all errors flow through **chat messages** (`error` field on `ChatMessage`, surfaced as inline alerts with `ERROR_PATTERNS` regex-matched "Try again" suggestion buttons in `MessageBubble.tsx`). Tool failures, deploy failures, signing rejections, payload validation, manifest parse errors all land in chat. Don't add new toasts post-connect — push errors into chat.
+- **Custom-domain DNS state**: All four custom-domain surfaces (sidebar dot, deploy success pill, single-domain card, multi-domain consolidated card) read DNS status from a single source — `aiStore.dnsStatuses`. The map is populated by `useDnsStatusPolling`, mounted exactly once in `MainLayout` (deliberately outside the sidebar's `ErrorBoundary` — a sidebar render error must not take DNS state down with it). No surface runs its own polling loop. Adding a new surface means reading `dnsStatuses.get(dnsStatusKey(leaseUuid, fqdn))`, not adding another `useVisibilityPolling`.
 
 ### Example Apps
 

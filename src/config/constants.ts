@@ -128,6 +128,18 @@ export const WS_LIVENESS_TIMEOUT_MS = 45_000;
 export const STORAGE_SKU_NAME = 'docker-small';
 
 // ============================================
+// Custom Domain DNS Polling Constants
+// ============================================
+
+/** Polling interval for browser-side DNS / HTTPS probes (milliseconds).
+ * Cloudflare DoH allows generous limits; revisit only if rate-limiting appears. */
+export const DNS_POLL_INTERVAL_MS = 30_000;
+
+/** After this long stuck in pending_dns (no detail attached), surface a
+ * "verify with dig locally" hint — likely a network block. */
+export const DNS_STUCK_THRESHOLD_MS = 5 * 60 * 1000;
+
+// ============================================
 // Account Setup Constants
 // ============================================
 

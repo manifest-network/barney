@@ -13,6 +13,7 @@ import { useAccountSetup } from '../../hooks/useAccountSetup';
 import { AccountSetupOverlay } from './AccountSetupOverlay';
 import { logError } from '../../utils/errors';
 import { CHAIN_NAME } from '../../config/chain';
+import { invalidateReservedDomainSuffixesCache } from '../../api/billingParams';
 
 const LandingPage = lazy(() =>
   import('../landing/LandingPage').then(m => ({ default: m.LandingPage }))
@@ -54,18 +55,23 @@ export function AppShell() {
     [signArbitrary]
   );
 
-  // Sync wallet state with AI context
+  // Account-setup flow needs direct getOfflineSigner access via a ref.
+  const getOfflineSignerRef = useRef(getOfflineSigner);
+  useEffect(() => { getOfflineSignerRef.current = getOfflineSigner; }, [getOfflineSigner]);
+
+  // Invalidate chain-scoped caches when the connected address changes (different
+  // wallet, possibly different chain → different governance Params).
+  useEffect(() => {
+    invalidateReservedDomainSuffixesCache();
+  }, [address]);
+
+  // Sync wallet state with AI context.
   useEffect(() => {
     setClientManager(clientManager);
     setAddress(address);
     const canSign = isWalletConnected && typeof signArbitrary === 'function';
     setSignArbitrary(canSign ? wrappedSignArbitrary : undefined);
   }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, wrappedSignArbitrary]);
-
-  // Account setup: one-shot faucet + credit funding on first connect
-  // Ref avoids unstable getOfflineSigner closure in useEffect deps (same pattern as useManifestMCP)
-  const getOfflineSignerRef = useRef(getOfflineSigner);
-  useEffect(() => { getOfflineSignerRef.current = getOfflineSigner; }, [getOfflineSigner]);
 
   // Watch for wallet connection errors (e.g. Safari popup blocking)
   const prevStatusRef = useRef(status);

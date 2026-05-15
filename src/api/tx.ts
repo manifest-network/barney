@@ -94,6 +94,11 @@ async function signAndBroadcast(
   }
 }
 
+// MsgSetItemCustomDomain broadcasts now go through mono's
+// `core.setItemCustomDomain(clientManager, ...)` helper (mono 0.8.0+) so
+// validation, canonicalization, and result shape stay consistent with the MCP
+// surface and CLI. See executeConfirmedSetCustomDomain in compositeTransactions.
+
 export async function fundCredit(
   signer: OfflineSigner,
   sender: string,

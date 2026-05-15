@@ -69,13 +69,27 @@ export async function withRetry<T>(
 /**
  * Wraps a promise with a timeout. Rejects with a TimeoutError if the
  * promise does not settle within the given duration.
+ *
+ * Optionally races against an AbortSignal: when the signal aborts before the
+ * promise settles, the race rejects with an AbortError so callers can bail
+ * out of long-running queries (Stop button, sendMessage interrupt, etc.).
+ * Note: this doesn't cancel the underlying work — promises don't support
+ * post-hoc cancellation — but it lets *us* stop awaiting and unblocks the
+ * caller immediately.
  */
 export async function withTimeout<T>(
   promise: Promise<T>,
   ms: number = AI_TOOL_API_TIMEOUT_MS,
-  label = 'Operation'
+  label = 'Operation',
+  signal?: AbortSignal,
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  // The signal can outlive this call (a single AbortController is shared
+  // across many withTimeout calls within a stream cycle). Capture the abort
+  // handler so we can detach it on the success/timeout paths — without this
+  // cleanup, listeners accumulate proportional to the number of withTimeout
+  // calls and only fire (harmlessly) when the controller is finally aborted.
+  let onAbort: (() => void) | undefined;
 
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(
@@ -84,11 +98,35 @@ export async function withTimeout<T>(
     );
   });
 
+  const abort = signal
+    ? new Promise<never>((_, reject) => {
+        if (signal.aborted) {
+          reject(new DOMException(`${label} aborted`, 'AbortError'));
+          return;
+        }
+        onAbort = () => reject(new DOMException(`${label} aborted`, 'AbortError'));
+        signal.addEventListener('abort', onAbort);
+      })
+    : null;
+
   try {
-    return await Promise.race([promise, timeout]);
+    return await Promise.race(abort ? [promise, timeout, abort] : [promise, timeout]);
   } finally {
     if (timeoutId !== undefined) {
       clearTimeout(timeoutId);
     }
+    if (signal && onAbort) {
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
+}
+
+/**
+ * Throw an AbortError if the signal is already aborted. Use at executor entry
+ * and between major await chains to short-circuit cancelled work.
+ */
+export function throwIfAborted(signal: AbortSignal | undefined, label = 'Operation'): void {
+  if (signal?.aborted) {
+    throw new DOMException(`${label} aborted`, 'AbortError');
   }
 }

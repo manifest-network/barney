@@ -90,6 +90,12 @@ export interface BatchEntry {
 export interface BatchSuccessItem {
   name: string;
   url?: string;
+  /** Non-fatal: the deploy itself succeeded but the per-LeaseItem custom
+   *  domain attach for this entry failed (chain rejection, signing error,
+   *  network blip). Surfaced as a distinct line in `summarizeBatchResult`'s
+   *  message so the user can retry with `set_custom_domain` rather than
+   *  redeploying. Only the deploy path sets this; restart never does. */
+  customDomainError?: string;
 }
 
 export interface BatchRunnerOptions<E extends BatchEntry> {
@@ -250,6 +256,16 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     parts.push(`${verb}:\n${lines.map((l) => `- ${l}`).join('\n')}`);
   }
   if (failed.length > 0) parts.push(`Failed: ${failed.join(', ')}.`);
+  // Distinct from `failed` — the deploy itself succeeded, the domain attach
+  // didn't. User retry is `set_custom_domain`, not redeploy.
+  const domainFailures = succeeded.filter((s) => s.customDomainError);
+  if (domainFailures.length > 0) {
+    parts.push(
+      `Custom domain attach failed for: ${
+        domainFailures.map((s) => `${s.name} (${s.customDomainError})`).join(', ')
+      }.`
+    );
+  }
 
   return {
     success: true,

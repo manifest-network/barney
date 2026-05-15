@@ -72,6 +72,7 @@ vi.mock('../../api/fred', () => ({
 vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   ...(await importOriginal()),
   cosmosTx: vi.fn(),
+  setItemCustomDomain: vi.fn(),
 }));
 
 vi.mock('../../utils/errors', () => ({
@@ -97,13 +98,21 @@ vi.mock('../../registry/appRegistry', async (importOriginal) => {
   };
 });
 
+// Default: no collision. Tests that exercise the dedupe pre-check
+// override with `.mockResolvedValueOnce(...)` or `.mockRejectedValueOnce(...)`.
+vi.mock('../../api/leaseByCustomDomain', () => ({
+  queryLeaseByCustomDomain: vi.fn().mockResolvedValue(null),
+}));
+
 import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing';
-import { getProviders, getSKUs } from '../../api/sku';
+import { getProviders, getSKUs, Unit } from '../../api/sku';
+import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
-import { cosmosTx } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx, setItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 import { uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
+import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
 const ADDRESS = 'manifest1abc';
 const CLIENT_MANAGER = {} as CosmosClientManager;
@@ -1744,6 +1753,14 @@ describe('executeConfirmedDeployApp', () => {
     const pollCall = vi.mocked(waitForLeaseReady).mock.calls[0];
     expect(pollCall[3]).toHaveProperty('getAuthToken');
     expect(typeof pollCall[3]!.getAuthToken).toBe('function');
+
+    // Emits an `app` displayCard with url/status and connection
+    expect(result.success && !result.requiresConfirmation && result.displayCard?.type).toBe('app');
+    if (result.success && !result.requiresConfirmation && result.displayCard?.type === 'app') {
+      expect(result.displayCard.data.url).toBe('127.0.0.1:32456');
+      expect(result.displayCard.data.status).toBe('running');
+      expect(result.displayCard.data.customDomain).toBeUndefined();
+    }
   });
 
   it('creates lease, uploads, and polls to ready — extracts port from top-level ports', async () => {
@@ -2023,6 +2040,55 @@ describe('executeConfirmedDeployApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).url).toBe('1.2.3.4:32200');
     expect((result.data as any).status).toBe('running');
+  });
+
+  // Regression: when fred throws (or times out) and chain confirms ACTIVE,
+  // fallbackToChainState used to write `{ status: 'running' }` only — the
+  // customDomains cache was dropped (sidebar dot blank) and the result
+  // message said "live!" with no clue the domain attached. Threading
+  // domainAttach through preserves both. See PR #93 Copilot 3236837791.
+  it('preserves customDomain in fallbackToChainState when fred throws but chain is ACTIVE', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'h', rawLog: '' } as any);
+    vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    // Fred throws (network error / connection refused) — drops into the
+    // catch arm at compositeTransactions.ts :1357 → fallbackToChainState.
+    vi.mocked(waitForLeaseReady).mockRejectedValue(new Error('fred unreachable'));
+    // Chain says ACTIVE → fallback takes the recovery branch.
+    vi.mocked(getLease).mockResolvedValue({
+      leaseUuid: 'new-lease-uuid', tenant: ADDRESS, state: LeaseState.LEASE_STATE_ACTIVE, items: [],
+    } as any);
+
+    const registry = makeRegistry();
+    const updateSpy = vi.spyOn(registry, 'updateApp');
+
+    const result = await executeConfirmedDeployApp(
+      {
+        app_name: 'redis', skuUuid: 'sku-1', providerUuid: 'p1',
+        providerUrl: 'https://fred.example.com',
+        _generatedManifest: '{"image":"redis"}',
+        customDomain: 'redis.example.com',
+        customDomainServiceName: '',
+      },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.status).toBe('running');
+    expect(data.custom_domain).toBe('redis.example.com');
+    expect(data.message).toMatch(/redis\.example\.com/);
+    // Sidebar dot depends on this cache write — fallback must mirror the
+    // success branch's :1243-1255 customDomains merge.
+    const cacheWrite = updateSpy.mock.calls.find(
+      (c) => Array.isArray((c[2] as any).customDomains)
+    );
+    expect(cacheWrite).toBeDefined();
+    expect((cacheWrite![2] as any).customDomains).toEqual([
+      { serviceName: '', customDomain: 'redis.example.com' },
+    ]);
   });
 });
 
@@ -2572,6 +2638,148 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(cmdArgs).toContain('sku-1:1:db');
     // Should NOT contain the single-service format
     expect(cmdArgs).not.toContain('sku-1:1');
+  });
+
+  // Regression: prior to this fix, mergeBatchDeployConfirmations coalesced
+  // multi-app AI deploys with custom_domain into a single batch_deploy, but
+  // SingleDeployEntry didn't carry the domain fields, so the attach TX was
+  // silently dropped. Deploys succeeded; user only noticed when DNS failed.
+  // See PR #93 Copilot comment 3236552254.
+  describe('custom domain attach', () => {
+    function makeDomainOptions(reg = makeRegistry()) {
+      vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+      vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+      vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+      vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+        lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+        connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
+      });
+      return { reg, opts: makeOptions({ appRegistry: reg }) };
+    }
+
+    it('attaches custom domains for entries that include them', async () => {
+      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
+      const { opts } = makeDomainOptions();
+      const entries = [
+        { app_name: 'a1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'a1.example.com' },
+        { app_name: 'a2', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'a2.example.com' },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+
+      const calls = vi.mocked(setItemCustomDomain).mock.calls;
+      expect(calls).toHaveLength(2);
+      const domains = calls.map((c) => c[2]);
+      expect(domains).toContain('a1.example.com');
+      expect(domains).toContain('a2.example.com');
+    });
+
+    it('passes serviceName option when entry.customDomainServiceName is non-empty', async () => {
+      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
+      const { opts } = makeDomainOptions();
+      const entries = [
+        { app_name: 'wp', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), serviceNames: ['web', 'db'], customDomain: 'wp.example.com', customDomainServiceName: 'web' },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+
+      const call = vi.mocked(setItemCustomDomain).mock.calls[0];
+      expect(call[2]).toBe('wp.example.com');
+      expect(call[3]).toEqual({ serviceName: 'web' });
+    });
+
+    it('does not call setItemCustomDomain when entry has no customDomain', async () => {
+      const { opts } = makeDomainOptions();
+      const entries = [
+        { app_name: 'plain', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+      expect(setItemCustomDomain).not.toHaveBeenCalled();
+    });
+
+    it('surfaces domain attach failure in summary without aborting the batch', async () => {
+      // One success, one chain-rejection (code !== 0). Deploy itself still succeeds.
+      vi.mocked(setItemCustomDomain)
+        .mockResolvedValueOnce({ code: 0, transactionHash: 'dh1', rawLog: '' } as any)
+        .mockResolvedValueOnce({ code: 7, transactionHash: 'dh2', rawLog: 'reserved zone' } as any);
+      const { opts } = makeDomainOptions();
+      const entries = [
+        { app_name: 'ok', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'ok.example.com' },
+        { app_name: 'rej', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'rej.example.com' },
+      ];
+      const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+
+      expect(result.success).toBe(true);
+      const data = result.data as any;
+      // Both deploys still in the deployed list — domain failure doesn't promote to deploy failure.
+      expect(data.deployed.map((d: any) => d.name)).toEqual(expect.arrayContaining(['ok', 'rej']));
+      expect(data.failed).toHaveLength(0);
+      // Summary message calls out the domain failure distinctly.
+      expect(data.message).toMatch(/Custom domain attach failed for: rej \(chain rejected with code 7\)/);
+    });
+
+    it('caches customDomains in registry after successful attach', async () => {
+      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
+      const { reg, opts } = makeDomainOptions();
+      const updateSpy = vi.spyOn(reg, 'updateApp');
+      const entries = [
+        { app_name: 'cached', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'cached.example.com' },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+
+      // Among the multiple updateApp calls during the deploy, one must include
+      // the just-attached customDomains entry.
+      const domainUpdate = updateSpy.mock.calls.find(
+        (c) => Array.isArray((c[2] as any).customDomains)
+      );
+      expect(domainUpdate).toBeDefined();
+      expect((domainUpdate![2] as any).customDomains).toEqual([
+        { serviceName: '', customDomain: 'cached.example.com' },
+      ]);
+    });
+
+    // Regression: when fred throws (or times out) and chain confirms ACTIVE,
+    // the batch fallback path used to drop the customDomains cache. The
+    // happy-path inline write at :1700 has already run by then, so the
+    // fallback's new merge is idempotent against it. This test verifies
+    // both writes happen and the entry still lands in deployed[].
+    // See PR #93 Copilot 3236837791.
+    it('preserves customDomains in fallback path when fred throws but chain is ACTIVE', async () => {
+      vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'h', rawLog: '' } as any);
+      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
+      vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+      vi.mocked(waitForLeaseReady).mockRejectedValue(new Error('fred unreachable'));
+      vi.mocked(getLease).mockResolvedValue({
+        leaseUuid: 'new-lease-uuid', tenant: ADDRESS, state: LeaseState.LEASE_STATE_ACTIVE, items: [],
+      } as any);
+
+      const reg = makeRegistry();
+      const updateSpy = vi.spyOn(reg, 'updateApp');
+      const entries = [{
+        app_name: 'redis', size: 'micro',
+        skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com',
+        payload: makePayload(),
+        customDomain: 'redis.example.com',
+      }];
+
+      const result = await executeConfirmedBatchDeploy(
+        { entries },
+        CLIENT_MANAGER,
+        makeOptions({ appRegistry: reg }),
+      );
+
+      expect(result.success).toBe(true);
+      // Entry still in deployed[] — chain ACTIVE via fallback.
+      expect((result.data as any).deployed.map((d: any) => d.name)).toContain('redis');
+      // Both the happy-path inline write (:1700) and the fallback merge
+      // produce customDomains writes. At least one must be present and
+      // carry the attached entry — sidebar dot depends on it.
+      const cacheWrites = updateSpy.mock.calls.filter(
+        (c) => Array.isArray((c[2] as any).customDomains)
+      );
+      expect(cacheWrites.length).toBeGreaterThanOrEqual(1);
+      expect((cacheWrites[cacheWrites.length - 1][2] as any).customDomains).toEqual([
+        { serviceName: '', customDomain: 'redis.example.com' },
+      ]);
+    });
   });
 });
 
@@ -3451,5 +3659,226 @@ describe('executeConfirmedUpdateApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
     expect(updateLease).toHaveBeenCalled();
+  });
+});
+
+describe('deploy_app with custom_domain (Pass B)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', address: 'p-addr', payoutAddress: 'p-addr', metaHash: new Uint8Array(), active: true, apiUrl: 'https://prov.example' },
+    ]);
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-micro', providerUuid: 'p1', name: 'docker-micro', basePrice: { amount: '10', denom: 'upwr' }, unit: Unit.UNIT_PER_DAY } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-micro', quantity: 1 }] });
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      creditAccount: { tenant: 'addr', creditAddress: 'caddr', activeLeaseCount: 0n, pendingLeaseCount: 0n, reservedAmounts: [] },
+      balances: [{ denom: DENOMS.PWR, amount: '999000000' }],
+      availableBalances: [{ denom: DENOMS.PWR, amount: '999000000' }],
+    });
+  });
+
+  it('executeDeployApp validates custom_domain format', async () => {
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'not a domain' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/not a valid hostname/i);
+  });
+
+  it('executeDeployApp passes custom_domain through to pendingAction.args for single-service deploy', async () => {
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'redis.example.com' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(true);
+    if (r.success && r.requiresConfirmation) {
+      expect(r.pendingAction.args.customDomain).toBe('redis.example.com');
+      expect(r.pendingAction.args.customDomainServiceName).toBe('');
+    }
+  });
+
+  it('executeDeployApp rejects multi-service stack without service_name', async () => {
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const services = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+      db: { image: 'postgres', port: '5432' },
+    });
+    const r = await executeDeployApp(
+      { app_name: 'stack', services, custom_domain: 'app.example.com' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error).toMatch(/multi-service stack.*service_name/i);
+      expect(r.error).toMatch(/web/);
+      expect(r.error).toMatch(/db/);
+    }
+  });
+
+  it('executeDeployApp accepts service_name when matching a stack service', async () => {
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const services = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+      db: { image: 'postgres', port: '5432' },
+    });
+    const r = await executeDeployApp(
+      { app_name: 'stack', services, custom_domain: 'app.example.com', service_name: 'web' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(true);
+    if (r.success && r.requiresConfirmation) {
+      expect(r.pendingAction.args.customDomain).toBe('app.example.com');
+      expect(r.pendingAction.args.customDomainServiceName).toBe('web');
+    }
+  });
+
+  it('executeDeployApp rejects unknown service_name in stack', async () => {
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const services = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+    });
+    // Single-service stack auto-selects, so use multi-service to trigger the not-found path
+    const services2 = JSON.stringify({
+      web: { image: 'nginx', port: '80' },
+      db: { image: 'postgres', port: '5432' },
+    });
+    const r = await executeDeployApp(
+      { app_name: 'stack', services: services2, custom_domain: 'app.example.com', service_name: 'bogus' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/not found/i);
+    void services;
+  });
+
+  it('executeDeployApp threads apex warning into customDomainWarning', async () => {
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'example.com' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(true);
+    if (r.success && r.requiresConfirmation) {
+      expect(typeof r.pendingAction.args.customDomainWarning).toBe('string');
+      expect(r.pendingAction.args.customDomainWarning).toMatch(/apex/i);
+    }
+  });
+
+  // Hero (red → green) for PR #93 Copilot 3248436488: pre-fix code never
+  // queries leaseByCustomDomain on the deploy path, so a duplicate domain
+  // slips through and the deploy confirmation proceeds, charging for a
+  // non-functional lease. Post-fix: pre-confirmation rejection.
+  it('rejects deploy when the custom domain is already attached to another lease', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValueOnce({
+      lease: { uuid: 'lease-occupied' } as any,
+      leaseUuid: 'lease-occupied',
+      serviceName: '',
+    });
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'taken.example.com' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error).toMatch(/already attached/i);
+      expect(r.error).toMatch(/taken\.example\.com/);
+    }
+  });
+
+  it('names the holding app in the error when the local registry knows it', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValueOnce({
+      lease: { uuid: 'lease-X' } as any,
+      leaseUuid: 'lease-X',
+      serviceName: '',
+    });
+    // Seed the registry so getAppByLease('lease-X') returns 'web-prod'.
+    const registry = makeRegistry([{
+      name: 'web-prod',
+      leaseUuid: 'lease-X',
+      size: 'micro',
+      providerUuid: 'p-1',
+      providerUrl: 'https://fred.example.com',
+      createdAt: 0,
+      status: 'running',
+    }]);
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'taken.example.com' },
+      makeOptions({ appRegistry: registry }),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error).toMatch(/"web-prod"/);   // friendly: names the app
+      expect(r.error).not.toMatch(/another lease/);
+    }
+  });
+
+  // No-regression: queryLeaseByCustomDomain returns null → existing happy
+  // path. customDomain MUST still land in pendingAction.args.
+  it('does not block deploy when the domain is unattached on the chain', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValueOnce(null);
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'fresh.example.com' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(true);
+    if (r.success && r.requiresConfirmation) {
+      expect(r.pendingAction.args.customDomain).toBe('fresh.example.com');
+    }
+  });
+
+  // No-regression: chain query throws → fallback to "don't block", chain
+  // remains authoritative. Matches the existing set_custom_domain pattern.
+  it('does not block deploy when queryLeaseByCustomDomain throws (chain authoritative)', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockRejectedValueOnce(new Error('LCD timeout'));
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+    const r = await executeDeployApp(
+      { app_name: 'redis', image: 'redis', port: '6379', custom_domain: 'maybe-fresh.example.com' },
+      makeOptions({ appRegistry: makeRegistry() }),
+    );
+    expect(r.success).toBe(true);
+    expect(logError).toHaveBeenCalledWith(
+      'compositeTransactions.executeDeployApp.queryLeaseByCustomDomain',
+      expect.any(Error),
+    );
   });
 });

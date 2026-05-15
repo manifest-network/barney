@@ -4,6 +4,8 @@ import type { ChatMessage } from '../../contexts/aiTypes';
 import { StreamingText } from './StreamingText';
 import { LogCard } from './LogCard';
 import { HelpCard } from './HelpCard';
+import { CustomDomainCard } from './CustomDomainCard';
+import { AppCard } from './AppCard';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useAI } from '../../hooks/useAI';
 
@@ -113,13 +115,19 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
         )}
       </div>
       <div className="message-content">
-        {/* Tool results: LogCard for logs, collapsible block for others */}
+        {/* Tool results: LogCard for logs, CustomDomainCard for custom domains, collapsible block for others */}
         {isTool && message.card?.type === 'logs' && (
           <LogCard
             appName={message.card.data.app_name}
             logs={message.card.data.logs}
             truncated={message.card.data.truncated}
           />
+        )}
+        {isTool && message.card?.type === 'custom_domain' && (
+          <CustomDomainCard data={message.card.data} />
+        )}
+        {isTool && message.card?.type === 'app' && (
+          <AppCard data={message.card.data} />
         )}
         {isTool && !message.card && (
           <div className="message-tool-block">

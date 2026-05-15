@@ -22,6 +22,57 @@ export interface PayloadAttachment {
 }
 
 /**
+ * Per-tool successful-result data shapes.
+ *
+ * `data: unknown` on ToolResultSuccess accepts anything, but the AI consumes
+ * a JSON serialization of this object on its next stream turn — so renaming
+ * a field is a silent contract change. The shapes below pin the user-visible
+ * contract for the tools whose output is also rendered by a card or referenced
+ * by other tools, so refactors trip the typechecker.
+ *
+ * Today only a subset of tools is typed; the rest fall back to `unknown` until
+ * we get to them. Adding a tool to the map is opt-in and non-breaking.
+ */
+export interface ToolDataMap {
+  app_status: {
+    name: string;
+    status: string;
+    size: string;
+    image?: string;
+    serviceImages?: Record<string, string>;
+    url?: string;
+    chainState: string;
+    created: string;
+    customDomains?: { serviceName: string; customDomain: string }[];
+  };
+  list_apps: {
+    apps: Array<{
+      name: string;
+      status: string;
+      size: string;
+      image?: string;
+      url?: string;
+      created: string;
+    }>;
+    count: number;
+  };
+  get_logs: {
+    app_name: string;
+    logs: Record<string, string>;
+    truncated: boolean;
+  };
+  get_balance: {
+    credits: number;
+    spending_per_hour: number;
+    hours_remaining: number | null;
+    running_apps: number;
+  };
+}
+
+/** Lookup helper — `ToolData<'app_status'>` resolves to that tool's data shape. */
+export type ToolData<N extends keyof ToolDataMap> = ToolDataMap[N];
+
+/**
  * Successful tool execution result
  */
 interface ToolResultSuccess {

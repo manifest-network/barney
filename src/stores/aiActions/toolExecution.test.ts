@@ -333,6 +333,125 @@ describe('processToolCallsFn', () => {
     expect(buildPayloadFromManifest).toHaveBeenCalledTimes(3);
   });
 
+  // Regression: batch path used to leave the owning tool message without
+  // `awaitingConfirmation: true`. The schema fix (87b22b2) made the flag
+  // survive Zod, so the persistence rehydrate at persistence.ts:82-89
+  // marks Interrupted on tab-killed-mid-confirm reloads — but only when
+  // the persisted message actually carries the flag. Single-confirm flow
+  // (setSingleConfirmation) sets it; batch must follow the same invariant.
+  // Only the owning message gets the flag — the other batch entries are
+  // status placeholders, not awaiting any confirm. See PR #93 Copilot 3236552199.
+  it('marks the owning tool message as awaitingConfirmation in batch merge', async () => {
+    const makeDeployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          skuUuid: 'sku-123',
+          providerUuid: 'prov-456',
+          providerUrl: 'https://provider.test',
+          _generatedManifest: `{"services":{"${appName}":{}}}`,
+        },
+      },
+    });
+
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(makeDeployResult('alpha'))
+      .mockResolvedValueOnce(makeDeployResult('beta'))
+      .mockResolvedValueOnce(makeDeployResult('gamma'));
+
+    const assistantMsg = makeMessage({ id: 'asst_1' });
+    state.messages = [assistantMsg];
+
+    const tc1 = makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } });
+    const tc2 = makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } });
+    const tc3 = makeToolCall({ id: 'tc_3', function: { name: 'deploy_app', arguments: {} } });
+
+    await processToolCallsFn(get, set, [tc1, tc2, tc3], 'asst_1', {
+      content: '',
+      thinking: '',
+      toolCalls: [tc1, tc2, tc3],
+    });
+
+    expect(state.pendingConfirmation!.action.toolName).toBe('batch_deploy');
+
+    // Owning message = the one referenced by pendingConfirmation.messageId
+    // (the LAST batch entry, per mergeBatchDeployConfirmations).
+    const owningId = state.pendingConfirmation!.messageId;
+    const owningMsg = state.messages.find((m) => m.id === owningId)!;
+    expect(owningMsg).toBeDefined();
+    expect(owningMsg.awaitingConfirmation).toBe(true);
+
+    // The other batch entries are status placeholders — they should NOT
+    // carry the flag, otherwise rehydrate would emit Interrupted markers
+    // on messages that never had a pending confirm.
+    const otherToolMsgs = state.messages.filter(
+      (m) => m.id !== owningId && m.role === 'tool'
+    );
+    expect(otherToolMsgs.length).toBeGreaterThan(0);
+    expect(otherToolMsgs.every((m) => !m.awaitingConfirmation)).toBe(true);
+  });
+
+  // Regression: prior to this fix, the merge dropped custom_domain fields,
+  // so AI-driven batch deploys silently lost their domain attach. Each
+  // entry's custom domain must thread through to executeConfirmedBatchDeploy
+  // (which then calls setItemCustomDomain per entry). See PR #93 Copilot
+  // comment 3236552254.
+  it('threads customDomain/customDomainServiceName/customDomainWarning through batch merge', async () => {
+    const makeDeployResult = (appName: string, domain: string, serviceName: string, warning?: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          skuUuid: 'sku-123',
+          providerUuid: 'prov-456',
+          providerUrl: 'https://provider.test',
+          _generatedManifest: `{"services":{"${appName}":{}}}`,
+          customDomain: domain,
+          customDomainServiceName: serviceName,
+          ...(warning ? { customDomainWarning: warning } : {}),
+        },
+      },
+    });
+
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(makeDeployResult('alpha', 'alpha.example.com', '', 'apex warning A'))
+      .mockResolvedValueOnce(makeDeployResult('beta', 'beta.example.com', 'web'));
+
+    const assistantMsg = makeMessage({ id: 'asst_1' });
+    state.messages = [assistantMsg];
+
+    const tc1 = makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } });
+    const tc2 = makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } });
+
+    await processToolCallsFn(get, set, [tc1, tc2], 'asst_1', {
+      content: '',
+      thinking: '',
+      toolCalls: [tc1, tc2],
+    });
+
+    expect(state.pendingConfirmation!.action.toolName).toBe('batch_deploy');
+    const entries = state.pendingConfirmation!.action.args.entries as Array<Record<string, unknown>>;
+    expect(entries).toHaveLength(2);
+
+    expect(entries[0].customDomain).toBe('alpha.example.com');
+    expect(entries[0].customDomainServiceName).toBe('');
+    expect(entries[0].customDomainWarning).toBe('apex warning A');
+
+    expect(entries[1].customDomain).toBe('beta.example.com');
+    expect(entries[1].customDomainServiceName).toBe('web');
+    // No warning on the second entry — field should be omitted, not undefined-key.
+    expect(entries[1]).not.toHaveProperty('customDomainWarning');
+  });
+
   it('excludes failed entries from batch but still batches the rest', async () => {
     const makeDeployResult = (appName: string): ToolResult => ({
       success: true,

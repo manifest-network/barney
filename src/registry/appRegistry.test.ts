@@ -10,6 +10,7 @@ import {
   reconcileWithChain,
   validateAppName,
   sanitizeManifestForStorage,
+  subscribeToRegistry,
   type AppEntry,
 } from './appRegistry';
 
@@ -103,6 +104,28 @@ describe('appRegistry', () => {
 
     it('removeApp returns false for unknown lease', () => {
       expect(removeApp(ADDR_A, 'nonexistent')).toBe(false);
+    });
+
+    it('round-trips customDomains across save/load via localStorage', () => {
+      // Verifies that neither AppEntrySchema.safeParse on reload nor
+      // sanitizeManifestForStorage (which only touches manifest env) drops
+      // the customDomains field. Locks in the chain-cache shape that the
+      // polling driver and the AppCard / CustomDomainCard rely on.
+      const app = makeApp({
+        customDomains: [
+          { serviceName: '', customDomain: 'app.example.com' },
+          { serviceName: 'web', customDomain: 'api.example.com' },
+        ],
+      });
+      addApp(ADDR_A, app);
+
+      // Fresh read goes through getApps → loadApps → AppEntrySchema.safeParse.
+      const reloaded = getApps(ADDR_A);
+      expect(reloaded).toHaveLength(1);
+      expect(reloaded[0].customDomains).toEqual([
+        { serviceName: '', customDomain: 'app.example.com' },
+        { serviceName: 'web', customDomain: 'api.example.com' },
+      ]);
     });
   });
 
@@ -386,6 +409,163 @@ describe('appRegistry', () => {
       const apps = getApps(ADDR_A);
       expect(apps).toHaveLength(1);
       expect(apps[0].name).toBe('my-app');
+    });
+  });
+
+  describe('subscribeToRegistry', () => {
+    const ADDR = 'manifest1abc';
+
+    it('fires the listener with the mutated address on addApp', () => {
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+
+      addApp(ADDR, makeApp());
+
+      expect(listener).toHaveBeenCalledWith(ADDR);
+      unsub();
+    });
+
+    it('fires on updateApp', () => {
+      const app = makeApp();
+      addApp(ADDR, app);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+
+      updateApp(ADDR, app.leaseUuid, { status: 'stopped' });
+
+      expect(listener).toHaveBeenCalledWith(ADDR);
+      unsub();
+    });
+
+    it('fires on removeApp', () => {
+      const app = makeApp();
+      addApp(ADDR, app);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+
+      removeApp(ADDR, app.leaseUuid);
+
+      expect(listener).toHaveBeenCalledWith(ADDR);
+      unsub();
+    });
+
+    it('fires on reconcileWithChain when state changes', () => {
+      addApp(ADDR, makeApp({ status: 'running' }));
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+
+      // Empty leaseStates → app marked stopped, mutation occurs.
+      reconcileWithChain(ADDR, new Map());
+
+      expect(listener).toHaveBeenCalledWith(ADDR);
+      unsub();
+    });
+
+    it('does NOT fire on reconcileWithChain when state unchanged', () => {
+      const app = makeApp({ status: 'running' });
+      addApp(ADDR, app);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      listener.mockClear(); // addApp also fires; clear before the assertion
+
+      // Existing running lease still active → no change.
+      reconcileWithChain(ADDR, new Map([[app.leaseUuid, 'active']]));
+
+      expect(listener).not.toHaveBeenCalled();
+      unsub();
+    });
+
+    it('unsubscribe stops further notifications', () => {
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      unsub();
+
+      addApp(ADDR, makeApp());
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it('listener exception does not block other listeners', () => {
+      const bad = vi.fn(() => { throw new Error('boom'); });
+      const good = vi.fn();
+      const unsubBad = subscribeToRegistry(bad);
+      const unsubGood = subscribeToRegistry(good);
+
+      addApp(ADDR, makeApp());
+
+      expect(bad).toHaveBeenCalled();
+      expect(good).toHaveBeenCalled();
+      unsubBad();
+      unsubGood();
+    });
+  });
+
+  // ---- Cross-tab sync ----
+  //
+  // The module-top `storage` event listener bridges localStorage writes from
+  // other tabs into the existing `notify(address)` pub/sub. Both registered
+  // consumers (`useRegistryApps`, `AppsSidebar`) get cross-tab updates for
+  // free without subscribing to `storage` themselves.
+  describe('cross-tab storage event sync', () => {
+    it('notifies subscribers when another tab writes the wallet registry key', () => {
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      try {
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: `barney-apps-${ADDR_A}`,
+          newValue: JSON.stringify([makeApp()]),
+          oldValue: null,
+          storageArea: localStorage,
+        }));
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect(listener).toHaveBeenCalledWith(ADDR_A);
+      } finally { unsub(); }
+    });
+
+    it('routes notify by the address parsed out of the storage key (cross-wallet)', () => {
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      try {
+        // Another tab on a DIFFERENT wallet — listener should still fire with
+        // that wallet's address; per-subscriber address filters handle the
+        // ignore-if-not-mine logic (see AppsSidebar.tsx:138, useRegistryApps.ts:30).
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: `barney-apps-${ADDR_B}`,
+          newValue: null,  // simulate disconnect / clear
+          oldValue: JSON.stringify([makeApp()]),
+          storageArea: localStorage,
+        }));
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect(listener).toHaveBeenCalledWith(ADDR_B);
+      } finally { unsub(); }
+    });
+
+    it('does not notify on foreign localStorage keys', () => {
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      try {
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: 'barney-ai-history',
+          newValue: '[]',
+          oldValue: null,
+          storageArea: localStorage,
+        }));
+        expect(listener).not.toHaveBeenCalled();
+      } finally { unsub(); }
+    });
+
+    it('ignores storage events without a key (global localStorage.clear)', () => {
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      try {
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: null,
+          newValue: null,
+          oldValue: null,
+          storageArea: localStorage,
+        }));
+        expect(listener).not.toHaveBeenCalled();
+      } finally { unsub(); }
     });
   });
 });

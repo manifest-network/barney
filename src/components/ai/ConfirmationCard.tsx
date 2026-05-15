@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, useState, useCallback } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { AlertTriangle, Check, X, Paperclip, Copy, CheckCheck, Eye, EyeOff } from 'lucide-react';
 import { FocusTrap } from 'focus-trap-react';
 import type { PendingAction } from '../../ai/toolExecutor';
@@ -8,6 +8,10 @@ import { findExampleByAppName } from '../../config/exampleApps';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { ManifestEditor } from './ManifestEditor';
 import { StackManifestEditor } from './StackManifestEditor';
+import { validateAll, validateCustomDomainFormat, apexRecordKindLabel } from '../../utils/customDomainValidation';
+import { getDisplaySafeArgs } from '../../ai/tools';
+import { CustomDomainBranch, CloudflareProxyHint } from './ConfirmationCardCustomDomain';
+import { parseCustomDomainArgs } from './customDomainBranchData';
 import {
   parseEditableManifest, serializeManifest,
   parseEditableStackManifest, serializeStackManifest,
@@ -60,8 +64,7 @@ function parseStackManifest(action: PendingAction): Record<string, StackServiceS
   }
 }
 
-/** Internal args that should not be shown in the confirmation parameters. */
-const INTERNAL_ARGS = new Set(['_generatedManifest', '_serviceNames', '_isStack']);
+
 
 function InlineCopyButton({ value }: { value: string }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
@@ -93,9 +96,11 @@ function SensitiveValue({ value }: { value: string }) {
   );
 }
 
+import type { ConfirmActionOverrides } from '../../stores/aiActions/confirmAction';
+
 interface ConfirmationCardProps {
   action: PendingAction;
-  onConfirm: (editedManifestJson?: string) => void;
+  onConfirm: (overrides?: ConfirmActionOverrides) => void;
   onCancel: () => void;
   isExecuting?: boolean;
 }
@@ -130,26 +135,141 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     return parseStackManifest(action);
   }, [action, isEditable, isStackEditable]);
 
-  const handleConfirm = useCallback(() => {
-    if (editedManifest) {
-      onConfirm(serializeManifest(editedManifest));
-    } else if (editedStack) {
-      onConfirm(serializeStackManifest(editedStack));
-    } else {
-      onConfirm();
-    }
-  }, [editedManifest, editedStack, onConfirm]);
+  const customDomainData = useMemo(() => parseCustomDomainArgs(action), [action]);
 
-  // Filter out internal args for display
-  const displayArgs = useMemo(() => {
-    const filtered: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(action.args)) {
-      if (!INTERNAL_ARGS.has(k)) {
-        filtered[k] = v;
+  // Editable custom domain input on deploy_app ConfirmationCards. Defaults to
+  // any AI-prefilled value (`args.customDomain`) so a chat message like
+  // "deploy redis with custom domain X" pre-fills the input. Empty input means
+  // "no domain attached" — the deploy proceeds without firing the set-domain TX.
+  const isDeployApp = action.toolName === 'deploy_app';
+  const allStackServiceNames = useMemo(() => {
+    if (!isDeployApp) return undefined;
+    const sn = action.args._serviceNames;
+    return Array.isArray(sn) ? (sn as string[]) : undefined;
+  }, [isDeployApp, action.args._serviceNames]);
+  // Multi-service stacks expose the picker; single-service stacks auto-select
+  // (see `singleStackService` below) so the user doesn't have to pick from a
+  // 1-option dropdown. Image+port deploys have no `_serviceNames` at all.
+  const stackServiceNames = useMemo(
+    () => (allStackServiceNames && allStackServiceNames.length > 1 ? allStackServiceNames : undefined),
+    [allStackServiceNames],
+  );
+  const singleStackService = allStackServiceNames && allStackServiceNames.length === 1
+    ? allStackServiceNames[0]
+    : '';
+
+  const initialDomain = typeof action.args.customDomain === 'string' ? action.args.customDomain : '';
+  // Fall back to the lone stack service so a user typing a domain into a
+  // single-service stack card (no picker shown) still threads the service
+  // name through to confirm. Without this fallback, `handleConfirm` used to
+  // overwrite the AI-prefilled service name to '' and the post-broadcast
+  // set-domain TX got rejected against the named LeaseItem.
+  const initialServiceName = typeof action.args.customDomainServiceName === 'string'
+    ? action.args.customDomainServiceName
+    : singleStackService;
+  const [editedCustomDomain, setEditedCustomDomain] = useState(initialDomain);
+  const [editedCustomDomainServiceName, setEditedCustomDomainServiceName] = useState(initialServiceName);
+
+  // Two layers of validation:
+  //  - Synchronous (format / IP / dot count): fast feedback as user types.
+  //  - Asynchronous (`validateAll` — debounced 300ms): runs the chain
+  //    `Params.reservedDomainSuffixes` RPC + apex check. Disables Confirm
+  //    while pending or on error so a reserved-zone domain can't slip
+  //    through to a `MsgCreateLease` whose `MsgSetItemCustomDomain` will
+  //    then be rejected post-broadcast. The async result also drives the
+  //    apex warning shown in this card (kept in sync with what the user
+  //    actually typed).
+  const editedDomainTrimmed = editedCustomDomain.trim();
+  const editedDomainFormatError = editedDomainTrimmed
+    ? validateCustomDomainFormat(editedDomainTrimmed)
+    : null;
+  const editedDomainHasContent = editedDomainTrimmed.length > 0;
+
+  // Last-validated marker. The cached value is only valid for `domain`; if the
+  // input has since changed, we're "pending" until the next debounce resolves.
+  // No synchronous setState in the effect body — only inside the async resolve —
+  // which keeps the React-hooks/set-state-in-effect lint happy.
+  const [lastValidated, setLastValidated] = useState<{
+    domain: string;
+    error?: string;
+    warning?: string;
+  }>({ domain: '' });
+
+  useEffect(() => {
+    if (!isDeployApp || !editedDomainHasContent || editedDomainFormatError) return;
+    if (lastValidated.domain === editedDomainTrimmed) return; // already validated
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const result = await validateAll(editedDomainTrimmed);
+        if (cancelled) return;
+        setLastValidated({ domain: editedDomainTrimmed, error: result.error, warning: result.warning });
+      } catch (err) {
+        if (cancelled) return;
+        logError('ConfirmationCard.asyncValidate', err);
+        // Chain unreachable: store as "validated, no error/warning" so the chain
+        // will reject authoritatively if it's actually a reserved zone.
+        setLastValidated({ domain: editedDomainTrimmed });
       }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [isDeployApp, editedDomainTrimmed, editedDomainHasContent, editedDomainFormatError, lastValidated.domain]);
+
+  // Derived async-validation state. `pending` = the current input differs from
+  // the last successfully-validated domain (and there's something to validate).
+  // The async error/warning is only meaningful when the validated domain matches
+  // the current input — otherwise display ignores it.
+  const asyncDomainPending = editedDomainHasContent && !editedDomainFormatError &&
+    lastValidated.domain !== editedDomainTrimmed;
+  const asyncDomainError = lastValidated.domain === editedDomainTrimmed ? lastValidated.error : undefined;
+  const asyncDomainWarning = lastValidated.domain === editedDomainTrimmed ? lastValidated.warning : undefined;
+  const editedDomainError = editedDomainFormatError ?? asyncDomainError ?? null;
+
+  // Multi-service stacks need an explicit service selection: without one the
+  // chain receives `MsgSetItemCustomDomain` with no `service_name` and rejects.
+  // The deploy_app TX would still go through, but the domain attach surfaces as
+  // a post-broadcast "attach failed, retry" message — wasted UX. Block confirm
+  // until the user picks one. We don't auto-pick the first service: which item
+  // a domain attaches to is a meaningful choice that should be explicit.
+  const stackServicePickerError = stackServiceNames !== undefined
+    && editedDomainHasContent
+    && !editedDomainFormatError
+    && editedCustomDomainServiceName === '';
+
+  const handleConfirm = useCallback(() => {
+    const manifestOverride = editedManifest
+      ? serializeManifest(editedManifest)
+      : editedStack
+        ? serializeStackManifest(editedStack)
+        : undefined;
+
+    if (!isDeployApp) {
+      onConfirm(manifestOverride ? { editedManifestJson: manifestOverride } : undefined);
+      return;
     }
-    return filtered;
-  }, [action.args]);
+
+    const overrides: ConfirmActionOverrides = {};
+    if (manifestOverride) overrides.editedManifestJson = manifestOverride;
+    overrides.editedCustomDomain = editedDomainTrimmed;
+    // State already carries the right value across all code paths:
+    //  - image+port (no _serviceNames): initialServiceName = ''
+    //  - single-service stack: initialServiceName = singleStackService (or AI-prefilled)
+    //  - multi-service stack: initialServiceName = AI-prefilled or '' (picker fills it,
+    //    and stackServicePickerError blocks confirm when still '')
+    overrides.editedCustomDomainServiceName = editedDomainTrimmed ? editedCustomDomainServiceName : '';
+    onConfirm(overrides);
+  }, [editedManifest, editedStack, isDeployApp, editedDomainTrimmed, editedCustomDomainServiceName, onConfirm]);
+
+  // Filter to user-facing args only. The AI tool schema in AI_TOOLS is the
+  // single source of truth — this avoids the drift bug where every new TX
+  // tool used to require a manual addition to the INTERNAL_ARGS allowlist.
+  const displayArgs = useMemo(
+    () => getDisplaySafeArgs(action.toolName, action.args),
+    [action.toolName, action.args],
+  );
 
   return (
     <FocusTrap focusTrapOptions={{
@@ -173,7 +293,9 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
       <div className="confirmation-body">
         <p id="confirmation-description" className="confirmation-description">{action.description}</p>
 
-        {isStackEditable && editedStack ? (
+        {customDomainData ? (
+          <CustomDomainBranch data={customDomainData} />
+        ) : isStackEditable && editedStack ? (
           <div className="confirmation-details">
             <StackManifestEditor stack={editedStack} onChange={setEditedStack} />
           </div>
@@ -209,8 +331,38 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                   {action.toolName === 'stop_app' ? 'Apps to stop:' : action.toolName === 'restart_app' ? 'Apps to restart:' : 'Apps to deploy:'}
                 </p>
                 <ul className="confirmation-batch-list">
-                  {(action.args.entries as Array<{ app_name: string; size?: string }>).map((entry) => (
-                    <li key={entry.app_name}>{entry.app_name}{entry.size ? ` (${entry.size})` : ''}</li>
+                  {(action.args.entries as Array<{
+                    app_name: string;
+                    size?: string;
+                    customDomain?: string;
+                    customDomainServiceName?: string;
+                    customDomainWarning?: string;
+                  }>).map((entry) => (
+                    <li key={entry.app_name}>
+                      <span>{entry.app_name}{entry.size ? ` (${entry.size})` : ''}</span>
+                      {/* Per-entry custom-domain display. Render only when
+                          present so non-domain entries (stop_app, restart_app,
+                          batch deploys without a domain attached) stay tight
+                          and the markup matches the pre-fix `<li>` exactly.
+                          Mirrors the single-deploy card's customDomainData
+                          branch: fqdn + optional service-name + apex warning
+                          when set. See PR #93 Copilot 3248436597. */}
+                      {entry.customDomain && (
+                        <div className="confirmation-batch-domain">
+                          <span className="font-mono text-xs text-dim">
+                            domain: {entry.customDomain}
+                            {entry.customDomainServiceName && (
+                              <> · service: <code>{entry.customDomainServiceName}</code></>
+                            )}
+                          </span>
+                          {entry.customDomainWarning && (
+                            <p className="confirmation-apex-warning" role="alert">
+                              {entry.customDomainWarning}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </li>
                   ))}
                 </ul>
               </div>
@@ -252,6 +404,69 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
             )}
           </>
         )}
+
+        {isDeployApp && (() => {
+          const isApex = editedDomainHasContent && !editedDomainError && !!asyncDomainWarning;
+          const recordKind = `${isApex ? 'an' : 'a'} ${apexRecordKindLabel(isApex)}${isApex ? ' record' : ''}`;
+          const showSuccessHint = editedDomainHasContent && !editedDomainError && !asyncDomainPending;
+          return (
+            <div className="confirmation-details">
+              <p className="confirmation-details-title">Custom domain (optional)</p>
+              <div className="confirmation-payload">
+                <input
+                  type="text"
+                  inputMode="url"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="app.example.com (leave empty to skip)"
+                  value={editedCustomDomain}
+                  onChange={(e) => setEditedCustomDomain(e.target.value)}
+                  className="custom-domain-card__input"
+                  aria-label="Custom domain"
+                  aria-invalid={editedDomainError != null}
+                  aria-busy={asyncDomainPending}
+                />
+                {stackServiceNames && editedDomainHasContent && (
+                  <>
+                    <select
+                      value={editedCustomDomainServiceName}
+                      onChange={(e) => setEditedCustomDomainServiceName(e.target.value)}
+                      className="custom-domain-card__input mt-2"
+                      aria-label="Service to attach domain to"
+                      aria-invalid={stackServicePickerError}
+                    >
+                      <option value="">— pick a service —</option>
+                      {stackServiceNames.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    {stackServicePickerError && (
+                      <p className="text-xs text-error mt-1" role="alert">
+                        Pick a service to attach the domain to.
+                      </p>
+                    )}
+                  </>
+                )}
+                {asyncDomainPending && !editedDomainError && (
+                  <p className="text-xs text-muted mt-2" aria-live="polite">Checking domain…</p>
+                )}
+                {editedDomainError && (
+                  <p className="text-xs text-error mt-2" role="alert">{editedDomainError}</p>
+                )}
+                {showSuccessHint && (
+                  <>
+                    <p className="text-xs text-muted mt-2">
+                      Will attach right after the lease is created. The provider FQDN appears
+                      in the deploy result — add {recordKind} at your registrar pointing at it.
+                    </p>
+                    <CloudflareProxyHint inline />
+                  </>
+                )}
+                {asyncDomainWarning && editedDomainHasContent && !editedDomainError && !asyncDomainPending && (
+                  <p className="text-sm text-warning mt-2" role="alert">{asyncDomainWarning}</p>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </div>
       <div className="confirmation-actions">
         <button
@@ -267,7 +482,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         <button
           type="button"
           onClick={handleConfirm}
-          disabled={isExecuting}
+          disabled={isExecuting || (isDeployApp && (editedDomainError != null || asyncDomainPending || stackServicePickerError))}
           className="btn btn-success btn-sm"
         >
           <Check className="w-4 h-4" />

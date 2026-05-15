@@ -82,6 +82,14 @@ export const AI_TOOLS: ToolDefinition[] = [
             type: 'string',
             description: 'Container labels as JSON (e.g. \'{"app":"myapp"}\').',
           },
+          custom_domain: {
+            type: 'string',
+            description: 'Optional FQDN to attach to the lease item right after the create-lease TX confirms. The set-domain TX is broadcast before the manifest upload so Traefik has the domain available when provisioning the container.',
+          },
+          service_name: {
+            type: 'string',
+            description: 'Service to target inside a multi-service stack. Required when "services" is provided alongside "custom_domain" (deploy + attach in one step), and used by the set_custom_domain tool as the per-LeaseItem picker. Must match one of the service keys. Omit for image+port single-service deploys.',
+          },
         },
         required: [],
       },
@@ -205,6 +213,32 @@ export const AI_TOOLS: ToolDefinition[] = [
           },
         },
         required: ['app_name'],
+      },
+    },
+  },
+
+  {
+    type: 'function',
+    function: {
+      name: 'set_custom_domain',
+      description: 'Attach or clear a custom DNS domain (e.g. "app.example.com") on a deployed app. Pass an empty string for custom_domain to clear an existing domain. For multi-service stacks, the AI must pick service_name from the stack\'s services.',
+      parameters: {
+        type: 'object',
+        properties: {
+          app_name: {
+            type: 'string',
+            description: 'The app name to attach the domain to.',
+          },
+          custom_domain: {
+            type: 'string',
+            description: 'Fully qualified domain name (e.g. "app.example.com"). Empty string clears the existing custom domain.',
+          },
+          service_name: {
+            type: 'string',
+            description: 'For multi-service stacks: which service the domain applies to. Omit for single-service apps.',
+          },
+        },
+        required: ['app_name', 'custom_domain'],
       },
     },
   },
@@ -428,6 +462,7 @@ export const CONFIRMATION_TOOLS = new Set([
   'fund_credits',
   'restart_app',
   'update_app',
+  'set_custom_domain',
   'cosmos_tx',
 ]);
 
@@ -441,6 +476,40 @@ export function requiresConfirmation(toolName: string): boolean {
 export const VALID_TOOL_NAMES: ReadonlySet<string> = new Set(
   AI_TOOLS.map((tool) => tool.function.name)
 );
+
+/** Lookup table of tool name → declared user-facing parameter keys.
+ *  Used by ConfirmationCard to filter `pendingAction.args` for display. */
+const TOOL_PUBLIC_PARAMS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  AI_TOOLS.map((tool) => [
+    tool.function.name,
+    new Set(Object.keys(tool.function.parameters.properties)),
+  ]),
+);
+
+/**
+ * Filter `pendingAction.args` to the keys that the AI tool's public schema
+ * declares. Internal-only fields stuffed into `args` by executors (skuUuid,
+ * providerUrl, _generatedManifest, customDomainServiceName, ...) are dropped.
+ *
+ * The AI tool schema in `AI_TOOLS` is the single source of truth — adding a
+ * new internal arg requires no other change; adding a new *public* arg
+ * automatically surfaces it in the confirmation card.
+ *
+ * Unknown tool names (e.g. internal `batch_deploy`) return an empty record so
+ * nothing leaks to the user.
+ */
+export function getDisplaySafeArgs(
+  toolName: string,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const publicKeys = TOOL_PUBLIC_PARAMS.get(toolName);
+  if (!publicKeys) return {};
+  const out: Record<string, unknown> = {};
+  for (const k of publicKeys) {
+    if (k in args && args[k] !== undefined) out[k] = args[k];
+  }
+  return out;
+}
 
 export function isValidToolName(name: unknown): name is string {
   return typeof name === 'string' && VALID_TOOL_NAMES.has(name);
@@ -457,11 +526,12 @@ export function getToolCallDescription(
     case 'deploy_app': {
       const name = args.app_name ? ` "${args.app_name}"` : '';
       const size = args.size ? ` (${args.size})` : '';
+      const domain = typeof args.custom_domain === 'string' && args.custom_domain ? ` with custom domain ${args.custom_domain}` : '';
       if (args.services) {
-        return `Deploying stack${name}${size}...`;
+        return `Deploying stack${name}${size}${domain}...`;
       }
       const image = !args.app_name && args.image ? ` from ${args.image}` : '';
-      return `Deploying app${name}${image}${size}...`;
+      return `Deploying app${name}${image}${size}${domain}...`;
     }
     case 'stop_app': {
       const stopName = String(args.app_name ?? '').trim();
@@ -499,6 +569,12 @@ export function getToolCallDescription(
       return `Fetching releases for "${args.app_name}"...`;
     case 'request_faucet':
       return 'Requesting tokens from faucet...';
+    case 'set_custom_domain': {
+      const domain = String(args.custom_domain ?? '').trim();
+      const target = String(args.app_name ?? '').trim();
+      if (domain === '') return `Clearing custom domain for "${target}"...`;
+      return `Setting custom domain "${domain}" for "${target}"...`;
+    }
     case 'cosmos_query':
       return `Querying ${args.module} ${args.subcommand}...`;
     case 'cosmos_tx':

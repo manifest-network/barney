@@ -16,15 +16,19 @@ import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../../api/provider-api';
 import { getLeaseStatus, getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
+import { resolveExpectedCnameTarget } from '../../utils/connection';
+import { getDomainAssignments } from '../../api/leaseDomains';
+import type { Lease } from '../../api/billing';
 import { requestFaucet } from '@manifest-network/manifest-mcp-chain';
 import { isFaucetEnabled, getFaucetBaseUrl, FAUCET_COOLDOWN_HOURS } from '../../api/faucet';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
-import { withRetry, withTimeout } from '../../api/utils';
+import { withRetry, withTimeout, throwIfAborted } from '../../api/utils';
 import { getProviderAuthToken } from './utils';
-import type { ToolResult, ToolExecutorOptions } from './types';
+import type { ToolResult, ToolExecutorOptions, ToolData } from './types';
+import type { MessageCard } from '../../contexts/aiTypes';
 
 /**
  * Execute list_apps: Get apps from registry, reconcile with chain.
@@ -33,7 +37,8 @@ export async function executeListApps(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry } = options;
+  const { address, appRegistry, signal } = options;
+  throwIfAborted(signal, 'list_apps');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -44,8 +49,9 @@ export async function executeListApps(
 
   // Reconcile with chain: mark apps as stopped if lease is gone
   try {
-    const activeLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE), undefined, 'Fetch active leases');
-    const pendingLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING), undefined, 'Fetch pending leases');
+    const activeLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE), undefined, 'Fetch active leases', signal);
+    throwIfAborted(signal, 'list_apps');
+    const pendingLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING), undefined, 'Fetch pending leases', signal);
     const activeUuids = new Set([
       ...activeLeases.map((l) => l.uuid),
       ...pendingLeases.map((l) => l.uuid),
@@ -61,6 +67,7 @@ export async function executeListApps(
       }
     }
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
     logError('compositeQueries.executeListApps.reconcile', error);
   }
 
@@ -69,39 +76,37 @@ export async function executeListApps(
     apps = apps.filter((a) => a.status === stateFilter);
   }
 
-  return {
-    success: true,
-    data: {
-      apps: apps.map((a) => {
-        let image: string | undefined;
-        if (a.manifest) {
-          try {
-            const manifest = JSON.parse(a.manifest);
-            if (typeof manifest.image === 'string') {
-              image = manifest.image;
-            } else if (manifest.services && typeof manifest.services === 'object') {
-              // Stack: join service images (e.g. "nginx + postgres")
-              const images = Object.values(manifest.services as Record<string, Record<string, unknown>>)
-                .map((svc) => typeof svc.image === 'string' ? svc.image : null)
-                .filter(Boolean);
-              if (images.length > 0) image = images.join(' + ');
-            }
-          } catch (error) {
-            logError('compositeQueries.executeListApps.parseManifest', error);
+  const data: ToolData<'list_apps'> = {
+    apps: apps.map((a) => {
+      let image: string | undefined;
+      if (a.manifest) {
+        try {
+          const manifest = JSON.parse(a.manifest);
+          if (typeof manifest.image === 'string') {
+            image = manifest.image;
+          } else if (manifest.services && typeof manifest.services === 'object') {
+            // Stack: join service images (e.g. "nginx + postgres")
+            const images = Object.values(manifest.services as Record<string, Record<string, unknown>>)
+              .map((svc) => typeof svc.image === 'string' ? svc.image : null)
+              .filter(Boolean);
+            if (images.length > 0) image = images.join(' + ');
           }
+        } catch (error) {
+          logError('compositeQueries.executeListApps.parseManifest', error);
         }
-        return {
-          name: a.name,
-          status: a.status,
-          size: a.size,
-          image,
-          url: a.url,
-          created: new Date(a.createdAt).toISOString(),
-        };
-      }),
-      count: apps.length,
-    },
+      }
+      return {
+        name: a.name,
+        status: a.status,
+        size: a.size,
+        image,
+        url: a.url,
+        created: new Date(a.createdAt).toISOString(),
+      };
+    }),
+    count: apps.length,
   };
+  return { success: true, data };
 }
 
 /**
@@ -112,7 +117,8 @@ export async function executeAppStatus(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary } = options;
+  const { address, appRegistry, signArbitrary, signal } = options;
+  throwIfAborted(signal, 'app_status');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -125,13 +131,16 @@ export async function executeAppStatus(
   // Get chain state
   let chainState = 'unknown';
   let leaseState: LeaseState | null = null;
+  let lease: Lease | null = null;
   try {
-    const lease = await getLease(app.leaseUuid);
+    lease = await getLease(app.leaseUuid);
+    throwIfAborted(signal, 'app_status');
     if (lease) {
       leaseState = lease.state as LeaseState;
       chainState = LEASE_STATE_LABELS[leaseState]?.toLowerCase() ?? 'unknown';
     }
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
     logError('compositeQueries.executeAppStatus.chainState', error);
   }
 
@@ -144,8 +153,10 @@ export async function executeAppStatus(
   ) {
     try {
       const authToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
+      throwIfAborted(signal, 'app_status');
       fredStatus = await getLeaseStatus(app.providerUrl, app.leaseUuid, authToken);
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error;
       logError('compositeQueries.executeAppStatus.fredStatus', error);
     }
   }
@@ -246,18 +257,104 @@ export async function executeAppStatus(
     }
   }
 
+  // Surface custom domains from chain (single seam — see leaseDomains.ts) and
+  // refresh the AppEntry cache so the DNS polling driver (mounted in MainLayout) knows what to watch
+  // without an extra chain round-trip per render.
+  const customDomains = getDomainAssignments(lease?.items);
+  if (lease) {
+    appRegistry.updateApp(address, app.leaseUuid, { customDomains });
+  }
+
+  // Stack service names — drive the empty-form service picker on stacks where no
+  // domain is set yet, and feed the multi-domain consolidated view when multiple
+  // domains are attached.
+  const stackServiceNames: string[] = serviceImages ? Object.keys(serviceImages) : [];
+
+  // Compute displayCard:
+  //  - >=2 custom domains: consolidated multi-domain view
+  //  - exactly one custom domain: single-domain status view
+  //  - no domain on a running app: "no domain" form (with picker on stacks)
+  //  - stopped apps with no domains: skip (not actionable)
+  let displayCard: MessageCard | undefined;
+  if (customDomains.length >= 2) {
+    displayCard = {
+      type: 'custom_domain',
+      data: {
+        appName: app.name,
+        fqdn: '',
+        leaseUuid: app.leaseUuid,
+        serviceName: '',
+        expectedAddress: address,
+        domains: customDomains.map(({ serviceName, customDomain }) => ({
+          serviceName,
+          customDomain,
+          expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
+        })),
+        ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
+      },
+    };
+  } else if (customDomains.length === 1) {
+    const { serviceName, customDomain } = customDomains[0];
+    displayCard = {
+      type: 'custom_domain',
+      data: {
+        appName: app.name,
+        fqdn: customDomain,
+        leaseUuid: app.leaseUuid,
+        serviceName,
+        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
+        expectedAddress: address,
+        ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
+      },
+    };
+  } else if (customDomains.length === 0 && currentStatus === 'running') {
+    // Gate on chain LeaseItem service names, not the stored manifest. The
+    // manifest-derived `stackServiceNames` would let pre-ENG-56 legacy stacks
+    // (all-unnamed chain items but a stored manifest claiming named services)
+    // reach the no-domain form — the user would happily fill it in, then
+    // `executeSetCustomDomain` rejects at TX time with "predates per-service
+    // domains". This gate mirrors the chain truth table at
+    // `compositeTransactions.ts:2858-2901`:
+    //   - single-item (any name shape): attach allowed, auto-pick the lone item
+    //   - multi-item with ≥1 named: attach allowed, picker shows named only
+    //   - multi-item, all unnamed: chain rejects → don't show form
+    const leaseItems = lease?.items ?? [];
+    const namedServiceNames = leaseItems
+      .filter((i) => i.serviceName !== '')
+      .map((i) => i.serviceName);
+    const canAttachDomain = leaseItems.length === 1 || namedServiceNames.length > 0;
+    if (canAttachDomain) {
+      const serviceName = leaseItems.length === 1 ? leaseItems[0].serviceName : '';
+      displayCard = {
+        type: 'custom_domain',
+        data: {
+          appName: app.name,
+          fqdn: '',
+          leaseUuid: app.leaseUuid,
+          serviceName,
+          expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
+          expectedAddress: address,
+          ...(namedServiceNames.length > 0 ? { serviceNames: namedServiceNames } : {}),
+        },
+      };
+    }
+  }
+
+  const data: ToolData<'app_status'> = {
+    name: app.name,
+    status: currentStatus,
+    size: app.size,
+    image,
+    ...(serviceImages ? { serviceImages } : {}),
+    url: connectionUrl || appUrl,
+    chainState,
+    created: new Date(app.createdAt).toISOString(),
+    ...(customDomains.length > 0 ? { customDomains } : {}),
+  };
   return {
     success: true,
-    data: {
-      name: app.name,
-      status: currentStatus,
-      size: app.size,
-      image,
-      ...(serviceImages ? { serviceImages } : {}),
-      url: connectionUrl || appUrl,
-      chainState,
-      created: new Date(app.createdAt).toISOString(),
-    },
+    data,
+    ...(displayCard ? { displayCard } : {}),
   };
 }
 
@@ -267,14 +364,15 @@ export async function executeAppStatus(
 export async function executeGetBalance(
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, clientManager } = options;
+  const { address, clientManager, signal } = options;
+  throwIfAborted(signal, 'get_balance');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!clientManager) return { success: false, error: 'Not connected to blockchain' };
 
   let balance: Awaited<ReturnType<typeof getBalance>>;
   try {
     const queryClient = await clientManager.getQueryClient();
-    balance = await withTimeout(getBalance(queryClient, address), undefined, 'Fetch balance');
+    balance = await withTimeout(getBalance(queryClient, address), undefined, 'Fetch balance', signal);
   } catch (error) {
     logError('compositeQueries.executeGetBalance', error);
     return {
@@ -313,25 +411,28 @@ export async function executeGetBalance(
     }
   }
 
-  return {
-    success: true,
-    data: {
-      credits,
-      spending_per_hour: Math.round(spendingPerHour * 100) / 100,
-      hours_remaining: hoursRemaining,
-      running_apps: runningApps,
-    },
+  const data: ToolData<'get_balance'> = {
+    credits,
+    spending_per_hour: Math.round(spendingPerHour * 100) / 100,
+    hours_remaining: hoursRemaining,
+    running_apps: runningApps,
   };
+  return { success: true, data };
 }
 
 /**
  * Execute browse_catalog: Providers + SKUs grouped by tier.
  */
-export async function executeBrowseCatalog(): Promise<ToolResult> {
+export async function executeBrowseCatalog(
+  options: ToolExecutorOptions = { clientManager: null, address: undefined },
+): Promise<ToolResult> {
+  const { signal } = options;
+  throwIfAborted(signal, 'browse_catalog');
   const [providers, skus] = await Promise.all([
-    withTimeout(getProviders(true), undefined, 'Fetch providers'),
-    withTimeout(getSKUs(true), undefined, 'Fetch SKUs'),
+    withTimeout(getProviders(true), undefined, 'Fetch providers', signal),
+    withTimeout(getSKUs(true), undefined, 'Fetch SKUs', signal),
   ]);
+  throwIfAborted(signal, 'browse_catalog');
 
   // Check provider health in parallel
   const providersWithHealth = await Promise.all(
@@ -339,9 +440,10 @@ export async function executeBrowseCatalog(): Promise<ToolResult> {
       let healthy = false;
       if (p.apiUrl) {
         try {
-          const health = await getProviderHealth(p.apiUrl);
+          const health = await withTimeout(getProviderHealth(p.apiUrl), undefined, `Provider health (${p.uuid})`, signal);
           healthy = health?.status === 'healthy';
         } catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError') throw error;
           logError(`compositeQueries.executeBrowseCatalog.healthCheck[${p.uuid}]`, error);
         }
       }
@@ -352,6 +454,7 @@ export async function executeBrowseCatalog(): Promise<ToolResult> {
       };
     })
   );
+  throwIfAborted(signal, 'browse_catalog');
 
   // Group SKUs by name (tier)
   const tiers: Record<string, Array<{ provider: string; price: string; unit: string }>> = {};
@@ -441,7 +544,8 @@ export async function executeGetLogs(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary } = options;
+  const { address, appRegistry, signArbitrary, signal } = options;
+  throwIfAborted(signal, 'get_logs');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -509,13 +613,14 @@ export async function executeGetLogs(
     }
   }
 
+  const data: ToolData<'get_logs'> = {
+    app_name: app.name,
+    logs: llmLogs,
+    truncated,
+  };
   return {
     success: true,
-    data: {
-      app_name: app.name,
-      logs: llmLogs,
-      truncated,
-    },
+    data,
     displayCard: {
       type: 'logs',
       data: {
@@ -534,7 +639,8 @@ export async function executeLeaseHistory(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry } = options;
+  const { address, appRegistry, signal } = options;
+  throwIfAborted(signal, 'lease_history');
   if (!address) return { success: false, error: 'Wallet not connected' };
 
   const stateArg = (args.state as string | undefined)?.toLowerCase() || 'all';
@@ -585,7 +691,8 @@ export async function executeAppDiagnostics(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary } = options;
+  const { address, appRegistry, signArbitrary, signal } = options;
+  throwIfAborted(signal, 'app_diagnostics');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -644,7 +751,8 @@ export async function executeAppReleases(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary } = options;
+  const { address, appRegistry, signArbitrary, signal } = options;
+  throwIfAborted(signal, 'app_releases');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -703,7 +811,8 @@ export async function executeRequestFaucet(
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
   if (!isFaucetEnabled()) return { success: false, error: 'Faucet is not available on this network' };
-  const { address } = options;
+  const { address, signal } = options;
+  throwIfAborted(signal, 'request_faucet');
   if (!address) return { success: false, error: 'Wallet not connected' };
 
   let faucetResult;

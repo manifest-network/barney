@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { withRetry, withTimeout } from './utils';
+import { withRetry, withTimeout, throwIfAborted } from './utils';
 
 describe('withRetry', () => {
   it('returns result on first success', async () => {
@@ -69,5 +69,72 @@ describe('withTimeout', () => {
     // Advancing timers should not cause unhandled rejections
     vi.advanceTimersByTime(10000);
     vi.useRealTimers();
+  });
+
+  it('rejects with AbortError when the signal is already aborted', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    await expect(
+      withTimeout(new Promise(() => undefined), 5000, 'Test', ac.signal),
+    ).rejects.toThrow(/aborted/i);
+  });
+
+  it('rejects with AbortError when the signal aborts mid-flight', async () => {
+    const ac = new AbortController();
+    const promise = withTimeout(new Promise(() => undefined), 5000, 'Test', ac.signal);
+    setTimeout(() => ac.abort(), 0);
+    await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('resolves normally when signal never aborts', async () => {
+    const ac = new AbortController();
+    const result = await withTimeout(Promise.resolve('done'), 5000, 'Test', ac.signal);
+    expect(result).toBe('done');
+  });
+
+  it('removes the abort listener on success path (no leak across repeated calls)', async () => {
+    const ac = new AbortController();
+    const addSpy = vi.spyOn(ac.signal, 'addEventListener');
+    const removeSpy = vi.spyOn(ac.signal, 'removeEventListener');
+
+    // 5 successful calls sharing one signal
+    for (let i = 0; i < 5; i++) {
+      await withTimeout(Promise.resolve(i), 5000, 'Test', ac.signal);
+    }
+
+    // Each attached listener must be detached.
+    const abortAdds = addSpy.mock.calls.filter((c) => c[0] === 'abort');
+    const abortRemoves = removeSpy.mock.calls.filter((c) => c[0] === 'abort');
+    expect(abortAdds.length).toBe(5);
+    expect(abortRemoves.length).toBe(5);
+  });
+
+  it('removes the abort listener on timeout path', async () => {
+    const ac = new AbortController();
+    const removeSpy = vi.spyOn(ac.signal, 'removeEventListener');
+
+    await expect(
+      withTimeout(new Promise(() => undefined), 1, 'Test', ac.signal),
+    ).rejects.toThrow(/timed out/);
+
+    const abortRemoves = removeSpy.mock.calls.filter((c) => c[0] === 'abort');
+    expect(abortRemoves.length).toBe(1);
+  });
+});
+
+describe('throwIfAborted', () => {
+  it('is a no-op when signal is undefined', () => {
+    expect(() => throwIfAborted(undefined)).not.toThrow();
+  });
+
+  it('is a no-op when signal is not aborted', () => {
+    const ac = new AbortController();
+    expect(() => throwIfAborted(ac.signal)).not.toThrow();
+  });
+
+  it('throws AbortError when signal is aborted', () => {
+    const ac = new AbortController();
+    ac.abort();
+    expect(() => throwIfAborted(ac.signal, 'work')).toThrow(/work aborted/);
   });
 });

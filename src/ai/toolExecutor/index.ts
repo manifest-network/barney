@@ -30,6 +30,8 @@ import {
   executeConfirmedRestartApp,
   executeUpdateApp,
   executeConfirmedUpdateApp,
+  executeSetCustomDomain,
+  executeConfirmedSetCustomDomain,
 } from './compositeTransactions';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 
@@ -57,6 +59,7 @@ const TX_TOOLS = new Set([
   'fund_credits',
   'restart_app',
   'update_app',
+  'set_custom_domain',
 ]);
 
 /**
@@ -83,7 +86,7 @@ export async function executeTool(
         case 'get_balance':
           return await executeGetBalance(options);
         case 'browse_catalog':
-          return await executeBrowseCatalog();
+          return await executeBrowseCatalog(options);
         case 'lease_history':
           return await executeLeaseHistory(args, options);
         case 'app_diagnostics':
@@ -117,6 +120,8 @@ export async function executeTool(
           return await executeRestartApp(args, options);
         case 'update_app':
           return await executeUpdateApp(args, options, payload);
+        case 'set_custom_domain':
+          return await executeSetCustomDomain(args, options);
         default:
           return { success: false, error: `Unknown TX tool: ${toolName}` };
       }
@@ -174,6 +179,8 @@ export async function executeConfirmedTool(
         return await executeConfirmedRestartApp(args, clientManager, options);
       case 'update_app':
         return await executeConfirmedUpdateApp(args, clientManager, options, payload);
+      case 'set_custom_domain':
+        return await executeConfirmedSetCustomDomain(args, clientManager, options);
       default:
         return { success: false, error: `Unknown confirmed tool: ${toolName}` };
     }

@@ -1,7 +1,24 @@
-import { describe, it, expect, vi } from 'vitest';
-import { createElement } from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
+
+// Stub validateAll so the async-validate effect resolves deterministically
+// without hitting the (mocked) chain RPC for reserved-suffix params. The
+// stub mirrors the sync validators so format / IP / apex checks still apply.
+vi.mock('../../utils/customDomainValidation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/customDomainValidation')>();
+  return {
+    ...actual,
+    validateAll: vi.fn(async (fqdn: string) => {
+      const formatError = actual.validateCustomDomainFormat(fqdn);
+      if (formatError) return { error: formatError };
+      if (actual.isApex(fqdn)) return { warning: actual.APEX_WARNING };
+      return {};
+    }),
+  };
+});
+
 import { ConfirmationCard } from './ConfirmationCard';
 import {
   parseEditableManifest, serializeManifest,
@@ -618,6 +635,162 @@ describe('ConfirmationCard with stack manifest', () => {
     expect(element.props.action.args._generatedManifest).toBe(manifest);
   });
 
+  describe('set_custom_domain branch', () => {
+    function renderInto(action: PendingAction) {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      flushSync(() => { root.render(createElement(ConfirmationCard, { action, onConfirm: vi.fn(), onCancel: vi.fn() })); });
+      return { container, cleanup: () => { flushSync(() => { root.unmount(); }); container.remove(); } };
+    }
+
+    it('renders DNS table with CNAME target on attach', () => {
+      const action = makeAction({
+        toolName: 'set_custom_domain',
+        args: {
+          app_name: 'my-api',
+          leaseUuid: 'lu1',
+          serviceName: '',
+          customDomain: 'app.example.com',
+          currentDomain: '',
+          expectedCnameTarget: 'auto.barney0.manifest0.net',
+        },
+        description: 'Attach "app.example.com" to "my-api"?',
+      });
+      const { container, cleanup } = renderInto(action);
+      try {
+        const text = container.textContent ?? '';
+        expect(text).toContain('CNAME');
+        expect(text).toContain('app.example.com');
+        expect(text).toContain('auto.barney0.manifest0.net');
+        expect(text).toMatch(/orange-cloud proxy/i);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('renders apex warning when warning provided AND switches Type cell to ALIAS / ANAME / CNAME-flattened', () => {
+      const action = makeAction({
+        toolName: 'set_custom_domain',
+        args: {
+          app_name: 'my-api',
+          leaseUuid: 'lu1',
+          serviceName: '',
+          customDomain: 'example.com',
+          currentDomain: '',
+          expectedCnameTarget: 'auto.barney0.manifest0.net',
+          warning: 'This is an apex domain. Use ALIAS / ANAME / CNAME-flattening.',
+        },
+        description: 'Attach "example.com"?',
+      });
+      const { container, cleanup } = renderInto(action);
+      try {
+        const text = container.textContent ?? '';
+        expect(text).toMatch(/apex/i);
+        // Type cell must reflect the apex constraint, not "CNAME".
+        expect(text).toMatch(/ALIAS \/ ANAME \/ CNAME-flattened/);
+        // Verify the bare "CNAME" text doesn't appear in the Type cell — the only
+        // remaining "CNAME" mentions are inside the apex warning string.
+        const typeCells = Array.from(container.querySelectorAll('table.custom-domain-dns-table tbody td'))
+          .map(td => td.textContent ?? '');
+        expect(typeCells[0]).not.toBe('CNAME');
+        expect(typeCells[0]).toContain('ALIAS');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('renders Type cell as plain CNAME for non-apex (subdomain) attaches', () => {
+      const action = makeAction({
+        toolName: 'set_custom_domain',
+        args: {
+          app_name: 'my-api',
+          leaseUuid: 'lu1',
+          serviceName: '',
+          customDomain: 'app.example.com',
+          currentDomain: '',
+          expectedCnameTarget: 'auto.barney0.manifest0.net',
+        },
+        description: 'Attach "app.example.com"?',
+      });
+      const { container, cleanup } = renderInto(action);
+      try {
+        const typeCells = Array.from(container.querySelectorAll('table.custom-domain-dns-table tbody td'))
+          .map(td => td.textContent ?? '');
+        expect(typeCells[0]).toBe('CNAME');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('renders clear-banner when customDomain is empty', () => {
+      const action = makeAction({
+        toolName: 'set_custom_domain',
+        args: {
+          app_name: 'my-api',
+          leaseUuid: 'lu1',
+          serviceName: '',
+          customDomain: '',
+          currentDomain: 'old.example.com',
+        },
+        description: 'Clear custom domain "old.example.com" from "my-api"?',
+      });
+      const { container, cleanup } = renderInto(action);
+      try {
+        const text = container.textContent ?? '';
+        expect(text).toMatch(/clear/i);
+        expect(text).toContain('old.example.com');
+        expect(text).toContain('my-api');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('does not show CNAME table when clearing', () => {
+      const action = makeAction({
+        toolName: 'set_custom_domain',
+        args: {
+          app_name: 'my-api',
+          leaseUuid: 'lu1',
+          serviceName: '',
+          customDomain: '',
+          currentDomain: 'old.example.com',
+        },
+        description: 'Clear?',
+      });
+      const { container, cleanup } = renderInto(action);
+      try {
+        const text = container.textContent ?? '';
+        expect(text).not.toMatch(/registrar/i);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('shows replacement note when changing domain', () => {
+      const action = makeAction({
+        toolName: 'set_custom_domain',
+        args: {
+          app_name: 'my-api',
+          leaseUuid: 'lu1',
+          serviceName: '',
+          customDomain: 'new.example.com',
+          currentDomain: 'old.example.com',
+          expectedCnameTarget: 'auto.barney0.manifest0.net',
+        },
+        description: 'Replace?',
+      });
+      const { container, cleanup } = renderInto(action);
+      try {
+        const text = container.textContent ?? '';
+        expect(text).toContain('old.example.com');
+        expect(text).toContain('new.example.com');
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
   it('displays (ingress) label on ports with ingress flag in read-only stack summary', () => {
     // Use a non-editable tool name so the read-only parseStackManifest path renders
     const manifest = JSON.stringify({
@@ -646,6 +819,318 @@ describe('ConfirmationCard with stack manifest', () => {
       expect(text).not.toContain('5432/tcp (ingress)');
     } finally {
       flushSync(() => { root.unmount(); });
+      container.remove();
+    }
+  });
+
+  describe('deploy_app editable custom domain input', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    /** React tracks input value separately; use the prototype setter so onChange fires. */
+    function setReactInputValue(input: HTMLInputElement, value: string) {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    /** Advance past the 300ms debounce + flush microtasks so async validation resolves. */
+    async function settleAsyncValidation() {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(350);
+      });
+    }
+
+    function renderInto(action: PendingAction, onConfirm = vi.fn()) {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      flushSync(() => { root.render(createElement(ConfirmationCard, { action, onConfirm, onCancel: vi.fn() })); });
+      return { container, root, onConfirm, cleanup: () => { flushSync(() => { root.unmount(); }); container.remove(); } };
+    }
+
+    function makeDeployAction(args: Record<string, unknown> = {}): PendingAction {
+      return {
+        id: 'deploy-1',
+        toolName: 'deploy_app',
+        args: { app_name: 'redis', size: 'micro', ...args },
+        description: 'Deploy "redis" on micro tier?',
+      };
+    }
+
+    function findConfirmBtn(container: HTMLElement): HTMLButtonElement {
+      return Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Confirm')) as HTMLButtonElement;
+    }
+
+    it('renders an empty editable input by default', () => {
+      const { container, cleanup } = renderInto(makeDeployAction());
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        expect(input).not.toBeNull();
+        expect(input.value).toBe('');
+        expect(container.textContent ?? '').toMatch(/Custom domain/i);
+      } finally { cleanup(); }
+    });
+
+    it('pre-fills the input from an AI-prefilled customDomain arg', () => {
+      const { container, cleanup } = renderInto(makeDeployAction({ customDomain: 'app.example.com' }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        expect(input.value).toBe('app.example.com');
+      } finally { cleanup(); }
+    });
+
+    it('disables Confirm while async validation is pending', async () => {
+      const { container, cleanup } = renderInto(makeDeployAction());
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'redis.example.com'));
+        // Immediately after typing, async hasn't resolved → button disabled
+        expect(findConfirmBtn(container).disabled).toBe(true);
+        expect(container.textContent ?? '').toMatch(/Checking domain/i);
+        await settleAsyncValidation();
+        // After debounce + resolve → button enabled
+        expect(findConfirmBtn(container).disabled).toBe(false);
+      } finally { cleanup(); }
+    });
+
+    it('passes editedCustomDomain to onConfirm after async validation settles', async () => {
+      const { container, onConfirm, cleanup } = renderInto(makeDeployAction());
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'redis.example.com'));
+        await settleAsyncValidation();
+        flushSync(() => findConfirmBtn(container).click());
+        expect(onConfirm).toHaveBeenCalledTimes(1);
+        expect(onConfirm.mock.calls[0][0].editedCustomDomain).toBe('redis.example.com');
+      } finally { cleanup(); }
+    });
+
+    it('passes editedCustomDomain="" when user clears a pre-filled domain', async () => {
+      const { container, onConfirm, cleanup } = renderInto(makeDeployAction({ customDomain: 'app.example.com' }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, ''));
+        // Empty input bypasses async; button immediately enabled
+        flushSync(() => findConfirmBtn(container).click());
+        expect(onConfirm.mock.calls[0][0].editedCustomDomain).toBe('');
+      } finally { cleanup(); }
+    });
+
+    it('disables Confirm when domain input has invalid format (IPv4) — sync error', () => {
+      const { container, cleanup } = renderInto(makeDeployAction());
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, '192.168.1.1'));
+        // Sync error wins; button disabled without waiting for async
+        expect(findConfirmBtn(container).disabled).toBe(true);
+        expect(container.textContent ?? '').toMatch(/IP address/i);
+      } finally { cleanup(); }
+    });
+
+    it('shows apex warning after async validation resolves on a 2-label domain', async () => {
+      const { container, cleanup } = renderInto(makeDeployAction());
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'example.com'));
+        await settleAsyncValidation();
+        expect(container.textContent ?? '').toMatch(/apex/i);
+        // Apex isn't an error — Confirm stays enabled
+        expect(findConfirmBtn(container).disabled).toBe(false);
+      } finally { cleanup(); }
+    });
+
+    it('shows a service select for multi-service stacks when domain is filled', () => {
+      const { container, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['web', 'db'] }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'app.example.com'));
+        const select = container.querySelector('select[aria-label="Service to attach domain to"]') as HTMLSelectElement;
+        expect(select).not.toBeNull();
+        const options = Array.from(select.querySelectorAll('option')).map(o => o.value);
+        expect(options).toContain('web');
+        expect(options).toContain('db');
+      } finally { cleanup(); }
+    });
+
+    it('does not show service select for single-service deploys', () => {
+      const { container, cleanup } = renderInto(makeDeployAction());
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'app.example.com'));
+        const select = container.querySelector('select[aria-label="Service to attach domain to"]');
+        expect(select).toBeNull();
+      } finally { cleanup(); }
+    });
+
+    it('threads selected service name through onConfirm for stacks', async () => {
+      const { container, onConfirm, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['web', 'db'] }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'app.example.com'));
+        const select = container.querySelector('select[aria-label="Service to attach domain to"]') as HTMLSelectElement;
+        flushSync(() => {
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!;
+          setter.call(select, 'db');
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        await settleAsyncValidation();
+        flushSync(() => findConfirmBtn(container).click());
+        expect(onConfirm.mock.calls[0][0].editedCustomDomainServiceName).toBe('db');
+      } finally { cleanup(); }
+    });
+
+    // Regression: single-service stacks have no picker (intentional — a
+    // 1-option dropdown is just noise), so `handleConfirm` used to clobber
+    // the service name to ''. The downstream set-domain TX then went out
+    // with service_name='' and got rejected against the named LeaseItem.
+    // Both the AI-prefill path and the user-types-it-themselves path need
+    // to preserve the lone service name through to onConfirm.
+    it('preserves the auto-selected service name for single-service stack deploys', async () => {
+      const { container, onConfirm, cleanup } = renderInto(
+        makeDeployAction({ _serviceNames: ['wp'], customDomain: 'foo.com', customDomainServiceName: 'wp' })
+      );
+      try {
+        await settleAsyncValidation();
+        flushSync(() => findConfirmBtn(container).click());
+        expect(onConfirm.mock.calls[0][0].editedCustomDomainServiceName).toBe('wp');
+      } finally { cleanup(); }
+    });
+
+    it('auto-selects the lone service when user types a domain into a single-service stack', async () => {
+      const { container, onConfirm, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['wp'] }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'foo.com'));
+        await settleAsyncValidation();
+        flushSync(() => findConfirmBtn(container).click());
+        expect(onConfirm.mock.calls[0][0].editedCustomDomainServiceName).toBe('wp');
+      } finally { cleanup(); }
+    });
+
+    it('disables Confirm when a stack has a domain entered but no service picked', async () => {
+      const { container, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['web', 'db'] }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'app.example.com'));
+        await settleAsyncValidation();
+        // Picker stays at the default empty option — Confirm should be disabled.
+        const select = container.querySelector('select[aria-label="Service to attach domain to"]') as HTMLSelectElement;
+        expect(select.value).toBe('');
+        expect(findConfirmBtn(container).disabled).toBe(true);
+      } finally { cleanup(); }
+    });
+
+    it('shows an inline error next to the picker when a stack service is required but unset', async () => {
+      const { container, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['web', 'db'] }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'app.example.com'));
+        await settleAsyncValidation();
+        expect(container.textContent).toMatch(/pick a service/i);
+      } finally { cleanup(); }
+    });
+
+    it('re-enables Confirm once the user picks a service', async () => {
+      const { container, cleanup } = renderInto(makeDeployAction({ _serviceNames: ['web', 'db'] }));
+      try {
+        const input = container.querySelector('input[aria-label="Custom domain"]') as HTMLInputElement;
+        flushSync(() => setReactInputValue(input, 'app.example.com'));
+        await settleAsyncValidation();
+        expect(findConfirmBtn(container).disabled).toBe(true);
+
+        const select = container.querySelector('select[aria-label="Service to attach domain to"]') as HTMLSelectElement;
+        flushSync(() => {
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!;
+          setter.call(select, 'web');
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        expect(findConfirmBtn(container).disabled).toBe(false);
+      } finally { cleanup(); }
+    });
+  });
+});
+
+// Regression: PR #93 Copilot 3248436597. Batch deploys carried per-entry
+// `customDomain`, `customDomainServiceName`, `customDomainWarning` through
+// `toolExecution.ts:178-184` into the pending action's `args.entries`, but
+// the batch render branch in `ConfirmationCard.tsx` only typed entries as
+// `{ app_name, size? }` — so users approved batches attaching custom
+// domains they never saw on the confirmation card.
+describe('ConfirmationCard batch render — per-entry custom-domain (Copilot 3248436597)', () => {
+  it('renders domain + apex warning only for entries that carry them', () => {
+    const action = makeAction({
+      toolName: 'batch_deploy',
+      args: {
+        entries: [
+          {
+            app_name: 'wp',
+            size: 'small',
+            customDomain: 'example.com',          // apex
+            customDomainServiceName: 'web',
+            customDomainWarning: 'Apex CNAMEs are RFC-prohibited; use ALIAS/ANAME/CNAME-flattening at your registrar.',
+          },
+          {
+            app_name: 'plain',
+            size: 'micro',
+            // no customDomain at all
+          },
+        ],
+      },
+      description: 'Deploy 2 apps?',
+    });
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    flushSync(() => { act(() => { root.render(createElement(ConfirmationCard, {
+      action, onConfirm: vi.fn(), onCancel: vi.fn(),
+    })); }); });
+
+    try {
+      expect(container.textContent).toMatch(/wp/);
+      expect(container.textContent).toMatch(/example\.com/);
+      expect(container.textContent).toMatch(/service:.*web/);
+      expect(container.textContent).toMatch(/Apex CNAMEs/i);
+
+      expect(container.textContent).toMatch(/plain/);
+      // Apex warning must not double-render against the plain entry.
+      const warningOccurrences = container.querySelectorAll('.confirmation-apex-warning').length;
+      expect(warningOccurrences).toBe(1);
+    } finally {
+      flushSync(() => { act(() => { root.unmount(); }); });
+      container.remove();
+    }
+  });
+
+  it('renders the service-name annotation only when customDomainServiceName is non-empty', () => {
+    const action = makeAction({
+      toolName: 'batch_deploy',
+      args: {
+        entries: [
+          {
+            app_name: 'redis',
+            size: 'micro',
+            customDomain: 'redis.example.com',
+            customDomainServiceName: '',  // single-item lease — no service annotation
+          },
+        ],
+      },
+      description: 'Deploy redis?',
+    });
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    flushSync(() => { act(() => { root.render(createElement(ConfirmationCard, {
+      action, onConfirm: vi.fn(), onCancel: vi.fn(),
+    })); }); });
+
+    try {
+      expect(container.textContent).toMatch(/redis\.example\.com/);
+      expect(container.textContent).not.toMatch(/service:/);
+    } finally {
+      flushSync(() => { act(() => { root.unmount(); }); });
       container.remove();
     }
   });

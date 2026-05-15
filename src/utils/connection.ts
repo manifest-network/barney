@@ -13,6 +13,16 @@ export function isValidFqdn(value: string): boolean {
 }
 
 /**
+ * Canonical FQDN normalization: trim whitespace, strip a trailing dot, lowercase.
+ * DNS hostnames are case-insensitive (RFC 4343); the trailing dot marks the root
+ * and isn't part of the relative name. Use this anywhere two FQDN strings are
+ * being compared or sent over the wire.
+ */
+export function normalizeFqdn(value: string): string {
+  return value.trim().replace(/\.$/, '').toLowerCase();
+}
+
+/**
  * Collect per-instance FQDNs from a connection object.
  * For flat leases: collects from `connection.instances`.
  * For stack leases: collects from each service's instances.
@@ -51,4 +61,41 @@ export function collectInstanceUrls(
   // Only return if there are multiple unique FQDNs
   const unique = [...new Set(urls)];
   return unique.length > 1 ? unique : [];
+}
+
+/**
+ * Resolve the provider-issued CNAME target for a deployed app/service.
+ * - Stack: `connection.services[serviceName].fqdn` (or the first instance's fqdn)
+ * - Single-service: `connection.fqdn` (or the first instance's fqdn)
+ * Validates with `isValidFqdn` and strips a trailing dot. Returns undefined if
+ * no usable hostname is found.
+ */
+export function resolveExpectedCnameTarget(
+  connection:
+    | {
+        readonly fqdn?: string;
+        readonly instances?: readonly { readonly fqdn?: string }[];
+        readonly services?: Readonly<Record<string, unknown>>;
+      }
+    | undefined,
+  serviceName: string,
+): string | undefined {
+  if (!connection) return undefined;
+
+  const normalize = (value?: string): string | undefined => {
+    if (!value) return undefined;
+    const stripped = value.replace(/\.$/, '');
+    return isValidFqdn(stripped) ? stripped : undefined;
+  };
+
+  if (serviceName !== '' && connection.services) {
+    const svcRaw = connection.services[serviceName];
+    if (svcRaw && typeof svcRaw === 'object') {
+      const svc = svcRaw as { readonly fqdn?: string; readonly instances?: readonly { readonly fqdn?: string }[] };
+      const svcFqdn = normalize(svc.fqdn) ?? normalize(svc.instances?.[0]?.fqdn);
+      if (svcFqdn) return svcFqdn;
+    }
+  }
+
+  return normalize(connection.fqdn) ?? normalize(connection.instances?.[0]?.fqdn);
 }

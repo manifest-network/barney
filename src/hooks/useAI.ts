@@ -11,6 +11,8 @@ export function useAI() {
     pendingConfirmation: s.pendingConfirmation,
     pendingPayload: s.pendingPayload,
     deployProgress: s.deployProgress,
+    dnsStatuses: s.dnsStatuses,
+    setDnsStatuses: s.setDnsStatuses,
     setIsOpen: s.setIsOpen,
     sendMessage: s.sendMessage,
     updateSettings: s.updateSettings,
@@ -23,6 +25,7 @@ export function useAI() {
     attachPayload: s.attachPayload,
     clearPayload: s.clearPayload,
     requestBatchDeploy: s.requestBatchDeploy,
+    requestStopApp: s.requestStopApp,
     addLocalMessage: s.addLocalMessage,
     stopStreaming: s.stopStreaming,
   })));

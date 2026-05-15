@@ -218,12 +218,40 @@ describe('validateChatHistory', () => {
     expect(result[0].id).toBe('valid');
   });
 
-  it('resets isStreaming to false', () => {
-    const messages = [
-      { id: '1', role: 'assistant', content: 'Test', timestamp: 123, isStreaming: true },
-    ];
-    const result = validateChatHistory(messages);
+  // Persisted transient flags must survive validation — they drive rehydrate
+  // branches in persistence.ts (Interrupted marker for streams and confirms)
+  // and the `toChatApiMessages` filter (synthesized /help text must not loop
+  // back to the model). Previously the schema dropped `awaitingConfirmation`
+  // and `local`, and hard-set `isStreaming: false`, silently killing all three.
+  it('preserves isStreaming=true so rehydrate can detect interrupted streams', () => {
+    const result = validateChatHistory([
+      { id: 'm1', role: 'assistant', content: 'partial...', timestamp: 1, isStreaming: true },
+    ]);
+    expect(result[0].isStreaming).toBe(true);
+  });
+
+  it('preserves awaitingConfirmation for rehydrate to mark interrupted', () => {
+    const result = validateChatHistory([{
+      id: 'm1', role: 'tool', content: 'Awaiting confirmation...', timestamp: 1,
+      awaitingConfirmation: true, toolCallId: 'tc1', toolName: 'deploy_app',
+    }]);
+    expect(result[0].awaitingConfirmation).toBe(true);
+  });
+
+  it('preserves local flag for synthesized messages', () => {
+    const result = validateChatHistory([
+      { id: 'm1', role: 'assistant', content: '/help canned text', timestamp: 1, local: true },
+    ]);
+    expect(result[0].local).toBe(true);
+  });
+
+  it('defaults missing transient flags to false', () => {
+    const result = validateChatHistory([
+      { id: 'm1', role: 'user', content: 'plain message', timestamp: 1 },
+    ]);
     expect(result[0].isStreaming).toBe(false);
+    expect(result[0].awaitingConfirmation).toBe(false);
+    expect(result[0].local).toBe(false);
   });
 
   it('limits message count', () => {

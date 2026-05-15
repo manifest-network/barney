@@ -29,6 +29,15 @@ export const AppEntrySchema = z.object({
   }).optional(),
   status: z.enum(APP_STATUSES),
   manifest: z.string().optional(),
+  /** Cached chain state for the lease's `LeaseItem.custom_domain` fields.
+   *  Written by `executeConfirmedDeployApp` on successful attach and refreshed by
+   *  `executeAppStatus` on every status check. Survives across page refreshes
+   *  via localStorage; the polling driver in MainLayout uses it to know which
+   *  apps to monitor without an extra chain round-trip per render. */
+  customDomains: z.array(z.object({
+    serviceName: z.string(),
+    customDomain: z.string(),
+  })).optional(),
 });
 
 export type AppEntry = z.infer<typeof AppEntrySchema>;
@@ -91,6 +100,74 @@ function sanitizeEnvObject(env: Record<string, string>): Record<string, string> 
 
 function storageKey(address: string): string {
   return `barney-apps-${address}`;
+}
+
+/**
+ * In-tab change notifications.
+ *
+ * Mid-tool-execution writes (`executeAppStatus` updating customDomains,
+ * `executeConfirmedDeployApp` flipping status) used to be invisible to the
+ * sidebar until its 60s AUTO_REFRESH_INTERVAL_MS tick. Subscribing to this
+ * pub/sub closes that gap.
+ *
+ * Only fires for the wallet whose registry was mutated, so a stale subscriber
+ * from a previous wallet (cross-wallet switch race) doesn't get spurious
+ * updates. localStorage 'storage' events handle the cross-tab case separately.
+ */
+type RegistryListener = (address: string) => void;
+const listeners = new Set<RegistryListener>();
+
+export function subscribeToRegistry(listener: RegistryListener): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+function notify(address: string): void {
+  for (const listener of listeners) {
+    try {
+      listener(address);
+    } catch (error) {
+      logError('appRegistry.notify', error);
+    }
+  }
+}
+
+/**
+ * Cross-tab synchronization via the localStorage `storage` event.
+ *
+ * Fires only in OTHER tabs (not the one that wrote), so this composes
+ * cleanly with the in-tab `notify` path: a deploy in Tab A notifies via
+ * the in-tab Set AND fires a `storage` event that Tab B picks up here.
+ *
+ * Filter on the `barney-apps-` prefix so foreign keys (`barney-ai-*`,
+ * unrelated app keys) don't spuriously notify. Extract the address from
+ * the key and route through `notify(address)` — subscribers already
+ * filter by their own address (`mutated === address`), so cross-wallet
+ * traffic from another tab on a different wallet is harmless.
+ *
+ * `newValue === null` (the other tab cleared its registry / disconnected)
+ * is intentionally NOT special-cased: subscribers re-read via `getApps`,
+ * which returns `[]` on missing key. The notify-then-reread pattern stays
+ * uniform.
+ *
+ * `event.key === null` (devtools `localStorage.clear()`) is skipped — no
+ * address info to route with, and subscribers will re-read on their next
+ * interaction anyway.
+ */
+const STORAGE_KEY_PREFIX = 'barney-apps-';
+
+function handleStorageEvent(event: StorageEvent): void {
+  if (event.storageArea !== null && event.storageArea !== localStorage) return;
+  const key = event.key;
+  if (key === null) return;
+  if (!key.startsWith(STORAGE_KEY_PREFIX)) return;
+  const address = key.slice(STORAGE_KEY_PREFIX.length);
+  if (!address) return;
+  notify(address);
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', handleStorageEvent);
 }
 
 /**
@@ -249,6 +326,7 @@ export function addApp(address: string, entry: AppEntry): AppEntry {
   if (!saveApps(address, apps)) {
     throw new Error('Failed to save app to local registry (localStorage may be full). The lease was created on-chain but may not appear in the sidebar.');
   }
+  notify(address);
   return entry;
 }
 
@@ -265,7 +343,11 @@ export function updateApp(
   apps[idx] = { ...apps[idx], ...updates };
   if (!saveApps(address, apps)) {
     logError('appRegistry.updateApp', new Error('localStorage write failed — update may not persist across page reload'));
+    // Don't notify on save failure: subscribers re-read from localStorage and
+    // would see stale state, masking the failure with a no-op refresh.
+    return apps[idx];
   }
+  notify(address);
   return apps[idx];
 }
 
@@ -276,7 +358,10 @@ export function removeApp(address: string, leaseUuid: string): boolean {
   if (filtered.length === apps.length) return false;
   if (!saveApps(address, filtered)) {
     logError('appRegistry.removeApp', new Error('localStorage write failed — removal may not persist across page reload'));
+    // See updateApp note: skip notify on save failure to avoid stale-read masking.
+    return true;
   }
+  notify(address);
   return true;
 }
 
@@ -320,6 +405,9 @@ export function reconcileWithChain(
   if (changed) {
     if (!saveApps(address, apps)) {
       logError('appRegistry.reconcileWithChain', new Error('localStorage write failed — reconciliation may not persist across page reload'));
+      // See updateApp note: skip notify on save failure to avoid stale-read masking.
+      return;
     }
+    notify(address);
   }
 }

@@ -18,12 +18,32 @@ import {
   AI_TOOL_CACHE_MAX_SIZE,
 } from '../config/constants';
 import type { ChatMessage, PendingConfirmation, MessageCard } from '../contexts/aiTypes';
+import type { CustomDomainStatusKind } from '../utils/customDomainStatus';
+
+/** Per-domain status report stored in the dnsStatuses map. The map key is
+ *  `${leaseUuid}::${customDomain}` so multi-domain stacks don't collide. */
+export interface DnsStatusEntry {
+  leaseUuid: string;
+  customDomain: string;
+  serviceName: string;
+  kind: CustomDomainStatusKind;
+  /** The provider FQDN the user's CNAME should point at. May be undefined
+   *  briefly while connection metadata refreshes. */
+  expectedCnameTarget?: string;
+  /** Free-form sub-reason from `computeStatus` (today: only set on the
+   *  wrong-target case, future: server-side reasons like "acme_rate_limited"). */
+  detail?: string;
+}
+
+export const dnsStatusKey = (leaseUuid: string, customDomain: string) =>
+  `${leaseUuid}::${customDomain}`;
 
 import { loadSettings, loadHistory, clearHistoryStorage } from './aiActions/persistence';
 import { scheduleStreamingUpdateFn, flushPendingUpdateFn } from './aiActions/streaming';
 import { sendMessageFn } from './aiActions/sendMessage';
-import { confirmActionFn, cancelActionFn } from './aiActions/confirmAction';
+import { confirmActionFn, cancelActionFn, type ConfirmActionOverrides } from './aiActions/confirmAction';
 import { requestBatchDeployFn } from './aiActions/batchDeploy';
+import { requestStopAppFn } from './aiActions/stopApp';
 import { generateMessageId, trimMessages } from './aiActions/utils';
 
 // Re-export for use by action modules and consumers
@@ -44,6 +64,11 @@ export interface AIStore {
   pendingPayload: PayloadAttachment | null;
   deployProgress: DeployProgress | null;
 
+  /** DNS resolution status by `dnsStatusKey(leaseUuid, customDomain)`. Driven
+   *  by the per-tab polling loop in MainLayout; consumed by AppsSidebar (dot),
+   *  the CustomDomainCard, and the AppCard's embedded custom-domain row. */
+  dnsStatuses: ReadonlyMap<string, DnsStatusEntry>;
+
   // --- Internal state (only accessed via get() in actions) ---
   clientManager: CosmosClientManager | null;
   address: string | undefined;
@@ -57,7 +82,7 @@ export interface AIStore {
   // --- Actions ---
   setIsOpen: (open: boolean) => void;
   sendMessage: (content: string) => Promise<void>;
-  confirmAction: (editedManifestJson?: string) => Promise<void>;
+  confirmAction: (overrides?: ConfirmActionOverrides) => Promise<void>;
   cancelAction: () => void;
   addMessage: (message: ChatMessage) => void;
   updateMessageById: (messageId: string, updates: Partial<ChatMessage>) => void;
@@ -67,9 +92,11 @@ export interface AIStore {
   setClientManager: (manager: CosmosClientManager | null) => void;
   setAddress: (address: string | undefined) => void;
   setSignArbitrary: (fn: SignArbitraryFn | undefined) => void;
+  setDnsStatuses: (statuses: ReadonlyMap<string, DnsStatusEntry>) => void;
   updateSettings: (settings: Partial<AISettings>) => void;
   clearHistory: () => void;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
+  requestStopApp: (appName: string) => void;
   addLocalMessage: (content: string, card?: MessageCard) => void;
   stopStreaming: () => void;
   scheduleStreamingUpdate: (messageId: string, content: string, thinking?: string) => void;
@@ -96,6 +123,7 @@ export const createAIStore = () =>
     pendingConfirmation: null,
     pendingPayload: null,
     deployProgress: null,
+    dnsStatuses: new Map<string, DnsStatusEntry>(),
 
     clientManager: null,
     address: undefined,
@@ -132,6 +160,7 @@ export const createAIStore = () =>
         content,
         timestamp: Date.now(),
         card,
+        local: true,
       };
       set({ messages: trimMessages([...get().messages, msg]) });
     },
@@ -148,13 +177,22 @@ export const createAIStore = () =>
     setAddress: (address) => {
       if (address !== get().address) {
         get()._toolCache.clear();
-        set({ deployProgress: null });
+        // Drop dnsStatuses too — entries belong to the prior wallet's running
+        // apps and would otherwise leak across wallets and grow the map on
+        // every switch. Also bounds (does not fully eliminate) the race where
+        // an in-flight DoH probe from the prior wallet resolves after this
+        // call; any post-reset resolution is overwritten on the next 30s tick.
+        set({ deployProgress: null, dnsStatuses: new Map() });
       }
       set({ address });
     },
 
     setSignArbitrary: (fn) => {
       set({ signArbitrary: fn });
+    },
+
+    setDnsStatuses: (statuses) => {
+      set({ dnsStatuses: statuses });
     },
 
     // --- Payload attachment ---
@@ -226,9 +264,10 @@ export const createAIStore = () =>
 
     // --- Complex actions ---
     sendMessage: (content) => sendMessageFn(get, set, content),
-    confirmAction: (editedManifestJson) => confirmActionFn(get, set, editedManifestJson),
+    confirmAction: (overrides) => confirmActionFn(get, set, overrides),
     cancelAction: () => cancelActionFn(get, set),
     requestBatchDeploy: (apps, userMessage) => requestBatchDeployFn(get, set, apps, userMessage),
+    requestStopApp: (appName) => requestStopAppFn(get, set, appName),
 
     // --- Tool cache ---
     getToolCacheKey: (toolName, args) => {

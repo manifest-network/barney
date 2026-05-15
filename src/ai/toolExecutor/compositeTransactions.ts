@@ -4,7 +4,7 @@
  */
 
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
-import { cosmosTx } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx, setItemCustomDomain as monoSetItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
@@ -16,7 +16,11 @@ import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
-import { isValidFqdn } from '../../utils/connection';
+import { isValidFqdn, normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
+import { getLeaseItemsForLease } from '../../api/leaseItems';
+import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
+import { getDomainForService } from '../../api/leaseDomains';
+import { validateAll, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
 import { extractYamlServiceNames } from '../../utils/fileValidation';
@@ -1018,6 +1022,69 @@ export async function executeDeployApp(
     ? ` (~${priceDisplay}${serviceCount > 1 ? ` × ${serviceCount}` : ''})`
     : '';
 
+  // Optional custom domain: validate up front so the user gets fast feedback
+  // before any TX. The set-domain TX will be broadcast in the confirmed-deploy
+  // path, between create-lease and manifest upload.
+  let customDomain = '';
+  let customDomainServiceName = '';
+  let customDomainWarning: string | undefined;
+  if (typeof args.custom_domain === 'string' && args.custom_domain.trim() !== '') {
+    customDomain = normalizeFqdn(args.custom_domain);
+    const validation = await validateAll(customDomain);
+    if (validation.error) return { success: false, error: validation.error };
+    customDomainWarning = validation.warning;
+
+    // Uniqueness pre-check. The set_custom_domain path does this at line ~2997;
+    // without it, a deploy can confirm and pay for a lease before the post-
+    // broadcast MsgSetItemCustomDomain is chain-rejected as duplicate, leaving
+    // the user charged for a non-functional deploy. Wrap in withTimeout to
+    // bound the latency cost — consistent with other LCD calls in this
+    // executor (compositeQueries.ts:52,54 and billingParams.ts).
+    // On error/timeout: fall through, chain remains authoritative.
+    // See PR #93 Copilot 3248436488.
+    try {
+      const existing = await withTimeout(
+        queryLeaseByCustomDomain(customDomain),
+        undefined,
+        'queryLeaseByCustomDomain',
+      );
+      if (existing) {
+        const heldByApp = appRegistry.getAppByLease(address, existing.leaseUuid);
+        const friendly = heldByApp ? `"${heldByApp.name}"` : 'another lease';
+        return {
+          success: false,
+          error: `"${customDomain}" is already attached to ${friendly}. Pick a different domain or detach it first.`,
+        };
+      }
+    } catch (err) {
+      logError('compositeTransactions.executeDeployApp.queryLeaseByCustomDomain', err);
+      // Don't block — chain remains authoritative.
+    }
+
+    if (serviceNames && serviceNames.length > 1) {
+      const explicit = typeof args.service_name === 'string' ? args.service_name.trim() : '';
+      if (!explicit) {
+        return {
+          success: false,
+          error: `"${name}" is a multi-service stack — pass service_name to attach the custom domain to one of: ${serviceNames.join(', ')}.`,
+        };
+      }
+      if (!serviceNames.includes(explicit)) {
+        return {
+          success: false,
+          error: `Service "${explicit}" not found in stack. Available: ${serviceNames.join(', ')}.`,
+        };
+      }
+      customDomainServiceName = explicit;
+    } else if (serviceNames && serviceNames.length === 1) {
+      // Single-service stack — auto-select.
+      customDomainServiceName = serviceNames[0];
+    } else {
+      // Image+port single-item legacy lease — chain wants serviceName=''.
+      customDomainServiceName = '';
+    }
+  }
+
   return {
     success: true,
     requiresConfirmation: true,
@@ -1032,6 +1099,11 @@ export async function executeDeployApp(
         providerUrl: provider.apiUrl,
         ...(args._generatedManifest ? { _generatedManifest: args._generatedManifest } : {}),
         ...(serviceNames && serviceNames.length > 0 ? { _serviceNames: serviceNames } : {}),
+        ...(customDomain ? {
+          customDomain,
+          customDomainServiceName,
+          ...(customDomainWarning ? { customDomainWarning } : {}),
+        } : {}),
       },
     },
   };
@@ -1106,6 +1178,32 @@ export async function executeConfirmedDeployApp(
     logError('compositeTransactions.executeConfirmedDeployApp.addApp', error);
   }
 
+  // Optional: attach custom domain BEFORE manifest upload so Traefik picks
+  // up the per-item custom_domain label as soon as the container is up.
+  // A failure here is non-fatal: the deploy proceeds, the user is left in
+  // the existing 2-step state and can retry set_custom_domain standalone.
+  // Type is module-scoped (`DomainAttachResult`) so the batch path and
+  // `fallbackToChainState` can use the same shape.
+  const customDomainArg = typeof args.customDomain === 'string' ? args.customDomain : '';
+  let domainAttach: DomainAttachResult = { kind: 'none' };
+  if (customDomainArg !== '') {
+    const customDomainServiceName = typeof args.customDomainServiceName === 'string' ? args.customDomainServiceName : '';
+    try {
+      const domainResult = await monoSetItemCustomDomain(
+        clientManager,
+        leaseUuid,
+        customDomainArg,
+        customDomainServiceName !== '' ? { serviceName: customDomainServiceName } : {},
+      );
+      domainAttach = domainResult.code === 0
+        ? { kind: 'attached', customDomain: customDomainArg, serviceName: customDomainServiceName }
+        : { kind: 'failed', error: `chain rejected with code ${domainResult.code}` };
+    } catch (err) {
+      logError('compositeTransactions.executeConfirmedDeployApp.setItemCustomDomain', err);
+      domainAttach = { kind: 'failed', error: err instanceof Error ? err.message : 'unknown error' };
+    }
+  }
+
   // Upload payload
   onProgress?.({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
 
@@ -1163,21 +1261,95 @@ export async function executeConfirmedDeployApp(
         'compositeTransactions.executeConfirmedDeployApp'
       );
 
+      // Cache the just-attached custom domain so the DNS polling driver
+      // (mounted in MainLayout) sees it without waiting for the user to run
+      // `app_status`. Merge against existing entries — multi-service stacks
+      // can have N domains.
+      let customDomainsUpdate: { customDomains: { serviceName: string; customDomain: string }[] } | object = {};
+      if (domainAttach.kind === 'attached') {
+        const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
+        const others = prior.filter((d) => d.serviceName !== domainAttach.serviceName);
+        customDomainsUpdate = {
+          customDomains: [...others, { serviceName: domainAttach.serviceName, customDomain: domainAttach.customDomain }],
+        };
+      }
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',
         url: connectionUrl,
         connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+        ...customDomainsUpdate,
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
+
+      // No CustomDomainCard auto-emission on the deploy path. The deploy result
+      // is the primary surface here. DNS progress (4-state polling) is available
+      // by running app_status (chat or sidebar click), which surfaces the
+      // CustomDomainCard for the now-attached domain — same component, just
+      // discovered separately to keep the deploy success surface uncluttered.
+
+      const expectedCnameTarget = domainAttach.kind === 'attached'
+        ? resolveExpectedCnameTarget(connection, domainAttach.serviceName)
+        : undefined;
+      const isApexAttached = typeof args.customDomainWarning === 'string' && args.customDomainWarning.length > 0;
+      const recordKind = isApexAttached
+        ? `an ${apexRecordKindLabel(true)} record (apex domains cannot use CNAME)`
+        : `a ${apexRecordKindLabel(false)}`;
+
+      let message: string;
+      switch (domainAttach.kind) {
+        case 'failed':
+          message = `App "${name}" is live, but the custom-domain attach failed (${domainAttach.error}). Run \`set_custom_domain\` to try again.`;
+          break;
+        case 'attached': {
+          const target = expectedCnameTarget ?? '<provider FQDN>';
+          message = `App "${name}" is live. Custom domain "${domainAttach.customDomain}" attached — add ${recordKind} at your registrar pointing at ${target}.`;
+          break;
+        }
+        case 'none':
+          message = `App "${name}" is live!`;
+          break;
+      }
+
+      // Emit a single rich `app` displayCard. When a custom domain attached,
+      // the AppCard embeds a DomainRow that reads its live DNS status from
+      // the shared `dnsStatuses` slice (no per-card polling).
+      const displayCard = {
+        type: 'app' as const,
+        data: {
+          name,
+          url: connectionUrl,
+          status: 'running',
+          connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+          ...(domainAttach.kind === 'attached'
+            ? {
+                customDomain: {
+                  fqdn: domainAttach.customDomain,
+                  leaseUuid,
+                  serviceName: domainAttach.serviceName,
+                  expectedCnameTarget,
+                  isApex: isApexAttached,
+                },
+              }
+            : {}),
+        },
+      };
 
       return {
         success: true,
         data: {
-          message: `App "${name}" is live!`,
+          message,
           name,
           url: connectionUrl,
           status: 'running',
+          ...(domainAttach.kind === 'attached' ? {
+            custom_domain: domainAttach.customDomain,
+            service_name: domainAttach.serviceName,
+            expected_cname_target: expectedCnameTarget,
+            is_apex: isApexAttached,
+          } : {}),
+          ...(domainAttach.kind === 'failed' ? { custom_domain_error: domainAttach.error } : {}),
         },
+        displayCard,
       };
     }
 
@@ -1201,19 +1373,39 @@ export async function executeConfirmedDeployApp(
       };
     }
 
-    // Fred didn't confirm — fall back to chain state
-    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress);
+    // Fred didn't confirm — fall back to chain state. Thread domainAttach so
+    // the fallback can preserve customDomains cache + message detail.
+    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress, domainAttach);
   } catch (error) {
     logError('compositeTransactions.executeConfirmedDeployApp.polling', error);
     // Polling failed but lease+upload succeeded — check chain state to determine actual status.
     // Don't use diagnostics alone to decide failure: they may describe a still-running app.
-    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress);
+    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress, domainAttach);
   }
 }
 
 /**
+ * Custom-domain attach outcome carried from the deploy executor through to
+ * `fallbackToChainState`. The success branch (line :1233+) reads this to
+ * tailor the result message and registry write; the fallback path mirrors
+ * that behavior so a fred-times-out + chain-ACTIVE case doesn't silently
+ * drop the customDomains cache (sidebar dot would go blank).
+ */
+type DomainAttachResult =
+  | { kind: 'none' }
+  | { kind: 'attached'; customDomain: string; serviceName: string }
+  | { kind: 'failed'; error: string };
+
+/**
  * When fred polling doesn't confirm readiness, check the chain state.
  * If the lease is ACTIVE on chain, trust it and mark the app as running.
+ *
+ * `domainAttach` is threaded from the caller so this path preserves the
+ * customDomains cache (DNS polling driver + sidebar dot need it) and the
+ * "domain attached" message detail. Without it, fred-times-out becomes a
+ * silent UX loss: the user sees "live!" with no clue the domain attached.
+ * Defaults to `{ kind: 'none' }` so future callers don't have to thread it
+ * if they have no domain to preserve.
  */
 async function fallbackToChainState(
   name: string,
@@ -1221,19 +1413,55 @@ async function fallbackToChainState(
   appRegistry: ToolExecutorOptions['appRegistry'],
   address: string,
   onProgress?: ToolExecutorOptions['onProgress'],
+  domainAttach: DomainAttachResult = { kind: 'none' },
 ): Promise<ToolResult> {
   try {
     const lease = await getLease(leaseUuid);
     if (lease && lease.state === LeaseState.LEASE_STATE_ACTIVE) {
-      // Chain says ACTIVE — trust it
-      appRegistry?.updateApp(address, leaseUuid, { status: 'running' });
+      // Chain says ACTIVE — trust it. When a custom domain attached on the
+      // way in, mirror the success-branch behavior at :1243-1255: keep the
+      // customDomains cache populated so the DNS polling driver and the
+      // sidebar dot see the attached domain. Without this, fred-timeout
+      // silently drops customDomains and the user sees "live app" with no
+      // sign the domain attached.
+      let customDomainsUpdate: object = {};
+      if (domainAttach.kind === 'attached' && appRegistry) {
+        const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
+        const others = prior.filter((d) => d.serviceName !== domainAttach.serviceName);
+        customDomainsUpdate = {
+          customDomains: [
+            ...others,
+            { serviceName: domainAttach.serviceName, customDomain: domainAttach.customDomain },
+          ],
+        };
+      }
+      appRegistry?.updateApp(address, leaseUuid, { status: 'running', ...customDomainsUpdate });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
+
+      let message: string;
+      switch (domainAttach.kind) {
+        case 'attached':
+          message = `App "${name}" is live. Custom domain "${domainAttach.customDomain}" attached — check the sidebar for DNS status, or run app_status for record details.`;
+          break;
+        case 'failed':
+          message = `App "${name}" is live, but the custom-domain attach failed (${domainAttach.error}). Run \`set_custom_domain\` to try again.`;
+          break;
+        case 'none':
+          message = `App "${name}" is live!`;
+          break;
+      }
+
       return {
         success: true,
         data: {
-          message: `App "${name}" is live!`,
+          message,
           name,
           status: 'running',
+          ...(domainAttach.kind === 'attached' ? {
+            custom_domain: domainAttach.customDomain,
+            service_name: domainAttach.serviceName,
+          } : {}),
+          ...(domainAttach.kind === 'failed' ? { custom_domain_error: domainAttach.error } : {}),
         },
       };
     }
@@ -1241,7 +1469,9 @@ async function fallbackToChainState(
     logError('compositeTransactions.fallbackToChainState', error);
   }
 
-  // Chain state unknown or not active — keep as deploying
+  // Chain state unknown or not active — keep as deploying. Domain attach
+  // outcome doesn't surface here: the deploy itself didn't conclude, so
+  // surfacing "attached!" would mislead.
   appRegistry?.updateApp(address, leaseUuid, { status: 'deploying' });
   onProgress?.({ phase: 'failed', detail: `Provisioning timed out. Use app_status("${name}") to check progress.` });
   return {
@@ -1266,6 +1496,15 @@ export interface SingleDeployEntry {
   providerUrl: string;
   payload: PayloadAttachment;
   serviceNames?: string[];
+  // Per-LeaseItem custom domain attached between create-lease and payload
+  // upload, mirroring the single-deploy contract (see :1154-1180). Missing
+  // or empty `customDomain` = no attach. `customDomainServiceName` selects
+  // the target LeaseItem in a multi-service stack; empty string = the
+  // single-item-lease default. `customDomainWarning` is the apex warning
+  // surfaced post-broadcast (computed at deploy_app validation time).
+  customDomain?: string;
+  customDomainServiceName?: string;
+  customDomainWarning?: string;
 }
 
 // ============================================================================
@@ -1516,6 +1755,56 @@ export async function executeConfirmedBatchDeploy(
         logError('compositeTransactions.executeConfirmedBatchDeploy.addApp', error);
       }
 
+      // ---- Attach custom domain (signing) ----
+      // Mirrors single-deploy ordering at :1154-1180. Attach BEFORE upload so
+      // Traefik picks up the per-item custom_domain label as soon as the
+      // container comes up. Failure is non-fatal: the deploy proceeds and
+      // the failure surfaces via `customDomainError` on the returned
+      // BatchSuccessItem (rendered in summary by summarizeBatchResult).
+      // `domainAttach` is also threaded into the fallback path below so a
+      // fred-times-out + chain-ACTIVE case preserves the customDomains
+      // cache (same shape as the single-deploy attach outcome at :1163).
+      let domainAttach: DomainAttachResult = { kind: 'none' };
+      if (entry.customDomain) {
+        const requestedDomain = entry.customDomain;
+        const requestedService = entry.customDomainServiceName ?? '';
+        try {
+          const domainResult = await withSign(() => monoSetItemCustomDomain(
+            clientManager,
+            leaseUuid,
+            requestedDomain,
+            requestedService !== '' ? { serviceName: requestedService } : {},
+          ));
+          if (domainResult.code === 0) {
+            domainAttach = { kind: 'attached', customDomain: requestedDomain, serviceName: requestedService };
+            // Cache the just-attached domain so the DNS polling driver sees
+            // it without waiting for the user to run `app_status`. Merge
+            // against existing entries — multi-service stacks can have
+            // N domains. Mirrors single-deploy at :1243-1255.
+            //
+            // This happy-path write is mutually exclusive with the new
+            // customDomains merge in `fallbackToChainState`: that path only
+            // fires when fred doesn't confirm, at which point the cache
+            // here is already correct and the fallback's write is
+            // idempotent against it.
+            try {
+              const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
+              const others = prior.filter((d) => d.serviceName !== requestedService);
+              appRegistry.updateApp(address, leaseUuid, {
+                customDomains: [...others, { serviceName: requestedService, customDomain: requestedDomain }],
+              });
+            } catch (error) {
+              logError('compositeTransactions.executeConfirmedBatchDeploy.cacheCustomDomain', error);
+            }
+          } else {
+            domainAttach = { kind: 'failed', error: `chain rejected with code ${domainResult.code}` };
+          }
+        } catch (err) {
+          logError('compositeTransactions.executeConfirmedBatchDeploy.setItemCustomDomain', err);
+          domainAttach = { kind: 'failed', error: err instanceof Error ? err.message : 'unknown error' };
+        }
+      }
+
       // ---- Upload payload (signing) ----
       updateProgress('uploading', 'Uploading manifest...');
 
@@ -1567,7 +1856,11 @@ export async function executeConfirmedBatchDeploy(
 
           appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined });
           updateProgress('ready', 'App is live!');
-          return { name, url: connectionUrl };
+          return {
+            name,
+            url: connectionUrl,
+            ...(domainAttach.kind === 'failed' ? { customDomainError: domainAttach.error } : {}),
+          };
         }
 
         if (
@@ -1583,14 +1876,20 @@ export async function executeConfirmedBatchDeploy(
 
         const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
           updateProgress(p.phase, p.detail);
-        });
-        return fbResult.success ? { name } : null;
+        }, domainAttach);
+        return fbResult.success ? {
+          name,
+          ...(domainAttach.kind === 'failed' ? { customDomainError: domainAttach.error } : {}),
+        } : null;
       } catch (error) {
         logError('executeConfirmedBatchDeploy.poll', error);
         const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
           updateProgress(p.phase, p.detail);
-        });
-        return fbResult.success ? { name } : null;
+        }, domainAttach);
+        return fbResult.success ? {
+          name,
+          ...(domainAttach.kind === 'failed' ? { customDomainError: domainAttach.error } : {}),
+        } : null;
       }
     },
   });
@@ -2592,4 +2891,291 @@ export async function executeConfirmedUpdateApp(
     onProgress?.({ phase: 'failed', detail: 'Update polling failed', operation: 'update' });
     return { success: false, error: `Update may still be in progress. Use app_status("${name}") to check.` };
   }
+}
+
+// ============================================================================
+// set_custom_domain
+// ============================================================================
+
+/**
+ * Pre-validation for set_custom_domain. Returns confirmation result or error.
+ *
+ * **Single-domain-per-LeaseItem assumption.** The chain currently enforces a
+ * single `custom_domain` string per `LeaseItem`, and the empty string is the
+ * sentinel for "clear" (see `MsgSetItemCustomDomain` in proto). This function,
+ * the `CustomDomainCardData` shape, the AI tool schema, the success-message
+ * wording, and the `ConfirmationCard` clear/attach branching all bake that
+ * cardinality in. If the chain ever moves to `customDomains: string[]` (SAN
+ * certs, multiple aliases per service), the entry points to revisit are:
+ *   - this function (`executeSetCustomDomain`) and `executeConfirmedSetCustomDomain`
+ *   - `executeDeployApp` and `executeConfirmedDeployApp` (the `customDomain` /
+ *     `customDomainServiceName` pre-attach path added in Pass B)
+ *   - the `set_custom_domain` and `deploy_app` schemas in `ai/tools.ts`
+ *   - the `MessageCard` discriminated union and `CustomDomainCardData`
+ *   - the chat success messages in `executeConfirmedSetCustomDomain` and
+ *     `executeConfirmedDeployApp`
+ *   - the `ConfirmationCard` `CustomDomainBranch` and `deployWithCustomDomain`
+ *     sections (clear/attach branching, DNS table)
+ */
+export async function executeSetCustomDomain(
+  args: Record<string, unknown>,
+  options: ToolExecutorOptions,
+): Promise<ToolResult> {
+  const { address, appRegistry } = options;
+  if (!address) return { success: false, error: 'Wallet not connected' };
+  if (!appRegistry) return { success: false, error: 'App registry not available' };
+
+  const appName = String(args.app_name ?? '').trim();
+  if (typeof args.custom_domain !== 'string') {
+    return { success: false, error: 'custom_domain must be a string (use "" to clear).' };
+  }
+  const customDomain = normalizeFqdn(args.custom_domain);
+  const explicitServiceName = typeof args.service_name === 'string' ? args.service_name.trim() : '';
+
+  if (!appName) return { success: false, error: 'app_name is required.' };
+
+  const app = appRegistry.findApp(address, appName);
+  if (!app) return { success: false, error: `No app found matching "${appName}".` };
+
+  // Validate format/apex/reserved when not clearing
+  let warning: string | undefined;
+  if (customDomain !== '') {
+    const validation = await validateAll(customDomain);
+    if (validation.error) return { success: false, error: validation.error };
+    warning = validation.warning;
+  }
+
+  // Resolve service_name from chain LeaseItems
+  let leaseItems: Awaited<ReturnType<typeof getLeaseItemsForLease>>;
+  try {
+    leaseItems = await getLeaseItemsForLease(app.leaseUuid);
+  } catch (err) {
+    logError('compositeTransactions.executeSetCustomDomain.getLeaseItems', err);
+    return { success: false, error: 'Failed to read lease items from chain. Try again.' };
+  }
+
+  if (leaseItems.length === 0) {
+    return { success: false, error: `No lease items found for "${appName}". The lease may have been closed.` };
+  }
+
+  let serviceName = '';
+  const namedItems = leaseItems.filter(i => i.serviceName !== '');
+  const unnamedItems = leaseItems.filter(i => i.serviceName === '');
+
+  if (leaseItems.length === 1 && unnamedItems.length === 1) {
+    // Legacy single-item lease: serviceName must be "" on chain.
+    if (explicitServiceName !== '') {
+      return {
+        success: false,
+        error: `"${appName}" is a single-service app — drop the service_name argument.`,
+      };
+    }
+    serviceName = '';
+  } else if (unnamedItems.length > 0 && namedItems.length === 0) {
+    // Multi-item legacy lease — chain rejects these for custom_domain.
+    return {
+      success: false,
+      error: `"${appName}" predates per-service domains and has multiple items without service names. Re-deploy with explicit service names to use custom domains.`,
+    };
+  } else {
+    // Modern lease(s) with per-service names. Auto-select when there's only one
+    // (no ambiguity); only require service_name for true multi-service stacks.
+    if (!explicitServiceName) {
+      if (namedItems.length === 1) {
+        serviceName = namedItems[0].serviceName;
+      } else {
+        const available = namedItems.map(i => i.serviceName).join(', ');
+        return {
+          success: false,
+          error: `"${appName}" is a multi-service stack — pass service_name. Available services: ${available}.`,
+        };
+      }
+    } else {
+      const match = namedItems.find(i => i.serviceName === explicitServiceName);
+      if (!match) {
+        const available = namedItems.map(i => i.serviceName).join(', ');
+        return {
+          success: false,
+          error: `Service "${explicitServiceName}" not found in "${appName}". Available: ${available}.`,
+        };
+      }
+      serviceName = explicitServiceName;
+    }
+  }
+
+  // Find current domain on the matched item (for change-detection)
+  const currentDomain = getDomainForService(leaseItems, serviceName);
+
+  if (customDomain === currentDomain) {
+    if (customDomain === '') {
+      return { success: false, error: `"${appName}" has no custom domain to clear.` };
+    }
+    return { success: false, error: `"${appName}" already has "${customDomain}" attached.` };
+  }
+
+  // Uniqueness pre-check (not authoritative — chain still verifies on TX).
+  // Two reject cases:
+  //  1. The domain is on a *different* lease entirely.
+  //  2. The domain is on this same lease but a *different* service. The chain
+  //     also rejects this; we surface a friendlier message that names the
+  //     service currently holding it.
+  if (customDomain !== '') {
+    try {
+      const existing = await queryLeaseByCustomDomain(customDomain);
+      if (existing) {
+        if (existing.leaseUuid !== app.leaseUuid) {
+          return {
+            success: false,
+            error: `"${customDomain}" is already attached to another lease. Pick a different domain.`,
+          };
+        }
+        if (existing.serviceName !== serviceName) {
+          const heldBy = existing.serviceName === ''
+            ? 'this app'
+            : `service "${existing.serviceName}" on this app`;
+          return {
+            success: false,
+            error: `"${customDomain}" is already attached to ${heldBy}. Clear it from there first, or pick a different domain.`,
+          };
+        }
+      }
+    } catch (err) {
+      logError('compositeTransactions.executeSetCustomDomain.queryLeaseByCustomDomain', err);
+      // Don't block — chain will reject if duplicate.
+    }
+  }
+
+  const expectedCnameTarget = resolveExpectedCnameTarget(app.connection, serviceName);
+
+  let confirmationMessage: string;
+  if (customDomain === '') {
+    confirmationMessage = `Clear custom domain "${currentDomain}" from "${appName}"?`;
+  } else if (currentDomain === '') {
+    confirmationMessage = `Attach "${customDomain}" to "${appName}"?`;
+  } else {
+    confirmationMessage = `Change "${appName}" custom domain from "${currentDomain}" to "${customDomain}"?`;
+  }
+
+  return {
+    success: true,
+    requiresConfirmation: true,
+    confirmationMessage,
+    pendingAction: {
+      toolName: 'set_custom_domain',
+      args: {
+        app_name: app.name,
+        leaseUuid: app.leaseUuid,
+        serviceName,
+        customDomain,
+        currentDomain,
+        expectedCnameTarget,
+        warning,
+        address,
+      },
+    },
+  };
+}
+
+/**
+ * Execute set_custom_domain after user confirmation.
+ *
+ * Delegates the broadcast to mono's `core.setItemCustomDomain` helper (which
+ * routes through `cosmosTx` + `set-item-custom-domain` CLI form) so validation,
+ * canonicalization, and the result shape stay consistent with the MCP surface
+ * and direct-CLI users.
+ */
+export async function executeConfirmedSetCustomDomain(
+  args: Record<string, unknown>,
+  clientManager: CosmosClientManager,
+  options: ToolExecutorOptions,
+): Promise<ToolResult> {
+  const { address, appRegistry } = options;
+  if (!address) return { success: false, error: 'Wallet not connected.' };
+
+  const appName = args.app_name as string;
+  const leaseUuid = args.leaseUuid as string;
+  const serviceName = typeof args.serviceName === 'string' ? args.serviceName : '';
+  if (typeof args.customDomain !== 'string') {
+    return { success: false, error: 'customDomain must be a string (use "" to clear).' };
+  }
+  const customDomain = args.customDomain;
+  const expectedCnameTarget = typeof args.expectedCnameTarget === 'string' ? args.expectedCnameTarget : undefined;
+  const isApexWarning = typeof args.warning === 'string' && args.warning.length > 0;
+  const clearing = customDomain === '';
+
+  let result: Awaited<ReturnType<typeof monoSetItemCustomDomain>>;
+  try {
+    result = await monoSetItemCustomDomain(
+      clientManager,
+      leaseUuid,
+      clearing ? '' : customDomain,
+      {
+        ...(serviceName !== '' ? { serviceName } : {}),
+        ...(clearing ? { clear: true } : {}),
+      },
+    );
+  } catch (err) {
+    logError('compositeTransactions.executeConfirmedSetCustomDomain', err);
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to set custom domain.' };
+  }
+
+  if (result.code !== 0) {
+    return { success: false, error: `Transaction failed with code ${result.code}.` };
+  }
+
+  // Refresh the AppEntry's customDomains cache so the polling driver can pick
+  // up the new state without waiting for the next `app_status` call. Mirrors
+  // the cache write in executeConfirmedDeployApp. Merge against the existing
+  // cache: in a multi-service stack, attaching a domain to one service must
+  // not clobber a domain previously attached to a different service.
+  if (appRegistry) {
+    const app = appRegistry.getAppByLease(address, leaseUuid);
+    const prior = app?.customDomains ?? [];
+    const others = prior.filter((d) => d.serviceName !== serviceName);
+    const customDomains = clearing
+      ? others
+      : [...others, { serviceName, customDomain }];
+    appRegistry.updateApp(address, leaseUuid, { customDomains });
+  }
+
+  if (clearing) {
+    return {
+      success: true,
+      data: {
+        message: `Custom domain cleared for "${appName}".`,
+        app_name: appName,
+        custom_domain: null,
+        transactionHash: result.transactionHash,
+      },
+    };
+  }
+
+  const recordKind = isApexWarning
+    ? `an ${apexRecordKindLabel(true)} record (apex domains cannot use CNAME)`
+    : `a ${apexRecordKindLabel(false)}`;
+  const target = expectedCnameTarget ?? '<provider FQDN>';
+
+  return {
+    success: true,
+    data: {
+      message: `Custom domain "${customDomain}" attached to "${appName}". Add ${recordKind} at your registrar pointing at ${target}.`,
+      app_name: appName,
+      custom_domain: customDomain,
+      service_name: serviceName,
+      expected_cname_target: expectedCnameTarget,
+      is_apex: isApexWarning,
+      transactionHash: result.transactionHash,
+    },
+    displayCard: {
+      type: 'custom_domain',
+      data: {
+        appName,
+        fqdn: customDomain,
+        leaseUuid,
+        serviceName,
+        expectedCnameTarget,
+        expectedAddress: address,
+      },
+    },
+  };
 }
