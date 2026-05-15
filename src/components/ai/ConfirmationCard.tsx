@@ -331,8 +331,38 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                   {action.toolName === 'stop_app' ? 'Apps to stop:' : action.toolName === 'restart_app' ? 'Apps to restart:' : 'Apps to deploy:'}
                 </p>
                 <ul className="confirmation-batch-list">
-                  {(action.args.entries as Array<{ app_name: string; size?: string }>).map((entry) => (
-                    <li key={entry.app_name}>{entry.app_name}{entry.size ? ` (${entry.size})` : ''}</li>
+                  {(action.args.entries as Array<{
+                    app_name: string;
+                    size?: string;
+                    customDomain?: string;
+                    customDomainServiceName?: string;
+                    customDomainWarning?: string;
+                  }>).map((entry) => (
+                    <li key={entry.app_name}>
+                      <span>{entry.app_name}{entry.size ? ` (${entry.size})` : ''}</span>
+                      {/* Per-entry custom-domain display. Render only when
+                          present so non-domain entries (stop_app, restart_app,
+                          batch deploys without a domain attached) stay tight
+                          and the markup matches the pre-fix `<li>` exactly.
+                          Mirrors the single-deploy card's customDomainData
+                          branch: fqdn + optional service-name + apex warning
+                          when set. See PR #93 Copilot 3248436597. */}
+                      {entry.customDomain && (
+                        <div className="confirmation-batch-domain">
+                          <span className="font-mono text-xs text-dim">
+                            domain: {entry.customDomain}
+                            {entry.customDomainServiceName && (
+                              <> · service: <code>{entry.customDomainServiceName}</code></>
+                            )}
+                          </span>
+                          {entry.customDomainWarning && (
+                            <p className="confirmation-apex-warning" role="alert">
+                              {entry.customDomainWarning}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </li>
                   ))}
                 </ul>
               </div>

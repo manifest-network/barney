@@ -1050,3 +1050,88 @@ describe('ConfirmationCard with stack manifest', () => {
     });
   });
 });
+
+// Regression: PR #93 Copilot 3248436597. Batch deploys carried per-entry
+// `customDomain`, `customDomainServiceName`, `customDomainWarning` through
+// `toolExecution.ts:178-184` into the pending action's `args.entries`, but
+// the batch render branch in `ConfirmationCard.tsx` only typed entries as
+// `{ app_name, size? }` — so users approved batches attaching custom
+// domains they never saw on the confirmation card.
+describe('ConfirmationCard batch render — per-entry custom-domain (Copilot 3248436597)', () => {
+  it('renders domain + apex warning only for entries that carry them', () => {
+    const action = makeAction({
+      toolName: 'batch_deploy',
+      args: {
+        entries: [
+          {
+            app_name: 'wp',
+            size: 'small',
+            customDomain: 'example.com',          // apex
+            customDomainServiceName: 'web',
+            customDomainWarning: 'Apex CNAMEs are RFC-prohibited; use ALIAS/ANAME/CNAME-flattening at your registrar.',
+          },
+          {
+            app_name: 'plain',
+            size: 'micro',
+            // no customDomain at all
+          },
+        ],
+      },
+      description: 'Deploy 2 apps?',
+    });
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    flushSync(() => { act(() => { root.render(createElement(ConfirmationCard, {
+      action, onConfirm: vi.fn(), onCancel: vi.fn(),
+    })); }); });
+
+    try {
+      expect(container.textContent).toMatch(/wp/);
+      expect(container.textContent).toMatch(/example\.com/);
+      expect(container.textContent).toMatch(/service:.*web/);
+      expect(container.textContent).toMatch(/Apex CNAMEs/i);
+
+      expect(container.textContent).toMatch(/plain/);
+      // Apex warning must not double-render against the plain entry.
+      const warningOccurrences = container.querySelectorAll('.confirmation-apex-warning').length;
+      expect(warningOccurrences).toBe(1);
+    } finally {
+      flushSync(() => { act(() => { root.unmount(); }); });
+      container.remove();
+    }
+  });
+
+  it('renders the service-name annotation only when customDomainServiceName is non-empty', () => {
+    const action = makeAction({
+      toolName: 'batch_deploy',
+      args: {
+        entries: [
+          {
+            app_name: 'redis',
+            size: 'micro',
+            customDomain: 'redis.example.com',
+            customDomainServiceName: '',  // single-item lease — no service annotation
+          },
+        ],
+      },
+      description: 'Deploy redis?',
+    });
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    flushSync(() => { act(() => { root.render(createElement(ConfirmationCard, {
+      action, onConfirm: vi.fn(), onCancel: vi.fn(),
+    })); }); });
+
+    try {
+      expect(container.textContent).toMatch(/redis\.example\.com/);
+      expect(container.textContent).not.toMatch(/service:/);
+    } finally {
+      flushSync(() => { act(() => { root.unmount(); }); });
+      container.remove();
+    }
+  });
+});
