@@ -1174,19 +1174,28 @@ describe('executeDeployApp', () => {
     }
   });
 
-  it('defaults to the first resolved tier when size is omitted', async () => {
+  it('defaults to the cheapest resolved tier when size is omitted', async () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
 
+    // Arrange so the cheapest tier (docker-small @ 0.01 PWR/hr) is NOT tiers[0].
+    // The default must follow price, not insertion order, so this catches a
+    // tiers[0]-based regression that the SAMPLE_TIERS default would silently miss.
+    const tiersOutOfPriceOrder = [
+      { skuName: 'docker-large', skuUuid: 'sku-l', providerUuid: 'p1', cores: 4, ramMB: 4096, diskGB: 20, pricePerHour: 0.5, denomSymbol: 'PWR', unit: 1 },
+      { skuName: 'docker-medium', skuUuid: 'sku-m', providerUuid: 'p1', cores: 2, ramMB: 2048, diskGB: 10, pricePerHour: 0.2, denomSymbol: 'PWR', unit: 1 },
+      { skuName: 'docker-small', skuUuid: 'sku-s', providerUuid: 'p1', cores: 1, ramMB: 1024, diskGB: 5, pricePerHour: 0.01, denomSymbol: 'PWR', unit: 1 },
+      { skuName: 'docker-micro', skuUuid: 'sku-mi', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
+    ];
+
     const result = await executeDeployApp(
       { image: 'nginx:latest', port: '80' },
-      makeOptions()
+      makeOptions({ tiers: tiersOutOfPriceOrder })
     );
 
     expect(result.success).toBe(true);
-    // Defaults to first tier in resolved list (docker-micro).
-    expect(result.pendingAction?.args.size).toBe('docker-micro');
+    expect(result.pendingAction?.args.size).toBe('docker-small');
   });
 
   it('applies known image defaults when model omits args', async () => {
@@ -2345,6 +2354,32 @@ describe('executeBatchDeploy', () => {
     const result = await executeBatchDeploy([makeBatchEntry('app1')], makeOptions(), 'xxlarge');
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid size');
+  });
+
+  it('batch defaults to the cheapest resolved tier when size is omitted', async () => {
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+
+    // Arrange so the cheapest tier (docker-small @ 0.01 PWR/hr) is NOT tiers[0].
+    // A `tiers[0]`-based regression would silently pass against SAMPLE_TIERS;
+    // this ordering forces the test to rely on price comparison.
+    const tiersOutOfPriceOrder = [
+      { skuName: 'docker-large', skuUuid: 'sku-l', providerUuid: 'p1', cores: 4, ramMB: 4096, diskGB: 20, pricePerHour: 0.5, denomSymbol: 'PWR', unit: 1 },
+      { skuName: 'docker-small', skuUuid: 'sku-s', providerUuid: 'p1', cores: 1, ramMB: 1024, diskGB: 5, pricePerHour: 0.01, denomSymbol: 'PWR', unit: 1 },
+      { skuName: 'docker-micro', skuUuid: 'sku-mi', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
+    ];
+
+    const result = await executeBatchDeploy(
+      [makeBatchEntry('app1')],
+      makeOptions({ tiers: tiersOutOfPriceOrder }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    const entries = result.pendingAction?.args.entries as Array<{ size: string }>;
+    expect(entries[0].size).toBe('docker-small');
   });
 
   it('returns confirmation for valid batch', async () => {

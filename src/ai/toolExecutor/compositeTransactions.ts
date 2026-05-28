@@ -7,6 +7,7 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import { cosmosTx, setItemCustomDomain as monoSetItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
+import { getCheapestTier } from '../../api/skuTiers';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
 import { DENOMS } from '../../api/config';
@@ -896,7 +897,10 @@ export async function executeDeployApp(
     return { success: false, error: 'Tier catalog unavailable — try again in a moment.' };
   }
 
-  const defaultSize = tiers[0].skuName;  // first tier in spec order = "smallest"
+  // When the caller omits size, default to the cheapest available tier
+  // (lowest normalized $/hour). Keeps the default sensible across networks
+  // whose env spec map isn't ordered cheapest-first.
+  const defaultSize = getCheapestTier(tiers).skuName;
   const rawSize = (args.size as string | undefined)?.toLowerCase() || defaultSize;
   // Accept both full SKU name ('docker-micro') and the bare suffix ('micro')
   // for backward compatibility with legacy model output.
@@ -1486,7 +1490,7 @@ export interface BatchDeployEntry {
 export async function executeBatchDeploy(
   entries: BatchDeployEntry[],
   options: ToolExecutorOptions,
-  size: string = 'micro'
+  size?: string
 ): Promise<ToolResult> {
   const { address, appRegistry, tiers } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
@@ -1496,8 +1500,12 @@ export async function executeBatchDeploy(
     return { success: false, error: 'Tier catalog unavailable — try again in a moment.' };
   }
 
-  // Resolve and validate size from the resolved tier list (no chain round-trip).
-  const rawSize = size.toLowerCase();
+  // When size is omitted, default to the cheapest available tier (lowest
+  // normalized $/hour). Mirrors executeDeployApp's single-deploy default and
+  // keeps the default sensible across networks whose env spec map isn't
+  // ordered cheapest-first.
+  const effectiveSize = size ?? getCheapestTier(tiers).skuName;
+  const rawSize = effectiveSize.toLowerCase();
   const matched =
     tiers.find((t) => t.skuName === rawSize)
     ?? tiers.find((t) => t.skuName === `docker-${rawSize}`)
@@ -1505,7 +1513,7 @@ export async function executeBatchDeploy(
   if (!matched) {
     return {
       success: false,
-      error: `Invalid size "${size}". Valid tiers: ${tiers.map((t) => t.skuName).join(', ')}.`,
+      error: `Invalid size "${effectiveSize}". Valid tiers: ${tiers.map((t) => t.skuName).join(', ')}.`,
     };
   }
   const skuUuid = matched.skuUuid;

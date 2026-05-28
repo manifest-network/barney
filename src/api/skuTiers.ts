@@ -42,6 +42,30 @@ export interface ResolveResult {
 }
 
 /**
+ * Return the tier with the lowest normalized `pricePerHour`. Ties are
+ * resolved by first occurrence in the input list. Throws on an empty list
+ * — callers must guard `tiers.length === 0` themselves (typically with a
+ * "Tier catalog unavailable" error).
+ *
+ * Used as the default size for `deploy_app` and `batch_deploy` when the
+ * caller (or model) omits the `size` argument. Picking cheapest rather
+ * than `tiers[0]` keeps the default sensible across networks whose env
+ * spec map isn't ordered cheapest-first.
+ */
+export function getCheapestTier(tiers: readonly ResolvedSkuTier[]): ResolvedSkuTier {
+  if (tiers.length === 0) {
+    throw new Error('getCheapestTier called with empty tier list — caller must guard tiers.length === 0');
+  }
+  let cheapest = tiers[0];
+  for (let i = 1; i < tiers.length; i++) {
+    if (tiers[i].pricePerHour < cheapest.pricePerHour) {
+      cheapest = tiers[i];
+    }
+  }
+  return cheapest;
+}
+
+/**
  * Convert a SKU's basePrice + Unit to a per-hour price in display units.
  * - UNIT_PER_HOUR → basePrice as-is
  * - UNIT_PER_DAY  → basePrice / 24

@@ -1,7 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { hourlyPriceFromSku, resolveSkuTiers } from './skuTiers';
+import { getCheapestTier, hourlyPriceFromSku, resolveSkuTiers } from './skuTiers';
+import type { ResolvedSkuTier } from './skuTiers';
 import { Unit } from './sku';
 import type { SKU } from './sku';
+
+function tier(overrides: Partial<ResolvedSkuTier>): ResolvedSkuTier {
+  return {
+    skuName: 'docker-micro',
+    skuUuid: 'u',
+    providerUuid: 'p',
+    cores: 1,
+    ramMB: 1024,
+    diskGB: 5,
+    pricePerHour: 0.1,
+    denomSymbol: 'PWR',
+    unit: 1,
+    ...overrides,
+  };
+}
 
 vi.mock('./sku', async (orig) => {
   const actual = await orig<typeof import('./sku')>();
@@ -127,5 +143,50 @@ describe('resolveSkuTiers', () => {
     await resolveSkuTiers({ 'docker-micro': { cores: 0.5, ramMB: 512, diskGB: 1 } });
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+describe('getCheapestTier', () => {
+  it('returns the only tier in a single-element list', () => {
+    const t = tier({ skuName: 'docker-micro', pricePerHour: 0.05 });
+    expect(getCheapestTier([t])).toBe(t);
+  });
+
+  it('returns the cheapest when it is at the start', () => {
+    const cheap = tier({ skuName: 'a', pricePerHour: 0.01 });
+    const mid = tier({ skuName: 'b', pricePerHour: 0.1 });
+    const exp = tier({ skuName: 'c', pricePerHour: 0.5 });
+    expect(getCheapestTier([cheap, mid, exp])).toBe(cheap);
+  });
+
+  it('returns the cheapest when it is in the middle', () => {
+    const exp = tier({ skuName: 'a', pricePerHour: 0.5 });
+    const cheap = tier({ skuName: 'b', pricePerHour: 0.01 });
+    const mid = tier({ skuName: 'c', pricePerHour: 0.1 });
+    expect(getCheapestTier([exp, cheap, mid])).toBe(cheap);
+  });
+
+  it('returns the cheapest when it is at the end', () => {
+    const exp = tier({ skuName: 'a', pricePerHour: 0.5 });
+    const mid = tier({ skuName: 'b', pricePerHour: 0.1 });
+    const cheap = tier({ skuName: 'c', pricePerHour: 0.01 });
+    expect(getCheapestTier([exp, mid, cheap])).toBe(cheap);
+  });
+
+  it('tie-breaks by first occurrence', () => {
+    const first = tier({ skuName: 'a', pricePerHour: 0.05 });
+    const second = tier({ skuName: 'b', pricePerHour: 0.05 });
+    const third = tier({ skuName: 'c', pricePerHour: 0.05 });
+    expect(getCheapestTier([first, second, third])).toBe(first);
+  });
+
+  it('treats pricePerHour=0 as the cheapest', () => {
+    const free = tier({ skuName: 'a', pricePerHour: 0 });
+    const paid = tier({ skuName: 'b', pricePerHour: 0.01 });
+    expect(getCheapestTier([paid, free])).toBe(free);
+  });
+
+  it('throws on empty input (callers must guard tiers.length === 0)', () => {
+    expect(() => getCheapestTier([])).toThrow();
   });
 });
