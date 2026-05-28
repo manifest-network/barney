@@ -210,7 +210,7 @@ What versions has wordpress run?
 
 ### `request_faucet`
 
-**What it does.** Requests free MFX and PWR tokens from the configured faucet. Subject to a 24-hour cooldown per `(address, denom)` pair.
+**What it does.** Requests free PWR (covers both gas and credits) and MFX tokens from the configured faucet. Subject to a 24-hour cooldown per `(address, denom)` pair.
 
 **Example prompts.**
 

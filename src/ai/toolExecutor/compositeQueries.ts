@@ -837,7 +837,7 @@ export async function executeRequestFaucet(
     return {
       success: true,
       data: {
-        message: 'Tokens sent! You received MFX (for gas) and PWR (for credits).',
+        message: 'Tokens sent! You received PWR (gas + credits) and MFX.',
         results,
       },
     };

@@ -104,7 +104,7 @@ The AI assistant uses a 3-layer architecture:
 | `lease_history(state?, limit?, offset?)` | Query | Paginated on-chain lease history with state filtering |
 | `app_diagnostics(app_name)` | Query | Provision diagnostics: status, fail count, last error |
 | `app_releases(app_name)` | Query | Release/version history for an app |
-| `request_faucet()` | Query | Request free MFX and PWR tokens from the faucet (24-hour cooldown per token) |
+| `request_faucet()` | Query | Request free PWR (gas + credits) and MFX tokens from the faucet (24-hour cooldown per token) |
 | `cosmos_query(module, subcommand, args?)` | Query | Raw chain query escape hatch |
 | `cosmos_tx(module, subcommand, args)` | TX | Raw chain TX escape hatch |
 
@@ -222,7 +222,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `useAI` | Zustand store consumer — selects all public state/actions via `useShallow` |
 | `useToast` | Context consumer hook for ToastContext |
 | `useCopyToClipboard` | Clipboard copy with feedback state |
-| `useAccountSetup` | One-shot sequential account setup pipeline — requests faucet tokens (MFX + PWR) and funds credits on first connect. Returns `AccountSetupState` (`isInitialSetup` + `phase`) for the `AccountSetupOverlay`. Setup data persisted to localStorage via `versionedStorage` |
+| `useAccountSetup` | One-shot sequential account setup pipeline — requests PWR from the faucet (PWR pays both gas and credits after ENG-243) and funds credits on first connect. Returns `AccountSetupState` (`isInitialSetup` + `phase`) for the `AccountSetupOverlay`. Setup data persisted to localStorage via `versionedStorage`. MFX is no longer part of the blocking flow; users who need MFX can request it via the `request_faucet` chat tool |
 | `useDnsStatusPolling` | Single polling driver for custom-domain DNS state. Mounted in `MainLayout` (outside the sidebar's `ErrorBoundary`, so a sidebar render error doesn't take DNS state down with it). Iterates running apps with `customDomains` and writes per-domain `DnsStatusEntry` rows into `aiStore.dnsStatuses`. All custom-domain surfaces (sidebar dot, single-domain card, multi-domain card, AppCard's deploy-success row) read from this slice — no per-component poll loops |
 | `useRegistryApps` | `useSyncExternalStore` view of the wallet's app registry, kept live via `subscribeToRegistry`. Used by `MainLayout` to feed the DNS polling driver |
 | `useVisibilityPolling` | Visibility-aware polling with optional exponential backoff. Pauses on tab hidden, resumes on focus. Used by `AIProvider` (health check) and `AppsSidebar` (refresh) |
@@ -283,7 +283,6 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `TX_HASH_DISPLAY_LENGTH` | 16 | Truncated tx-hash display length |
 | `MAX_REASON_LENGTH` | 256 | Max length for reason/description fields |
 | `MAX_FILENAME_LENGTH` | 255 | Max filename length for uploads |
-| `ACCOUNT_SETUP_MFX_THRESHOLD` | 0.5 | MFX balance below which faucet is requested (display units) |
 | `ACCOUNT_SETUP_PWR_THRESHOLD` | 5 | PWR balance below which faucet is requested (display units) |
 | `ACCOUNT_SETUP_CREDIT_THRESHOLD` | 5 | Credit balance below which credits are funded (display units) |
 | `ACCOUNT_SETUP_CREDIT_AMOUNT` | 10 | PWR amount funded into credits per setup pass (display units) |
@@ -343,7 +342,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 Defined in `src/config/chain.ts`:
 - Chain name: `manifestlocal` (used for cosmos-kit / chain registry lookups)
 - Chain ID: configurable via `PUBLIC_CHAIN_ID` (default: `manifest-ledger-beta`)
-- Gas price: configurable via `PUBLIC_GAS_PRICE` (default: `0.0025umfx`)
+- Gas price: configurable via `PUBLIC_GAS_PRICE` (default: `0.0025factory/manifest1afk…/upwr`)
 - Denoms: `umfx` (native), `factory/.../upwr` (PWR factory token) - both 6 decimals
 - Endpoints default to localhost (26657 RPC, 1317 REST)
 

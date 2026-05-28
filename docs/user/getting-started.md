@@ -50,13 +50,12 @@ On first connect, Barney can auto-provision your account so you can deploy immed
 
 The `AccountSetupOverlay` runs a sequential pipeline:
 
-1. **Check MFX (gas token).** If your wallet balance is below 0.5 MFX, request `umfx` from the faucet and wait for confirmation on-chain.
-2. **Check PWR (credit token).** If your wallet PWR balance is below 5 PWR, request `upwr` from the faucet.
-3. **Check credits.** If your credit account balance is below 5 PWR, fund the credits account with 10 PWR.
+1. **Check PWR (gas + credit token).** If your wallet PWR balance is below 5 PWR, request `upwr` from the faucet and wait for confirmation on-chain. PWR pays both transaction fees *and* funds your credit account.
+2. **Check credits.** If your credit account balance is below 5 PWR, fund the credits account with 10 PWR.
 
 Each step retries once on failure. If a step still fails after retry, the overlay surfaces the error and the pipeline stops. You can refill manually later (see [funding credits](#funding-credits)).
 
-The faucet enforces a 24-hour cooldown per `(address, denom)` pair. If you've already used the faucet today, that step is skipped.
+The faucet enforces a 24-hour cooldown per `(address, denom)` pair. If you've already used the faucet today, that step is skipped. MFX is no longer required to operate Barney; if you need MFX for staking or governance, request it via the `Request faucet tokens` chat command.
 
 If `PUBLIC_FAUCET_URL` is unset (e.g. mainnet, or a custom self-hosted instance), this overlay does not run. You will need to fund your account out of band before deploying.
 
@@ -69,7 +68,7 @@ The chat UI uses end-user vocabulary, not chain vocabulary. The mapping is:
 | App | Lease |
 | Stopped | Closed |
 | Credits | PWR (`upwr` factory denom) |
-| Gas | MFX (`umfx`) |
+| Gas | PWR (`upwr` factory denom) — same token as credits after ENG-243 |
 | Tier or size | SKU |
 | Provider | Provider (a node operator running Fred) |
 
@@ -163,7 +162,7 @@ Request faucet tokens
 
 Credits are denominated in PWR (display units; 1 PWR = 1,000,000 `upwr`). Funding moves PWR from your wallet to your credit account on chain, where it pays for active leases.
 
-The faucet enforces a 24-hour cooldown per token. Use `Request faucet tokens` (testnet only) when you need free MFX and PWR for testing.
+The faucet enforces a 24-hour cooldown per token. Use `Request faucet tokens` (testnet only) when you need free PWR (covers both gas and credits) and MFX for testing.
 
 ## Catalog and providers
 

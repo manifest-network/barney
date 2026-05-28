@@ -27,7 +27,16 @@ function parseGasPriceAmount(gasPrice: string): number {
   return Number.isFinite(n) && n >= 0 ? n : 0.0025;
 }
 
+/** Parse the denom suffix from a CosmJS gas price string
+ *  (e.g. "0.0025umfx" → "umfx", "0.0025factory/.../upwr" → "factory/.../upwr").
+ *  Falls back to 'umfx' if the string can't be parsed. */
+function parseGasPriceDenom(gasPrice: string): string {
+  const m = gasPrice.match(/^[0-9.]+(.+)$/);
+  return m?.[1] ?? 'umfx';
+}
+
 const gasPriceAmount = parseGasPriceAmount(GAS_PRICE);
+const gasPriceDenom = parseGasPriceDenom(GAS_PRICE);
 
 export const manifestLocalChain: Chain = {
   chain_name: 'manifestlocal',
@@ -41,7 +50,7 @@ export const manifestLocalChain: Chain = {
   fees: {
     fee_tokens: [
       {
-        denom: 'umfx',
+        denom: gasPriceDenom,
         fixed_min_gas_price: gasPriceAmount,
         low_gas_price: gasPriceAmount * 1.05,
         average_gas_price: gasPriceAmount * 1.1,

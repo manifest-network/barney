@@ -69,7 +69,8 @@ const DEFAULTS: RuntimeConfig = {
   PUBLIC_MORPHEUS_MODEL: 'minimax-m2.5',
   PUBLIC_PWR_DENOM:
     'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr',
-  PUBLIC_GAS_PRICE: '0.0025umfx',
+  PUBLIC_GAS_PRICE:
+    '0.0025factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr',
   PUBLIC_CHAIN_ID: 'manifest-ledger-beta',
   PUBLIC_FAUCET_URL: '',
   PUBLIC_AI_STREAM_TIMEOUT_MS: '30000',

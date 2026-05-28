@@ -391,7 +391,7 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'request_faucet',
-      description: 'Request free MFX (gas) and PWR (credits) tokens from the faucet. 24-hour cooldown per token.',
+      description: 'Request free PWR (gas + credits) and MFX tokens from the faucet. 24-hour cooldown per token.',
       parameters: {
         type: 'object',
         properties: {},

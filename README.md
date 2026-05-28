@@ -125,7 +125,7 @@ Set environment variables on the container. The `docker/env.sh` entrypoint uses 
 | `PUBLIC_WEB3AUTH_CLIENT_ID` | `YOUR_WEB3AUTH_CLIENT_ID` | Web3Auth client ID ([dashboard](https://dashboard.web3auth.io)) |
 | `PUBLIC_WEB3AUTH_NETWORK` | `sapphire_devnet` | One of `sapphire_devnet`, `sapphire_mainnet`, `testnet`, `mainnet` |
 | `PUBLIC_PWR_DENOM` | local factory denom | PWR token denom |
-| `PUBLIC_GAS_PRICE` | `0.0025umfx` | Gas price for transaction fees |
+| `PUBLIC_GAS_PRICE` | `0.0025factory/manifest1afk…/upwr` | Gas price for transaction fees |
 | `PUBLIC_CHAIN_ID` | `manifest-ledger-beta` | Chain ID for cosmos-kit and signing |
 | `PUBLIC_FAUCET_URL` | _(empty)_ | Faucet endpoint URL — enables account auto-provisioning when set |
 | `PUBLIC_AI_STREAM_TIMEOUT_MS` | `30000` | Per-chunk stream timeout, ms (max `120000`) |

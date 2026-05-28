@@ -36,7 +36,7 @@ The container expects a small number of environment variables. The full referenc
 
 | Variable | Purpose |
 |----------|---------|
-| `PUBLIC_GAS_PRICE` | Match the chain's recommended fee. Default `0.0025umfx` is fine for most operators. |
+| `PUBLIC_GAS_PRICE` | Match the chain's recommended fee. Default `0.0025factory/manifest1afk…/upwr` (PWR factory denom) is fine for most operators. |
 | `PUBLIC_PWR_DENOM` | The factory denom for PWR on this chain. Use the chain's canonical value. |
 | `PUBLIC_FAUCET_URL` | Enables first-connect account auto-provisioning. Leave empty on mainnet. |
 | `PUBLIC_WEB3AUTH_NETWORK` | `sapphire_mainnet` for production, `sapphire_devnet` for testnet. |

@@ -32,7 +32,9 @@ describe('getConfigValue', () => {
     expect(getConfigValue('PUBLIC_PWR_DENOM')).toBe(
       'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr'
     );
-    expect(getConfigValue('PUBLIC_GAS_PRICE')).toBe('0.0025umfx');
+    expect(getConfigValue('PUBLIC_GAS_PRICE')).toBe(
+      '0.0025factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr'
+    );
     expect(getConfigValue('PUBLIC_CHAIN_ID')).toBe('manifest-ledger-beta');
   });
 
