@@ -6,7 +6,14 @@ import {
   getDisplaySafeArgs,
   AI_TOOLS,
   CONFIRMATION_TOOLS,
+  buildAITools,
 } from './tools';
+import type { ResolvedSkuTier } from '../api/skuTiers';
+
+const SAMPLE_TIERS: ResolvedSkuTier[] = [
+  { skuName: 'docker-micro', skuUuid: 'a', providerUuid: 'p', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
+  { skuName: 'docker-small', skuUuid: 'b', providerUuid: 'p', cores: 1, ramMB: 1024, diskGB: 5, pricePerHour: 0.1, denomSymbol: 'PWR', unit: 1 },
+];
 
 describe('requiresConfirmation', () => {
   it('returns true for all TX tools', () => {
@@ -230,6 +237,34 @@ describe('getToolCallDescription - new tools', () => {
   it('returns description for request_faucet', () => {
     const desc = getToolCallDescription('request_faucet', {});
     expect(desc).toContain('faucet');
+  });
+});
+
+describe('buildAITools', () => {
+  it('returns 17 tools', () => {
+    expect(buildAITools(SAMPLE_TIERS)).toHaveLength(17);
+  });
+
+  it('renders deploy_app.size.enum from tier list', () => {
+    const tools = buildAITools(SAMPLE_TIERS);
+    const deploy = tools.find((t) => t.function.name === 'deploy_app');
+    const sizeProp = deploy!.function.parameters.properties.size as { enum?: string[] };
+    expect(sizeProp.enum).toEqual(['docker-micro', 'docker-small']);
+  });
+
+  it('omits size.enum when tier list is empty (executor handles rejection)', () => {
+    const tools = buildAITools([]);
+    const deploy = tools.find((t) => t.function.name === 'deploy_app');
+    const sizeProp = deploy!.function.parameters.properties.size as { enum?: string[] };
+    expect(sizeProp.enum).toBeUndefined();
+  });
+
+  it('keeps non-deploy tools unchanged regardless of tiers', () => {
+    const a = buildAITools(SAMPLE_TIERS);
+    const b = buildAITools([]);
+    const stopA = JSON.stringify(a.find((t) => t.function.name === 'stop_app'));
+    const stopB = JSON.stringify(b.find((t) => t.function.name === 'stop_app'));
+    expect(stopA).toBe(stopB);
   });
 });
 
