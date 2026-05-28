@@ -218,45 +218,11 @@ export const EXAMPLE_APPS: ExampleApp[] = [
 
   // --- Manifest Admin ---
   {
-    label: 'Manifest Admin (prod)',
+    label: 'Manifest Admin (mainnet)',
     manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/manifest-admin:0.2.3', ['8080'], {
       env: {
         PUBLIC_REST_URL: 'https://barney.manifest.network/api/chain/rest',
         PUBLIC_RPC_URL: 'https://barney.manifest.network/api/chain/rpc',
-        PUBLIC_CHAIN_ID: 'manifest-ledger-beta',
-        PUBLIC_GAS_PRICE: '1.0umfx',
-        PUBLIC_WEB3AUTH_CLIENT_ID: 'BKj3lr6GfN2CnvO4CIKo5fuoCg_TpHsAPK7R8lbl6kUlz0CAH_5mFNswScEb7M6szV4hd1Tkwa2oPZ9KiXJB-44',
-        PUBLIC_WEB3AUTH_NETWORK: 'testnet',
-      },
-      tmpfs: ['/var/cache/nginx', '/var/run'],
-    }),
-    size: 'micro',
-    group: 'apps',
-    category: 'Tools',
-  },
-  {
-    label: 'Manifest Admin (staging)',
-    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/manifest-admin:0.2.3', ['8080'], {
-      env: {
-        PUBLIC_REST_URL: 'https://barney.dev.manifest.network/api/chain/rest',
-        PUBLIC_RPC_URL: 'https://barney.dev.manifest.network/api/chain/rpc',
-        PUBLIC_CHAIN_ID: 'manifest-ledger-beta',
-        PUBLIC_GAS_PRICE: '1.0umfx',
-        PUBLIC_WEB3AUTH_CLIENT_ID: 'BKj3lr6GfN2CnvO4CIKo5fuoCg_TpHsAPK7R8lbl6kUlz0CAH_5mFNswScEb7M6szV4hd1Tkwa2oPZ9KiXJB-44',
-        PUBLIC_WEB3AUTH_NETWORK: 'testnet',
-      },
-      tmpfs: ['/var/cache/nginx', '/var/run'],
-    }),
-    size: 'micro',
-    group: 'apps',
-    category: 'Tools',
-  },
-  {
-    label: 'Manifest Admin (mainnet)',
-    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/manifest-admin:0.2.3', ['8080'], {
-      env: {
-        PUBLIC_REST_URL: 'https://nodes.manifest.network/manifest/api',
-        PUBLIC_RPC_URL: 'https://nodes.manifest.network/manifest/rpc',
         PUBLIC_CHAIN_ID: 'manifest-ledger-mainnet',
         PUBLIC_GAS_PRICE: '1.0umfx',
         PUBLIC_WEB3AUTH_CLIENT_ID: 'BFrleEIGBGexRmOp61oq7ItQ2HdR7vrVRY1iIcGwd25dcboLvjEJ695oNxcI1ZKAdO7ri3eGZjFcMnxowLdoRTM',
@@ -272,9 +238,26 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     label: 'Manifest Admin (testnet)',
     manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/manifest-admin:0.2.3', ['8080'], {
       env: {
-        PUBLIC_REST_URL: 'https://nodes.liftedinit.tech/manifest/testnet/api',
-        PUBLIC_RPC_URL: 'https://nodes.liftedinit.tech/manifest/testnet/rpc',
+        PUBLIC_REST_URL: 'https://barney.testnet.manifest.network/api/chain/rest',
+        PUBLIC_RPC_URL: 'https://barney.testnet.manifest.network/api/chain/rpc',
         PUBLIC_CHAIN_ID: 'manifest-ledger-testnet',
+        PUBLIC_GAS_PRICE: '1.0umfx',
+        PUBLIC_WEB3AUTH_CLIENT_ID: 'BKj3lr6GfN2CnvO4CIKo5fuoCg_TpHsAPK7R8lbl6kUlz0CAH_5mFNswScEb7M6szV4hd1Tkwa2oPZ9KiXJB-44',
+        PUBLIC_WEB3AUTH_NETWORK: 'testnet',
+      },
+      tmpfs: ['/var/cache/nginx', '/var/run'],
+    }),
+    size: 'micro',
+    group: 'apps',
+    category: 'Tools',
+  },
+  {
+    label: 'Manifest Admin (dev)',
+    manifest: SERVICE_MANIFEST('ghcr.io/manifest-network/manifest-admin:0.2.3', ['8080'], {
+      env: {
+        PUBLIC_REST_URL: 'https://barney.dev.manifest.network/api/chain/rest',
+        PUBLIC_RPC_URL: 'https://barney.dev.manifest.network/api/chain/rpc',
+        PUBLIC_CHAIN_ID: 'manifest-ledger-beta',
         PUBLIC_GAS_PRICE: '1.0umfx',
         PUBLIC_WEB3AUTH_CLIENT_ID: 'BKj3lr6GfN2CnvO4CIKo5fuoCg_TpHsAPK7R8lbl6kUlz0CAH_5mFNswScEb7M6szV4hd1Tkwa2oPZ9KiXJB-44',
         PUBLIC_WEB3AUTH_NETWORK: 'testnet',
