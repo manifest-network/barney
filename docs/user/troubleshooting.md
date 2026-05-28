@@ -59,7 +59,7 @@ The selected provider is not responding to health checks. Barney's catalog brows
 
 The lease transaction is broadcast but waiting for inclusion. Most often this resolves within one block (~6 s). If it stays stuck:
 
-- Check your MFX (gas) balance — `Check my balance`. Insufficient gas means the transaction never actually broadcast.
+- Check your PWR balance — `Check my balance`. PWR pays both gas and credits after ENG-243; insufficient PWR means the transaction never actually broadcast.
 - Check the chain status — if RPC is unreachable, switch to a known-good endpoint.
 
 The deploy auto-fails after `AI_DEPLOY_PROVISION_TIMEOUT_MS` (5 minutes by default). The error appears in the chat with the stuck phase.

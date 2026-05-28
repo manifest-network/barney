@@ -143,10 +143,7 @@ export const DNS_STUCK_THRESHOLD_MS = 5 * 60 * 1000;
 // Account Setup Constants
 // ============================================
 
-/** Request faucet when wallet MFX balance falls below this (display units, i.e. after fromBaseUnits conversion) */
-export const ACCOUNT_SETUP_MFX_THRESHOLD = 0.5;
-
-/** Request faucet when wallet PWR balance falls below this (display units) */
+/** Request faucet when wallet PWR balance falls below this (display units, i.e. after fromBaseUnits conversion) */
 export const ACCOUNT_SETUP_PWR_THRESHOLD = 5;
 
 /** Fund credits when credit account balance falls below this (display units) */

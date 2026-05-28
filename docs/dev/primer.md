@@ -33,8 +33,8 @@ Manifest's two denoms:
 
 | Display | Base denom | Decimals | Purpose |
 |---------|-----------|----------|---------|
-| MFX | `umfx` | 6 | Gas token; pays transaction fees |
-| PWR | `factory/.../upwr` | 6 | Credit token; pays for active leases |
+| MFX | `umfx` | 6 | Staking / governance token (no longer the default gas token after ENG-243) |
+| PWR | `factory/.../upwr` | 6 | Default gas token *and* credit token; pays transaction fees and active leases |
 
 The PWR denom uses the `tokenfactory` module, which lets a chain spawn child denoms namespaced by creator address. The local devnet PWR denom is `factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr`.
 

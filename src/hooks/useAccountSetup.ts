@@ -2,17 +2,22 @@
  * useAccountSetup — one-shot sequential account setup pipeline.
  *
  * On first wallet connect (no localStorage key), runs a sequential pipeline:
- * 1. Check MFX → if low, faucetDripAndVerify → retry once → stop on failure
- * 2. Check PWR → if low, faucetDripAndVerify → retry once → stop on failure
- * 3. Check credits → if low, fundCredit → verify TX result → retry once → stop on failure
+ * 1. Check PWR → if low, faucetDripAndVerify → retry once → stop on failure
+ * 2. Check credits → if low, fundCredit → verify TX result → retry once → stop on failure
  *
  * Each faucet step verifies token delivery on-chain by polling getBalance()
  * until the balance increases above the pre-drip snapshot.
  *
  * No recurring interval, no cooldowns, no toast calls.
  *
- * If the localStorage key exists but both balances are zero (backend reset),
- * the stale key is cleared and setup re-runs.
+ * If the localStorage key exists but wallet PWR balance is zero, the stale key
+ * is cleared and setup re-runs (covers backend reset and returning users who
+ * have spent their wallet PWR; the early credit check short-circuits the
+ * visible re-run for users who still have credits funded).
+ *
+ * MFX is no longer part of this flow — PWR pays both gas and credits after
+ * the gas-token cutover (ENG-243). Users who still need MFX can request it
+ * via the `request_faucet` chat tool.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -26,7 +31,6 @@ import { fromBaseUnits, toBaseUnits } from '../utils/format';
 import { logError } from '../utils/errors';
 import { createVersionedStorage } from '../utils/versionedStorage';
 import {
-  ACCOUNT_SETUP_MFX_THRESHOLD,
   ACCOUNT_SETUP_PWR_THRESHOLD,
   ACCOUNT_SETUP_CREDIT_THRESHOLD,
   ACCOUNT_SETUP_CREDIT_AMOUNT,
@@ -161,16 +165,13 @@ export function useAccountSetup({
     async function runSetup() {
       let isNewSetup = !persisted?.setupCompleted;
       try {
-        // 1. Fetch balances
-        const [mfxCoin, pwrCoin] = await Promise.all([
-          getBalance(targetAddress, DENOMS.MFX),
-          getBalance(targetAddress, DENOMS.PWR),
-        ]);
+        // 1. Fetch PWR balance
+        const pwrCoin = await getBalance(targetAddress, DENOMS.PWR);
         if (signal.aborted || addressRef.current !== targetAddress) return;
 
-        if (!/^\d+$/.test(mfxCoin.amount) || !/^\d+$/.test(pwrCoin.amount)) {
+        if (!/^\d+$/.test(pwrCoin.amount)) {
           logError('useAccountSetup.check', new Error(
-            `Unexpected balance: MFX=${mfxCoin.amount}, PWR=${pwrCoin.amount}`
+            `Unexpected balance: PWR=${pwrCoin.amount}`
           ));
           if (isNewSetup) {
             setSetupState({ isInitialSetup: true, phase: 'checking', error: 'Could not check balances. Please try again later.' });
@@ -182,18 +183,19 @@ export function useAccountSetup({
           return;
         }
 
-        const mfxBalance = fromBaseUnits(mfxCoin.amount, DENOMS.MFX);
         const pwrBalance = fromBaseUnits(pwrCoin.amount, DENOMS.PWR);
 
-        // Stale-key detection: if we had setupCompleted but balances are zero,
-        // backend was reset — clear and re-run
-        if (persisted?.setupCompleted && mfxBalance === 0 && pwrBalance === 0) {
+        // Stale-key detection: setupCompleted persisted but wallet PWR is zero.
+        // Triggers on backend reset OR when a returning user has spent their wallet
+        // PWR down. The early credit check below skips back to `complete` for users
+        // who already have credits funded, so the visible re-run is rare.
+        if (persisted?.setupCompleted && pwrBalance === 0) {
           clearSetupData(targetAddress);
           isNewSetup = true;
           setSetupState({ isInitialSetup: true, phase: 'checking' });
           // Fall through to run setup
         } else if (persisted?.setupCompleted) {
-          // Returning wallet with balances — skip setup
+          // Returning wallet with balance — skip setup
           setSetupState({ isInitialSetup: false, phase: 'complete' });
           return;
         }
@@ -220,59 +222,30 @@ export function useAccountSetup({
           setSetupState({ isInitialSetup: true, phase: 'checking' });
         }
 
-        // 2. Faucet phase
+        // 2. Faucet phase — PWR only (covers gas + credits after ENG-243)
         let setupError: string | undefined;
 
-        if (mfxBalance < ACCOUNT_SETUP_MFX_THRESHOLD || pwrBalance < ACCOUNT_SETUP_PWR_THRESHOLD) {
+        if (pwrBalance < ACCOUNT_SETUP_PWR_THRESHOLD) {
           setSetupState({ isInitialSetup: true, phase: 'faucet' });
 
-          // MFX drip
-          if (mfxBalance < ACCOUNT_SETUP_MFX_THRESHOLD) {
-            const mfxResult = await faucetDripAndVerify(targetAddress, DENOMS.MFX, { signal });
+          const pwrResult = await faucetDripAndVerify(targetAddress, DENOMS.PWR, { signal });
+          if (signal.aborted || addressRef.current !== targetAddress) return;
+
+          if (!pwrResult.success) {
+            // Retry once
+            setSetupState({ isInitialSetup: true, phase: 'faucet', error: 'Could not add starter funds. Retrying...' });
+            await new Promise((r) => setTimeout(r, ACCOUNT_SETUP_RETRY_DELAY_MS));
+            if (signal.aborted || addressRef.current !== targetAddress) return;
+            setSetupState({ isInitialSetup: true, phase: 'faucet' });
+
+            const retry = await faucetDripAndVerify(targetAddress, DENOMS.PWR, { signal });
             if (signal.aborted || addressRef.current !== targetAddress) return;
 
-            if (!mfxResult.success) {
-              // Retry once
-              setSetupState({ isInitialSetup: true, phase: 'faucet', error: 'Could not add starter funds. Retrying...' });
-              await new Promise((r) => setTimeout(r, ACCOUNT_SETUP_RETRY_DELAY_MS));
-              if (signal.aborted || addressRef.current !== targetAddress) return;
-              setSetupState({ isInitialSetup: true, phase: 'faucet' });
-
-              const retry = await faucetDripAndVerify(targetAddress, DENOMS.MFX, { signal });
-              if (signal.aborted || addressRef.current !== targetAddress) return;
-
-              if (!retry.success) {
-                setupError = 'Could not add starter funds. Please try again later.';
-                setSetupState({ isInitialSetup: true, phase: 'faucet', error: setupError });
-                finishWithError(targetAddress, signal);
-                return;
-              }
-            }
-          }
-
-          // PWR drip
-          if (!setupError && pwrBalance < ACCOUNT_SETUP_PWR_THRESHOLD) {
-            if (signal.aborted || addressRef.current !== targetAddress) return;
-
-            const pwrResult = await faucetDripAndVerify(targetAddress, DENOMS.PWR, { signal });
-            if (signal.aborted || addressRef.current !== targetAddress) return;
-
-            if (!pwrResult.success) {
-              // Retry once
-              setSetupState({ isInitialSetup: true, phase: 'faucet', error: 'Could not add starter funds. Retrying...' });
-              await new Promise((r) => setTimeout(r, ACCOUNT_SETUP_RETRY_DELAY_MS));
-              if (signal.aborted || addressRef.current !== targetAddress) return;
-              setSetupState({ isInitialSetup: true, phase: 'faucet' });
-
-              const retry = await faucetDripAndVerify(targetAddress, DENOMS.PWR, { signal });
-              if (signal.aborted || addressRef.current !== targetAddress) return;
-
-              if (!retry.success) {
-                setupError = 'Could not add starter funds. Please try again later.';
-                setSetupState({ isInitialSetup: true, phase: 'faucet', error: setupError });
-                finishWithError(targetAddress, signal);
-                return;
-              }
+            if (!retry.success) {
+              setupError = 'Could not add starter funds. Please try again later.';
+              setSetupState({ isInitialSetup: true, phase: 'faucet', error: setupError });
+              finishWithError(targetAddress, signal);
+              return;
             }
           }
         }
