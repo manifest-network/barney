@@ -10,6 +10,7 @@ import { ManifestEditor } from './ManifestEditor';
 import { StackManifestEditor } from './StackManifestEditor';
 import { validateAll, validateCustomDomainFormat, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { getDisplaySafeArgs } from '../../ai/tools';
+import { useAI } from '../../hooks/useAI';
 import { CustomDomainBranch, CloudflareProxyHint } from './ConfirmationCardCustomDomain';
 import { parseCustomDomainArgs } from './customDomainBranchData';
 import {
@@ -142,6 +143,18 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   // "deploy redis with custom domain X" pre-fills the input. Empty input means
   // "no domain attached" — the deploy proceeds without firing the set-domain TX.
   const isDeployApp = action.toolName === 'deploy_app';
+
+  // Live $/hour for deploy_app — read straight from the resolved tier list.
+  // While loading, the row shows a skeleton; on error, a warning.
+  const { skuTiers } = useAI();
+  const selectedTier = useMemo(() => {
+    if (!isDeployApp) return undefined;
+    const requestedSize = typeof action.args.size === 'string' ? action.args.size : undefined;
+    if (!requestedSize) return undefined;
+    return skuTiers.tiers.find(t => t.skuName === requestedSize)
+      ?? skuTiers.tiers.find(t => t.skuName === `docker-${requestedSize}`);
+  }, [isDeployApp, action.args.size, skuTiers.tiers]);
+
   const allStackServiceNames = useMemo(() => {
     if (!isDeployApp) return undefined;
     const sn = action.args._serviceNames;
@@ -468,6 +481,26 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           );
         })()}
       </div>
+      {isDeployApp && (
+        <div className="confirmation-details" data-testid="sku-price-row">
+          <p className="confirmation-details-title">Estimated price</p>
+          <div className="confirmation-payload">
+            {skuTiers.phase === 'ready' && selectedTier ? (
+              <span className="font-mono text-sm text-primary">
+                {selectedTier.pricePerHour.toFixed(4)} {selectedTier.denomSymbol}/hr
+              </span>
+            ) : skuTiers.phase === 'loading' || skuTiers.phase === 'idle' ? (
+              <span className="text-sm text-muted animate-pulse" data-testid="sku-price-skeleton">
+                Loading price…
+              </span>
+            ) : (
+              <span className="text-sm text-warning">
+                — Price unavailable ({skuTiers.error ?? 'tier catalog not ready'})
+              </span>
+            )}
+          </div>
+        </div>
+      )}
       <div className="confirmation-actions">
         <button
           ref={cancelRef}
@@ -482,7 +515,15 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         <button
           type="button"
           onClick={handleConfirm}
-          disabled={isExecuting || (isDeployApp && (editedDomainError != null || asyncDomainPending || stackServicePickerError))}
+          disabled={
+            isExecuting ||
+            (isDeployApp && (
+              editedDomainError != null ||
+              asyncDomainPending ||
+              stackServicePickerError ||
+              skuTiers.phase !== 'ready'
+            ))
+          }
           className="btn btn-success btn-sm"
         >
           <Check className="w-4 h-4" />
