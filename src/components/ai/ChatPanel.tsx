@@ -9,6 +9,8 @@ import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { EXAMPLE_APPS, buildExampleManifest, type ExampleApp } from '../../config/exampleApps';
+import { resolveSizeName } from '../../api/skuTiers';
+import { computeExampleAppGate } from './exampleAppGating';
 import { buildHelpText } from '../../ai/helpText';
 
 const ConfirmationCard = lazy(() =>
@@ -83,6 +85,22 @@ export function ChatPanel() {
       : skuTiers.phase === 'error'
         ? `Deploy unavailable: ${skuTiers.error ?? 'tier catalog not ready'}`
         : undefined;
+
+  /**
+   * Per-example-app gating: catalog-level (not ready / error) wins first;
+   * after that, an app whose `size` hint doesn't resolve in the current
+   * tier list is disabled with a tier-specific tooltip. UI gating uses the
+   * same `resolveSizeName` helper as the executor so a button can only be
+   * enabled when the executor would accept that size. See
+   * `computeExampleAppGate` for the pure predicate + its unit tests.
+   */
+  const exampleAppGating = (app: ExampleApp) =>
+    computeExampleAppGate({
+      size: app.size,
+      tiers: skuTiers.tiers,
+      tiersReady,
+      notReadyTitle: tierTooltip,
+    });
 
   const [input, setInput] = useState('');
   const [showSettings, setShowSettings] = useState(false);
@@ -279,6 +297,10 @@ export function ChatPanel() {
 
   const deployExample = async (app: ExampleApp) => {
     if (!tiersReady) return;
+    // Defensive: if the stored size hint doesn't resolve in the current
+    // catalog, the button should already be disabled — but the click handler
+    // is the last line of defence against a stale render.
+    if (app.size && resolveSizeName(app.size, skuTiers.tiers) === null) return;
     const manifestJson = buildExampleManifest(app);
     const filename = `manifest-${app.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}.json`;
     const blob = new Blob([manifestJson], { type: 'application/json' });
@@ -435,56 +457,65 @@ export function ChatPanel() {
                   <div className="chat-example-apps__group">
                     <p className="chat-example-apps__group-label">Games</p>
                     <div className="chat-example-apps__buttons" role="group" aria-label="Example games">
-                      {EXAMPLE_GAMES.map((app, i) => (
-                        <button
-                          key={app.label}
-                          type="button"
-                          onClick={() => deployExample(app)}
-                          className="chat-suggestion chat-example-apps__stagger"
-                          style={{ '--stagger': i } as React.CSSProperties}
-                          disabled={!isConnected || isStreaming || !tiersReady}
-                          title={tierTooltip}
-                        >
-                          {app.label}
-                        </button>
-                      ))}
+                      {EXAMPLE_GAMES.map((app, i) => {
+                        const gate = exampleAppGating(app);
+                        return (
+                          <button
+                            key={app.label}
+                            type="button"
+                            onClick={() => deployExample(app)}
+                            className="chat-suggestion chat-example-apps__stagger"
+                            style={{ '--stagger': i } as React.CSSProperties}
+                            disabled={!isConnected || isStreaming || gate.disabled}
+                            title={gate.title}
+                          >
+                            {app.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                   <div className="chat-example-apps__group">
                     <p className="chat-example-apps__group-label">Apps</p>
                     <div className="chat-example-apps__buttons" role="group" aria-label="Service apps">
-                      {EXAMPLE_SERVICES.map((app, i) => (
-                        <button
-                          key={app.label}
-                          type="button"
-                          onClick={() => deployExample(app)}
-                          className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
-                          style={{ '--stagger': i } as React.CSSProperties}
-                          disabled={!isConnected || isStreaming || !tiersReady}
-                          title={tierTooltip}
-                        >
-                          {app.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {EXAMPLE_STACKS.length > 0 && (
-                    <div className="chat-example-apps__group">
-                      <p className="chat-example-apps__group-label">Stacks</p>
-                      <div className="chat-example-apps__buttons" role="group" aria-label="Example stacks">
-                        {EXAMPLE_STACKS.map((app, i) => (
+                      {EXAMPLE_SERVICES.map((app, i) => {
+                        const gate = exampleAppGating(app);
+                        return (
                           <button
                             key={app.label}
                             type="button"
                             onClick={() => deployExample(app)}
                             className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
                             style={{ '--stagger': i } as React.CSSProperties}
-                            disabled={!isConnected || isStreaming || !tiersReady}
-                          title={tierTooltip}
+                            disabled={!isConnected || isStreaming || gate.disabled}
+                            title={gate.title}
                           >
                             {app.label}
                           </button>
-                        ))}
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {EXAMPLE_STACKS.length > 0 && (
+                    <div className="chat-example-apps__group">
+                      <p className="chat-example-apps__group-label">Stacks</p>
+                      <div className="chat-example-apps__buttons" role="group" aria-label="Example stacks">
+                        {EXAMPLE_STACKS.map((app, i) => {
+                          const gate = exampleAppGating(app);
+                          return (
+                            <button
+                              key={app.label}
+                              type="button"
+                              onClick={() => deployExample(app)}
+                              className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
+                              style={{ '--stagger': i } as React.CSSProperties}
+                              disabled={!isConnected || isStreaming || gate.disabled}
+                              title={gate.title}
+                            >
+                              {app.label}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   )}

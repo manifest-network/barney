@@ -7,7 +7,7 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import { cosmosTx, setItemCustomDomain as monoSetItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
-import { getCheapestTier } from '../../api/skuTiers';
+import { getCheapestTier, resolveSizeName } from '../../api/skuTiers';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
 import { DENOMS } from '../../api/config';
@@ -901,13 +901,12 @@ export async function executeDeployApp(
   // (lowest normalized $/hour). Keeps the default sensible across networks
   // whose env spec map isn't ordered cheapest-first.
   const defaultSize = getCheapestTier(tiers).skuName;
-  const rawSize = (args.size as string | undefined)?.toLowerCase() || defaultSize;
-  // Accept both full SKU name ('docker-micro') and the bare suffix ('micro')
-  // for backward compatibility with legacy model output.
-  const requestedTier =
-    tiers.find((t) => t.skuName === rawSize)
-    ?? tiers.find((t) => t.skuName === `docker-${rawSize}`)
-    ?? tiers.find((t) => t.skuName.endsWith(`-${rawSize}`));
+  const rawSize = (args.size as string | undefined) || defaultSize;
+  // `resolveSizeName` handles canonical / `docker-` / suffix backward-compat
+  // and case-insensitivity. UI surfaces (ChatPanel example-app buttons,
+  // AppsSidebar re-deploy) use the same helper to gate their disabled state
+  // so a button can only be enabled when this lookup would succeed.
+  const requestedTier = resolveSizeName(rawSize, tiers);
   if (!requestedTier) {
     return {
       success: false,
@@ -1503,13 +1502,10 @@ export async function executeBatchDeploy(
   // When size is omitted, default to the cheapest available tier (lowest
   // normalized $/hour). Mirrors executeDeployApp's single-deploy default and
   // keeps the default sensible across networks whose env spec map isn't
-  // ordered cheapest-first.
+  // ordered cheapest-first. Same `resolveSizeName` as the single-deploy path
+  // — UI surfaces use it too to keep gating in lockstep with the executor.
   const effectiveSize = size ?? getCheapestTier(tiers).skuName;
-  const rawSize = effectiveSize.toLowerCase();
-  const matched =
-    tiers.find((t) => t.skuName === rawSize)
-    ?? tiers.find((t) => t.skuName === `docker-${rawSize}`)
-    ?? tiers.find((t) => t.skuName.endsWith(`-${rawSize}`));
+  const matched = resolveSizeName(effectiveSize, tiers);
   if (!matched) {
     return {
       success: false,

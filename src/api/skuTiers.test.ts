@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getCheapestTier, hourlyPriceFromSku, resolveSkuTiers } from './skuTiers';
+import { getCheapestTier, hourlyPriceFromSku, resolveSizeName, resolveSkuTiers } from './skuTiers';
 import type { ResolvedSkuTier } from './skuTiers';
 import { Unit } from './sku';
 import type { SKU } from './sku';
@@ -144,6 +144,65 @@ describe('resolveSkuTiers', () => {
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
+
+  it('preserves existing behavior when each SKU name is offered by a single provider', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      sku({ uuid: 'a', name: 'docker-micro', providerUuid: 'p1', basePrice: { amount: '36000', denom: 'upwr' } }),
+      sku({ uuid: 'b', name: 'docker-small', providerUuid: 'p2', basePrice: { amount: '100000', denom: 'upwr' } }),
+    ]);
+    const result = await resolveSkuTiers({
+      'docker-micro': { cores: 0.5, ramMB: 512, diskGB: 1 },
+      'docker-small': { cores: 1, ramMB: 1024, diskGB: 5 },
+    });
+    expect(result.tiers.map(t => ({ name: t.skuName, provider: t.providerUuid }))).toEqual([
+      { name: 'docker-micro', provider: 'p1' },
+      { name: 'docker-small', provider: 'p2' },
+    ]);
+  });
+
+  it('when multiple providers offer the same SKU name, picks the cheapest provider', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      // p1 offers docker-micro at 0.1 PWR/hour
+      sku({ uuid: 'a', name: 'docker-micro', providerUuid: 'p1', basePrice: { amount: '100000', denom: 'upwr' } }),
+      // p2 offers docker-micro at 0.036 PWR/hour — cheapest
+      sku({ uuid: 'b', name: 'docker-micro', providerUuid: 'p2', basePrice: { amount: '36000', denom: 'upwr' } }),
+      // p3 offers docker-micro at 0.2 PWR/hour — expensive
+      sku({ uuid: 'c', name: 'docker-micro', providerUuid: 'p3', basePrice: { amount: '200000', denom: 'upwr' } }),
+    ]);
+    const result = await resolveSkuTiers({
+      'docker-micro': { cores: 0.5, ramMB: 512, diskGB: 1 },
+    });
+    expect(result.tiers).toHaveLength(1);
+    expect(result.tiers[0].providerUuid).toBe('p2');
+    expect(result.tiers[0].skuUuid).toBe('b');
+    expect(result.tiers[0].pricePerHour).toBeCloseTo(0.036);
+  });
+
+  it('multi-provider tie-break: first occurrence wins', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      sku({ uuid: 'a', name: 'docker-micro', providerUuid: 'p1', basePrice: { amount: '100000', denom: 'upwr' } }),
+      sku({ uuid: 'b', name: 'docker-micro', providerUuid: 'p2', basePrice: { amount: '100000', denom: 'upwr' } }),
+    ]);
+    const result = await resolveSkuTiers({
+      'docker-micro': { cores: 0.5, ramMB: 512, diskGB: 1 },
+    });
+    expect(result.tiers[0].providerUuid).toBe('p1');
+    expect(result.tiers[0].skuUuid).toBe('a');
+  });
+
+  it('does not warn for chain SKUs that lose the multi-provider tie (they are part of the same name)', async () => {
+    // Multi-provider duplicates of a chosen-spec name should NOT trigger
+    // the "no spec entry" warning — the spec name IS matched, just by a
+    // different provider's SKU.
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(getSKUs).mockResolvedValue([
+      sku({ uuid: 'a', name: 'docker-micro', providerUuid: 'p1', basePrice: { amount: '100000', denom: 'upwr' } }),
+      sku({ uuid: 'b', name: 'docker-micro', providerUuid: 'p2', basePrice: { amount: '36000', denom: 'upwr' } }),
+    ]);
+    await resolveSkuTiers({ 'docker-micro': { cores: 0.5, ramMB: 512, diskGB: 1 } });
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
 });
 
 describe('getCheapestTier', () => {
@@ -188,5 +247,48 @@ describe('getCheapestTier', () => {
 
   it('throws on empty input (callers must guard tiers.length === 0)', () => {
     expect(() => getCheapestTier([])).toThrow();
+  });
+});
+
+describe('resolveSizeName', () => {
+  const micro = tier({ skuName: 'docker-micro' });
+  const small = tier({ skuName: 'docker-small' });
+  const large = tier({ skuName: 'docker-large' });
+  const tiers = [micro, small, large];
+
+  it('matches a canonical SKU name exactly', () => {
+    expect(resolveSizeName('docker-small', tiers)).toBe(small);
+  });
+
+  it('matches the docker- prefix backward-compat form', () => {
+    expect(resolveSizeName('small', tiers)).toBe(small);
+  });
+
+  it('matches the suffix-only backward-compat form', () => {
+    const gpu = tier({ skuName: 'gpu-medium' });
+    const tiersWithGpu = [...tiers, gpu];
+    expect(resolveSizeName('medium', tiersWithGpu)).toBe(gpu);
+  });
+
+  it('is case-insensitive', () => {
+    expect(resolveSizeName('Docker-Small', tiers)).toBe(small);
+    expect(resolveSizeName('SMALL', tiers)).toBe(small);
+  });
+
+  it('returns null for unresolvable size', () => {
+    expect(resolveSizeName('xxlarge', tiers)).toBeNull();
+    expect(resolveSizeName('docker-xxlarge', tiers)).toBeNull();
+  });
+
+  it('returns null for empty tier list', () => {
+    expect(resolveSizeName('micro', [])).toBeNull();
+  });
+
+  it('canonical match wins over docker- fallback', () => {
+    // If a tier is literally named 'small' AND there's a 'docker-small',
+    // the canonical-name match should win because it's tried first.
+    const literalSmall = tier({ skuName: 'small' });
+    const dockerSmall = tier({ skuName: 'docker-small' });
+    expect(resolveSizeName('small', [dockerSmall, literalSmall])).toBe(literalSmall);
   });
 });
