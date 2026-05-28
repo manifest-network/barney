@@ -113,11 +113,6 @@ describe('getSystemPrompt', () => {
     expect(prompt).toContain('POSTGRES_PASSWORD=""');
   });
 
-  it('contains storage instructions for stateful apps', () => {
-    const prompt = getSystemPrompt();
-    expect(prompt).toContain('storage=true');
-  });
-
   it('contains Compose Features section', () => {
     const prompt = getSystemPrompt();
     expect(prompt).toContain('## Compose Features');

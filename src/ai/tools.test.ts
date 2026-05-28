@@ -174,12 +174,6 @@ describe('AI_TOOLS', () => {
     expect(toolNames).toContain('update_app');
   });
 
-  it('includes storage param in deploy_app', () => {
-    const deployTool = AI_TOOLS.find((t) => t.function.name === 'deploy_app');
-    expect(deployTool?.function.parameters.properties).toHaveProperty('storage');
-    expect(deployTool?.function.parameters.properties.storage.type).toBe('boolean');
-  });
-
   it('includes app_diagnostics tool', () => {
     const toolNames = AI_TOOLS.map((t) => t.function.name);
     expect(toolNames).toContain('app_diagnostics');

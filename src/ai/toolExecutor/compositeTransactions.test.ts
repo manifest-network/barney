@@ -779,15 +779,6 @@ describe('parseAndValidateStackServices', () => {
     }
   });
 
-  it('sets needsStorage when known image requires storage', () => {
-    const json = JSON.stringify({ db: { image: 'postgres' } });
-    const result = parseAndValidateStackServices(json, true, 'test');
-    expect('error' in result).toBe(false);
-    if (!('error' in result)) {
-      expect(result.needsStorage).toBe(true);
-    }
-  });
-
   it('extracts health_check from service config', () => {
     const json = JSON.stringify({
       web: { image: 'nginx', health_check: { test: ['CMD-SHELL', 'curl -f http://localhost'], interval: '30s' } },
@@ -1183,43 +1174,7 @@ describe('executeDeployApp', () => {
     }
   });
 
-  it('upgrades to storage SKU when storage=true and size is micro', async () => {
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-
-    const result = await executeDeployApp(
-      { image: 'postgres:latest', port: '5432', storage: true },
-      makeOptions()
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.requiresConfirmation).toBe(true);
-    expect(result.confirmationMessage).toContain('upgraded for storage');
-    expect(result.confirmationMessage).toContain('docker-small');
-    // Size stored in pendingAction should reflect the upgrade
-    expect(result.pendingAction?.args.size).toBe('docker-small');
-  });
-
-  it('does not upgrade when storage=true and size is already small', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-
-    const result = await executeDeployApp(
-      { image: 'postgres:latest', port: '5432', storage: true, size: 'small' },
-      makeOptions()
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.confirmationMessage).not.toContain('upgraded for storage');
-  });
-
-  it('does not upgrade when storage is not set', async () => {
+  it('defaults to the first resolved tier when size is omitted', async () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1230,7 +1185,6 @@ describe('executeDeployApp', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(result.confirmationMessage).not.toContain('upgraded for storage');
     // Defaults to first tier in resolved list (docker-micro).
     expect(result.pendingAction?.args.size).toBe('docker-micro');
   });
@@ -1258,8 +1212,6 @@ describe('executeDeployApp', () => {
     expect(manifest.ports).toEqual({ '7474/tcp': {}, '7687/tcp': {} });
     // NEO4J_AUTH should be neo4j/<generated password>
     expect(manifest.env.NEO4J_AUTH).toMatch(/^neo4j\/[A-Za-z0-9]{16}$/);
-    // Storage upgrade should be triggered
-    expect(result.confirmationMessage).toContain('upgraded for storage');
   });
 
   it('model-provided values override known image defaults', async () => {

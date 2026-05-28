@@ -13,7 +13,7 @@ import { DENOMS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
-import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
+import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
 import { isValidFqdn, normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
@@ -279,7 +279,6 @@ function validateInternalServiceNames(
 interface ParseStackServicesResult {
   services: Record<string, ServiceConfig>;
   serviceNames: string[];
-  needsStorage: boolean;
 }
 
 /**
@@ -311,7 +310,6 @@ export function parseAndValidateStackServices(
   }
 
   const stackServices: Record<string, ServiceConfig> = {};
-  let needsStorage = false;
 
   for (const [svcName, svcRaw] of Object.entries(parsedServices)) {
     const nameError = validateServiceName(svcName);
@@ -392,7 +390,6 @@ export function parseAndValidateStackServices(
       if (!cfg.tmpfs && knownConfig.tmpfs) cfg.tmpfs = knownConfig.tmpfs;
       if (!command && knownConfig.command) command = [...knownConfig.command];
       if (!svcArgs && knownConfig.args) svcArgs = [...knownConfig.args];
-      if (knownConfig.storage) needsStorage = true;
       if (!healthCheck && knownConfig.health_check) healthCheck = { ...knownConfig.health_check };
     }
 
@@ -435,7 +432,7 @@ export function parseAndValidateStackServices(
     }
   }
 
-  return { services: stackServices, serviceNames, needsStorage };
+  return { services: stackServices, serviceNames };
 }
 
 
@@ -664,8 +661,6 @@ export async function executeDeployApp(
     );
     if ('error' in parsed) return { success: false, error: parsed.error };
 
-    if (parsed.needsStorage && args.storage === undefined) args.storage = true;
-
     // Pre-generate a shared password for all auto-generated env vars in the stack.
     // This ensures cross-service credentials match (e.g., WORDPRESS_DB_PASSWORD matches MYSQL_PASSWORD).
     const sharedPassword = generatePassword();
@@ -778,7 +773,7 @@ export async function executeDeployApp(
       }
     }
 
-    // Known image safety net: merge defaults for port, env, user, tmpfs, storage, command, args, health_check
+    // Known image safety net: merge defaults for port, env, user, tmpfs, command, args, health_check
     const knownConfig = findKnownImage(args.image as string);
     if (knownConfig) {
       if (!args.port && knownConfig.port) args.port = knownConfig.port;
@@ -788,7 +783,6 @@ export async function executeDeployApp(
       if (!args.tmpfs && knownConfig.tmpfs) args.tmpfs = knownConfig.tmpfs;
       if (!command && knownConfig.command) command = [...knownConfig.command];
       if (!cmdArgs && knownConfig.args) cmdArgs = [...knownConfig.args];
-      if (args.storage === undefined && knownConfig.storage) args.storage = knownConfig.storage;
       if (!healthCheck && knownConfig.health_check) healthCheck = { ...knownConfig.health_check };
     }
 
@@ -916,22 +910,7 @@ export async function executeDeployApp(
       error: `Invalid size "${rawSize}". Valid tiers: ${tiers.map((t) => t.skuName).join(', ')}.`,
     };
   }
-  let storageUpgrade = false;
-  let matched = requestedTier;
-
-  // Auto-upgrade to storage-capable SKU when storage is requested.
-  if (args.storage === true && matched.skuName !== STORAGE_SKU_NAME) {
-    const storageTier = tiers.find((t) => t.skuName === STORAGE_SKU_NAME);
-    if (!storageTier) {
-      return {
-        success: false,
-        error: `Storage requires the "${STORAGE_SKU_NAME}" tier, which is not available on this network.`,
-      };
-    }
-    matched = storageTier;
-    storageUpgrade = true;
-  }
-
+  const matched = requestedTier;
   const size = matched.skuName;  // canonical SKU name
   const skuUuid = matched.skuUuid;
 
@@ -1071,7 +1050,7 @@ export async function executeDeployApp(
   return {
     success: true,
     requiresConfirmation: true,
-    confirmationMessage: `Deploy "${name}"${stackInfo} on ${storageUpgrade ? STORAGE_SKU_NAME : size} tier${storageUpgrade ? ' (upgraded for storage)' : ''}${priceInfo}?${creditWarning}`,
+    confirmationMessage: `Deploy "${name}"${stackInfo} on ${size} tier${priceInfo}?${creditWarning}`,
     pendingAction: {
       toolName: 'deploy_app',
       args: {

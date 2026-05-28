@@ -90,7 +90,7 @@ The AI assistant uses a 3-layer architecture:
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, storage?, services?, health_check?, stop_grace_period?, init?, expose?, labels?, custom_domain?, service_name?)` | TX | Deploy from attached manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image`. `custom_domain` attaches a domain in the same TX flow (single-step deploy + DNS); `service_name` picks the target service in a multi-service stack. The `size` enum is rebuilt at prompt-build time from the resolved SKU tier list (chain ∩ `PUBLIC_SKU_SPECS`); default size is `tiers[0]` (first entry in env spec insertion order). Executor returns `Tier catalog unavailable — try again in a moment.` if `loadSkuTiers` hasn't reached `ready` yet |
+| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, services?, health_check?, stop_grace_period?, init?, expose?, labels?, custom_domain?, service_name?)` | TX | Deploy from attached manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image`. `custom_domain` attaches a domain in the same TX flow (single-step deploy + DNS); `service_name` picks the target service in a multi-service stack. The `size` enum is rebuilt at prompt-build time from the resolved SKU tier list (chain ∩ `PUBLIC_SKU_SPECS`); default size is `tiers[0]` (first entry in env spec insertion order). Executor returns `Tier catalog unavailable — try again in a moment.` if `loadSkuTiers` hasn't reached `ready` yet |
 | `stop_app(app_name)` | TX | Stop apps by name, comma-separated list (e.g. "redis,postgres"), or "all" to stop all running apps |
 | `fund_credits(amount)` | TX | Add credits in display units |
 | `restart_app(app_name)` | TX | Restart apps by name, comma-separated list, or "all" to restart all running apps |
@@ -276,7 +276,6 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `WS_RECONNECT_DELAY_MS` | 1s | Delay before WebSocket reconnect attempt |
 | `WS_MAX_RECONNECT_ATTEMPTS` | 2 | Max reconnects before falling back to polling |
 | `WS_LIVENESS_TIMEOUT_MS` | 45s | WebSocket data liveness timeout (Fred pings every 30s) |
-| `STORAGE_SKU_NAME` | 'docker-small' | SKU name that supports persistent disk storage |
 | `DNS_POLL_INTERVAL_MS` | 30s | Polling interval for browser-side DNS / HTTPS probes (`useDnsStatusPolling`) |
 | `DNS_STUCK_THRESHOLD_MS` | 5min | Show "verify with dig locally" hint after sustained `pending_dns` (only when slice has no `detail`) |
 | `AUTO_REFRESH_INTERVAL_MS` | 15s | Auto-refresh interval for sidebar data polling |

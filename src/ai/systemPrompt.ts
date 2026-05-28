@@ -145,7 +145,7 @@ User: "Deploy Redis"
 → deploy_app(image="redis", port="6379")
 
 User: "Deploy Postgres"
-→ deploy_app(image="postgres", port="5432", env='{"POSTGRES_PASSWORD":""}', user="999:999", tmpfs="/var/run/postgresql", storage=true)
+→ deploy_app(image="postgres", port="5432", env='{"POSTGRES_PASSWORD":""}', user="999:999", tmpfs="/var/run/postgresql")
 
 User: "Deploy my-custom-app"
 → "What port does my-custom-app expose, and does it need any environment variables?"

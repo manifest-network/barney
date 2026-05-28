@@ -62,10 +62,6 @@ export const AI_TOOLS: ToolDefinition[] = [
             type: 'string',
             description: 'JSON array for container command/args override, e.g. \'["echo hello"]\'. Only with "image".',
           },
-          storage: {
-            type: 'boolean',
-            description: 'Set to true for apps that need persistent disk (databases, etc.).',
-          },
           services: {
             type: 'string',
             description: 'JSON object for multi-service stack deploys. Mutually exclusive with "image". Format: \'{"web":{"image":"nginx","port":"80"},"db":{"image":"postgres","port":"5432","env":{"POSTGRES_PASSWORD":""}}}\'.',
