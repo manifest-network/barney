@@ -1,4 +1,22 @@
-export const HELP_TEXT = `## Quick Reference
+import type { ResolvedSkuTier } from '../api/skuTiers';
+
+function tiersSection(tiers: readonly ResolvedSkuTier[]): string {
+  if (tiers.length === 0) {
+    return '_Tier catalog loading — refresh in a moment._';
+  }
+  const rows = tiers
+    .map(
+      (t) =>
+        `| ${t.skuName} | ${t.cores} cores | ${t.ramMB.toLocaleString()} MB | ${t.diskGB} GB | ${t.pricePerHour.toFixed(4)} ${t.denomSymbol}/hr |`,
+    )
+    .join('\n');
+  return `| Tier | CPU | Memory | Disk | Price |
+|------|-----|--------|------|-------|
+${rows}`;
+}
+
+export function buildHelpText(tiers: readonly ResolvedSkuTier[]): string {
+  return `## Quick Reference
 
 ### Commands
 | Command | Description |
@@ -24,12 +42,7 @@ export const HELP_TEXT = `## Quick Reference
 - "Browse catalog"
 
 ### Resource tiers
-| Tier | CPU | Memory | Disk |
-|------|-----|--------|------|
-| docker-micro | 0.5 cores | 512 MB | 1 GB |
-| docker-small | 1 core | 1,024 MB | 5 GB |
-| docker-medium | 2 cores | 2,048 MB | 10 GB |
-| docker-large | 4 cores | 4,096 MB | 20 GB |
+${tiersSection(tiers)}
 
 ### Keyboard shortcuts
 | Key | Action |
@@ -39,3 +52,4 @@ export const HELP_TEXT = `## Quick Reference
 | **\\u2191 \\u2193** | Browse input history |
 | **/** | Focus chat input |
 `;
+}

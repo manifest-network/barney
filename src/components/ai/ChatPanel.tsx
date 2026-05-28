@@ -9,7 +9,7 @@ import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { EXAMPLE_APPS, buildExampleManifest, type ExampleApp } from '../../config/exampleApps';
-import { HELP_TEXT } from '../../ai/helpText';
+import { buildHelpText } from '../../ai/helpText';
 
 const ConfirmationCard = lazy(() =>
   import('./ConfirmationCard').then(m => ({ default: m.ConfirmationCard }))
@@ -72,6 +72,8 @@ export function ChatPanel() {
     addLocalMessage,
     clearHistory,
     stopStreaming,
+    skuTiers,
+    retrySkuTiers,
   } = useAI();
 
   const [input, setInput] = useState('');
@@ -144,7 +146,7 @@ export function ChatPanel() {
 
     // Handle local commands (no LLM round-trip)
     if (message.toLowerCase() === '/help') {
-      addLocalMessage(HELP_TEXT, { type: 'help', data: null });
+      addLocalMessage(buildHelpText(skuTiers.tiers), { type: 'help', data: null });
       return;
     }
     if (message.toLowerCase() === '/clear') {
@@ -339,7 +341,7 @@ export function ChatPanel() {
         <div className="chat-panel-actions">
           <button
             type="button"
-            onClick={() => addLocalMessage(HELP_TEXT, { type: 'help', data: null })}
+            onClick={() => addLocalMessage(buildHelpText(skuTiers.tiers), { type: 'help', data: null })}
             className="chat-panel-btn"
             aria-label="Show help"
           >
