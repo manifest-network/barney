@@ -57,6 +57,7 @@ vi.mock('../../utils/errors', () => ({
 
 vi.mock('../../ai/tools', () => ({
   AI_TOOLS: [],
+  buildAITools: vi.fn(() => []),
   isValidToolName: vi.fn(() => true),
   getToolCallDescription: vi.fn(() => 'tool desc'),
 }));

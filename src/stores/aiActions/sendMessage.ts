@@ -3,7 +3,7 @@
  */
 
 import { streamChat } from '../../api/morpheus';
-import { AI_TOOLS } from '../../ai/tools';
+import { buildAITools } from '../../ai/tools';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { validateUserInput } from '../../ai/validation';
 import { logError } from '../../utils/errors';
@@ -79,12 +79,13 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
       iteration++;
 
       const currentMessages = get().messages.filter((m) => m.id !== currentAssistantMessageId);
-      const { address } = get();
-      const apiMessages = toChatApiMessages(currentMessages, address);
+      const { address, skuTiers } = get();
+      const apiMessages = toChatApiMessages(currentMessages, address, skuTiers.tiers);
+      const tools = buildAITools(skuTiers.tiers);
 
       const stream = streamChat({
         messages: apiMessages,
-        tools: AI_TOOLS,
+        tools,
         signal: get().abortController?.signal,
       });
 
