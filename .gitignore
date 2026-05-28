@@ -23,3 +23,6 @@ coverage
 *.njsproj
 *.sln
 *.sw?
+
+# Local working artifacts (architect plans, scratch notes)
+docs/superpowers/
