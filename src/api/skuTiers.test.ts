@@ -270,9 +270,30 @@ describe('resolveSizeName', () => {
     expect(resolveSizeName('medium', tiersWithGpu)).toBe(gpu);
   });
 
-  it('is case-insensitive', () => {
+  it('is case-insensitive on the input', () => {
     expect(resolveSizeName('Docker-Small', tiers)).toBe(small);
     expect(resolveSizeName('SMALL', tiers)).toBe(small);
+  });
+
+  it('is case-insensitive on the catalog SKU names too', () => {
+    // Network-provided SKU names may not be lowercase. The docstring promises
+    // case-insensitive lookup; without lowercasing `t.skuName` as well, a
+    // request for 'small' against an uppercase 'Docker-Small' SKU would
+    // silently miss all three fallbacks.
+    const mixedMicro = tier({ skuName: 'Docker-Micro' });
+    const mixedSmall = tier({ skuName: 'Docker-Small' });
+    const mixedGpu = tier({ skuName: 'GPU-Large' });
+    const mixedTiers = [mixedMicro, mixedSmall, mixedGpu];
+
+    // canonical match
+    expect(resolveSizeName('Docker-Micro', mixedTiers)).toBe(mixedMicro);
+    expect(resolveSizeName('docker-micro', mixedTiers)).toBe(mixedMicro);
+    // docker- prefix backward-compat against uppercase catalog
+    expect(resolveSizeName('small', mixedTiers)).toBe(mixedSmall);
+    expect(resolveSizeName('SMALL', mixedTiers)).toBe(mixedSmall);
+    // suffix-only backward-compat against uppercase catalog
+    expect(resolveSizeName('large', mixedTiers)).toBe(mixedGpu);
+    expect(resolveSizeName('LARGE', mixedTiers)).toBe(mixedGpu);
   });
 
   it('returns null for unresolvable size', () => {

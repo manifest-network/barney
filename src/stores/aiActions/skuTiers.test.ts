@@ -95,7 +95,7 @@ describe('loadSkuTiers', () => {
 describe('retrySkuTiers', () => {
   beforeEach(() => vi.mocked(resolveSkuTiers).mockReset());
 
-  it('re-issues a fetch after error', async () => {
+  it('from error: resets phase and re-issues a fetch', async () => {
     vi.mocked(resolveSkuTiers).mockRejectedValueOnce(new Error('x'));
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const store = createAIStore();
@@ -108,15 +108,59 @@ describe('retrySkuTiers', () => {
     });
     await store.getState().retrySkuTiers();
     expect(store.getState().skuTiers.phase).toBe('ready');
+    expect(vi.mocked(resolveSkuTiers)).toHaveBeenCalledTimes(2);
     spy.mockRestore();
   });
 
-  it('re-issues a fetch even from ready phase', async () => {
+  it('from idle: resets phase (no-op) and issues a fetch', async () => {
+    vi.mocked(resolveSkuTiers).mockResolvedValue({ tiers: [SAMPLE_TIER], denomSymbol: 'PWR' });
+    const store = createAIStore();
+    expect(store.getState().skuTiers.phase).toBe('idle');
+    await store.getState().retrySkuTiers();
+    expect(store.getState().skuTiers.phase).toBe('ready');
+    expect(vi.mocked(resolveSkuTiers)).toHaveBeenCalledTimes(1);
+  });
+
+  it('from loading: in-flight dedupe path — joins the existing promise without a second fetch', async () => {
+    let resolveFn: ((v: { tiers: typeof SAMPLE_TIER[]; denomSymbol: string }) => void) = () => {};
+    const gate = new Promise<{ tiers: typeof SAMPLE_TIER[]; denomSymbol: string }>((r) => {
+      resolveFn = r;
+    });
+    vi.mocked(resolveSkuTiers).mockReturnValue(gate);
+    const store = createAIStore();
+    const load = store.getState().loadSkuTiers();
+    expect(store.getState().skuTiers.phase).toBe('loading');
+    const retry = store.getState().retrySkuTiers();
+    // The retry happened while load was in flight — retrySkuTiersFn sets
+    // idle then calls loadSkuTiersFn; the in-flight promise dedupe inside
+    // loadSkuTiersFn means we still only get one upstream resolveSkuTiers
+    // call.
+    resolveFn({ tiers: [SAMPLE_TIER], denomSymbol: 'PWR' });
+    await Promise.all([load, retry]);
+    expect(vi.mocked(resolveSkuTiers)).toHaveBeenCalledTimes(1);
+    expect(store.getState().skuTiers.phase).toBe('ready');
+  });
+
+  it('from ready: NO-OP — does not re-fetch, does not transition phase, preserves tiers', async () => {
     vi.mocked(resolveSkuTiers).mockResolvedValue({ tiers: [SAMPLE_TIER], denomSymbol: 'PWR' });
     const store = createAIStore();
     await store.getState().loadSkuTiers();
     expect(store.getState().skuTiers.phase).toBe('ready');
-    await store.getState().retrySkuTiers();
-    expect(vi.mocked(resolveSkuTiers)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(resolveSkuTiers)).toHaveBeenCalledTimes(1);
+
+    const tiersBefore = store.getState().skuTiers.tiers;
+    const result = store.getState().retrySkuTiers();
+    // Must resolve to a resolved promise so awaiting consumers don't hang.
+    await expect(result).resolves.toBeUndefined();
+    // Phase must NOT have transitioned away from 'ready' — consumers read
+    // skuTiers.tiers without a phase guard, so a ready → idle/loading would
+    // briefly orphan the previously-resolved tiers in active executions.
+    expect(store.getState().skuTiers.phase).toBe('ready');
+    // Tiers must be the same reference — confirms we didn't reset state.
+    expect(store.getState().skuTiers.tiers).toBe(tiersBefore);
+    // No second fetch — and crucially this is the only no-op-from-ready
+    // signal that survives if someone later changes the loadSkuTiersFn
+    // short-circuit too.
+    expect(vi.mocked(resolveSkuTiers)).toHaveBeenCalledTimes(1);
   });
 });

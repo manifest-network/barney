@@ -83,7 +83,17 @@ export function loadSkuTiersFn(get: Get, set: Set): Promise<void> {
 }
 
 export function retrySkuTiersFn(get: Get, set: Set): Promise<void> {
-  // Force a fresh attempt by resetting phase first.
-  set({ skuTiers: { ...get().skuTiers, phase: 'idle', error: null } });
+  const current = get().skuTiers;
+  // Retry from ready is a no-op — loadSkuTiersFn short-circuits on ready
+  // anyway, and we must not transition ready → idle/loading because
+  // consumers (compositeTransactions.ts, sendMessage / confirmAction /
+  // toolExecution / batchDeploy action modules) read skuTiers.tiers
+  // directly without phase guards. A transient ready → idle window would
+  // orphan the resolved tiers from any in-flight tool execution.
+  // If we ever need stale-while-revalidate refresh from ready, that should
+  // be a separate action (e.g. revalidateSkuTiersFn) with its own
+  // isRevalidating flag so consumers can opt in to the new phase shape.
+  if (current.phase === 'ready') return Promise.resolve();
+  set({ skuTiers: { ...current, phase: 'idle', error: null } });
   return loadSkuTiersFn(get, set);
 }

@@ -5,9 +5,16 @@
  * accompanying CPU/RAM/disk specs. Different networks ship different specs,
  * so the resolved tier list is the chain ∩ env intersection.
  *
- * On any parse error or schema violation, returns an empty map and logs to
- * console. The caller (loadSkuTiers action) treats an empty spec map as
- * "no tiers usable" and surfaces that as an error to deploy surfaces.
+ * Failure handling is intentionally split between top-level and per-entry
+ * cases so a single malformed entry can't poison the whole catalog:
+ *  - Top-level failures (`JSON.parse` throws, parsed value is not a
+ *    non-array object) return an empty map and log to console. The caller
+ *    (`loadSkuTiers` action) treats an empty spec map as "no tiers usable"
+ *    and surfaces that as an error to deploy surfaces.
+ *  - Per-entry schema failures (missing field, wrong type, non-positive
+ *    number) drop just that entry, log it, and keep the rest. Matches the
+ *    broader ENG-241 "log warnings, don't hard-fail" policy applied to
+ *    chain-vs-env drift in `resolveSkuTiers`.
  */
 
 import { logError } from '../utils/errors';

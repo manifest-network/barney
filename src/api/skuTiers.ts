@@ -60,10 +60,16 @@ export function resolveSizeName(
   tiers: readonly ResolvedSkuTier[],
 ): ResolvedSkuTier | null {
   const s = rawSize.toLowerCase();
+  const dockerS = `docker-${s}`;
+  const dashS = `-${s}`;
+  // Lowercase BOTH sides so a network shipping mixed-case SKU names
+  // (e.g. 'Docker-Small') still matches a lowercase input. Computing
+  // each tier's lowered name lazily inside the predicates keeps it
+  // allocation-light for the common all-lowercase case.
   return (
-    tiers.find((t) => t.skuName === s)
-    ?? tiers.find((t) => t.skuName === `docker-${s}`)
-    ?? tiers.find((t) => t.skuName.endsWith(`-${s}`))
+    tiers.find((t) => t.skuName.toLowerCase() === s)
+    ?? tiers.find((t) => t.skuName.toLowerCase() === dockerS)
+    ?? tiers.find((t) => t.skuName.toLowerCase().endsWith(dashS))
     ?? null
   );
 }
