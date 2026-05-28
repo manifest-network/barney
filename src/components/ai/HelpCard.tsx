@@ -1,4 +1,5 @@
 import { HelpCircle, Rocket, Terminal, Keyboard, Layers, SlashSquare } from 'lucide-react';
+import { useAI } from '../../hooks/useAI';
 
 const CAPABILITIES = [
   'Deploy apps from a manifest file or the built-in catalog',
@@ -19,21 +20,16 @@ const EXAMPLES = [
   'Browse catalog',
 ];
 
-const TIERS = [
-  { name: 'micro', cpu: '0.5', mem: '512 MB', disk: '1 GB' },
-  { name: 'small', cpu: '1', mem: '1 GB', disk: '5 GB' },
-  { name: 'medium', cpu: '2', mem: '2 GB', disk: '10 GB' },
-  { name: 'large', cpu: '4', mem: '4 GB', disk: '20 GB' },
-];
-
 const SHORTCUTS = [
   { key: 'Enter', action: 'Send message' },
   { key: 'Shift + Enter', action: 'New line' },
-  { key: '\u2191 \u2193', action: 'Browse input history' },
+  { key: '↑ ↓', action: 'Browse input history' },
   { key: '/', action: 'Focus chat input' },
 ];
 
 export function HelpCard() {
+  const { skuTiers, retrySkuTiers } = useAI();
+
   return (
     <div className="help-card" role="region" aria-label="Help reference">
       <div className="help-card__header">
@@ -91,28 +87,47 @@ export function HelpCard() {
           <Layers className="w-3.5 h-3.5" aria-hidden="true" />
           <span>Resource tiers</span>
         </div>
-        <div className="help-card__table-wrap">
-          <table className="help-card__table">
-            <thead>
-              <tr>
-                <th>Tier</th>
-                <th>CPU</th>
-                <th>Memory</th>
-                <th>Storage</th>
-              </tr>
-            </thead>
-            <tbody>
-              {TIERS.map((t) => (
-                <tr key={t.name}>
-                  <td><span className="help-card__tier-badge">{t.name}</span></td>
-                  <td>{t.cpu}</td>
-                  <td>{t.mem}</td>
-                  <td>{t.disk}</td>
+        {skuTiers.phase === 'ready' && skuTiers.tiers.length > 0 ? (
+          <div className="help-card__table-wrap">
+            <table className="help-card__table">
+              <thead>
+                <tr>
+                  <th>Tier</th>
+                  <th>CPU</th>
+                  <th>Memory</th>
+                  <th>Storage</th>
+                  <th>Price</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {skuTiers.tiers.map((t) => (
+                  <tr key={t.skuName}>
+                    <td><span className="help-card__tier-badge">{t.skuName}</span></td>
+                    <td>{t.cores}</td>
+                    <td>{t.ramMB.toLocaleString()} MB</td>
+                    <td>{t.diskGB} GB</td>
+                    <td>{t.pricePerHour.toFixed(4)} {t.denomSymbol}/hr</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : skuTiers.phase === 'loading' || skuTiers.phase === 'idle' ? (
+          <p className="text-sm text-muted">Loading tier catalog…</p>
+        ) : (
+          <div>
+            <p className="text-sm text-error">
+              Tier catalog unavailable{skuTiers.error ? `: ${skuTiers.error}` : '.'}
+            </p>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm mt-2"
+              onClick={() => retrySkuTiers()}
+            >
+              Retry
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Keyboard shortcuts */}
