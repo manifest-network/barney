@@ -49,8 +49,8 @@ describe('getConfigValue', () => {
 });
 
 describe('runtimeConfig', () => {
-  it('exports all 17 keys as strings', () => {
-    expect(Object.keys(runtimeConfig)).toHaveLength(17);
+  it('exports all 18 keys as strings', () => {
+    expect(Object.keys(runtimeConfig)).toHaveLength(18);
     for (const value of Object.values(runtimeConfig)) {
       expect(typeof value).toBe('string');
     }
@@ -63,6 +63,29 @@ describe('runtimeConfig', () => {
 
   it('is frozen', () => {
     expect(Object.isFrozen(runtimeConfig)).toBe(true);
+  });
+});
+
+describe('PUBLIC_SKU_SPECS', () => {
+  let originalConfig: typeof window.__RUNTIME_CONFIG__;
+
+  beforeEach(() => {
+    originalConfig = window.__RUNTIME_CONFIG__;
+  });
+
+  afterEach(() => {
+    window.__RUNTIME_CONFIG__ = originalConfig;
+  });
+
+  it('returns runtime override when set', () => {
+    const json = '{"docker-micro":{"cores":0.5,"ramMB":512,"diskGB":1}}';
+    window.__RUNTIME_CONFIG__ = { PUBLIC_SKU_SPECS: json };
+    expect(getConfigValue('PUBLIC_SKU_SPECS')).toBe(json);
+  });
+
+  it('defaults to empty string when unset', () => {
+    window.__RUNTIME_CONFIG__ = {};
+    expect(getConfigValue('PUBLIC_SKU_SPECS')).toBe('');
   });
 });
 
