@@ -38,6 +38,12 @@ export function AIProvider({ children }: { children: ReactNode }) {
     { backoff: true, maxBackoffMultiplier: AI_HEALTH_CHECK_MAX_BACKOFF, context: 'AIProvider.healthCheck' },
   );
 
+  // Kick off SKU tier load once per provider lifetime. Idempotent — the action
+  // short-circuits if already loading/ready.
+  useEffect(() => {
+    store.getState().loadSkuTiers();
+  }, [store]);
+
   // Persistence subscriptions + confirmation timeout
   useEffect(() => {
     // Persistence subscriptions (settings + history to localStorage)
