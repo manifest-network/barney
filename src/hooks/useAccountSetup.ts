@@ -10,8 +10,10 @@
  *
  * No recurring interval, no cooldowns, no toast calls.
  *
- * If the localStorage key exists but PWR balance is zero (backend reset),
- * the stale key is cleared and setup re-runs.
+ * If the localStorage key exists but wallet PWR balance is zero, the stale key
+ * is cleared and setup re-runs (covers backend reset and returning users who
+ * have spent their wallet PWR; the early credit check short-circuits the
+ * visible re-run for users who still have credits funded).
  *
  * MFX is no longer part of this flow — PWR pays both gas and credits after
  * the gas-token cutover (ENG-243). Users who still need MFX can request it
@@ -183,8 +185,10 @@ export function useAccountSetup({
 
         const pwrBalance = fromBaseUnits(pwrCoin.amount, DENOMS.PWR);
 
-        // Stale-key detection: if we had setupCompleted but PWR balance is zero,
-        // backend was reset — clear and re-run
+        // Stale-key detection: setupCompleted persisted but wallet PWR is zero.
+        // Triggers on backend reset OR when a returning user has spent their wallet
+        // PWR down. The early credit check below skips back to `complete` for users
+        // who already have credits funded, so the visible re-run is rare.
         if (persisted?.setupCompleted && pwrBalance === 0) {
           clearSetupData(targetAddress);
           isNewSetup = true;

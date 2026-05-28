@@ -29,10 +29,10 @@ function parseGasPriceAmount(gasPrice: string): number {
 
 /** Parse the denom suffix from a CosmJS gas price string
  *  (e.g. "0.0025umfx" → "umfx", "0.0025factory/.../upwr" → "factory/.../upwr").
- *  Falls back to 'umfx' if the string can't be parsed. */
+ *  Falls back to the configured PWR denom if the string can't be parsed. */
 function parseGasPriceDenom(gasPrice: string): string {
   const m = gasPrice.match(/^[0-9.]+(.+)$/);
-  return m?.[1] ?? 'umfx';
+  return m?.[1] ?? runtimeConfig.PUBLIC_PWR_DENOM;
 }
 
 const gasPriceAmount = parseGasPriceAmount(GAS_PRICE);
