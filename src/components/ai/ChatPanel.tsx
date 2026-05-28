@@ -9,8 +9,7 @@ import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { EXAMPLE_APPS, buildExampleManifest, type ExampleApp } from '../../config/exampleApps';
-import { resolveSizeName } from '../../api/skuTiers';
-import { computeExampleAppGate } from './exampleAppGating';
+import { computeExampleAppGate, getDeployExampleRejection } from './exampleAppGating';
 import { buildHelpText } from '../../ai/helpText';
 
 const ConfirmationCard = lazy(() =>
@@ -296,11 +295,23 @@ export function ChatPanel() {
   };
 
   const deployExample = async (app: ExampleApp) => {
-    if (!tiersReady) return;
-    // Defensive: if the stored size hint doesn't resolve in the current
-    // catalog, the button should already be disabled — but the click handler
-    // is the last line of defence against a stale render.
-    if (app.size && resolveSizeName(app.size, skuTiers.tiers) === null) return;
+    // Reject + surface a chat message rather than silently returning. The
+    // typed-command path (doSubmit clears input before calling us) would
+    // otherwise look like the app froze. Button-click path also takes this
+    // branch — extra chat noise is preferable to a silent click, and the
+    // button is already disabled so it's hard to reach this branch by
+    // clicking in practice.
+    const rejection = getDeployExampleRejection({
+      size: app.size,
+      tiers: skuTiers.tiers,
+      tiersReady,
+      phase: skuTiers.phase,
+      errorMessage: skuTiers.error,
+    });
+    if (rejection !== null) {
+      addLocalMessage(rejection);
+      return;
+    }
     const manifestJson = buildExampleManifest(app);
     const filename = `manifest-${app.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}.json`;
     const blob = new Blob([manifestJson], { type: 'application/json' });

@@ -18,6 +18,7 @@
  */
 
 import { resolveSizeName, type ResolvedSkuTier } from '../../api/skuTiers';
+import type { SkuTiersPhase } from '../../stores/aiActions/skuTiers';
 
 export interface ExampleAppGate {
   disabled: boolean;
@@ -46,4 +47,41 @@ export function computeExampleAppGate(input: ExampleAppGateInput): ExampleAppGat
     };
   }
   return { disabled: false };
+}
+
+/**
+ * Sister of `computeExampleAppGate` for the typed-command path (e.g.
+ * "deploy tetris" routed through `doSubmit` → `deployExample`).
+ *
+ * The button-click path can lean on tooltips to explain a disabled state.
+ * The typed path has no tooltip surface — `doSubmit` has already cleared
+ * the input by the time `deployExample` runs, so a silent `return` from
+ * `deployExample` looks like the app froze (empty input + zero feedback).
+ *
+ * Returns the chat message to surface via `addLocalMessage` when the
+ * deploy should be rejected, or `null` when the deploy should proceed.
+ * Same gating hierarchy as `computeExampleAppGate`: catalog readiness
+ * wins first, then per-app size resolution.
+ */
+export interface DeployExampleRejectionInput {
+  size?: string;
+  tiers: readonly ResolvedSkuTier[];
+  tiersReady: boolean;
+  /** Current SKU tiers slice phase — needed to pick loading-vs-error wording. */
+  phase: SkuTiersPhase;
+  /** `skuTiers.error` from the store, only meaningful when `phase === 'error'`. */
+  errorMessage: string | null;
+}
+
+export function getDeployExampleRejection(input: DeployExampleRejectionInput): string | null {
+  if (!input.tiersReady) {
+    if (input.phase === 'error') {
+      return `Deploy unavailable: ${input.errorMessage ?? 'tier catalog not ready'}. Click Retry above.`;
+    }
+    return 'Deploy unavailable: tier catalog is still loading. Please wait a moment and try again.';
+  }
+  if (input.size && resolveSizeName(input.size, input.tiers) === null) {
+    return `Tier '${input.size}' is not available on this network.`;
+  }
+  return null;
 }

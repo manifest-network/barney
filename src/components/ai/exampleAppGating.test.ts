@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeExampleAppGate } from './exampleAppGating';
+import { computeExampleAppGate, getDeployExampleRejection } from './exampleAppGating';
 import type { ResolvedSkuTier } from '../../api/skuTiers';
 
 function tier(name: string): ResolvedSkuTier {
@@ -89,5 +89,100 @@ describe('computeExampleAppGate', () => {
     });
     expect(gate.disabled).toBe(true);
     expect(gate.title).toBe('Loading tier catalog…');
+  });
+});
+
+describe('getDeployExampleRejection', () => {
+  // Sister of `computeExampleAppGate` for the typed-command path
+  // ("deploy tetris" / "deploy redis" through doSubmit). The button-click
+  // path uses tooltips; the typed path can't, so it surfaces the rejection
+  // as a chat message instead.
+
+  it('returns null when tiers are ready and size resolves — happy path', () => {
+    expect(getDeployExampleRejection({
+      size: 'docker-micro',
+      tiers: READY_TIERS,
+      tiersReady: true,
+      phase: 'ready',
+      errorMessage: null,
+    })).toBeNull();
+  });
+
+  it('returns null when tiers are ready and the app has no size hint', () => {
+    expect(getDeployExampleRejection({
+      tiers: READY_TIERS,
+      tiersReady: true,
+      phase: 'ready',
+      errorMessage: null,
+    })).toBeNull();
+  });
+
+  it('returns loading wording when tiers are not ready (phase=loading)', () => {
+    const msg = getDeployExampleRejection({
+      size: 'small',
+      tiers: [],
+      tiersReady: false,
+      phase: 'loading',
+      errorMessage: null,
+    });
+    expect(msg).toBe('Deploy unavailable: tier catalog is still loading. Please wait a moment and try again.');
+  });
+
+  it('returns loading wording when tiers are not ready (phase=idle)', () => {
+    const msg = getDeployExampleRejection({
+      size: 'small',
+      tiers: [],
+      tiersReady: false,
+      phase: 'idle',
+      errorMessage: null,
+    });
+    expect(msg).toBe('Deploy unavailable: tier catalog is still loading. Please wait a moment and try again.');
+  });
+
+  it('returns error wording with the underlying error when phase=error', () => {
+    const msg = getDeployExampleRejection({
+      size: 'small',
+      tiers: [],
+      tiersReady: false,
+      phase: 'error',
+      errorMessage: 'chain unreachable',
+    });
+    expect(msg).toBe('Deploy unavailable: chain unreachable. Click Retry above.');
+  });
+
+  it('error wording falls back to a generic phrase when errorMessage is null', () => {
+    const msg = getDeployExampleRejection({
+      size: 'small',
+      tiers: [],
+      tiersReady: false,
+      phase: 'error',
+      errorMessage: null,
+    });
+    expect(msg).toBe('Deploy unavailable: tier catalog not ready. Click Retry above.');
+  });
+
+  it('returns tier-specific rejection when stored size does not resolve', () => {
+    const msg = getDeployExampleRejection({
+      size: 'gpu-xlarge',
+      tiers: READY_TIERS,
+      tiersReady: true,
+      phase: 'ready',
+      errorMessage: null,
+    });
+    expect(msg).toBe("Tier 'gpu-xlarge' is not available on this network.");
+  });
+
+  it('catalog-not-ready dominates over an also-unresolvable size', () => {
+    // If catalog hasn't loaded, the user can't tell if the size is bad or
+    // the catalog is bad — surface the higher-level catalog message so the
+    // typed-path reason matches what the button-tooltip side would say.
+    const msg = getDeployExampleRejection({
+      size: 'docker-xxlarge',
+      tiers: [],
+      tiersReady: false,
+      phase: 'loading',
+      errorMessage: null,
+    });
+    expect(msg).toMatch(/loading/);
   });
 });
