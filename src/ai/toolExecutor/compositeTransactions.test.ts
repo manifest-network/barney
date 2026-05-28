@@ -117,6 +117,13 @@ import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 const ADDRESS = 'manifest1abc';
 const CLIENT_MANAGER = {} as CosmosClientManager;
 
+const SAMPLE_TIERS = [
+  { skuName: 'docker-micro', skuUuid: 'sku-1', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
+  { skuName: 'docker-small', skuUuid: 'sku-2', providerUuid: 'p1', cores: 1, ramMB: 1024, diskGB: 5, pricePerHour: 0.1, denomSymbol: 'PWR', unit: 1 },
+  { skuName: 'docker-medium', skuUuid: 'sku-3', providerUuid: 'p1', cores: 2, ramMB: 2048, diskGB: 10, pricePerHour: 0.2, denomSymbol: 'PWR', unit: 1 },
+  { skuName: 'docker-large', skuUuid: 'sku-4', providerUuid: 'p1', cores: 4, ramMB: 4096, diskGB: 20, pricePerHour: 0.5, denomSymbol: 'PWR', unit: 1 },
+];
+
 function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutorOptions {
   return {
     clientManager: CLIENT_MANAGER,
@@ -126,6 +133,7 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
       pub_key: { type: 'tendermint/PubKeySecp256k1', value: 'pubkey' },
       signature: 'sig',
     }),
+    tiers: SAMPLE_TIERS,
     ...overrides,
   };
 }
@@ -1030,7 +1038,25 @@ describe('executeDeployApp', () => {
     const result = await executeDeployApp({ size: 'xxlarge' }, makeOptions(), makePayload());
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid size');
-    expect(result.error).toContain('micro, small, medium, large');
+    expect(result.error).toContain('docker-micro, docker-small, docker-medium, docker-large');
+  });
+
+  it('returns clean error when tier catalog is empty (loading/error state)', async () => {
+    const result = await executeDeployApp({ image: 'redis' }, makeOptions({ tiers: [] }), makePayload());
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/tier catalog unavailable/i);
+  });
+
+  it('accepts both "micro" (legacy) and "docker-micro" (canonical) for size', async () => {
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    const a = await executeDeployApp({ image: 'redis', port: '6379', size: 'micro' }, makeOptions(), makePayload());
+    const b = await executeDeployApp({ image: 'redis', port: '6379', size: 'docker-micro' }, makeOptions(), makePayload());
+    expect(a.success).toBe(true);
+    expect(b.success).toBe(true);
+    expect(a.pendingAction?.args.size).toBe('docker-micro');
+    expect(b.pendingAction?.args.size).toBe('docker-micro');
   });
 
   it('accepts all valid size tiers', async () => {
@@ -1158,10 +1184,6 @@ describe('executeDeployApp', () => {
   });
 
   it('upgrades to storage SKU when storage=true and size is micro', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1174,13 +1196,9 @@ describe('executeDeployApp', () => {
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
     expect(result.confirmationMessage).toContain('upgraded for storage');
-    expect(result.confirmationMessage).toContain('small');
-    expect(resolveSkuItems).toHaveBeenCalledWith(
-      [{ sku_name: 'docker-small', quantity: 1 }],
-      expect.anything()
-    );
+    expect(result.confirmationMessage).toContain('docker-small');
     // Size stored in pendingAction should reflect the upgrade
-    expect(result.pendingAction?.args.size).toBe('small');
+    expect(result.pendingAction?.args.size).toBe('docker-small');
   });
 
   it('does not upgrade when storage=true and size is already small', async () => {
@@ -1202,10 +1220,6 @@ describe('executeDeployApp', () => {
   });
 
   it('does not upgrade when storage is not set', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1217,10 +1231,8 @@ describe('executeDeployApp', () => {
 
     expect(result.success).toBe(true);
     expect(result.confirmationMessage).not.toContain('upgraded for storage');
-    expect(resolveSkuItems).toHaveBeenCalledWith(
-      [{ sku_name: 'docker-micro', quantity: 1 }],
-      expect.anything()
-    );
+    // Defaults to first tier in resolved list (docker-micro).
+    expect(result.pendingAction?.args.size).toBe('docker-micro');
   });
 
   it('applies known image defaults when model omits args', async () => {
@@ -2406,19 +2418,17 @@ describe('executeBatchDeploy', () => {
   });
 
   it('returns insufficient credits error when total cost exceeds balance', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1', basePrice: { denom: 'upwr', amount: '1000000' }, unit: 1 } as any,
-    ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
+    // 0.5 PWR balance with tier price 1 PWR/hour × 3 entries = need 3, have 0.5
     vi.mocked(getCreditAccount).mockResolvedValue({
       balances: [{ denom: 'upwr', amount: '500000' }],
     } as any);
 
+    const tiersWithHighPrice = SAMPLE_TIERS.map(t => ({ ...t, pricePerHour: 1.0 }));
     const entries = [makeBatchEntry('app1'), makeBatchEntry('app2'), makeBatchEntry('app3')];
-    const result = await executeBatchDeploy(entries, makeOptions());
+    const result = await executeBatchDeploy(entries, makeOptions({ tiers: tiersWithHighPrice }));
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('Insufficient credits');
@@ -2457,14 +2467,10 @@ describe('executeBatchDeploy', () => {
   });
 
   it('counts services (not just entries) for credit check on stack deploys', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1', basePrice: { denom: 'upwr', amount: '1000000' }, unit: 1 } as any,
-    ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    // 1.5 credits: enough for 1 entry but not 2 services
+    // 1.5 credits: enough for 1 entry but not 2 services at 1 PWR/hr each
     vi.mocked(getCreditAccount).mockResolvedValue({
       balances: [{ denom: 'upwr', amount: '1500000' }],
     } as any);
@@ -2482,8 +2488,9 @@ describe('executeBatchDeploy', () => {
       payload: { bytes, filename: 'manifest-wordpress.json', size: bytes.length, hash: 'b'.repeat(64) },
     };
 
+    const tiersWithHighPrice = SAMPLE_TIERS.map(t => ({ ...t, pricePerHour: 1.0 }));
     // 1 entry with 2 services → needs 2 credits, but only 1.5 available
-    const result = await executeBatchDeploy([entry], makeOptions());
+    const result = await executeBatchDeploy([entry], makeOptions({ tiers: tiersWithHighPrice }));
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('Insufficient credits');
@@ -3825,7 +3832,7 @@ describe('deploy_app with custom_domain (Pass B)', () => {
       name: 'web-prod',
       leaseUuid: 'lease-X',
       size: 'micro',
-      providerUuid: 'p-1',
+      providerUuid: 'p1',
       providerUrl: 'https://fred.example.com',
       createdAt: 0,
       status: 'running',

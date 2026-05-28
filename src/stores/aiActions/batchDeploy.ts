@@ -83,7 +83,7 @@ export async function requestBatchDeployFn(
       };
     }));
 
-    const { clientManager, address, signArbitrary } = get();
+    const { clientManager, address, signArbitrary, skuTiers } = get();
 
     const result = await executeBatchDeploy(entries, {
       clientManager,
@@ -91,6 +91,7 @@ export async function requestBatchDeployFn(
       signArbitrary,
       onProgress: (progress) => set({ deployProgress: { ...progress } }),
       appRegistry: getAppRegistryAccess(),
+      tiers: skuTiers.tiers,
     });
 
     if (result.requiresConfirmation) {

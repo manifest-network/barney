@@ -66,6 +66,7 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
   return {
     clientManager: CLIENT_MANAGER,
     address: ADDRESS,
+    tiers: [],
     ...overrides,
   };
 }

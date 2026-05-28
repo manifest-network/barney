@@ -6,10 +6,10 @@
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import { cosmosTx, setItemCustomDomain as monoSetItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
-import { getProviders, getSKUs, Unit } from '../../api/sku';
+import { getProviders } from '../../api/sku';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
-import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
+import { DENOMS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
@@ -21,7 +21,6 @@ import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 import { getDomainForService } from '../../api/leaseDomains';
 import { validateAll, apexRecordKindLabel } from '../../utils/customDomainValidation';
-import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
 import { extractYamlServiceNames } from '../../utils/fileValidation';
 import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, getServiceNames, type ServiceConfig, type HealthCheckConfig } from '../manifest';
@@ -895,49 +894,48 @@ export async function executeDeployApp(
     }
   }
 
-  // Resolve and validate size
-  const VALID_SIZE_TIERS = ['micro', 'small', 'medium', 'large'] as const;
-  let size = (args.size as string | undefined)?.toLowerCase() || 'micro';
-  if (!VALID_SIZE_TIERS.includes(size as typeof VALID_SIZE_TIERS[number])) {
+  // Resolve and validate size from the AI store's resolved tier list.
+  // No chain round-trip needed — the tier list already has SKU UUID, provider
+  // UUID, and normalized $/hour price baked in.
+  const { tiers } = options;
+  if (tiers.length === 0) {
+    return { success: false, error: 'Tier catalog unavailable — try again in a moment.' };
+  }
+
+  const defaultSize = tiers[0].skuName;  // first tier in spec order = "smallest"
+  const rawSize = (args.size as string | undefined)?.toLowerCase() || defaultSize;
+  // Accept both full SKU name ('docker-micro') and the bare suffix ('micro')
+  // for backward compatibility with legacy model output.
+  const requestedTier =
+    tiers.find((t) => t.skuName === rawSize)
+    ?? tiers.find((t) => t.skuName === `docker-${rawSize}`)
+    ?? tiers.find((t) => t.skuName.endsWith(`-${rawSize}`));
+  if (!requestedTier) {
     return {
       success: false,
-      error: `Invalid size "${size}". Valid tiers: ${VALID_SIZE_TIERS.join(', ')}.`,
+      error: `Invalid size "${rawSize}". Valid tiers: ${tiers.map((t) => t.skuName).join(', ')}.`,
     };
   }
-  let skuName = `docker-${size}`;
   let storageUpgrade = false;
+  let matched = requestedTier;
 
-  // Auto-upgrade to storage-capable SKU when storage is requested
-  if (args.storage === true && skuName !== STORAGE_SKU_NAME) {
-    skuName = STORAGE_SKU_NAME;
-    size = STORAGE_SKU_NAME.replace('docker-', '');
+  // Auto-upgrade to storage-capable SKU when storage is requested.
+  if (args.storage === true && matched.skuName !== STORAGE_SKU_NAME) {
+    const storageTier = tiers.find((t) => t.skuName === STORAGE_SKU_NAME);
+    if (!storageTier) {
+      return {
+        success: false,
+        error: `Storage requires the "${STORAGE_SKU_NAME}" tier, which is not available on this network.`,
+      };
+    }
+    matched = storageTier;
     storageUpgrade = true;
   }
 
-  // Find matching SKU
-  let allSKUs;
-  try {
-    allSKUs = await withTimeout(getSKUs(true), undefined, 'Fetch tiers');
-  } catch (error) {
-    logError('compositeTransactions.deploy.fetchSKUs', error);
-    return { success: false, error: 'Failed to fetch available tiers. Please try again.' };
-  }
+  const size = matched.skuName;  // canonical SKU name
+  const skuUuid = matched.skuUuid;
 
-  const resolveResult = resolveSkuItems(
-    [{ sku_name: skuName, quantity: 1 }],
-    allSKUs
-  );
-  if (resolveResult.error || !resolveResult.items) {
-    return {
-      success: false,
-      error: `Tier "${size}" is not available. Use browse_catalog to see available tiers.`,
-    };
-  }
-
-  const skuUuid = resolveResult.items[0].sku_uuid;
-
-  // Find provider
-  const matchingSku = allSKUs.find((s) => s.uuid === skuUuid);
+  // Find provider — still need apiUrl, which isn't in ResolvedSkuTier.
   let providers;
   try {
     providers = await withTimeout(getProviders(true), undefined, 'Fetch providers');
@@ -946,32 +944,17 @@ export async function executeDeployApp(
     return { success: false, error: 'Failed to fetch providers. Please try again.' };
   }
 
-  const provider = matchingSku
-    ? providers.find((p) => p.uuid === matchingSku.providerUuid)
-    : providers[0];
+  const provider = providers.find((p) => p.uuid === matched.providerUuid);
 
   if (!provider || !provider.apiUrl) {
     return { success: false, error: 'No available provider found for this tier.' };
   }
 
-  // Format price for display using SKU's unit, and calculate hourly cost for credit check
-  let priceDisplay = '';
-  let skuHourlyCost = 0;
-  if (matchingSku?.basePrice) {
-    const { symbol } = getDenomMetadata(matchingSku.basePrice.denom);
-    const basePrice = fromBaseUnits(matchingSku.basePrice.amount, matchingSku.basePrice.denom);
-    const unitLabel = UNIT_LABELS[matchingSku.unit as Unit] || '/hr';
-
-    // Convert to hourly cost based on unit
-    if (matchingSku.unit === Unit.UNIT_PER_DAY) {
-      skuHourlyCost = basePrice / 24;
-    } else {
-      // Default to per-hour for UNIT_PER_HOUR or unspecified
-      skuHourlyCost = basePrice;
-    }
-
-    priceDisplay = `${Math.round(basePrice * 100) / 100} ${symbol}${unitLabel}`;
-  }
+  // Pricing is normalized to $/hour at the source (`resolveSkuTiers`).
+  const skuHourlyCost = matched.pricePerHour;
+  const priceDisplay = skuHourlyCost > 0
+    ? `${skuHourlyCost.toFixed(4)} ${matched.denomSymbol}/hr`
+    : '';
 
   // Stack deploys multiply cost by service count
   const serviceNamesResult = validateInternalServiceNames(args._serviceNames, 'deploy_app');
@@ -1088,7 +1071,7 @@ export async function executeDeployApp(
   return {
     success: true,
     requiresConfirmation: true,
-    confirmationMessage: `Deploy "${name}"${stackInfo} on ${storageUpgrade ? 'small' : size} tier${storageUpgrade ? ' (upgraded for storage)' : ''}${priceInfo}?${creditWarning}`,
+    confirmationMessage: `Deploy "${name}"${stackInfo} on ${storageUpgrade ? STORAGE_SKU_NAME : size} tier${storageUpgrade ? ' (upgraded for storage)' : ''}${priceInfo}?${creditWarning}`,
     pendingAction: {
       toolName: 'deploy_app',
       args: {
@@ -1526,36 +1509,30 @@ export async function executeBatchDeploy(
   options: ToolExecutorOptions,
   size: string = 'micro'
 ): Promise<ToolResult> {
-  const { address, appRegistry } = options;
+  const { address, appRegistry, tiers } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (entries.length === 0) return { success: false, error: 'No apps to deploy' };
-
-  // Resolve and validate size
-  const VALID_SIZE_TIERS = ['micro', 'small', 'medium', 'large'] as const;
-  const normalizedSize = size.toLowerCase();
-  if (!VALID_SIZE_TIERS.includes(normalizedSize as typeof VALID_SIZE_TIERS[number])) {
-    return { success: false, error: `Invalid size "${size}". Valid tiers: ${VALID_SIZE_TIERS.join(', ')}.` };
-  }
-  const skuName = `docker-${normalizedSize}`;
-
-  // Find matching SKU
-  let allSKUs;
-  try {
-    allSKUs = await withTimeout(getSKUs(true), undefined, 'Fetch tiers');
-  } catch (error) {
-    logError('compositeTransactions.update.fetchSKUs', error);
-    return { success: false, error: 'Failed to fetch available tiers. Please try again.' };
+  if (tiers.length === 0) {
+    return { success: false, error: 'Tier catalog unavailable — try again in a moment.' };
   }
 
-  const resolveResult = resolveSkuItems([{ sku_name: skuName, quantity: 1 }], allSKUs);
-  if (resolveResult.error || !resolveResult.items) {
-    return { success: false, error: `Tier "${size}" is not available. Use browse_catalog to see available tiers.` };
+  // Resolve and validate size from the resolved tier list (no chain round-trip).
+  const rawSize = size.toLowerCase();
+  const matched =
+    tiers.find((t) => t.skuName === rawSize)
+    ?? tiers.find((t) => t.skuName === `docker-${rawSize}`)
+    ?? tiers.find((t) => t.skuName.endsWith(`-${rawSize}`));
+  if (!matched) {
+    return {
+      success: false,
+      error: `Invalid size "${size}". Valid tiers: ${tiers.map((t) => t.skuName).join(', ')}.`,
+    };
   }
-  const skuUuid = resolveResult.items[0].sku_uuid;
+  const skuUuid = matched.skuUuid;
+  const normalizedSize = matched.skuName;  // canonical SKU name
 
-  // Find provider
-  const matchingSku = allSKUs.find((s) => s.uuid === skuUuid);
+  // Find provider — still need apiUrl, which isn't in ResolvedSkuTier.
   let providers;
   try {
     providers = await withTimeout(getProviders(true), undefined, 'Fetch providers');
@@ -1564,9 +1541,7 @@ export async function executeBatchDeploy(
     return { success: false, error: 'Failed to fetch providers. Please try again.' };
   }
 
-  const provider = matchingSku
-    ? providers.find((p) => p.uuid === matchingSku.providerUuid)
-    : providers[0];
+  const provider = providers.find((p) => p.uuid === matched.providerUuid);
 
   if (!provider || !provider.apiUrl) {
     return { success: false, error: 'No available provider found for this tier.' };
@@ -1615,25 +1590,11 @@ export async function executeBatchDeploy(
     });
   }
 
-  // Format price for display
-  let priceDisplay = '';
-  if (matchingSku?.basePrice) {
-    const { symbol } = getDenomMetadata(matchingSku.basePrice.denom);
-    const basePrice = fromBaseUnits(matchingSku.basePrice.amount, matchingSku.basePrice.denom);
-    const unitLabel = UNIT_LABELS[matchingSku.unit as Unit] || '/hr';
-    priceDisplay = `${Math.round(basePrice * 100) / 100} ${symbol}${unitLabel}`;
-  }
-
-  // Credit check for total cost
-  let skuHourlyCost = 0;
-  if (matchingSku?.basePrice) {
-    const basePrice = fromBaseUnits(matchingSku.basePrice.amount, matchingSku.basePrice.denom);
-    if (matchingSku.unit === Unit.UNIT_PER_DAY) {
-      skuHourlyCost = basePrice / 24;
-    } else {
-      skuHourlyCost = basePrice;
-    }
-  }
+  // Pricing is already normalized to $/hour at the source (`resolveSkuTiers`).
+  const skuHourlyCost = matched.pricePerHour;
+  const priceDisplay = skuHourlyCost > 0
+    ? `${skuHourlyCost.toFixed(4)} ${matched.denomSymbol}/hr`
+    : '';
 
   // Count total services across all entries (stacks contribute multiple services)
   const totalServiceCount = resolvedEntries.reduce(

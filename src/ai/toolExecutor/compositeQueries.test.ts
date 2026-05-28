@@ -112,6 +112,7 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
     clientManager: CLIENT_MANAGER,
     address: ADDRESS,
     appRegistry: makeRegistry(),
+    tiers: [],
     ...overrides,
   };
 }

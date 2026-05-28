@@ -76,6 +76,14 @@ export function ChatPanel() {
     retrySkuTiers,
   } = useAI();
 
+  const tiersReady = skuTiers.phase === 'ready' && skuTiers.tiers.length > 0;
+  const tierTooltip =
+    skuTiers.phase === 'loading' || skuTiers.phase === 'idle'
+      ? 'Loading tier catalog…'
+      : skuTiers.phase === 'error'
+        ? `Deploy unavailable: ${skuTiers.error ?? 'tier catalog not ready'}`
+        : undefined;
+
   const [input, setInput] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
@@ -270,6 +278,7 @@ export function ChatPanel() {
   };
 
   const deployExample = async (app: ExampleApp) => {
+    if (!tiersReady) return;
     const manifestJson = buildExampleManifest(app);
     const filename = `manifest-${app.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}.json`;
     const blob = new Blob([manifestJson], { type: 'application/json' });
@@ -403,6 +412,21 @@ export function ChatPanel() {
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
+            {/* Tier-error banner — surfaces above example-app buttons so the
+                disabled buttons make sense. Only shown when the user is on a
+                deploy surface but the tier catalog failed to load. */}
+            {showExampleApps && skuTiers.phase === 'error' && (
+              <div className="chat-example-apps__error" role="alert">
+                <span>Deploy unavailable: {skuTiers.error ?? 'tier catalog not ready'}</span>
+                <button
+                  type="button"
+                  onClick={() => { retrySkuTiers().catch((err) => logError('ChatPanel.retrySkuTiers', err)); }}
+                  className="btn btn-secondary btn-sm"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
             {/* Example app buttons after deploy explanation */}
             {showExampleApps && (
               <div className="chat-example-apps">
@@ -418,7 +442,8 @@ export function ChatPanel() {
                           onClick={() => deployExample(app)}
                           className="chat-suggestion chat-example-apps__stagger"
                           style={{ '--stagger': i } as React.CSSProperties}
-                          disabled={!isConnected || isStreaming}
+                          disabled={!isConnected || isStreaming || !tiersReady}
+                          title={tierTooltip}
                         >
                           {app.label}
                         </button>
@@ -435,7 +460,8 @@ export function ChatPanel() {
                           onClick={() => deployExample(app)}
                           className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
                           style={{ '--stagger': i } as React.CSSProperties}
-                          disabled={!isConnected || isStreaming}
+                          disabled={!isConnected || isStreaming || !tiersReady}
+                          title={tierTooltip}
                         >
                           {app.label}
                         </button>
@@ -453,7 +479,8 @@ export function ChatPanel() {
                             onClick={() => deployExample(app)}
                             className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
                             style={{ '--stagger': i } as React.CSSProperties}
-                            disabled={!isConnected || isStreaming}
+                            disabled={!isConnected || isStreaming || !tiersReady}
+                          title={tierTooltip}
                           >
                             {app.label}
                           </button>
