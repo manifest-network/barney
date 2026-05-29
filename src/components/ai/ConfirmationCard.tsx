@@ -10,6 +10,7 @@ import { ManifestEditor } from './ManifestEditor';
 import { StackManifestEditor } from './StackManifestEditor';
 import { validateAll, validateCustomDomainFormat, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { getDisplaySafeArgs } from '../../ai/tools';
+import { resolveSizeName } from '../../api/skuTiers';
 import { useAI } from '../../hooks/useAI';
 import { CustomDomainBranch, CloudflareProxyHint } from './ConfirmationCardCustomDomain';
 import { parseCustomDomainArgs } from './customDomainBranchData';
@@ -145,14 +146,19 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   const isDeployApp = action.toolName === 'deploy_app';
 
   // Live $/hour for deploy_app — read straight from the resolved tier list.
-  // While loading, the row shows a skeleton; on error, a warning.
+  // While loading, the row shows a skeleton; on error, a warning. Uses the
+  // shared `resolveSizeName` so the price-row lookup is identical to the
+  // executor's: canonical / `docker-` prefix / suffix-only / case-insensitive
+  // on both sides. Without this, model-emitted shorthand like 'large' against
+  // a non-docker-prefixed SKU, or 'small' against a mixed-case catalog, would
+  // resolve at the executor but render here as "Price unavailable" — and the
+  // user could approve a deploy with incomplete pricing info.
   const { skuTiers } = useAI();
   const selectedTier = useMemo(() => {
     if (!isDeployApp) return undefined;
     const requestedSize = typeof action.args.size === 'string' ? action.args.size : undefined;
     if (!requestedSize) return undefined;
-    return skuTiers.tiers.find(t => t.skuName === requestedSize)
-      ?? skuTiers.tiers.find(t => t.skuName === `docker-${requestedSize}`);
+    return resolveSizeName(requestedSize, skuTiers.tiers) ?? undefined;
   }, [isDeployApp, action.args.size, skuTiers.tiers]);
 
   const allStackServiceNames = useMemo(() => {
