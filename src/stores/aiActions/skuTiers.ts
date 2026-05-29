@@ -44,9 +44,38 @@ export function loadSkuTiersFn(get: Get, set: Set): Promise<void> {
   if (existing) return existing;
   if (get().skuTiers.phase === 'ready') return Promise.resolve();
 
-  set({ skuTiers: { ...get().skuTiers, phase: 'loading', error: null } });
-
   const specs = parseSkuSpecs(runtimeConfig.PUBLIC_SKU_SPECS);
+
+  // Short-circuit when `PUBLIC_SKU_SPECS` is empty / unparseable / all-entries-
+  // invalid: the resolved spec map is `{}`, which means no chain query can
+  // produce a usable tier list. Transitioning straight to error (without ever
+  // calling `resolveSkuTiers`) saves a ~15s timeout wait AND surfaces a
+  // diagnostic that points at the env var rather than the chain.
+  //
+  // Distinct from `resolveSkuTiers`'s "No tiers available — check
+  // PUBLIC_SKU_SPECS and chain SKU catalog." which fires when chain returns
+  // SKUs but none intersect with the spec map. Different ops symptoms, so
+  // different messages — keep both wordings stable.
+  //
+  // The wrapped wording (`Deploy unavailable: PUBLIC_SKU_SPECS is empty or
+  // invalid — no SKU specs configured.`) is matched by `MessageBubble`'s
+  // pass-6 catalog-error `ERROR_PATTERNS` regex, so the user gets the inline
+  // Retry button. Retry will re-run this same code path, hit the same
+  // empty-specs result, and short-circuit again — operationally a no-op,
+  // which is the correct behavior until the user updates the env var.
+  if (Object.keys(specs).length === 0) {
+    set({
+      skuTiers: {
+        phase: 'error',
+        tiers: [],
+        denomSymbol: '',
+        error: 'PUBLIC_SKU_SPECS is empty or invalid — no SKU specs configured.',
+      },
+    });
+    return Promise.resolve();
+  }
+
+  set({ skuTiers: { ...get().skuTiers, phase: 'loading', error: null } });
 
   const promise = (async () => {
     try {

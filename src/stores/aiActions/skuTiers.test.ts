@@ -4,6 +4,14 @@ vi.mock('../../api/skuTiers', () => ({
   resolveSkuTiers: vi.fn(),
 }));
 
+vi.mock('../../config/skuSpecs', async (orig) => {
+  const actual = await orig<typeof import('../../config/skuSpecs')>();
+  return {
+    ...actual,
+    parseSkuSpecs: vi.fn(actual.parseSkuSpecs),
+  };
+});
+
 vi.mock('../../api/utils', async (orig) => {
   const actual = await orig<typeof import('../../api/utils')>();
   return {
@@ -26,6 +34,7 @@ vi.mock('../../config/runtimeConfig', async (orig) => {
 import { createAIStore } from '../aiStore';
 import { resolveSkuTiers } from '../../api/skuTiers';
 import { withTimeout } from '../../api/utils';
+import { parseSkuSpecs } from '../../config/skuSpecs';
 
 const SAMPLE_TIER = {
   skuName: 'docker-micro',
@@ -46,9 +55,14 @@ describe('loadSkuTiers', () => {
     // AND zeroes the call count for `toHaveBeenCalledTimes` assertions). The
     // module mock at the top of the file stashes a `vi.fn(realImpl)` over
     // the export, so without this reset prior tests' calls would leak in.
-    const real = await vi.importActual<typeof import('../../api/utils')>('../../api/utils');
+    const utils = await vi.importActual<typeof import('../../api/utils')>('../../api/utils');
     vi.mocked(withTimeout).mockReset();
-    vi.mocked(withTimeout).mockImplementation(real.withTimeout);
+    vi.mocked(withTimeout).mockImplementation(utils.withTimeout);
+    // Same pattern for parseSkuSpecs — restore real impl per test, individual
+    // tests can override (e.g. to force the empty-specs short-circuit path).
+    const specs = await vi.importActual<typeof import('../../config/skuSpecs')>('../../config/skuSpecs');
+    vi.mocked(parseSkuSpecs).mockReset();
+    vi.mocked(parseSkuSpecs).mockImplementation(specs.parseSkuSpecs);
   });
 
   it('transitions idle → loading → ready on success', async () => {
@@ -151,6 +165,50 @@ describe('loadSkuTiers', () => {
     await store.getState().loadSkuTiers();
     expect(store.getState().skuTiers.phase).toBe('ready');
     expect(store.getState().skuTiers.tiers).toEqual([SAMPLE_TIER]);
+  });
+
+  it('short-circuits with a config-error message when parseSkuSpecs returns {}', async () => {
+    // Empty `PUBLIC_SKU_SPECS` (or JSON parse fail / all-entries-invalid) is
+    // a pure local-config problem — there is no chain query that can fix it,
+    // so we transition straight to error without waiting on the network.
+    // Without this short-circuit, the user would wait up to
+    // AI_TOOL_API_TIMEOUT_MS (~15s) for the wrapped `resolveSkuTiers` call to
+    // time out, and the displayed error would point at the chain rather than
+    // the env var that actually needs fixing.
+    vi.mocked(parseSkuSpecs).mockReturnValue({});
+    const store = createAIStore();
+    const result = store.getState().loadSkuTiers();
+    // Synchronous transition: error state visible before awaiting the returned
+    // promise. resolveSkuTiers must not be called at all.
+    const state = store.getState().skuTiers;
+    expect(state.phase).toBe('error');
+    expect(state.error).toMatch(/PUBLIC_SKU_SPECS is empty or invalid/);
+    expect(state.tiers).toEqual([]);
+    expect(vi.mocked(resolveSkuTiers)).not.toHaveBeenCalled();
+    // The returned promise resolves immediately (not an in-flight wait).
+    await expect(result).resolves.toBeUndefined();
+  });
+
+  it('regex-match contract: the empty-specs error wording is matched by the pass-6 inline-Retry pattern', () => {
+    // Lock-in test for the cross-fix coupling — the empty-specs short-circuit
+    // is only useful as a recovery path if MessageBubble's ERROR_PATTERNS
+    // attaches a Retry button to the resulting rejection. Trace the same
+    // wording deployExample wraps with: `Deploy unavailable: <error>.`
+    const catalogErrorPattern = /^Deploy unavailable: (?!tier catalog is still loading\b).+\.$/;
+    const wrapped = 'Deploy unavailable: PUBLIC_SKU_SPECS is empty or invalid — no SKU specs configured.';
+    expect(catalogErrorPattern.test(wrapped)).toBe(true);
+  });
+
+  it('still calls resolveSkuTiers when parseSkuSpecs returns a non-empty map (regression catch)', async () => {
+    // Make sure the short-circuit doesn't accidentally fire on the happy path.
+    // The default runtimeConfig mock at the top of the file provides a valid
+    // single-entry specs map, and `parseSkuSpecs` is real (per beforeEach), so
+    // we just need to verify the chain side runs.
+    vi.mocked(resolveSkuTiers).mockResolvedValue({ tiers: [SAMPLE_TIER], denomSymbol: 'PWR' });
+    const store = createAIStore();
+    await store.getState().loadSkuTiers();
+    expect(vi.mocked(resolveSkuTiers)).toHaveBeenCalledTimes(1);
+    expect(store.getState().skuTiers.phase).toBe('ready');
   });
 });
 
