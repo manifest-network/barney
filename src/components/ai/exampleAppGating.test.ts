@@ -147,7 +147,23 @@ describe('getDeployExampleRejection', () => {
       phase: 'error',
       errorMessage: 'chain unreachable',
     });
-    expect(msg).toBe('Deploy unavailable: chain unreachable. Click Retry above.');
+    expect(msg).toBe('Deploy unavailable: chain unreachable.');
+  });
+
+  it('error wording does NOT reference a separate Retry control', () => {
+    // The Retry button is supplied by MessageBubble's ERROR_PATTERNS surface
+    // (inline, next to the message) — referencing "Click Retry above" was a
+    // footgun on cold-load typed-deploy paths where the example-apps banner
+    // isn't rendered. Lock the contract: rejection text must not point at
+    // any external control.
+    const msg = getDeployExampleRejection({
+      size: 'small',
+      tiers: [],
+      tiersReady: false,
+      phase: 'error',
+      errorMessage: 'chain unreachable',
+    });
+    expect(msg).not.toMatch(/click .* (above|below|here)|retry above/i);
   });
 
   it('error wording falls back to a generic phrase when errorMessage is null', () => {
@@ -158,7 +174,7 @@ describe('getDeployExampleRejection', () => {
       phase: 'error',
       errorMessage: null,
     });
-    expect(msg).toBe('Deploy unavailable: tier catalog not ready. Click Retry above.');
+    expect(msg).toBe('Deploy unavailable: tier catalog not ready.');
   });
 
   it('returns tier-specific rejection when stored size does not resolve', () => {

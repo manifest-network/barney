@@ -30,6 +30,7 @@ export function useAI() {
     requestBatchDeploy: s.requestBatchDeploy,
     requestStopApp: s.requestStopApp,
     addLocalMessage: s.addLocalMessage,
+    addLocalErrorMessage: s.addLocalErrorMessage,
     stopStreaming: s.stopStreaming,
   })));
 }

@@ -8,11 +8,26 @@ import { CustomDomainCard } from './CustomDomainCard';
 import { AppCard } from './AppCard';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useAI } from '../../hooks/useAI';
+import { logError } from '../../utils/errors';
 
-interface ErrorSuggestion {
-  label: string;
-  message: string;
-}
+/**
+ * Suggestion buttons rendered next to a message's inline error alert.
+ *
+ * Two shapes:
+ *  - `{ label, message }` — clicking sends `message` back to the model
+ *    (existing pattern for retry-style suggestions).
+ *  - `{ label, action }` — clicking dispatches a named UI action against
+ *    the AI store. Today's only entry is `'retrySkuTiers'` — used to put
+ *    the SKU-tier Retry button inline next to a tier-load failure message
+ *    instead of pointing the user at a separate banner above the example
+ *    apps (see the typed-deploy cold-load footgun in pass 6).
+ *
+ *  Pick an action over a `message` when the desired effect is a direct UI
+ *  state change, not "ask the model to do X."
+ */
+type ErrorSuggestion =
+  | { label: string; message: string }
+  | { label: string; action: 'retrySkuTiers' };
 
 const ERROR_PATTERNS: Array<{ pattern: RegExp; suggestions: ErrorSuggestion[] }> = [
   {
@@ -22,6 +37,19 @@ const ERROR_PATTERNS: Array<{ pattern: RegExp; suggestions: ErrorSuggestion[] }>
   {
     pattern: /insufficient|not enough|credit|balance/i,
     suggestions: [{ label: 'Check credits', message: 'Check my credits' }],
+  },
+  {
+    // Tier-catalog rejection (cold-load / chain-down / loading variants).
+    // Anchored at the start of the string so the pattern doesn't claim
+    // unrelated tool errors that merely happen to mention the phrase.
+    pattern: /^Deploy unavailable: (tier catalog|.+)\.?( Please.+)?$/,
+    suggestions: [{ label: 'Retry', action: 'retrySkuTiers' }],
+  },
+  {
+    // Stored-size doesn't resolve in the current catalog — config-condition,
+    // not transient. No Retry; offer a navigation alternative instead.
+    pattern: /^Tier '.+' is not available on this network\.$/,
+    suggestions: [{ label: 'List apps', message: "What's running?" }],
   },
   {
     pattern: /no app found|not found.*app/i,
@@ -65,7 +93,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
   const [isThinkingExpanded, setIsThinkingExpanded] = useState(false);
   const [isToolExpanded, setIsToolExpanded] = useState(false);
   const { copied, copyToClipboard } = useCopyToClipboard();
-  const { sendMessage } = useAI();
+  const { sendMessage, retrySkuTiers } = useAI();
   const suggestions = error ? getErrorSuggestions(error) : [];
 
   const isUser = role === 'user';
@@ -207,7 +235,13 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
               <button
                 key={s.label}
                 type="button"
-                onClick={() => sendMessage(s.message)}
+                onClick={() => {
+                  if ('message' in s) {
+                    sendMessage(s.message);
+                  } else if (s.action === 'retrySkuTiers') {
+                    retrySkuTiers().catch((err) => logError('MessageBubble.retrySkuTiers', err));
+                  }
+                }}
                 className="message-error-suggestion"
               >
                 {s.label}

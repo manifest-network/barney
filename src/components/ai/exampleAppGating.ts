@@ -76,7 +76,12 @@ export interface DeployExampleRejectionInput {
 export function getDeployExampleRejection(input: DeployExampleRejectionInput): string | null {
   if (!input.tiersReady) {
     if (input.phase === 'error') {
-      return `Deploy unavailable: ${input.errorMessage ?? 'tier catalog not ready'}. Click Retry above.`;
+      // No "Click Retry above" — the rejection is rendered through
+      // MessageBubble's inline-alert path which attaches its own Retry
+      // suggestion button next to the error text via ERROR_PATTERNS.
+      // Referencing a separate control was a footgun on cold-load paths
+      // where showExampleApps gating hides the banner the prose pointed at.
+      return `Deploy unavailable: ${input.errorMessage ?? 'tier catalog not ready'}.`;
     }
     return 'Deploy unavailable: tier catalog is still loading. Please wait a moment and try again.';
   }

@@ -71,6 +71,7 @@ export function ChatPanel() {
     clearPayload,
     requestBatchDeploy,
     addLocalMessage,
+    addLocalErrorMessage,
     clearHistory,
     stopStreaming,
     skuTiers,
@@ -301,6 +302,12 @@ export function ChatPanel() {
     // branch — extra chat noise is preferable to a silent click, and the
     // button is already disabled so it's hard to reach this branch by
     // clicking in practice.
+    //
+    // Use `addLocalErrorMessage` so the rejection renders through
+    // `MessageBubble`'s inline-alert path. `ERROR_PATTERNS` then surfaces
+    // an inline Retry / List apps button next to the message — much more
+    // discoverable on cold-load typed-deploy flows where the example-apps
+    // error banner is hidden (`showExampleApps` requires existing messages).
     const rejection = getDeployExampleRejection({
       size: app.size,
       tiers: skuTiers.tiers,
@@ -309,7 +316,7 @@ export function ChatPanel() {
       errorMessage: skuTiers.error,
     });
     if (rejection !== null) {
-      addLocalMessage(rejection);
+      addLocalErrorMessage(rejection);
       return;
     }
     const manifestJson = buildExampleManifest(app);

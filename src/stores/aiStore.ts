@@ -112,6 +112,7 @@ export interface AIStore {
   loadSkuTiers: () => Promise<void>;
   retrySkuTiers: () => Promise<void>;
   addLocalMessage: (content: string, card?: MessageCard) => void;
+  addLocalErrorMessage: (error: string) => void;
   stopStreaming: () => void;
   scheduleStreamingUpdate: (messageId: string, content: string, thinking?: string) => void;
   flushPendingUpdate: () => void;
@@ -176,6 +177,21 @@ export const createAIStore = () =>
         content,
         timestamp: Date.now(),
         card,
+        local: true,
+      };
+      set({ messages: trimMessages([...get().messages, msg]) });
+    },
+
+    /** UI-synthesized error message — renders via `MessageBubble`'s inline-alert
+     *  path and gets `ERROR_PATTERNS` suggestion buttons. Sibling of
+     *  `addLocalMessage`; differs only in setting `error` instead of `content`. */
+    addLocalErrorMessage: (error) => {
+      const msg: ChatMessage = {
+        id: generateMessageId(),
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        error,
         local: true,
       };
       set({ messages: trimMessages([...get().messages, msg]) });
