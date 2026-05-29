@@ -159,14 +159,28 @@ export async function resolveSkuTiers(specs: SkuSpecMap): Promise<ResolveResult>
       continue;
     }
 
+    // Filter out candidates that lack a basePrice — hourlyPriceFromSku
+    // returns 0 for those, which would falsely beat every priced candidate
+    // in the loop below and surface as a "free" tier. A genuinely-zero-price
+    // tier has a basePrice object whose `amount === '0'`, so it survives
+    // this filter and is selected correctly.
+    const priced = candidates.filter((c) => !!c.basePrice);
+    if (priced.length === 0) {
+      logError(
+        'skuTiers.resolveSkuTiers.noPricedProvider',
+        new Error(`PUBLIC_SKU_SPECS includes "${specName}" but no chain provider has a basePrice for it`),
+      );
+      continue;
+    }
+
     // Pick the cheapest provider's SKU for this name; tie-break by first
     // occurrence (which mirrors the order chain returned them).
-    let chosen = candidates[0];
+    let chosen = priced[0];
     let chosenPrice = hourlyPriceFromSku(chosen);
-    for (let i = 1; i < candidates.length; i++) {
-      const p = hourlyPriceFromSku(candidates[i]);
+    for (let i = 1; i < priced.length; i++) {
+      const p = hourlyPriceFromSku(priced[i]);
       if (p < chosenPrice) {
-        chosen = candidates[i];
+        chosen = priced[i];
         chosenPrice = p;
       }
     }

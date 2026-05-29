@@ -203,6 +203,67 @@ describe('resolveSkuTiers', () => {
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
+
+  it('skips candidates with missing basePrice (cheapest-pick must not pretend they are free)', async () => {
+    // Pass-11 fix #2: hourlyPriceFromSku returns 0 for missing basePrice,
+    // which would make an unpriced SKU appear "free" and beat every priced
+    // candidate in the cheapest-pick loop. Filter unpriced candidates before
+    // the loop so a genuine paid tier is chosen, not the half-populated row
+    // that happens to have a falsy basePrice.
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(getSKUs).mockResolvedValue([
+      // p1: no basePrice (would have been "free" pre-fix; now skipped)
+      sku({ uuid: 'a', name: 'docker-micro', providerUuid: 'p1', basePrice: undefined as unknown as SKU['basePrice'] }),
+      // p2: 0.05 PWR/hour — the genuinely-cheapest priced provider
+      sku({ uuid: 'b', name: 'docker-micro', providerUuid: 'p2', basePrice: { amount: '50000', denom: 'upwr' } }),
+      // p3: 0.2 PWR/hour
+      sku({ uuid: 'c', name: 'docker-micro', providerUuid: 'p3', basePrice: { amount: '200000', denom: 'upwr' } }),
+    ]);
+    const result = await resolveSkuTiers({
+      'docker-micro': { cores: 0.5, ramMB: 512, diskGB: 1 },
+    });
+    expect(result.tiers).toHaveLength(1);
+    expect(result.tiers[0].providerUuid).toBe('p2');
+    expect(result.tiers[0].skuUuid).toBe('b');
+    expect(result.tiers[0].pricePerHour).toBeCloseTo(0.05);
+    spy.mockRestore();
+  });
+
+  it('drops the spec entry with a "noPricedProvider" warning when ALL candidates lack basePrice', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(getSKUs).mockResolvedValue([
+      sku({ uuid: 'a', name: 'docker-micro', providerUuid: 'p1', basePrice: undefined as unknown as SKU['basePrice'] }),
+      sku({ uuid: 'b', name: 'docker-micro', providerUuid: 'p2', basePrice: undefined as unknown as SKU['basePrice'] }),
+    ]);
+    const result = await resolveSkuTiers({
+      'docker-micro': { cores: 0.5, ramMB: 512, diskGB: 1 },
+    });
+    expect(result.tiers).toEqual([]);
+    // logError prefixes the context to console.error — assert against the
+    // first arg so it works whether the second arg is an Error or string.
+    const calls = spy.mock.calls.map((c) => String(c[0]));
+    expect(calls.some((c) => c.includes('noPricedProvider'))).toBe(true);
+    spy.mockRestore();
+  });
+
+  it('still selects a genuine zero-price tier (basePrice.amount === "0") — regression catch', async () => {
+    // The new filter checks for `!!basePrice` (object presence), NOT for a
+    // truthy amount. A genuinely-free SKU has a basePrice object whose amount
+    // is "0", so it survives the filter, hourlyPriceFromSku returns 0, and
+    // the tier is selected correctly as the cheapest. Critical to distinguish
+    // from the missing-basePrice case the fix is targeting.
+    vi.mocked(getSKUs).mockResolvedValue([
+      sku({ uuid: 'a', name: 'docker-micro', providerUuid: 'p1', basePrice: { amount: '0', denom: 'upwr' } }),
+      sku({ uuid: 'b', name: 'docker-micro', providerUuid: 'p2', basePrice: { amount: '50000', denom: 'upwr' } }),
+    ]);
+    const result = await resolveSkuTiers({
+      'docker-micro': { cores: 0.5, ramMB: 512, diskGB: 1 },
+    });
+    expect(result.tiers).toHaveLength(1);
+    // p1 wins because its amount is genuinely 0, not because basePrice is missing.
+    expect(result.tiers[0].providerUuid).toBe('p1');
+    expect(result.tiers[0].pricePerHour).toBe(0);
+  });
 });
 
 describe('getCheapestTier', () => {
