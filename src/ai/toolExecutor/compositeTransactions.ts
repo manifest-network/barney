@@ -12,7 +12,7 @@ import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
-import { logError } from '../../utils/errors';
+import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
@@ -1186,7 +1186,7 @@ export async function executeConfirmedDeployApp(
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     return {
       success: false,
-      error: `Lease created but upload failed: ${uploadResult.error}. The lease ${leaseUuid} is active — you may need to stop it.`,
+      error: `Lease created but upload failed: ${normalizeErrorPunctuation(uploadResult.error)}. The lease ${leaseUuid} is active — you may need to stop it.`,
     };
   }
 
@@ -2791,7 +2791,7 @@ export async function executeConfirmedUpdateApp(
             success: false,
             error: rollbackOk
               ? `Update failed, previous version restored. Last error: ${provision.last_error}`
-              : `Update failed and rollback failed. Last error: ${provision.last_error}. Use app_status("${name}") to check.`,
+              : `Update failed and rollback failed. Last error: ${normalizeErrorPunctuation(provision.last_error)}. Use app_status("${name}") to check.`,
           };
         }
       } catch (error) {

@@ -75,9 +75,13 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   setItemCustomDomain: vi.fn(),
 }));
 
-vi.mock('../../utils/errors', () => ({
-  logError: vi.fn(),
-}));
+vi.mock('../../utils/errors', async (orig) => {
+  const actual = await orig<typeof import('../../utils/errors')>();
+  return {
+    ...actual,
+    logError: vi.fn(),
+  };
+});
 
 vi.mock('./utils', () => ({
   extractLeaseUuidFromTxResult: vi.fn().mockReturnValue('new-lease-uuid'),
@@ -2063,6 +2067,37 @@ describe('executeConfirmedDeployApp', () => {
       { serviceName: '', customDomain: 'redis.example.com' },
     ]);
   });
+
+  it('normalizes trailing-period on uploadResult.error so the chat-visible message has no double period', async () => {
+    // Pass-9 follow-up: the error string interpolated into the user-visible
+    // "Lease created but upload failed: …. The lease … is active…" template
+    // routes through `normalizeErrorPunctuation`. An upstream error ending
+    // in `.` (chain responses + ToolResult.error all-common) used to print
+    // as `… failed: provider rejected the payload..  The lease …` — double
+    // period. Now the strip-then-append happens at the boundary so the
+    // visible string has exactly one `.` before the next sentence.
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({
+      success: false,
+      error: 'provider rejected the payload.',
+    });
+
+    const result = await executeConfirmedDeployApp(
+      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry() }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Lease created but upload failed:');
+    expect(result.error).toContain('provider rejected the payload.');
+    // The critical no-double-period assertion — would have failed pre-fix.
+    expect(result.error).not.toMatch(/\.\./);
+    // And the boundary is intact: the helper's stripped tail is followed by
+    // the template's own `.` continuation, then the next sentence.
+    expect(result.error).toContain('the payload. The lease');
+  });
 });
 
 describe('executeStopApp', () => {
@@ -3653,6 +3688,49 @@ describe('executeConfirmedUpdateApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
     expect(updateLease).toHaveBeenCalled();
+  });
+
+  it('normalizes trailing-period on provision.last_error in rollback-failed branch', async () => {
+    // Pass-9 follow-up: site 4. The "Update failed and rollback failed.
+    // Last error: …. Use app_status(…) to check." template embeds the
+    // provision.last_error mid-sentence; without normalization an upstream
+    // error ending in `.` would double-up.
+    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: '127.0.0.1',
+        ports: { '6379/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+      },
+    });
+    // Rollback failed: status='failed' + last_error ending in `.`.
+    vi.mocked(getLeaseProvision).mockResolvedValue({
+      status: 'failed',
+      fail_count: 1,
+      last_error: 'health check kept timing out.',
+    });
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Update failed and rollback failed.');
+    expect(result.error).toContain('health check kept timing out.');
+    expect(result.error).not.toMatch(/\.\./);
+    // Sentence boundary survives: tail-stripped `.` then template's own `.`
+    // then the next sentence.
+    expect(result.error).toContain('timing out. Use app_status');
   });
 });
 

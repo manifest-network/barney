@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getErrorMessage, logError, handleError } from './errors';
+import { getErrorMessage, logError, handleError, normalizeErrorPunctuation } from './errors';
 
 describe('getErrorMessage', () => {
   it('extracts message from Error instance', () => {
@@ -93,5 +93,38 @@ describe('handleError', () => {
   it('returns default fallback for unknown errors', () => {
     const result = handleError('TestContext', { unknown: true });
     expect(result).toBe('An unexpected error occurred');
+  });
+});
+
+describe('normalizeErrorPunctuation', () => {
+  it('passes through a string with no trailing period', () => {
+    expect(normalizeErrorPunctuation('X')).toBe('X');
+  });
+
+  it('strips a single trailing period', () => {
+    expect(normalizeErrorPunctuation('X.')).toBe('X');
+  });
+
+  it('strips multiple trailing periods (defensive)', () => {
+    expect(normalizeErrorPunctuation('X..')).toBe('X');
+    expect(normalizeErrorPunctuation('X.....')).toBe('X');
+  });
+
+  it('returns empty string unchanged', () => {
+    expect(normalizeErrorPunctuation('')).toBe('');
+  });
+
+  it('only strips trailing periods, not internal ones', () => {
+    expect(normalizeErrorPunctuation('X. final words.')).toBe('X. final words');
+    expect(normalizeErrorPunctuation('a.b.c.')).toBe('a.b.c');
+  });
+
+  it('is idempotent on the already-stripped form', () => {
+    const once = normalizeErrorPunctuation('Already stripped.');
+    expect(normalizeErrorPunctuation(once)).toBe(once);
+  });
+
+  it('preserves a string of only periods as empty', () => {
+    expect(normalizeErrorPunctuation('...')).toBe('');
   });
 });
