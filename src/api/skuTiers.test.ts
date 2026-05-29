@@ -229,7 +229,11 @@ describe('resolveSkuTiers', () => {
     spy.mockRestore();
   });
 
-  it('drops the spec entry with a "noPricedProvider" warning when ALL candidates lack basePrice', async () => {
+  it('drops the spec entry with a "noPricedProvider" warning when ALL candidates lack basePrice, and does NOT also log "missingSpec" for the same name', async () => {
+    // Pass-12 fix: the noPricedProvider branch claims `matchedSkuNames` before
+    // `continue` so the missing-spec loop below doesn't fire a second,
+    // misleading warning ("Chain SKU 'X' has no entry in PUBLIC_SKU_SPECS")
+    // about the same SKU. One root cause = one warning.
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.mocked(getSKUs).mockResolvedValue([
       sku({ uuid: 'a', name: 'docker-micro', providerUuid: 'p1', basePrice: undefined as unknown as SKU['basePrice'] }),
@@ -243,6 +247,14 @@ describe('resolveSkuTiers', () => {
     // first arg so it works whether the second arg is an Error or string.
     const calls = spy.mock.calls.map((c) => String(c[0]));
     expect(calls.some((c) => c.includes('noPricedProvider'))).toBe(true);
+    // Cross-loop invariant: missingSpec must NOT fire for the same SKU name.
+    // Pre-pass-12, the missing-spec loop saw `docker-micro` as unmatched
+    // (matchedSkuNames was empty for it) and logged a duplicate warning.
+    expect(calls.some((c) => c.includes('missingSpec'))).toBe(false);
+    // Exactly one logError across the whole resolveSkuTiers run for this
+    // scenario — the noPricedProvider one. Anything else means we
+    // accidentally double-warned.
+    expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
 

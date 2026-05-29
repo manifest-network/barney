@@ -166,6 +166,11 @@ export async function resolveSkuTiers(specs: SkuSpecMap): Promise<ResolveResult>
     // this filter and is selected correctly.
     const priced = candidates.filter((c) => !!c.basePrice);
     if (priced.length === 0) {
+      // Claim the name so the missing-spec loop below doesn't log a second,
+      // misleading warning ("Chain SKU 'X' has no entry in PUBLIC_SKU_SPECS")
+      // about the same SKU. One root cause = one warning; the missing-spec
+      // loop is for the genuinely-different "chain has it, spec doesn't" case.
+      matchedSkuNames.add(specName);
       logError(
         'skuTiers.resolveSkuTiers.noPricedProvider',
         new Error(`PUBLIC_SKU_SPECS includes "${specName}" but no chain provider has a basePrice for it`),
