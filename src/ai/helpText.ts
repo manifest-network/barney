@@ -1,10 +1,35 @@
-import type { ResolvedSkuTier } from '../api/skuTiers';
+import type { SkuTiersState } from '../stores/aiActions/skuTiers';
+import { normalizeErrorPunctuation } from '../utils/errors';
 
-function tiersSection(tiers: readonly ResolvedSkuTier[]): string {
-  if (tiers.length === 0) {
-    return '_Tier catalog loading — refresh in a moment._';
+function tiersSection(slice: SkuTiersState): string {
+  if (slice.tiers.length === 0) {
+    // Phase-distinct copy — pass 14. The old "_Tier catalog loading…_" wording
+    // was wrong in two of the four reachable states: `error` (no load in
+    // progress, refresh won't help) and `idle` (load hasn't been kicked off
+    // yet). Pass 14 splits the wording so /help is honest about what's going
+    // on. Mirrors the pass-8 "distinct diagnostics by source" pattern.
+    switch (slice.phase) {
+      case 'error':
+        // Pass-9 cross-coupling: `slice.error` may already end with `.`
+        // (e.g. the pass-8 short-circuit string
+        // 'PUBLIC_SKU_SPECS is empty or invalid — no SKU specs configured.').
+        // Without `normalizeErrorPunctuation` we'd render `..._` here. The
+        // helper strips trailing periods so we can append exactly one.
+        return `_Tier catalog unavailable: ${normalizeErrorPunctuation(slice.error ?? 'unknown error')}._`;
+      case 'loading':
+        return '_Tier catalog loading — refresh in a moment._';
+      case 'idle':
+        return '_Tier catalog not loaded yet._';
+      case 'ready':
+      default:
+        // Defensive — `ready` with zero tiers means env spec map matched
+        // nothing on chain (config drift). The resolver also surfaces this
+        // via `loadSkuTiersFn`'s empty-intersection error path, but if the
+        // slice ever reaches `ready` with [], this is the right copy.
+        return '_No tiers configured for this network._';
+    }
   }
-  const rows = tiers
+  const rows = slice.tiers
     .map(
       (t) =>
         `| ${t.skuName} | ${t.cores} cores | ${t.ramMB.toLocaleString()} MB | ${t.diskGB} GB | ${t.pricePerHour.toFixed(4)} ${t.denomSymbol}/hr |`,
@@ -15,7 +40,7 @@ function tiersSection(tiers: readonly ResolvedSkuTier[]): string {
 ${rows}`;
 }
 
-export function buildHelpText(tiers: readonly ResolvedSkuTier[]): string {
+export function buildHelpText(slice: SkuTiersState): string {
   return `## Quick Reference
 
 ### Commands
@@ -42,7 +67,7 @@ export function buildHelpText(tiers: readonly ResolvedSkuTier[]): string {
 - "Browse catalog"
 
 ### Resource tiers
-${tiersSection(tiers)}
+${tiersSection(slice)}
 
 ### Keyboard shortcuts
 | Key | Action |

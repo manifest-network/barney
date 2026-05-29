@@ -172,7 +172,7 @@ export function ChatPanel() {
 
     // Handle local commands (no LLM round-trip)
     if (message.toLowerCase() === '/help') {
-      addLocalMessage(buildHelpText(skuTiers.tiers), { type: 'help', data: null });
+      addLocalMessage(buildHelpText(skuTiers), { type: 'help', data: null });
       return;
     }
     if (message.toLowerCase() === '/clear') {
@@ -390,7 +390,7 @@ export function ChatPanel() {
         <div className="chat-panel-actions">
           <button
             type="button"
-            onClick={() => addLocalMessage(buildHelpText(skuTiers.tiers), { type: 'help', data: null })}
+            onClick={() => addLocalMessage(buildHelpText(skuTiers), { type: 'help', data: null })}
             className="chat-panel-btn"
             aria-label="Show help"
           >
