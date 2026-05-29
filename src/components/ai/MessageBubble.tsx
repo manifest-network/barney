@@ -39,10 +39,17 @@ const ERROR_PATTERNS: Array<{ pattern: RegExp; suggestions: ErrorSuggestion[] }>
     suggestions: [{ label: 'Check credits', message: 'Check my credits' }],
   },
   {
-    // Tier-catalog rejection (cold-load / chain-down / loading variants).
+    // Tier-catalog rejection — error-state wordings only. Matches the
+    // `Deploy unavailable: ${errorMessage}.` interpolation AND the bare
+    // `Deploy unavailable: tier catalog not ready.` fallback. The negative
+    // lookahead excludes the loading-state wording (`tier catalog is still
+    // loading. Please wait a moment and try again.`) — that one still
+    // surfaces in the bubble but without a Retry button, because there's
+    // nothing to retry while a fetch is in flight.
+    //
     // Anchored at the start of the string so the pattern doesn't claim
     // unrelated tool errors that merely happen to mention the phrase.
-    pattern: /^Deploy unavailable: (tier catalog|.+)\.?( Please.+)?$/,
+    pattern: /^Deploy unavailable: (?!tier catalog is still loading\b).+\.$/,
     suggestions: [{ label: 'Retry', action: 'retrySkuTiers' }],
   },
   {

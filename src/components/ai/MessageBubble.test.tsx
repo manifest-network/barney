@@ -78,10 +78,23 @@ describe('MessageBubble — ERROR_PATTERNS for tier rejections', () => {
     expect(retrySkuTiers).toHaveBeenCalledTimes(1);
   });
 
-  it('renders a Retry button for the loading-state wording', () => {
+  it('renders no Retry button for the loading-state wording (nothing to retry while in flight)', () => {
     render(makeError('Deploy unavailable: tier catalog is still loading. Please wait a moment and try again.'));
-    const retryBtn = findButton(/^Retry$/);
-    expect(retryBtn).not.toBeNull();
+    // The rejection still surfaces in the bubble (the error text is rendered),
+    // but no Retry suggestion — there's no failure to recover from yet.
+    expect(container.textContent).toContain('Deploy unavailable: tier catalog is still loading.');
+    expect(findButton(/^Retry$/)).toBeNull();
+  });
+
+  it('lock-in: both error-state wordings still produce a Retry button (regression catch against over-tightening)', () => {
+    // 1. Interpolation form
+    render(makeError('Deploy unavailable: chain unreachable.'));
+    expect(findButton(/^Retry$/)).not.toBeNull();
+    flushSync(() => { root.unmount(); });
+    container.remove();
+    // 2. Bare fallback form
+    render(makeError('Deploy unavailable: tier catalog not ready.'));
+    expect(findButton(/^Retry$/)).not.toBeNull();
   });
 
   it('renders a "List apps" suggestion (no Retry) for stale-size rejection', () => {
