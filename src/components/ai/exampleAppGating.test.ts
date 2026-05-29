@@ -201,4 +201,57 @@ describe('getDeployExampleRejection', () => {
     });
     expect(msg).toMatch(/loading/);
   });
+
+  // Pass-9: punctuation normalization. Two of the four known errorMessage
+  // sources (pass-8 short-circuit + empty-intersection from resolveSkuTiers)
+  // already end with `.`, so the unconditional `${msg}.` template appended a
+  // visible double period. Strip-then-append normalizes to exactly one
+  // trailing period — preserves the pass-6 ERROR_PATTERNS contract
+  // (`.+\.$` still matches: single trailing `.`, lookahead still succeeds).
+
+  it('does not double-up the trailing period when errorMessage already ends with one', () => {
+    const msg = getDeployExampleRejection({
+      size: 'small',
+      tiers: [],
+      tiersReady: false,
+      phase: 'error',
+      errorMessage: 'PUBLIC_SKU_SPECS is empty or invalid — no SKU specs configured.',
+    });
+    expect(msg).toBe('Deploy unavailable: PUBLIC_SKU_SPECS is empty or invalid — no SKU specs configured.');
+    expect(msg).not.toMatch(/\.\./);
+  });
+
+  it('collapses multi-period defensive cases to a single trailing period', () => {
+    const msg = getDeployExampleRejection({
+      size: 'small',
+      tiers: [],
+      tiersReady: false,
+      phase: 'error',
+      errorMessage: 'chain unreachable...',
+    });
+    expect(msg).toBe('Deploy unavailable: chain unreachable.');
+    expect(msg).not.toMatch(/\.\./);
+  });
+
+  it('appends a period when errorMessage has no trailing punctuation (regression)', () => {
+    const msg = getDeployExampleRejection({
+      size: 'small',
+      tiers: [],
+      tiersReady: false,
+      phase: 'error',
+      errorMessage: 'chain unreachable',
+    });
+    expect(msg).toBe('Deploy unavailable: chain unreachable.');
+  });
+
+  it('uses bare fallback wording (with single period) when errorMessage is null (regression)', () => {
+    const msg = getDeployExampleRejection({
+      size: 'small',
+      tiers: [],
+      tiersReady: false,
+      phase: 'error',
+      errorMessage: null,
+    });
+    expect(msg).toBe('Deploy unavailable: tier catalog not ready.');
+  });
 });

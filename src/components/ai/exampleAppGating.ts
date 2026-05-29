@@ -81,7 +81,16 @@ export function getDeployExampleRejection(input: DeployExampleRejectionInput): s
       // suggestion button next to the error text via ERROR_PATTERNS.
       // Referencing a separate control was a footgun on cold-load paths
       // where showExampleApps gating hides the banner the prose pointed at.
-      return `Deploy unavailable: ${input.errorMessage ?? 'tier catalog not ready'}.`;
+      //
+      // Strip any trailing periods on the input before re-appending exactly
+      // one. Two of the known errorMessage sources (pass-8 short-circuit +
+      // empty-intersection from resolveSkuTiers) already end with `.`, so
+      // an unconditional `${msg}.` template printed a visible double period.
+      // `\.+$` also handles defensive multi-period inputs. The single
+      // trailing `.` we re-append preserves the pass-6 ERROR_PATTERNS
+      // catalog-error regex contract (`.+\.$`).
+      const raw = input.errorMessage ?? 'tier catalog not ready';
+      return `Deploy unavailable: ${raw.replace(/\.+$/, '')}.`;
     }
     return 'Deploy unavailable: tier catalog is still loading. Please wait a moment and try again.';
   }
