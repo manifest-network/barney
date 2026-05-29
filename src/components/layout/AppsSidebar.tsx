@@ -15,6 +15,7 @@ import { truncateAddress } from '../../utils/address';
 import { logError } from '../../utils/errors';
 import { CHAIN_NAME } from '../../config/chain';
 import { findExampleByAppName, buildExampleManifest } from '../../config/exampleApps';
+import { computeReDeployGate } from './reDeployGating';
 import { SECONDS_PER_HOUR, AUTO_REFRESH_INTERVAL_MS } from '../../config/constants';
 import { useVisibilityPolling } from '../../hooks/useVisibilityPolling';
 import { dnsStatusKey, type DnsStatusEntry } from '../../stores/aiStore';
@@ -54,7 +55,8 @@ const STATUS_COLORS: Record<string, string> = {
 
 export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const { address, disconnect, wallet } = useChain(CHAIN_NAME);
-  const { sendMessage, attachPayload, dnsStatuses } = useAI();
+  const { sendMessage, attachPayload, dnsStatuses, skuTiers } = useAI();
+  const tiersReady = skuTiers.phase === 'ready' && skuTiers.tiers.length > 0;
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [credits, setCredits] = useState<number | null>(null);
   const [hoursRemaining, setHoursRemaining] = useState<number | null>(null);
@@ -343,9 +345,24 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                 />
                 <span className="apps-sidebar__recent-name">{app.name}</span>
                 <span className="apps-sidebar__recent-time">{timeAgo(app.createdAt)}</span>
+                {(() => {
+                  // The re-deploy button repeats the original deploy with the
+                  // stored `app.size`. If that tier is no longer in the
+                  // catalog (env spec changed, network swap, etc.), the
+                  // deploy would fail in the executor — `computeReDeployGate`
+                  // catches that up front using the same `resolveSizeName`
+                  // helper the executor uses.
+                  const gate = computeReDeployGate({
+                    size: app.size,
+                    tiers: skuTiers.tiers,
+                    tiersReady,
+                  });
+                  return (
                 <button
                   type="button"
+                  disabled={gate.disabled}
                   onClick={async () => {
+                    if (gate.disabled) return;
                     // Use stored manifest, or fall back to known example app manifest
                     let manifestJson = app.manifest;
                     if (!manifestJson) {
@@ -364,10 +381,12 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                   }}
                   className="apps-sidebar__recent-redeploy"
                   aria-label={`Re-deploy ${app.name}`}
-                  title="Re-deploy"
+                  title={gate.title}
                 >
                   <RotateCcw className="w-3 h-3" />
                 </button>
+                  );
+                })()}
               </div>
             ))}
           </div>

@@ -9,7 +9,8 @@ import { ALLOWED_FILE_EXTENSIONS } from '../../utils/fileValidation';
 import { formatFileSize } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { EXAMPLE_APPS, buildExampleManifest, type ExampleApp } from '../../config/exampleApps';
-import { HELP_TEXT } from '../../ai/helpText';
+import { computeExampleAppGate, getDeployExampleRejection } from './exampleAppGating';
+import { buildHelpText } from '../../ai/helpText';
 
 const ConfirmationCard = lazy(() =>
   import('./ConfirmationCard').then(m => ({ default: m.ConfirmationCard }))
@@ -70,9 +71,36 @@ export function ChatPanel() {
     clearPayload,
     requestBatchDeploy,
     addLocalMessage,
+    addLocalErrorMessage,
     clearHistory,
     stopStreaming,
+    skuTiers,
+    retrySkuTiers,
   } = useAI();
+
+  const tiersReady = skuTiers.phase === 'ready' && skuTiers.tiers.length > 0;
+  const tierTooltip =
+    skuTiers.phase === 'loading' || skuTiers.phase === 'idle'
+      ? 'Loading tier catalog…'
+      : skuTiers.phase === 'error'
+        ? `Deploy unavailable: ${skuTiers.error ?? 'tier catalog not ready'}`
+        : undefined;
+
+  /**
+   * Per-example-app gating: catalog-level (not ready / error) wins first;
+   * after that, an app whose `size` hint doesn't resolve in the current
+   * tier list is disabled with a tier-specific tooltip. UI gating uses the
+   * same `resolveSizeName` helper as the executor so a button can only be
+   * enabled when the executor would accept that size. See
+   * `computeExampleAppGate` for the pure predicate + its unit tests.
+   */
+  const exampleAppGating = (app: ExampleApp) =>
+    computeExampleAppGate({
+      size: app.size,
+      tiers: skuTiers.tiers,
+      tiersReady,
+      notReadyTitle: tierTooltip,
+    });
 
   const [input, setInput] = useState('');
   const [showSettings, setShowSettings] = useState(false);
@@ -144,7 +172,7 @@ export function ChatPanel() {
 
     // Handle local commands (no LLM round-trip)
     if (message.toLowerCase() === '/help') {
-      addLocalMessage(HELP_TEXT, { type: 'help', data: null });
+      addLocalMessage(buildHelpText(skuTiers), { type: 'help', data: null });
       return;
     }
     if (message.toLowerCase() === '/clear') {
@@ -268,6 +296,29 @@ export function ChatPanel() {
   };
 
   const deployExample = async (app: ExampleApp) => {
+    // Reject + surface a chat message rather than silently returning. The
+    // typed-command path (doSubmit clears input before calling us) would
+    // otherwise look like the app froze. Button-click path also takes this
+    // branch — extra chat noise is preferable to a silent click, and the
+    // button is already disabled so it's hard to reach this branch by
+    // clicking in practice.
+    //
+    // Use `addLocalErrorMessage` so the rejection renders through
+    // `MessageBubble`'s inline-alert path. `ERROR_PATTERNS` then surfaces
+    // an inline Retry / List apps button next to the message — much more
+    // discoverable on cold-load typed-deploy flows where the example-apps
+    // error banner is hidden (`showExampleApps` requires existing messages).
+    const rejection = getDeployExampleRejection({
+      size: app.size,
+      tiers: skuTiers.tiers,
+      tiersReady,
+      phase: skuTiers.phase,
+      errorMessage: skuTiers.error,
+    });
+    if (rejection !== null) {
+      addLocalErrorMessage(rejection);
+      return;
+    }
     const manifestJson = buildExampleManifest(app);
     const filename = `manifest-${app.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}.json`;
     const blob = new Blob([manifestJson], { type: 'application/json' });
@@ -339,7 +390,7 @@ export function ChatPanel() {
         <div className="chat-panel-actions">
           <button
             type="button"
-            onClick={() => addLocalMessage(HELP_TEXT, { type: 'help', data: null })}
+            onClick={() => addLocalMessage(buildHelpText(skuTiers), { type: 'help', data: null })}
             className="chat-panel-btn"
             aria-label="Show help"
           >
@@ -401,6 +452,21 @@ export function ChatPanel() {
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
+            {/* Tier-error banner — surfaces above example-app buttons so the
+                disabled buttons make sense. Only shown when the user is on a
+                deploy surface but the tier catalog failed to load. */}
+            {showExampleApps && skuTiers.phase === 'error' && (
+              <div className="chat-example-apps__error" role="alert">
+                <span>Deploy unavailable: {skuTiers.error ?? 'tier catalog not ready'}</span>
+                <button
+                  type="button"
+                  onClick={() => { retrySkuTiers().catch((err) => logError('ChatPanel.retrySkuTiers', err)); }}
+                  className="btn btn-secondary btn-sm"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
             {/* Example app buttons after deploy explanation */}
             {showExampleApps && (
               <div className="chat-example-apps">
@@ -409,53 +475,65 @@ export function ChatPanel() {
                   <div className="chat-example-apps__group">
                     <p className="chat-example-apps__group-label">Games</p>
                     <div className="chat-example-apps__buttons" role="group" aria-label="Example games">
-                      {EXAMPLE_GAMES.map((app, i) => (
-                        <button
-                          key={app.label}
-                          type="button"
-                          onClick={() => deployExample(app)}
-                          className="chat-suggestion chat-example-apps__stagger"
-                          style={{ '--stagger': i } as React.CSSProperties}
-                          disabled={!isConnected || isStreaming}
-                        >
-                          {app.label}
-                        </button>
-                      ))}
+                      {EXAMPLE_GAMES.map((app, i) => {
+                        const gate = exampleAppGating(app);
+                        return (
+                          <button
+                            key={app.label}
+                            type="button"
+                            onClick={() => deployExample(app)}
+                            className="chat-suggestion chat-example-apps__stagger"
+                            style={{ '--stagger': i } as React.CSSProperties}
+                            disabled={!isConnected || isStreaming || gate.disabled}
+                            title={gate.title}
+                          >
+                            {app.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                   <div className="chat-example-apps__group">
                     <p className="chat-example-apps__group-label">Apps</p>
                     <div className="chat-example-apps__buttons" role="group" aria-label="Service apps">
-                      {EXAMPLE_SERVICES.map((app, i) => (
-                        <button
-                          key={app.label}
-                          type="button"
-                          onClick={() => deployExample(app)}
-                          className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
-                          style={{ '--stagger': i } as React.CSSProperties}
-                          disabled={!isConnected || isStreaming}
-                        >
-                          {app.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {EXAMPLE_STACKS.length > 0 && (
-                    <div className="chat-example-apps__group">
-                      <p className="chat-example-apps__group-label">Stacks</p>
-                      <div className="chat-example-apps__buttons" role="group" aria-label="Example stacks">
-                        {EXAMPLE_STACKS.map((app, i) => (
+                      {EXAMPLE_SERVICES.map((app, i) => {
+                        const gate = exampleAppGating(app);
+                        return (
                           <button
                             key={app.label}
                             type="button"
                             onClick={() => deployExample(app)}
                             className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
                             style={{ '--stagger': i } as React.CSSProperties}
-                            disabled={!isConnected || isStreaming}
+                            disabled={!isConnected || isStreaming || gate.disabled}
+                            title={gate.title}
                           >
                             {app.label}
                           </button>
-                        ))}
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {EXAMPLE_STACKS.length > 0 && (
+                    <div className="chat-example-apps__group">
+                      <p className="chat-example-apps__group-label">Stacks</p>
+                      <div className="chat-example-apps__buttons" role="group" aria-label="Example stacks">
+                        {EXAMPLE_STACKS.map((app, i) => {
+                          const gate = exampleAppGating(app);
+                          return (
+                            <button
+                              key={app.label}
+                              type="button"
+                              onClick={() => deployExample(app)}
+                              className="chat-suggestion chat-suggestion--app chat-example-apps__stagger"
+                              style={{ '--stagger': i } as React.CSSProperties}
+                              disabled={!isConnected || isStreaming || gate.disabled}
+                              title={gate.title}
+                            >
+                              {app.label}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   )}

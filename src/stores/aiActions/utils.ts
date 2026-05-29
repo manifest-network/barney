@@ -8,6 +8,7 @@ import { getSystemPrompt } from '../../ai/systemPrompt';
 import { AI_MAX_MESSAGES } from '../../config/constants';
 import * as appRegistry from '../../registry/appRegistry';
 import type { AppRegistryAccess } from '../../ai/toolExecutor/types';
+import type { ResolvedSkuTier } from '../../api/skuTiers';
 
 export function generateMessageId(): string {
   return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -28,10 +29,14 @@ export function createAssistantMessage(): ChatMessage {
   };
 }
 
-export function toChatApiMessages(msgs: ChatMessage[], address: string | undefined): ChatApiMessage[] {
+export function toChatApiMessages(
+  msgs: ChatMessage[],
+  address: string | undefined,
+  tiers: readonly ResolvedSkuTier[] = [],
+): ChatApiMessage[] {
   const systemMessage: ChatApiMessage = {
     role: 'system',
-    content: getSystemPrompt(address),
+    content: getSystemPrompt(address, tiers),
   };
 
   const conversationMessages: ChatApiMessage[] = msgs

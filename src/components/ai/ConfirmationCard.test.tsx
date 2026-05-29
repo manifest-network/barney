@@ -19,6 +19,15 @@ vi.mock('../../utils/customDomainValidation', async (importOriginal) => {
   };
 });
 
+// ConfirmationCard reads `skuTiers` from useAI for the deploy_app price row.
+// Stub it so the tests can render without an AIProvider — all assertions here
+// focus on the manifest-editor and custom-domain branches, not the price line.
+vi.mock('../../hooks/useAI', () => ({
+  useAI: () => ({
+    skuTiers: { phase: 'ready', tiers: [], denomSymbol: 'PWR', error: null },
+  }),
+}));
+
 import { ConfirmationCard } from './ConfirmationCard';
 import {
   parseEditableManifest, serializeManifest,

@@ -47,6 +47,7 @@ function makeOptions(app: AppEntry): ToolExecutorOptions {
     clientManager: null,
     address: ADDR,
     appRegistry: makeRegistry([app]),
+    tiers: [],
   };
 }
 
@@ -56,7 +57,7 @@ describe('executeSetCustomDomain', () => {
   it('returns error when wallet not connected', async () => {
     const r = await executeSetCustomDomain(
       { app_name: 'x', custom_domain: 'a.example.com' },
-      { clientManager: null, address: undefined, appRegistry: makeRegistry() },
+      { clientManager: null, address: undefined, appRegistry: makeRegistry(), tiers: [] },
     );
     expect(r.success).toBe(false);
   });
@@ -93,7 +94,7 @@ describe('executeSetCustomDomain', () => {
   it('returns error when app not found', async () => {
     const r = await executeSetCustomDomain(
       { app_name: 'missing', custom_domain: 'a.example.com' },
-      { clientManager: null, address: ADDR, appRegistry: makeRegistry() },
+      { clientManager: null, address: ADDR, appRegistry: makeRegistry(), tiers: [] },
     );
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error).toMatch(/no app/i);
@@ -347,6 +348,7 @@ describe('executeConfirmedSetCustomDomain', () => {
     return {
       clientManager: fakeClientManager,
       address: ADDR,
+      tiers: [],
     };
   }
 
@@ -365,7 +367,7 @@ describe('executeConfirmedSetCustomDomain', () => {
     const r = await executeConfirmedSetCustomDomain(
       { app_name: 'a', leaseUuid: 'l', serviceName: '', customDomain: 'a.example.com' },
       fakeClientManager,
-      { clientManager: null, address: undefined },
+      { clientManager: null, address: undefined, tiers: [] },
     );
     expect(r.success).toBe(false);
   });

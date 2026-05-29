@@ -7,7 +7,7 @@ import { cosmosTx } from '@manifest-network/manifest-mcp-core';
 import { getLease } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { isValidUUID, parseJsonStringArray } from '../../utils/format';
-import { logError } from '../../utils/errors';
+import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { toHex } from '../../utils/hash';
 import type { ToolResult, SignResult, PayloadAttachment } from './types';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, computePayloadHash } from './utils';
@@ -326,7 +326,7 @@ async function handlePayloadUploadAfterLeaseCreation(
       return {
         success: true,
         data: {
-          message: `Lease ${leaseUuid} created with ${itemsSummary}, but payload upload failed: ${uploadResult.error}. You may need to upload the payload manually using upload_payload.`,
+          message: `Lease ${leaseUuid} created with ${itemsSummary}, but payload upload failed: ${normalizeErrorPunctuation(uploadResult.error)}. You may need to upload the payload manually using upload_payload.`,
           leaseUuid,
           transactionHash,
         },
@@ -345,7 +345,7 @@ async function handlePayloadUploadAfterLeaseCreation(
     return {
       success: true,
       data: {
-        message: `Lease ${leaseUuid} created with ${itemsSummary}, but payload upload failed: ${uploadErr instanceof Error ? uploadErr.message : 'Unknown error'}. You may need to upload the payload manually using upload_payload.`,
+        message: `Lease ${leaseUuid} created with ${itemsSummary}, but payload upload failed: ${normalizeErrorPunctuation(uploadErr instanceof Error ? uploadErr.message : 'Unknown error')}. You may need to upload the payload manually using upload_payload.`,
         leaseUuid,
         transactionHash,
       },

@@ -6,6 +6,7 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import type { DeployProgress } from '../progress';
 import type { AppEntry } from '../../registry/appRegistry';
 import type { MessageCard } from '../../contexts/aiTypes';
+import type { ResolvedSkuTier } from '../../api/skuTiers';
 
 export interface SignResult {
   pub_key: { type: string; value: string };
@@ -136,6 +137,10 @@ export interface ToolExecutorOptions {
   onProgress?: (progress: DeployProgress) => void;
   appRegistry?: AppRegistryAccess;
   signal?: AbortSignal;
+  /** Resolved SKU tier list from the AI store. An empty array means
+   *  "not ready" — deploy executors must refuse with
+   *  "Tier catalog unavailable" before any broadcast. */
+  tiers: readonly ResolvedSkuTier[];
 }
 
 export interface PendingAction {

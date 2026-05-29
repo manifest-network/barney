@@ -177,14 +177,6 @@ describe('generateImageReferenceForPrompt', () => {
     expect(redisLine).toContain('health_check=yes');
   });
 
-  it('includes storage flag when present', () => {
-    const ref = generateImageReferenceForPrompt();
-    expect(ref).toContain('postgres: port=5432');
-    // postgres line should have storage=true
-    const postgresLine = ref.split('\n').find(l => l.startsWith('postgres:'));
-    expect(postgresLine).toContain('storage=true');
-  });
-
   it('includes aliases when present', () => {
     const ref = generateImageReferenceForPrompt();
     expect(ref).toContain('(aka postgresql)');

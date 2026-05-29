@@ -1,11 +1,20 @@
 /**
  * AI Tool Definitions
  *
- * 16 tools: 5 TX (require confirmation), 9 query, 2 escape hatch.
+ * 17 tools: 6 TX (require confirmation), 9 query, 2 escape hatch.
  * Model does intent classification; code does orchestration.
+ *
+ * `AI_TOOLS` is the static base list — it's the single source of truth for
+ * `VALID_TOOL_NAMES`, `TOOL_PUBLIC_PARAMS`, and `getDisplaySafeArgs`, none of
+ * which depend on the resolved SKU tier list. Use `buildAITools(tiers)` when
+ * sending the schema to the model so `deploy_app.size.enum` reflects the
+ * currently-resolved tier list. Until tiers resolve, `buildAITools([])` returns
+ * the schema without a size enum constraint — the executor handles rejection
+ * with a clean "Tier catalog unavailable" error.
  */
 
 import type { ToolDefinition } from '../api/morpheus';
+import type { ResolvedSkuTier } from '../api/skuTiers';
 
 export const AI_TOOLS: ToolDefinition[] = [
   // --- TX tools (require confirmation) ---
@@ -23,8 +32,7 @@ export const AI_TOOLS: ToolDefinition[] = [
           },
           size: {
             type: 'string',
-            description: 'Resource tier: micro, small, medium, or large. Applies to all services in a stack.',
-            enum: ['micro', 'small', 'medium', 'large'],
+            description: 'Resource tier (SKU name, e.g. "docker-micro"). Applies to all services in a stack. The exact set of valid tier names is resolved at runtime from chain; see the size enum on this schema.',
           },
           image: {
             type: 'string',
@@ -53,10 +61,6 @@ export const AI_TOOLS: ToolDefinition[] = [
           args: {
             type: 'string',
             description: 'JSON array for container command/args override, e.g. \'["echo hello"]\'. Only with "image".',
-          },
-          storage: {
-            type: 'boolean',
-            description: 'Set to true for apps that need persistent disk (databases, etc.).',
           },
           services: {
             type: 'string',
@@ -582,4 +586,34 @@ export function getToolCallDescription(
     default:
       return `Executing ${toolName}...`;
   }
+}
+
+/**
+ * Build the AI tool schema with the deploy_app.size enum sourced from the
+ * resolved tier list. Pass an empty array (loading/error states) to omit the
+ * enum constraint entirely — the executor will reject the tool invocation
+ * with a "Tier catalog unavailable" message before broadcasting anything.
+ */
+export function buildAITools(tiers: readonly ResolvedSkuTier[]): ToolDefinition[] {
+  return AI_TOOLS.map((tool) => {
+    if (tool.function.name !== 'deploy_app') return tool;
+    if (tiers.length === 0) return tool;
+    const props = tool.function.parameters.properties;
+    return {
+      ...tool,
+      function: {
+        ...tool.function,
+        parameters: {
+          ...tool.function.parameters,
+          properties: {
+            ...props,
+            size: {
+              ...props.size,
+              enum: tiers.map((t) => t.skuName),
+            },
+          },
+        },
+      },
+    };
+  });
 }

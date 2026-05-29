@@ -90,7 +90,7 @@ The AI assistant uses a 3-layer architecture:
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, storage?, services?, health_check?, stop_grace_period?, init?, expose?, labels?, custom_domain?, service_name?)` | TX | Deploy from attached manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image`. `custom_domain` attaches a domain in the same TX flow (single-step deploy + DNS); `service_name` picks the target service in a multi-service stack. Defaults: size=micro, name from filename/image |
+| `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, services?, health_check?, stop_grace_period?, init?, expose?, labels?, custom_domain?, service_name?)` | TX | Deploy from attached manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image`. `custom_domain` attaches a domain in the same TX flow (single-step deploy + DNS); `service_name` picks the target service in a multi-service stack. The `size` enum is rebuilt at prompt-build time from the resolved SKU tier list (chain ∩ `PUBLIC_SKU_SPECS`); default size is the cheapest available tier (lowest normalized `$/hour` via `getCheapestTier(tiers)` in `src/api/skuTiers.ts`). Executor returns `Tier catalog unavailable — try again in a moment.` if `loadSkuTiers` hasn't reached `ready` yet |
 | `stop_app(app_name)` | TX | Stop apps by name, comma-separated list (e.g. "redis,postgres"), or "all" to stop all running apps |
 | `fund_credits(amount)` | TX | Add credits in display units |
 | `restart_app(app_name)` | TX | Restart apps by name, comma-separated list, or "all" to restart all running apps |
@@ -108,7 +108,7 @@ The AI assistant uses a 3-layer architecture:
 | `cosmos_query(module, subcommand, args?)` | Query | Raw chain query escape hatch |
 | `cosmos_tx(module, subcommand, args)` | TX | Raw chain TX escape hatch |
 
-Tool definitions: `src/ai/tools.ts`. System prompt: `src/ai/systemPrompt.ts`. Known Docker images and stacks: `src/ai/knownImages.ts`. In-app `/help` content: `src/ai/helpText.ts`.
+Tool definitions: `src/ai/tools.ts` (static base `AI_TOOLS` + `buildAITools(tiers)` builder — the builder is what `sendMessage` ships to the model, with `deploy_app.size.enum` injected from the resolved tier list; passing `[]` omits the enum so the executor's "Tier catalog unavailable" rejection is the single failure mode). System prompt: `src/ai/systemPrompt.ts` (signature is `getSystemPrompt(address?, tiers?)` — the tier block is rendered from `tiers`). Known Docker images and stacks: `src/ai/knownImages.ts`. In-app `/help` content: `src/ai/helpText.ts` (signature is `buildHelpText(skuTiers: SkuTiersState)` — the resource-tiers table is rendered from `skuTiers.tiers`; an empty list produces phase-distinct copy: `error` → "Tier catalog unavailable: \<error\>"; `loading` → loading status row; `idle` → "not loaded yet"; defensive empty `ready` → "no tiers configured").
 
 ### Manifest Generation (`src/ai/manifest.ts`)
 
@@ -182,6 +182,7 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-core` (shared MCP
 |--------|---------|
 | `billing.ts` | Leases, credit accounts (custom Manifest module) |
 | `sku.ts` | Provider catalog, SKU definitions |
+| `skuTiers.ts` | `resolveSkuTiers(specs)` joins the chain SKU catalog with the env spec map and normalizes `basePrice` + `Unit` (PER_HOUR / PER_DAY) into `pricePerHour` display units. `hourlyPriceFromSku(sku)` is the unit→hourly converter. `getCheapestTier(tiers)` returns the lowest-`pricePerHour` entry (ties resolved by first occurrence) and is what `deploy_app` / `batch_deploy` use as the size default when the caller omits it. Returns `ResolvedSkuTier[]` ordered by env spec insertion order — that order drives the AI tool's `size.enum` and the `/help` table; the default tier is price-driven, not order-driven. Chain SKUs missing a spec entry — and spec entries missing a chain SKU — are dropped with a `logError` warning and omitted from the resolved list (config-drift policy). |
 | `bank.ts` | Cosmos SDK bank queries |
 | `tx.ts` | Transaction signing client and message builders for all Manifest modules (billing, SKU, provider management) |
 | `provider-api.ts` | Auth helpers, health check, connection info, upload — delegates to `@manifest-network/manifest-mcp-fred` with CORS proxy/SSRF adapter. Keeps `validateAuthTimestamp` and null-returning `getProviderHealth` locally |
@@ -208,9 +209,12 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `aiActions/toolExecution.ts` | `processToolCalls`, `handleToolCall` |
 | `aiActions/streaming.ts` | `scheduleStreamingUpdate`, `flushPendingUpdate` (RAF) |
 | `aiActions/persistence.ts` | `loadSettings`, `loadHistory`, persistence subscriptions |
+| `aiActions/skuTiers.ts` | `loadSkuTiers` / `retrySkuTiers` — boot-time SKU resolution. Parses `PUBLIC_SKU_SPECS`, calls `resolveSkuTiers()`, writes the `SkuTiersState` slice (`phase: 'idle' \| 'loading' \| 'ready' \| 'error'`, `tiers`, `denomSymbol`, `error`). Concurrent calls dedupe via the store's `_skuTiersInFlight` promise field. `retrySkuTiers` is a no-op from `ready` (consumers read `skuTiers.tiers` without phase-guarding, so transitioning `ready → loading` would leak stale tiers to in-flight chat/tool execution); from `idle`/`loading`/`error` it resets phase and re-issues the fetch. Used by the Retry button on `ChatPanel`'s tier-error banner. |
 | `aiActions/utils.ts` | `generateMessageId`, `trimMessages`, `createAssistantMessage`, `toChatApiMessages`, `getAppRegistryAccess` |
 
-`AIProvider` (`src/contexts/AIContext.tsx`) is a thin lifecycle wrapper that sets up persistence subscriptions, health checks, confirmation timeouts, and calls `store.getState().destroy()` on unmount.
+`AIProvider` (`src/contexts/AIContext.tsx`) is a thin lifecycle wrapper that sets up persistence subscriptions, health checks, confirmation timeouts, fires `loadSkuTiers()` once on mount, and calls `store.getState().destroy()` on unmount.
+
+**`skuTiers` slice on the store** (`aiStore.ts`): the resolved SKU tier list lives here as `SkuTiersState`. Deploy surfaces (chat-panel example-app buttons, sidebar re-deploy, `ConfirmationCard` Confirm) gate on `skuTiers.phase === 'ready'`. All other surfaces (landing page, balance, app list, logs, custom-domain status) render normally regardless of tier state. The executor (`compositeTransactions.ts` `executeDeployApp` / `executeBatchDeploy`) reads the resolved list from `ToolExecutorOptions.tiers` rather than calling `resolveSkuTiers` itself — `confirmAction` + `batchDeploy` + `toolExecution` thread `get().skuTiers.tiers` into each call so the executor stays pure.
 
 ### Hooks (`src/hooks/`)
 
@@ -272,7 +276,6 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `WS_RECONNECT_DELAY_MS` | 1s | Delay before WebSocket reconnect attempt |
 | `WS_MAX_RECONNECT_ATTEMPTS` | 2 | Max reconnects before falling back to polling |
 | `WS_LIVENESS_TIMEOUT_MS` | 45s | WebSocket data liveness timeout (Fred pings every 30s) |
-| `STORAGE_SKU_NAME` | 'docker-small' | SKU name that supports persistent disk storage |
 | `DNS_POLL_INTERVAL_MS` | 30s | Polling interval for browser-side DNS / HTTPS probes (`useDnsStatusPolling`) |
 | `DNS_STUCK_THRESHOLD_MS` | 5min | Show "verify with dig locally" hint after sustained `pending_dns` (only when slice has no `detail`) |
 | `AUTO_REFRESH_INTERVAL_MS` | 15s | Auto-refresh interval for sidebar data polling |
@@ -324,6 +327,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 - **App registry scoping**: Registry is per-wallet in localStorage. `AppShell` syncs wallet changes and clears deploy progress on disconnect.
 - **Error UX boundary**: Two error surfaces by design. **Toasts** (`useToast` + `ToastContainer`) are reserved for surfaces that exist *before* the chat panel mounts — wallet connection errors (popup blocked / closed / network) in `AppShell`. Once the user is connected, all errors flow through **chat messages** (`error` field on `ChatMessage`, surfaced as inline alerts with `ERROR_PATTERNS` regex-matched "Try again" suggestion buttons in `MessageBubble.tsx`). Tool failures, deploy failures, signing rejections, payload validation, manifest parse errors all land in chat. Don't add new toasts post-connect — push errors into chat.
 - **Custom-domain DNS state**: All four custom-domain surfaces (sidebar dot, deploy success pill, single-domain card, multi-domain consolidated card) read DNS status from a single source — `aiStore.dnsStatuses`. The map is populated by `useDnsStatusPolling`, mounted exactly once in `MainLayout` (deliberately outside the sidebar's `ErrorBoundary` — a sidebar render error must not take DNS state down with it). No surface runs its own polling loop. Adding a new surface means reading `dnsStatuses.get(dnsStatusKey(leaseUuid, fqdn))`, not adding another `useVisibilityPolling`.
+- **SKU tier resolution**: Single source of truth is `aiStore.skuTiers` (slice produced by `loadSkuTiers`, kicked off once in `AIProvider`). The resolved tier list is chain ∩ `PUBLIC_SKU_SPECS` — chain owns SKU names + per-`Unit` prices (normalized to `$/hr` in `hourlyPriceFromSku()`), env owns CPU/RAM/disk. Session-lifetime cache — no periodic refresh. All deploy-related surfaces read from the slice: `deploy_app.size.enum` (`buildAITools(tiers)`), `/help` table (`buildHelpText(skuTiers)`), system prompt tier block (`getSystemPrompt(addr, tiers)`), `ConfirmationCard` price row, executor validation (`compositeTransactions.ts` reads `options.tiers`). Gating contract: deploy surfaces disable on `phase !== 'ready'` (`ChatPanel` example-app buttons, `AppsSidebar` re-deploy, `ConfirmationCard` Confirm) and show inline retry on `error`; non-deploy surfaces (landing, balance, app list, logs, custom-domain status) render normally regardless. The executor returns `Tier catalog unavailable — try again in a moment.` if invoked while the slice isn't `ready` — this is the single failure mode for `buildAITools([])` omitting the `size.enum`.
 
 ### Example Apps
 
@@ -348,7 +352,7 @@ Defined in `src/config/chain.ts`:
 
 ### Runtime Environment Variables
 
-17 client-side `PUBLIC_*` variables use a 3-tier fallback defined in `src/config/runtimeConfig.ts`:
+18 client-side `PUBLIC_*` variables use a 3-tier fallback defined in `src/config/runtimeConfig.ts`:
 
 1. `window.__RUNTIME_CONFIG__` — set by `public/config.js` (generated at container startup by `docker/env.sh`)
 2. `import.meta.env` — Rsbuild static replacement from `.env` files (requires static property access, not dynamic `import.meta.env[key]`)
@@ -358,7 +362,9 @@ Consumer code imports `runtimeConfig` from `src/config/runtimeConfig.ts` — nev
 
 Built-in flags (`import.meta.env.DEV` / `PROD`) remain build-time and are accessed directly where needed.
 
-Client-side variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_MORPHEUS_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`, `PUBLIC_GAS_PRICE`, `PUBLIC_CHAIN_ID`, `PUBLIC_FAUCET_URL`, `PUBLIC_AI_STREAM_TIMEOUT_MS`, `PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS`, `PUBLIC_AI_TOOL_API_TIMEOUT_MS`, `PUBLIC_AI_MAX_RETRIES`, `PUBLIC_AI_CONFIRMATION_TIMEOUT_MS`, `PUBLIC_AI_MAX_TOOL_ITERATIONS`, `PUBLIC_AI_MAX_MESSAGES`, `PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY`
+Client-side variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_MORPHEUS_MODEL`, `PUBLIC_WEB3AUTH_CLIENT_ID`, `PUBLIC_WEB3AUTH_NETWORK`, `PUBLIC_PWR_DENOM`, `PUBLIC_GAS_PRICE`, `PUBLIC_CHAIN_ID`, `PUBLIC_FAUCET_URL`, `PUBLIC_AI_STREAM_TIMEOUT_MS`, `PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS`, `PUBLIC_AI_TOOL_API_TIMEOUT_MS`, `PUBLIC_AI_MAX_RETRIES`, `PUBLIC_AI_CONFIRMATION_TIMEOUT_MS`, `PUBLIC_AI_MAX_TOOL_ITERATIONS`, `PUBLIC_AI_MAX_MESSAGES`, `PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY`, `PUBLIC_SKU_SPECS`
+
+`PUBLIC_SKU_SPECS` is special: it's a JSON-string env (e.g. `'{"docker-micro":{"cores":0.5,"ramMB":512,"diskGB":1}, ...}'`) parsed by `src/config/skuSpecs.ts`'s `parseSkuSpecs()` into a `Record<string, {cores, ramMB, diskGB}>`. The chain owns SKU names + prices; this env owns resource specs. The resolved tier list is the chain ∩ env intersection (see `src/api/skuTiers.ts`). Two distinct error diagnostics by source: empty / unparseable / all-entries-invalid `PUBLIC_SKU_SPECS` short-circuits synchronously to `error` with `"PUBLIC_SKU_SPECS is empty or invalid — no SKU specs configured."` (no chain call); a non-empty spec map with no chain SKU intersection lands in `error` after the chain fetch with `"No tiers available — check PUBLIC_SKU_SPECS and chain SKU catalog."` Both surface as inline error alerts on deploy surfaces with a Retry control. Tier order in the resolved list follows env spec **insertion order** and drives the AI tool's `size.enum`, the `/help` table, and the system-prompt tier block — but the **default** deploy size is the cheapest available tier (lowest `pricePerHour`, picked via `getCheapestTier(tiers)`), not `tiers[0]`. Insertion order is for presentation; price wins for defaults.
 
 Server-side variables (never shipped to browser):
 - `MORPHEUS_API_KEY` — injected by nginx (prod) or rsbuild dev proxy into upstream Morpheus API requests via `Authorization: Bearer` header

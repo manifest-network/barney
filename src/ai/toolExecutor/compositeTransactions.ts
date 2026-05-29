@@ -6,14 +6,15 @@
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import { cosmosTx, setItemCustomDomain as monoSetItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
-import { getProviders, getSKUs, Unit } from '../../api/sku';
+import { getProviders } from '../../api/sku';
+import { getCheapestTier, resolveSizeName } from '../../api/skuTiers';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
-import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
+import { DENOMS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
-import { logError } from '../../utils/errors';
+import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
-import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS, STORAGE_SKU_NAME } from '../../config/constants';
+import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
 import { isValidFqdn, normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
@@ -21,7 +22,6 @@ import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 import { getDomainForService } from '../../api/leaseDomains';
 import { validateAll, apexRecordKindLabel } from '../../utils/customDomainValidation';
-import { resolveSkuItems } from './transactions';
 import { validateAppName, sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
 import { extractYamlServiceNames } from '../../utils/fileValidation';
 import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, getServiceNames, type ServiceConfig, type HealthCheckConfig } from '../manifest';
@@ -280,7 +280,6 @@ function validateInternalServiceNames(
 interface ParseStackServicesResult {
   services: Record<string, ServiceConfig>;
   serviceNames: string[];
-  needsStorage: boolean;
 }
 
 /**
@@ -312,7 +311,6 @@ export function parseAndValidateStackServices(
   }
 
   const stackServices: Record<string, ServiceConfig> = {};
-  let needsStorage = false;
 
   for (const [svcName, svcRaw] of Object.entries(parsedServices)) {
     const nameError = validateServiceName(svcName);
@@ -393,7 +391,6 @@ export function parseAndValidateStackServices(
       if (!cfg.tmpfs && knownConfig.tmpfs) cfg.tmpfs = knownConfig.tmpfs;
       if (!command && knownConfig.command) command = [...knownConfig.command];
       if (!svcArgs && knownConfig.args) svcArgs = [...knownConfig.args];
-      if (knownConfig.storage) needsStorage = true;
       if (!healthCheck && knownConfig.health_check) healthCheck = { ...knownConfig.health_check };
     }
 
@@ -436,7 +433,7 @@ export function parseAndValidateStackServices(
     }
   }
 
-  return { services: stackServices, serviceNames, needsStorage };
+  return { services: stackServices, serviceNames };
 }
 
 
@@ -665,8 +662,6 @@ export async function executeDeployApp(
     );
     if ('error' in parsed) return { success: false, error: parsed.error };
 
-    if (parsed.needsStorage && args.storage === undefined) args.storage = true;
-
     // Pre-generate a shared password for all auto-generated env vars in the stack.
     // This ensures cross-service credentials match (e.g., WORDPRESS_DB_PASSWORD matches MYSQL_PASSWORD).
     const sharedPassword = generatePassword();
@@ -779,7 +774,7 @@ export async function executeDeployApp(
       }
     }
 
-    // Known image safety net: merge defaults for port, env, user, tmpfs, storage, command, args, health_check
+    // Known image safety net: merge defaults for port, env, user, tmpfs, command, args, health_check
     const knownConfig = findKnownImage(args.image as string);
     if (knownConfig) {
       if (!args.port && knownConfig.port) args.port = knownConfig.port;
@@ -789,7 +784,6 @@ export async function executeDeployApp(
       if (!args.tmpfs && knownConfig.tmpfs) args.tmpfs = knownConfig.tmpfs;
       if (!command && knownConfig.command) command = [...knownConfig.command];
       if (!cmdArgs && knownConfig.args) cmdArgs = [...knownConfig.args];
-      if (args.storage === undefined && knownConfig.storage) args.storage = knownConfig.storage;
       if (!healthCheck && knownConfig.health_check) healthCheck = { ...knownConfig.health_check };
     }
 
@@ -895,49 +889,35 @@ export async function executeDeployApp(
     }
   }
 
-  // Resolve and validate size
-  const VALID_SIZE_TIERS = ['micro', 'small', 'medium', 'large'] as const;
-  let size = (args.size as string | undefined)?.toLowerCase() || 'micro';
-  if (!VALID_SIZE_TIERS.includes(size as typeof VALID_SIZE_TIERS[number])) {
+  // Resolve and validate size from the AI store's resolved tier list.
+  // No chain round-trip needed — the tier list already has SKU UUID, provider
+  // UUID, and normalized $/hour price baked in.
+  const { tiers } = options;
+  if (tiers.length === 0) {
+    return { success: false, error: 'Tier catalog unavailable — try again in a moment.' };
+  }
+
+  // When the caller omits size, default to the cheapest available tier
+  // (lowest normalized $/hour). Keeps the default sensible across networks
+  // whose env spec map isn't ordered cheapest-first.
+  const defaultSize = getCheapestTier(tiers).skuName;
+  const rawSize = (args.size as string | undefined) || defaultSize;
+  // `resolveSizeName` handles canonical / `docker-` / suffix backward-compat
+  // and case-insensitivity. UI surfaces (ChatPanel example-app buttons,
+  // AppsSidebar re-deploy) use the same helper to gate their disabled state
+  // so a button can only be enabled when this lookup would succeed.
+  const requestedTier = resolveSizeName(rawSize, tiers);
+  if (!requestedTier) {
     return {
       success: false,
-      error: `Invalid size "${size}". Valid tiers: ${VALID_SIZE_TIERS.join(', ')}.`,
+      error: `Invalid size "${rawSize}". Valid tiers: ${tiers.map((t) => t.skuName).join(', ')}.`,
     };
   }
-  let skuName = `docker-${size}`;
-  let storageUpgrade = false;
+  const matched = requestedTier;
+  const size = matched.skuName;  // canonical SKU name
+  const skuUuid = matched.skuUuid;
 
-  // Auto-upgrade to storage-capable SKU when storage is requested
-  if (args.storage === true && skuName !== STORAGE_SKU_NAME) {
-    skuName = STORAGE_SKU_NAME;
-    size = STORAGE_SKU_NAME.replace('docker-', '');
-    storageUpgrade = true;
-  }
-
-  // Find matching SKU
-  let allSKUs;
-  try {
-    allSKUs = await withTimeout(getSKUs(true), undefined, 'Fetch tiers');
-  } catch (error) {
-    logError('compositeTransactions.deploy.fetchSKUs', error);
-    return { success: false, error: 'Failed to fetch available tiers. Please try again.' };
-  }
-
-  const resolveResult = resolveSkuItems(
-    [{ sku_name: skuName, quantity: 1 }],
-    allSKUs
-  );
-  if (resolveResult.error || !resolveResult.items) {
-    return {
-      success: false,
-      error: `Tier "${size}" is not available. Use browse_catalog to see available tiers.`,
-    };
-  }
-
-  const skuUuid = resolveResult.items[0].sku_uuid;
-
-  // Find provider
-  const matchingSku = allSKUs.find((s) => s.uuid === skuUuid);
+  // Find provider — still need apiUrl, which isn't in ResolvedSkuTier.
   let providers;
   try {
     providers = await withTimeout(getProviders(true), undefined, 'Fetch providers');
@@ -946,32 +926,20 @@ export async function executeDeployApp(
     return { success: false, error: 'Failed to fetch providers. Please try again.' };
   }
 
-  const provider = matchingSku
-    ? providers.find((p) => p.uuid === matchingSku.providerUuid)
-    : providers[0];
+  const provider = providers.find((p) => p.uuid === matched.providerUuid);
 
   if (!provider || !provider.apiUrl) {
     return { success: false, error: 'No available provider found for this tier.' };
   }
 
-  // Format price for display using SKU's unit, and calculate hourly cost for credit check
-  let priceDisplay = '';
-  let skuHourlyCost = 0;
-  if (matchingSku?.basePrice) {
-    const { symbol } = getDenomMetadata(matchingSku.basePrice.denom);
-    const basePrice = fromBaseUnits(matchingSku.basePrice.amount, matchingSku.basePrice.denom);
-    const unitLabel = UNIT_LABELS[matchingSku.unit as Unit] || '/hr';
-
-    // Convert to hourly cost based on unit
-    if (matchingSku.unit === Unit.UNIT_PER_DAY) {
-      skuHourlyCost = basePrice / 24;
-    } else {
-      // Default to per-hour for UNIT_PER_HOUR or unspecified
-      skuHourlyCost = basePrice;
-    }
-
-    priceDisplay = `${Math.round(basePrice * 100) / 100} ${symbol}${unitLabel}`;
-  }
+  // Pricing is normalized to $/hour at the source (`resolveSkuTiers`).
+  // Pass-11 invariant: every resolved tier has `basePrice`, so
+  // `pricePerHour === 0` is a genuinely-free tier (`basePrice.amount === '0'`),
+  // NOT a missing-price candidate. Format unconditionally so free tiers
+  // surface "0.0000 .../hr" on the confirmation card instead of going blank
+  // (billing-transparency — same category as pass 5).
+  const skuHourlyCost = matched.pricePerHour;
+  const priceDisplay = `${skuHourlyCost.toFixed(4)} ${matched.denomSymbol}/hr`;
 
   // Stack deploys multiply cost by service count
   const serviceNamesResult = validateInternalServiceNames(args._serviceNames, 'deploy_app');
@@ -1018,9 +986,9 @@ export async function executeDeployApp(
   }
 
   const stackInfo = serviceCount > 1 ? ` (${serviceCount} services)` : '';
-  const priceInfo = priceDisplay
-    ? ` (~${priceDisplay}${serviceCount > 1 ? ` × ${serviceCount}` : ''})`
-    : '';
+  // priceDisplay is always non-empty (pass-16 invariant) — no need for a
+  // truthy guard around the ` (~…)` wrapper anymore.
+  const priceInfo = ` (~${priceDisplay}${serviceCount > 1 ? ` × ${serviceCount}` : ''})`;
 
   // Optional custom domain: validate up front so the user gets fast feedback
   // before any TX. The set-domain TX will be broadcast in the confirmed-deploy
@@ -1088,7 +1056,7 @@ export async function executeDeployApp(
   return {
     success: true,
     requiresConfirmation: true,
-    confirmationMessage: `Deploy "${name}"${stackInfo} on ${storageUpgrade ? 'small' : size} tier${storageUpgrade ? ' (upgraded for storage)' : ''}${priceInfo}?${creditWarning}`,
+    confirmationMessage: `Deploy "${name}"${stackInfo} on ${size} tier${priceInfo}?${creditWarning}`,
     pendingAction: {
       toolName: 'deploy_app',
       args: {
@@ -1221,7 +1189,7 @@ export async function executeConfirmedDeployApp(
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     return {
       success: false,
-      error: `Lease created but upload failed: ${uploadResult.error}. The lease ${leaseUuid} is active — you may need to stop it.`,
+      error: `Lease created but upload failed: ${normalizeErrorPunctuation(uploadResult.error)}. The lease ${leaseUuid} is active — you may need to stop it.`,
     };
   }
 
@@ -1524,38 +1492,33 @@ export interface BatchDeployEntry {
 export async function executeBatchDeploy(
   entries: BatchDeployEntry[],
   options: ToolExecutorOptions,
-  size: string = 'micro'
+  size?: string
 ): Promise<ToolResult> {
-  const { address, appRegistry } = options;
+  const { address, appRegistry, tiers } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (entries.length === 0) return { success: false, error: 'No apps to deploy' };
-
-  // Resolve and validate size
-  const VALID_SIZE_TIERS = ['micro', 'small', 'medium', 'large'] as const;
-  const normalizedSize = size.toLowerCase();
-  if (!VALID_SIZE_TIERS.includes(normalizedSize as typeof VALID_SIZE_TIERS[number])) {
-    return { success: false, error: `Invalid size "${size}". Valid tiers: ${VALID_SIZE_TIERS.join(', ')}.` };
-  }
-  const skuName = `docker-${normalizedSize}`;
-
-  // Find matching SKU
-  let allSKUs;
-  try {
-    allSKUs = await withTimeout(getSKUs(true), undefined, 'Fetch tiers');
-  } catch (error) {
-    logError('compositeTransactions.update.fetchSKUs', error);
-    return { success: false, error: 'Failed to fetch available tiers. Please try again.' };
+  if (tiers.length === 0) {
+    return { success: false, error: 'Tier catalog unavailable — try again in a moment.' };
   }
 
-  const resolveResult = resolveSkuItems([{ sku_name: skuName, quantity: 1 }], allSKUs);
-  if (resolveResult.error || !resolveResult.items) {
-    return { success: false, error: `Tier "${size}" is not available. Use browse_catalog to see available tiers.` };
+  // When size is omitted, default to the cheapest available tier (lowest
+  // normalized $/hour). Mirrors executeDeployApp's single-deploy default and
+  // keeps the default sensible across networks whose env spec map isn't
+  // ordered cheapest-first. Same `resolveSizeName` as the single-deploy path
+  // — UI surfaces use it too to keep gating in lockstep with the executor.
+  const effectiveSize = size ?? getCheapestTier(tiers).skuName;
+  const matched = resolveSizeName(effectiveSize, tiers);
+  if (!matched) {
+    return {
+      success: false,
+      error: `Invalid size "${effectiveSize}". Valid tiers: ${tiers.map((t) => t.skuName).join(', ')}.`,
+    };
   }
-  const skuUuid = resolveResult.items[0].sku_uuid;
+  const skuUuid = matched.skuUuid;
+  const normalizedSize = matched.skuName;  // canonical SKU name
 
-  // Find provider
-  const matchingSku = allSKUs.find((s) => s.uuid === skuUuid);
+  // Find provider — still need apiUrl, which isn't in ResolvedSkuTier.
   let providers;
   try {
     providers = await withTimeout(getProviders(true), undefined, 'Fetch providers');
@@ -1564,9 +1527,7 @@ export async function executeBatchDeploy(
     return { success: false, error: 'Failed to fetch providers. Please try again.' };
   }
 
-  const provider = matchingSku
-    ? providers.find((p) => p.uuid === matchingSku.providerUuid)
-    : providers[0];
+  const provider = providers.find((p) => p.uuid === matched.providerUuid);
 
   if (!provider || !provider.apiUrl) {
     return { success: false, error: 'No available provider found for this tier.' };
@@ -1615,25 +1576,14 @@ export async function executeBatchDeploy(
     });
   }
 
-  // Format price for display
-  let priceDisplay = '';
-  if (matchingSku?.basePrice) {
-    const { symbol } = getDenomMetadata(matchingSku.basePrice.denom);
-    const basePrice = fromBaseUnits(matchingSku.basePrice.amount, matchingSku.basePrice.denom);
-    const unitLabel = UNIT_LABELS[matchingSku.unit as Unit] || '/hr';
-    priceDisplay = `${Math.round(basePrice * 100) / 100} ${symbol}${unitLabel}`;
-  }
-
-  // Credit check for total cost
-  let skuHourlyCost = 0;
-  if (matchingSku?.basePrice) {
-    const basePrice = fromBaseUnits(matchingSku.basePrice.amount, matchingSku.basePrice.denom);
-    if (matchingSku.unit === Unit.UNIT_PER_DAY) {
-      skuHourlyCost = basePrice / 24;
-    } else {
-      skuHourlyCost = basePrice;
-    }
-  }
+  // Pricing is already normalized to $/hour at the source (`resolveSkuTiers`).
+  // Pass-11 invariant: every resolved tier has `basePrice`, so
+  // `pricePerHour === 0` is a genuinely-free tier (`basePrice.amount === '0'`),
+  // NOT a missing-price candidate. Format unconditionally so free tiers
+  // surface "0.0000 .../hr" on the confirmation card instead of going blank
+  // (billing-transparency — same category as pass 5).
+  const skuHourlyCost = matched.pricePerHour;
+  const priceDisplay = `${skuHourlyCost.toFixed(4)} ${matched.denomSymbol}/hr`;
 
   // Count total services across all entries (stacks contribute multiple services)
   const totalServiceCount = resolvedEntries.reduce(
@@ -1674,7 +1624,9 @@ export async function executeBatchDeploy(
   }
 
   const names = resolvedEntries.map((e) => e.app_name);
-  const confirmationMessage = `Deploy ${entries.length} apps (${names.join(', ')}) on ${normalizedSize} tier${priceDisplay ? ` (~${priceDisplay} each)` : ''}?${creditWarning}`;
+  // priceDisplay is always non-empty (pass-16 invariant) — no need for a
+  // truthy guard around the ` (~… each)` wrapper.
+  const confirmationMessage = `Deploy ${entries.length} apps (${names.join(', ')}) on ${normalizedSize} tier (~${priceDisplay} each)?${creditWarning}`;
 
   return {
     success: true,
@@ -2847,7 +2799,7 @@ export async function executeConfirmedUpdateApp(
             success: false,
             error: rollbackOk
               ? `Update failed, previous version restored. Last error: ${provision.last_error}`
-              : `Update failed and rollback failed. Last error: ${provision.last_error}. Use app_status("${name}") to check.`,
+              : `Update failed and rollback failed. Last error: ${normalizeErrorPunctuation(provision.last_error)}. Use app_status("${name}") to check.`,
           };
         }
       } catch (error) {

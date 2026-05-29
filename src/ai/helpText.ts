@@ -1,4 +1,47 @@
-export const HELP_TEXT = `## Quick Reference
+import type { SkuTiersState } from '../stores/aiActions/skuTiers';
+import { normalizeErrorPunctuation } from '../utils/errors';
+
+function tiersSection(slice: SkuTiersState): string {
+  if (slice.tiers.length === 0) {
+    // Phase-distinct copy — pass 14. The old "_Tier catalog loading…_" wording
+    // was wrong in two of the four reachable states: `error` (no load in
+    // progress, refresh won't help) and `idle` (load hasn't been kicked off
+    // yet). Pass 14 splits the wording so /help is honest about what's going
+    // on. Mirrors the pass-8 "distinct diagnostics by source" pattern.
+    switch (slice.phase) {
+      case 'error':
+        // Pass-9 cross-coupling: `slice.error` may already end with `.`
+        // (e.g. the pass-8 short-circuit string
+        // 'PUBLIC_SKU_SPECS is empty or invalid — no SKU specs configured.').
+        // Without `normalizeErrorPunctuation` we'd render `..._` here. The
+        // helper strips trailing periods so we can append exactly one.
+        return `_Tier catalog unavailable: ${normalizeErrorPunctuation(slice.error ?? 'unknown error')}._`;
+      case 'loading':
+        return '_Tier catalog loading — refresh in a moment._';
+      case 'idle':
+        return '_Tier catalog not loaded yet._';
+      case 'ready':
+      default:
+        // Defensive — `ready` with zero tiers means env spec map matched
+        // nothing on chain (config drift). The resolver also surfaces this
+        // via `loadSkuTiersFn`'s empty-intersection error path, but if the
+        // slice ever reaches `ready` with [], this is the right copy.
+        return '_No tiers configured for this network._';
+    }
+  }
+  const rows = slice.tiers
+    .map(
+      (t) =>
+        `| ${t.skuName} | ${t.cores} cores | ${t.ramMB.toLocaleString()} MB | ${t.diskGB} GB | ${t.pricePerHour.toFixed(4)} ${t.denomSymbol}/hr |`,
+    )
+    .join('\n');
+  return `| Tier | CPU | Memory | Disk | Price |
+|------|-----|--------|------|-------|
+${rows}`;
+}
+
+export function buildHelpText(slice: SkuTiersState): string {
+  return `## Quick Reference
 
 ### Commands
 | Command | Description |
@@ -24,12 +67,7 @@ export const HELP_TEXT = `## Quick Reference
 - "Browse catalog"
 
 ### Resource tiers
-| Tier | CPU | Memory | Disk |
-|------|-----|--------|------|
-| docker-micro | 0.5 cores | 512 MB | 1 GB |
-| docker-small | 1 core | 1,024 MB | 5 GB |
-| docker-medium | 2 cores | 2,048 MB | 10 GB |
-| docker-large | 4 cores | 4,096 MB | 20 GB |
+${tiersSection(slice)}
 
 ### Keyboard shortcuts
 | Key | Action |
@@ -39,3 +77,4 @@ export const HELP_TEXT = `## Quick Reference
 | **\\u2191 \\u2193** | Browse input history |
 | **/** | Focus chat input |
 `;
+}

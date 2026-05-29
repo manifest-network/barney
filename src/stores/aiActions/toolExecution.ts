@@ -47,7 +47,7 @@ async function handleToolCall(
     set({ deployProgress: null });
   }
 
-  const { clientManager, address, signArbitrary, abortController, pendingPayload } = get();
+  const { clientManager, address, signArbitrary, abortController, pendingPayload, skuTiers } = get();
 
   const result = await executeTool(toolCall.function.name, sanitizedArgs, {
     clientManager,
@@ -56,6 +56,7 @@ async function handleToolCall(
     onProgress: (progress) => set({ deployProgress: { ...progress } }),
     appRegistry: getAppRegistryAccess(),
     signal: abortController?.signal,
+    tiers: skuTiers.tiers,
   }, pendingPayload ?? undefined);
 
   if (result.success && !result.requiresConfirmation) {

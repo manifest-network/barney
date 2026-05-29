@@ -75,9 +75,13 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   setItemCustomDomain: vi.fn(),
 }));
 
-vi.mock('../../utils/errors', () => ({
-  logError: vi.fn(),
-}));
+vi.mock('../../utils/errors', async (orig) => {
+  const actual = await orig<typeof import('../../utils/errors')>();
+  return {
+    ...actual,
+    logError: vi.fn(),
+  };
+});
 
 vi.mock('./utils', () => ({
   extractLeaseUuidFromTxResult: vi.fn().mockReturnValue('new-lease-uuid'),
@@ -117,6 +121,13 @@ import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 const ADDRESS = 'manifest1abc';
 const CLIENT_MANAGER = {} as CosmosClientManager;
 
+const SAMPLE_TIERS = [
+  { skuName: 'docker-micro', skuUuid: 'sku-1', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
+  { skuName: 'docker-small', skuUuid: 'sku-2', providerUuid: 'p1', cores: 1, ramMB: 1024, diskGB: 5, pricePerHour: 0.1, denomSymbol: 'PWR', unit: 1 },
+  { skuName: 'docker-medium', skuUuid: 'sku-3', providerUuid: 'p1', cores: 2, ramMB: 2048, diskGB: 10, pricePerHour: 0.2, denomSymbol: 'PWR', unit: 1 },
+  { skuName: 'docker-large', skuUuid: 'sku-4', providerUuid: 'p1', cores: 4, ramMB: 4096, diskGB: 20, pricePerHour: 0.5, denomSymbol: 'PWR', unit: 1 },
+];
+
 function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutorOptions {
   return {
     clientManager: CLIENT_MANAGER,
@@ -126,6 +137,7 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
       pub_key: { type: 'tendermint/PubKeySecp256k1', value: 'pubkey' },
       signature: 'sig',
     }),
+    tiers: SAMPLE_TIERS,
     ...overrides,
   };
 }
@@ -771,15 +783,6 @@ describe('parseAndValidateStackServices', () => {
     }
   });
 
-  it('sets needsStorage when known image requires storage', () => {
-    const json = JSON.stringify({ db: { image: 'postgres' } });
-    const result = parseAndValidateStackServices(json, true, 'test');
-    expect('error' in result).toBe(false);
-    if (!('error' in result)) {
-      expect(result.needsStorage).toBe(true);
-    }
-  });
-
   it('extracts health_check from service config', () => {
     const json = JSON.stringify({
       web: { image: 'nginx', health_check: { test: ['CMD-SHELL', 'curl -f http://localhost'], interval: '30s' } },
@@ -1030,7 +1033,25 @@ describe('executeDeployApp', () => {
     const result = await executeDeployApp({ size: 'xxlarge' }, makeOptions(), makePayload());
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid size');
-    expect(result.error).toContain('micro, small, medium, large');
+    expect(result.error).toContain('docker-micro, docker-small, docker-medium, docker-large');
+  });
+
+  it('returns clean error when tier catalog is empty (loading/error state)', async () => {
+    const result = await executeDeployApp({ image: 'redis' }, makeOptions({ tiers: [] }), makePayload());
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/tier catalog unavailable/i);
+  });
+
+  it('accepts both "micro" (legacy) and "docker-micro" (canonical) for size', async () => {
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    const a = await executeDeployApp({ image: 'redis', port: '6379', size: 'micro' }, makeOptions(), makePayload());
+    const b = await executeDeployApp({ image: 'redis', port: '6379', size: 'docker-micro' }, makeOptions(), makePayload());
+    expect(a.success).toBe(true);
+    expect(b.success).toBe(true);
+    expect(a.pendingAction?.args.size).toBe('docker-micro');
+    expect(b.pendingAction?.args.size).toBe('docker-micro');
   });
 
   it('accepts all valid size tiers', async () => {
@@ -1070,6 +1091,63 @@ describe('executeDeployApp', () => {
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
     expect(result.confirmationMessage).toContain('docker-compose');
+  });
+
+  // Pass-16 regression catchers. Pre-pass-11, `pricePerHour === 0` was
+  // ambiguous (free tier OR missing basePrice), so the executor's
+  // `skuHourlyCost > 0` guard suppressed the display. Pass 11's basePrice
+  // filter closed that ambiguity — `pricePerHour === 0` now unambiguously
+  // means "genuinely free tier" (`basePrice.amount === '0'`), and the guard
+  // is a billing-transparency bug. These tests pin the unconditional format.
+  it('renders "0.0000 .../hr" on the confirmation message for a free tier (pass-16)', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-free', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-free', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+
+    const freeTier = [
+      { skuName: 'docker-micro', skuUuid: 'sku-free', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0, denomSymbol: 'PWR', unit: 1 },
+    ];
+    const result = await executeDeployApp(
+      { size: 'docker-micro' },
+      makeOptions({ tiers: freeTier }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    // Unconditional formatter — pre-fix this assertion fails because the
+    // `> 0` guard yielded `priceDisplay = ''` and the ` (~…)` wrapper was
+    // suppressed entirely.
+    expect(result.confirmationMessage).toContain('0.0000 PWR/hr');
+  });
+
+  it('still renders the price display for a positive-price tier (pass-16 happy-path regression)', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+
+    const result = await executeDeployApp(
+      { size: 'docker-micro' },
+      makeOptions(),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+    // SAMPLE_TIERS docker-micro is 0.036 PWR/hr — pinning the existing
+    // wording so a regression that flips it back to a `> 0` guard would
+    // still pass this test (no false positive) but the free-tier test
+    // above would fail (the regression catcher).
+    expect(result.confirmationMessage).toContain('0.0360 PWR/hr');
   });
 
   it('builds manifest from image when no payload', async () => {
@@ -1157,70 +1235,28 @@ describe('executeDeployApp', () => {
     }
   });
 
-  it('upgrades to storage SKU when storage=true and size is micro', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
+  it('defaults to the cheapest resolved tier when size is omitted', async () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
 
-    const result = await executeDeployApp(
-      { image: 'postgres:latest', port: '5432', storage: true },
-      makeOptions()
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.requiresConfirmation).toBe(true);
-    expect(result.confirmationMessage).toContain('upgraded for storage');
-    expect(result.confirmationMessage).toContain('small');
-    expect(resolveSkuItems).toHaveBeenCalledWith(
-      [{ sku_name: 'docker-small', quantity: 1 }],
-      expect.anything()
-    );
-    // Size stored in pendingAction should reflect the upgrade
-    expect(result.pendingAction?.args.size).toBe('small');
-  });
-
-  it('does not upgrade when storage=true and size is already small', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-
-    const result = await executeDeployApp(
-      { image: 'postgres:latest', port: '5432', storage: true, size: 'small' },
-      makeOptions()
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.confirmationMessage).not.toContain('upgraded for storage');
-  });
-
-  it('does not upgrade when storage is not set', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
+    // Arrange so the cheapest tier (docker-small @ 0.01 PWR/hr) is NOT tiers[0].
+    // The default must follow price, not insertion order, so this catches a
+    // tiers[0]-based regression that the SAMPLE_TIERS default would silently miss.
+    const tiersOutOfPriceOrder = [
+      { skuName: 'docker-large', skuUuid: 'sku-l', providerUuid: 'p1', cores: 4, ramMB: 4096, diskGB: 20, pricePerHour: 0.5, denomSymbol: 'PWR', unit: 1 },
+      { skuName: 'docker-medium', skuUuid: 'sku-m', providerUuid: 'p1', cores: 2, ramMB: 2048, diskGB: 10, pricePerHour: 0.2, denomSymbol: 'PWR', unit: 1 },
+      { skuName: 'docker-small', skuUuid: 'sku-s', providerUuid: 'p1', cores: 1, ramMB: 1024, diskGB: 5, pricePerHour: 0.01, denomSymbol: 'PWR', unit: 1 },
+      { skuName: 'docker-micro', skuUuid: 'sku-mi', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
+    ];
 
     const result = await executeDeployApp(
       { image: 'nginx:latest', port: '80' },
-      makeOptions()
+      makeOptions({ tiers: tiersOutOfPriceOrder })
     );
 
     expect(result.success).toBe(true);
-    expect(result.confirmationMessage).not.toContain('upgraded for storage');
-    expect(resolveSkuItems).toHaveBeenCalledWith(
-      [{ sku_name: 'docker-micro', quantity: 1 }],
-      expect.anything()
-    );
+    expect(result.pendingAction?.args.size).toBe('docker-small');
   });
 
   it('applies known image defaults when model omits args', async () => {
@@ -1246,8 +1282,6 @@ describe('executeDeployApp', () => {
     expect(manifest.ports).toEqual({ '7474/tcp': {}, '7687/tcp': {} });
     // NEO4J_AUTH should be neo4j/<generated password>
     expect(manifest.env.NEO4J_AUTH).toMatch(/^neo4j\/[A-Za-z0-9]{16}$/);
-    // Storage upgrade should be triggered
-    expect(result.confirmationMessage).toContain('upgraded for storage');
   });
 
   it('model-provided values override known image defaults', async () => {
@@ -2090,6 +2124,37 @@ describe('executeConfirmedDeployApp', () => {
       { serviceName: '', customDomain: 'redis.example.com' },
     ]);
   });
+
+  it('normalizes trailing-period on uploadResult.error so the chat-visible message has no double period', async () => {
+    // Pass-9 follow-up: the error string interpolated into the user-visible
+    // "Lease created but upload failed: …. The lease … is active…" template
+    // routes through `normalizeErrorPunctuation`. An upstream error ending
+    // in `.` (chain responses + ToolResult.error all-common) used to print
+    // as `… failed: provider rejected the payload..  The lease …` — double
+    // period. Now the strip-then-append happens at the boundary so the
+    // visible string has exactly one `.` before the next sentence.
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({
+      success: false,
+      error: 'provider rejected the payload.',
+    });
+
+    const result = await executeConfirmedDeployApp(
+      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry() }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Lease created but upload failed:');
+    expect(result.error).toContain('provider rejected the payload.');
+    // The critical no-double-period assertion — would have failed pre-fix.
+    expect(result.error).not.toMatch(/\.\./);
+    // And the boundary is intact: the helper's stripped tail is followed by
+    // the template's own `.` continuation, then the next sentence.
+    expect(result.error).toContain('the payload. The lease');
+  });
 });
 
 describe('executeStopApp', () => {
@@ -2383,6 +2448,32 @@ describe('executeBatchDeploy', () => {
     expect(result.error).toContain('Invalid size');
   });
 
+  it('batch defaults to the cheapest resolved tier when size is omitted', async () => {
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+
+    // Arrange so the cheapest tier (docker-small @ 0.01 PWR/hr) is NOT tiers[0].
+    // A `tiers[0]`-based regression would silently pass against SAMPLE_TIERS;
+    // this ordering forces the test to rely on price comparison.
+    const tiersOutOfPriceOrder = [
+      { skuName: 'docker-large', skuUuid: 'sku-l', providerUuid: 'p1', cores: 4, ramMB: 4096, diskGB: 20, pricePerHour: 0.5, denomSymbol: 'PWR', unit: 1 },
+      { skuName: 'docker-small', skuUuid: 'sku-s', providerUuid: 'p1', cores: 1, ramMB: 1024, diskGB: 5, pricePerHour: 0.01, denomSymbol: 'PWR', unit: 1 },
+      { skuName: 'docker-micro', skuUuid: 'sku-mi', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
+    ];
+
+    const result = await executeBatchDeploy(
+      [makeBatchEntry('app1')],
+      makeOptions({ tiers: tiersOutOfPriceOrder }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    const entries = result.pendingAction?.args.entries as Array<{ size: string }>;
+    expect(entries[0].size).toBe('docker-small');
+  });
+
   it('returns confirmation for valid batch', async () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
@@ -2405,20 +2496,68 @@ describe('executeBatchDeploy', () => {
     expect(result.pendingAction?.args.entries).toHaveLength(2);
   });
 
-  it('returns insufficient credits error when total cost exceeds balance', async () => {
+  // Pass-16 batch-side regression catchers. Mirrors the single-deploy pair
+  // above. Pre-fix, the batch `confirmationMessage` template
+  // `... tier${priceDisplay ? ` (~${priceDisplay} each)` : ''}?` dropped the
+  // price wrapper entirely when priceDisplay was empty — and priceDisplay
+  // was empty whenever pricePerHour was 0 (the pass-11-now-incorrect guard).
+  it('renders "0.0000 .../hr" on the batch confirmation message for a free tier (pass-16)', async () => {
     vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1', basePrice: { denom: 'upwr', amount: '1000000' }, unit: 1 } as any,
+      { uuid: 'sku-free', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-free', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+
+    const freeTier = [
+      { skuName: 'docker-micro', skuUuid: 'sku-free', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0, denomSymbol: 'PWR', unit: 1 },
+    ];
+    const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
+    const result = await executeBatchDeploy(entries, makeOptions({ tiers: freeTier }));
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('0.0000 PWR/hr');
+    // totalHourlyCost = 0 × 2 entries = 0; the credit check's
+    // `if (totalHourlyCost > 0 && credits < totalHourlyCost)` branch is
+    // skipped, so no Insufficient-credits error fires for the free tier
+    // even when getCreditAccount returns null.
+    expect(result.error).toBeUndefined();
+  });
+
+  it('still renders the price display for a positive-price batch tier (pass-16 happy-path regression)', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
     vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+
+    const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
+    const result = await executeBatchDeploy(entries, makeOptions());
+
+    expect(result.success).toBe(true);
+    // Default SAMPLE_TIERS docker-micro is 0.036 PWR/hr — same pin as the
+    // single-deploy happy-path regression catcher.
+    expect(result.confirmationMessage).toContain('0.0360 PWR/hr');
+  });
+
+  it('returns insufficient credits error when total cost exceeds balance', async () => {
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    // 0.5 PWR balance with tier price 1 PWR/hour × 3 entries = need 3, have 0.5
     vi.mocked(getCreditAccount).mockResolvedValue({
       balances: [{ denom: 'upwr', amount: '500000' }],
     } as any);
 
+    const tiersWithHighPrice = SAMPLE_TIERS.map(t => ({ ...t, pricePerHour: 1.0 }));
     const entries = [makeBatchEntry('app1'), makeBatchEntry('app2'), makeBatchEntry('app3')];
-    const result = await executeBatchDeploy(entries, makeOptions());
+    const result = await executeBatchDeploy(entries, makeOptions({ tiers: tiersWithHighPrice }));
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('Insufficient credits');
@@ -2457,14 +2596,10 @@ describe('executeBatchDeploy', () => {
   });
 
   it('counts services (not just entries) for credit check on stack deploys', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1', basePrice: { denom: 'upwr', amount: '1000000' }, unit: 1 } as any,
-    ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    // 1.5 credits: enough for 1 entry but not 2 services
+    // 1.5 credits: enough for 1 entry but not 2 services at 1 PWR/hr each
     vi.mocked(getCreditAccount).mockResolvedValue({
       balances: [{ denom: 'upwr', amount: '1500000' }],
     } as any);
@@ -2482,8 +2617,9 @@ describe('executeBatchDeploy', () => {
       payload: { bytes, filename: 'manifest-wordpress.json', size: bytes.length, hash: 'b'.repeat(64) },
     };
 
+    const tiersWithHighPrice = SAMPLE_TIERS.map(t => ({ ...t, pricePerHour: 1.0 }));
     // 1 entry with 2 services → needs 2 credits, but only 1.5 available
-    const result = await executeBatchDeploy([entry], makeOptions());
+    const result = await executeBatchDeploy([entry], makeOptions({ tiers: tiersWithHighPrice }));
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('Insufficient credits');
@@ -3660,6 +3796,49 @@ describe('executeConfirmedUpdateApp', () => {
     expect((result.data as any).status).toBe('running');
     expect(updateLease).toHaveBeenCalled();
   });
+
+  it('normalizes trailing-period on provision.last_error in rollback-failed branch', async () => {
+    // Pass-9 follow-up: site 4. The "Update failed and rollback failed.
+    // Last error: …. Use app_status(…) to check." template embeds the
+    // provision.last_error mid-sentence; without normalization an upstream
+    // error ending in `.` would double-up.
+    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: '127.0.0.1',
+        ports: { '6379/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+      },
+    });
+    // Rollback failed: status='failed' + last_error ending in `.`.
+    vi.mocked(getLeaseProvision).mockResolvedValue({
+      status: 'failed',
+      fail_count: 1,
+      last_error: 'health check kept timing out.',
+    });
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Update failed and rollback failed.');
+    expect(result.error).toContain('health check kept timing out.');
+    expect(result.error).not.toMatch(/\.\./);
+    // Sentence boundary survives: tail-stripped `.` then template's own `.`
+    // then the next sentence.
+    expect(result.error).toContain('timing out. Use app_status');
+  });
 });
 
 describe('deploy_app with custom_domain (Pass B)', () => {
@@ -3825,7 +4004,7 @@ describe('deploy_app with custom_domain (Pass B)', () => {
       name: 'web-prod',
       leaseUuid: 'lease-X',
       size: 'micro',
-      providerUuid: 'p-1',
+      providerUuid: 'p1',
       providerUrl: 'https://fred.example.com',
       createdAt: 0,
       status: 'running',

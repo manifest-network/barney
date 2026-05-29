@@ -424,7 +424,7 @@ export async function executeGetBalance(
  * Execute browse_catalog: Providers + SKUs grouped by tier.
  */
 export async function executeBrowseCatalog(
-  options: ToolExecutorOptions = { clientManager: null, address: undefined },
+  options: ToolExecutorOptions = { clientManager: null, address: undefined, tiers: [] },
 ): Promise<ToolResult> {
   const { signal } = options;
   throwIfAborted(signal, 'browse_catalog');

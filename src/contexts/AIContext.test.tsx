@@ -43,6 +43,17 @@ vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
+// Mock the SKU tier loader so the tests don't try to hit the chain on mount —
+// they only care about the health-check + store-orphan invariants.
+vi.mock('../stores/aiActions/skuTiers', async (orig) => {
+  const actual = await orig<typeof import('../stores/aiActions/skuTiers')>();
+  return {
+    ...actual,
+    loadSkuTiersFn: vi.fn().mockResolvedValue(undefined),
+    retrySkuTiersFn: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 import { AIProvider } from './AIContext';
 import { AIStoreContext, useAIStore } from './aiStoreContext';
 import { checkApiHealth } from '../api/morpheus';

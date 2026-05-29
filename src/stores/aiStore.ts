@@ -44,6 +44,12 @@ import { sendMessageFn } from './aiActions/sendMessage';
 import { confirmActionFn, cancelActionFn, type ConfirmActionOverrides } from './aiActions/confirmAction';
 import { requestBatchDeployFn } from './aiActions/batchDeploy';
 import { requestStopAppFn } from './aiActions/stopApp';
+import {
+  loadSkuTiersFn,
+  retrySkuTiersFn,
+  initialSkuTiersState,
+  type SkuTiersState,
+} from './aiActions/skuTiers';
 import { generateMessageId, trimMessages } from './aiActions/utils';
 
 // Re-export for use by action modules and consumers
@@ -52,6 +58,7 @@ export { generateMessageId };
 // Re-export types for backward compatibility
 export type { ChatMessage, PendingConfirmation } from '../contexts/aiTypes';
 export type { AISettings } from '../ai/validation';
+export type { SkuTiersState } from './aiActions/skuTiers';
 
 export interface AIStore {
   // --- Reactive state (components select these) ---
@@ -69,6 +76,10 @@ export interface AIStore {
    *  the CustomDomainCard, and the AppCard's embedded custom-domain row. */
   dnsStatuses: ReadonlyMap<string, DnsStatusEntry>;
 
+  /** Resolved SKU tier list (chain ∩ env), loaded once at boot. Deploy
+   *  surfaces gate on `phase === 'ready'`; everything else renders normally. */
+  skuTiers: SkuTiersState;
+
   // --- Internal state (only accessed via get() in actions) ---
   clientManager: CosmosClientManager | null;
   address: string | undefined;
@@ -78,6 +89,7 @@ export interface AIStore {
   _toolCache: Map<string, { result: ToolResult; timestamp: number }>;
   _pendingStreamUpdate: { messageId: string; content: string; thinking?: string } | null;
   _rafId: number | null;
+  _skuTiersInFlight: Promise<void> | null;
 
   // --- Actions ---
   setIsOpen: (open: boolean) => void;
@@ -97,7 +109,10 @@ export interface AIStore {
   clearHistory: () => void;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
   requestStopApp: (appName: string) => void;
+  loadSkuTiers: () => Promise<void>;
+  retrySkuTiers: () => Promise<void>;
   addLocalMessage: (content: string, card?: MessageCard) => void;
+  addLocalErrorMessage: (error: string) => void;
   stopStreaming: () => void;
   scheduleStreamingUpdate: (messageId: string, content: string, thinking?: string) => void;
   flushPendingUpdate: () => void;
@@ -124,6 +139,7 @@ export const createAIStore = () =>
     pendingPayload: null,
     deployProgress: null,
     dnsStatuses: new Map<string, DnsStatusEntry>(),
+    skuTiers: initialSkuTiersState,
 
     clientManager: null,
     address: undefined,
@@ -133,6 +149,7 @@ export const createAIStore = () =>
     _toolCache: new Map(),
     _pendingStreamUpdate: null,
     _rafId: null,
+    _skuTiersInFlight: null,
 
     // --- Simple actions ---
     setIsOpen: (open) => set({ isOpen: open }),
@@ -160,6 +177,21 @@ export const createAIStore = () =>
         content,
         timestamp: Date.now(),
         card,
+        local: true,
+      };
+      set({ messages: trimMessages([...get().messages, msg]) });
+    },
+
+    /** UI-synthesized error message — renders via `MessageBubble`'s inline-alert
+     *  path and gets `ERROR_PATTERNS` suggestion buttons. Sibling of
+     *  `addLocalMessage`; differs only in setting `error` instead of `content`. */
+    addLocalErrorMessage: (error) => {
+      const msg: ChatMessage = {
+        id: generateMessageId(),
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        error,
         local: true,
       };
       set({ messages: trimMessages([...get().messages, msg]) });
@@ -268,6 +300,8 @@ export const createAIStore = () =>
     cancelAction: () => cancelActionFn(get, set),
     requestBatchDeploy: (apps, userMessage) => requestBatchDeployFn(get, set, apps, userMessage),
     requestStopApp: (appName) => requestStopAppFn(get, set, appName),
+    loadSkuTiers: () => loadSkuTiersFn(get, set),
+    retrySkuTiers: () => retrySkuTiersFn(get, set),
 
     // --- Tool cache ---
     getToolCacheKey: (toolName, args) => {

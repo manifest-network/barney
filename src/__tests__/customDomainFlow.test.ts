@@ -87,6 +87,7 @@ describe('customDomainFlow integration', () => {
       clientManager: CLIENT_MANAGER,
       address: ADDR,
       appRegistry: registry,
+      tiers: [],
     };
 
     // Chain reports a single legacy (unnamed) lease item with no current domain.

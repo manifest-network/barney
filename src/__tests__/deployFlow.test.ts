@@ -129,6 +129,10 @@ describe('Deploy Flow Integration', () => {
         pub_key: { value: 'pubkey' },
         signature: 'sig',
       }),
+      tiers: [
+        { skuName: 'docker-micro', skuUuid: 'sku-micro', providerUuid: PROVIDER_UUID, cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
+        { skuName: 'docker-small', skuUuid: SKU_UUID, providerUuid: PROVIDER_UUID, cores: 1, ramMB: 1024, diskGB: 5, pricePerHour: 0.1, denomSymbol: 'PWR', unit: 1 },
+      ],
     };
   });
 

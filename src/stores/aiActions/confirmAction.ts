@@ -114,6 +114,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
         onProgress: (progress) => set({ deployProgress: { ...progress } }),
         appRegistry: getAppRegistryAccess(),
         signal: get().abortController?.signal,
+        tiers: get().skuTiers.tiers,
       },
       action.payload
     );
@@ -155,7 +156,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     const updatedMessages = get().messages.filter((m) => m.id !== newAssistantMessageId);
 
     const stream = streamChat({
-      messages: toChatApiMessages(updatedMessages, get().address),
+      messages: toChatApiMessages(updatedMessages, get().address, get().skuTiers.tiers),
       signal: get().abortController?.signal,
     });
 

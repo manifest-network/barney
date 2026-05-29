@@ -105,6 +105,7 @@ describe('processToolCallsFn', () => {
 
     get = () => ({
       ...state,
+      skuTiers: { phase: 'idle', tiers: [], denomSymbol: '', error: null },
       getToolCacheKey: (name: string, args: Record<string, unknown>) =>
         `${state.address}:${name}:${JSON.stringify(args)}`,
       getCachedToolResult: (key: string) => {

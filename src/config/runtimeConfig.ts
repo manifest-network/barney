@@ -29,7 +29,8 @@ type RuntimeConfigKey =
   | 'PUBLIC_AI_CONFIRMATION_TIMEOUT_MS'
   | 'PUBLIC_AI_MAX_TOOL_ITERATIONS'
   | 'PUBLIC_AI_MAX_MESSAGES'
-  | 'PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY';
+  | 'PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY'
+  | 'PUBLIC_SKU_SPECS';
 
 type RuntimeConfig = Record<RuntimeConfigKey, string>;
 
@@ -59,6 +60,7 @@ const BUILD_ENV: RuntimeConfig = {
   PUBLIC_AI_MAX_TOOL_ITERATIONS: import.meta.env.PUBLIC_AI_MAX_TOOL_ITERATIONS ?? '',
   PUBLIC_AI_MAX_MESSAGES: import.meta.env.PUBLIC_AI_MAX_MESSAGES ?? '',
   PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY: import.meta.env.PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY ?? '',
+  PUBLIC_SKU_SPECS: import.meta.env.PUBLIC_SKU_SPECS ?? '',
 };
 
 const DEFAULTS: RuntimeConfig = {
@@ -81,6 +83,7 @@ const DEFAULTS: RuntimeConfig = {
   PUBLIC_AI_MAX_TOOL_ITERATIONS: '10',
   PUBLIC_AI_MAX_MESSAGES: '200',
   PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY: '4',
+  PUBLIC_SKU_SPECS: '',
 };
 
 /** Keys that represent numeric (positive-integer) config values.
@@ -135,6 +138,7 @@ export const runtimeConfig: Readonly<RuntimeConfig> = Object.freeze({
   PUBLIC_AI_MAX_TOOL_ITERATIONS: getConfigValue('PUBLIC_AI_MAX_TOOL_ITERATIONS'),
   PUBLIC_AI_MAX_MESSAGES: getConfigValue('PUBLIC_AI_MAX_MESSAGES'),
   PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY: getConfigValue('PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY'),
+  PUBLIC_SKU_SPECS: getConfigValue('PUBLIC_SKU_SPECS'),
 });
 
 /** Parse a string as a positive integer with optional upper-bound clamping.

@@ -124,9 +124,6 @@ export const WS_MAX_RECONNECT_ATTEMPTS = 2;
  * Fred sends ping frames every 30s, so 45s gives comfortable headroom. */
 export const WS_LIVENESS_TIMEOUT_MS = 45_000;
 
-/** SKU name that supports persistent disk storage (hardcoded until Fred exposes this via API) */
-export const STORAGE_SKU_NAME = 'docker-small';
-
 // ============================================
 // Custom Domain DNS Polling Constants
 // ============================================

@@ -13,6 +13,9 @@ export function useAI() {
     deployProgress: s.deployProgress,
     dnsStatuses: s.dnsStatuses,
     setDnsStatuses: s.setDnsStatuses,
+    skuTiers: s.skuTiers,
+    loadSkuTiers: s.loadSkuTiers,
+    retrySkuTiers: s.retrySkuTiers,
     setIsOpen: s.setIsOpen,
     sendMessage: s.sendMessage,
     updateSettings: s.updateSettings,
@@ -27,6 +30,7 @@ export function useAI() {
     requestBatchDeploy: s.requestBatchDeploy,
     requestStopApp: s.requestStopApp,
     addLocalMessage: s.addLocalMessage,
+    addLocalErrorMessage: s.addLocalErrorMessage,
     stopStreaming: s.stopStreaming,
   })));
 }
