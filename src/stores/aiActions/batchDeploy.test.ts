@@ -36,9 +36,16 @@ vi.mock('../../utils/hash', () => ({
   toHex: vi.fn().mockReturnValue('010203'),
 }));
 
-vi.mock('../../utils/errors', () => ({
-  logError: vi.fn(),
-}));
+// Use importOriginal here so `normalizeErrorPunctuation` (real helper, used
+// transitively by `getDeployExampleRejection` from the catalog-gate path)
+// still works alongside the mocked `logError` spy.
+vi.mock('../../utils/errors', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/errors')>();
+  return {
+    ...actual,
+    logError: vi.fn(),
+  };
+});
 
 vi.mock('../../ai/systemPrompt', () => ({
   getSystemPrompt: vi.fn(() => 'system prompt'),
@@ -91,6 +98,28 @@ function makeApps(count = 2): Array<{ label: string; manifest: object }> {
   }));
 }
 
+// Default skuTiers state used by setupStore — pre-resolved `ready` slice so
+// existing happy-path tests flow past the pass-13 catalog gate without
+// caring about tier resolution. Catalog-gate tests override this explicitly.
+const READY_SKU_TIERS = {
+  phase: 'ready' as const,
+  tiers: [
+    {
+      skuName: 'docker-micro',
+      skuUuid: 'sku-1',
+      providerUuid: 'p-1',
+      cores: 0.5,
+      ramMB: 512,
+      diskGB: 1,
+      pricePerHour: 0.05,
+      denomSymbol: 'PWR',
+      unit: 1,
+    },
+  ],
+  denomSymbol: 'PWR',
+  error: null,
+};
+
 function setupStore(overrides: Record<string, unknown> = {}): Store {
   const store = createAIStore();
   store.setState({
@@ -103,6 +132,7 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
     settings: {
       saveHistory: false,
     },
+    skuTiers: READY_SKU_TIERS,
     ...overrides,
   });
   return store;
@@ -185,6 +215,108 @@ describe('requestBatchDeploy', () => {
       expect(sha256).not.toHaveBeenCalled();
       // isStreaming preserved (guard returned before the `set({ isStreaming: true })`).
       expect(store.getState().isStreaming).toBe(false);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Catalog gate (symmetric with ChatPanel.deployExample's single-example
+  // path) — without this, multi-example typed deploys ("deploy tetris and
+  // redis") would skip straight to executeBatchDeploy and surface a raw
+  // "Tier catalog unavailable" string that doesn't match the pass-6 catalog
+  // regex → no Retry button. Pass-13 fix.
+  // -----------------------------------------------------------------------
+  describe('catalog gate', () => {
+    it('rejects with an inline error when skuTiers.phase === "error" and does not call executeBatchDeploy', async () => {
+      const store = setupStore({
+        skuTiers: {
+          phase: 'error' as const,
+          tiers: [],
+          denomSymbol: '',
+          error: 'tier catalog fetch failed',
+        },
+      });
+
+      await store.getState().requestBatchDeploy(makeApps());
+
+      const msgs = store.getState().messages;
+      // Exactly one message: the synthetic error from addLocalErrorMessage.
+      // No user echo, no synthetic-assistant, no tool message.
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].role).toBe('assistant');
+      expect(msgs[0].local).toBe(true);
+      expect(msgs[0].content).toBe('');
+      expect(msgs[0].error).toBe('Deploy unavailable: tier catalog fetch failed.');
+      // Executor and payload work must not fire.
+      expect(mockExecuteBatchDeploy).not.toHaveBeenCalled();
+      expect(sha256).not.toHaveBeenCalled();
+      // isStreaming stays false — guard returned before `set({ isStreaming: true })`.
+      expect(store.getState().isStreaming).toBe(false);
+    });
+
+    it('rejects with the loading wording when skuTiers.phase === "loading"', async () => {
+      const store = setupStore({
+        skuTiers: {
+          phase: 'loading' as const,
+          tiers: [],
+          denomSymbol: '',
+          error: null,
+        },
+      });
+
+      await store.getState().requestBatchDeploy(makeApps());
+
+      const msgs = store.getState().messages;
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].role).toBe('assistant');
+      expect(msgs[0].local).toBe(true);
+      expect(msgs[0].error).toBe('Deploy unavailable: tier catalog is still loading. Please wait a moment and try again.');
+      expect(mockExecuteBatchDeploy).not.toHaveBeenCalled();
+      expect(sha256).not.toHaveBeenCalled();
+      expect(store.getState().isStreaming).toBe(false);
+    });
+
+    it('rejects with the loading wording when skuTiers.phase === "idle" (pre-fetch)', async () => {
+      const store = setupStore({
+        skuTiers: {
+          phase: 'idle' as const,
+          tiers: [],
+          denomSymbol: '',
+          error: null,
+        },
+      });
+
+      await store.getState().requestBatchDeploy(makeApps());
+
+      const msgs = store.getState().messages;
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].error).toBe('Deploy unavailable: tier catalog is still loading. Please wait a moment and try again.');
+      expect(mockExecuteBatchDeploy).not.toHaveBeenCalled();
+    });
+
+    it('proceeds normally when skuTiers.phase === "ready" (happy-path regression catcher)', async () => {
+      // setupStore defaults to a `ready` slice — relying on that here so this
+      // test fails loudly if the default changes in a way that masks the gate.
+      const store = setupStore();
+      mockExecuteBatchDeploy.mockResolvedValueOnce({
+        success: true,
+        requiresConfirmation: true,
+        confirmationMessage: 'Deploy 2 apps?',
+        pendingAction: { toolName: 'batch_deploy', args: { entries: [] } },
+      } as unknown as ToolResult);
+
+      await store.getState().requestBatchDeploy(makeApps());
+
+      // No catalog-gate rejection message — the existing user/assistant/tool
+      // sequence runs, and executeBatchDeploy fires with the resolved tiers.
+      expect(mockExecuteBatchDeploy).toHaveBeenCalledTimes(1);
+      const msgs = store.getState().messages;
+      // No synthetic local error message — first message should be the user echo.
+      const firstLocalAssistant = msgs.find(
+        (m) => m.role === 'assistant' && m.local === true,
+      );
+      expect(firstLocalAssistant).toBeUndefined();
+      // pendingConfirmation set (happy path).
+      expect(store.getState().pendingConfirmation).not.toBeNull();
     });
   });
 
