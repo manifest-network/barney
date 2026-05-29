@@ -9,6 +9,7 @@
 import { runtimeConfig } from '../../config/runtimeConfig';
 import { parseSkuSpecs } from '../../config/skuSpecs';
 import { resolveSkuTiers } from '../../api/skuTiers';
+import { withTimeout } from '../../api/utils';
 import { logError } from '../../utils/errors';
 import type { AIStore } from '../aiStore';
 import type { ResolvedSkuTier } from '../../api/skuTiers';
@@ -49,7 +50,18 @@ export function loadSkuTiersFn(get: Get, set: Set): Promise<void> {
 
   const promise = (async () => {
     try {
-      const { tiers, denomSymbol } = await resolveSkuTiers(specs);
+      // Bound the boot fetch with `withTimeout` (default AI_TOOL_API_TIMEOUT_MS).
+      // An unbounded await on a hung LCD endpoint would strand the slice in
+      // `phase: 'loading'` forever — and the pass-6 follow-up made loading
+      // Retry-less by design, so without this the only recovery would be a
+      // page reload. On timeout the rejection lands in the catch below and
+      // transitions to `phase: 'error'`, which gets the inline Retry suggestion
+      // via MessageBubble's ERROR_PATTERNS.
+      const { tiers, denomSymbol } = await withTimeout(
+        resolveSkuTiers(specs),
+        undefined,
+        'resolveSkuTiers',
+      );
       if (tiers.length === 0) {
         set({
           skuTiers: {

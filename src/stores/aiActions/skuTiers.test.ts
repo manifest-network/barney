@@ -4,6 +4,14 @@ vi.mock('../../api/skuTiers', () => ({
   resolveSkuTiers: vi.fn(),
 }));
 
+vi.mock('../../api/utils', async (orig) => {
+  const actual = await orig<typeof import('../../api/utils')>();
+  return {
+    ...actual,
+    withTimeout: vi.fn(actual.withTimeout),
+  };
+});
+
 vi.mock('../../config/runtimeConfig', async (orig) => {
   const actual = await orig<typeof import('../../config/runtimeConfig')>();
   return {
@@ -17,6 +25,7 @@ vi.mock('../../config/runtimeConfig', async (orig) => {
 
 import { createAIStore } from '../aiStore';
 import { resolveSkuTiers } from '../../api/skuTiers';
+import { withTimeout } from '../../api/utils';
 
 const SAMPLE_TIER = {
   skuName: 'docker-micro',
@@ -31,7 +40,16 @@ const SAMPLE_TIER = {
 };
 
 describe('loadSkuTiers', () => {
-  beforeEach(() => vi.mocked(resolveSkuTiers).mockReset());
+  beforeEach(async () => {
+    vi.mocked(resolveSkuTiers).mockReset();
+    // Reset withTimeout to its real impl (clears any per-test rejection mock
+    // AND zeroes the call count for `toHaveBeenCalledTimes` assertions). The
+    // module mock at the top of the file stashes a `vi.fn(realImpl)` over
+    // the export, so without this reset prior tests' calls would leak in.
+    const real = await vi.importActual<typeof import('../../api/utils')>('../../api/utils');
+    vi.mocked(withTimeout).mockReset();
+    vi.mocked(withTimeout).mockImplementation(real.withTimeout);
+  });
 
   it('transitions idle → loading → ready on success', async () => {
     vi.mocked(resolveSkuTiers).mockResolvedValue({
@@ -89,6 +107,50 @@ describe('loadSkuTiers', () => {
     expect(store.getState().skuTiers.phase).toBe('ready');
     await store.getState().loadSkuTiers();
     expect(vi.mocked(resolveSkuTiers)).toHaveBeenCalledTimes(1);
+  });
+
+  it('wraps the boot fetch with withTimeout (labelled `resolveSkuTiers`)', async () => {
+    // Wire-up check — locks in that loadSkuTiersFn passes through withTimeout
+    // rather than awaiting resolveSkuTiers directly. Without the wrapper, a
+    // hung LCD endpoint would strand the slice in `phase: 'loading'` forever
+    // (the pass-6 follow-up deliberately removed the Retry button from the
+    // loading state, so there's no in-app recovery from that condition).
+    vi.mocked(resolveSkuTiers).mockResolvedValue({ tiers: [SAMPLE_TIER], denomSymbol: 'PWR' });
+    const store = createAIStore();
+    await store.getState().loadSkuTiers();
+    expect(vi.mocked(withTimeout)).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(withTimeout).mock.calls[0];
+    // Second arg is `ms` — undefined means "use AI_TOOL_API_TIMEOUT_MS default".
+    expect(call[1]).toBeUndefined();
+    // Third arg is the label that ends up in the timeout error message.
+    expect(call[2]).toBe('resolveSkuTiers');
+  });
+
+  it('transitions to error when withTimeout rejects (LCD endpoint hangs)', async () => {
+    // Simulate the actual failure mode: withTimeout's promise rejects with
+    // a "timed out" Error because the wrapped resolveSkuTiers never settled.
+    vi.mocked(withTimeout).mockRejectedValueOnce(
+      new Error('resolveSkuTiers timed out after 15000ms'),
+    );
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = createAIStore();
+    await store.getState().loadSkuTiers();
+    const state = store.getState().skuTiers;
+    expect(state.phase).toBe('error');
+    expect(state.error).toMatch(/timed out/i);
+    expect(state.tiers).toEqual([]);
+    spy.mockRestore();
+  });
+
+  it('happy path still completes promptly without waiting for the timeout', async () => {
+    // Companion regression catch: tightening the timeout wrapper mustn't
+    // delay the resolved path. resolveSkuTiers resolves "instantly" → slice
+    // reaches ready without us ever needing to advance fake timers.
+    vi.mocked(resolveSkuTiers).mockResolvedValue({ tiers: [SAMPLE_TIER], denomSymbol: 'PWR' });
+    const store = createAIStore();
+    await store.getState().loadSkuTiers();
+    expect(store.getState().skuTiers.phase).toBe('ready');
+    expect(store.getState().skuTiers.tiers).toEqual([SAMPLE_TIER]);
   });
 });
 
