@@ -933,10 +933,13 @@ export async function executeDeployApp(
   }
 
   // Pricing is normalized to $/hour at the source (`resolveSkuTiers`).
+  // Pass-11 invariant: every resolved tier has `basePrice`, so
+  // `pricePerHour === 0` is a genuinely-free tier (`basePrice.amount === '0'`),
+  // NOT a missing-price candidate. Format unconditionally so free tiers
+  // surface "0.0000 .../hr" on the confirmation card instead of going blank
+  // (billing-transparency — same category as pass 5).
   const skuHourlyCost = matched.pricePerHour;
-  const priceDisplay = skuHourlyCost > 0
-    ? `${skuHourlyCost.toFixed(4)} ${matched.denomSymbol}/hr`
-    : '';
+  const priceDisplay = `${skuHourlyCost.toFixed(4)} ${matched.denomSymbol}/hr`;
 
   // Stack deploys multiply cost by service count
   const serviceNamesResult = validateInternalServiceNames(args._serviceNames, 'deploy_app');
@@ -983,9 +986,9 @@ export async function executeDeployApp(
   }
 
   const stackInfo = serviceCount > 1 ? ` (${serviceCount} services)` : '';
-  const priceInfo = priceDisplay
-    ? ` (~${priceDisplay}${serviceCount > 1 ? ` × ${serviceCount}` : ''})`
-    : '';
+  // priceDisplay is always non-empty (pass-16 invariant) — no need for a
+  // truthy guard around the ` (~…)` wrapper anymore.
+  const priceInfo = ` (~${priceDisplay}${serviceCount > 1 ? ` × ${serviceCount}` : ''})`;
 
   // Optional custom domain: validate up front so the user gets fast feedback
   // before any TX. The set-domain TX will be broadcast in the confirmed-deploy
@@ -1574,10 +1577,13 @@ export async function executeBatchDeploy(
   }
 
   // Pricing is already normalized to $/hour at the source (`resolveSkuTiers`).
+  // Pass-11 invariant: every resolved tier has `basePrice`, so
+  // `pricePerHour === 0` is a genuinely-free tier (`basePrice.amount === '0'`),
+  // NOT a missing-price candidate. Format unconditionally so free tiers
+  // surface "0.0000 .../hr" on the confirmation card instead of going blank
+  // (billing-transparency — same category as pass 5).
   const skuHourlyCost = matched.pricePerHour;
-  const priceDisplay = skuHourlyCost > 0
-    ? `${skuHourlyCost.toFixed(4)} ${matched.denomSymbol}/hr`
-    : '';
+  const priceDisplay = `${skuHourlyCost.toFixed(4)} ${matched.denomSymbol}/hr`;
 
   // Count total services across all entries (stacks contribute multiple services)
   const totalServiceCount = resolvedEntries.reduce(
@@ -1618,7 +1624,9 @@ export async function executeBatchDeploy(
   }
 
   const names = resolvedEntries.map((e) => e.app_name);
-  const confirmationMessage = `Deploy ${entries.length} apps (${names.join(', ')}) on ${normalizedSize} tier${priceDisplay ? ` (~${priceDisplay} each)` : ''}?${creditWarning}`;
+  // priceDisplay is always non-empty (pass-16 invariant) — no need for a
+  // truthy guard around the ` (~… each)` wrapper.
+  const confirmationMessage = `Deploy ${entries.length} apps (${names.join(', ')}) on ${normalizedSize} tier (~${priceDisplay} each)?${creditWarning}`;
 
   return {
     success: true,

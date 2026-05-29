@@ -1093,6 +1093,63 @@ describe('executeDeployApp', () => {
     expect(result.confirmationMessage).toContain('docker-compose');
   });
 
+  // Pass-16 regression catchers. Pre-pass-11, `pricePerHour === 0` was
+  // ambiguous (free tier OR missing basePrice), so the executor's
+  // `skuHourlyCost > 0` guard suppressed the display. Pass 11's basePrice
+  // filter closed that ambiguity — `pricePerHour === 0` now unambiguously
+  // means "genuinely free tier" (`basePrice.amount === '0'`), and the guard
+  // is a billing-transparency bug. These tests pin the unconditional format.
+  it('renders "0.0000 .../hr" on the confirmation message for a free tier (pass-16)', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-free', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-free', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+
+    const freeTier = [
+      { skuName: 'docker-micro', skuUuid: 'sku-free', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0, denomSymbol: 'PWR', unit: 1 },
+    ];
+    const result = await executeDeployApp(
+      { size: 'docker-micro' },
+      makeOptions({ tiers: freeTier }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    // Unconditional formatter — pre-fix this assertion fails because the
+    // `> 0` guard yielded `priceDisplay = ''` and the ` (~…)` wrapper was
+    // suppressed entirely.
+    expect(result.confirmationMessage).toContain('0.0000 PWR/hr');
+  });
+
+  it('still renders the price display for a positive-price tier (pass-16 happy-path regression)', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+
+    const result = await executeDeployApp(
+      { size: 'docker-micro' },
+      makeOptions(),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+    // SAMPLE_TIERS docker-micro is 0.036 PWR/hr — pinning the existing
+    // wording so a regression that flips it back to a `> 0` guard would
+    // still pass this test (no false positive) but the free-tier test
+    // above would fail (the regression catcher).
+    expect(result.confirmationMessage).toContain('0.0360 PWR/hr');
+  });
+
   it('builds manifest from image when no payload', async () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
@@ -2437,6 +2494,56 @@ describe('executeBatchDeploy', () => {
     expect(result.confirmationMessage).toContain('app2');
     expect(result.pendingAction?.toolName).toBe('batch_deploy');
     expect(result.pendingAction?.args.entries).toHaveLength(2);
+  });
+
+  // Pass-16 batch-side regression catchers. Mirrors the single-deploy pair
+  // above. Pre-fix, the batch `confirmationMessage` template
+  // `... tier${priceDisplay ? ` (~${priceDisplay} each)` : ''}?` dropped the
+  // price wrapper entirely when priceDisplay was empty — and priceDisplay
+  // was empty whenever pricePerHour was 0 (the pass-11-now-incorrect guard).
+  it('renders "0.0000 .../hr" on the batch confirmation message for a free tier (pass-16)', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-free', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-free', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+
+    const freeTier = [
+      { skuName: 'docker-micro', skuUuid: 'sku-free', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0, denomSymbol: 'PWR', unit: 1 },
+    ];
+    const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
+    const result = await executeBatchDeploy(entries, makeOptions({ tiers: freeTier }));
+
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('0.0000 PWR/hr');
+    // totalHourlyCost = 0 × 2 entries = 0; the credit check's
+    // `if (totalHourlyCost > 0 && credits < totalHourlyCost)` branch is
+    // skipped, so no Insufficient-credits error fires for the free tier
+    // even when getCreditAccount returns null.
+    expect(result.error).toBeUndefined();
+  });
+
+  it('still renders the price display for a positive-price batch tier (pass-16 happy-path regression)', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+
+    const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
+    const result = await executeBatchDeploy(entries, makeOptions());
+
+    expect(result.success).toBe(true);
+    // Default SAMPLE_TIERS docker-micro is 0.036 PWR/hr — same pin as the
+    // single-deploy happy-path regression catcher.
+    expect(result.confirmationMessage).toContain('0.0360 PWR/hr');
   });
 
   it('returns insufficient credits error when total cost exceeds balance', async () => {
