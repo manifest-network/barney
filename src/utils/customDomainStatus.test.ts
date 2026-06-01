@@ -191,6 +191,65 @@ describe('resolveDnsViaDoh', () => {
     expect(r.cname).toBe('target.example.net');
   });
 
+  // Regression: a correctly-configured CNAME flashed "got an A/AAAA record".
+  // Real recursive resolvers return the WHOLE chain in an A/AAAA answer — a
+  // `type=A` query for a CNAME'd name yields [CNAME(type 5), A(type 1)]. The
+  // dedicated `type=CNAME` query can transiently miss the record (RFC 2308
+  // negative-caching of a pre-publish NODATA during propagation, or a single
+  // failed fetch) while the A query still resolves the chain. The CNAME target
+  // must be recovered from the A/AAAA answer, not read solely from the
+  // dedicated CNAME query. See the user-reported "got an A/AAAA record" on a
+  // grey-cloud Cloudflare CNAME.
+  it('recovers the CNAME from the A/AAAA answer when the dedicated CNAME query misses it', async () => {
+    fetchSpy.mockImplementation((url: string) => {
+      const type = new URL(url).searchParams.get('type');
+      if (type === 'A') {
+        return Promise.resolve(new Response(JSON.stringify({
+          Status: 0,
+          Answer: [
+            { name: 'app.example.com', type: 5, data: 'target.example.net.' },
+            { name: 'target.example.net', type: 1, data: '64.29.115.29' },
+          ],
+        })) as any);
+      }
+      if (type === 'AAAA') {
+        return Promise.resolve(new Response(JSON.stringify({
+          Status: 0,
+          Answer: [{ name: 'app.example.com', type: 5, data: 'target.example.net.' }],
+        })) as any);
+      }
+      // Dedicated CNAME query misses (stale NODATA / transient fetch failure).
+      return Promise.resolve(new Response(JSON.stringify({ Status: 0 })) as any);
+    });
+    const r = await resolveDnsViaDoh('app.example.com');
+    expect(r.result).toBe('ok');
+    expect(r.cname).toBe('target.example.net');
+    expect(r.addresses).toEqual(['64.29.115.29']);
+  });
+
+  // The first-hop CNAME (owner name === queried fqdn) must win over any
+  // intermediate hop the resolver includes in a multi-hop chain — we validate
+  // the user's own record, which sits at the queried name.
+  it('selects the first-hop CNAME (owner name matches the queried fqdn) from a multi-hop chain', async () => {
+    fetchSpy.mockImplementation((url: string) => {
+      const type = new URL(url).searchParams.get('type');
+      if (type === 'A') {
+        return Promise.resolve(new Response(JSON.stringify({
+          Status: 0,
+          Answer: [
+            { name: 'app.example.com', type: 5, data: 'hop1.example.net.' },
+            { name: 'hop1.example.net', type: 5, data: 'hop2.example.org.' },
+            { name: 'hop2.example.org', type: 1, data: '64.29.115.29' },
+          ],
+        })) as any);
+      }
+      return Promise.resolve(new Response(JSON.stringify({ Status: 0 })) as any);
+    });
+    const r = await resolveDnsViaDoh('app.example.com');
+    expect(r.result).toBe('ok');
+    expect(r.cname).toBe('hop1.example.net');
+  });
+
   it('returns nxdomain when DoH responds with no records', async () => {
     fetchSpy.mockImplementation(() =>
       Promise.resolve(new Response(JSON.stringify({ Status: 3 })) as any),
