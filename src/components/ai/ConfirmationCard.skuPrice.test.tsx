@@ -86,11 +86,12 @@ beforeEach(() => {
 });
 
 describe('ConfirmationCard SKU price line', () => {
-  it('renders price for the resolved tier on ready', () => {
+  it('renders price AND specs for the resolved tier on ready', () => {
     skuTiers = { phase: 'ready', tiers: [SAMPLE_TIER], denomSymbol: 'PWR', error: null };
     render();
     expect(container.textContent).toContain('0.0360 PWR/hr');
     expect(container.textContent).toContain('Estimated price');
+    expect(container.textContent).toContain('0.5 vCPU · 512 MB RAM · 1 GB disk');
   });
 
   it('renders skeleton when loading', () => {
@@ -108,13 +109,16 @@ describe('ConfirmationCard SKU price line', () => {
     expect(container.textContent).toMatch(/chain down|tier catalog/i);
   });
 
-  it('disables Confirm button when tiers are not ready', () => {
+  it('keeps Confirm enabled even when tiers are not ready (gating removed)', () => {
+    // The executor falls back to the cheapest tier, or returns an inline
+    // "Tier catalog unavailable" error on an empty catalog. The button is no
+    // longer disabled on tier phase.
     skuTiers = { phase: 'loading', tiers: [], denomSymbol: '', error: null };
     render();
     const buttons = container.querySelectorAll('button');
     const confirm = Array.from(buttons).find((b) => b.textContent?.includes('Confirm'));
     expect(confirm).not.toBeUndefined();
-    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    expect((confirm as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('enables Confirm button when tiers are ready', () => {
@@ -163,5 +167,31 @@ describe('ConfirmationCard SKU price line', () => {
     skuTiers = { phase: 'ready', tiers: [SAMPLE_TIER], denomSymbol: 'PWR', error: null };
     render(makeAction({ size: 'micro' }));
     expect(container.textContent).toContain('0.0360 PWR/hr');
+  });
+
+  // Size-substitution note (POLA): only when a size was explicitly requested
+  // but isn't offered on this network. An omitted/resolved size shows no note.
+  it('names the substitution when an explicitly-requested size is unavailable', () => {
+    skuTiers = { phase: 'ready', tiers: [SAMPLE_TIER], denomSymbol: 'PWR', error: null };
+    render(makeAction({ size: 'xxlarge' }));
+    expect(container.textContent).toContain('0.0360 PWR/hr'); // cheapest fallback
+    expect(container.textContent).toContain('Requested size');
+    expect(container.textContent).toContain('xxlarge');
+    expect(container.textContent).toContain('docker-micro');
+    expect(container.textContent).toContain('cheapest available');
+  });
+
+  it('shows NO substitution note when size resolves exactly', () => {
+    skuTiers = { phase: 'ready', tiers: [SAMPLE_TIER], denomSymbol: 'PWR', error: null };
+    render(makeAction({ size: 'docker-micro' }));
+    expect(container.textContent).not.toContain('isn’t offered on this network');
+  });
+
+  it('shows NO substitution note when size is omitted (cheapest default is unsurprising)', () => {
+    skuTiers = { phase: 'ready', tiers: [SAMPLE_TIER], denomSymbol: 'PWR', error: null };
+    // args without a `size` key — the omitted-size path.
+    render({ ...ACTION, args: { app_name: 'redis' } });
+    expect(container.textContent).toContain('0.0360 PWR/hr');
+    expect(container.textContent).not.toContain('isn’t offered on this network');
   });
 });

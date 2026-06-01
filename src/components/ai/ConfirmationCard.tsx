@@ -10,7 +10,7 @@ import { ManifestEditor } from './ManifestEditor';
 import { StackManifestEditor } from './StackManifestEditor';
 import { validateAll, validateCustomDomainFormat, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { getDisplaySafeArgs } from '../../ai/tools';
-import { resolveSizeName } from '../../api/skuTiers';
+import { resolveSizeOrCheapest, formatTierSpecs } from '../../api/skuTiers';
 import { useAI } from '../../hooks/useAI';
 import { CustomDomainBranch, CloudflareProxyHint } from './ConfirmationCardCustomDomain';
 import { parseCustomDomainArgs } from './customDomainBranchData';
@@ -145,21 +145,18 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   // "no domain attached" — the deploy proceeds without firing the set-domain TX.
   const isDeployApp = action.toolName === 'deploy_app';
 
-  // Live $/hour for deploy_app — read straight from the resolved tier list.
-  // While loading, the row shows a skeleton; on error, a warning. Uses the
-  // shared `resolveSizeName` so the price-row lookup is identical to the
-  // executor's: canonical / `docker-` prefix / suffix-only / case-insensitive
-  // on both sides. Without this, model-emitted shorthand like 'large' against
-  // a non-docker-prefixed SKU, or 'small' against a mixed-case catalog, would
-  // resolve at the executor but render here as "Price unavailable" — and the
-  // user could approve a deploy with incomplete pricing info.
   const { skuTiers } = useAI();
-  const selectedTier = useMemo(() => {
+  // Resolve the deploy size through the SAME helper the executor uses, so the
+  // price/specs shown here are exactly what will deploy. An omitted or
+  // unavailable size resolves to the cheapest tier; `fallback` drives the
+  // substitution note below (only for an explicitly-requested-but-unavailable
+  // size — an omitted size deploying cheapest is the unsurprising default).
+  const sizeResolution = useMemo(() => {
     if (!isDeployApp) return undefined;
     const requestedSize = typeof action.args.size === 'string' ? action.args.size : undefined;
-    if (!requestedSize) return undefined;
-    return resolveSizeName(requestedSize, skuTiers.tiers) ?? undefined;
+    return resolveSizeOrCheapest(requestedSize, skuTiers.tiers) ?? undefined;
   }, [isDeployApp, action.args.size, skuTiers.tiers]);
+  const selectedTier = sizeResolution?.tier;
 
   const allStackServiceNames = useMemo(() => {
     if (!isDeployApp) return undefined;
@@ -491,9 +488,10 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         <div className="confirmation-details" data-testid="sku-price-row">
           <p className="confirmation-details-title">Estimated price</p>
           <div className="confirmation-payload">
-            {skuTiers.phase === 'ready' && selectedTier ? (
+            {selectedTier ? (
               <span className="font-mono text-sm text-primary">
                 {selectedTier.pricePerHour.toFixed(4)} {selectedTier.denomSymbol}/hr
+                <span className="text-muted"> · {formatTierSpecs(selectedTier)}</span>
               </span>
             ) : skuTiers.phase === 'loading' || skuTiers.phase === 'idle' ? (
               <span className="text-sm text-muted animate-pulse" data-testid="sku-price-skeleton">
@@ -505,6 +503,11 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
               </span>
             )}
           </div>
+          {sizeResolution?.fallback === 'cheapest-unavailable' && (
+            <p className="text-xs text-muted mt-1" role="note" aria-live="polite">
+              Requested size ‘{sizeResolution.requested}’ isn’t offered on this network — deploying ‘{sizeResolution.tier.skuName}’ (cheapest available) instead.
+            </p>
+          )}
         </div>
       )}
       <div className="confirmation-actions">
@@ -526,8 +529,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
             (isDeployApp && (
               editedDomainError != null ||
               asyncDomainPending ||
-              stackServicePickerError ||
-              skuTiers.phase !== 'ready'
+              stackServicePickerError
             ))
           }
           className="btn btn-success btn-sm"

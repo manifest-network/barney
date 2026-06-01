@@ -39,24 +39,12 @@ const ERROR_PATTERNS: Array<{ pattern: RegExp; suggestions: ErrorSuggestion[] }>
     suggestions: [{ label: 'Check credits', message: 'Check my credits' }],
   },
   {
-    // Tier-catalog rejection — error-state wordings only. Matches the
-    // `Deploy unavailable: ${errorMessage}.` interpolation AND the bare
-    // `Deploy unavailable: tier catalog not ready.` fallback. The negative
-    // lookahead excludes the loading-state wording (`tier catalog is still
-    // loading. Please wait a moment and try again.`) — that one still
-    // surfaces in the bubble but without a Retry button, because there's
-    // nothing to retry while a fetch is in flight.
-    //
-    // Anchored at the start of the string so the pattern doesn't claim
-    // unrelated tool errors that merely happen to mention the phrase.
-    pattern: /^Deploy unavailable: (?!tier catalog is still loading\b).+\.$/,
+    // Executor's only hard deploy failure: the SKU tier catalog couldn't be
+    // resolved (chain unreachable / misconfigured PUBLIC_SKU_SPECS). Offer an
+    // inline Retry that re-fetches the catalog. All other size handling now
+    // falls back to the cheapest tier rather than erroring.
+    pattern: /Tier catalog unavailable/i,
     suggestions: [{ label: 'Retry', action: 'retrySkuTiers' }],
-  },
-  {
-    // Stored-size doesn't resolve in the current catalog — config-condition,
-    // not transient. No Retry; offer a navigation alternative instead.
-    pattern: /^Tier '.+' is not available on this network\.$/,
-    suggestions: [{ label: 'List apps', message: "What's running?" }],
   },
   {
     pattern: /no app found|not found.*app/i,

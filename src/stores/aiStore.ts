@@ -77,7 +77,9 @@ export interface AIStore {
   dnsStatuses: ReadonlyMap<string, DnsStatusEntry>;
 
   /** Resolved SKU tier list (chain ∩ env), loaded once at boot. Deploy
-   *  surfaces gate on `phase === 'ready'`; everything else renders normally. */
+   *  surfaces are never disabled by tier state; the executor falls back to the
+   *  cheapest tier for an omitted/unavailable size and returns 'Tier catalog
+   *  unavailable' only for an empty list. */
   skuTiers: SkuTiersState;
 
   // --- Internal state (only accessed via get() in actions) ---

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getCheapestTier, hourlyPriceFromSku, resolveSizeName, resolveSkuTiers } from './skuTiers';
+import { getCheapestTier, hourlyPriceFromSku, resolveSizeName, resolveSkuTiers, resolveSizeOrCheapest, formatTierSpecs } from './skuTiers';
 import type { ResolvedSkuTier } from './skuTiers';
 import { Unit } from './sku';
 import type { SKU } from './sku';
@@ -384,5 +384,74 @@ describe('resolveSizeName', () => {
     const literalSmall = tier({ skuName: 'small' });
     const dockerSmall = tier({ skuName: 'docker-small' });
     expect(resolveSizeName('small', [dockerSmall, literalSmall])).toBe(literalSmall);
+  });
+
+  it('trims incidental surrounding whitespace before matching', () => {
+    expect(resolveSizeName('  small  ', tiers)).toBe(small);
+    expect(resolveSizeName(' docker-large ', tiers)).toBe(large);
+  });
+});
+
+describe('resolveSizeOrCheapest', () => {
+  const micro = tier({ skuName: 'docker-micro', pricePerHour: 0.036 });
+  const small = tier({ skuName: 'docker-small', pricePerHour: 0.1 });
+  const large = tier({ skuName: 'docker-large', pricePerHour: 0.5 });
+  const tiers = [small, large, micro]; // intentionally not price-ordered
+
+  it('returns null for an empty tier list', () => {
+    expect(resolveSizeOrCheapest('micro', [])).toBeNull();
+    expect(resolveSizeOrCheapest(undefined, [])).toBeNull();
+  });
+
+  it('returns the cheapest tier with cheapest-omitted when no size given', () => {
+    expect(resolveSizeOrCheapest(undefined, tiers)).toEqual({ tier: micro, fallback: 'cheapest-omitted' });
+  });
+
+  it('returns the exact tier with exact when the size resolves', () => {
+    expect(resolveSizeOrCheapest('small', tiers)).toEqual({ tier: small, fallback: 'exact' });
+    expect(resolveSizeOrCheapest('docker-large', tiers)).toEqual({ tier: large, fallback: 'exact' });
+  });
+
+  it('falls back to cheapest with cheapest-unavailable + requested when the size is unknown', () => {
+    expect(resolveSizeOrCheapest('xxlarge', tiers)).toEqual({
+      tier: micro,
+      fallback: 'cheapest-unavailable',
+      requested: 'xxlarge',
+    });
+  });
+
+  it('treats a whitespace-only size as omitted (cheapest-omitted, no note)', () => {
+    expect(resolveSizeOrCheapest('   ', tiers)).toEqual({ tier: micro, fallback: 'cheapest-omitted' });
+  });
+
+  it('trims a padded valid size to an exact match', () => {
+    expect(resolveSizeOrCheapest('  docker-large  ', tiers)).toEqual({ tier: large, fallback: 'exact' });
+  });
+
+  it('uses the trimmed value as `requested` when a padded size is unavailable', () => {
+    expect(resolveSizeOrCheapest('  xxlarge  ', tiers)).toEqual({
+      tier: micro,
+      fallback: 'cheapest-unavailable',
+      requested: 'xxlarge',
+    });
+  });
+});
+
+describe('formatTierSpecs', () => {
+  it('formats sub-1-core, MB ram, and disk', () => {
+    expect(formatTierSpecs(tier({ cores: 0.5, ramMB: 512, diskGB: 1 })))
+      .toBe('0.5 vCPU · 512 MB RAM · 1 GB disk');
+  });
+
+  it('rolls MB ram up to whole GB', () => {
+    expect(formatTierSpecs(tier({ cores: 1, ramMB: 1024, diskGB: 5 })))
+      .toBe('1 vCPU · 1 GB RAM · 5 GB disk');
+    expect(formatTierSpecs(tier({ cores: 4, ramMB: 4096, diskGB: 20 })))
+      .toBe('4 vCPU · 4 GB RAM · 20 GB disk');
+  });
+
+  it('uses one decimal for non-whole GB ram', () => {
+    expect(formatTierSpecs(tier({ cores: 2, ramMB: 1536, diskGB: 10 })))
+      .toBe('2 vCPU · 1.5 GB RAM · 10 GB disk');
   });
 });

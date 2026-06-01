@@ -1029,11 +1029,14 @@ describe('executeDeployApp', () => {
     expect(result.error).toContain('Wallet not connected');
   });
 
-  it('returns error for invalid size tier', async () => {
-    const result = await executeDeployApp({ size: 'xxlarge' }, makeOptions(), makePayload());
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Invalid size');
-    expect(result.error).toContain('docker-micro, docker-small, docker-medium, docker-large');
+  it('falls back to the cheapest tier for an unavailable size instead of erroring', async () => {
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    const result = await executeDeployApp({ image: 'redis', port: '6379', size: 'xxlarge' }, makeOptions(), makePayload());
+    expect(result.success).toBe(true);
+    // SAMPLE_TIERS cheapest is docker-micro (0.036/hr)
+    expect(result.pendingAction?.args.size).toBe('docker-micro');
   });
 
   it('returns clean error when tier catalog is empty (loading/error state)', async () => {
@@ -2442,10 +2445,15 @@ describe('executeBatchDeploy', () => {
     expect(result.error).toContain('No apps to deploy');
   });
 
-  it('returns error for invalid size', async () => {
+  it('batch falls back to the cheapest tier for an unavailable size', async () => {
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
     const result = await executeBatchDeploy([makeBatchEntry('app1')], makeOptions(), 'xxlarge');
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Invalid size');
+    expect(result.success).toBe(true);
+    const entries = result.pendingAction?.args.entries as Array<{ size: string }>;
+    expect(entries[0].size).toBe('docker-micro'); // SAMPLE_TIERS cheapest
   });
 
   it('batch defaults to the cheapest resolved tier when size is omitted', async () => {
