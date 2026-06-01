@@ -36,9 +36,8 @@ vi.mock('../../utils/hash', () => ({
   toHex: vi.fn().mockReturnValue('010203'),
 }));
 
-// Use importOriginal here so `normalizeErrorPunctuation` (real helper, used
-// transitively by `getDeployExampleRejection` from the catalog-gate path)
-// still works alongside the mocked `logError` spy.
+// Use importOriginal here so any real helpers in this module keep working
+// alongside the mocked `logError` spy.
 vi.mock('../../utils/errors', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../utils/errors')>();
   return {

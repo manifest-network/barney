@@ -29,15 +29,9 @@ export async function requestBatchDeployFn(
   // `requestStopAppFn`); found by architect's cycle-4 pattern scan.
   if (isStreaming || !isConnected || pendingConfirmation !== null) return;
 
-  // Catalog gate (symmetric with `ChatPanel.deployExample`'s single-example
-  // path — see `getDeployExampleRejection`). Without this gate, multi-example
-  // typed deploys ("deploy tetris and redis") would skip straight to
-  // `executeBatchDeploy`, which returns the raw `"Tier catalog unavailable
-  // — try again in a moment."` string that doesn't match `ERROR_PATTERNS`'
-  // pass-6 catalog regex, so no Retry button would render. Reusing the
-  // single-example predicate with `size: undefined` only fires the
-  // catalog-level checks (batch never carries a size hint) and produces
-  // identical wording — same recovery affordance via `addLocalErrorMessage`.
+  // No catalog pre-gate: `executeBatchDeploy` resolves the cheapest tier (or
+  // returns "Tier catalog unavailable" for an empty catalog), and that error
+  // surfaces inline on the tool message — the single failure channel.
   set({ isStreaming: true });
 
   let toolMsgId: string | undefined;
