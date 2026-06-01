@@ -4,7 +4,6 @@
 
 import type { PayloadAttachment } from '../../ai/toolExecutor';
 import { executeBatchDeploy, deriveAppName } from '../../ai/toolExecutor/compositeTransactions';
-import { getDeployExampleRejection } from '../../components/ai/exampleAppGating';
 import { logError } from '../../utils/errors';
 import { sha256, toHex } from '../../utils/hash';
 import type { AIStore } from '../aiStore';
@@ -39,19 +38,6 @@ export async function requestBatchDeployFn(
   // single-example predicate with `size: undefined` only fires the
   // catalog-level checks (batch never carries a size hint) and produces
   // identical wording — same recovery affordance via `addLocalErrorMessage`.
-  const { skuTiers } = get();
-  const rejection = getDeployExampleRejection({
-    size: undefined,
-    tiers: skuTiers.tiers,
-    tiersReady: skuTiers.phase === 'ready',
-    phase: skuTiers.phase,
-    errorMessage: skuTiers.error,
-  });
-  if (rejection !== null) {
-    get().addLocalErrorMessage(rejection);
-    return;
-  }
-
   set({ isStreaming: true });
 
   let toolMsgId: string | undefined;
@@ -106,7 +92,7 @@ export async function requestBatchDeployFn(
       };
     }));
 
-    const { clientManager, address, signArbitrary } = get();
+    const { clientManager, address, signArbitrary, skuTiers } = get();
 
     const result = await executeBatchDeploy(entries, {
       clientManager,
