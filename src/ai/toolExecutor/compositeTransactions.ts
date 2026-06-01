@@ -7,7 +7,7 @@ import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
 import { cosmosTx, setItemCustomDomain as monoSetItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
-import { getCheapestTier, resolveSizeName } from '../../api/skuTiers';
+import { resolveSizeOrCheapest } from '../../api/skuTiers';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
 import { DENOMS } from '../../api/config';
@@ -889,31 +889,18 @@ export async function executeDeployApp(
     }
   }
 
-  // Resolve and validate size from the AI store's resolved tier list.
-  // No chain round-trip needed — the tier list already has SKU UUID, provider
-  // UUID, and normalized $/hour price baked in.
+  // Resolve size from the AI store's resolved tier list. No chain round-trip
+  // needed — the tier list already has SKU UUID, provider UUID, and normalized
+  // $/hour price baked in. An omitted or unavailable size falls back to the
+  // cheapest tier (resolveSizeOrCheapest); an empty catalog is the only hard
+  // failure. The ConfirmationCard calls the same resolver so its price/specs
+  // row and any substitution note match exactly what deploys here.
   const { tiers } = options;
-  if (tiers.length === 0) {
+  const resolution = resolveSizeOrCheapest(args.size as string | undefined, tiers);
+  if (!resolution) {
     return { success: false, error: 'Tier catalog unavailable — try again in a moment.' };
   }
-
-  // When the caller omits size, default to the cheapest available tier
-  // (lowest normalized $/hour). Keeps the default sensible across networks
-  // whose env spec map isn't ordered cheapest-first.
-  const defaultSize = getCheapestTier(tiers).skuName;
-  const rawSize = (args.size as string | undefined) || defaultSize;
-  // `resolveSizeName` handles canonical / `docker-` / suffix backward-compat
-  // and case-insensitivity. UI surfaces (ChatPanel example-app buttons,
-  // AppsSidebar re-deploy) use the same helper to gate their disabled state
-  // so a button can only be enabled when this lookup would succeed.
-  const requestedTier = resolveSizeName(rawSize, tiers);
-  if (!requestedTier) {
-    return {
-      success: false,
-      error: `Invalid size "${rawSize}". Valid tiers: ${tiers.map((t) => t.skuName).join(', ')}.`,
-    };
-  }
-  const matched = requestedTier;
+  const matched = resolution.tier;
   const size = matched.skuName;  // canonical SKU name
   const skuUuid = matched.skuUuid;
 
@@ -1498,23 +1485,14 @@ export async function executeBatchDeploy(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (entries.length === 0) return { success: false, error: 'No apps to deploy' };
-  if (tiers.length === 0) {
+  // Resolve size once for the whole batch. Omitted/unavailable falls back to the
+  // cheapest tier (resolveSizeOrCheapest); an empty catalog is the only hard
+  // failure. Mirrors the single-deploy path.
+  const resolution = resolveSizeOrCheapest(size, tiers);
+  if (!resolution) {
     return { success: false, error: 'Tier catalog unavailable — try again in a moment.' };
   }
-
-  // When size is omitted, default to the cheapest available tier (lowest
-  // normalized $/hour). Mirrors executeDeployApp's single-deploy default and
-  // keeps the default sensible across networks whose env spec map isn't
-  // ordered cheapest-first. Same `resolveSizeName` as the single-deploy path
-  // — UI surfaces use it too to keep gating in lockstep with the executor.
-  const effectiveSize = size ?? getCheapestTier(tiers).skuName;
-  const matched = resolveSizeName(effectiveSize, tiers);
-  if (!matched) {
-    return {
-      success: false,
-      error: `Invalid size "${effectiveSize}". Valid tiers: ${tiers.map((t) => t.skuName).join(', ')}.`,
-    };
-  }
+  const matched = resolution.tier;
   const skuUuid = matched.skuUuid;
   const normalizedSize = matched.skuName;  // canonical SKU name
 
