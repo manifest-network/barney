@@ -385,6 +385,11 @@ describe('resolveSizeName', () => {
     const dockerSmall = tier({ skuName: 'docker-small' });
     expect(resolveSizeName('small', [dockerSmall, literalSmall])).toBe(literalSmall);
   });
+
+  it('trims incidental surrounding whitespace before matching', () => {
+    expect(resolveSizeName('  small  ', tiers)).toBe(small);
+    expect(resolveSizeName(' docker-large ', tiers)).toBe(large);
+  });
 });
 
 describe('resolveSizeOrCheapest', () => {
@@ -409,6 +414,22 @@ describe('resolveSizeOrCheapest', () => {
 
   it('falls back to cheapest with cheapest-unavailable + requested when the size is unknown', () => {
     expect(resolveSizeOrCheapest('xxlarge', tiers)).toEqual({
+      tier: micro,
+      fallback: 'cheapest-unavailable',
+      requested: 'xxlarge',
+    });
+  });
+
+  it('treats a whitespace-only size as omitted (cheapest-omitted, no note)', () => {
+    expect(resolveSizeOrCheapest('   ', tiers)).toEqual({ tier: micro, fallback: 'cheapest-omitted' });
+  });
+
+  it('trims a padded valid size to an exact match', () => {
+    expect(resolveSizeOrCheapest('  docker-large  ', tiers)).toEqual({ tier: large, fallback: 'exact' });
+  });
+
+  it('uses the trimmed value as `requested` when a padded size is unavailable', () => {
+    expect(resolveSizeOrCheapest('  xxlarge  ', tiers)).toEqual({
       tier: micro,
       fallback: 'cheapest-unavailable',
       requested: 'xxlarge',

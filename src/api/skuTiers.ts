@@ -59,7 +59,7 @@ export function resolveSizeName(
   rawSize: string,
   tiers: readonly ResolvedSkuTier[],
 ): ResolvedSkuTier | null {
-  const s = rawSize.toLowerCase();
+  const s = rawSize.trim().toLowerCase();
   const dockerS = `docker-${s}`;
   const dashS = `-${s}`;
   // Lowercase BOTH sides so a network shipping mixed-case SKU names
@@ -120,10 +120,15 @@ export function resolveSizeOrCheapest(
   tiers: readonly ResolvedSkuTier[],
 ): SizeResolution | null {
   if (tiers.length === 0) return null;
-  if (rawSize) {
-    const match = resolveSizeName(rawSize, tiers);
+  // Trim incidental whitespace and treat an empty-after-trim string as omitted,
+  // so a whitespace-only size takes the unsurprising cheapest-omitted path
+  // (no substitution note) and a padded valid size (e.g. ' docker-micro ')
+  // still resolves exactly instead of falling back.
+  const trimmed = rawSize?.trim();
+  if (trimmed) {
+    const match = resolveSizeName(trimmed, tiers);
     if (match) return { tier: match, fallback: 'exact' };
-    return { tier: getCheapestTier(tiers), fallback: 'cheapest-unavailable', requested: rawSize };
+    return { tier: getCheapestTier(tiers), fallback: 'cheapest-unavailable', requested: trimmed };
   }
   return { tier: getCheapestTier(tiers), fallback: 'cheapest-omitted' };
 }
