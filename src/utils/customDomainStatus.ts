@@ -122,7 +122,26 @@ async function probeOneProvider(provider: DohProvider, fqdn: string, signal: Abo
     return { result: 'network_fail' };
   }
 
-  const cnameAnswer = cnameRes?.Answer?.find(a => a.type === 5);
+  // Recursive resolvers return the whole CNAME chain in an A/AAAA answer
+  // (a `type=A` query for a CNAME'd name yields [CNAME(type 5), A(type 1)]).
+  // The dedicated `type=CNAME` query can transiently miss the record — RFC 2308
+  // negative-caching of a pre-publish NODATA during propagation, or a single
+  // failed fetch — so derive the CNAME from ALL three responses, not just
+  // `cnameRes`. Reading it solely from the CNAME query makes a correctly
+  // configured CNAME flash "got an A/AAAA record" whenever that one query misses.
+  const allAnswers = [
+    ...(aRes?.Answer ?? []),
+    ...(aaaaRes?.Answer ?? []),
+    ...(cnameRes?.Answer ?? []),
+  ];
+  // Prefer the first-hop CNAME: the type-5 record whose owner name is the
+  // queried fqdn (multi-hop chains carry intermediate CNAMEs too, and we
+  // validate the user's own record, which sits at `fqdn`). Fall back to any
+  // type-5 answer when the resolver omits an owner-name match.
+  const normalizedFqdn = normalizeFqdn(fqdn);
+  const cnameAnswer =
+    allAnswers.find((a) => a.type === 5 && normalizeFqdn(a.name) === normalizedFqdn) ??
+    allAnswers.find((a) => a.type === 5);
   const aAnswers = (aRes?.Answer ?? []).filter(a => a.type === 1).map(a => a.data);
   const aaaaAnswers = (aaaaRes?.Answer ?? []).filter(a => a.type === 28).map(a => a.data);
   const allAddresses = [...aAnswers, ...aaaaAnswers];
