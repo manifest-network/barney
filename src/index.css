@@ -4534,25 +4534,6 @@ h1, h2, h3, h4, h5, h6 {
   animation-delay: calc(var(--stagger, 0) * 30ms);
 }
 
-/* Tier-catalog-error banner shown above the example-app buttons when the
-   SKU tier load lands in `error` phase (see `ChatPanel` + `skuTiers` slice).
-   Layout mirrors the surrounding example-apps block: same padding/margin
-   as `.chat-example-apps`, but inline-arranged with the Retry button. */
-.chat-example-apps__error {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  padding: 0.625rem 0.875rem;
-  margin: 0.25rem 2.5rem;
-  border-radius: 0.5rem;
-  border: 1px solid oklch(0.55 0.15 25 / 0.4);
-  background: oklch(0.55 0.15 25 / 0.08);
-  color: var(--color-error-400);
-  font-size: 0.8125rem;
-}
-
 @keyframes staggerIn {
   from {
     opacity: 0;

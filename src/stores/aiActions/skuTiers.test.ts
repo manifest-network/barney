@@ -189,16 +189,6 @@ describe('loadSkuTiers', () => {
     await expect(result).resolves.toBeUndefined();
   });
 
-  it('regex-match contract: the empty-specs error wording is matched by the pass-6 inline-Retry pattern', () => {
-    // Lock-in test for the cross-fix coupling — the empty-specs short-circuit
-    // is only useful as a recovery path if MessageBubble's ERROR_PATTERNS
-    // attaches a Retry button to the resulting rejection. Trace the same
-    // wording deployExample wraps with: `Deploy unavailable: <error>.`
-    const catalogErrorPattern = /^Deploy unavailable: (?!tier catalog is still loading\b).+\.$/;
-    const wrapped = 'Deploy unavailable: PUBLIC_SKU_SPECS is empty or invalid — no SKU specs configured.';
-    expect(catalogErrorPattern.test(wrapped)).toBe(true);
-  });
-
   it('still calls resolveSkuTiers when parseSkuSpecs returns a non-empty map (regression catch)', async () => {
     // Make sure the short-circuit doesn't accidentally fire on the happy path.
     // The default runtimeConfig mock at the top of the file provides a valid

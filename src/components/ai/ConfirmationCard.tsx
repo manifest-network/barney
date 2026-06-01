@@ -145,14 +145,6 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   // "no domain attached" — the deploy proceeds without firing the set-domain TX.
   const isDeployApp = action.toolName === 'deploy_app';
 
-  // Live $/hour for deploy_app — read straight from the resolved tier list.
-  // While loading, the row shows a skeleton; on error, a warning. Uses the
-  // shared `resolveSizeName` so the price-row lookup is identical to the
-  // executor's: canonical / `docker-` prefix / suffix-only / case-insensitive
-  // on both sides. Without this, model-emitted shorthand like 'large' against
-  // a non-docker-prefixed SKU, or 'small' against a mixed-case catalog, would
-  // resolve at the executor but render here as "Price unavailable" — and the
-  // user could approve a deploy with incomplete pricing info.
   const { skuTiers } = useAI();
   // Resolve the deploy size through the SAME helper the executor uses, so the
   // price/specs shown here are exactly what will deploy. An omitted or
@@ -512,7 +504,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
             )}
           </div>
           {sizeResolution?.fallback === 'cheapest-unavailable' && (
-            <p className="text-xs text-muted mt-1" role="note">
+            <p className="text-xs text-muted mt-1" role="note" aria-live="polite">
               Requested size ‘{sizeResolution.requested}’ isn’t offered on this network — deploying ‘{sizeResolution.tier.skuName}’ (cheapest available) instead.
             </p>
           )}

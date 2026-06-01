@@ -5,7 +5,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { ChatMessage } from '../../contexts/aiTypes';
 
 const sendMessage = vi.fn();
-const retrySkuTiers = vi.fn();
+// Return a resolved promise — MessageBubble calls `retrySkuTiers().catch(...)`,
+// so a bare `vi.fn()` (returning undefined) would throw on `.catch`.
+const retrySkuTiers = vi.fn(() => Promise.resolve());
 
 vi.mock('../../hooks/useAI', () => ({
   useAI: () => ({ sendMessage, retrySkuTiers }),
