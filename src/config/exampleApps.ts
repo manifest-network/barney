@@ -15,7 +15,6 @@ export interface ExampleApp {
   manifestFactory?: () => Record<string, unknown>;
   /** Notice shown in the ManifestEditor during deploy/update confirmation. */
   notice?: string;
-  size?: string;
   group: 'games' | 'apps' | 'stacks';
   category?: string;
 }
@@ -76,13 +75,13 @@ export const EXAMPLE_APPS: ExampleApp[] = [
   { label: 'Doom', manifest: GAME_MANIFEST('doom'), group: 'games' },
   { label: 'ClassiCube', manifest: GAME_MANIFEST('classicube'), group: 'games' },
   // --- Databases ---
-  { label: 'Postgres 18', manifest: SERVICE_MANIFEST('postgres:18', ['5432'], { user: '999:999', tmpfs: ['/var/run/postgresql'] }), envFactory: () => ({ POSTGRES_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
-  { label: 'MySQL 9', manifest: SERVICE_MANIFEST('mysql:9', ['3306'], { tmpfs: ['/var/run/mysqld'] }), envFactory: () => ({ MYSQL_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
+  { label: 'Postgres 18', manifest: SERVICE_MANIFEST('postgres:18', ['5432'], { user: '999:999', tmpfs: ['/var/run/postgresql'] }), envFactory: () => ({ POSTGRES_PASSWORD: generatePassword() }), group: 'apps', category: 'Databases' },
+  { label: 'MySQL 9', manifest: SERVICE_MANIFEST('mysql:9', ['3306'], { tmpfs: ['/var/run/mysqld'] }), envFactory: () => ({ MYSQL_ROOT_PASSWORD: generatePassword() }), group: 'apps', category: 'Databases' },
   // { label: 'MariaDB 12', manifest: SERVICE_MANIFEST('mariadb:12', ['3306'], { tmpfs: ['/run/mysqld'] }), envFactory: () => ({ MARIADB_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
   // { label: 'MongoDB 8', manifest: SERVICE_MANIFEST('mongo:8', ['27017']), envFactory: () => ({ MONGO_INITDB_ROOT_USERNAME: 'admin', MONGO_INITDB_ROOT_PASSWORD: generatePassword() }), size: 'small', group: 'apps', category: 'Databases' },
   // { label: 'Neo4j 2026.01', manifest: SERVICE_MANIFEST('neo4j:2026.01', ['7474', '7687']), envFactory: () => ({ NEO4J_AUTH: `neo4j/${generatePassword()}` }), size: 'small', group: 'apps', category: 'Databases' },
-  { label: 'Redis 8.4', manifest: SERVICE_MANIFEST('redis:8.4', ['6379']), size: 'micro', group: 'apps', category: 'Databases' },
-  { label: 'Memcached 1.6', manifest: SERVICE_MANIFEST('memcached:1.6', ['11211']), size: 'micro', group: 'apps', category: 'Databases' },
+  { label: 'Redis 8.4', manifest: SERVICE_MANIFEST('redis:8.4', ['6379']), group: 'apps', category: 'Databases' },
+  { label: 'Memcached 1.6', manifest: SERVICE_MANIFEST('memcached:1.6', ['11211']), group: 'apps', category: 'Databases' },
   // { label: 'ClickHouse 25', manifest: SERVICE_MANIFEST('clickhouse/clickhouse-server:25.12', ['8123', '9000']), size: 'small', group: 'apps', category: 'Databases' },
   // { label: 'InfluxDB 2', manifest: SERVICE_MANIFEST('influxdb:2', ['8086']), size: 'small', group: 'apps', category: 'Databases' },
 
@@ -120,7 +119,7 @@ export const EXAMPLE_APPS: ExampleApp[] = [
       env: { MORPHEUS_GATEWAY_API_KEY: '', OPENCLAW_GATEWAY_TOKEN: generatePassword(64), OPENCLAW_GATEWAY_PASSWORD: generatePassword(64), EVERCLAW_WALLET_PASSPHRASE: generatePassword(64), EVERCLAW_AGENT_NAME: 'Barney', EVERCLAW_USER_NAME: 'Tester', TZ: 'America/New_York' },
       command: ['/bin/sh', '-c'],
     };
-  }, size: 'large', group: 'apps', category: 'Tools' },
+  }, group: 'apps', category: 'Tools' },
   // { label: 'Registry 2', manifest: SERVICE_MANIFEST('registry:2', ['5000']), size: 'micro', group: 'apps', category: 'Tools' },
 
   // --- Render Demo (user-supplied credentials, not auto-generated) ---
@@ -140,7 +139,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     }),
     envFactory: () => ({ INFERENCE_SECRET: generatePassword(32) }),
     notice: 'Save your API key, Secret key, and Inference Secret — these values are not stored and must be re-entered on updates.',
-    size: 'micro',
     group: 'apps',
     category: 'AI',
   },
@@ -159,7 +157,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     }),
     envFactory: () => ({ INFERENCE_SECRET: generatePassword(32) }),
     notice: 'Save your API key, Secret key, and Inference Secret — these values are not stored and must be re-entered on updates.',
-    size: 'micro',
     group: 'apps',
     category: 'AI',
   },
@@ -177,7 +174,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     }),
     envFactory: () => ({ INFERENCE_SECRET: generatePassword(32) }),
     notice: 'Save your API key, Secret key, and Inference Secret — these values are not stored and must be re-entered on updates.',
-    size: 'micro',
     group: 'apps',
     category: 'AI',
   },
@@ -195,7 +191,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     }),
     envFactory: () => ({ INFERENCE_SECRET: generatePassword(32) }),
     notice: 'Save your API key, Secret key, and Inference Secret — these values are not stored and must be re-entered on updates.',
-    size: 'micro',
     group: 'apps',
     category: 'AI',
   },
@@ -211,7 +206,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
     }),
     envFactory: () => ({ DASHBOARD_API_TOKEN: generatePassword(32) }),
     notice: 'Update RENDER_ACCOUNTS with your Render Network API credentials. Each account needs a label, public_key, and secret_key.',
-    size: 'micro',
     group: 'apps',
     category: 'AI',
   },
@@ -230,7 +224,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
       },
       tmpfs: ['/var/cache/nginx', '/var/run'],
     }),
-    size: 'micro',
     group: 'apps',
     category: 'Tools',
   },
@@ -247,7 +240,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
       },
       tmpfs: ['/var/cache/nginx', '/var/run'],
     }),
-    size: 'micro',
     group: 'apps',
     category: 'Tools',
   },
@@ -264,7 +256,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
       },
       tmpfs: ['/var/cache/nginx', '/var/run'],
     }),
-    size: 'micro',
     group: 'apps',
     category: 'Tools',
   },
@@ -294,7 +285,6 @@ export const EXAMPLE_APPS: ExampleApp[] = [
         },
       }};
     },
-    size: 'small',
     group: 'stacks',
     category: 'Stacks',
   },
