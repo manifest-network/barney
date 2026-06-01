@@ -138,9 +138,9 @@ async function probeOneProvider(provider: DohProvider, fqdn: string, signal: Abo
   // queried fqdn (multi-hop chains carry intermediate CNAMEs too, and we
   // validate the user's own record, which sits at `fqdn`). Fall back to any
   // type-5 answer when the resolver omits an owner-name match.
-  const normalizedFqdn = fqdn.replace(/\.$/, '').toLowerCase();
+  const normalizedFqdn = normalizeFqdn(fqdn);
   const cnameAnswer =
-    allAnswers.find((a) => a.type === 5 && a.name.replace(/\.$/, '').toLowerCase() === normalizedFqdn) ??
+    allAnswers.find((a) => a.type === 5 && normalizeFqdn(a.name) === normalizedFqdn) ??
     allAnswers.find((a) => a.type === 5);
   const aAnswers = (aRes?.Answer ?? []).filter(a => a.type === 1).map(a => a.data);
   const aaaaAnswers = (aaaaRes?.Answer ?? []).filter(a => a.type === 28).map(a => a.data);
