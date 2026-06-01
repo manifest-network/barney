@@ -189,8 +189,8 @@ describe('ConfirmationCard SKU price line', () => {
 
   it('shows NO substitution note when size is omitted (cheapest default is unsurprising)', () => {
     skuTiers = { phase: 'ready', tiers: [SAMPLE_TIER], denomSymbol: 'PWR', error: null };
-    const { size: _omit, ...rest } = ACTION.args as Record<string, unknown>;
-    render({ ...ACTION, args: rest });
+    // args without a `size` key — the omitted-size path.
+    render({ ...ACTION, args: { app_name: 'redis' } });
     expect(container.textContent).toContain('0.0360 PWR/hr');
     expect(container.textContent).not.toContain('isn’t offered on this network');
   });
