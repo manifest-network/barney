@@ -55,10 +55,10 @@ function findButton(label: RegExp | string): HTMLButtonElement | null {
   }) ?? null;
 }
 
-describe('MessageBubble — ERROR_PATTERNS for tier rejections', () => {
-  it('renders a Retry button for "Deploy unavailable: <chain msg>." and clicking it invokes retrySkuTiers', () => {
-    render(makeError('Deploy unavailable: chain unreachable.'));
-    expect(container.textContent).toContain('Deploy unavailable: chain unreachable.');
+describe('MessageBubble — ERROR_PATTERNS for tier catalog', () => {
+  it('renders a Retry button for the executor "Tier catalog unavailable" message and clicking invokes retrySkuTiers', () => {
+    render(makeError('Tier catalog unavailable — try again in a moment.'));
+    expect(container.textContent).toContain('Tier catalog unavailable');
     const retryBtn = findButton(/^Retry$/);
     expect(retryBtn).not.toBeNull();
     flushSync(() => {
@@ -68,45 +68,9 @@ describe('MessageBubble — ERROR_PATTERNS for tier rejections', () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it('renders a Retry button for the generic-fallback wording too', () => {
-    render(makeError('Deploy unavailable: tier catalog not ready.'));
-    const retryBtn = findButton(/^Retry$/);
-    expect(retryBtn).not.toBeNull();
-    flushSync(() => {
-      retryBtn!.click();
-    });
-    expect(retrySkuTiers).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders no Retry button for the loading-state wording (nothing to retry while in flight)', () => {
-    render(makeError('Deploy unavailable: tier catalog is still loading. Please wait a moment and try again.'));
-    // The rejection still surfaces in the bubble (the error text is rendered),
-    // but no Retry suggestion — there's no failure to recover from yet.
-    expect(container.textContent).toContain('Deploy unavailable: tier catalog is still loading.');
-    expect(findButton(/^Retry$/)).toBeNull();
-  });
-
-  it('lock-in: both error-state wordings still produce a Retry button (regression catch against over-tightening)', () => {
-    // 1. Interpolation form
-    render(makeError('Deploy unavailable: chain unreachable.'));
+  it('matches case-insensitively', () => {
+    render(makeError('tier catalog unavailable'));
     expect(findButton(/^Retry$/)).not.toBeNull();
-    flushSync(() => { root.unmount(); });
-    container.remove();
-    // 2. Bare fallback form
-    render(makeError('Deploy unavailable: tier catalog not ready.'));
-    expect(findButton(/^Retry$/)).not.toBeNull();
-  });
-
-  it('renders a "List apps" suggestion (no Retry) for stale-size rejection', () => {
-    render(makeError("Tier 'gpu-large' is not available on this network."));
-    expect(findButton(/^Retry$/)).toBeNull();
-    const listAppsBtn = findButton(/list apps/i);
-    expect(listAppsBtn).not.toBeNull();
-    flushSync(() => {
-      listAppsBtn!.click();
-    });
-    expect(sendMessage).toHaveBeenCalledWith("What's running?");
-    expect(retrySkuTiers).not.toHaveBeenCalled();
   });
 
   it('does not match unrelated error text', () => {
@@ -114,18 +78,10 @@ describe('MessageBubble — ERROR_PATTERNS for tier rejections', () => {
     expect(findButton(/^Retry$/)).toBeNull();
   });
 
-  it('does not match a long sentence that merely contains "Deploy unavailable" in the middle', () => {
-    // The tier-rejection patterns are anchored at the start of the string;
-    // a random tool-error mention of "deploy unavailable" mid-sentence should
-    // not steal a Retry button.
-    render(makeError('Something broke. Deploy unavailable for unrelated reasons. Try later.'));
-    expect(findButton(/^Retry$/)).toBeNull();
-  });
-
   it('logs but does not throw when retrySkuTiers rejects', async () => {
     retrySkuTiers.mockRejectedValueOnce(new Error('boom'));
     const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => {});
-    render(makeError('Deploy unavailable: chain unreachable.'));
+    render(makeError('Tier catalog unavailable — try again in a moment.'));
     const retryBtn = findButton(/^Retry$/);
     flushSync(() => {
       retryBtn!.click();
