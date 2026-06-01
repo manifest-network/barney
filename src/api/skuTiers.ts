@@ -98,6 +98,55 @@ export function getCheapestTier(tiers: readonly ResolvedSkuTier[]): ResolvedSkuT
   return cheapest;
 }
 
+export type SizeFallback = 'exact' | 'cheapest-omitted' | 'cheapest-unavailable';
+
+export interface SizeResolution {
+  tier: ResolvedSkuTier;
+  fallback: SizeFallback;
+  /** The raw requested size — present only for 'cheapest-unavailable'. */
+  requested?: string;
+}
+
+/**
+ * Resolve a size hint to a tier, falling back to the cheapest tier when the
+ * hint is absent or doesn't match the current catalog. Returns null ONLY for
+ * an empty tier list (the genuine "catalog unavailable" case). Shared by the
+ * deploy executor (compositeTransactions.ts) and the ConfirmationCard so the
+ * displayed price/specs always equal the tier that will deploy, and any
+ * substitution is disclosed before the user approves.
+ */
+export function resolveSizeOrCheapest(
+  rawSize: string | undefined,
+  tiers: readonly ResolvedSkuTier[],
+): SizeResolution | null {
+  if (tiers.length === 0) return null;
+  if (rawSize) {
+    const match = resolveSizeName(rawSize, tiers);
+    if (match) return { tier: match, fallback: 'exact' };
+    return { tier: getCheapestTier(tiers), fallback: 'cheapest-unavailable', requested: rawSize };
+  }
+  return { tier: getCheapestTier(tiers), fallback: 'cheapest-omitted' };
+}
+
+/**
+ * Human-readable one-line spec summary for a tier, e.g.
+ * "0.5 vCPU · 512 MB RAM · 1 GB disk". Rendered on the ConfirmationCard so the
+ * user sees the tier's capability (not just its price) before approving — this
+ * is what neutralizes cheapest-tier under-provisioning surprise.
+ */
+export function formatTierSpecs(
+  tier: Pick<ResolvedSkuTier, 'cores' | 'ramMB' | 'diskGB'>,
+): string {
+  let ram: string;
+  if (tier.ramMB >= 1024) {
+    const gb = tier.ramMB / 1024;
+    ram = `${Number.isInteger(gb) ? gb : gb.toFixed(1)} GB`;
+  } else {
+    ram = `${tier.ramMB} MB`;
+  }
+  return `${tier.cores} vCPU · ${ram} RAM · ${tier.diskGB} GB disk`;
+}
+
 /**
  * Convert a SKU's basePrice + Unit to a per-hour price in display units.
  * - UNIT_PER_HOUR → basePrice as-is
