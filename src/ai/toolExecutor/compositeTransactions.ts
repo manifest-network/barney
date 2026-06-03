@@ -1910,6 +1910,12 @@ export async function executeConfirmedStopApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
+  // ENG-279: stop_app deliberately stays on cosmosTx('billing','close-lease') rather
+  // than core.stopApp. core.stopApp drops the tx rawLog (breaking the "lease not active"
+  // already-stopped idempotent detection below) and forces waitForConfirmation=true,
+  // which would kill the bulk fast-path's fire-and-forget (false) behavior. cosmosTx is
+  // itself a core capability, so this still routes through mono.
+
   // Bulk stop — fire close-lease TXs without waiting for on-chain
   // confirmation (waitForConfirmation=false). This sends all TXs in
   // quick succession (~100ms each for signing + broadcast) instead of

@@ -61,6 +61,7 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   cosmosTx: vi.fn(),
   cosmosQuery: vi.fn(),
   getBalance: vi.fn(),
+  fundCredits: vi.fn(),
 }));
 
 vi.mock('../utils/errors', () => ({
@@ -78,7 +79,7 @@ import { getLeasesByTenant, getCreditEstimate, getLease } from '../api/billing';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
 import { waitForLeaseReady } from '../api/fred';
-import { cosmosTx, getBalance } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx, getBalance, fundCredits } from '@manifest-network/manifest-mcp-core';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from '../ai/toolExecutor/utils';
 
 const ADDRESS = 'manifest1testaddr';
@@ -256,11 +257,11 @@ describe('Deploy Flow Integration', () => {
     expect(fundResult.requiresConfirmation).toBe(true);
     expect(fundResult.confirmationMessage).toContain('50');
 
-    // Step 2: Confirm fund
-    vi.mocked(cosmosTx).mockResolvedValue({
-      module: 'billing', subcommand: 'fund-credit', height: '102',
-      code: 0, transactionHash: 'tx-hash-fund', rawLog: '', events: [],
-    } as Awaited<ReturnType<typeof cosmosTx>>);
+    // Step 2: Confirm fund (now routes through core.fundCredits)
+    vi.mocked(fundCredits).mockResolvedValue({
+      code: 0, transactionHash: 'tx-hash-fund', rawLog: '',
+      sender: 'manifest1test', tenant: 'manifest1test', amount: '50000000upwr',
+    } as Awaited<ReturnType<typeof fundCredits>>);
 
     const confirmedFund = await executeConfirmedTool('fund_credits', { amount: 50 }, CLIENT_MANAGER, options);
     expect(confirmedFund.success).toBe(true);
