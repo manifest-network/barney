@@ -77,6 +77,16 @@ export default defineConfig({
         __filename: 'mock',
         __dirname: 'mock',
       },
+      resolve: {
+        alias: {
+          // manifest-mcp-core 0.11.0's createGuardedFetch lazily dynamic-imports
+          // undici (+ node:net / node:dns) for server-side SSRF protection. Barney
+          // injects its own browser fetch (providerFetch) and never calls that path,
+          // but rspack still resolves the dynamic-import targets and undici pulls in
+          // node:async_hooks, which has no browser polyfill. Drop the dead chunk.
+          undici: false,
+        },
+      },
     },
   },
   server: {
