@@ -65,8 +65,12 @@ vi.mock('../../api/fred', () => ({
   waitForLeaseReady: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
-  restartLease: vi.fn(),
   updateLease: vi.fn(),
+}));
+
+vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  restartApp: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
@@ -113,14 +117,18 @@ import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
-import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
+import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, updateLease } from '../../api/fred';
+import { restartApp } from '@manifest-network/manifest-mcp-fred';
 import { cosmosTx, setItemCustomDomain, fundCredits } from '@manifest-network/manifest-mcp-core';
 import { uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
 const ADDRESS = 'manifest1abc';
-const CLIENT_MANAGER = {} as CosmosClientManager;
+const MOCK_QUERY_CLIENT = {} as Awaited<ReturnType<CosmosClientManager['getQueryClient']>>;
+const CLIENT_MANAGER = {
+  getQueryClient: vi.fn().mockResolvedValue(MOCK_QUERY_CLIENT),
+} as unknown as CosmosClientManager;
 
 const SAMPLE_TIERS = [
   { skuName: 'docker-micro', skuUuid: 'sku-1', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
@@ -3063,7 +3071,7 @@ describe('executeConfirmedRestartApp', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('restarts app and polls to ready', async () => {
-    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
@@ -3088,13 +3096,13 @@ describe('executeConfirmedRestartApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect(restartLease).toHaveBeenCalled();
+    expect(restartApp).toHaveBeenCalled();
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'restarting' }));
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
   });
 
   it('handles 409 error from restart endpoint', async () => {
-    vi.mocked(restartLease).mockRejectedValue(new ProviderApiError(409, 'lease is not running'));
+    vi.mocked(restartApp).mockRejectedValue(new ProviderApiError(409, 'lease is not running'));
 
     const onProgress = vi.fn();
     const app = makeApp();
@@ -3111,7 +3119,7 @@ describe('executeConfirmedRestartApp', () => {
   });
 
   it('handles poll failure (non-active state)', async () => {
-    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
       last_error: 'container crashed',
@@ -3131,7 +3139,7 @@ describe('executeConfirmedRestartApp', () => {
   });
 
   it('restarts multiple apps in batch and returns summary', async () => {
-    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
@@ -3166,7 +3174,7 @@ describe('executeConfirmedRestartApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).restarted).toHaveLength(2);
     expect((result.data as any).failed).toHaveLength(0);
-    expect(restartLease).toHaveBeenCalledTimes(2);
+    expect(restartApp).toHaveBeenCalledTimes(2);
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({
       operation: 'restart',
       batch: expect.arrayContaining([
@@ -3178,8 +3186,8 @@ describe('executeConfirmedRestartApp', () => {
 
   it('handles partial failures in batch restart', async () => {
     // First app succeeds, second fails with 409
-    vi.mocked(restartLease)
-      .mockResolvedValueOnce({ status: 'restarting' })
+    vi.mocked(restartApp)
+      .mockResolvedValueOnce({ lease_uuid: 'lease-uuid', status: 'restarting' })
       .mockRejectedValueOnce(new ProviderApiError(409, 'not restartable'));
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
@@ -3218,7 +3226,7 @@ describe('executeConfirmedRestartApp', () => {
   });
 
   it('returns failure when all batch restarts fail', async () => {
-    vi.mocked(restartLease).mockRejectedValue(new ProviderApiError(409, 'not restartable'));
+    vi.mocked(restartApp).mockRejectedValue(new ProviderApiError(409, 'not restartable'));
 
     const apps = [
       makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),

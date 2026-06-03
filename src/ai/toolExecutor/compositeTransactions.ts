@@ -9,7 +9,10 @@ import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
-import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
+import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
+import { restartApp } from '@manifest-network/manifest-mcp-fred';
+import { providerFetch } from '../../api/providerFetchAdapter';
+import { makeFredAuthTokens, getFredQueryClient } from './fredAuth';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
@@ -2199,7 +2202,7 @@ export async function executeRestartApp(
  */
 export async function executeConfirmedRestartApp(
   args: Record<string, unknown>,
-  _clientManager: CosmosClientManager,
+  clientManager: CosmosClientManager,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
   const { address, appRegistry, signArbitrary, onProgress, signal } = options;
@@ -2210,7 +2213,7 @@ export async function executeConfirmedRestartApp(
   // Batch restart
   const entries = args.entries as Array<{ app_name: string; leaseUuid: string; providerUrl: string }> | undefined;
   if (entries && entries.length > 0) {
-    return executeConfirmedBatchRestart(entries, address, appRegistry, signArbitrary, onProgress, signal);
+    return executeConfirmedBatchRestart(entries, clientManager, address, appRegistry, signArbitrary, onProgress, signal);
   }
 
   // Single restart
@@ -2220,12 +2223,15 @@ export async function executeConfirmedRestartApp(
 
   onProgress?.({ phase: 'restarting', detail: 'Restarting app...', operation: 'restart' });
 
-  // Mint auth token and call restart
-  const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
+  // fred.restartApp issues the restart (resolving the provider from chain + minting
+  // the ADR-036 token via getAuthToken). It does NOT poll — barney keeps its own
+  // waitForLeaseReady poll below. refreshAuthToken is reused for the poll's token refresh.
+  const { getAuthToken } = makeFredAuthTokens(signArbitrary);
+  const refreshAuthToken = () => getAuthToken(address, leaseUuid);
 
   try {
-    const authToken = await refreshAuthToken();
-    await restartLease(providerUrl, leaseUuid, authToken);
+    const queryClient = await getFredQueryClient(clientManager);
+    await restartApp(queryClient, address, leaseUuid, getAuthToken, providerFetch);
   } catch (error) {
     logError('compositeTransactions.executeConfirmedRestartApp', error);
     // 409 = lease is not in the right state for restart; don't mark as failed
@@ -2301,6 +2307,7 @@ export async function executeConfirmedRestartApp(
  */
 async function executeConfirmedBatchRestart(
   entries: Array<{ app_name: string; leaseUuid: string; providerUrl: string }>,
+  clientManager: CosmosClientManager,
   address: string,
   appRegistry: ToolExecutorOptions['appRegistry'] & object,
   signArbitrary: (address: string, data: string) => Promise<{ pub_key: { type: string; value: string }; signature: string }>,
@@ -2308,6 +2315,10 @@ async function executeConfirmedBatchRestart(
   signal: AbortSignal | undefined
 ): Promise<ToolResult> {
   const { signArbitraryWithMutex } = createSigningMutex(signArbitrary);
+  // Mint provider-auth tokens through the mutex so concurrent restarts serialize
+  // their signing (fred.restartApp calls getAuthToken internally).
+  const { getAuthToken } = makeFredAuthTokens(signArbitraryWithMutex);
+  const queryClient = await getFredQueryClient(clientManager);
 
   const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
 
@@ -2323,12 +2334,11 @@ async function executeConfirmedBatchRestart(
 
       updateProgress('restarting', 'Restarting...');
 
-      const refreshAuthToken = () => getProviderAuthToken(address, entry.leaseUuid, signArbitraryWithMutex);
+      const refreshAuthToken = () => getAuthToken(address, entry.leaseUuid);
 
-      // Issue restart command
+      // Issue restart command (fred.restartApp; does not poll — barney polls below)
       try {
-        const authToken = await refreshAuthToken();
-        await restartLease(entry.providerUrl, entry.leaseUuid, authToken);
+        await restartApp(queryClient, address, entry.leaseUuid, getAuthToken, providerFetch);
       } catch (error) {
         logError('executeConfirmedBatchRestart.restart', error);
         if (error instanceof ProviderApiError && error.status === 409) {
