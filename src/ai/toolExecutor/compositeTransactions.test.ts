@@ -72,6 +72,7 @@ vi.mock('../../api/fred', () => ({
 vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   ...(await importOriginal()),
   cosmosTx: vi.fn(),
+  fundCredits: vi.fn(),
   setItemCustomDomain: vi.fn(),
 }));
 
@@ -113,7 +114,7 @@ import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
-import { cosmosTx, setItemCustomDomain } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx, setItemCustomDomain, fundCredits } from '@manifest-network/manifest-mcp-core';
 import { uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
@@ -2369,16 +2370,20 @@ describe('executeFundCredits', () => {
 describe('executeConfirmedFundCredits', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('funds credits successfully', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+  it('funds credits via core.fundCredits', async () => {
+    vi.mocked(fundCredits).mockResolvedValue({
+      code: 0, transactionHash: 'hash', rawLog: '', sender: ADDRESS, tenant: ADDRESS, amount: '50000000upwr',
+    } as any);
 
     const result = await executeConfirmedFundCredits(
       { amount: 50, denomString: '50000000upwr', address: ADDRESS },
       CLIENT_MANAGER
     );
 
+    expect(fundCredits).toHaveBeenCalledWith(CLIENT_MANAGER, '50000000upwr');
     expect(result.success).toBe(true);
     expect((result.data as any).amount).toBe(50);
+    expect((result.data as any).transactionHash).toBe('hash');
   });
 });
 

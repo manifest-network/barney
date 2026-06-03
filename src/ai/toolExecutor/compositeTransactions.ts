@@ -4,7 +4,7 @@
  */
 
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
-import { cosmosTx, setItemCustomDomain as monoSetItemCustomDomain } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx, fundCredits, setItemCustomDomain as monoSetItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
@@ -2020,11 +2020,13 @@ export async function executeConfirmedFundCredits(
   args: Record<string, unknown>,
   clientManager: CosmosClientManager
 ): Promise<ToolResult> {
-  const address = args.address as string;
   const denomString = args.denomString as string;
   const amount = args.amount as number;
 
-  const result = await cosmosTx(clientManager, 'billing', 'fund-credit', [address, denomString], true);
+  // core.fundCredits wraps cosmosTx('billing','fund-credit',[tenant, amount],true);
+  // tenant defaults to the signer (the connected wallet), matching barney's prior
+  // `[address, denomString]` where address was always the signer's own address.
+  const result = await fundCredits(clientManager, denomString);
 
   if (result.code !== 0) {
     return { success: false, error: result.rawLog ?? 'Failed to fund credits' };
