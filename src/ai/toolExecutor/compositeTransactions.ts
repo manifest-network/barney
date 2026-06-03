@@ -9,8 +9,8 @@ import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
-import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
-import { restartApp } from '@manifest-network/manifest-mcp-fred';
+import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
+import { restartApp, updateApp } from '@manifest-network/manifest-mcp-fred';
 import { providerFetch } from '../../api/providerFetchAdapter';
 import { makeFredAuthTokens, getFredQueryClient } from './fredAuth';
 import { DENOMS } from '../../api/config';
@@ -2690,7 +2690,7 @@ export async function executeUpdateApp(
  */
 export async function executeConfirmedUpdateApp(
   args: Record<string, unknown>,
-  _clientManager: CosmosClientManager,
+  clientManager: CosmosClientManager,
   options: ToolExecutorOptions,
   payload?: PayloadAttachment
 ): Promise<ToolResult> {
@@ -2710,14 +2710,21 @@ export async function executeConfirmedUpdateApp(
   const leaseUuid = args.leaseUuid as string;
   const providerUrl = args.providerUrl as string;
 
+  // fred.updateApp uploads the manifest as a STRING (barney already built/merged it).
+  const manifestJson = typeof args._generatedManifest === 'string'
+    ? args._generatedManifest
+    : new TextDecoder().decode(payload.bytes);
+
   onProgress?.({ phase: 'updating', detail: 'Updating app with new manifest...', operation: 'update' });
 
-  // Mint auth token and call update
-  const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
+  // fred.updateApp does the provider upload but does NOT poll — barney keeps its
+  // waitForLeaseReady poll + rollback detection below. refreshAuthToken feeds the poll.
+  const { getAuthToken } = makeFredAuthTokens(signArbitrary);
+  const refreshAuthToken = () => getAuthToken(address, leaseUuid);
 
   try {
-    const authToken = await refreshAuthToken();
-    await updateLease(providerUrl, leaseUuid, payload.bytes, authToken);
+    const queryClient = await getFredQueryClient(clientManager);
+    await updateApp(queryClient, address, leaseUuid, getAuthToken, manifestJson, undefined, providerFetch);
   } catch (error) {
     logError('compositeTransactions.executeConfirmedUpdateApp', error);
     // 409 = lease is not in the right state for update; don't mark as failed
@@ -2738,7 +2745,6 @@ export async function executeConfirmedUpdateApp(
   const previousManifest = existingApp?.manifest;
 
   // Update registry with new manifest content (secrets stripped)
-  const manifestJson = new TextDecoder().decode(payload.bytes);
   appRegistry.updateApp(address, leaseUuid, { manifest: sanitizeManifestForStorage(manifestJson) });
 
   // Poll for readiness

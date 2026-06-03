@@ -65,12 +65,12 @@ vi.mock('../../api/fred', () => ({
   waitForLeaseReady: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
-  updateLease: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   restartApp: vi.fn(),
+  updateApp: vi.fn(),
 }));
 
 vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
@@ -117,8 +117,8 @@ import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
-import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, updateLease } from '../../api/fred';
-import { restartApp } from '@manifest-network/manifest-mcp-fred';
+import { waitForLeaseReady, getLeaseLogs, getLeaseProvision } from '../../api/fred';
+import { restartApp, updateApp } from '@manifest-network/manifest-mcp-fred';
 import { cosmosTx, setItemCustomDomain, fundCredits } from '@manifest-network/manifest-mcp-core';
 import { uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
@@ -3697,7 +3697,7 @@ describe('executeConfirmedUpdateApp', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('updates app and polls to ready', async () => {
-    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
@@ -3723,7 +3723,7 @@ describe('executeConfirmedUpdateApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect(updateLease).toHaveBeenCalled();
+    expect(updateApp).toHaveBeenCalled();
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'updating' }));
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
     // Registry should have updated manifest
@@ -3735,7 +3735,7 @@ describe('executeConfirmedUpdateApp', () => {
   });
 
   it('handles 409 error from update endpoint', async () => {
-    vi.mocked(updateLease).mockRejectedValue(new ProviderApiError(409, 'lease is not running'));
+    vi.mocked(updateApp).mockRejectedValue(new ProviderApiError(409, 'lease is not running'));
 
     const onProgress = vi.fn();
     const app = makeApp();
@@ -3752,7 +3752,7 @@ describe('executeConfirmedUpdateApp', () => {
   });
 
   it('handles poll failure (non-active state)', async () => {
-    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
       last_error: 'container crashed',
@@ -3785,7 +3785,7 @@ describe('executeConfirmedUpdateApp', () => {
   });
 
   it('reconstructs payload from _generatedManifest when no payload provided', async () => {
-    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
@@ -3815,7 +3815,7 @@ describe('executeConfirmedUpdateApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect(updateLease).toHaveBeenCalled();
+    expect(updateApp).toHaveBeenCalled();
   });
 
   it('normalizes trailing-period on provision.last_error in rollback-failed branch', async () => {
@@ -3823,7 +3823,7 @@ describe('executeConfirmedUpdateApp', () => {
     // Last error: …. Use app_status(…) to check." template embeds the
     // provision.last_error mid-sentence; without normalization an upstream
     // error ending in `.` would double-up.
-    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
