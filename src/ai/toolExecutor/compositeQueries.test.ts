@@ -56,13 +56,9 @@ vi.mock('../../api/provider-api', () => ({
 
 vi.mock('../../api/fred', () => ({
   getLeaseStatus: vi.fn(),
+  getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
   getLeaseReleases: vi.fn(),
-}));
-
-vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => ({
-  ...(await importOriginal<object>()),
-  getAppLogs: vi.fn(),
 }));
 
 vi.mock('../../api/faucet', () => ({
@@ -99,8 +95,7 @@ vi.mock('../../utils/leaseState', () => ({
 import { getLeasesByTenant, getLeasesByTenantPaginated, getLease } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
-import { getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import { getAppLogs } from '@manifest-network/manifest-mcp-fred';
+import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { cosmosQuery, getBalance } from '@manifest-network/manifest-mcp-core';
 import { isFaucetEnabled } from '../../api/faucet';
 import { requestFaucet } from '@manifest-network/manifest-mcp-chain';
@@ -764,10 +759,11 @@ describe('executeGetLogs', () => {
   it('returns logs for running app', async () => {
     const app = makeApp();
     const registry = makeRegistry([app]);
-    vi.mocked(getAppLogs).mockResolvedValue({
+    vi.mocked(getLeaseLogs).mockResolvedValue({
       lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
       logs: { web: 'line1\nline2\nline3' },
-      truncated: false,
     });
 
     const result = await executeGetLogs(
@@ -789,20 +785,18 @@ describe('executeGetLogs', () => {
     expect(card.data.truncated).toBe(false);
 
     // Verify auth token was created
-    expect(getAppLogs).toHaveBeenCalledWith(
-      MOCK_QUERY_CLIENT,
-      ADDRESS,
+    expect(getLeaseLogs).toHaveBeenCalledWith(
+      app.providerUrl,
       app.leaseUuid,
-      expect.any(Function),
-      100,
-      expect.any(Function)
+      'auth-token',
+      100
     );
   });
 
-  it('handles getAppLogs failure gracefully', async () => {
+  it('handles getLeaseLogs failure gracefully', async () => {
     const app = makeApp();
     const registry = makeRegistry([app]);
-    vi.mocked(getAppLogs).mockRejectedValue(new Error('connection refused'));
+    vi.mocked(getLeaseLogs).mockRejectedValue(new Error('connection refused'));
 
     const result = await executeGetLogs(
       { app_name: 'my-app' },
@@ -816,23 +810,22 @@ describe('executeGetLogs', () => {
   it('respects custom tail parameter', async () => {
     const app = makeApp();
     const registry = makeRegistry([app]);
-    vi.mocked(getAppLogs).mockResolvedValue({
+    vi.mocked(getLeaseLogs).mockResolvedValue({
       lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
       logs: { web: 'line1' },
-      truncated: false,
     });
 
     await executeGetLogs(
       { app_name: 'my-app', tail: 50 },
       makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
     );
-    expect(getAppLogs).toHaveBeenCalledWith(
-      MOCK_QUERY_CLIENT,
-      ADDRESS,
+    expect(getLeaseLogs).toHaveBeenCalledWith(
+      app.providerUrl,
       app.leaseUuid,
-      expect.any(Function),
-      50,
-      expect.any(Function)
+      'auth-token',
+      50
     );
   });
 
@@ -840,10 +833,11 @@ describe('executeGetLogs', () => {
     const app = makeApp();
     const registry = makeRegistry([app]);
     const longLog = 'x'.repeat(5000);
-    vi.mocked(getAppLogs).mockResolvedValue({
+    vi.mocked(getLeaseLogs).mockResolvedValue({
       lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
       logs: { web: longLog },
-      truncated: false,
     });
 
     const result = await executeGetLogs(
@@ -866,10 +860,11 @@ describe('executeGetLogs', () => {
   it('finds app via fuzzy match', async () => {
     const app = makeApp({ name: 'my-cool-app' });
     const registry = makeRegistry([app]);
-    vi.mocked(getAppLogs).mockResolvedValue({
+    vi.mocked(getLeaseLogs).mockResolvedValue({
       lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
       logs: { web: 'log output' },
-      truncated: false,
     });
 
     const result = await executeGetLogs(

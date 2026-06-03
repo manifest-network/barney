@@ -2240,8 +2240,10 @@ export async function executeConfirmedRestartApp(
     await restartApp(queryClient, address, leaseUuid, getAuthToken, providerFetch);
   } catch (error) {
     logError('compositeTransactions.executeConfirmedRestartApp', error);
-    // 409 = lease is not in the right state for restart; don't mark as failed
-    // because the app may still be running — only the restart was rejected.
+    // 409 = the provider rejected the restart but the app may still be running, so
+    // don't mark it failed — only the restart was rejected. Note: fred.restartApp
+    // pre-flights the chain lease state; a closed/expired/rejected lease surfaces as a
+    // non-409 error and correctly falls through to the failed-mark below.
     if (error instanceof ProviderApiError && error.status === 409) {
       onProgress?.({ phase: 'failed', detail: 'App is not in a restartable state', operation: 'restart' });
       return { success: false, error: `Cannot restart "${name}": app is not in a restartable state.` };
@@ -2733,8 +2735,10 @@ export async function executeConfirmedUpdateApp(
     await updateApp(queryClient, address, leaseUuid, getAuthToken, manifestJson, undefined, providerFetch);
   } catch (error) {
     logError('compositeTransactions.executeConfirmedUpdateApp', error);
-    // 409 = lease is not in the right state for update; don't mark as failed
-    // because the app may still be running — only the update was rejected.
+    // 409 = the provider rejected the update but the app may still be running, so
+    // don't mark it failed — only the update was rejected. Note: fred.updateApp
+    // pre-flights the chain lease state; a closed/expired/rejected lease surfaces as a
+    // non-409 error and correctly falls through to the failed-mark below.
     if (error instanceof ProviderApiError && error.status === 409) {
       onProgress?.({ phase: 'failed', detail: 'App is not in an updatable state', operation: 'update' });
       return { success: false, error: `Cannot update "${name}": app is not in an updatable state.` };

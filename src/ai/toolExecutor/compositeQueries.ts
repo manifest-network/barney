@@ -14,10 +14,7 @@ import {
 } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../../api/provider-api';
-import { getLeaseStatus, getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import { getAppLogs } from '@manifest-network/manifest-mcp-fred';
-import { providerFetch } from '../../api/providerFetchAdapter';
-import { makeFredAuthTokens, getFredQueryClient } from './fredAuth';
+import { getLeaseStatus, getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import { getDomainAssignments } from '../../api/leaseDomains';
@@ -547,10 +544,9 @@ export async function executeGetLogs(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary, signal, clientManager } = options;
+  const { address, appRegistry, signArbitrary, signal } = options;
   throwIfAborted(signal, 'get_logs');
   if (!address) return { success: false, error: 'Wallet not connected' };
-  if (!clientManager) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
   const name = args.app_name as string;
@@ -572,13 +568,20 @@ export async function executeGetLogs(
 
   const tail = typeof args.tail === 'number' && args.tail > 0 ? Math.floor(args.tail) : 100;
 
-  // fred.getAppLogs resolves the provider from chain and mints the ADR-036 token
-  // itself via getAuthToken, replacing barney's manual mint + getLeaseLogs two-step.
-  const { getAuthToken } = makeFredAuthTokens(signArbitrary);
+  let authToken: string;
+  try {
+    authToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
+  } catch (error) {
+    logError('compositeQueries.executeGetLogs.sign', error);
+    return {
+      success: false,
+      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+    };
+  }
+
   let logsResponse;
   try {
-    const queryClient = await getFredQueryClient(clientManager);
-    logsResponse = await getAppLogs(queryClient, address, app.leaseUuid, getAuthToken, tail, providerFetch);
+    logsResponse = await getLeaseLogs(app.providerUrl, app.leaseUuid, authToken, tail);
   } catch (error) {
     logError('compositeQueries.executeGetLogs', error);
     return {

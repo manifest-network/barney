@@ -119,6 +119,7 @@ import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision } from '../../api/fred';
 import { restartApp, updateApp } from '@manifest-network/manifest-mcp-fred';
+import { providerFetch } from '../../api/providerFetchAdapter';
 import { cosmosTx, setItemCustomDomain, fundCredits } from '@manifest-network/manifest-mcp-core';
 import { uploadPayloadToProvider } from './utils';
 import { resolveSkuItems } from './transactions';
@@ -3096,7 +3097,9 @@ describe('executeConfirmedRestartApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect(restartApp).toHaveBeenCalled();
+    expect(restartApp).toHaveBeenCalledWith(
+      MOCK_QUERY_CLIENT, ADDRESS, app.leaseUuid, expect.any(Function), providerFetch,
+    );
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'restarting' }));
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
   });
@@ -3723,7 +3726,9 @@ describe('executeConfirmedUpdateApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect(updateApp).toHaveBeenCalled();
+    expect(updateApp).toHaveBeenCalledWith(
+      MOCK_QUERY_CLIENT, ADDRESS, app.leaseUuid, expect.any(Function), expect.any(String), undefined, providerFetch,
+    );
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'updating' }));
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
     // Registry should have updated manifest
