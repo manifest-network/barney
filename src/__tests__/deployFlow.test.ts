@@ -257,14 +257,17 @@ describe('Deploy Flow Integration', () => {
     expect(fundResult.requiresConfirmation).toBe(true);
     expect(fundResult.confirmationMessage).toContain('50');
 
-    // Step 2: Confirm fund (now routes through core.fundCredits)
+    // Step 2: Confirm fund — use the args from pendingAction (includes denomString),
+    // mirroring the stop_app flow above, so the confirmed path exercises the real contract.
+    const fundArgs = fundResult.pendingAction!.args;
     vi.mocked(fundCredits).mockResolvedValue({
       code: 0, transactionHash: 'tx-hash-fund', rawLog: '',
       sender: 'manifest1test', tenant: 'manifest1test', amount: '50000000upwr',
     } as Awaited<ReturnType<typeof fundCredits>>);
 
-    const confirmedFund = await executeConfirmedTool('fund_credits', { amount: 50 }, CLIENT_MANAGER, options);
+    const confirmedFund = await executeConfirmedTool('fund_credits', fundArgs, CLIENT_MANAGER, options);
     expect(confirmedFund.success).toBe(true);
+    expect(fundCredits).toHaveBeenCalledWith(CLIENT_MANAGER, fundArgs.denomString);
   });
 
   it('get_balance flow', async () => {

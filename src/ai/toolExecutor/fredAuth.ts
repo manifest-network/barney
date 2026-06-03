@@ -17,7 +17,8 @@ import type { SignArbitraryFn } from './types';
 export interface FredAuthTokens {
   /** Lease-scoped token (status / logs / restart / connection). */
   getAuthToken: (address: string, leaseUuid: string) => Promise<string>;
-  /** Upload token binding the manifest meta-hash (payload upload during deploy/update). */
+  /** Upload token binding the manifest meta-hash (payload upload during deploy — wired in Phase 2;
+   *  restart/update use only getAuthToken). */
   getLeaseDataAuthToken: (address: string, leaseUuid: string, metaHashHex: string) => Promise<string>;
 }
 
