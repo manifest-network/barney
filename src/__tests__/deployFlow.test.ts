@@ -56,6 +56,11 @@ vi.mock('../api/fred', () => ({
   getLeaseProvision: vi.fn(),
 }));
 
+vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  deployManifest: vi.fn(),
+}));
+
 vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   ...(await importOriginal()),
   cosmosTx: vi.fn(),
@@ -79,6 +84,7 @@ import { getLeasesByTenant, getCreditEstimate, getLease } from '../api/billing';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
 import { waitForLeaseReady } from '../api/fred';
+import { deployManifest } from '@manifest-network/manifest-mcp-fred';
 import { cosmosTx, getBalance, fundCredits } from '@manifest-network/manifest-mcp-core';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from '../ai/toolExecutor/utils';
 
@@ -192,6 +198,18 @@ describe('Deploy Flow Integration', () => {
         host: 'https://my-app.example.com',
         ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 12345 } },
       },
+    });
+    // deploy now routes through fred.deployManifest: fire onLeaseCreated (registry
+    // addApp) then return a ready DeployAppResult with the connection.
+    vi.mocked(deployManifest).mockImplementation(async (input) => {
+      await input.onLeaseCreated?.(LEASE_UUID, 'https://prov.example');
+      // Simulate a provisioning poll tick (mono's internal poll surfaces these).
+      input.pollOptions?.onProgress?.({ state: LeaseState.LEASE_STATE_PENDING, phase: 'provisioning' } as any);
+      return {
+        lease_uuid: LEASE_UUID, provider_uuid: PROVIDER_UUID, provider_url: 'https://prov.example',
+        state: LeaseState.LEASE_STATE_ACTIVE,
+        connection: { host: 'https://my-app.example.com', ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 12345 } } },
+      } as Awaited<ReturnType<typeof deployManifest>>;
     });
 
     const confirmedResult = await executeConfirmedTool('deploy_app', { app_name: 'my-app', size: 'small' }, CLIENT_MANAGER, options, payload);

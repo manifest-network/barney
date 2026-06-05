@@ -10,7 +10,7 @@ import { getProviders } from '../../api/sku';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
-import { restartApp, updateApp } from '@manifest-network/manifest-mcp-fred';
+import { restartApp, updateApp, deployManifest, type DeployAppResult } from '@manifest-network/manifest-mcp-fred';
 import { providerFetch } from '../../api/providerFetchAdapter';
 import { makeFredAuthTokens, getFredQueryClient } from './fredAuth';
 import { DENOMS } from '../../api/config';
@@ -515,6 +515,28 @@ export function extractUrlFromFredStatus(
  * Resolve the app URL after successful deployment.
  * Priority: info endpoint (has port mappings) > fred status > connection endpoint.
  */
+/** Derive a display URL + normalized connection from provider connection info,
+ *  applying barney's https/TCP rewrite + stack-FQDN promotion. Pure (no fetch).
+ *  Used by resolveAppUrl (restart/update) and the deploy path (on deployManifest's
+ *  returned connection). */
+function deriveUrlFromConnection(connection: ConnectionDetails): { url?: string; connection: ConnectionDetails } {
+  let ports: Record<string, unknown> | undefined = connection.ports ?? connection.instances?.[0]?.ports;
+  let fqdn = connection.fqdn;
+  if (!ports && connection.services) {
+    const primary = extractPrimaryServicePorts(connection.services);
+    if (primary) {
+      ports = primary.ports;
+      if (!fqdn) {
+        const svc = connection.services[primary.serviceName];
+        fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
+      }
+    }
+  }
+  const withPorts = { ...connection, ports, fqdn };
+  const url = formatConnectionUrl(connection.host, withPorts);
+  return { url, connection: withPorts };
+}
+
 async function resolveAppUrl(
   providerUrl: string,
   leaseUuid: string,
@@ -529,28 +551,8 @@ async function resolveAppUrl(
       const token = await getProviderAuthToken(address, leaseUuid, signArbitrary);
       const connResponse = await getLeaseConnectionInfo(providerUrl, leaseUuid, token);
       if (connResponse.connection) {
-        const connection = connResponse.connection;
-        // Ports may be at top level or nested inside instances[0].ports
-        let ports: Record<string, unknown> | undefined =
-          connection.ports ?? connection.instances?.[0]?.ports;
-
-        // Stack deployments: ports nested under services.<name>.instances[0].ports
-        let fqdn = connection.fqdn;
-        if (!ports && connection.services) {
-          const primary = extractPrimaryServicePorts(connection.services);
-          if (primary) {
-            ports = primary.ports;
-            // Promote primary service's FQDN to top-level for formatConnectionUrl
-            if (!fqdn) {
-              const svc = connection.services[primary.serviceName];
-              fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
-            }
-          }
-        }
-
-        const withPorts = { ...connection, ports, fqdn };
-        const url = formatConnectionUrl(connection.host, withPorts);
-        if (url || withPorts.ports) return { url, connection: withPorts };
+        const { url, connection } = deriveUrlFromConnection(connResponse.connection);
+        if (url || connection.ports) return { url, connection };
       }
     } catch (error) {
       logError(`${logContext}.connection`, error);
@@ -1093,253 +1095,158 @@ export async function executeConfirmedDeployApp(
   const skuUuid = args.skuUuid as string;
   const providerUuid = args.providerUuid as string;
   const providerUrl = args.providerUrl as string;
-  const metaHashHex = payload.hash;
 
-  // Create lease
+  // The manifest barney already built / the user edited (file upload, ManifestEditor,
+  // or generated from typed args). deployManifest validates + uploads it verbatim.
+  const manifestJson = typeof args._generatedManifest === 'string'
+    ? args._generatedManifest
+    : new TextDecoder().decode(payload.bytes);
+  const manifestForStore = sanitizeManifestForStorage(manifestJson);
+
+  const customDomainArg = typeof args.customDomain === 'string' ? args.customDomain : '';
+  const customDomainServiceName = typeof args.customDomainServiceName === 'string' ? args.customDomainServiceName : '';
+
+  const { getAuthToken, getLeaseDataAuthToken } = makeFredAuthTokens(signArbitrary);
+
   onProgress?.({ phase: 'creating_lease', detail: 'Creating lease on-chain...' });
 
-  const serviceNamesResult = validateInternalServiceNames(args._serviceNames, 'deploy_app');
-  if (serviceNamesResult.error) {
-    onProgress?.({ phase: 'failed', detail: serviceNamesResult.error });
-    return { success: false, error: serviceNamesResult.error };
-  }
-  const leaseItems = formatLeaseItems(skuUuid, serviceNamesResult.serviceNames);
-  const cmdArgs = ['--meta-hash', metaHashHex, ...leaseItems];
-  const result = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
-
-  if (result.code !== 0) {
-    onProgress?.({ phase: 'failed', detail: result.rawLog ?? 'Transaction failed' });
-    return { success: false, error: result.rawLog ?? 'Failed to create lease' };
-  }
-
-  const leaseUuid = extractLeaseUuidFromTxResult(result);
-  if (!leaseUuid) {
-    onProgress?.({ phase: 'failed', detail: 'Could not extract lease UUID from transaction' });
-    return { success: false, error: 'Lease created but could not extract UUID. Check your leases manually.' };
-  }
-
-  // Add to registry (store manifest for re-deploy, secrets stripped)
-  const manifestJson = new TextDecoder().decode(payload.bytes);
+  // leaseUuid is captured from deployManifest's onLeaseCreated (fires after the
+  // create-lease TX confirms) so the catch path can flip the right registry
+  // entry to 'failed' and fetch diagnostics. deployManifest owns the whole
+  // create-lease -> set-domain -> upload -> poll sequence; it returns only on
+  // lease ACTIVE and throws ("Deploy partially succeeded: ...") otherwise.
+  let leaseUuid: string | undefined;
+  let result: DeployAppResult;
   try {
-    appRegistry.addApp(address, {
-      name,
-      leaseUuid,
-      size,
-      providerUuid,
-      providerUrl,
-      createdAt: Date.now(),
-      status: 'deploying',
-      manifest: sanitizeManifestForStorage(manifestJson),
-    });
+    result = await deployManifest(
+      {
+        manifest: manifestJson,
+        // Provider-aware SKU resolution stays barney-side (ENG-258); pass the
+        // pre-resolved pair so deployManifest skips its own name-based lookup.
+        sku: { kind: 'resolved', skuUuid, providerUuid },
+        ...(customDomainArg !== '' ? { customDomain: customDomainArg } : {}),
+        ...(customDomainArg !== '' && customDomainServiceName !== '' ? { serviceName: customDomainServiceName } : {}),
+        abortSignal: signal,
+        onLeaseCreated: (createdLeaseUuid) => {
+          leaseUuid = createdLeaseUuid;
+          try {
+            appRegistry.addApp(address, {
+              name,
+              leaseUuid: createdLeaseUuid,
+              size,
+              providerUuid,
+              providerUrl,
+              createdAt: Date.now(),
+              status: 'deploying',
+              manifest: manifestForStore,
+            });
+          } catch (error) {
+            // Lease already created on-chain — log but don't abort the deploy.
+            logError('compositeTransactions.executeConfirmedDeployApp.addApp', error);
+          }
+          onProgress?.({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
+        },
+        pollOptions: {
+          onProgress: (status) => {
+            onProgress?.({ phase: 'provisioning', detail: status.phase || 'Provisioning...', fredStatus: status });
+          },
+        },
+      },
+      { clientManager, getAuthToken, getLeaseDataAuthToken, fetchFn: providerFetch },
+    );
   } catch (error) {
-    // Lease already created on-chain — log but don't abort the deploy flow
-    logError('compositeTransactions.executeConfirmedDeployApp.addApp', error);
+    logError('compositeTransactions.executeConfirmedDeployApp.deploy', error);
+    onProgress?.({ phase: 'failed', detail: error instanceof Error ? error.message : 'Deployment failed' });
+    // Lease may have been created before the failing step (upload/poll/set-domain/
+    // terminal/timeout). Mark the entry failed (if we got a UUID) and append
+    // best-effort diagnostics, mirroring the old terminal-failure branch.
+    if (leaseUuid) appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    const baseMsg = normalizeErrorPunctuation(error instanceof Error ? error.message : 'Deployment failed');
+    const diagnostics = leaseUuid ? await fetchFailureLogs(providerUrl, leaseUuid, address, signArbitrary) : '';
+    return { success: false, error: diagnostics ? `${baseMsg}\n\n${diagnostics}` : baseMsg };
   }
 
-  // Optional: attach custom domain BEFORE manifest upload so Traefik picks
-  // up the per-item custom_domain label as soon as the container is up.
-  // A failure here is non-fatal: the deploy proceeds, the user is left in
-  // the existing 2-step state and can retry set_custom_domain standalone.
-  // Type is module-scoped (`DomainAttachResult`) so the batch path and
-  // `fallbackToChainState` can use the same shape.
-  const customDomainArg = typeof args.customDomain === 'string' ? args.customDomain : '';
-  let domainAttach: DomainAttachResult = { kind: 'none' };
-  if (customDomainArg !== '') {
-    const customDomainServiceName = typeof args.customDomainServiceName === 'string' ? args.customDomainServiceName : '';
-    try {
-      const domainResult = await monoSetItemCustomDomain(
-        clientManager,
-        leaseUuid,
-        customDomainArg,
-        customDomainServiceName !== '' ? { serviceName: customDomainServiceName } : {},
-      );
-      domainAttach = domainResult.code === 0
-        ? { kind: 'attached', customDomain: customDomainArg, serviceName: customDomainServiceName }
-        : { kind: 'failed', error: `chain rejected with code ${domainResult.code}` };
-    } catch (err) {
-      logError('compositeTransactions.executeConfirmedDeployApp.setItemCustomDomain', err);
-      domainAttach = { kind: 'failed', error: err instanceof Error ? err.message : 'unknown error' };
-    }
-  }
+  // Success — deployManifest only returns on lease ACTIVE.
+  leaseUuid = result.lease_uuid;
+  const { url: connectionUrl, connection } = result.connection
+    ? deriveUrlFromConnection(result.connection)
+    : { url: result.url, connection: undefined as ConnectionDetails | undefined };
 
-  // Upload payload
-  onProgress?.({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
-
-  const uploadResult = await uploadPayloadToProvider(
-    providerUrl,
-    leaseUuid,
-    metaHashHex,
-    payload.bytes,
-    address,
-    signArbitrary
-  );
-
-  if (!uploadResult.success) {
-    onProgress?.({ phase: 'failed', detail: `Upload failed: ${uploadResult.error}` });
-    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-    return {
-      success: false,
-      error: `Lease created but upload failed: ${normalizeErrorPunctuation(uploadResult.error)}. The lease ${leaseUuid} is active — you may need to stop it.`,
+  // deployManifest only sets custom_domain when the in-deploy set-domain TX
+  // succeeded (it's fatal otherwise — that lands in the catch above), so a
+  // present custom_domain is the "attached" case. Cache it so the DNS polling
+  // driver (mounted in MainLayout) sees it without waiting for app_status;
+  // merge against existing entries (multi-service stacks can have N domains).
+  const attachedDomain = result.custom_domain;
+  const attachedServiceName = result.service_name ?? '';
+  let customDomainsUpdate: { customDomains: { serviceName: string; customDomain: string }[] } | object = {};
+  if (attachedDomain) {
+    const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
+    const others = prior.filter((d) => d.serviceName !== attachedServiceName);
+    customDomainsUpdate = {
+      customDomains: [...others, { serviceName: attachedServiceName, customDomain: attachedDomain }],
     };
   }
+  appRegistry.updateApp(address, leaseUuid, {
+    status: 'running',
+    url: connectionUrl,
+    connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+    ...customDomainsUpdate,
+  });
+  onProgress?.({ phase: 'ready', detail: 'App is live!' });
 
-  // Poll fred for readiness
-  onProgress?.({ phase: 'provisioning', detail: 'Waiting for deployment...' });
+  const expectedCnameTarget = attachedDomain
+    ? resolveExpectedCnameTarget(connection, attachedServiceName)
+    : undefined;
+  const isApexAttached = typeof args.customDomainWarning === 'string' && args.customDomainWarning.length > 0;
+  const recordKind = isApexAttached
+    ? `an ${apexRecordKindLabel(true)} record (apex domains cannot use CNAME)`
+    : `a ${apexRecordKindLabel(false)}`;
 
-  try {
-    const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
-    const authToken = await refreshAuthToken();
+  const message = attachedDomain
+    ? `App "${name}" is live. Custom domain "${attachedDomain}" attached — add ${recordKind} at your registrar pointing at ${expectedCnameTarget ?? '<provider FQDN>'}.`
+    : `App "${name}" is live!`;
 
-    const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
-      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
-      intervalMs: FRED_POLL_INTERVAL_MS,
-      abortSignal: signal,
-      onProgress: (status) => {
-        onProgress?.({
-          phase: 'provisioning',
-          detail: status.phase || 'Provisioning...',
-          fredStatus: status,
-        });
-      },
-      getAuthToken: refreshAuthToken,
-      // Check chain state to detect rejected/closed leases
-      checkChainState: async (): Promise<TerminalChainState | null> => {
-        const lease = await getLease(leaseUuid);
-        if (!lease) return { state: 'closed' };
-        if (lease.state === LeaseState.LEASE_STATE_CLOSED) return { state: 'closed' };
-        if (lease.state === LeaseState.LEASE_STATE_REJECTED) return { state: 'rejected' };
-        if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return { state: 'expired' };
-        return null;
-      },
-    });
+  // Emit a single rich `app` displayCard. When a custom domain attached, the
+  // AppCard embeds a DomainRow that reads its live DNS status from the shared
+  // `dnsStatuses` slice (no per-card polling).
+  const displayCard = {
+    type: 'app' as const,
+    data: {
+      name,
+      url: connectionUrl,
+      status: 'running',
+      connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+      ...(attachedDomain
+        ? {
+            customDomain: {
+              fqdn: attachedDomain,
+              leaseUuid,
+              serviceName: attachedServiceName,
+              expectedCnameTarget,
+              isApex: isApexAttached,
+            },
+          }
+        : {}),
+    },
+  };
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
-      const { url: connectionUrl, connection } = await resolveAppUrl(
-        providerUrl, leaseUuid, fredStatus, address, signArbitrary,
-        'compositeTransactions.executeConfirmedDeployApp'
-      );
-
-      // Cache the just-attached custom domain so the DNS polling driver
-      // (mounted in MainLayout) sees it without waiting for the user to run
-      // `app_status`. Merge against existing entries — multi-service stacks
-      // can have N domains.
-      let customDomainsUpdate: { customDomains: { serviceName: string; customDomain: string }[] } | object = {};
-      if (domainAttach.kind === 'attached') {
-        const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
-        const others = prior.filter((d) => d.serviceName !== domainAttach.serviceName);
-        customDomainsUpdate = {
-          customDomains: [...others, { serviceName: domainAttach.serviceName, customDomain: domainAttach.customDomain }],
-        };
-      }
-      appRegistry.updateApp(address, leaseUuid, {
-        status: 'running',
-        url: connectionUrl,
-        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
-        ...customDomainsUpdate,
-      });
-      onProgress?.({ phase: 'ready', detail: 'App is live!' });
-
-      // No CustomDomainCard auto-emission on the deploy path. The deploy result
-      // is the primary surface here. DNS progress (4-state polling) is available
-      // by running app_status (chat or sidebar click), which surfaces the
-      // CustomDomainCard for the now-attached domain — same component, just
-      // discovered separately to keep the deploy success surface uncluttered.
-
-      const expectedCnameTarget = domainAttach.kind === 'attached'
-        ? resolveExpectedCnameTarget(connection, domainAttach.serviceName)
-        : undefined;
-      const isApexAttached = typeof args.customDomainWarning === 'string' && args.customDomainWarning.length > 0;
-      const recordKind = isApexAttached
-        ? `an ${apexRecordKindLabel(true)} record (apex domains cannot use CNAME)`
-        : `a ${apexRecordKindLabel(false)}`;
-
-      let message: string;
-      switch (domainAttach.kind) {
-        case 'failed':
-          message = `App "${name}" is live, but the custom-domain attach failed (${domainAttach.error}). Run \`set_custom_domain\` to try again.`;
-          break;
-        case 'attached': {
-          const target = expectedCnameTarget ?? '<provider FQDN>';
-          message = `App "${name}" is live. Custom domain "${domainAttach.customDomain}" attached — add ${recordKind} at your registrar pointing at ${target}.`;
-          break;
-        }
-        case 'none':
-          message = `App "${name}" is live!`;
-          break;
-      }
-
-      // Emit a single rich `app` displayCard. When a custom domain attached,
-      // the AppCard embeds a DomainRow that reads its live DNS status from
-      // the shared `dnsStatuses` slice (no per-card polling).
-      const displayCard = {
-        type: 'app' as const,
-        data: {
-          name,
-          url: connectionUrl,
-          status: 'running',
-          connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
-          ...(domainAttach.kind === 'attached'
-            ? {
-                customDomain: {
-                  fqdn: domainAttach.customDomain,
-                  leaseUuid,
-                  serviceName: domainAttach.serviceName,
-                  expectedCnameTarget,
-                  isApex: isApexAttached,
-                },
-              }
-            : {}),
-        },
-      };
-
-      return {
-        success: true,
-        data: {
-          message,
-          name,
-          url: connectionUrl,
-          status: 'running',
-          ...(domainAttach.kind === 'attached' ? {
-            custom_domain: domainAttach.customDomain,
-            service_name: domainAttach.serviceName,
-            expected_cname_target: expectedCnameTarget,
-            is_apex: isApexAttached,
-          } : {}),
-          ...(domainAttach.kind === 'failed' ? { custom_domain_error: domainAttach.error } : {}),
-        },
-        displayCard,
-      };
-    }
-
-    if (
-      fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
-      fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
-      fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
-      fredStatus.provision_status === 'failed'
-    ) {
-      appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-      onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' });
-
-      const diagnostics = await fetchFailureLogs(providerUrl, leaseUuid, address, signArbitrary);
-      const errorMsg = diagnostics
-        ? `Deployment failed: ${fredStatus.last_error || 'Unknown error'}\n\n${diagnostics}`
-        : `Deployment failed: ${fredStatus.last_error || 'Unknown error'}`;
-
-      return {
-        success: false,
-        error: errorMsg,
-      };
-    }
-
-    // Fred didn't confirm — fall back to chain state. Thread domainAttach so
-    // the fallback can preserve customDomains cache + message detail.
-    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress, domainAttach);
-  } catch (error) {
-    logError('compositeTransactions.executeConfirmedDeployApp.polling', error);
-    // Polling failed but lease+upload succeeded — check chain state to determine actual status.
-    // Don't use diagnostics alone to decide failure: they may describe a still-running app.
-    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress, domainAttach);
-  }
+  return {
+    success: true,
+    data: {
+      message,
+      name,
+      url: connectionUrl,
+      status: 'running',
+      ...(attachedDomain ? {
+        custom_domain: attachedDomain,
+        service_name: attachedServiceName,
+        expected_cname_target: expectedCnameTarget,
+        is_apex: isApexAttached,
+      } : {}),
+    },
+    displayCard,
+  };
 }
 
 /**
