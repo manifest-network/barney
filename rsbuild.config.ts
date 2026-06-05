@@ -77,18 +77,6 @@ export default defineConfig({
         __filename: 'mock',
         __dirname: 'mock',
       },
-      resolve: {
-        alias: {
-          // mono 0.12.0 (ENG-281) moved core's SSRF fetch to the node-only subpath
-          // `@manifest-network/manifest-mcp-core/guarded-fetch` (exports `default: null`),
-          // but fred's MAIN barrel still imports its server module `server/fetch-gate.js`,
-          // which imports that node-only subpath — so browser consumers of fred's
-          // capability functions still drag it in. Barney injects its own browser fetch
-          // (providerFetch) and never uses the SSRF guard, so stub the dead subpath.
-          // Remove once fred's barrel stops pulling in its server entry (ENG-281 follow-up).
-          '@manifest-network/manifest-mcp-core/guarded-fetch$': false,
-        },
-      },
     },
   },
   server: {
