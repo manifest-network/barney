@@ -1730,6 +1730,8 @@ describe('executeConfirmedDeployApp', () => {
     const [input, opts] = vi.mocked(deployManifest).mock.calls[0];
     expect(input.sku).toEqual({ kind: 'resolved', skuUuid: 'sku-1', providerUuid: 'p1' });
     expect(opts.fetchFn).toBe(providerFetch);
+    // Provisioning window: barney's configurable timeout (5 min default), not fred's 2-min default.
+    expect(input.pollOptions?.timeoutMs).toBeGreaterThan(120_000);
 
     expect(result.success && !result.requiresConfirmation && result.displayCard?.type).toBe('app');
     if (result.success && !result.requiresConfirmation && result.displayCard?.type === 'app') {

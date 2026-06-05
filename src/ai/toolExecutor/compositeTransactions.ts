@@ -1130,6 +1130,10 @@ export async function executeConfirmedDeployApp(
           onProgress?.({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
         },
         pollOptions: {
+          // Preserve barney's configurable provisioning window (fred's default is 2 min;
+          // AI_DEPLOY_PROVISION_TIMEOUT_MS defaults to 5 min, set via PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS).
+          timeoutMs: AI_DEPLOY_PROVISION_TIMEOUT_MS,
+          intervalMs: FRED_POLL_INTERVAL_MS,
           onProgress: (status) => {
             onProgress?.({ phase: 'provisioning', detail: status.phase || 'Provisioning...', fredStatus: status });
           },
@@ -1489,6 +1493,8 @@ export async function executeConfirmedBatchDeploy(
               updateProgress('uploading', 'Uploading manifest...');
             },
             pollOptions: {
+              timeoutMs: AI_DEPLOY_PROVISION_TIMEOUT_MS,
+              intervalMs: FRED_POLL_INTERVAL_MS,
               onProgress: (status) => updateProgress('provisioning', status.phase || 'Provisioning...'),
             },
           },
