@@ -15,13 +15,10 @@ import {
   getLeaseProvision as fredGetLeaseProvision,
   getLeaseReleases as fredGetLeaseReleases,
   getLeaseInfo as fredGetLeaseInfo,
-  restartLease as fredRestartLease,
-  updateLease as fredUpdateLease,
   ProviderApiError,
   type FredLeaseStatus,
   type FredLeaseLogs,
   type FredLeaseProvision,
-  type FredActionResponse,
   type FredLeaseInfo,
   type FredLeaseReleases,
 } from '@manifest-network/manifest-mcp-fred';
@@ -83,18 +80,6 @@ export function getLeaseInfo(
   providerApiUrl: string, leaseUuid: string, authToken: string
 ): Promise<FredLeaseInfo> {
   return fredGetLeaseInfo(providerApiUrl, leaseUuid, authToken, providerFetch);
-}
-
-export function restartLease(
-  providerApiUrl: string, leaseUuid: string, authToken: string
-): Promise<FredActionResponse> {
-  return fredRestartLease(providerApiUrl, leaseUuid, authToken, providerFetch);
-}
-
-export function updateLease(
-  providerApiUrl: string, leaseUuid: string, payload: Uint8Array, authToken: string
-): Promise<FredActionResponse> {
-  return fredUpdateLease(providerApiUrl, leaseUuid, payload, authToken, providerFetch);
 }
 
 // ============================================================================

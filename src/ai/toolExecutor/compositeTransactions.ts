@@ -184,23 +184,6 @@ export function extractServiceNamesFromPayload(bytes: Uint8Array): string[] {
   return valid;
 }
 
-/**
- * Format lease items for create-lease command.
- * Single-service: ['sku-uuid:1']
- * Stack (multi-service): ['sku-uuid:1:web', 'sku-uuid:1:db', ...]
- */
-export function formatLeaseItems(skuUuid: string, serviceNames?: string[]): string[] {
-  if (!serviceNames || serviceNames.length === 0) {
-    return [`${skuUuid}:1`];
-  }
-  for (const name of serviceNames) {
-    if (typeof name !== 'string' || !name) {
-      throw new Error(`Invalid service name in lease items: ${JSON.stringify(name)}`);
-    }
-  }
-  return serviceNames.map(name => `${skuUuid}:1:${name}`);
-}
-
 /** Coerce a string-or-number tool arg to string; reject objects/arrays/booleans. */
 function coerceStringArg(value: unknown, fieldName: string, context?: string): { value?: string; error?: string } {
   if (value == null) return {};
