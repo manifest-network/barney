@@ -114,15 +114,14 @@ vi.mock('../../api/leaseByCustomDomain', () => ({
   queryLeaseByCustomDomain: vi.fn().mockResolvedValue(null),
 }));
 
-import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing';
+import { getCreditEstimate, getCreditAccount } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision } from '../../api/fred';
 import { restartApp, updateApp, deployManifest, type DeployAppResult } from '@manifest-network/manifest-mcp-fred';
 import { providerFetch } from '../../api/providerFetchAdapter';
-import { cosmosTx, setItemCustomDomain, fundCredits } from '@manifest-network/manifest-mcp-core';
-import { uploadPayloadToProvider } from './utils';
+import { cosmosTx, fundCredits } from '@manifest-network/manifest-mcp-core';
 import { resolveSkuItems } from './transactions';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
@@ -2433,98 +2432,63 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(result.error).toContain('No entries');
   });
 
-  it('deploys all apps in parallel and reports results', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
+  // Mock deployManifest per entry: fire onLeaseCreated then resolve ACTIVE with a
+  // connection, reflecting any customDomain/serviceName the input requested
+  // (deployManifest owns the in-deploy set-domain TX and returns custom_domain).
+  function mockBatchOk() {
+    vi.mocked(deployManifest).mockImplementation(async (input) => {
+      await input.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return {
+        lease_uuid: 'new-lease-uuid', provider_uuid: 'p1', provider_url: 'https://fred.example.com',
+        state: LeaseState.LEASE_STATE_ACTIVE,
+        connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
+        ...(input.customDomain ? { custom_domain: input.customDomain, service_name: input.serviceName ?? '' } : {}),
+      } as DeployAppResult;
     });
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid',
-      tenant: ADDRESS,
-      provider_uuid: 'p1',
-      connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
-    });
+  }
+  const entry = (app_name: string, extra: Record<string, unknown> = {}) => ({
+    app_name, size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1',
+    providerUrl: 'https://fred.example.com', payload: makePayload(), ...extra,
+  });
 
+  it('deploys all entries and reports results', async () => {
+    mockBatchOk();
     const onProgress = vi.fn();
     const registry = makeRegistry();
-    const entries = [
-      {
-        app_name: 'game1',
-        size: 'micro',
-        skuUuid: 'sku-1',
-        providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        payload: makePayload(),
-      },
-      {
-        app_name: 'game2',
-        size: 'micro',
-        skuUuid: 'sku-1',
-        providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        payload: makePayload(),
-      },
-    ];
-
     const result = await executeConfirmedBatchDeploy(
-      { entries },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry, onProgress })
+      { entries: [entry('game1'), entry('game2')] },
+      CLIENT_MANAGER, makeOptions({ appRegistry: registry, onProgress }),
     );
 
     expect(result.success).toBe(true);
     const data = result.data as any;
     expect(data.deployed).toHaveLength(2);
-    expect(data.deployed.map((d: any) => d.name)).toContain('game1');
-    expect(data.deployed.map((d: any) => d.name)).toContain('game2');
+    expect(data.deployed.map((d: any) => d.name)).toEqual(expect.arrayContaining(['game1', 'game2']));
     expect(data.failed).toHaveLength(0);
-    expect(onProgress).toHaveBeenCalled();
-    // Verify batch progress was emitted
+    expect(vi.mocked(deployManifest)).toHaveBeenCalledTimes(2);
+    // batch progress emitted
     const lastProgressCall = onProgress.mock.calls[onProgress.mock.calls.length - 1][0];
     expect(lastProgressCall.batch).toBeDefined();
   });
 
-  it('handles partial failure gracefully', async () => {
-    // First call succeeds, second fails
-    vi.mocked(cosmosTx)
-      .mockResolvedValueOnce({ code: 0, transactionHash: 'hash1', rawLog: '' } as any)
-      .mockResolvedValueOnce({ code: 1, rawLog: 'insufficient funds' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-    });
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid',
-      tenant: ADDRESS,
-      provider_uuid: 'p1',
-      connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
-    });
-
-    const registry = makeRegistry();
-    const entries = [
-      {
-        app_name: 'game1',
-        size: 'micro',
-        skuUuid: 'sku-1',
-        providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        payload: makePayload(),
-      },
-      {
-        app_name: 'game2',
-        size: 'micro',
-        skuUuid: 'sku-1',
-        providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        payload: makePayload(),
-      },
-    ];
+  it('handles partial failure gracefully (one entry deployManifest rejects)', async () => {
+    vi.mocked(deployManifest)
+      .mockImplementationOnce(async (input) => {
+        await input.onLeaseCreated?.('lease-1', 'https://fred.example.com');
+        return {
+          lease_uuid: 'lease-1', provider_uuid: 'p1', provider_url: 'https://fred.example.com',
+          state: LeaseState.LEASE_STATE_ACTIVE,
+          connection: { host: '127.0.0.1', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+        } as DeployAppResult;
+      })
+      .mockImplementationOnce(async (input) => {
+        await input.onLeaseCreated?.('lease-2', 'https://fred.example.com');
+        throw new Error('Deploy partially succeeded: lease lease-2 was created but upload failed');
+      });
 
     const result = await executeConfirmedBatchDeploy(
-      { entries },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry })
+      { entries: [entry('game1'), entry('game2')] },
+      CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry() }),
     );
 
     expect(result.success).toBe(true);
@@ -2532,185 +2496,75 @@ describe('executeConfirmedBatchDeploy', () => {
     expect((result.data as any).failed).toContain('game2');
   });
 
-  it('includes service names in lease items for stack deploys', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-    });
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid',
-      tenant: ADDRESS,
-      provider_uuid: 'p1',
-      connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
-    });
-
-    const registry = makeRegistry();
-    const entries = [
-      {
-        app_name: 'wordpress',
-        size: 'small',
-        skuUuid: 'sku-1',
-        providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        payload: makePayload(),
-        serviceNames: ['web', 'db'],
-      },
-    ];
-
-    await executeConfirmedBatchDeploy(
-      { entries },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry })
-    );
-
-    // Verify cosmosTx was called with service-name-qualified lease items
-    const txCall = vi.mocked(cosmosTx).mock.calls[0];
-    const cmdArgs = txCall[3] as string[];
-    expect(cmdArgs).toContain('sku-1:1:web');
-    expect(cmdArgs).toContain('sku-1:1:db');
-    // Should NOT contain the single-service format
-    expect(cmdArgs).not.toContain('sku-1:1');
-  });
-
-  // Regression: prior to this fix, mergeBatchDeployConfirmations coalesced
-  // multi-app AI deploys with custom_domain into a single batch_deploy, but
-  // SingleDeployEntry didn't carry the domain fields, so the attach TX was
-  // silently dropped. Deploys succeeded; user only noticed when DNS failed.
-  // See PR #93 Copilot comment 3236552254.
   describe('custom domain attach', () => {
-    function makeDomainOptions(reg = makeRegistry()) {
-      vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-      vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-      vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
-      vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-        lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
-        connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
+    it('passes the custom domain to deployManifest for entries that include it', async () => {
+      mockBatchOk();
+      await executeConfirmedBatchDeploy(
+        { entries: [entry('a1', { customDomain: 'a1.example.com' }), entry('a2', { customDomain: 'a2.example.com' })] },
+        CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry() }),
+      );
+      const domains = vi.mocked(deployManifest).mock.calls.map((c) => c[0].customDomain);
+      expect(domains).toHaveLength(2);
+      expect(domains).toEqual(expect.arrayContaining(['a1.example.com', 'a2.example.com']));
+    });
+
+    it('passes serviceName when entry.customDomainServiceName is non-empty', async () => {
+      mockBatchOk();
+      await executeConfirmedBatchDeploy(
+        { entries: [entry('wp', { serviceNames: ['web', 'db'], customDomain: 'wp.example.com', customDomainServiceName: 'web' })] },
+        CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry() }),
+      );
+      const input = vi.mocked(deployManifest).mock.calls[0][0];
+      expect(input.customDomain).toBe('wp.example.com');
+      expect(input.serviceName).toBe('web');
+    });
+
+    it('omits customDomain/serviceName when the entry has no custom domain', async () => {
+      mockBatchOk();
+      await executeConfirmedBatchDeploy(
+        { entries: [entry('plain')] }, CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry() }),
+      );
+      const input = vi.mocked(deployManifest).mock.calls[0][0];
+      expect(input.customDomain).toBeUndefined();
+      expect(input.serviceName).toBeUndefined();
+    });
+
+    it('fails the entry when its in-deploy domain attach fails (fatal)', async () => {
+      // deployManifest makes a set-domain failure fatal — the entry lands in failed[].
+      vi.mocked(deployManifest).mockImplementation(async (input) => {
+        await input.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+        if (input.customDomain === 'rej.example.com') {
+          throw new Error('Deploy partially succeeded: set-domain rejected (reserved zone)');
+        }
+        return {
+          lease_uuid: 'new-lease-uuid', provider_uuid: 'p1', provider_url: 'https://fred.example.com',
+          state: LeaseState.LEASE_STATE_ACTIVE,
+          connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+          custom_domain: input.customDomain, service_name: '',
+        } as DeployAppResult;
       });
-      return { reg, opts: makeOptions({ appRegistry: reg }) };
-    }
-
-    it('attaches custom domains for entries that include them', async () => {
-      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
-      const { opts } = makeDomainOptions();
-      const entries = [
-        { app_name: 'a1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'a1.example.com' },
-        { app_name: 'a2', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'a2.example.com' },
-      ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
-
-      const calls = vi.mocked(setItemCustomDomain).mock.calls;
-      expect(calls).toHaveLength(2);
-      const domains = calls.map((c) => c[2]);
-      expect(domains).toContain('a1.example.com');
-      expect(domains).toContain('a2.example.com');
-    });
-
-    it('passes serviceName option when entry.customDomainServiceName is non-empty', async () => {
-      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
-      const { opts } = makeDomainOptions();
-      const entries = [
-        { app_name: 'wp', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), serviceNames: ['web', 'db'], customDomain: 'wp.example.com', customDomainServiceName: 'web' },
-      ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
-
-      const call = vi.mocked(setItemCustomDomain).mock.calls[0];
-      expect(call[2]).toBe('wp.example.com');
-      expect(call[3]).toEqual({ serviceName: 'web' });
-    });
-
-    it('does not call setItemCustomDomain when entry has no customDomain', async () => {
-      const { opts } = makeDomainOptions();
-      const entries = [
-        { app_name: 'plain', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
-      ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
-      expect(setItemCustomDomain).not.toHaveBeenCalled();
-    });
-
-    it('surfaces domain attach failure in summary without aborting the batch', async () => {
-      // One success, one chain-rejection (code !== 0). Deploy itself still succeeds.
-      vi.mocked(setItemCustomDomain)
-        .mockResolvedValueOnce({ code: 0, transactionHash: 'dh1', rawLog: '' } as any)
-        .mockResolvedValueOnce({ code: 7, transactionHash: 'dh2', rawLog: 'reserved zone' } as any);
-      const { opts } = makeDomainOptions();
-      const entries = [
-        { app_name: 'ok', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'ok.example.com' },
-        { app_name: 'rej', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'rej.example.com' },
-      ];
-      const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
-
+      const result = await executeConfirmedBatchDeploy(
+        { entries: [entry('ok', { customDomain: 'ok.example.com' }), entry('rej', { customDomain: 'rej.example.com' })] },
+        CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry() }),
+      );
       expect(result.success).toBe(true);
       const data = result.data as any;
-      // Both deploys still in the deployed list — domain failure doesn't promote to deploy failure.
-      expect(data.deployed.map((d: any) => d.name)).toEqual(expect.arrayContaining(['ok', 'rej']));
-      expect(data.failed).toHaveLength(0);
-      // Summary message calls out the domain failure distinctly.
-      expect(data.message).toMatch(/Custom domain attach failed for: rej \(chain rejected with code 7\)/);
+      expect(data.deployed.map((d: any) => d.name)).toContain('ok');
+      expect(data.failed).toContain('rej');
     });
 
-    it('caches customDomains in registry after successful attach', async () => {
-      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
-      const { reg, opts } = makeDomainOptions();
+    it('caches customDomains in registry after a successful attach', async () => {
+      mockBatchOk();
+      const reg = makeRegistry();
       const updateSpy = vi.spyOn(reg, 'updateApp');
-      const entries = [
-        { app_name: 'cached', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'cached.example.com' },
-      ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
-
-      // Among the multiple updateApp calls during the deploy, one must include
-      // the just-attached customDomains entry.
-      const domainUpdate = updateSpy.mock.calls.find(
-        (c) => Array.isArray((c[2] as any).customDomains)
+      await executeConfirmedBatchDeploy(
+        { entries: [entry('cached', { customDomain: 'cached.example.com' })] },
+        CLIENT_MANAGER, makeOptions({ appRegistry: reg }),
       );
+      const domainUpdate = updateSpy.mock.calls.find((c) => Array.isArray((c[2] as any).customDomains));
       expect(domainUpdate).toBeDefined();
       expect((domainUpdate![2] as any).customDomains).toEqual([
         { serviceName: '', customDomain: 'cached.example.com' },
-      ]);
-    });
-
-    // Regression: when fred throws (or times out) and chain confirms ACTIVE,
-    // the batch fallback path used to drop the customDomains cache. The
-    // happy-path inline write at :1700 has already run by then, so the
-    // fallback's new merge is idempotent against it. This test verifies
-    // both writes happen and the entry still lands in deployed[].
-    // See PR #93 Copilot 3236837791.
-    it('preserves customDomains in fallback path when fred throws but chain is ACTIVE', async () => {
-      vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'h', rawLog: '' } as any);
-      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
-      vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-      vi.mocked(waitForLeaseReady).mockRejectedValue(new Error('fred unreachable'));
-      vi.mocked(getLease).mockResolvedValue({
-        leaseUuid: 'new-lease-uuid', tenant: ADDRESS, state: LeaseState.LEASE_STATE_ACTIVE, items: [],
-      } as any);
-
-      const reg = makeRegistry();
-      const updateSpy = vi.spyOn(reg, 'updateApp');
-      const entries = [{
-        app_name: 'redis', size: 'micro',
-        skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com',
-        payload: makePayload(),
-        customDomain: 'redis.example.com',
-      }];
-
-      const result = await executeConfirmedBatchDeploy(
-        { entries },
-        CLIENT_MANAGER,
-        makeOptions({ appRegistry: reg }),
-      );
-
-      expect(result.success).toBe(true);
-      // Entry still in deployed[] — chain ACTIVE via fallback.
-      expect((result.data as any).deployed.map((d: any) => d.name)).toContain('redis');
-      // Both the happy-path inline write (:1700) and the fallback merge
-      // produce customDomains writes. At least one must be present and
-      // carry the attached entry — sidebar dot depends on it.
-      const cacheWrites = updateSpy.mock.calls.filter(
-        (c) => Array.isArray((c[2] as any).customDomains)
-      );
-      expect(cacheWrites.length).toBeGreaterThanOrEqual(1);
-      expect((cacheWrites[cacheWrites.length - 1][2] as any).customDomains).toEqual([
-        { serviceName: '', customDomain: 'redis.example.com' },
       ]);
     });
   });
