@@ -5,7 +5,7 @@
  */
 
 import { createStore } from 'zustand/vanilla';
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import { checkApiHealth } from '../api/morpheus';
 import type { AISettings } from '../ai/validation';
 import type { SignArbitraryFn, PayloadAttachment, ToolResult } from '../ai/toolExecutor';

@@ -8,7 +8,7 @@ import {
   CosmosClientManager,
   type ManifestMCPConfig,
   type WalletProvider,
-} from '@manifest-network/manifest-mcp-core';
+} from '@manifest-network/manifest-sdk';
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import { RPC_ENDPOINT } from '../api/config';
 import { CHAIN_NAME, CHAIN_ID, GAS_PRICE } from '../config/chain';

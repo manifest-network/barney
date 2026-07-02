@@ -3,7 +3,7 @@
  * These run immediately without confirmation.
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import { cosmosQuery, getBalance, noopLogger } from '@manifest-network/manifest-mcp-core';
 import {
   getLeasesByTenant,

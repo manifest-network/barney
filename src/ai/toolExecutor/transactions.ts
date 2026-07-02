@@ -2,7 +2,7 @@
  * Transaction tool handlers (require user confirmation)
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import { cosmosTx } from '@manifest-network/manifest-mcp-core';
 import { getLease } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';

@@ -3,7 +3,7 @@
  * These return requiresConfirmation first, then execute after user approval.
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import {
   asFqdn,
   asLeaseUuid,

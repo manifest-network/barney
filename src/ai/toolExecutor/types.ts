@@ -2,7 +2,7 @@
  * Type definitions for the tool executor
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager, SignArbitraryResult } from '@manifest-network/manifest-sdk';
 import type { DeployProgress } from '../progress';
 import type { AppEntry } from '../../registry/appRegistry';
 import type { MessageCard } from '../../contexts/aiTypes';
@@ -12,6 +12,15 @@ export interface SignResult {
   pub_key: { type: string; value: string };
   signature: string;
 }
+
+/**
+ * Compile-time parity guard (PR 0): Barney's SignResult must stay structurally
+ * assignable to the SDK's SignArbitraryResult (both ADR-036 `{ signature, pub_key }`).
+ * PR 5 wires the auth-token factory against the SDK type; if SignResult ever drifts,
+ * the `T extends U` constraint fails and `tsc` errors right here.
+ */
+type AssertAssignable<T extends U, U> = T;
+export type _SignResultParity = AssertAssignable<SignResult, SignArbitraryResult>;
 
 export type SignArbitraryFn = (address: string, data: string) => Promise<SignResult>;
 
