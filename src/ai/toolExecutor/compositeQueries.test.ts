@@ -518,6 +518,18 @@ describe('executeGetBalance', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('RPC down');
   });
+
+  it('invokes core getBalance with a ReadCtx ({ query, chain, logger }) + address', async () => {
+    vi.mocked(getBalance).mockResolvedValue({ balances: [], credits: null });
+
+    await executeGetBalance(makeOptions());
+
+    expect(getBalance).toHaveBeenCalledTimes(1);
+    const [ctx, addr] = vi.mocked(getBalance).mock.calls[0];
+    expect(addr).toBe(ADDRESS);
+    expect(ctx).toMatchObject({ query: MOCK_QUERY_CLIENT, chain: CLIENT_MANAGER });
+    expect(ctx).toHaveProperty('logger');
+  });
 });
 
 describe('executeBrowseCatalog', () => {

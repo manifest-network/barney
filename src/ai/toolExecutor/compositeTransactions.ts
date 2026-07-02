@@ -4,7 +4,13 @@
  */
 
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
-import { cosmosTx, setItemCustomDomain as monoSetItemCustomDomain } from '@manifest-network/manifest-mcp-core';
+import {
+  asFqdn,
+  asLeaseUuid,
+  cosmosTx,
+  noopLogger,
+  setItemCustomDomain as monoSetItemCustomDomain,
+} from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
@@ -1145,10 +1151,12 @@ export async function executeConfirmedDeployApp(
     const customDomainServiceName = typeof args.customDomainServiceName === 'string' ? args.customDomainServiceName : '';
     try {
       const domainResult = await monoSetItemCustomDomain(
-        clientManager,
-        leaseUuid,
-        customDomainArg,
-        customDomainServiceName !== '' ? { serviceName: customDomainServiceName } : {},
+        { chain: clientManager, logger: noopLogger },
+        {
+          leaseUuid: asLeaseUuid(leaseUuid),
+          customDomain: asFqdn(customDomainArg),
+          ...(customDomainServiceName !== '' ? { serviceName: customDomainServiceName } : {}),
+        },
       );
       domainAttach = domainResult.code === 0
         ? { kind: 'attached', customDomain: customDomainArg, serviceName: customDomainServiceName }
@@ -1700,10 +1708,12 @@ export async function executeConfirmedBatchDeploy(
         const requestedService = entry.customDomainServiceName ?? '';
         try {
           const domainResult = await withSign(() => monoSetItemCustomDomain(
-            clientManager,
-            leaseUuid,
-            requestedDomain,
-            requestedService !== '' ? { serviceName: requestedService } : {},
+            { chain: clientManager, logger: noopLogger },
+            {
+              leaseUuid: asLeaseUuid(leaseUuid),
+              customDomain: asFqdn(requestedDomain),
+              ...(requestedService !== '' ? { serviceName: requestedService } : {}),
+            },
           ));
           if (domainResult.code === 0) {
             domainAttach = { kind: 'attached', customDomain: requestedDomain, serviceName: requestedService };
@@ -3036,13 +3046,18 @@ export async function executeConfirmedSetCustomDomain(
   let result: Awaited<ReturnType<typeof monoSetItemCustomDomain>>;
   try {
     result = await monoSetItemCustomDomain(
-      clientManager,
-      leaseUuid,
-      clearing ? '' : customDomain,
-      {
-        ...(serviceName !== '' ? { serviceName } : {}),
-        ...(clearing ? { clear: true } : {}),
-      },
+      { chain: clientManager, logger: noopLogger },
+      clearing
+        ? {
+            leaseUuid: asLeaseUuid(leaseUuid),
+            clear: true,
+            ...(serviceName !== '' ? { serviceName } : {}),
+          }
+        : {
+            leaseUuid: asLeaseUuid(leaseUuid),
+            customDomain: asFqdn(customDomain),
+            ...(serviceName !== '' ? { serviceName } : {}),
+          },
     );
   } catch (err) {
     logError('compositeTransactions.executeConfirmedSetCustomDomain', err);

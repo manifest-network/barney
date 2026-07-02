@@ -4,7 +4,7 @@
  */
 
 import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
-import { cosmosQuery, getBalance } from '@manifest-network/manifest-mcp-core';
+import { cosmosQuery, getBalance, noopLogger } from '@manifest-network/manifest-mcp-core';
 import {
   getLeasesByTenant,
   getLeasesByTenantPaginated,
@@ -371,8 +371,17 @@ export async function executeGetBalance(
 
   let balance: Awaited<ReturnType<typeof getBalance>>;
   try {
-    const queryClient = await clientManager.getQueryClient();
-    balance = await withTimeout(getBalance(queryClient, address), undefined, 'Fetch balance', signal);
+    const query = await clientManager.getQueryClient();
+    // core@0.15 getBalance takes a ReadCtx ({ query, chain, logger }); build the
+    // minimal ctx over the existing clientManager. Same composite, byte-identical
+    // return shape as 0.8 (parity pinned by the executeGetBalance tests below).
+    // PR 4 replaces this with the createManifestReadClient facade.
+    balance = await withTimeout(
+      getBalance({ query, chain: clientManager, logger: noopLogger }, address),
+      undefined,
+      'Fetch balance',
+      signal,
+    );
   } catch (error) {
     logError('compositeQueries.executeGetBalance', error);
     return {

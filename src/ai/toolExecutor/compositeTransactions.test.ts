@@ -2812,7 +2812,8 @@ describe('executeConfirmedBatchDeploy', () => {
 
       const calls = vi.mocked(setItemCustomDomain).mock.calls;
       expect(calls).toHaveLength(2);
-      const domains = calls.map((c) => c[2]);
+      // core@0.15: domain now lives in the input object (arg index 1), not positional arg 2.
+      const domains = calls.map((c) => (c[1] as { customDomain?: string }).customDomain);
       expect(domains).toContain('a1.example.com');
       expect(domains).toContain('a2.example.com');
     });
@@ -2825,9 +2826,10 @@ describe('executeConfirmedBatchDeploy', () => {
       ];
       await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
 
-      const call = vi.mocked(setItemCustomDomain).mock.calls[0];
-      expect(call[2]).toBe('wp.example.com');
-      expect(call[3]).toEqual({ serviceName: 'web' });
+      // core@0.15: domain + serviceName now live in the input object (arg index 1).
+      const input = vi.mocked(setItemCustomDomain).mock.calls[0][1] as { customDomain?: string; serviceName?: string };
+      expect(input.customDomain).toBe('wp.example.com');
+      expect(input.serviceName).toBe('web');
     });
 
     it('does not call setItemCustomDomain when entry has no customDomain', async () => {
