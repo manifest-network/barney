@@ -6,12 +6,17 @@ import { useEffect, useRef, useState } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import {
   CosmosClientManager,
+  createSignerAdapter,
   type ManifestMCPConfig,
   type WalletProvider,
+  type SignArbitraryResult,
 } from '@manifest-network/manifest-sdk';
+import { createAuthTokens } from '@manifest-network/manifest-sdk/deploy';
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import { RPC_ENDPOINT } from '../api/config';
 import { CHAIN_NAME, CHAIN_ID, GAS_PRICE } from '../config/chain';
+import { createSigningMutex } from '../ai/toolExecutor/batchRunner';
+import type { SigningContext } from '../ai/toolExecutor/types';
 import { logError } from '../utils/errors';
 
 /**
@@ -21,10 +26,16 @@ class CosmosKitWalletProvider implements WalletProvider {
   readonly type = 'web3auth' as const;
   private signer: OfflineSigner;
   private address: string;
+  signArbitrary?: (address: string, data: string) => Promise<SignArbitraryResult>;
 
-  constructor(signer: OfflineSigner, address: string) {
+  constructor(
+    signer: OfflineSigner,
+    address: string,
+    signArbitrary?: (address: string, data: string) => Promise<SignArbitraryResult>,
+  ) {
     this.signer = signer;
     this.address = address;
+    this.signArbitrary = signArbitrary;
   }
 
   async getAddress(): Promise<string> {
@@ -38,6 +49,7 @@ class CosmosKitWalletProvider implements WalletProvider {
 
 export interface UseManifestMCPResult {
   clientManager: CosmosClientManager | null;
+  signing: SigningContext | undefined;
   isConnected: boolean;
   address: string | undefined;
   error: string | null;
@@ -47,15 +59,21 @@ export interface UseManifestMCPResult {
  * Hook to get a CosmosClientManager connected via cosmos-kit
  */
 export function useManifestMCP(): UseManifestMCPResult {
-  const { address, isWalletConnected, getOfflineSigner } = useChain(CHAIN_NAME);
+  const { address, isWalletConnected, getOfflineSigner, signArbitrary } = useChain(CHAIN_NAME);
   const [clientManager, setClientManager] = useState<CosmosClientManager | null>(null);
+  const [signing, setSigning] = useState<SigningContext | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const clientManagerRef = useRef<CosmosClientManager | null>(null);
   const getOfflineSignerRef = useRef(getOfflineSigner);
+  const signArbitraryRef = useRef(signArbitrary);
 
   useEffect(() => {
     getOfflineSignerRef.current = getOfflineSigner;
   }, [getOfflineSigner]);
+
+  useEffect(() => {
+    signArbitraryRef.current = signArbitrary;
+  }, [signArbitrary]);
 
   useEffect(() => {
     let isMounted = true;
@@ -68,6 +86,7 @@ export function useManifestMCP(): UseManifestMCPResult {
         }
         if (isMounted) {
           setClientManager(null);
+          setSigning(undefined);
           setError(null);
         }
         return;
@@ -75,7 +94,25 @@ export function useManifestMCP(): UseManifestMCPResult {
 
       try {
         const signer = getOfflineSignerRef.current();
-        const walletProvider = new CosmosKitWalletProvider(signer, address);
+
+        // Bridge cosmos-kit's signArbitrary into the SDK WalletProvider shape.
+        const wrappedSignArbitrary = async (
+          signerAddress: string,
+          data: string,
+        ): Promise<SignArbitraryResult> => {
+          const fn = signArbitraryRef.current;
+          if (typeof fn !== 'function') {
+            throw new Error('Wallet does not support signArbitrary');
+          }
+          const result = await fn(signerAddress, data);
+          return { pub_key: result.pub_key, signature: result.signature };
+        };
+        const mutex = createSigningMutex(wrappedSignArbitrary);
+        const walletProvider = new CosmosKitWalletProvider(
+          signer,
+          address,
+          mutex.signArbitraryWithMutex,
+        );
 
         const config: ManifestMCPConfig = {
           chainId: CHAIN_ID,
@@ -93,8 +130,16 @@ export function useManifestMCP(): UseManifestMCPResult {
         const manager = CosmosClientManager.getInstance(config, walletProvider);
         clientManagerRef.current = manager;
 
+        // Build the ADR-036 auth-token factory bound to this wallet address.
+        // Shares the mutex's sign lock so single + batch ops never hit the
+        // wallet concurrently.
+        const authSigner = createSignerAdapter(walletProvider, 'manifest');
+        const authTokens = createAuthTokens(authSigner, { chainId: CHAIN_ID });
+        const signingContext: SigningContext = { authTokens, withSign: mutex.withSign };
+
         if (isMounted) {
           setClientManager(manager);
+          setSigning(signingContext);
           setError(null);
         }
       } catch (err) {
@@ -102,6 +147,7 @@ export function useManifestMCP(): UseManifestMCPResult {
         if (isMounted) {
           setError(err instanceof Error ? err.message : 'Failed to connect');
           setClientManager(null);
+          setSigning(undefined);
         }
       }
     };
@@ -125,6 +171,7 @@ export function useManifestMCP(): UseManifestMCPResult {
 
   return {
     clientManager,
+    signing,
     isConnected: isWalletConnected && clientManager !== null,
     address,
     error,

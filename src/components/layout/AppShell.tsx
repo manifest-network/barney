@@ -35,8 +35,8 @@ function isPopupClosedError(msg: string): boolean {
 }
 
 export function AppShell() {
-  const { setClientManager, setAddress, setSignArbitrary } = useAI();
-  const { clientManager, address } = useManifestMCP();
+  const { setClientManager, setAddress, setSignArbitrary, setSigning } = useAI();
+  const { clientManager, address, signing } = useManifestMCP();
   const { signArbitrary, isWalletConnected, isWalletConnecting, openView, getOfflineSigner, status, message, disconnect } = useChain(CHAIN_NAME);
   const toast = useToast();
 
@@ -69,9 +69,10 @@ export function AppShell() {
   useEffect(() => {
     setClientManager(clientManager);
     setAddress(address);
+    setSigning(signing);
     const canSign = isWalletConnected && typeof signArbitrary === 'function';
     setSignArbitrary(canSign ? wrappedSignArbitrary : undefined);
-  }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, wrappedSignArbitrary]);
+  }, [clientManager, address, signing, isWalletConnected, signArbitrary, setClientManager, setAddress, setSigning, setSignArbitrary, wrappedSignArbitrary]);
 
   // Watch for wallet connection errors (e.g. Safari popup blocking)
   const prevStatusRef = useRef(status);

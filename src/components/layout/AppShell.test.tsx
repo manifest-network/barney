@@ -15,6 +15,7 @@ vi.mock('../../hooks/useAI', () => ({
     setClientManager: mockSetClientManager,
     setAddress: mockSetAddress,
     setSignArbitrary: mockSetSignArbitrary,
+    setSigning: vi.fn(),
   }),
 }));
 
@@ -28,6 +29,7 @@ vi.mock('../../hooks/useManifestMCP', () => ({
   useManifestMCP: () => ({
     clientManager: null,
     address: mockAddress,
+    signing: undefined,
   }),
 }));
 

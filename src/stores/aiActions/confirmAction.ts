@@ -70,7 +70,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     return;
   }
 
-  const { address, signArbitrary } = get();
+  const { address, signArbitrary, signing } = get();
   const { messageId } = pendingConfirmation;
 
   // Clone action to avoid mutating React state; apply user edits if present.
@@ -111,6 +111,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
         clientManager,
         address,
         signArbitrary,
+        signing,
         onProgress: (progress) => set({ deployProgress: { ...progress } }),
         appRegistry: getAppRegistryAccess(),
         signal: get().abortController?.signal,
