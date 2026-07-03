@@ -607,6 +607,18 @@ describe('extractServiceNamesFromPayload', () => {
     expect(extractServiceNamesFromPayload(bytes)).toEqual(['web', 'db']);
   });
 
+  it('extracts from JSON stack manifest whose services carry no image key (leniency guard)', () => {
+    // Guards the deliberately-lenient Barney-local isStackManifest/getServiceNames
+    // that back this extraction. fred's strict isStackManifest requires `"image" in v`
+    // per service and would return [] for image-less services — regressing this path.
+    // Every other extraction test feeds services that already carry an image, so only
+    // this one fails if the code ever swaps to fred's strict variant. See the KEPT LOCAL
+    // note in src/ai/manifest.ts.
+    const json = JSON.stringify({ services: { web: {}, db: {} } });
+    const bytes = new TextEncoder().encode(json);
+    expect(extractServiceNamesFromPayload(bytes)).toEqual(['web', 'db']);
+  });
+
   it('returns empty for JSON single-service manifest', () => {
     const json = JSON.stringify({ image: 'nginx', ports: { '80/tcp': {} } });
     const bytes = new TextEncoder().encode(json);

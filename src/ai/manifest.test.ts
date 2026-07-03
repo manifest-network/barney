@@ -177,6 +177,24 @@ describe('buildManifest', () => {
     expect(result.payload.hash).toBe(result2.payload.hash);
   });
 
+  it('payload hash equals the exact SHA-256 hex of the manifest JSON (contract, not just shape)', async () => {
+    // Pins the true meta_hash contract, not just "64 hex chars". Fred rejects
+    // uploads whose body hash != the recorded meta_hash, so payload.hash MUST be
+    // SHA-256 of the exact bytes uploaded (result.json). A future fred change that
+    // canonicalizes/prefixes the hashed input would still yield 64-hex but a
+    // different value — this test catches that; the length-only tests would not.
+    // redis:8.4 has no required env, so no password generation → deterministic JSON.
+    const result = await buildManifest({ image: 'redis:8.4' });
+    const result2 = await buildManifest({ image: 'redis:8.4' });
+    expect(result.json).toBe(result2.json); // determinism guard (no generated secrets)
+
+    // Independently recompute SHA-256 hex of the exact JSON string that was hashed.
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(result.json));
+    const expected = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+
+    expect(result.payload.hash).toBe(expected);
+  });
+
   it('omits env when empty object', async () => {
     const result = await buildManifest({ image: 'redis:8.4', env: {} });
     const parsed = JSON.parse(result.json);
