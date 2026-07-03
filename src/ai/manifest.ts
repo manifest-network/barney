@@ -16,9 +16,12 @@ import {
   buildManifest as fredBuildManifest,
   mergeManifest as fredMergeManifest,
   validateServiceName as fredValidateServiceName,
+  normalizePorts as fredNormalizePorts,
+  deriveAppNameFromImage as fredDeriveAppNameFromImage,
+  metaHashHex,
   type BuildManifestOptions as FredBuildManifestOptions,
 } from '@manifest-network/manifest-mcp-fred';
-import { sha256, toHex, generatePassword, validatePayloadSize } from '../utils/hash';
+import { generatePassword, validatePayloadSize } from '../utils/hash';
 import { logError } from '../utils/errors';
 import type { PayloadAttachment } from './toolExecutor/types';
 
@@ -36,7 +39,11 @@ export interface PortOptions {
 
 /**
  * Derive an app name from a Docker image reference.
- * Strips registry prefix, tag, digest, and normalizes to valid app name chars.
+ *
+ * Thin wrapper over fred's deriveAppNameFromImage. Fred returns '' on degenerate
+ * refs (e.g. "...:latest", "", "/"); Barney's callers require a non-empty name,
+ * so keep the historical `|| 'app'` fallback. Fred may strip a trailing hyphen
+ * during >32-char truncation — equivalent to Barney on all realistic Docker refs.
  *
  * Examples:
  *   "redis:8.4"                        → "redis"
@@ -45,37 +52,18 @@ export interface PortOptions {
  *   "postgres@sha256:abc..."            → "postgres"
  */
 export function deriveAppNameFromImage(image: string): string {
-  let name = image;
-
-  // Strip tag (:...) or digest (@sha256:...)
-  name = name.replace(/@sha256:[a-fA-F0-9]+$/, '');
-  name = name.replace(/:[\w][\w.-]*$/, '');
-
-  // Strip registry prefix (anything before the last slash)
-  const lastSlash = name.lastIndexOf('/');
-  if (lastSlash !== -1) {
-    name = name.slice(lastSlash + 1);
-  }
-
-  // Strip "library/" prefix (Docker Hub official images)
-  if (name.startsWith('library/')) {
-    name = name.slice(8);
-  }
-
-  // Normalize: lowercase, replace invalid chars, collapse hyphens
-  name = name
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 32);
-
-  return name || 'app';
+  return fredDeriveAppNameFromImage(image) || 'app';
 }
 
 /**
  * Normalize a port specification into the manifest ports format.
  * Accepts comma-separated ports with optional protocol suffix.
+ *
+ * Delegates to fred's normalizePorts (runtime-identical parse + identical error
+ * messages). Two benign, non-migrated divergences: fred throws ManifestMCPError
+ * rather than Error (Barney reads only error.message, so the text is the contract),
+ * and fred types the value as Record<string, never>. Barney keeps the PortOptions
+ * surface, so cast the value type — the same bridge toFredOptions already applies.
  *
  * Examples:
  *   "6379"           → { "6379/tcp": {} }
@@ -84,36 +72,7 @@ export function deriveAppNameFromImage(image: string): string {
  *   "8080/tcp,53/udp"→ { "8080/tcp": {}, "53/udp": {} }
  */
 export function normalizePorts(port: string): Record<string, PortOptions> {
-  const result: Record<string, PortOptions> = {};
-  const VALID_PROTOCOLS = new Set(['tcp', 'udp']);
-
-  for (const raw of port.split(',')) {
-    const trimmed = raw.trim();
-    if (!trimmed) continue;
-
-    let portStr: string;
-    let protocol: string;
-    if (trimmed.includes('/')) {
-      const slashIdx = trimmed.indexOf('/');
-      portStr = trimmed.slice(0, slashIdx);
-      protocol = trimmed.slice(slashIdx + 1);
-    } else {
-      portStr = trimmed;
-      protocol = 'tcp';
-    }
-
-    const portNum = parseInt(portStr, 10);
-    if (isNaN(portNum) || portNum < 1 || portNum > 65535 || String(portNum) !== portStr) {
-      throw new Error(`Invalid port: "${portStr}". Port must be a number between 1 and 65535.`);
-    }
-    if (!VALID_PROTOCOLS.has(protocol)) {
-      throw new Error(`Invalid protocol: "${protocol}". Must be "tcp" or "udp".`);
-    }
-
-    result[`${portNum}/${protocol}`] = {};
-  }
-
-  return result;
+  return fredNormalizePorts(port) as Record<string, PortOptions>;
 }
 
 export interface BuildManifestResult {
@@ -222,7 +181,7 @@ export async function buildManifest(opts: BuildManifestOptions): Promise<BuildMa
   }
 
   const bytes = new TextEncoder().encode(json);
-  const hash = toHex(await sha256(json));
+  const hash = await metaHashHex(json);
   const derivedAppName = deriveAppNameFromImage(opts.image);
 
   return {
@@ -325,7 +284,7 @@ export async function buildStackManifest(opts: StackManifestOptions): Promise<Bu
   }
 
   const bytes = new TextEncoder().encode(json);
-  const hash = toHex(await sha256(json));
+  const hash = await metaHashHex(json);
 
   // Derive app name from the first service's image
   const firstService = opts.services[serviceNames[0]];
@@ -344,6 +303,16 @@ export async function buildStackManifest(opts: StackManifestOptions): Promise<Bu
 }
 
 /**
+ * KEPT LOCAL — deliberately NOT re-exported from fred. Fred's isStackManifest
+ * requires `"image" in v` for every service, and fred's getServiceNames /
+ * parseStackManifest close over that strict check. Barney's payload-upload path
+ * (extractServiceNamesFromPayload in compositeTransactions.ts, which calls
+ * getServiceNames on arbitrary parsed JSON) relies on the lenient
+ * "services is a non-empty object of objects" semantics:
+ * getServiceNames({ services: { web: {}, db: {} } }) must return ['web','db']
+ * (pinned in manifest.test.ts). Migrating to fred's strict variant would
+ * regress that path, so these three helpers stay Barney-local.
+ *
  * Check if a manifest is a stack manifest (has `services` key with object value).
  */
 export function isStackManifest(manifest: unknown): boolean {
