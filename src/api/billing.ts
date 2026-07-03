@@ -11,6 +11,7 @@ import type {
 } from '@manifest-network/manifestjs/dist/codegen/liftedinit/billing/v1/query';
 import type { PageResponse } from '@manifest-network/manifestjs/dist/codegen/cosmos/base/query/v1beta1/pagination';
 import { getQueryClient, queryWithNotFound, lcdConvert, fixEnumField } from './queryClient';
+import { getReadClient } from './readClient';
 
 // Re-export manifestjs types for consumers (Coin is exported from bank.ts)
 export type { BillingParams, Lease, LeaseItem, CreditAccount };
@@ -25,7 +26,6 @@ const { leaseStateFromJSON: fromJSON, leaseStateToJSON: toJSON } = liftedinit.bi
 
 // fromAmino converters for query responses
 const {
-  QueryParamsResponse: QueryParamsResponseConverter,
   QueryLeaseResponse: QueryLeaseResponseConverter,
   QueryLeasesResponse: QueryLeasesResponseConverter,
   QueryCreditAccountResponse: QueryCreditAccountResponseConverter,
@@ -100,9 +100,8 @@ export async function getCreditEstimate(tenant: string): Promise<QueryCreditEsti
 }
 
 export async function getBillingParams(): Promise<BillingParams> {
-  const client = await getQueryClient();
-  const data = await client.liftedinit.billing.v1.params();
-  return lcdConvert(data, QueryParamsResponseConverter).params;
+  const client = await getReadClient();
+  return client.getBillingParams();
 }
 
 export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState): Promise<Lease[]> {
