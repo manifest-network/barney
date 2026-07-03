@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { pollLeaseUntilReady, connectLeaseEvents, waitForLeaseReady } from './fred';
+import { pollLeaseUntilReady, connectLeaseEvents, waitForLeaseReady, getLeaseLogs } from './fred';
+import { getLeaseLogs as sdkGetLeaseLogs } from '@manifest-network/manifest-sdk/deploy';
+import { providerFetch } from './providerFetchAdapter';
 import { LeaseState } from './billing';
 import { ProviderApiError } from './provider-api';
 
@@ -41,6 +43,17 @@ vi.mock('../utils/url', () => ({
 
 vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
+}));
+
+// getLeaseLogs is now sourced from the SDK's ./deploy subpath (PR 2). Mock it so the
+// wrapper test can assert argument forwarding without hitting the real HTTP fn.
+vi.mock('@manifest-network/manifest-sdk/deploy', () => ({
+  getLeaseLogs: vi.fn(),
+}));
+
+// providerFetch is the DEV-proxy / PROD-SSRF fetch adapter the wrapper injects as fetchFn.
+vi.mock('./providerFetchAdapter', () => ({
+  providerFetch: vi.fn(),
 }));
 
 const PROVIDER_URL = 'https://fred.example.com';
@@ -519,5 +532,45 @@ describe('waitForLeaseReady', () => {
     expect(result.state).toBe(LeaseState.LEASE_STATE_ACTIVE);
     expect(result.provision_status).toBe('ready');
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('getLeaseLogs wrapper', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const LOGS = {
+    lease_uuid: LEASE_UUID,
+    tenant: 'manifest1abc',
+    provider_uuid: 'p1',
+    logs: { web: 'log output' },
+  };
+
+  it('forwards to the SDK deploy getLeaseLogs with providerFetch as fetchFn and default tail 100', async () => {
+    vi.mocked(sdkGetLeaseLogs).mockResolvedValue(LOGS);
+
+    const result = await getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN);
+
+    expect(result).toBe(LOGS);
+    expect(sdkGetLeaseLogs).toHaveBeenCalledWith(
+      PROVIDER_URL,
+      LEASE_UUID,
+      AUTH_TOKEN,
+      100,
+      providerFetch,
+    );
+  });
+
+  it('forwards an explicit tail unchanged', async () => {
+    vi.mocked(sdkGetLeaseLogs).mockResolvedValue(LOGS);
+
+    await getLeaseLogs(PROVIDER_URL, LEASE_UUID, AUTH_TOKEN, 500);
+
+    expect(sdkGetLeaseLogs).toHaveBeenCalledWith(
+      PROVIDER_URL,
+      LEASE_UUID,
+      AUTH_TOKEN,
+      500,
+      providerFetch,
+    );
   });
 });

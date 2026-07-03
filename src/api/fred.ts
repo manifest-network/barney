@@ -11,7 +11,6 @@
 import { z } from 'zod';
 import {
   getLeaseStatus as fredGetLeaseStatus,
-  getLeaseLogs as fredGetLeaseLogs,
   getLeaseProvision as fredGetLeaseProvision,
   getLeaseReleases as fredGetLeaseReleases,
   getLeaseInfo as fredGetLeaseInfo,
@@ -25,6 +24,13 @@ import {
   type FredLeaseInfo,
   type FredLeaseReleases,
 } from '@manifest-network/manifest-mcp-fred';
+// getLeaseLogs re-sourced to the aggregating SDK's browser-safe ./deploy subpath.
+// The SDK deploy barrel re-exports mono-fred's getLeaseLogs unchanged (identical fn +
+// signature: getLeaseLogs(providerUrl, leaseUuid, authToken, tail?, fetchFn?)). Barney's
+// wrapper below keeps owning provider-URL + ADR-036 auth + providerFetch injection; the
+// LLM-vs-LogCard truncation stays in compositeQueries.ts. Never getAppLogs — its
+// 4000-char cap would clip the full-logs LogCard.
+import { getLeaseLogs as fredGetLeaseLogs } from '@manifest-network/manifest-sdk/deploy';
 import { providerFetch } from './providerFetchAdapter';
 import { validateProviderUrl, normalizeBaseUrl } from './providerFetch';
 import { LeaseState } from './billing';
