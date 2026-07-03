@@ -757,7 +757,7 @@ describe('executeGetLogs', () => {
     expect(result.error).toContain('stopped');
   });
 
-  it('returns error without signArbitrary', async () => {
+  it('returns error without signing', async () => {
     const app = makeApp();
     const registry = makeRegistry([app]);
     const result = await executeGetLogs(

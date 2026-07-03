@@ -242,6 +242,16 @@ describe('aiStore', () => {
     });
   });
 
+  describe('setSigning', () => {
+    it('stores and clears the signing context', () => {
+      const ctx = {} as AIStore['signing'];
+      store.getState().setSigning(ctx);
+      expect(store.getState().signing).toBe(ctx);
+      store.getState().setSigning(undefined);
+      expect(store.getState().signing).toBeUndefined();
+    });
+  });
+
   // ---- Settings ----
 
   describe('updateSettings', () => {
