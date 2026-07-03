@@ -56,8 +56,11 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   ...(await importOriginal()),
   cosmosTx: vi.fn(),
   cosmosQuery: vi.fn(),
-  getBalance: vi.fn(),
 }));
+
+vi.mock('../api/readClient', () => ({ getReadClient: vi.fn() }));
+
+const mockGetBalance = vi.fn();
 
 vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
@@ -74,7 +77,8 @@ import { getLeasesByTenant, getCreditEstimate, getLease } from '../api/billing';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
 import { waitForLeaseReady } from '../api/fred';
-import { cosmosTx, getBalance } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx } from '@manifest-network/manifest-mcp-core';
+import { getReadClient } from '../api/readClient';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from '../ai/toolExecutor/utils';
 
 const ADDRESS = 'manifest1testaddr';
@@ -263,7 +267,10 @@ describe('Deploy Flow Integration', () => {
   });
 
   it('get_balance flow', async () => {
-    vi.mocked(getBalance).mockResolvedValue({
+    vi.mocked(getReadClient).mockResolvedValue(
+      { getBalance: mockGetBalance } as unknown as Awaited<ReturnType<typeof getReadClient>>,
+    );
+    mockGetBalance.mockResolvedValue({
       balances: [{ denom: 'umfx', amount: '5000000' }],
       current_balance: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
       spending_per_hour: [{ denom: 'umfx', amount: '3600' }],

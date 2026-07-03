@@ -74,8 +74,11 @@ vi.mock('@manifest-network/manifest-mcp-chain', () => ({
 vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   ...(await importOriginal()),
   cosmosQuery: vi.fn(),
-  getBalance: vi.fn(),
 }));
+
+vi.mock('../../api/readClient', () => ({ getReadClient: vi.fn() }));
+
+const mockGetBalance = vi.fn();
 
 vi.mock('../../utils/errors', () => ({
   logError: vi.fn(),
@@ -96,7 +99,8 @@ import { getLeasesByTenant, getLeasesByTenantPaginated, getLease } from '../../a
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import { cosmosQuery, getBalance } from '@manifest-network/manifest-mcp-core';
+import { cosmosQuery } from '@manifest-network/manifest-mcp-core';
+import { getReadClient } from '../../api/readClient';
 import { isFaucetEnabled } from '../../api/faucet';
 import { requestFaucet } from '@manifest-network/manifest-mcp-chain';
 import { logError } from '../../utils/errors';
@@ -434,7 +438,12 @@ describe('executeAppStatus', () => {
 });
 
 describe('executeGetBalance', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getReadClient).mockResolvedValue(
+      { getBalance: mockGetBalance } as unknown as Awaited<ReturnType<typeof getReadClient>>,
+    );
+  });
 
   it('returns error without wallet', async () => {
     const result = await executeGetBalance(makeOptions({ address: undefined }));
@@ -448,7 +457,7 @@ describe('executeGetBalance', () => {
   });
 
   it('returns formatted balance', async () => {
-    vi.mocked(getBalance).mockResolvedValue({
+    mockGetBalance.mockResolvedValue({
       balances: [{ denom: 'umfx', amount: '5000000' }],
       current_balance: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
       spending_per_hour: [{ denom: 'umfx', amount: '3600' }],
@@ -474,7 +483,7 @@ describe('executeGetBalance', () => {
   });
 
   it('returns null hours_remaining when spending_per_hour is empty', async () => {
-    vi.mocked(getBalance).mockResolvedValue({
+    mockGetBalance.mockResolvedValue({
       balances: [{ denom: 'umfx', amount: '5000000' }],
       current_balance: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
       spending_per_hour: [],
@@ -498,7 +507,7 @@ describe('executeGetBalance', () => {
   });
 
   it('returns zero credits when credit account missing', async () => {
-    vi.mocked(getBalance).mockResolvedValue({
+    mockGetBalance.mockResolvedValue({
       balances: [{ denom: 'umfx', amount: '5000000' }],
       credits: null,
     });
@@ -512,23 +521,11 @@ describe('executeGetBalance', () => {
   });
 
   it('returns error when getBalance throws', async () => {
-    vi.mocked(getBalance).mockRejectedValue(new Error('RPC down'));
+    mockGetBalance.mockRejectedValue(new Error('RPC down'));
 
     const result = await executeGetBalance(makeOptions());
     expect(result.success).toBe(false);
     expect(result.error).toContain('RPC down');
-  });
-
-  it('invokes core getBalance with a ReadCtx ({ query, chain, logger }) + address', async () => {
-    vi.mocked(getBalance).mockResolvedValue({ balances: [], credits: null });
-
-    await executeGetBalance(makeOptions());
-
-    expect(getBalance).toHaveBeenCalledTimes(1);
-    const [ctx, addr] = vi.mocked(getBalance).mock.calls[0];
-    expect(addr).toBe(ADDRESS);
-    expect(ctx).toMatchObject({ query: MOCK_QUERY_CLIENT, chain: CLIENT_MANAGER });
-    expect(ctx).toHaveProperty('logger');
   });
 });
 

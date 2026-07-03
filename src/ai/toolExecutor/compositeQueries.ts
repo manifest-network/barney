@@ -4,7 +4,9 @@
  */
 
 import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
-import { cosmosQuery, getBalance, noopLogger } from '@manifest-network/manifest-mcp-core';
+import { cosmosQuery } from '@manifest-network/manifest-mcp-core';
+import type { ManifestReadClient } from '@manifest-network/manifest-sdk';
+import { getReadClient } from '../../api/readClient';
 import {
   getLeasesByTenant,
   getLeasesByTenantPaginated,
@@ -369,19 +371,10 @@ export async function executeGetBalance(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!clientManager) return { success: false, error: 'Not connected to blockchain' };
 
-  let balance: Awaited<ReturnType<typeof getBalance>>;
+  let balance: Awaited<ReturnType<ManifestReadClient['getBalance']>>;
   try {
-    const query = await clientManager.getQueryClient();
-    // call-shape adapted to core@0.15's ReadCtx ({ query, chain, logger }); the
-    // consumer reads a stable field subset (credits.balances / spending_per_hour /
-    // running_apps / hours_remaining), so the get_balance ToolData is unchanged.
-    // PR 4 replaces this with the createManifestReadClient facade.
-    balance = await withTimeout(
-      getBalance({ query, chain: clientManager, logger: noopLogger }, address),
-      undefined,
-      'Fetch balance',
-      signal,
-    );
+    const client = await getReadClient();
+    balance = await withTimeout(client.getBalance(address), undefined, 'Fetch balance', signal);
   } catch (error) {
     logError('compositeQueries.executeGetBalance', error);
     return {
