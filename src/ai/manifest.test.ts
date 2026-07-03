@@ -723,3 +723,49 @@ describe('getServiceNames', () => {
     expect(getServiceNames(null)).toEqual([]);
   });
 });
+
+// ============================================================================
+// PR 3 regression pins — fred-parity for the consolidated pure helpers.
+// These pin CURRENT behavior BEFORE Task 2 swaps the local impls to fred's, so
+// the swap is proven behavior-preserving.
+//  - deriveAppNameFromImage keeps the `|| 'app'` guard: fred returns '' on
+//    degenerate refs, Barney callers require a non-empty name.
+//  - normalizePorts keeps IDENTICAL error-message text: fred throws
+//    ManifestMCPError (a subclass of Error) while Barney throws plain Error, but
+//    Barney reads only error.message, so the message text is the contract.
+// The getServiceNames({ services: { web: {}, db: {} } }) pin above stays green
+// ONLY because isStackManifest/getServiceNames stay Barney-local (fred's
+// isStackManifest requires `"image" in v` per service).
+// ============================================================================
+
+describe('deriveAppNameFromImage — degenerate-ref guard (fred-parity regression)', () => {
+  it('yields "app" for an all-punctuation ref', () => {
+    expect(deriveAppNameFromImage('...:latest')).toBe('app');
+  });
+
+  it('yields "app" for an empty string', () => {
+    expect(deriveAppNameFromImage('')).toBe('app');
+  });
+
+  it('yields "app" for a slash-only ref', () => {
+    expect(deriveAppNameFromImage('/')).toBe('app');
+  });
+});
+
+describe('normalizePorts — message/shape parity (fred re-export regression)', () => {
+  it('produces the ingress-free { "port/proto": {} } shape', () => {
+    expect(normalizePorts('6379,53/udp')).toEqual({ '6379/tcp': {}, '53/udp': {} });
+  });
+
+  it('throws the exact invalid-port message', () => {
+    expect(() => normalizePorts('abc')).toThrow(
+      'Invalid port: "abc". Port must be a number between 1 and 65535.'
+    );
+  });
+
+  it('throws the exact invalid-protocol message', () => {
+    expect(() => normalizePorts('8080/sctp')).toThrow(
+      'Invalid protocol: "sctp". Must be "tcp" or "udp".'
+    );
+  });
+});
