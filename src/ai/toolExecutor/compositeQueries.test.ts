@@ -869,6 +869,50 @@ describe('executeGetLogs', () => {
     expect(card.data.logs.web.length).toBe(5000);
   });
 
+  it('keeps every service full for the LogCard but caps and drops for the LLM (multi-service)', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    // web fits whole (3000). db (3000, tail-marked 'X') is kept only as its
+    // 1000-char TAIL so the marker survives. cache (500) is dropped from the LLM
+    // path once the 4000-char budget is exhausted.
+    const web = 'W'.repeat(3000);
+    const db = 'D'.repeat(2999) + 'X';
+    const cache = 'C'.repeat(500);
+    vi.mocked(getLeaseLogs).mockResolvedValue({
+      lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
+      logs: { web, db, cache },
+    });
+
+    const result = await executeGetLogs(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+    );
+    expect(result.success).toBe(true);
+
+    // LLM path: capped at MAX_LOG_CHARS=4000 total. web whole, db tail-truncated
+    // to 1000 (keeps 'X'), cache dropped entirely.
+    const data = result.data as any;
+    expect(data.logs.web).toBe(web);
+    expect(data.logs.db.length).toBe(1000);
+    expect(data.logs.db.endsWith('X')).toBe(true);
+    expect(data.logs.cache).toBeUndefined();
+    const llmTotal = Object.values(data.logs as Record<string, string>)
+      .reduce((n, s) => n + s.length, 0);
+    expect(llmTotal).toBe(4000);
+    expect(data.truncated).toBe(true);
+
+    // LogCard path: every service full, nothing dropped, truncated:false.
+    const card = (result as any).displayCard;
+    expect(card.type).toBe('logs');
+    expect(card.data.logs.web.length).toBe(3000);
+    expect(card.data.logs.db.length).toBe(3000);
+    expect(card.data.logs.db.endsWith('X')).toBe(true);
+    expect(card.data.logs.cache.length).toBe(500);
+    expect(card.data.truncated).toBe(false);
+  });
+
   it('finds app via fuzzy match', async () => {
     const app = makeApp({ name: 'my-cool-app' });
     const registry = makeRegistry([app]);
