@@ -33,6 +33,16 @@ describe('getReadClient', () => {
     expect(a).toBe(b);
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
+
+  it('resets the cache on construction failure so the next call rebuilds', async () => {
+    mockCreate.mockRejectedValueOnce(new Error('boot fail'));
+    await expect(getReadClient()).rejects.toThrow('boot fail');
+
+    // The .catch nulled clientPromise; a subsequent call constructs afresh.
+    mockCreate.mockResolvedValue({ dispose: mockDispose });
+    await getReadClient();
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('disposeReadClient', () => {
@@ -47,5 +57,20 @@ describe('disposeReadClient', () => {
   it('is a no-op when no client was created', async () => {
     await disposeReadClient();
     expect(mockDispose).not.toHaveBeenCalled();
+  });
+
+  it('swallows a throwing dispose() and still lets the next call rebuild', async () => {
+    const throwingDispose = vi.fn(() => {
+      throw new Error('teardown boom');
+    });
+    mockCreate.mockResolvedValue({ dispose: throwingDispose });
+    await getReadClient();
+
+    await expect(disposeReadClient()).resolves.toBeUndefined();
+    expect(throwingDispose).toHaveBeenCalledTimes(1);
+
+    // Cache was cleared despite the throw, so the next call constructs afresh.
+    await getReadClient();
+    expect(mockCreate).toHaveBeenCalledTimes(2);
   });
 });

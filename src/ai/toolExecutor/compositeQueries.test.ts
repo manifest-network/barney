@@ -474,6 +474,8 @@ describe('executeGetBalance', () => {
 
     const result = await executeGetBalance(makeOptions());
     expect(result.success).toBe(true);
+    // Wallet address is threaded into the read client's getBalance call.
+    expect(mockGetBalance).toHaveBeenCalledWith(ADDRESS);
     const data = result.data as any;
     expect(data.credits).toBe(100);
     expect(data.hours_remaining).toBe(24);
