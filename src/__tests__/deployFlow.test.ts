@@ -29,10 +29,6 @@ vi.mock('../api/billing', async (importOriginal) => {
   };
 });
 
-vi.mock('../api/bank', () => ({
-  getAllBalances: vi.fn(),
-}));
-
 vi.mock('../api/sku', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/sku')>();
   return {
