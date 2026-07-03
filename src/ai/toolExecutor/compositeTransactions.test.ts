@@ -90,10 +90,6 @@ vi.mock('./utils', () => ({
   getProviderAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
 }));
 
-vi.mock('./transactions', () => ({
-  resolveSkuItems: vi.fn(),
-}));
-
 vi.mock('../../registry/appRegistry', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../registry/appRegistry')>();
   return {
@@ -115,7 +111,6 @@ import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
 import { cosmosTx, setItemCustomDomain } from '@manifest-network/manifest-mcp-core';
 import { uploadPayloadToProvider } from './utils';
-import { resolveSkuItems } from './transactions';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
 const ADDRESS = 'manifest1abc';
@@ -1061,7 +1056,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1079,7 +1073,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1', price: { denom: 'umfx', amount: '1000000' } } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', name: 'Provider', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1106,7 +1099,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-free', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-free', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1133,7 +1125,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1157,7 +1148,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1178,7 +1168,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1223,7 +1212,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1266,7 +1254,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1291,7 +1278,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1317,7 +1303,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1338,7 +1323,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1360,7 +1344,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1388,7 +1371,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1419,7 +1401,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1454,7 +1435,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1472,7 +1452,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1535,7 +1514,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1583,7 +1561,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1634,7 +1611,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1681,7 +1657,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -1702,7 +1677,6 @@ describe('executeDeployApp', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-small', name: 'docker-small', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-small', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -2537,7 +2511,6 @@ describe('executeBatchDeploy', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -2564,7 +2537,6 @@ describe('executeBatchDeploy', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-free', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-free', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -2590,7 +2562,6 @@ describe('executeBatchDeploy', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -2626,7 +2597,6 @@ describe('executeBatchDeploy', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-1', quantity: 1 }] });
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
@@ -3911,7 +3881,6 @@ describe('deploy_app with custom_domain (Pass B)', () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-micro', providerUuid: 'p1', name: 'docker-micro', basePrice: { amount: '10', denom: 'upwr' }, unit: Unit.UNIT_PER_DAY } as any,
     ]);
-    vi.mocked(resolveSkuItems).mockReturnValue({ items: [{ sku_uuid: 'sku-micro', quantity: 1 }] });
     vi.mocked(getCreditAccount).mockResolvedValue({
       creditAccount: { tenant: 'addr', creditAddress: 'caddr', activeLeaseCount: 0n, pendingLeaseCount: 0n, reservedAmounts: [] },
       balances: [{ denom: DENOMS.PWR, amount: '999000000' }],
