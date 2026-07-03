@@ -137,7 +137,6 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
     lastMessageTime: 0,
     clientManager: fakeClientManager,
     address: 'manifest1test',
-    signArbitrary: vi.fn(),
     settings: {
       saveHistory: false,
     },

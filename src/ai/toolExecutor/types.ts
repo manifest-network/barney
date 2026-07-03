@@ -158,7 +158,6 @@ export interface AppRegistryAccess {
 export interface ToolExecutorOptions {
   clientManager: CosmosClientManager | null;
   address: string | undefined;
-  signArbitrary?: (address: string, data: string) => Promise<SignResult>;
   /** Root-built signing capability (auth-token factory + shared sign lock). */
   signing?: SigningContext;
   onProgress?: (progress: DeployProgress) => void;

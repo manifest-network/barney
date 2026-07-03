@@ -19,9 +19,6 @@ import { HEALTH_CHECK_TIMEOUT_MS } from '../config/constants';
 
 // Re-export types and classes from mono for backward compatibility
 export {
-  createSignMessage,
-  createLeaseDataSignMessage,
-  createAuthToken,
   ProviderApiError,
   type LeaseConnectionResponse,
   type ConnectionDetails,

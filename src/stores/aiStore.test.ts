@@ -242,14 +242,6 @@ describe('aiStore', () => {
     });
   });
 
-  describe('setSignArbitrary', () => {
-    it('stores the signArbitrary fn', () => {
-      const fn = vi.fn();
-      store.getState().setSignArbitrary(fn);
-      expect(store.getState().signArbitrary).toBe(fn);
-    });
-  });
-
   // ---- Settings ----
 
   describe('updateSettings', () => {
