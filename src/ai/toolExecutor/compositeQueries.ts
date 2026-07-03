@@ -28,7 +28,7 @@ import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import { withRetry, withTimeout, throwIfAborted } from '../../api/utils';
-import { getProviderAuthToken } from './utils';
+import { asLeaseUuid } from '@manifest-network/manifest-sdk';
 import type { ToolResult, ToolExecutorOptions, ToolData } from './types';
 import type { MessageCard } from '../../contexts/aiTypes';
 
@@ -119,7 +119,7 @@ export async function executeAppStatus(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary, signal } = options;
+  const { address, appRegistry, signing, signal } = options;
   throwIfAborted(signal, 'app_status');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
@@ -151,10 +151,10 @@ export async function executeAppStatus(
   if (
     (app.status === 'running' || app.status === 'deploying') &&
     app.providerUrl &&
-    signArbitrary
+    signing
   ) {
     try {
-      const authToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
+      const authToken = await signing.authTokens.getAuthToken(asLeaseUuid(app.leaseUuid));
       throwIfAborted(signal, 'app_status');
       fredStatus = await getLeaseStatus(app.providerUrl, app.leaseUuid, authToken);
     } catch (error) {
@@ -184,9 +184,9 @@ export async function executeAppStatus(
         }
         // Fetch connection details from provider API
         let connectionRefreshed = false;
-        if (signArbitrary && app.providerUrl) {
+        if (signing && app.providerUrl) {
           try {
-            const infoAuthToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
+            const infoAuthToken = await signing.authTokens.getAuthToken(asLeaseUuid(app.leaseUuid));
             const connResponse = await getLeaseConnectionInfo(app.providerUrl, app.leaseUuid, infoAuthToken);
             if (connResponse.connection) {
               const conn = connResponse.connection;
@@ -546,7 +546,7 @@ export async function executeGetLogs(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary, signal } = options;
+  const { address, appRegistry, signing, signal } = options;
   throwIfAborted(signal, 'get_logs');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
@@ -564,7 +564,7 @@ export async function executeGetLogs(
   if (!app.providerUrl) {
     return { success: false, error: `App "${app.name}" has no provider URL` };
   }
-  if (!signArbitrary) {
+  if (!signing) {
     return { success: false, error: 'Signing not available' };
   }
 
@@ -572,7 +572,7 @@ export async function executeGetLogs(
 
   let authToken: string;
   try {
-    authToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
+    authToken = await signing.authTokens.getAuthToken(asLeaseUuid(app.leaseUuid));
   } catch (error) {
     logError('compositeQueries.executeGetLogs.sign', error);
     return {
@@ -693,7 +693,7 @@ export async function executeAppDiagnostics(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary, signal } = options;
+  const { address, appRegistry, signing, signal } = options;
   throwIfAborted(signal, 'app_diagnostics');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
@@ -711,13 +711,13 @@ export async function executeAppDiagnostics(
   if (!app.providerUrl) {
     return { success: false, error: `App "${app.name}" has no provider URL` };
   }
-  if (!signArbitrary) {
+  if (!signing) {
     return { success: false, error: 'Signing not available' };
   }
 
   let authToken: string;
   try {
-    authToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
+    authToken = await signing.authTokens.getAuthToken(asLeaseUuid(app.leaseUuid));
   } catch (error) {
     logError('compositeQueries.executeAppDiagnostics.sign', error);
     return {
@@ -753,7 +753,7 @@ export async function executeAppReleases(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary, signal } = options;
+  const { address, appRegistry, signing, signal } = options;
   throwIfAborted(signal, 'app_releases');
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
@@ -771,13 +771,13 @@ export async function executeAppReleases(
   if (!app.providerUrl) {
     return { success: false, error: `App "${app.name}" has no provider URL` };
   }
-  if (!signArbitrary) {
+  if (!signing) {
     return { success: false, error: 'Signing not available' };
   }
 
   let authToken: string;
   try {
-    authToken = await getProviderAuthToken(address, app.leaseUuid, signArbitrary);
+    authToken = await signing.authTokens.getAuthToken(asLeaseUuid(app.leaseUuid));
   } catch (error) {
     logError('compositeQueries.executeAppReleases.sign', error);
     return {

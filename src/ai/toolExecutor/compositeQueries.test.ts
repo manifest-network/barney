@@ -50,8 +50,6 @@ vi.mock('../../api/sku', async (importOriginal) => {
 vi.mock('../../api/provider-api', () => ({
   getProviderHealth: vi.fn(),
   getLeaseConnectionInfo: vi.fn(),
-  createSignMessage: vi.fn().mockReturnValue('sign-msg'),
-  createAuthToken: vi.fn().mockReturnValue('auth-token'),
 }));
 
 vi.mock('../../api/fred', () => ({
@@ -703,10 +701,13 @@ describe('executeLeaseHistory', () => {
   });
 });
 
-const mockSignArbitrary = vi.fn().mockResolvedValue({
-  pub_key: { type: 'tendermint/PubKeySecp256k1', value: 'pubkey123' },
-  signature: 'sig123',
-});
+const mockSigning = {
+  authTokens: {
+    getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
+    getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),
+  },
+  withSign: <T,>(fn: () => Promise<T>) => fn(),
+};
 
 describe('executeGetLogs', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -740,7 +741,7 @@ describe('executeGetLogs', () => {
     const registry = makeRegistry([app]);
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('no provider URL');
@@ -750,7 +751,7 @@ describe('executeGetLogs', () => {
     const app = makeApp({ status: 'stopped' });
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: makeRegistry([app]), signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: makeRegistry([app]), signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('stopped');
@@ -761,7 +762,7 @@ describe('executeGetLogs', () => {
     const registry = makeRegistry([app]);
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: undefined })
+      makeOptions({ appRegistry: registry, signing: undefined })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Signing not available');
@@ -779,7 +780,7 @@ describe('executeGetLogs', () => {
 
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(true);
     const data = result.data as any;
@@ -799,7 +800,7 @@ describe('executeGetLogs', () => {
     expect(getLeaseLogs).toHaveBeenCalledWith(
       app.providerUrl,
       app.leaseUuid,
-      'auth-token',
+      'mock-auth-token',
       100
     );
   });
@@ -811,7 +812,7 @@ describe('executeGetLogs', () => {
 
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Failed to fetch logs');
@@ -830,12 +831,12 @@ describe('executeGetLogs', () => {
 
     await executeGetLogs(
       { app_name: 'my-app', tail: 50 },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(getLeaseLogs).toHaveBeenCalledWith(
       app.providerUrl,
       app.leaseUuid,
-      'auth-token',
+      'mock-auth-token',
       50
     );
   });
@@ -853,7 +854,7 @@ describe('executeGetLogs', () => {
 
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(true);
     const data = result.data as any;
@@ -886,7 +887,7 @@ describe('executeGetLogs', () => {
 
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(true);
 
@@ -924,7 +925,7 @@ describe('executeGetLogs', () => {
 
     const result = await executeGetLogs(
       { app_name: 'cool-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(true);
     expect((result.data as any).app_name).toBe('my-cool-app');
@@ -963,7 +964,7 @@ describe('executeAppDiagnostics', () => {
     const registry = makeRegistry([app]);
     const result = await executeAppDiagnostics(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('stopped');
@@ -974,7 +975,7 @@ describe('executeAppDiagnostics', () => {
     const registry = makeRegistry([app]);
     const result = await executeAppDiagnostics(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('no provider URL');
@@ -991,7 +992,7 @@ describe('executeAppDiagnostics', () => {
 
     const result = await executeAppDiagnostics(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(true);
     const data = result.data as any;
@@ -1008,7 +1009,7 @@ describe('executeAppDiagnostics', () => {
 
     const result = await executeAppDiagnostics(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Failed to fetch diagnostics');
@@ -1048,7 +1049,7 @@ describe('executeAppReleases', () => {
     const registry = makeRegistry([app]);
     const result = await executeAppReleases(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('stopped');
@@ -1059,7 +1060,7 @@ describe('executeAppReleases', () => {
     const registry = makeRegistry([app]);
     const result = await executeAppReleases(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('no provider URL');
@@ -1080,7 +1081,7 @@ describe('executeAppReleases', () => {
 
     const result = await executeAppReleases(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(true);
     const data = result.data as any;
@@ -1096,7 +1097,7 @@ describe('executeAppReleases', () => {
 
     const result = await executeAppReleases(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Failed to fetch releases');

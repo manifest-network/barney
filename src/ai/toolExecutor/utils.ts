@@ -3,43 +3,25 @@
  */
 
 import { sha256Hex as computePayloadHash, isValidMetaHash } from '../../utils/hash';
-import {
-  createLeaseDataSignMessage,
-  createSignMessage,
-  createAuthToken,
-  uploadLeaseData,
-  ProviderApiError,
-} from '../../api/provider-api';
-import type { ToolResult, SignResult } from './types';
+import { uploadLeaseData, ProviderApiError } from '../../api/provider-api';
+import type { LeaseUuid } from '@manifest-network/manifest-sdk';
+import type { AuthTokens, ToolResult } from './types';
 
 // Re-export for backward compatibility
 export { extractLeaseUuid as extractLeaseUuidFromTxResult } from '../../utils/tx';
 
 /**
- * Create a provider auth token for ADR-036 authenticated requests.
- * Centralizes the sign-and-create-token pattern used across query and TX executors.
- */
-export async function getProviderAuthToken(
-  address: string,
-  leaseUuid: string,
-  signArbitrary: (address: string, data: string) => Promise<SignResult>
-): Promise<string> {
-  const timestamp = Math.floor(Date.now() / 1000);
-  const message = createSignMessage(address, leaseUuid, timestamp);
-  const signResult = await signArbitrary(address, message);
-  return createAuthToken(address, leaseUuid, timestamp, signResult.pub_key.value, signResult.signature);
-}
-
-/**
  * Upload payload to provider with ADR-036 authentication.
+ * The lease-data auth token is minted by the root-built `authTokens` factory
+ * (address-bound, mutex-serialized). The 64-hex `meta_hash` precheck is retained
+ * here — the factory does not validate hash form.
  */
 export async function uploadPayloadToProvider(
   providerApiUrl: string,
-  leaseUuid: string,
+  leaseUuid: LeaseUuid,
   metaHashHex: string,
   payload: Uint8Array,
-  address: string,
-  signArbitrary: (address: string, data: string) => Promise<SignResult>
+  authTokens: AuthTokens
 ): Promise<ToolResult> {
   try {
     // Validate meta_hash format
@@ -50,38 +32,16 @@ export async function uploadPayloadToProvider(
       };
     }
 
-    // Create the sign message
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signMessage = createLeaseDataSignMessage(leaseUuid, metaHashHex, timestamp);
-
-    // Sign the message using ADR-036
-    let signResult: SignResult;
+    // Mint the lease-data auth token via the factory (ADR-036 signing happens here).
+    let authToken: string;
     try {
-      signResult = await signArbitrary(address, signMessage);
+      authToken = await authTokens.getLeaseDataAuthToken(leaseUuid, metaHashHex);
     } catch (signError) {
       return {
         success: false,
         error: `Failed to sign message: ${signError instanceof Error ? signError.message : 'Signing rejected or failed'}`,
       };
     }
-
-    // Validate sign result has required fields
-    if (!signResult?.pub_key?.value || !signResult?.signature) {
-      return {
-        success: false,
-        error: 'Invalid signature result: missing public key or signature. Please try again.',
-      };
-    }
-
-    // Create the auth token
-    const authToken = createAuthToken(
-      address,
-      leaseUuid,
-      timestamp,
-      signResult.pub_key.value,
-      signResult.signature,
-      metaHashHex
-    );
 
     // Upload the payload
     await uploadLeaseData(providerApiUrl, leaseUuid, payload, authToken);

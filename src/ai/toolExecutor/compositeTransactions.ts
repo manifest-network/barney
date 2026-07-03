@@ -21,7 +21,7 @@ import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
-import { extractLeaseUuidFromTxResult, uploadPayloadToProvider, getProviderAuthToken } from './utils';
+import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
 import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
 import { isValidFqdn, normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
@@ -35,7 +35,8 @@ import { MANIFEST_NOTICE_KEY } from '../../config/constants';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
-import { createSigningMutex, runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
+import type { SigningContext } from './types';
+import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([
@@ -522,14 +523,14 @@ async function resolveAppUrl(
   providerUrl: string,
   leaseUuid: string,
   fredStatus: FredLeaseStatus,
-  address: string,
-  signArbitrary: ToolExecutorOptions['signArbitrary'],
+  _address: string,
+  signing: SigningContext | undefined,
   logContext: string
 ): Promise<{ url?: string; connection?: ConnectionDetails }> {
   // 1. Try connection endpoint (has proper host + port mappings)
-  if (signArbitrary) {
+  if (signing) {
     try {
-      const token = await getProviderAuthToken(address, leaseUuid, signArbitrary);
+      const token = await signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
       const connResponse = await getLeaseConnectionInfo(providerUrl, leaseUuid, token);
       if (connResponse.connection) {
         const connection = connResponse.connection;
@@ -593,13 +594,13 @@ export function deriveAppName(filename: string): string {
 async function fetchFailureLogs(
   providerUrl: string,
   leaseUuid: string,
-  address: string,
-  signArbitrary: ToolExecutorOptions['signArbitrary']
+  _address: string,
+  signing: SigningContext | undefined
 ): Promise<string | null> {
-  if (!signArbitrary) return null;
+  if (!signing) return null;
 
   try {
-    const authToken = await getProviderAuthToken(address, leaseUuid, signArbitrary);
+    const authToken = await signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
 
     const parts: string[] = [];
 
@@ -1079,7 +1080,7 @@ export async function executeConfirmedDeployApp(
   options: ToolExecutorOptions,
   payload?: PayloadAttachment
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary, onProgress, signal } = options;
+  const { address, appRegistry, signing, onProgress, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -1089,7 +1090,7 @@ export async function executeConfirmedDeployApp(
   }
 
   if (!payload) return { success: false, error: 'Payload missing' };
-  if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
+  if (!signing) return { success: false, error: 'Wallet does not support message signing' };
 
   const name = args.app_name as string;
   const size = args.size as string;
@@ -1172,11 +1173,10 @@ export async function executeConfirmedDeployApp(
 
   const uploadResult = await uploadPayloadToProvider(
     providerUrl,
-    leaseUuid,
+    asLeaseUuid(leaseUuid),
     metaHashHex,
     payload.bytes,
-    address,
-    signArbitrary
+    signing.authTokens
   );
 
   if (!uploadResult.success) {
@@ -1192,7 +1192,7 @@ export async function executeConfirmedDeployApp(
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for deployment...' });
 
   try {
-    const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
+    const refreshAuthToken = () => signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
     const authToken = await refreshAuthToken();
 
     const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
@@ -1220,7 +1220,7 @@ export async function executeConfirmedDeployApp(
 
     if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
       const { url: connectionUrl, connection } = await resolveAppUrl(
-        providerUrl, leaseUuid, fredStatus, address, signArbitrary,
+        providerUrl, leaseUuid, fredStatus, address, signing,
         'compositeTransactions.executeConfirmedDeployApp'
       );
 
@@ -1325,7 +1325,7 @@ export async function executeConfirmedDeployApp(
       appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
       onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' });
 
-      const diagnostics = await fetchFailureLogs(providerUrl, leaseUuid, address, signArbitrary);
+      const diagnostics = await fetchFailureLogs(providerUrl, leaseUuid, address, signing);
       const errorMsg = diagnostics
         ? `Deployment failed: ${fredStatus.last_error || 'Unknown error'}\n\n${diagnostics}`
         : `Deployment failed: ${fredStatus.last_error || 'Unknown error'}`;
@@ -1643,12 +1643,12 @@ export async function executeConfirmedBatchDeploy(
     return { success: false, error: 'No entries to deploy' };
   }
 
-  const { address, appRegistry, signArbitrary, onProgress, signal } = options;
+  const { address, appRegistry, signing, onProgress, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
-  if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
+  if (!signing) return { success: false, error: 'Wallet does not support message signing' };
 
-  const { withSign, signArbitraryWithMutex } = createSigningMutex(signArbitrary);
+  const { withSign } = signing;
 
   const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
 
@@ -1750,11 +1750,10 @@ export async function executeConfirmedBatchDeploy(
 
       const uploadResult = await uploadPayloadToProvider(
         entry.providerUrl,
-        leaseUuid,
+        asLeaseUuid(leaseUuid),
         entry.payload.hash,
         entry.payload.bytes,
-        address,
-        signArbitraryWithMutex
+        signing.authTokens
       );
 
       if (!uploadResult.success) {
@@ -1767,7 +1766,7 @@ export async function executeConfirmedBatchDeploy(
       updateProgress('provisioning', 'Waiting for deployment...');
 
       try {
-        const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitraryWithMutex);
+        const refreshAuthToken = () => signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
         const authToken = await refreshAuthToken();
 
         const fredStatus = await waitForLeaseReady(entry.providerUrl, leaseUuid, authToken, {
@@ -1790,7 +1789,7 @@ export async function executeConfirmedBatchDeploy(
 
         if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
           const { url: connectionUrl, connection } = await resolveAppUrl(
-            entry.providerUrl, leaseUuid, fredStatus, address, signArbitraryWithMutex,
+            entry.providerUrl, leaseUuid, fredStatus, address, signing,
             'executeConfirmedBatchDeploy'
           );
 
@@ -2210,15 +2209,15 @@ export async function executeConfirmedRestartApp(
   _clientManager: CosmosClientManager,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary, onProgress, signal } = options;
+  const { address, appRegistry, signing, onProgress, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
-  if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
+  if (!signing) return { success: false, error: 'Wallet does not support message signing' };
 
   // Batch restart
   const entries = args.entries as Array<{ app_name: string; leaseUuid: string; providerUrl: string }> | undefined;
   if (entries && entries.length > 0) {
-    return executeConfirmedBatchRestart(entries, address, appRegistry, signArbitrary, onProgress, signal);
+    return executeConfirmedBatchRestart(entries, address, appRegistry, signing, onProgress, signal);
   }
 
   // Single restart
@@ -2229,7 +2228,7 @@ export async function executeConfirmedRestartApp(
   onProgress?.({ phase: 'restarting', detail: 'Restarting app...', operation: 'restart' });
 
   // Mint auth token and call restart
-  const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
+  const refreshAuthToken = () => signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
 
   try {
     const authToken = await refreshAuthToken();
@@ -2270,7 +2269,7 @@ export async function executeConfirmedRestartApp(
 
     if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
       const { url: connectionUrl, connection } = await resolveAppUrl(
-        providerUrl, leaseUuid, fredStatus, address, signArbitrary,
+        providerUrl, leaseUuid, fredStatus, address, signing,
         'compositeTransactions.executeConfirmedRestartApp'
       );
 
@@ -2311,12 +2310,10 @@ async function executeConfirmedBatchRestart(
   entries: Array<{ app_name: string; leaseUuid: string; providerUrl: string }>,
   address: string,
   appRegistry: ToolExecutorOptions['appRegistry'] & object,
-  signArbitrary: (address: string, data: string) => Promise<{ pub_key: { type: string; value: string }; signature: string }>,
+  signing: SigningContext,
   onProgress: ToolExecutorOptions['onProgress'],
   signal: AbortSignal | undefined
 ): Promise<ToolResult> {
-  const { signArbitraryWithMutex } = createSigningMutex(signArbitrary);
-
   const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
 
   const { succeeded, failed, batchProgress } = await runBatchWithConcurrency({
@@ -2331,7 +2328,7 @@ async function executeConfirmedBatchRestart(
 
       updateProgress('restarting', 'Restarting...');
 
-      const refreshAuthToken = () => getProviderAuthToken(address, entry.leaseUuid, signArbitraryWithMutex);
+      const refreshAuthToken = () => signing.authTokens.getAuthToken(asLeaseUuid(entry.leaseUuid));
 
       // Issue restart command
       try {
@@ -2366,7 +2363,7 @@ async function executeConfirmedBatchRestart(
 
         if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
           const { url: connectionUrl, connection } = await resolveAppUrl(
-            entry.providerUrl, entry.leaseUuid, fredStatus, address, signArbitraryWithMutex,
+            entry.providerUrl, entry.leaseUuid, fredStatus, address, signing,
             'executeConfirmedBatchRestart'
           );
 
@@ -2692,10 +2689,10 @@ export async function executeConfirmedUpdateApp(
   options: ToolExecutorOptions,
   payload?: PayloadAttachment
 ): Promise<ToolResult> {
-  const { address, appRegistry, signArbitrary, onProgress, signal } = options;
+  const { address, appRegistry, signing, onProgress, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
-  if (!signArbitrary) return { success: false, error: 'Wallet does not support message signing' };
+  if (!signing) return { success: false, error: 'Wallet does not support message signing' };
 
   // Reconstruct payload from stored manifest JSON (image-based update)
   if (!payload && typeof args._generatedManifest === 'string') {
@@ -2711,7 +2708,7 @@ export async function executeConfirmedUpdateApp(
   onProgress?.({ phase: 'updating', detail: 'Updating app with new manifest...', operation: 'update' });
 
   // Mint auth token and call update
-  const refreshAuthToken = () => getProviderAuthToken(address, leaseUuid, signArbitrary);
+  const refreshAuthToken = () => signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
 
   try {
     const authToken = await refreshAuthToken();
@@ -2796,7 +2793,7 @@ export async function executeConfirmedUpdateApp(
       }
 
       const { url: connectionUrl, connection } = await resolveAppUrl(
-        providerUrl, leaseUuid, fredStatus, address, signArbitrary,
+        providerUrl, leaseUuid, fredStatus, address, signing,
         'compositeTransactions.executeConfirmedUpdateApp'
       );
 

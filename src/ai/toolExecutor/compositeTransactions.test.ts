@@ -54,9 +54,6 @@ vi.mock('../../api/provider-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/provider-api')>();
   return {
     ...actual,
-    createSignMessage: vi.fn().mockReturnValue('sign-msg'),
-    createAuthToken: vi.fn().mockReturnValue('auth-token'),
-    createLeaseDataSignMessage: vi.fn().mockReturnValue('lease-data-sign-msg'),
     getLeaseConnectionInfo: vi.fn(),
   };
 });
@@ -87,7 +84,6 @@ vi.mock('./utils', () => ({
   extractLeaseUuidFromTxResult: vi.fn().mockReturnValue('new-lease-uuid'),
   uploadPayloadToProvider: vi.fn().mockResolvedValue({ success: true, data: { message: 'ok' } }),
   computePayloadHash: vi.fn(),
-  getProviderAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
 }));
 
 vi.mock('../../registry/appRegistry', async (importOriginal) => {
@@ -128,10 +124,13 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
     clientManager: CLIENT_MANAGER,
     address: ADDRESS,
     appRegistry: makeRegistry(),
-    signArbitrary: vi.fn().mockResolvedValue({
-      pub_key: { type: 'tendermint/PubKeySecp256k1', value: 'pubkey' },
-      signature: 'sig',
-    }),
+    signing: {
+      authTokens: {
+        getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
+        getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),
+      },
+      withSign: <T,>(fn: () => Promise<T>) => fn(),
+    },
     tiers: SAMPLE_TIERS,
     ...overrides,
   };
