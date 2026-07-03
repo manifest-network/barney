@@ -41,6 +41,9 @@ describe('check-bundle guards', () => {
       './node_modules/@manifest-network/manifest-mcp-core/dist/index.js',
       `${abs}/dist/reads.js`,
       `javascript/esm|${abs}/dist/deploy.js`,
+      // rspack's real two-pipe identifier: `<loader>|<abspath>|<hash>`. The old
+      // lastIndexOf('|') strip yielded the hash and broke canonicalization.
+      `javascript/esm|${abs}/dist/deploy.js|9f2ab1c`,
     ];
     expect(copyRoots(names, 'manifest-mcp-core').size).toBe(1);
   });

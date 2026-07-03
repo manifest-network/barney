@@ -4,6 +4,7 @@ import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginNodePolyfill } from '@rsbuild/plugin-node-polyfill';
 import ipaddr from 'ipaddr.js';
+import { forbiddenNodeOnlyImport } from './scripts/browser-safety-guard.mjs';
 
 const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
 /**
@@ -104,30 +105,8 @@ class ForbidNodeOnlyBrowserImportsPlugin {
   apply(compiler: RspackCompilerLike): void {
     compiler.hooks.normalModuleFactory.tap('ForbidNodeOnlyBrowserImports', (nmf) => {
       nmf.hooks.beforeResolve.tap('ForbidNodeOnlyBrowserImports', (data) => {
-        const req = data.request ?? '';
-        const issuer = data.contextInfo?.issuer ?? '';
-        const always: { name: string; re: RegExp }[] = [
-          { name: 'core guarded-fetch (node-only SSRF)', re: /guarded-fetch(\.[mc]?js)?$/ },
-          { name: 'fred node server barrel', re: /manifest-mcp-fred[\\/].*server(\/|\.|$)/ },
-          { name: 'sdk node subpath', re: /manifest-sdk[\\/](dist[\\/])?node(\.[mc]?js)?$/ },
-        ];
-        for (const { name, re } of always) {
-          if (re.test(req)) {
-            throw new Error(`[browser-safety] forbidden node-only import "${req}" (${name}) from ${issuer || 'entry'} — migration spec §4 risk 5.`);
-          }
-        }
-        const benignIssuer = /node_modules[\\/](@modelcontextprotocol[\\/]sdk|@manifest-network[\\/]manifest-mcp-chain)[\\/]/.test(issuer);
-        if (!benignIssuer) {
-          const builtins: { name: string; re: RegExp }[] = [
-            { name: 'undici', re: /^undici(\/|$)/ },
-            { name: 'node:async_hooks', re: /^(node:)?async_hooks$/ },
-          ];
-          for (const { name, re } of builtins) {
-            if (re.test(req)) {
-              throw new Error(`[browser-safety] node builtin "${req}" (${name}) reached the browser graph from ${issuer || 'entry'} — migration spec §4 risk 5.`);
-            }
-          }
-        }
+        const reason = forbiddenNodeOnlyImport(data.request, data.contextInfo?.issuer);
+        if (reason) throw new Error('[browser-safety] ' + reason + ' — migration spec §4 risk 5.');
       });
     });
   }

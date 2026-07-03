@@ -2126,6 +2126,57 @@ describe('executeConfirmedDeployApp', () => {
     expect((cacheWrite![2] as any).customDomains).toEqual([
       { serviceName: '', customDomain: 'redis.example.com' },
     ]);
+    // The attach TX shape: ctx carries the clientManager (as `chain`) plus a
+    // logger; input mirrors the deploy args with serviceName omitted when empty.
+    const attachCall = vi.mocked(setItemCustomDomain).mock.calls[0];
+    expect(attachCall[0]).toMatchObject({ chain: CLIENT_MANAGER });
+    expect(attachCall[0]).toHaveProperty('logger');
+    expect(attachCall[1]).toEqual({ leaseUuid: 'new-lease-uuid', customDomain: 'redis.example.com' });
+    expect((attachCall[1] as { serviceName?: string }).serviceName).toBeUndefined();
+  });
+
+  // Companion to the success attach: a non-zero setItemCustomDomain code is
+  // non-fatal — the deploy still succeeds, but the result surfaces the attach
+  // failure (custom_domain_error + an "attach failed" message) and omits the
+  // custom_domain success fields. Mirrors compositeTransactions.ts :1161-1166
+  // (domainAttach kind:'failed') + the :1313 custom_domain_error surfacing.
+  it('surfaces attach-failed outcome when setItemCustomDomain returns a non-zero code', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
+    vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid',
+      tenant: ADDRESS,
+      provider_uuid: 'p1',
+      connection: {
+        host: '127.0.0.1',
+        ports: { '6379/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+      },
+    });
+    // Attach TX broadcasts but the chain rejects it with a non-zero code.
+    vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 5, transactionHash: 'dh', rawLog: '' } as any);
+
+    const result = await executeConfirmedDeployApp(
+      {
+        app_name: 'redis', skuUuid: 'sku-1', providerUuid: 'p1',
+        providerUrl: 'https://fred.example.com',
+        _generatedManifest: '{"image":"redis"}',
+        customDomain: 'redis.example.com',
+        customDomainServiceName: '',
+      },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry() }),
+      makePayload(),
+    );
+
+    // Deploy still succeeds; the attach failure is reported alongside.
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.status).toBe('running');
+    expect(data.custom_domain_error).toBe('chain rejected with code 5');
+    // Success-only fields are omitted on the failed branch.
+    expect(data.custom_domain).toBeUndefined();
+    expect(data.message).toMatch(/custom-domain attach failed/i);
   });
 
   it('normalizes trailing-period on uploadResult.error so the chat-visible message has no double period', async () => {

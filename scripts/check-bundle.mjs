@@ -20,8 +20,11 @@ export function copyRoots(names, pkg) {
   const re = new RegExp(`(.*node_modules[\\\\/]@manifest-network[\\\\/]${pkg})`);
   const roots = new Set();
   for (const n of names) {
-    const stripped = n.includes('|') ? n.slice(n.lastIndexOf('|') + 1) : n;
-    const abs = resolve(stripped);
+    // rspack's loader-prefixed identifier is `javascript/esm|<abspath>|<hash>`
+    // (two pipes). Pick the pipe-delimited segment that carries node_modules
+    // rather than blindly taking the last segment (which is the hash).
+    const seg = n.includes('|') ? (n.split('|').find((s) => s.includes('node_modules')) ?? n) : n;
+    const abs = resolve(seg);
     const m = abs.match(re);
     if (m) roots.add(m[1]);
   }

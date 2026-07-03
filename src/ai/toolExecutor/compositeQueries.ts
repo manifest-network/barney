@@ -372,9 +372,9 @@ export async function executeGetBalance(
   let balance: Awaited<ReturnType<typeof getBalance>>;
   try {
     const query = await clientManager.getQueryClient();
-    // core@0.15 getBalance takes a ReadCtx ({ query, chain, logger }); build the
-    // minimal ctx over the existing clientManager. Same composite, byte-identical
-    // return shape as 0.8 (parity pinned by the executeGetBalance tests below).
+    // call-shape adapted to core@0.15's ReadCtx ({ query, chain, logger }); the
+    // consumer reads a stable field subset (credits.balances / spending_per_hour /
+    // running_apps / hours_remaining), so the get_balance ToolData is unchanged.
     // PR 4 replaces this with the createManifestReadClient facade.
     balance = await withTimeout(
       getBalance({ query, chain: clientManager, logger: noopLogger }, address),
