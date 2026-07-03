@@ -8,14 +8,13 @@ import type {
 import type {
   QueryCreditAccountResponse,
   QueryCreditEstimateResponse,
-  QueryProviderWithdrawableResponse,
 } from '@manifest-network/manifestjs/dist/codegen/liftedinit/billing/v1/query';
 import type { PageResponse } from '@manifest-network/manifestjs/dist/codegen/cosmos/base/query/v1beta1/pagination';
 import { getQueryClient, queryWithNotFound, lcdConvert, fixEnumField } from './queryClient';
 
 // Re-export manifestjs types for consumers (Coin is exported from bank.ts)
 export type { BillingParams, Lease, LeaseItem, CreditAccount };
-export type { QueryCreditEstimateResponse, QueryCreditAccountResponse, QueryProviderWithdrawableResponse };
+export type { QueryCreditEstimateResponse, QueryCreditAccountResponse };
 
 // Re-export LeaseState enum from manifestjs for type safety
 export const LeaseState = liftedinit.billing.v1.LeaseState;
