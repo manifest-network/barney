@@ -23,8 +23,6 @@ export interface SignResult {
 type AssertAssignable<T extends U, U> = T;
 export type _SignResultParity = AssertAssignable<SignResult, SignArbitraryResult>;
 
-export type SignArbitraryFn = (address: string, data: string) => Promise<SignResult>;
-
 /** The signer-bound ADR-036 auth-token factory returned by the SDK's `createAuthTokens`. */
 export type AuthTokens = ReturnType<typeof createAuthTokens>;
 

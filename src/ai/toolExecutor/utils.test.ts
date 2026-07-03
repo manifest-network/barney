@@ -92,6 +92,17 @@ describe('uploadPayloadToProvider', () => {
     expect(mockUploadLeaseData).not.toHaveBeenCalled();
   });
 
+  it('returns "Signing rejected or failed" when the factory rejects with a non-Error', async () => {
+    const authTokens = {
+      getAuthToken: vi.fn(),
+      getLeaseDataAuthToken: vi.fn().mockRejectedValue('user bailed'),
+    } as unknown as AuthTokens;
+    const result = await uploadPayloadToProvider(PROVIDER_URL, LEASE_UUID, VALID_HASH, PAYLOAD, authTokens);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Signing rejected or failed');
+    expect(mockUploadLeaseData).not.toHaveBeenCalled();
+  });
+
   // --- Provider API HTTP errors ---
 
   it('treats 409 as idempotent success', async () => {
