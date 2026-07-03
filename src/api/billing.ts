@@ -10,10 +10,8 @@ import type {
   QueryCreditEstimateResponse,
   QueryProviderWithdrawableResponse,
 } from '@manifest-network/manifestjs/dist/codegen/liftedinit/billing/v1/query';
-import type { Coin } from '@manifest-network/manifestjs/dist/codegen/cosmos/base/v1beta1/coin';
 import type { PageResponse } from '@manifest-network/manifestjs/dist/codegen/cosmos/base/query/v1beta1/pagination';
 import { getQueryClient, queryWithNotFound, lcdConvert, fixEnumField } from './queryClient';
-import { logError } from '../utils/errors';
 
 // Re-export manifestjs types for consumers (Coin is exported from bank.ts)
 export type { BillingParams, Lease, LeaseItem, CreditAccount };
@@ -33,9 +31,6 @@ const {
   QueryLeasesResponse: QueryLeasesResponseConverter,
   QueryCreditAccountResponse: QueryCreditAccountResponseConverter,
   QueryCreditAddressResponse: QueryCreditAddressResponseConverter,
-  QueryWithdrawableAmountResponse: QueryWithdrawableAmountResponseConverter,
-  QueryProviderWithdrawableResponse: QueryProviderWithdrawableResponseConverter,
-  QueryCreditAccountsResponse: QueryCreditAccountsResponseConverter,
   QueryCreditEstimateResponse: QueryCreditEstimateResponseConverter,
 } = liftedinit.billing.v1;
 
@@ -142,15 +137,6 @@ export async function getLeasesByTenantPaginated(
   };
 }
 
-export async function getLeasesByProvider(providerUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
-  const client = await getQueryClient();
-  const data = await client.liftedinit.billing.v1.leasesByProvider({
-    providerUuid,
-    stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
-  });
-  return lcdConvert(data, QueryLeasesResponseConverter).leases.map(fixLeaseEnums);
-}
-
 export async function getLease(leaseUuid: string): Promise<Lease | null> {
   const client = await getQueryClient();
   const data = await queryWithNotFound(
@@ -161,44 +147,9 @@ export async function getLease(leaseUuid: string): Promise<Lease | null> {
   return fixLeaseEnums(lcdConvert(data, QueryLeaseResponseConverter).lease);
 }
 
-export async function getWithdrawableAmount(leaseUuid: string): Promise<Coin[]> {
-  const client = await getQueryClient();
-  const data = await queryWithNotFound(
-    () => client.liftedinit.billing.v1.withdrawableAmount({ leaseUuid }),
-    null,
-  );
-  if (!data) return [];
-  return lcdConvert(data, QueryWithdrawableAmountResponseConverter).amounts;
-}
-
-export async function getProviderWithdrawable(providerUuid: string): Promise<QueryProviderWithdrawableResponse> {
-  const client = await getQueryClient();
-  const data = await queryWithNotFound(
-    () => client.liftedinit.billing.v1.providerWithdrawable({ providerUuid, limit: BigInt(0) }),
-    null,
-  );
-  if (!data) return { amounts: [], leaseCount: 0n, hasMore: false };
-  return lcdConvert(data, QueryProviderWithdrawableResponseConverter);
-}
-
-export async function getLeasesBySKU(skuUuid: string, stateFilter?: LeaseState): Promise<Lease[]> {
-  const client = await getQueryClient();
-  const data = await client.liftedinit.billing.v1.leasesBySKU({
-    skuUuid,
-    stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
-  });
-  return lcdConvert(data, QueryLeasesResponseConverter).leases.map(fixLeaseEnums);
-}
-
 export interface PaginatedLeasesResponse {
   leases: Lease[];
   pagination?: PageResponse;
-}
-
-export interface GetAllLeasesParams {
-  stateFilter?: LeaseState;
-  limit?: number;
-  offset?: number;
 }
 
 function buildPageRequest(params?: { limit?: number; offset?: number; countTotal?: boolean; reverse?: boolean }) {
@@ -212,87 +163,3 @@ function buildPageRequest(params?: { limit?: number; offset?: number; countTotal
   };
 }
 
-export async function getAllLeases(params?: GetAllLeasesParams): Promise<PaginatedLeasesResponse> {
-  const client = await getQueryClient();
-  const data = await client.liftedinit.billing.v1.leases({
-    pagination: buildPageRequest({
-      limit: params?.limit,
-      offset: params?.offset,
-      countTotal: !!params?.limit,
-    }),
-    stateFilter: params?.stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
-  });
-
-  const converted = lcdConvert(data, QueryLeasesResponseConverter);
-
-  return {
-    leases: converted.leases.map(fixLeaseEnums),
-    pagination: converted.pagination,
-  };
-}
-
-export interface PaginatedCreditsResponse {
-  creditAccounts: CreditAccount[];
-  balances: Record<string, Coin[]>;
-  pagination?: PageResponse;
-}
-
-export interface GetAllCreditsParams {
-  limit?: number;
-  offset?: number;
-}
-
-/**
- * Fetches all credit accounts with their balances.
- *
- * **N+1 Query Pattern:** The billing bulk API (`/credits`) doesn't include balance data,
- * so we make additional requests to the bank module for each credit account's balance.
- * With pagination (default PAGE_SIZE=10), this results in up to 10 parallel HTTP requests
- * per page load.
- *
- * **Tradeoffs:**
- * - Balances are fetched in parallel via Promise.all for performance
- * - Individual balance fetch errors are logged (dev mode) but don't fail the entire request
- * - This is acceptable for current pagination sizes but could become a bottleneck if:
- *   - Page size increases significantly (>20-30 accounts)
- *   - This pattern is replicated elsewhere without consideration
- */
-export async function getAllCredits(params?: GetAllCreditsParams): Promise<PaginatedCreditsResponse> {
-  const client = await getQueryClient();
-  const data = await client.liftedinit.billing.v1.creditAccounts({
-    pagination: buildPageRequest({
-      limit: params?.limit,
-      offset: params?.offset,
-      countTotal: !!params?.limit,
-    }),
-  });
-
-  const converted = lcdConvert(data, QueryCreditAccountsResponseConverter);
-  const creditAccounts = converted.creditAccounts;
-
-  // N+1 query: fetch balances from bank module (see function docs for rationale)
-  const balances: Record<string, Coin[]> = {};
-
-  if (creditAccounts.length > 0) {
-    const balancePromises = creditAccounts.map(async (account) => {
-      try {
-        const balanceData = await client.cosmos.bank.v1beta1.allBalances({ address: account.creditAddress, resolveDenom: false });
-        return { key: account.creditAddress, balances: (balanceData.balances ?? []) as Coin[] };
-      } catch (error) {
-        logError('billing.getAllCredits.fetchBalance', error);
-        return { key: account.creditAddress, balances: [] as Coin[] };
-      }
-    });
-
-    const results = await Promise.all(balancePromises);
-    for (const result of results) {
-      balances[result.key] = result.balances;
-    }
-  }
-
-  return {
-    creditAccounts,
-    balances,
-    pagination: converted.pagination,
-  };
-}
