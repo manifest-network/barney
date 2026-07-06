@@ -55,7 +55,7 @@ Barney builds messages via `manifestjs`'s generated code (`@manifest-network/man
 
 ### ADR-036 (sign arbitrary)
 
-ADR-036 is the Cosmos standard for *off-chain* signatures — proving address ownership without a transaction. Barney uses ADR-036 to authenticate to providers when uploading manifest payloads or querying lease status. The cosmos-kit `signArbitrary` method produces the signature; `getProviderAuthToken` (in `src/ai/toolExecutor/utils.ts`) packages it into the bearer token providers expect.
+ADR-036 is the Cosmos standard for *off-chain* signatures — proving address ownership without a transaction. Barney uses ADR-036 to authenticate to providers when uploading manifest payloads or querying lease status. The cosmos-kit `signArbitrary` method produces the signature; the ADR-036 bearer token providers expect is minted by the `createAuthTokens` factory built in `src/hooks/useManifestMCP.ts` (exposed to tool execution as a `SigningContext` via `authTokens.getAuthToken` / `getLeaseDataAuthToken`).
 
 ## Manifest-specific concepts
 
@@ -66,7 +66,7 @@ Manifest decentralises hosting. **Providers** are independent operators running 
 - `liftedinit.sku.v1.Provider` — `uuid`, `address`, `payoutAddress`, `metaHash`, `active`, `apiUrl`. (Note: there is no `name` field.)
 - `liftedinit.sku.v1.SKU` — a "tier" with a price (`basePrice`), unit (`UNIT_PER_HOUR` / `UNIT_PER_DAY`), and resource description.
 
-A typical provider exposes four standard SKU tiers: `docker-micro`, `docker-small`, `docker-medium`, `docker-large`. The hardcoded constant `STORAGE_SKU_NAME = 'docker-small'` marks the smallest tier with persistent disk; larger tiers also support disk.
+A typical provider exposes standard SKU tiers such as `docker-micro`, `docker-small`, `docker-medium`, and `docker-large`. Each tier's disk allotment comes from its `diskGB` spec in `PUBLIC_SKU_SPECS` (resolved against the chain SKU catalog in `src/api/skuTiers.ts`); there is no separate storage-only tier or storage-swap constant.
 
 `browse_catalog` (in Barney) calls `getProviders` and `getSKUs` and then health-checks each provider's API URL.
 
@@ -132,7 +132,8 @@ Barney delegates the HTTP wrappers to `@manifest-network/manifest-mcp-fred`, inj
 
 The `@manifest-network/manifest-mcp-*` packages are shared libraries used by Barney *and* by the Manifest [MCP server](https://modelcontextprotocol.io) implementation. They consolidate the bits of code that would otherwise drift between the two:
 
-- `manifest-mcp-core` — `CosmosClientManager`, message builders, `cosmosTx` helper for raw transactions, common types.
+- `manifest-sdk` — the aggregating SDK: `CosmosClientManager`, `WalletProvider`, `ManifestMCPConfig`, `SignArbitraryResult`, the `createManifestReadClient` read client, and the `createAuthTokens` ADR-036 token factory (`@manifest-network/manifest-sdk/deploy`).
+- `manifest-mcp-core` — `cosmosTx` / `cosmosQuery` helpers for raw transactions and queries, `setItemCustomDomain`, and common types (`asLeaseUuid`, `asFqdn`).
 - `manifest-mcp-fred` — provider HTTP functions, manifest builders (`buildManifest`, `mergeManifest`, `validateServiceName`).
 - `manifest-mcp-chain` — faucet client, chain-side helpers (`requestFaucetCredit`).
 

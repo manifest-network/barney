@@ -200,7 +200,7 @@ If you need predictable cross-service credentials in a hand-authored stack, supp
 
 ### Persistent storage
 
-Persistent disk storage requires the `docker-small` SKU. When the AI deploys with `storage: true`, Barney auto-selects `docker-small` regardless of the requested size. To deploy a stack with persistent volumes, set the size to `small` when you submit the deploy.
+Larger disk requires the `docker-small` (or larger) SKU. There is no `storage` deploy flag; select the tier by naming the size explicitly (e.g. "Deploy as small") when you submit the deploy.
 
 ## Validation rules
 

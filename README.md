@@ -22,7 +22,7 @@ For local development or self-hosting, see [Quick start](#quick-start) and [Depl
 
 ## Prerequisites
 
-- Node.js >= 20
+- Node.js >= 22.19.0
 - npm >= 10
 - A Morpheus API key (for AI features) — request access from [mor.org](https://mor.org)
 - A reachable Manifest Network node (RPC + REST endpoints), or use the public testnet endpoints
@@ -63,12 +63,12 @@ Image tags follow semver — `:latest`, `:1`, `:1.2`, `:1.2.3` — published by 
 
 ## What you can do
 
-The AI assistant exposes 16 tools that map to on-chain transactions and queries. All transaction tools require an explicit user confirmation step.
+The AI assistant exposes 17 tools that map to on-chain transactions and queries. All transaction tools require an explicit user confirmation step.
 
 | Category | Tool | Action |
 |----------|------|--------|
 | Deploy | `deploy_app` | Deploy from a manifest file, Docker image, or service stack |
-| Manage | `stop_app`, `restart_app`, `update_app` | Lifecycle operations on running apps |
+| Manage | `stop_app`, `restart_app`, `update_app`, `set_custom_domain` | Lifecycle and custom-domain operations on running apps |
 | Funding | `fund_credits`, `request_faucet` | Top up credits or request testnet tokens |
 | Inspect | `list_apps`, `app_status`, `get_logs`, `app_diagnostics`, `app_releases` | App state, logs, error details, version history |
 | Discover | `browse_catalog`, `lease_history`, `get_balance` | Provider catalog, past leases, account state |
@@ -192,9 +192,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for layered architecture and request flow
 ## How it works
 
 1. **Connect** a wallet via Web3Auth social login.
-2. **Account setup** — on first connect (and only when `PUBLIC_FAUCET_URL` is configured), the `useAccountSetup` hook runs a one-shot pipeline: requests faucet tokens (MFX + PWR) and funds credits.
+2. **Account setup** — on first connect (and only when `PUBLIC_FAUCET_URL` is configured), the `useAccountSetup` hook runs a one-shot pipeline: requests PWR from the faucet (PWR covers both gas and credits after ENG-243) and funds credits. MFX is no longer part of the blocking flow — users who need MFX request it via the `request_faucet` chat tool.
 3. **Chat** with the AI to deploy, manage, and monitor apps.
-4. The AI calls 16 composite tools that map to on-chain transactions and queries.
+4. The AI calls 17 composite tools that map to on-chain transactions and queries.
 5. Transaction tools require explicit user confirmation; the manifest can be edited inline before broadcast.
 6. Deploy progress is tracked in real time through provider WebSocket events with polling fallback.
 
@@ -205,7 +205,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for layered architecture and request flow
 - **Tailwind CSS v4** — utility-first styling with OKLCH theme tokens
 - **cosmos-kit** — Cosmos wallet abstraction (only `@cosmos-kit/web3auth` is registered in `main.tsx`; Leap, Cosmostation, and Ledger packages are installed but not enabled)
 - **manifestjs** — generated Manifest chain client
-- **`@manifest-network/manifest-mcp-core` / `mcp-fred` / `mcp-chain`** — shared MCP libraries for transaction signing, provider HTTP/WebSocket, and faucet
+- **`@manifest-network/manifest-sdk` / `manifest-mcp-core` / `mcp-fred` / `mcp-chain`** — shared SDK + MCP libraries: the sdk barrel provides CosmosClientManager, WalletProvider, the read client, and provider auth/deploy helpers (createAuthTokens, getLeaseLogs); core handles transaction signing (cosmosTx/cosmosQuery); fred provides provider HTTP/WebSocket; chain backs the faucet
 - **Morpheus API** — OpenAI-compatible LLM inference with tool calling
 - **Zustand** — vanilla store for AI chat state
 - **Vitest** + happy-dom — test runner

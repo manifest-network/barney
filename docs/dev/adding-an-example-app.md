@@ -23,7 +23,6 @@ export interface ExampleApp {
   envFactory?: () => Record<string, string>;
   manifestFactory?: () => Record<string, unknown>;
   notice?: string;
-  size?: string;
   group: 'games' | 'apps' | 'stacks';
   category?: string;
 }
@@ -36,7 +35,6 @@ export interface ExampleApp {
 | `envFactory` | no | Returns env vars to merge into `manifest.env` at deploy time (e.g. random passwords). |
 | `manifestFactory` | no | Returns the *complete* manifest dynamically, overriding `manifest` and `envFactory`. Use for stacks that need coordinated values across services. |
 | `notice` | no | Display-only string. Surfaced through the manifest as a top-level `_notice` key (`MANIFEST_NOTICE_KEY` in `src/config/constants.ts`) so the `ManifestEditor` can read it during deploy/update confirmation. The key is stripped from the payload before upload, so it never reaches the provider. Useful for "save these credentials, they cannot be recovered". |
-| `size` | no | Preferred SKU tier (`micro`, `small`, `medium`, `large`). Defaults to `micro`. Set to `small` for persistent storage (the only tier where `STORAGE_SKU_NAME` currently applies). |
 | `group` | yes | Tab the app appears under: `games`, `apps`, or `stacks`. |
 | `category` | only for `apps` | Sub-grouping inside `apps` — `Databases`, `Messaging`, `Web Servers`, `AI`, … |
 
@@ -54,13 +52,12 @@ The `findExampleByAppName(appName)` helper performs the reverse lookup, used by 
 
 ```ts
 {
-  label: 'Postgres 17',
-  manifest: SERVICE_MANIFEST('postgres:17', ['5432'], {
+  label: 'Postgres 18',
+  manifest: SERVICE_MANIFEST('postgres:18', ['5432'], {
     user: '999:999',
     tmpfs: ['/var/run/postgresql'],
   }),
   envFactory: () => ({ POSTGRES_PASSWORD: generatePassword() }),
-  size: 'small',
   group: 'apps',
   category: 'Databases',
 },
@@ -104,7 +101,6 @@ The `findExampleByAppName(appName)` helper performs the reverse lookup, used by 
       },
     };
   },
-  size: 'small',
   group: 'stacks',
 },
 ```
@@ -124,7 +120,6 @@ The `findExampleByAppName(appName)` helper performs the reverse lookup, used by 
   }),
   envFactory: () => ({ INFERENCE_SECRET: generatePassword(32) }),
   notice: 'Save your API key, Secret key, and Inference Secret — these values are not stored and must be re-entered on updates.',
-  size: 'micro',
   group: 'apps',
   category: 'AI',
 },
@@ -135,11 +130,10 @@ Placeholder values in `manifest.env` (`pk_YOUR_KEY`) signal that the user must e
 ## Authoring conventions
 
 - **Pin tags.** Use `redis:8.4`, not `redis:latest`. Predictable behaviour beats automatic upgrades.
-- **Prefer micro.** Default to the smallest tier that works. Bump to `small` only when persistent storage is required.
 - **Use `tmpfs`** for in-memory state directories that the image expects to write to (`/var/run/postgresql`, `/var/run/mysqld`).
 - **Generate one password per logical credential.** When the same value needs to live in two env vars (e.g. WordPress and MySQL share a password), use `manifestFactory`.
 - **Never hard-code production secrets.** If a user must supply a key, leave a clearly invalid placeholder (`pk_YOUR_KEY`) and add a `notice`.
-- **Set `category` only for `group: 'apps'`.** Games and stacks ignore the field.
+- **Set `category` on `group: 'apps'` entries.** It is informational metadata; the chat panel groups example buttons only by `group` (Games / Apps / Stacks), not by `category`.
 
 ## Validation
 

@@ -180,7 +180,7 @@ The catalog lists active providers and their available SKU tiers (typically `doc
 | `docker-medium` | 2 cores | 2,048 MB | 10 GB |
 | `docker-large` | 4 cores | 4,096 MB | 20 GB |
 
-Persistent disk storage requires `docker-small`. When you set `storage: true` on a deploy, Barney auto-selects `docker-small` regardless of the size you requested.
+Larger tiers such as `docker-small` provide more disk. There is no `storage` deploy flag; select a larger tier by naming the size explicitly (e.g. "Deploy as small").
 
 ## Keyboard shortcuts
 

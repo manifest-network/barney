@@ -66,23 +66,22 @@ ErrorBoundary
                   └─ ToastContainer (toast rendering)
 ```
 
-`AppShell` (`src/components/layout/AppShell.tsx`) is the top-level router. It syncs wallet state (clientManager, address, signArbitrary) from cosmos-kit into AIContext.
+`AppShell` (`src/components/layout/AppShell.tsx`) is the top-level router. It syncs wallet state (clientManager, address, and a `signing` SigningContext) from cosmos-kit into the AI store via `setSigning`.
 
 ### AI Tool Execution Flow
 
 The AI assistant uses a 3-layer architecture:
 
 1. **AI Store** (`src/stores/aiStore.ts`) - Zustand store managing chat state, streaming, tool execution, and wallet refs. Actions in `src/stores/aiActions/`.
-2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-mcp-core`
+2. **useManifestMCP** (`src/hooks/useManifestMCP.ts`) - Bridges cosmos-kit with `@manifest-network/manifest-sdk`
 3. **Tool Executor** (`src/ai/toolExecutor/`) - Dispatches to composite executors:
    - **Entry point** (`index.ts`): Contains `QUERY_TOOLS`/`TX_TOOLS` sets and `executeTool()` dispatcher
    - **Types** (`types.ts`): `ToolResult`, `ToolExecutorOptions`, `PayloadAttachment`, etc.
    - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`, `request_faucet`
-   - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`
-   - **Transactions** (`transactions.ts`): Lease creation, payload upload, transaction helpers
+   - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`, `set_custom_domain`
    - **Batch runner** (`batchRunner.ts`): Shared batch execution infrastructure — `createSigningMutex`, `runBatchWithConcurrency`, `computeOverallPhase`, `summarizeBatchResult`. Used by batch deploy and batch restart.
    - **Helpers** (`helpers.ts`): Shared functions — `extractPrimaryServicePorts`, `formatConnectionUrl`
-   - **Utils** (`utils.ts`): ADR-036 auth token creation (`getProviderAuthToken`), payload upload and hashing utilities
+   - **Utils** (`utils.ts`): payload upload with ADR-036 auth (`uploadPayloadToProvider`, minting the lease-data token via the injected `authTokens` factory) and hashing (`computePayloadHash`). The ADR-036 token factory is built by `createAuthTokens` in `src/hooks/useManifestMCP.ts`, not here
    - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
    - **Internal pseudo-tool**: `batch_deploy` — orchestrates multi-app deploys from the UI. Not declared in `AI_TOOLS` and never exposed to the model; routed through `executeConfirmedTool` (case `'batch_deploy'`) by the `requestBatchDeploy` AI store action (e.g. `useAI().requestBatchDeploy`)
 
@@ -159,7 +158,7 @@ Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored 
 
 `src/api/fred.ts` — Fred HTTP functions and WebSocket streaming for lease deployment status.
 
-HTTP functions (`getLeaseStatus`, `getLeaseLogs`, `getLeaseProvision`, `getLeaseInfo`, `restartLease`, `updateLease`, `getLeaseReleases`) are thin wrappers that delegate to `@manifest-network/manifest-mcp-fred` with Barney's CORS proxy/SSRF `fetchFn` adapter injected via `src/api/providerFetchAdapter.ts`.
+HTTP functions are thin wrappers with Barney's CORS proxy/SSRF `fetchFn` adapter (`src/api/providerFetchAdapter.ts`) injected. Six (`getLeaseStatus`, `getLeaseProvision`, `getLeaseInfo`, `restartLease`, `updateLease`, `getLeaseReleases`) delegate to `@manifest-network/manifest-mcp-fred`; `getLeaseLogs` is re-sourced from `@manifest-network/manifest-sdk/deploy`.
 
 Barney-specific code that stays local:
 - `pollLeaseUntilReady()` — Polling loop with `checkChainState`, `getAuthToken`, count-based `maxAttempts`
@@ -173,8 +172,8 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-core` (shared MCP
 ### Wallet Integration
 
 - cosmos-kit provides wallet abstraction (Web3Auth is the only enabled wallet provider in `src/main.tsx`; Leap, Cosmostation, Ledger packages are installed but not imported)
-- `CosmosClientManager` from `@manifest-network/manifest-mcp-core` wraps the signer for MCP operations
-- `signArbitrary` used for ADR-036 off-chain authentication (payload uploads to providers, fred status queries)
+- `CosmosClientManager` from `@manifest-network/manifest-sdk` wraps the signer for MCP operations
+- `signArbitrary` (wrapped in a signing mutex and consumed by the `createAuthTokens` factory exposed as `SigningContext.authTokens`) backs ADR-036 off-chain authentication (payload uploads to providers, fred status queries)
 
 ### API Layer (`src/api/`)
 
@@ -194,6 +193,7 @@ AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-core` (shared MCP
 | `providerFetch.ts` | Provider URL validation helpers (`validateProviderUrl`, `normalizeBaseUrl`), used by `fred.ts` for validating provider endpoints |
 | `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
 | `queryClient.ts` | LCD query client factory (cached singleton) |
+| `readClient.ts` | Cached query-only Manifest read client (`getReadClient` / `disposeReadClient`) built from `@manifest-network/manifest-sdk`'s `createManifestReadClient`; backs `getSKUs`/`getProviders`/`getBillingParams` and composite `get_balance` |
 | `index.ts` | Barrel re-exports for API modules |
 
 ### AI Store (`src/stores/aiStore.ts`)
@@ -210,9 +210,10 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `aiActions/streaming.ts` | `scheduleStreamingUpdate`, `flushPendingUpdate` (RAF) |
 | `aiActions/persistence.ts` | `loadSettings`, `loadHistory`, persistence subscriptions |
 | `aiActions/skuTiers.ts` | `loadSkuTiers` / `retrySkuTiers` — boot-time SKU resolution. Parses `PUBLIC_SKU_SPECS`, calls `resolveSkuTiers()`, writes the `SkuTiersState` slice (`phase: 'idle' \| 'loading' \| 'ready' \| 'error'`, `tiers`, `denomSymbol`, `error`). Concurrent calls dedupe via the store's `_skuTiersInFlight` promise field. `retrySkuTiers` is a no-op from `ready` (consumers read `skuTiers.tiers` without phase-guarding, so transitioning `ready → loading` would leak stale tiers to in-flight chat/tool execution); from `idle`/`loading`/`error` it resets phase and re-issues the fetch. Used by the Retry button on `ChatPanel`'s tier-error banner. |
+| `aiActions/stopApp.ts` | `requestStopApp` (synthesizes a `stop_app` pendingConfirmation from a UI surface) |
 | `aiActions/utils.ts` | `generateMessageId`, `trimMessages`, `createAssistantMessage`, `toChatApiMessages`, `getAppRegistryAccess` |
 
-`AIProvider` (`src/contexts/AIContext.tsx`) is a thin lifecycle wrapper that sets up persistence subscriptions, health checks, confirmation timeouts, fires `loadSkuTiers()` once on mount, and calls `store.getState().destroy()` on unmount.
+`AIProvider` (`src/contexts/AIContext.tsx`) is a thin lifecycle wrapper that sets up persistence subscriptions, health checks, confirmation timeouts, fires `loadSkuTiers()` once on mount, and on unmount calls `store.getState().destroy()` and `disposeReadClient()` (`src/api/readClient.ts`).
 
 **`skuTiers` slice on the store** (`aiStore.ts`): the resolved SKU tier list lives here as `SkuTiersState`. Deploy surfaces are **never disabled** by tier state — example-app buttons, sidebar re-deploy, and `ConfirmationCard` Confirm always render enabled. The executor and `ConfirmationCard` share `resolveSizeOrCheapest` (`src/api/skuTiers.ts`) so an omitted/unavailable size deploys on the cheapest tier; the card shows the resolved tier's price + specs (`formatTierSpecs`) and names any substitution (a `'cheapest-unavailable'` fallback). An empty tier list yields the executor's inline `Tier catalog unavailable` error (with a `Retry` → `retrySkuTiers`) — the single failure mode. The executor (`compositeTransactions.ts` `executeDeployApp` / `executeBatchDeploy`) reads the resolved list from `ToolExecutorOptions.tiers` rather than calling `resolveSkuTiers` itself — `confirmAction` + `batchDeploy` + `toolExecution` thread `get().skuTiers.tiers` into each call so the executor stays pure.
 
@@ -220,7 +221,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 
 | Hook | Purpose |
 |------|---------|
-| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-mcp-core` |
+| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-sdk` (builds the `CosmosClientManager` + `SigningContext` = `{ authTokens, withSign }`) |
 | `useAutoScroll` | MutationObserver-based auto-scroll that respects user scroll position |
 | `useInputHistory` | Arrow-key navigation through past chat inputs |
 | `useAI` | Zustand store consumer — selects all public state/actions via `useShallow` |
@@ -249,6 +250,8 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `connection.ts` | `collectInstanceUrls` — per-instance FQDN URL collection with hostname validation (`isValidFqdn`) |
 | `tx.ts` | Transaction event parsing utilities (extract attribute values from TX events) |
 | `versionedStorage.ts` | Versioned localStorage with schema migrations (envelope format, upgrade chain) |
+| `customDomainStatus.ts` | Custom-domain status computation (`computeStatus` → `CustomDomainStatusReport`; `CustomDomainStatusKind`, DNS/HTTPS probe result types) |
+| `customDomainValidation.ts` | Custom-domain FQDN validation (`validateCustomDomainFormat`, `isApex`, `isReservedSuffix`, `apexRecordKindLabel`, `APEX_WARNING`) |
 | `cn.ts` | Re-exports `clsx` as `cn`: `cn('foo', condition && 'bar')` |
 
 ### Constants (`src/config/constants.ts`)
@@ -310,7 +313,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 - **SSRF protection**: `src/utils/url.ts` provides `parseHttpUrl` and `isUrlSsrfSafe` (DEV mode allows localhost via `isUrlSsrfSafe`); `src/ai/validation.ts` adds `isPrivateHost()` with `ipaddr.js` for IP range classification
 - **Error utilities**: Use `logError()` from `src/utils/errors.ts` instead of raw `console.error`
 - **Retry logic**: Use `withRetry()` from `src/api/utils.ts` for transient network error recovery with exponential backoff
-- **Tool result caching**: Query tool results cached for 10s in the AI store to reduce redundant API calls (max 50 entries; when full, the 10% oldest by insert timestamp — minimum 5 — are evicted in one batch). Cache is scoped per wallet address and cleared on wallet change.
+- **Tool result caching**: Query tool results cached for 10s in the AI store to reduce redundant API calls (max 50 entries; when full, the 10% oldest by insert timestamp — minimum 1 — are evicted in one batch (10% of the current max 50 = 5)). Cache is scoped per wallet address and cleared on wallet change.
 - **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
 - **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
 - **Dev CORS proxy** (`providerFetchAdapter.ts`):

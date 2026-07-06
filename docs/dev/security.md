@@ -126,7 +126,7 @@ If you fork Barney and add a third-party script, widen the CSP minimally (specif
 
 ### 7. Chat history hygiene
 
-- **Validation on load.** `barney-ai-history` is plain JSON validated by `validateChatHistory` (`src/ai/validation.ts`); on `JSON.parse` failure or invalid shape the catch block removes the key and the app starts with an empty history. There is no version envelope and no migration chain — that pattern (`src/utils/versionedStorage.ts`) is used by the app registry and the account-setup flag, not by chat history or settings.
+- **Validation on load.** `barney-ai-history` is plain JSON validated by `validateChatHistory` (`src/ai/validation.ts`); on `JSON.parse` failure or invalid shape the catch block removes the key and the app starts with an empty history. There is no version envelope and no migration chain — that pattern (`src/utils/versionedStorage.ts`) is used by the account-setup flag, not by the app registry, chat history, or settings.
 - **Streaming messages excluded from persistence.** Half-finished assistant messages don't make it to localStorage; only completed messages do.
 - **Storage scoping.** The app registry (`barney-apps-{address}`) and the account-setup flag (`barney-refill-{address}`) are keyed by wallet address; chat history (`barney-ai-history`), AI settings (`barney-ai-settings`), and theme (`barney-theme`) are global to the browser profile. Switching wallets isolates per-wallet state but does not clear global state.
 
@@ -145,7 +145,7 @@ We do *not* trust:
 
 ## ADR-036 provider auth
 
-When Barney calls a provider HTTP endpoint, it constructs an ADR-036 token via `getProviderAuthToken` (in `src/ai/toolExecutor/utils.ts`). The token includes a timestamp and the provider validates timestamp freshness (`validateAuthTimestamp` in `src/api/provider-api.ts`) to prevent replay.
+When Barney calls a provider HTTP endpoint, it mints an ADR-036 token via the SDK's `createAuthTokens` factory (from `@manifest-network/manifest-sdk/deploy`), which is built per wallet address in `src/hooks/useManifestMCP.ts` and threaded through the store as the `authTokens` field of a `SigningContext` (`src/ai/toolExecutor/types.ts`). Provider auth tokens are minted on demand via `authTokens.getAuthToken(leaseUuid)`; lease-data uploads use `authTokens.getLeaseDataAuthToken(leaseUuid, metaHash)` inside `uploadPayloadToProvider` (`src/ai/toolExecutor/utils.ts`). The token includes a timestamp; `validateAuthTimestamp` in `src/api/provider-api.ts` is a client-side freshness check that prevents replay.
 
 The signature is over a deterministic payload — the provider can verify the user's wallet ownership without involving the chain.
 
