@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # Barney has a pre-existing peer conflict (@cosmos-kit/react wants
+      # @interchain-ui/react@^1.26.3, repo pins 1.26.2); the Dockerfile installs
+      # with --legacy-peer-deps, so CI matches that convention.
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      # `npm run build` runs `tsc -b && rsbuild build` (production), which also
+      # emits dist/bundle-modules.json via EmitBundleModulesPlugin and runs the
+      # ForbidNodeOnlyBrowserImports resolve tripwire.
+      - name: Typecheck + build
+        run: npm run build
+
+      # Asserts no @modelcontextprotocol/sdk in the browser output and a single
+      # manifest-mcp-core + manifestjs copy. Requires the build above.
+      - name: Browser-safety bundle guard
+        run: npm run check:bundle

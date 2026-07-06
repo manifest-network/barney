@@ -50,8 +50,6 @@ vi.mock('../../api/sku', async (importOriginal) => {
 vi.mock('../../api/provider-api', () => ({
   getProviderHealth: vi.fn(),
   getLeaseConnectionInfo: vi.fn(),
-  createSignMessage: vi.fn().mockReturnValue('sign-msg'),
-  createAuthToken: vi.fn().mockReturnValue('auth-token'),
 }));
 
 vi.mock('../../api/fred', () => ({
@@ -74,8 +72,11 @@ vi.mock('@manifest-network/manifest-mcp-chain', () => ({
 vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   ...(await importOriginal()),
   cosmosQuery: vi.fn(),
-  getBalance: vi.fn(),
 }));
+
+vi.mock('../../api/readClient', () => ({ getReadClient: vi.fn() }));
+
+const mockGetBalance = vi.fn();
 
 vi.mock('../../utils/errors', () => ({
   logError: vi.fn(),
@@ -96,7 +97,8 @@ import { getLeasesByTenant, getLeasesByTenantPaginated, getLease } from '../../a
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import { cosmosQuery, getBalance } from '@manifest-network/manifest-mcp-core';
+import { cosmosQuery } from '@manifest-network/manifest-mcp-core';
+import { getReadClient } from '../../api/readClient';
 import { isFaucetEnabled } from '../../api/faucet';
 import { requestFaucet } from '@manifest-network/manifest-mcp-chain';
 import { logError } from '../../utils/errors';
@@ -434,7 +436,12 @@ describe('executeAppStatus', () => {
 });
 
 describe('executeGetBalance', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getReadClient).mockResolvedValue(
+      { getBalance: mockGetBalance } as unknown as Awaited<ReturnType<typeof getReadClient>>,
+    );
+  });
 
   it('returns error without wallet', async () => {
     const result = await executeGetBalance(makeOptions({ address: undefined }));
@@ -448,7 +455,7 @@ describe('executeGetBalance', () => {
   });
 
   it('returns formatted balance', async () => {
-    vi.mocked(getBalance).mockResolvedValue({
+    mockGetBalance.mockResolvedValue({
       balances: [{ denom: 'umfx', amount: '5000000' }],
       current_balance: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
       spending_per_hour: [{ denom: 'umfx', amount: '3600' }],
@@ -465,6 +472,8 @@ describe('executeGetBalance', () => {
 
     const result = await executeGetBalance(makeOptions());
     expect(result.success).toBe(true);
+    // Wallet address is threaded into the read client's getBalance call.
+    expect(mockGetBalance).toHaveBeenCalledWith(ADDRESS);
     const data = result.data as any;
     expect(data.credits).toBe(100);
     expect(data.hours_remaining).toBe(24);
@@ -474,7 +483,7 @@ describe('executeGetBalance', () => {
   });
 
   it('returns null hours_remaining when spending_per_hour is empty', async () => {
-    vi.mocked(getBalance).mockResolvedValue({
+    mockGetBalance.mockResolvedValue({
       balances: [{ denom: 'umfx', amount: '5000000' }],
       current_balance: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
       spending_per_hour: [],
@@ -498,7 +507,7 @@ describe('executeGetBalance', () => {
   });
 
   it('returns zero credits when credit account missing', async () => {
-    vi.mocked(getBalance).mockResolvedValue({
+    mockGetBalance.mockResolvedValue({
       balances: [{ denom: 'umfx', amount: '5000000' }],
       credits: null,
     });
@@ -512,7 +521,7 @@ describe('executeGetBalance', () => {
   });
 
   it('returns error when getBalance throws', async () => {
-    vi.mocked(getBalance).mockRejectedValue(new Error('RPC down'));
+    mockGetBalance.mockRejectedValue(new Error('RPC down'));
 
     const result = await executeGetBalance(makeOptions());
     expect(result.success).toBe(false);
@@ -692,10 +701,13 @@ describe('executeLeaseHistory', () => {
   });
 });
 
-const mockSignArbitrary = vi.fn().mockResolvedValue({
-  pub_key: { type: 'tendermint/PubKeySecp256k1', value: 'pubkey123' },
-  signature: 'sig123',
-});
+const mockSigning = {
+  authTokens: {
+    getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
+    getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),
+  },
+  withSign: <T,>(fn: () => Promise<T>) => fn(),
+};
 
 describe('executeGetLogs', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -729,7 +741,7 @@ describe('executeGetLogs', () => {
     const registry = makeRegistry([app]);
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('no provider URL');
@@ -739,18 +751,18 @@ describe('executeGetLogs', () => {
     const app = makeApp({ status: 'stopped' });
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: makeRegistry([app]), signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: makeRegistry([app]), signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('stopped');
   });
 
-  it('returns error without signArbitrary', async () => {
+  it('returns error without signing', async () => {
     const app = makeApp();
     const registry = makeRegistry([app]);
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: undefined })
+      makeOptions({ appRegistry: registry, signing: undefined })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Signing not available');
@@ -768,7 +780,7 @@ describe('executeGetLogs', () => {
 
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(true);
     const data = result.data as any;
@@ -788,7 +800,7 @@ describe('executeGetLogs', () => {
     expect(getLeaseLogs).toHaveBeenCalledWith(
       app.providerUrl,
       app.leaseUuid,
-      'auth-token',
+      'mock-auth-token',
       100
     );
   });
@@ -800,7 +812,7 @@ describe('executeGetLogs', () => {
 
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Failed to fetch logs');
@@ -819,12 +831,12 @@ describe('executeGetLogs', () => {
 
     await executeGetLogs(
       { app_name: 'my-app', tail: 50 },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(getLeaseLogs).toHaveBeenCalledWith(
       app.providerUrl,
       app.leaseUuid,
-      'auth-token',
+      'mock-auth-token',
       50
     );
   });
@@ -842,7 +854,7 @@ describe('executeGetLogs', () => {
 
     const result = await executeGetLogs(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(true);
     const data = result.data as any;
@@ -857,6 +869,50 @@ describe('executeGetLogs', () => {
     expect(card.data.logs.web.length).toBe(5000);
   });
 
+  it('keeps every service full for the LogCard but caps and drops for the LLM (multi-service)', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    // web fits whole (3000). db (3000, tail-marked 'X') is kept only as its
+    // 1000-char TAIL so the marker survives. cache (500) is dropped from the LLM
+    // path once the 4000-char budget is exhausted.
+    const web = 'W'.repeat(3000);
+    const db = 'D'.repeat(2999) + 'X';
+    const cache = 'C'.repeat(500);
+    vi.mocked(getLeaseLogs).mockResolvedValue({
+      lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
+      logs: { web, db, cache },
+    });
+
+    const result = await executeGetLogs(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+    expect(result.success).toBe(true);
+
+    // LLM path: capped at MAX_LOG_CHARS=4000 total. web whole, db tail-truncated
+    // to 1000 (keeps 'X'), cache dropped entirely.
+    const data = result.data as any;
+    expect(data.logs.web).toBe(web);
+    expect(data.logs.db.length).toBe(1000);
+    expect(data.logs.db.endsWith('X')).toBe(true);
+    expect(data.logs.cache).toBeUndefined();
+    const llmTotal = Object.values(data.logs as Record<string, string>)
+      .reduce((n, s) => n + s.length, 0);
+    expect(llmTotal).toBe(4000);
+    expect(data.truncated).toBe(true);
+
+    // LogCard path: every service full, nothing dropped, truncated:false.
+    const card = (result as any).displayCard;
+    expect(card.type).toBe('logs');
+    expect(card.data.logs.web.length).toBe(3000);
+    expect(card.data.logs.db.length).toBe(3000);
+    expect(card.data.logs.db.endsWith('X')).toBe(true);
+    expect(card.data.logs.cache.length).toBe(500);
+    expect(card.data.truncated).toBe(false);
+  });
+
   it('finds app via fuzzy match', async () => {
     const app = makeApp({ name: 'my-cool-app' });
     const registry = makeRegistry([app]);
@@ -869,7 +925,7 @@ describe('executeGetLogs', () => {
 
     const result = await executeGetLogs(
       { app_name: 'cool-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(true);
     expect((result.data as any).app_name).toBe('my-cool-app');
@@ -908,7 +964,7 @@ describe('executeAppDiagnostics', () => {
     const registry = makeRegistry([app]);
     const result = await executeAppDiagnostics(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('stopped');
@@ -919,7 +975,7 @@ describe('executeAppDiagnostics', () => {
     const registry = makeRegistry([app]);
     const result = await executeAppDiagnostics(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('no provider URL');
@@ -936,7 +992,7 @@ describe('executeAppDiagnostics', () => {
 
     const result = await executeAppDiagnostics(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(true);
     const data = result.data as any;
@@ -953,7 +1009,7 @@ describe('executeAppDiagnostics', () => {
 
     const result = await executeAppDiagnostics(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Failed to fetch diagnostics');
@@ -993,7 +1049,7 @@ describe('executeAppReleases', () => {
     const registry = makeRegistry([app]);
     const result = await executeAppReleases(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('stopped');
@@ -1004,7 +1060,7 @@ describe('executeAppReleases', () => {
     const registry = makeRegistry([app]);
     const result = await executeAppReleases(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('no provider URL');
@@ -1025,7 +1081,7 @@ describe('executeAppReleases', () => {
 
     const result = await executeAppReleases(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(true);
     const data = result.data as any;
@@ -1041,7 +1097,7 @@ describe('executeAppReleases', () => {
 
     const result = await executeAppReleases(
       { app_name: 'my-app' },
-      makeOptions({ appRegistry: registry, signArbitrary: mockSignArbitrary })
+      makeOptions({ appRegistry: registry, signing: mockSigning })
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Failed to fetch releases');

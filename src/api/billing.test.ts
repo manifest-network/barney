@@ -6,6 +6,7 @@ import {
   LEASE_STATE_MAP,
   LEASE_STATE_FILTERS,
   getLeasesByTenantPaginated,
+  getBillingParams,
 } from './billing';
 
 vi.mock('./queryClient', () => {
@@ -26,7 +27,16 @@ vi.mock('./queryClient', () => {
   };
 });
 
+const { mockGetBillingParams } = vi.hoisted(() => ({ mockGetBillingParams: vi.fn() }));
+
+vi.mock('./readClient', () => ({
+  getReadClient: vi.fn().mockResolvedValue({
+    getBillingParams: (...a: unknown[]) => mockGetBillingParams(...a),
+  }),
+}));
+
 import { getQueryClient, lcdConvert } from './queryClient';
+import { getReadClient } from './readClient';
 
 describe('leaseStateToString', () => {
   it('converts LEASE_STATE_ACTIVE to string', () => {
@@ -150,5 +160,24 @@ describe('getLeasesByTenantPaginated', () => {
         stateFilter: LeaseState.LEASE_STATE_UNSPECIFIED,
       })
     );
+  });
+});
+
+describe('getBillingParams (read-client delegation)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('delegates to the read client and returns its Params (not the LCD path)', async () => {
+    const sentinel = { creditDenoms: ['upwr'] } as unknown as Awaited<
+      ReturnType<typeof getBillingParams>
+    >;
+    mockGetBillingParams.mockResolvedValue(sentinel);
+
+    const result = await getBillingParams();
+
+    expect(result).toBe(sentinel);
+    expect(mockGetBillingParams).toHaveBeenCalledTimes(1);
+    // Runs over the SDK read client, never the LCD getQueryClient path.
+    expect(getReadClient).toHaveBeenCalledTimes(1);
+    expect(getQueryClient).not.toHaveBeenCalled();
   });
 });

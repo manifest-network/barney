@@ -177,6 +177,24 @@ describe('buildManifest', () => {
     expect(result.payload.hash).toBe(result2.payload.hash);
   });
 
+  it('payload hash equals the exact SHA-256 hex of the manifest JSON (contract, not just shape)', async () => {
+    // Pins the true meta_hash contract, not just "64 hex chars". Fred rejects
+    // uploads whose body hash != the recorded meta_hash, so payload.hash MUST be
+    // SHA-256 of the exact bytes uploaded (result.json). A future fred change that
+    // canonicalizes/prefixes the hashed input would still yield 64-hex but a
+    // different value — this test catches that; the length-only tests would not.
+    // redis:8.4 has no required env, so no password generation → deterministic JSON.
+    const result = await buildManifest({ image: 'redis:8.4' });
+    const result2 = await buildManifest({ image: 'redis:8.4' });
+    expect(result.json).toBe(result2.json); // determinism guard (no generated secrets)
+
+    // Independently recompute SHA-256 hex of the exact JSON string that was hashed.
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(result.json));
+    const expected = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+
+    expect(result.payload.hash).toBe(expected);
+  });
+
   it('omits env when empty object', async () => {
     const result = await buildManifest({ image: 'redis:8.4', env: {} });
     const parsed = JSON.parse(result.json);
@@ -721,5 +739,51 @@ describe('getServiceNames', () => {
 
   it('returns empty array for non-object', () => {
     expect(getServiceNames(null)).toEqual([]);
+  });
+});
+
+// ============================================================================
+// PR 3 regression pins — fred-parity for the consolidated pure helpers.
+// These pin CURRENT behavior BEFORE Task 2 swaps the local impls to fred's, so
+// the swap is proven behavior-preserving.
+//  - deriveAppNameFromImage keeps the `|| 'app'` guard: fred returns '' on
+//    degenerate refs, Barney callers require a non-empty name.
+//  - normalizePorts keeps IDENTICAL error-message text: fred throws
+//    ManifestMCPError (a subclass of Error) while Barney throws plain Error, but
+//    Barney reads only error.message, so the message text is the contract.
+// The getServiceNames({ services: { web: {}, db: {} } }) pin above stays green
+// ONLY because isStackManifest/getServiceNames stay Barney-local (fred's
+// isStackManifest requires `"image" in v` per service).
+// ============================================================================
+
+describe('deriveAppNameFromImage — degenerate-ref guard (fred-parity regression)', () => {
+  it('yields "app" for an all-punctuation ref', () => {
+    expect(deriveAppNameFromImage('...:latest')).toBe('app');
+  });
+
+  it('yields "app" for an empty string', () => {
+    expect(deriveAppNameFromImage('')).toBe('app');
+  });
+
+  it('yields "app" for a slash-only ref', () => {
+    expect(deriveAppNameFromImage('/')).toBe('app');
+  });
+});
+
+describe('normalizePorts — message/shape parity (fred re-export regression)', () => {
+  it('produces the ingress-free { "port/proto": {} } shape', () => {
+    expect(normalizePorts('6379,53/udp')).toEqual({ '6379/tcp': {}, '53/udp': {} });
+  });
+
+  it('throws the exact invalid-port message', () => {
+    expect(() => normalizePorts('abc')).toThrow(
+      'Invalid port: "abc". Port must be a number between 1 and 65535.'
+    );
+  });
+
+  it('throws the exact invalid-protocol message', () => {
+    expect(() => normalizePorts('8080/sctp')).toThrow(
+      'Invalid protocol: "sctp". Must be "tcp" or "udp".'
+    );
   });
 });

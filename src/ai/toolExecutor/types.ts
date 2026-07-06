@@ -2,7 +2,8 @@
  * Type definitions for the tool executor
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager, SignArbitraryResult } from '@manifest-network/manifest-sdk';
+import type { createAuthTokens } from '@manifest-network/manifest-sdk/deploy';
 import type { DeployProgress } from '../progress';
 import type { AppEntry } from '../../registry/appRegistry';
 import type { MessageCard } from '../../contexts/aiTypes';
@@ -13,7 +14,29 @@ export interface SignResult {
   signature: string;
 }
 
-export type SignArbitraryFn = (address: string, data: string) => Promise<SignResult>;
+/**
+ * Compile-time parity guard (PR 0): Barney's SignResult must stay structurally
+ * assignable to the SDK's SignArbitraryResult (both ADR-036 `{ signature, pub_key }`).
+ * PR 5 wires the auth-token factory against the SDK type; if SignResult ever drifts,
+ * the `T extends U` constraint fails and `tsc` errors right here.
+ */
+type AssertAssignable<T extends U, U> = T;
+export type _SignResultParity = AssertAssignable<SignResult, SignArbitraryResult>;
+
+/** The signer-bound ADR-036 auth-token factory returned by the SDK's `createAuthTokens`. */
+export type AuthTokens = ReturnType<typeof createAuthTokens>;
+
+/**
+ * Composition-root signing capability threaded into every executor that touches
+ * the wallet. `authTokens` mints ADR-036 provider tokens (address-bound, built
+ * per wallet address at the root); `withSign` serializes chain-TX broadcasts on
+ * the SAME lock the factory's signArbitrary uses, so single and batch ops never
+ * hit the wallet concurrently.
+ */
+export interface SigningContext {
+  authTokens: AuthTokens;
+  withSign: <T>(fn: () => Promise<T>) => Promise<T>;
+}
 
 export interface PayloadAttachment {
   bytes: Uint8Array;
@@ -133,7 +156,8 @@ export interface AppRegistryAccess {
 export interface ToolExecutorOptions {
   clientManager: CosmosClientManager | null;
   address: string | undefined;
-  signArbitrary?: (address: string, data: string) => Promise<SignResult>;
+  /** Root-built signing capability (auth-token factory + shared sign lock). */
+  signing?: SigningContext;
   onProgress?: (progress: DeployProgress) => void;
   appRegistry?: AppRegistryAccess;
   signal?: AbortSignal;

@@ -18,6 +18,7 @@ import { setupPersistenceSubscriptions } from '../stores/aiActions/persistence';
 import { useVisibilityPolling } from '../hooks/useVisibilityPolling';
 import { AI_HEALTH_CHECK_INTERVAL_MS, AI_HEALTH_CHECK_MAX_BACKOFF, AI_CONFIRMATION_TIMEOUT_MS, MS_PER_SECOND, SECONDS_PER_MINUTE } from '../config/constants';
 import { logError } from '../utils/errors';
+import { disposeReadClient } from '../api/readClient';
 
 // Re-export types for backward compatibility
 export type { ChatMessage, PendingConfirmation, AISettings } from '../stores/aiStore';
@@ -100,6 +101,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       unsubConfirmation();
       if (confirmationTimeoutId) clearTimeout(confirmationTimeoutId);
       store.getState().destroy();
+      void disposeReadClient();
     };
   }, [store]);
 

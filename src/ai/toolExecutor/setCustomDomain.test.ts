@@ -23,7 +23,8 @@ vi.mock('../../utils/errors', () => ({ logError: vi.fn() }));
 
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
-import { setItemCustomDomain } from '@manifest-network/manifest-mcp-core';
+import { asFqdn, asLeaseUuid, setItemCustomDomain } from '@manifest-network/manifest-mcp-core';
+import type { SetItemCustomDomainResult } from '@manifest-network/manifest-mcp-core';
 
 const ADDR = 'manifest1tenant';
 const LEASE_UUID = 'lease-uuid-1';
@@ -352,8 +353,8 @@ describe('executeConfirmedSetCustomDomain', () => {
     };
   }
 
-  function monoResult(overrides: Partial<{ lease_uuid: string; service_name: string; custom_domain: string; transactionHash: string; code: number }> = {}) {
-    return {
+  function monoResult(overrides: Partial<{ lease_uuid: string; service_name: string; custom_domain: string; transactionHash: string; code: number }> = {}): SetItemCustomDomainResult {
+    const base = {
       lease_uuid: 'lu1',
       service_name: '',
       custom_domain: 'app.example.com',
@@ -361,6 +362,33 @@ describe('executeConfirmedSetCustomDomain', () => {
       code: 0,
       ...overrides,
     };
+    // core@0.15's SetItemCustomDomainResult brands lease_uuid/custom_domain
+    // (LeaseUuid/Fqdn). asLeaseUuid/asFqdn are identity casts at runtime, so
+    // downstream value-equality assertions are unaffected.
+    return {
+      ...base,
+      lease_uuid: asLeaseUuid(base.lease_uuid),
+      custom_domain: asFqdn(base.custom_domain),
+    };
+  }
+
+  // core@0.15 setItemCustomDomain is (ctx, input, opts?). The domain/serviceName/
+  // clear intent now lives in the input object at arg index 1 (was positional
+  // args 2/3/opts). Brand casts are identity at runtime, so captured values are
+  // the plain strings passed in.
+  function capturedInput(callIndex = 0) {
+    return vi.mocked(setItemCustomDomain).mock.calls[callIndex][1] as {
+      leaseUuid: string;
+      customDomain?: string;
+      serviceName?: string;
+      clear?: boolean;
+    };
+  }
+
+  // ctx is arg 0: core@0.15 wants a TxCtx ({ chain, logger }) built over the
+  // clientManager (was the bare clientManager positional).
+  function capturedCtx(callIndex = 0) {
+    return vi.mocked(setItemCustomDomain).mock.calls[callIndex][0];
   }
 
   it('returns error if wallet not connected', async () => {
@@ -380,7 +408,13 @@ describe('executeConfirmedSetCustomDomain', () => {
       options(),
     );
     expect(r.success).toBe(true);
-    expect(setItemCustomDomain).toHaveBeenCalledWith(fakeClientManager, 'lu1', 'app.example.com', { serviceName: 'web' });
+    expect(setItemCustomDomain).toHaveBeenCalledTimes(1);
+    expect(capturedCtx()).toMatchObject({ chain: fakeClientManager });
+    expect(capturedCtx()).toHaveProperty('logger');
+    const input = capturedInput();
+    expect(input.leaseUuid).toBe('lu1');
+    expect(input.customDomain).toBe('app.example.com');
+    expect(input.serviceName).toBe('web');
     if (r.success && !r.requiresConfirmation) {
       expect(r.displayCard?.type).toBe('custom_domain');
       if (r.displayCard?.type === 'custom_domain') {
@@ -402,7 +436,11 @@ describe('executeConfirmedSetCustomDomain', () => {
       options(),
     );
     expect(r.success).toBe(true);
-    expect(setItemCustomDomain).toHaveBeenCalledWith(fakeClientManager, 'lu1', '', { clear: true });
+    const input = capturedInput();
+    expect(input.leaseUuid).toBe('lu1');
+    expect(input.clear).toBe(true);
+    // clear arm carries no customDomain (discriminated union).
+    expect(input.customDomain).toBeUndefined();
   });
 
   it('does not pass serviceName option when empty (legacy 1-item lease)', async () => {
@@ -412,8 +450,8 @@ describe('executeConfirmedSetCustomDomain', () => {
       fakeClientManager,
       options(),
     );
-    const callArgs = vi.mocked(setItemCustomDomain).mock.calls[0];
-    expect(callArgs[3]).toEqual({});
+    // serviceName omitted from the input object when empty (legacy 1-item lease).
+    expect(capturedInput().serviceName).toBeUndefined();
   });
 
   it('rejects non-string customDomain in the confirmed path', async () => {

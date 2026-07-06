@@ -4,7 +4,7 @@
  * Transitions between views with a fade + slide animation.
  */
 
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { useAI } from '../../hooks/useAI';
 import { useManifestMCP } from '../../hooks/useManifestMCP';
@@ -35,25 +35,10 @@ function isPopupClosedError(msg: string): boolean {
 }
 
 export function AppShell() {
-  const { setClientManager, setAddress, setSignArbitrary } = useAI();
-  const { clientManager, address } = useManifestMCP();
-  const { signArbitrary, isWalletConnected, isWalletConnecting, openView, getOfflineSigner, status, message, disconnect } = useChain(CHAIN_NAME);
+  const { setClientManager, setAddress, setSigning } = useAI();
+  const { clientManager, address, signing } = useManifestMCP();
+  const { isWalletConnected, isWalletConnecting, openView, getOfflineSigner, status, message, disconnect } = useChain(CHAIN_NAME);
   const toast = useToast();
-
-  // Create a stable wrapper for signArbitrary
-  const wrappedSignArbitrary = useCallback(
-    async (signerAddress: string, data: string) => {
-      if (typeof signArbitrary !== 'function') {
-        throw new Error('Wallet does not support signArbitrary');
-      }
-      const result = await signArbitrary(signerAddress, data);
-      return {
-        pub_key: result.pub_key,
-        signature: result.signature,
-      };
-    },
-    [signArbitrary]
-  );
 
   // Account-setup flow needs direct getOfflineSigner access via a ref.
   const getOfflineSignerRef = useRef(getOfflineSigner);
@@ -69,9 +54,8 @@ export function AppShell() {
   useEffect(() => {
     setClientManager(clientManager);
     setAddress(address);
-    const canSign = isWalletConnected && typeof signArbitrary === 'function';
-    setSignArbitrary(canSign ? wrappedSignArbitrary : undefined);
-  }, [clientManager, address, isWalletConnected, signArbitrary, setClientManager, setAddress, setSignArbitrary, wrappedSignArbitrary]);
+    setSigning(signing);
+  }, [clientManager, address, signing, setClientManager, setAddress, setSigning]);
 
   // Watch for wallet connection errors (e.g. Safari popup blocking)
   const prevStatusRef = useRef(status);

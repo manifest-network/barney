@@ -86,12 +86,12 @@ export async function requestBatchDeployFn(
       };
     }));
 
-    const { clientManager, address, signArbitrary, skuTiers } = get();
+    const { clientManager, address, signing, skuTiers } = get();
 
     const result = await executeBatchDeploy(entries, {
       clientManager,
       address,
-      signArbitrary,
+      signing,
       onProgress: (progress) => set({ deployProgress: { ...progress } }),
       appRegistry: getAppRegistryAccess(),
       tiers: skuTiers.tiers,

@@ -81,7 +81,6 @@ describe('processToolCallsFn', () => {
     deployProgress: AIStore['deployProgress'];
     clientManager: AIStore['clientManager'];
     address: AIStore['address'];
-    signArbitrary: AIStore['signArbitrary'];
     abortController: AIStore['abortController'];
     _toolCache: Map<string, { result: ToolResult; timestamp: number }>;
   };
@@ -98,7 +97,6 @@ describe('processToolCallsFn', () => {
       deployProgress: null,
       clientManager: null,
       address: 'manifest1test',
-      signArbitrary: undefined,
       abortController: null,
       _toolCache: new Map(),
     };

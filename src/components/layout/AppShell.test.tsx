@@ -8,13 +8,12 @@ import { AppShell } from './AppShell';
 
 const mockSetClientManager = vi.fn();
 const mockSetAddress = vi.fn();
-const mockSetSignArbitrary = vi.fn();
 
 vi.mock('../../hooks/useAI', () => ({
   useAI: () => ({
     setClientManager: mockSetClientManager,
     setAddress: mockSetAddress,
-    setSignArbitrary: mockSetSignArbitrary,
+    setSigning: vi.fn(),
   }),
 }));
 
@@ -28,12 +27,12 @@ vi.mock('../../hooks/useManifestMCP', () => ({
   useManifestMCP: () => ({
     clientManager: null,
     address: mockAddress,
+    signing: undefined,
   }),
 }));
 
 vi.mock('@cosmos-kit/react', () => ({
   useChain: () => ({
-    signArbitrary: vi.fn(),
     isWalletConnected: mockIsWalletConnected,
     isWalletConnecting: false,
     openView: vi.fn(),

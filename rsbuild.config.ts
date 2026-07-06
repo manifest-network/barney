@@ -1,8 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginNodePolyfill } from '@rsbuild/plugin-node-polyfill';
 import ipaddr from 'ipaddr.js';
+import { forbiddenNodeOnlyImport } from './scripts/browser-safety-guard.mjs';
 
 const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
 /**
@@ -63,6 +65,80 @@ function isValidProxyTarget(target: string): boolean {
   }
 }
 
+// Minimal structural shapes for the rspack hooks we tap (avoids depending on
+// @rsbuild/core's exported plugin-type surface). Methods are bivariant, so these
+// narrow shapes are assignable where the full Compiler is expected.
+interface ResolveData {
+  request?: string;
+  contextInfo?: { issuer?: string };
+}
+interface StatsModule {
+  name?: string;
+  identifier?: string;
+  modules?: StatsModule[];
+}
+interface RspackCompilerLike {
+  options: { mode?: string };
+  outputPath: string;
+  hooks: {
+    normalModuleFactory: {
+      tap(
+        name: string,
+        fn: (nmf: {
+          hooks: { beforeResolve: { tap(name: string, fn: (data: ResolveData) => void): void } };
+        }) => void,
+      ): void;
+    };
+    done: {
+      tap(name: string, fn: (stats: { toJson(opts: Record<string, boolean>): { modules?: StatsModule[] } }) => void): void;
+    };
+  };
+}
+
+/**
+ * Fails the build if a node-only module resolves into the browser graph.
+ * See migration spec §4 risk 5. undici/node:async_hooks are skipped for the
+ * benign @modelcontextprotocol/sdk (reached via the chain faucet barrel but
+ * tree-shaken out of OUTPUT — asserted separately by scripts/check-bundle.mjs).
+ */
+class ForbidNodeOnlyBrowserImportsPlugin {
+  apply(compiler: RspackCompilerLike): void {
+    compiler.hooks.normalModuleFactory.tap('ForbidNodeOnlyBrowserImports', (nmf) => {
+      nmf.hooks.beforeResolve.tap('ForbidNodeOnlyBrowserImports', (data) => {
+        const reason = forbiddenNodeOnlyImport(data.request, data.contextInfo?.issuer);
+        if (reason) throw new Error('[browser-safety] ' + reason + ' — migration spec §4 risk 5.');
+      });
+    });
+  }
+}
+
+/**
+ * Emits dist/bundle-modules.json — the bundled module paths for
+ * manifest-mcp-core / manifestjs / @modelcontextprotocol/sdk. Consumed by
+ * scripts/check-bundle.mjs for the single-copy + no-MCP-sdk assertions.
+ */
+class EmitBundleModulesPlugin {
+  apply(compiler: RspackCompilerLike): void {
+    compiler.hooks.done.tap('EmitBundleModules', (stats) => {
+      if (compiler.options.mode !== 'production') return;
+      const json = stats.toJson({ all: false, modules: true, nestedModules: true });
+      const names = new Set<string>();
+      const walk = (mods: StatsModule[] | undefined): void => {
+        for (const m of mods ?? []) {
+          if (m.name) names.add(m.name);
+          if (m.identifier) names.add(m.identifier);
+          if (m.modules) walk(m.modules);
+        }
+      };
+      walk(json.modules);
+      const relevant = [...names].filter((n) =>
+        /@manifest-network[\\/](manifest-mcp-core|manifestjs)|@modelcontextprotocol[\\/]sdk/.test(n),
+      );
+      writeFileSync(join(compiler.outputPath, 'bundle-modules.json'), JSON.stringify(relevant, null, 2));
+    });
+  }
+}
+
 export default defineConfig({
   plugins: [
     pluginReact(),
@@ -77,6 +153,7 @@ export default defineConfig({
         __filename: 'mock',
         __dirname: 'mock',
       },
+      plugins: [new ForbidNodeOnlyBrowserImportsPlugin(), new EmitBundleModulesPlugin()],
     },
   },
   server: {

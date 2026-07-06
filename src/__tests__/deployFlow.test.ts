@@ -29,10 +29,6 @@ vi.mock('../api/billing', async (importOriginal) => {
   };
 });
 
-vi.mock('../api/bank', () => ({
-  getAllBalances: vi.fn(),
-}));
-
 vi.mock('../api/sku', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/sku')>();
   return {
@@ -45,8 +41,6 @@ vi.mock('../api/sku', async (importOriginal) => {
 vi.mock('../api/provider-api', () => ({
   getProviderHealth: vi.fn(),
   getLeaseConnectionInfo: vi.fn(),
-  createSignMessage: vi.fn().mockReturnValue('sign-msg'),
-  createAuthToken: vi.fn().mockReturnValue('auth-token'),
 }));
 
 vi.mock('../api/fred', () => ({
@@ -60,8 +54,11 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   ...(await importOriginal()),
   cosmosTx: vi.fn(),
   cosmosQuery: vi.fn(),
-  getBalance: vi.fn(),
 }));
+
+vi.mock('../api/readClient', () => ({ getReadClient: vi.fn() }));
+
+const mockGetBalance = vi.fn();
 
 vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
@@ -71,14 +68,14 @@ vi.mock('../ai/toolExecutor/utils', () => ({
   extractLeaseUuidFromTxResult: vi.fn(),
   uploadPayloadToProvider: vi.fn(),
   computePayloadHash: vi.fn(),
-  getProviderAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
 }));
 
 import { getLeasesByTenant, getCreditEstimate, getLease } from '../api/billing';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
 import { waitForLeaseReady } from '../api/fred';
-import { cosmosTx, getBalance } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx } from '@manifest-network/manifest-mcp-core';
+import { getReadClient } from '../api/readClient';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from '../ai/toolExecutor/utils';
 
 const ADDRESS = 'manifest1testaddr';
@@ -125,10 +122,13 @@ describe('Deploy Flow Integration', () => {
       address: ADDRESS,
       appRegistry: registry,
       onProgress: (p: DeployProgress) => progressEvents.push(p),
-      signArbitrary: vi.fn().mockResolvedValue({
-        pub_key: { value: 'pubkey' },
-        signature: 'sig',
-      }),
+      signing: {
+        authTokens: {
+          getAuthToken: vi.fn().mockResolvedValue('auth-token'),
+          getLeaseDataAuthToken: vi.fn().mockResolvedValue('lease-data-auth-token'),
+        },
+        withSign: <T,>(fn: () => Promise<T>) => fn(),
+      },
       tiers: [
         { skuName: 'docker-micro', skuUuid: 'sku-micro', providerUuid: PROVIDER_UUID, cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
         { skuName: 'docker-small', skuUuid: SKU_UUID, providerUuid: PROVIDER_UUID, cores: 1, ramMB: 1024, diskGB: 5, pricePerHour: 0.1, denomSymbol: 'PWR', unit: 1 },
@@ -267,7 +267,10 @@ describe('Deploy Flow Integration', () => {
   });
 
   it('get_balance flow', async () => {
-    vi.mocked(getBalance).mockResolvedValue({
+    vi.mocked(getReadClient).mockResolvedValue(
+      { getBalance: mockGetBalance } as unknown as Awaited<ReturnType<typeof getReadClient>>,
+    );
+    mockGetBalance.mockResolvedValue({
       balances: [{ denom: 'umfx', amount: '5000000' }],
       current_balance: [{ denom: 'factory/manifest1afk9zr2hn2jsac63h4hm60vl9z3e5u69gndzf7c99cqge3vzwjzsfmy9qj/upwr', amount: '100000000' }],
       spending_per_hour: [{ denom: 'umfx', amount: '3600' }],

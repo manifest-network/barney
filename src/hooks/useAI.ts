@@ -24,7 +24,7 @@ export function useAI() {
     cancelAction: s.cancelAction,
     setClientManager: s.setClientManager,
     setAddress: s.setAddress,
-    setSignArbitrary: s.setSignArbitrary,
+    setSigning: s.setSigning,
     attachPayload: s.attachPayload,
     clearPayload: s.clearPayload,
     requestBatchDeploy: s.requestBatchDeploy,

@@ -242,11 +242,13 @@ describe('aiStore', () => {
     });
   });
 
-  describe('setSignArbitrary', () => {
-    it('stores the signArbitrary fn', () => {
-      const fn = vi.fn();
-      store.getState().setSignArbitrary(fn);
-      expect(store.getState().signArbitrary).toBe(fn);
+  describe('setSigning', () => {
+    it('stores and clears the signing context', () => {
+      const ctx = {} as AIStore['signing'];
+      store.getState().setSigning(ctx);
+      expect(store.getState().signing).toBe(ctx);
+      store.getState().setSigning(undefined);
+      expect(store.getState().signing).toBeUndefined();
     });
   });
 

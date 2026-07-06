@@ -1,5 +1,5 @@
 # Stage 1 — Build
-FROM node:22-alpine3.21 AS build
+FROM node:22.19.0-alpine3.21 AS build
 ARG GIT_COMMIT=""
 ARG RELEASE_VERSION=""
 WORKDIR /app
