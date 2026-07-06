@@ -130,12 +130,33 @@ export function useManifestMCP(): UseManifestMCPResult {
         const manager = CosmosClientManager.getInstance(config, walletProvider);
         clientManagerRef.current = manager;
 
-        // Build the ADR-036 auth-token factory bound to this wallet address.
-        // Shares the mutex's sign lock so single + batch ops never hit the
-        // wallet concurrently.
-        const authSigner = createSignerAdapter(walletProvider, 'manifest');
-        const authTokens = createAuthTokens(authSigner, { chainId: CHAIN_ID });
-        const signingContext: SigningContext = { authTokens, withSign: mutex.withSign };
+        // Only expose `signing` when the wallet can sign arbitrary data, so a
+        // wallet that can't is gated at the executor's `!signing` check before
+        // any billed action (e.g. create-lease). clientManager is still set —
+        // chain TXs + queries work either way. Restores main's `canSign` gate
+        // that the SDK migration dropped (ENG-466 / Copilot PR #104).
+        //
+        // NOTE: cosmos-kit's useChain always returns `signArbitrary` as a thin
+        // wrapper that throws at CALL time (never literally undefined), so this
+        // `typeof` check is effectively always true for the enabled Web3Auth
+        // wallet — same as main, where `canSign` reduced to `isWalletConnected`.
+        // So this is defensive parity (inert for cosmos-kit), not a behavior
+        // change. It reads the ref rather than adding signArbitrary to the
+        // effect deps on purpose: cosmos-kit hands back a fresh wrapper identity
+        // per render, which would thrash the client re-init. A real pre-lease
+        // fast-fail for a wallet whose underlying client lacks signArbitrary
+        // must probe `wallet.client.signArbitrary` — tracked in ENG-466.
+        // The factory shares the mutex's sign lock so single + batch ops never
+        // hit the wallet concurrently.
+        const canSign = typeof signArbitraryRef.current === 'function';
+        const signingContext: SigningContext | undefined = canSign
+          ? {
+              authTokens: createAuthTokens(createSignerAdapter(walletProvider, 'manifest'), {
+                chainId: CHAIN_ID,
+              }),
+              withSign: mutex.withSign,
+            }
+          : undefined;
 
         if (isMounted) {
           setClientManager(manager);

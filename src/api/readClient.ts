@@ -19,8 +19,9 @@ let clientPromise: Promise<ManifestReadClient> | null = null;
  * keeps the LCD transport (numeric enum preservation via the LCD-adapter fromJSON
  * path) — the reason fixSKUEnums is deletable.
  *
- * NOTE: requires a non-empty PUBLIC_CHAIN_ID; an empty chainId throws INVALID_CONFIG
- * (CHAIN_ID defaults to 'manifest-ledger-beta'). PROD restUrl must be https.
+ * NOTE: the chainId passed here is CHAIN_ID (sourced from the PUBLIC_CHAIN_ID env
+ * via runtimeConfig; defaults to 'manifest-ledger-beta', so it is non-empty in
+ * practice). An empty chainId would throw INVALID_CONFIG. PROD restUrl must be https.
  */
 export function getReadClient(): Promise<ManifestReadClient> {
   if (!clientPromise) {
