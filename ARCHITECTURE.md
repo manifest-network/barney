@@ -49,7 +49,7 @@ The **Morpheus API** never returns a manifest or a signed transaction. It return
 React 19 components organised by concern:
 
 - **`layout/`** — `AppShell` (top-level router), `MainLayout` (sidebar + chat split), `AppsSidebar`, `AccountSetupOverlay`.
-- **`ai/`** — chat surface: `ChatPanel`, `MessageBubble`, `ConfirmationCard` (TX approval with `ManifestEditor` / `StackManifestEditor`), `ProgressCard`, `AppCard`, `ToolResultCard`, `LogCard`.
+- **`ai/`** — chat surface: `ChatPanel`, `MessageBubble`, `ConfirmationCard` (TX approval with `ManifestEditor` / `StackManifestEditor`), `ProgressCard`, `AppCard`, `CustomDomainCard`, `HelpCard`, `LogCard`.
 - **`landing/`** — `LandingPage` shown when the wallet is disconnected.
 - **`ui/`** — primitives (`Modal`, `Toast`, `ErrorBoundary`, `MatrixRain`, …).
 
@@ -66,7 +66,7 @@ ErrorBoundary
             └─ ToastContainer
 ```
 
-`AppShell` syncs cosmos-kit wallet state (`clientManager`, `address`, `signArbitrary`) into the Zustand store and toggles between `LandingPage` and `MainLayout` based on `isWalletConnected`.
+`AppShell` syncs cosmos-kit wallet state (`clientManager`, `address`, `signing`) into the Zustand store and toggles between `LandingPage` and `MainLayout` based on `isWalletConnected`.
 
 ### 2. State layer (`src/stores/`, `src/contexts/AIContext.tsx`)
 
@@ -74,7 +74,7 @@ A single Zustand vanilla store (`createAIStore`) holds all AI-related state:
 
 | Reactive state | Internal state |
 |----------------|----------------|
-| `messages`, `isStreaming`, `isConnected`, `settings` | `clientManager`, `address`, `signArbitrary` |
+| `messages`, `isStreaming`, `isConnected`, `settings` | `clientManager`, `address`, `signing` |
 | `pendingConfirmation`, `pendingPayload`, `deployProgress` | `abortController`, `_toolCache`, `_pendingStreamUpdate`, `_rafId` |
 
 Action implementations live in `src/stores/aiActions/`:
@@ -118,9 +118,9 @@ executeConfirmedTool(toolName, args, clientManager, options, payload?)
 
 - `compositeQueries.ts` — read-only operations that resolve immediately.
 - `compositeTransactions.ts` — TX builders that *return* a confirmation request first; the actual signing happens in the `executeConfirmed*` companion when the user approves.
-- `transactions.ts` — lease creation, payload upload, generic TX helpers.
+- (removed) — lease creation now lives in `compositeTransactions.ts` (via `cosmosTx` `billing create-lease`) and payload upload in `utils.ts` (`uploadPayloadToProvider`); the old `transactions.ts` was deleted.
 - `batchRunner.ts` — concurrency-bounded batch execution with shared signing mutex; used by `requestBatchDeploy` and bulk restart.
-- `helpers.ts`, `utils.ts`, `types.ts` — shared types (`ToolResult`, `ToolExecutorOptions`, `PayloadAttachment`), ADR-036 auth token construction, payload upload helpers.
+- `helpers.ts`, `utils.ts`, `types.ts` — shared types (`ToolResult`, `ToolExecutorOptions`, `PayloadAttachment`, `SigningContext`), ADR-036 token minting via the injected `authTokens` factory, and payload upload helpers. (The token factory itself is built in `src/hooks/useManifestMCP.ts`.)
 
 ### 4. Chain & provider clients (`src/api/`)
 
@@ -130,7 +130,8 @@ Thin wrappers over external libraries with Barney-specific behaviour kept local.
 |--------|-------|------|
 | `bank.ts` | manifestjs / cosmjs Bank | `getBalance`, `Coin` re-export |
 | `billing.ts` | manifestjs `liftedinit.billing.v1` | LCD type conversions, lease state mapping, `getCreditAccount` |
-| `sku.ts` | manifestjs `liftedinit.sku.v1` | Provider/SKU enum fixups (`Unit` enum) |
+| `sku.ts` | SDK read client (`readClient.ts` `getReadClient`) + manifestjs `Unit` enum | `getProviders` / `getSKUs`; `Unit` enum and `Provider`/`SKU` type re-exports (enum fixups removed) |
+| `readClient.ts` | `@manifest-network/manifest-sdk` `createManifestReadClient` | Cached query-only SDK read client (`getReadClient` / `disposeReadClient`); backs `getSKUs`/`getProviders`/`getBillingParams` |
 | `tx.ts` | cosmjs Stargate signing client | `signAndBroadcast`, `buildMsg`, `fundCredit` |
 | `fred.ts` | `@manifest-network/manifest-mcp-fred` | WebSocket lease event streaming, polling fallback, browser-side connection |
 | `provider-api.ts` | `@manifest-network/manifest-mcp-fred` | `validateAuthTimestamp`, null-returning `getProviderHealth` |
@@ -203,10 +204,10 @@ executeConfirmedTool('deploy_app', args, clientManager, options, payload)
    ▼
 executeConfirmedDeployApp:
   1. Resolve provider + SKU from on-chain catalog (api/sku.ts)
-  2. Build MsgCreateLease, sign + broadcast  (api/tx.ts → cosmjs Stargate)
+  2. Create lease via cosmosTx('billing','create-lease'), broadcast under signing.withSign  (@manifest-network/manifest-mcp-core)
        onProgress({ phase: 'creating_lease' })
-  3. Build ADR-036 auth token (signArbitrary)        (toolExecutor/utils.ts)
-  4. Upload payload to provider (HTTP)               (toolExecutor/transactions.ts)
+  3. Mint ADR-036 auth token (signing.authTokens)     (toolExecutor/utils.ts)
+  4. Upload payload to provider (HTTP)               (toolExecutor/utils.ts)
        onProgress({ phase: 'uploading' })
   5. waitForLeaseReady → WebSocket /v1/leases/{uuid}/events with polling fallback (api/fred.ts)
        onProgress({ phase: 'provisioning' })
@@ -226,8 +227,7 @@ AppShell → useAccountSetup({ address, isWalletConnected, getOfflineSignerRef }
    ▼
 1. Read setup state from localStorage (versionedStorage)
 2. If setupCompleted=false (or stale + zero balances):
-     ├─ check MFX  → faucetDripAndVerify(address, 'umfx')
-     ├─ check PWR  → faucetDripAndVerify(address, factoryDenom)
+     ├─ check PWR  → faucetDripAndVerify(address, DENOMS.PWR)
      └─ check credits → fundCredit(address, 10 PWR)
    Each step retries once on failure; setup state is persisted on completion.
    │
@@ -278,7 +278,7 @@ Query tool results are cached per `(walletAddress, toolName, sortedArgs)` for `A
 
 ### Runtime configuration
 
-`src/config/runtimeConfig.ts` resolves 17 client-side `PUBLIC_*` variables via:
+`src/config/runtimeConfig.ts` resolves 18 client-side `PUBLIC_*` variables via:
 
 1. `window.__RUNTIME_CONFIG__` (rendered into `/config.js` at container startup by `docker/env.sh`)
 2. `import.meta.env` (build-time inlined by Rsbuild from `.env*` files)

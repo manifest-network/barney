@@ -1,6 +1,6 @@
 # AI cookbook
 
-This cookbook documents the 16 tools the AI can call, what each does, and how to invoke them in natural language. The model performs intent classification; you do not need to know tool names. Behind every chat reply is one or more deterministic tool calls executed in your browser — the model never speaks directly to the chain.
+This cookbook documents the 17 tools the AI can call, what each does, and how to invoke them in natural language. The model performs intent classification; you do not need to know tool names. Behind every chat reply is one or more deterministic tool calls executed in your browser — the model never speaks directly to the chain.
 
 A confirmation step is required for transactions that move tokens or change on-chain state. Queries return immediately.
 
@@ -31,10 +31,10 @@ Deploy WordPress with MySQL
 Deploy tetris, doom, and pacman
 ```
 
-**Under the hood.** `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, storage?, services?, health_check?, stop_grace_period?, init?, expose?, labels?)`.
+**Under the hood.** `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, services?, health_check?, stop_grace_period?, init?, expose?, labels?, custom_domain?, service_name?)`.
 
 - `image` and `services` are mutually exclusive. `services` is a JSON object describing a multi-service stack.
-- `size` defaults to `micro`. Set to `small` when you need persistent disk storage; `storage: true` auto-selects `docker-small` regardless of the requested size.
+- `size` defaults to the cheapest available tier — omitting it lets the executor pick the cheapest SKU; name a larger tier (e.g. `small`) explicitly when you want more resources. There is no `storage` parameter.
 - For curated images (Postgres, Redis, MySQL, …), default ports, env, user, and tmpfs are pre-populated.
 - Empty values in the `env` map auto-generate alphanumeric passwords (e.g. `{"POSTGRES_PASSWORD":""}`).
 - The deploy progresses through `creating_lease → uploading → provisioning → ready`, surfaced live in the progress card.
@@ -95,6 +95,20 @@ Top up my credits with 100 PWR
 
 **Under the hood.** `fund_credits(amount)`. The amount is in display units (1 PWR = 1,000,000 `upwr`).
 
+### `set_custom_domain`
+
+**What it does.** Attaches, changes, or clears a custom DNS domain on a deployed app. Pass an empty string for `custom_domain` to clear an existing domain.
+
+**Example prompts.**
+
+```
+Attach app.example.com to my-api
+Change the domain on wordpress to blog.example.com
+Clear the custom domain on my-api
+```
+
+**Under the hood.** `set_custom_domain(app_name, custom_domain, service_name?)`. `service_name` selects the target service in a multi-service stack. Requires confirmation.
+
 ## Query tools (no confirmation)
 
 ### `list_apps`
@@ -141,7 +155,7 @@ Tail 500 lines of redis logs
 
 ### `get_balance`
 
-**What it does.** Returns wallet balances (MFX, PWR), credit balance, spending rate, and time-remaining estimate.
+**What it does.** Returns your credit balance, spending rate (per hour), time-remaining estimate, and running-app count. It does not return separate wallet MFX/PWR balances.
 
 **Example prompts.**
 
@@ -259,7 +273,7 @@ Run cosmos_tx bank send with [...]
 
 - **Be specific about size or version when you care.** "Deploy postgres 17" preserves the tag; "Deploy postgres" defaults to whatever the curated catalog suggests.
 - **Multiple names = multiple deploys.** "Deploy tetris, doom, and hextris" calls `deploy_app` once per game.
-- **Local fast-path for example apps.** When your prompt matches `^deploy <name1>(, |, and | & | and )<name2>...` AND every name maps to a built-in example app, Barney skips the LLM round-trip and runs a batch deploy directly. If even one name doesn't match a built-in example, the entire prompt is sent to the model instead — which may produce different results than you expect. To force the AI path, phrase the request differently ("Please deploy redis and postgres for me").
+- **Local fast-path for example apps.** Any prompt beginning with `deploy` is checked locally: the text after `deploy` is split on `,`/`and`/`&` and each name is matched against the example-app catalog. If two or more names match, Barney batch-deploys the matched subset directly (unmatched names are silently dropped, not sent to the model); if exactly one matches, it deploys that one. Only when NO name matches an example app is the whole prompt sent to the model. To force the AI path, phrase the request differently ("Please deploy redis and postgres for me").
 - **For bulk stop/restart**, use comma-separated lists or `all`. The AI will fall back to `list_apps` first if you ask by pattern (e.g. "stop all tetris apps").
 - **The `/help` slash command** prints the in-app cheat sheet.
 - **The `/clear` slash command** wipes chat history (the on-chain state is unaffected).

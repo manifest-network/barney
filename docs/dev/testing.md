@@ -20,7 +20,7 @@ Coverage HTML reports land in `coverage/`. The provider is configured in `vitest
 |----------|---------|
 | `src/**/__tests__/` (when used) | Co-located tests for a feature directory |
 | `src/**/*.test.ts(x)` | Unit and component tests |
-| `src/__tests__/` | Cross-cutting integration tests (currently `deployFlow.test.ts`) |
+| `src/__tests__/` | Cross-cutting integration tests (currently `deployFlow.test.ts` and `customDomainFlow.test.ts`) |
 
 A typical module has its tests immediately next to it: `src/utils/hash.ts` ↔ `src/utils/hash.test.ts`.
 

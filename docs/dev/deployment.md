@@ -96,8 +96,8 @@ Pin the image tag. Do not use `:latest` in production.
 
 The image entrypoint is `/docker/env.sh`. On every container start, it:
 
-1. **Validates `PUBLIC_MORPHEUS_URL`.** Empty or containing `?`/`#` is a hard failure.
-2. **Strips trailing slashes** from `PUBLIC_MORPHEUS_URL` to avoid double-slash in the upstream `proxy_pass`.
+1. **Strips trailing slashes** from `PUBLIC_MORPHEUS_URL` to avoid double-slash in the upstream `proxy_pass`.
+2. **Validates `PUBLIC_MORPHEUS_URL`.** Empty or containing `?`/`#` is a hard failure.
 3. **Extracts IPv4 DNS resolvers** from `/etc/resolv.conf` (with `1.1.1.1 8.8.8.8` as a fallback) for nginx's `resolver` directive.
 4. **Renders `/etc/nginx/conf.d/default.conf`** from `nginx.conf.template` with `MORPHEUS_API_KEY`, `PUBLIC_MORPHEUS_URL`, and `NGINX_RESOLVERS` substituted via `envsubst`.
 5. **Renders `/usr/share/nginx/html/config.js`** from `config.js.template` with all `PUBLIC_*` browser-side variables substituted.
@@ -122,10 +122,6 @@ If you are diagnosing prod chat failures with `checkApiHealth TimeoutError` erro
 A simple HTTP check against `/index.html` is sufficient. The container does not expose a dedicated health endpoint — nginx returning 200 for the SPA shell means `env.sh` succeeded and nginx is serving traffic.
 
 For deeper monitoring, hit `/api/morpheus/...` with a no-op completion request and assert a non-503 response. A 503 from `/api/morpheus/...` specifically means `MORPHEUS_API_KEY` is unset; nginx fast-fails in that case rather than forwarding.
-
-## Persistent storage assumption
-
-`STORAGE_SKU_NAME = 'docker-small'` is hardcoded in `src/config/constants.ts`. When a deploy sets `storage: true`, the executor swaps the requested SKU for `docker-small` regardless of size. If your chain catalog uses a different naming convention (e.g. `docker-disk-small`) or splits storage into a separate SKU, the storage flag will silently miss and your apps will deploy without persistent disk. Update the constant and rebuild the image until Fred exposes storage capability through the SKU API.
 
 ## Logging
 

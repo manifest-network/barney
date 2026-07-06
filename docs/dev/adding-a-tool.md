@@ -52,6 +52,7 @@ export const CONFIRMATION_TOOLS = new Set([
   'fund_credits',
   'restart_app',
   'update_app',
+  'set_custom_domain',
   'cosmos_tx',
   'pause_app',          // ← new
 ]);
@@ -85,9 +86,7 @@ export async function executePauseApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
-  const resolved = resolveMultiAppNames(args.app_name, address, appRegistry, {
-    requireRunning: true,
-  });
+  const resolved = resolveMultiAppNames(String(args.app_name ?? ''), address, appRegistry, (a) => a.status === 'running', 'pause');
   if (resolved.mode === 'error') return { success: false, error: resolved.error };
 
   // Single-app path
@@ -130,14 +129,11 @@ export async function executeConfirmedPauseApp(
   if (!app) return { success: false, error: `App not found.` };
 
   // Authenticate to the provider using ADR-036
-  if (!options.signArbitrary) {
-    return { success: false, error: 'Wallet does not support signArbitrary.' };
+  const { signing } = options;
+  if (!signing) {
+    return { success: false, error: 'Wallet does not support message signing' };
   }
-  const authToken = await getProviderAuthToken(
-    address,
-    app.leaseUuid,
-    options.signArbitrary,
-  );
+  const authToken = await signing.authTokens.getAuthToken(asLeaseUuid(app.leaseUuid));
 
   // Call your provider HTTP function
   await pauseLease(app.providerUrl, app.leaseUuid, authToken);
@@ -170,6 +166,7 @@ Open `src/ai/toolExecutor/index.ts`:
      'fund_credits',
      'restart_app',
      'update_app',
+     'set_custom_domain',
      'pause_app',          // ← new
    ]);
    ```
@@ -222,7 +219,7 @@ Mock conventions live in [testing.md](testing.md). The short version:
 
 Three doc surfaces benefit from updates:
 
-- **[CLAUDE.md](../../CLAUDE.md)** — add a row to the "16 Composite Tools" table (and adjust the count in the heading).
+- **[CLAUDE.md](../../CLAUDE.md)** — add a row to the "17 Composite Tools" table (and adjust the count in the heading).
 - **[ARCHITECTURE.md](../../ARCHITECTURE.md)** — usually no change unless the tool introduces a new layer.
 - **[docs/user/ai-cookbook.md](../user/ai-cookbook.md)** — add a section in the appropriate group with example prompts.
 

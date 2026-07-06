@@ -6,7 +6,7 @@ For an overview of the codebase, read [ARCHITECTURE.md](ARCHITECTURE.md). For un
 
 ## Prerequisites
 
-- **Node.js >= 20** (the production Docker build pins Node 22 via `Dockerfile`'s `node:22-alpine3.21` base; there is no general PR/CI workflow today)
+- **Node.js >= 22.19.0** (the production Docker build pins Node 22 via `Dockerfile`'s `node:22.19.0-alpine3.21` base; CI (`.github/workflows/ci.yml`) runs lint, the full Vitest suite, and typecheck+build on every pull request and push to `main`)
 - **npm >= 10**
 - A **Morpheus API key** (request access from [mor.org](https://mor.org)) — required to test AI features
 - Optional: a local Manifest Network node, or use the public testnet endpoints (`https://nodes.liftedinit.tech/manifest/testnet/api`, `https://nodes.liftedinit.tech/manifest/testnet/rpc`)
