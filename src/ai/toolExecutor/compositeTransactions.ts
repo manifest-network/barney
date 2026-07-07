@@ -2140,6 +2140,18 @@ export async function executeRestartApp(
 /**
  * Execute restart_app after user confirmation.
  * Supports batch restart when args.entries is present (from app_name="all" or comma-separated).
+ *
+ * ENG-279 no-migration note (spec §3.13, §7): restart_app and update_app got
+ * NO deploy-path rewrite. They already call mono's low-level fred http ops
+ * (`restartLease` / `updateLease` from `../../api/fred`, which delegate to
+ * `@manifest-network/manifest-mcp-fred`), so the ENG-279 "route through
+ * fred/core ops" goal was already satisfied for them at the http-function
+ * level. Their ONLY change from ENG-279 is transparent and came via C1:
+ * `signing.authTokens.getAuthToken` is now the address-binding adapter over
+ * the single `providerAuth` minter — no per-tool edit here. They keep
+ * `waitForLeaseReady` (fred http tools are fire-and-return with no internal
+ * poll); do not "finish migrating" them to deployManifest — that primitive
+ * is create-lease + deploy, not update/restart.
  */
 export async function executeConfirmedRestartApp(
   args: Record<string, unknown>,
