@@ -4,6 +4,7 @@
 
 import type { CosmosClientManager, SignArbitraryResult } from '@manifest-network/manifest-sdk';
 import type { createAuthTokens } from '@manifest-network/manifest-sdk/deploy';
+import type { ProviderAuthPort } from '@manifest-network/manifest-mcp-fred';
 import type { DeployProgress } from '../progress';
 import type { AppEntry } from '../../registry/appRegistry';
 import type { MessageCard } from '../../contexts/aiTypes';
@@ -27,13 +28,15 @@ export type _SignResultParity = AssertAssignable<SignResult, SignArbitraryResult
 export type AuthTokens = ReturnType<typeof createAuthTokens>;
 
 /**
- * Composition-root signing capability threaded into every executor that touches
- * the wallet. `authTokens` mints ADR-036 provider tokens (address-bound, built
- * per wallet address at the root); `withSign` serializes chain-TX broadcasts on
- * the SAME lock the factory's signArbitrary uses, so single and batch ops never
- * hit the wallet concurrently.
+ * Composition-root signing capability. `providerAuth` is the single ADR-036
+ * minter (one AuthTimestampTracker); `authTokens` is a thin address-binding
+ * adapter over the SAME providerAuth instance; `withSign` serializes chain-TX
+ * broadcasts on the mutex the minter's signArbitrary also uses.
  */
 export interface SigningContext {
+  /** The single ADR-036 token minter. ctx.providerAuth for deployManifest (C2). Address-PARAM. */
+  providerAuth: ProviderAuthPort;
+  /** Address-BOUND adapter over the SAME `providerAuth` instance (never a 2nd createProviderAuth). */
   authTokens: AuthTokens;
   withSign: <T>(fn: () => Promise<T>) => Promise<T>;
 }

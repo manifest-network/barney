@@ -123,6 +123,7 @@ describe('Deploy Flow Integration', () => {
       appRegistry: registry,
       onProgress: (p: DeployProgress) => progressEvents.push(p),
       signing: {
+        providerAuth: { providerToken: vi.fn(), leaseDataToken: vi.fn() },
         authTokens: {
           getAuthToken: vi.fn().mockResolvedValue('auth-token'),
           getLeaseDataAuthToken: vi.fn().mockResolvedValue('lease-data-auth-token'),

@@ -702,6 +702,7 @@ describe('executeLeaseHistory', () => {
 });
 
 const mockSigning = {
+  providerAuth: { providerToken: vi.fn(), leaseDataToken: vi.fn() },
   authTokens: {
     getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
     getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),

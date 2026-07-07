@@ -162,6 +162,7 @@ export function useManifestMCP(): UseManifestMCPResult {
                 { chainId: CHAIN_ID },
               );
               return {
+                providerAuth,
                 authTokens: createAuthTokensAdapter(providerAuth, address),
                 withSign: mutex.withSign,
               };

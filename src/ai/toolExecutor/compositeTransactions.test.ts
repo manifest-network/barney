@@ -125,6 +125,7 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
     address: ADDRESS,
     appRegistry: makeRegistry(),
     signing: {
+      providerAuth: { providerToken: vi.fn(), leaseDataToken: vi.fn() },
       authTokens: {
         getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
         getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),
