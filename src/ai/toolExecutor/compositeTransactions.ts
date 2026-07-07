@@ -1772,6 +1772,15 @@ export async function executeConfirmedBatchDeploy(
 /**
  * Pre-validation for stop_app. Returns confirmation result or error.
  * Supports app_name="all" to stop every running/deploying app at once.
+ *
+ * ENG-279 escape hatch (spec §7, D0): stop_app deliberately stays on
+ * `cosmosTx(clientManager, 'billing', 'close-lease', …)` and is NOT migrated
+ * to `@manifest-network/manifest-mcp-core`'s `stopApp`. This is a genuine
+ * capability gap, not laziness: `core.stopApp` drops the TX `rawLog` (barney
+ * surfaces it in the ConfirmationCard result) and forces a synchronous
+ * broadcast, whereas the bulk path here fires close-lease async
+ * (`cosmosTx(..., false)`) so "stop all" doesn't serialize N confirmations.
+ * Keep on cosmosTx until core exposes rawLog + async broadcast.
  */
 export async function executeStopApp(
   args: Record<string, unknown>,
