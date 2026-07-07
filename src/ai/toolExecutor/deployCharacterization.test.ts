@@ -96,6 +96,7 @@ vi.mock('../../api/leaseByCustomDomain', () => ({
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady } from '../../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-core';
+import { getLease } from '../../api/billing';
 
 const ADDRESS = 'manifest1abc';
 const CLIENT_MANAGER = {} as CosmosClientManager;
@@ -290,5 +291,43 @@ describe('C0 characterization — failure paths', () => {
     expect(result.error).toBe('insufficient funds');
     expect(registry.addApp).not.toHaveBeenCalled();
     expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'failed' }));
+  });
+});
+
+describe('C0 characterization — fallbackToChainState core (delta D-B frozen half)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('poll throws but chain ACTIVE → still reports ready/running (must NOT report failed)', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as never);
+    vi.mocked(waitForLeaseReady).mockRejectedValue(new Error('poll network flake'));
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as never);
+
+    const onProgress = vi.fn();
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      CONFIRMED_ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry, onProgress }), makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as { status: string }).status).toBe('running');
+    expect(registry.updateApp).toHaveBeenCalledWith(
+      ADDRESS, 'new-lease-uuid', expect.objectContaining({ status: 'running' }),
+    );
+    expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'ready' }));
+  });
+
+  it('poll inconclusive + chain PENDING → deploying (still-in-flight pin)', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as never);
+    vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as never);
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as never);
+
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      CONFIRMED_ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry }), makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as { status: string }).status).toBe('deploying');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'new-lease-uuid', { status: 'deploying' });
   });
 });
