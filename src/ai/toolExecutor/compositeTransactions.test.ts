@@ -2547,7 +2547,7 @@ describe('executeConfirmedBatchDeploy', () => {
 
     it('lands a fatal in-deploy domain failure in failed[] (no non-fatal summary)', async () => {
       // deployManifest owns the attach; a rejection there is terminal — the entry
-      // must land in failed[], never deployed[] with a customDomainError line.
+      // must land in failed[], never deployed[] as a non-fatal annotation.
       vi.mocked(deployManifest).mockRejectedValue(new Error('set-domain rejected'));
       const entries = [
         { app_name: 'rej', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'rej.example.com' },
