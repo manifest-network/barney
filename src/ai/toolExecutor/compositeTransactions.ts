@@ -10,6 +10,8 @@ import {
   cosmosTx,
   noopLogger,
   setItemCustomDomain as monoSetItemCustomDomain,
+  ManifestMCPError,
+  ManifestMCPErrorCode,
 } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
@@ -41,7 +43,7 @@ import { getReadClient } from '../../api/readClient';
 import { providerFetch } from '../../api/providerFetchAdapter';
 // ADR-036 D3: FredAuthCtx is not on the manifest-sdk facade yet (mono follow-up
 // filed); import direct from -fred, our existing direct dep.
-import type { FredAuthCtx } from '@manifest-network/manifest-mcp-fred';
+import { TerminalChainStateError, type FredAuthCtx } from '@manifest-network/manifest-mcp-fred';
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([
@@ -1500,6 +1502,78 @@ export async function classifyLeaseChainState(leaseUuid: string): Promise<ChainD
     logError('compositeTransactions.classifyLeaseChainState', error);
     return 'failed';
   }
+}
+
+interface DeployErrorContext {
+  name: string;
+  /** From the caller's captured onLeaseCreated value. undefined ⇒ case 1 (no lease). */
+  leaseUuid?: string;
+  providerUrl?: string;
+  address: string;
+  signing: SigningContext;
+  appRegistry: NonNullable<ToolExecutorOptions['appRegistry']>;
+  onProgress?: ToolExecutorOptions['onProgress'];
+  /** Set when a fatal set-domain failure raised this — still runs the case-2 chain-check. */
+  failedStep?: 'set_domain';
+}
+
+/**
+ * Classify a deployManifest throw into barney's registry/progress/ToolResult.
+ * Case 1 (raw Error, no lease): surface raw error, no fetchFailureLogs.
+ * Case 2 (ManifestMCPError, ambiguous): getLease chain-check → running/deploying/failed.
+ * Case 3 (TerminalChainStateError): straight failed, no chain-check.
+ */
+export async function handleDeployManifestError(
+  error: unknown,
+  ctx: DeployErrorContext,
+): Promise<ToolResult> {
+  const { name, leaseUuid, providerUrl, address, signing, appRegistry, onProgress } = ctx;
+
+  // Case 3: chain-terminal — definitively failed, no chain re-check.
+  if (error instanceof TerminalChainStateError) {
+    if (leaseUuid) appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    onProgress?.({ phase: 'failed', detail: error.message });
+    return { success: false, error: `Deployment failed: ${error.message}` };
+  }
+
+  // Case 2: ambiguous post-lease throw — chain is the source of truth.
+  if (error instanceof ManifestMCPError && leaseUuid) {
+    const verdict = await classifyLeaseChainState(leaseUuid);
+    if (verdict === 'running') {
+      appRegistry.updateApp(address, leaseUuid, { status: 'running' });
+      onProgress?.({ phase: 'ready', detail: 'App is live!' });
+      return { success: true, data: { message: `App "${name}" is live!`, name, status: 'running' } };
+    }
+    if (verdict === 'deploying') {
+      appRegistry.updateApp(address, leaseUuid, { status: 'deploying' });
+      return {
+        success: true,
+        data: {
+          message: `App "${name}" is still deploying. Use app_status("${name}") to check progress.`,
+          name,
+          status: 'deploying',
+        },
+      };
+    }
+    // verdict === 'failed'
+    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    onProgress?.({ phase: 'failed', detail: error.message });
+    const skipLogs = error.code === ManifestMCPErrorCode.OPERATION_CANCELLED;
+    const diagnostics = skipLogs || !providerUrl
+      ? null
+      : await fetchFailureLogs(providerUrl, leaseUuid, address, signing);
+    // barney copy — NOT the SDK's "…close_lease" text (barney has no close_lease tool).
+    const errorMsg = diagnostics
+      ? `Deployment failed: ${error.message}\n\n${diagnostics}`
+      : `Deployment failed: ${error.message}`;
+    return { success: false, error: errorMsg };
+  }
+
+  // Case 1: raw Error (or ManifestMCPError with no lease) — create-lease rejected,
+  // no lease exists. Surface the raw error; no failure-log fetch.
+  const message = error instanceof Error ? error.message : 'Deployment failed';
+  onProgress?.({ phase: 'failed', detail: message });
+  return { success: false, error: message };
 }
 
 // ============================================================================

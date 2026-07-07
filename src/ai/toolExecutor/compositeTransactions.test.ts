@@ -22,6 +22,7 @@ import {
   executeConfirmedUpdateApp,
   buildFredAuthCtx,
   classifyLeaseChainState,
+  handleDeployManifestError,
   type BatchDeployEntry,
 } from './compositeTransactions';
 import type { ToolExecutorOptions, PayloadAttachment } from './types';
@@ -74,6 +75,16 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   setItemCustomDomain: vi.fn(),
 }));
 
+// B4: spread importOriginal so manifest.ts's buildManifest/mergeManifest/metaHashHex
+// re-exports survive — a full-replace mock would nuke them and break existing tests.
+vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => ({
+  ...(await importOriginal()),
+  deployManifest: vi.fn(),
+  TerminalChainStateError: class TerminalChainStateError extends Error {
+    constructor(m: string) { super(m); this.name = 'TerminalChainStateError'; }
+  },
+}));
+
 vi.mock('../../utils/errors', async (orig) => {
   const actual = await orig<typeof import('../../utils/errors')>();
   return {
@@ -111,7 +122,8 @@ import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
-import { cosmosTx, setItemCustomDomain } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx, setItemCustomDomain, ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-mcp-core';
+import { TerminalChainStateError } from '@manifest-network/manifest-mcp-fred';
 import { uploadPayloadToProvider } from './utils';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
@@ -4246,5 +4258,87 @@ describe('classifyLeaseChainState', () => {
   it('getLease throw → failed, never throws', async () => {
     vi.mocked(getLease).mockRejectedValue(new Error('rpc down'));
     expect(await classifyLeaseChainState('u')).toBe('failed');
+  });
+});
+
+describe('handleDeployManifestError', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function ctx(overrides: Record<string, unknown> = {}) {
+    return {
+      name: 'test-app',
+      leaseUuid: 'lease-1',
+      providerUrl: 'https://fred.example.com',
+      address: ADDRESS,
+      signing: makeOptions().signing!,
+      appRegistry: makeRegistry([{ name: 'test-app', leaseUuid: 'lease-1', size: 'small', providerUuid: 'p1', providerUrl: 'x', createdAt: 0, status: 'deploying' } as AppEntry]),
+      onProgress: vi.fn(),
+      ...overrides,
+    } as any;
+  }
+
+  it('case 1: raw Error (no lease) surfaces the raw message, no failure-log fetch', async () => {
+    const c = ctx({ leaseUuid: undefined, providerUrl: undefined });
+    const result = await handleDeployManifestError(new Error('insufficient funds'), c);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('insufficient funds');
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(getLeaseLogs).not.toHaveBeenCalled();
+    expect(c.onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'failed' }));
+  });
+
+  it('case 3: TerminalChainStateError → updateApp(failed), no chain-check', async () => {
+    const c = ctx();
+    // Real TerminalChainStateError ctor is (leaseUuid, chainState, ctx?); the mock's
+    // 1-arg ctor uses only the first arg as the message. Second arg satisfies the type.
+    const result = await handleDeployManifestError(new TerminalChainStateError('lease rejected', 'rejected'), c);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('lease rejected');
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'failed' });
+    expect(getLease).not.toHaveBeenCalled();
+  });
+
+  it('case 2 running: chain ACTIVE → running + ready progress (not failed)', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
+    const c = ctx();
+    const result = await handleDeployManifestError(
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true }), c);
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('running');
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'running' });
+    expect(c.onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+  });
+
+  it('case 2 deploying: chain PENDING → non-failed still-provisioning result', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as any);
+    const c = ctx();
+    const result = await handleDeployManifestError(
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true }), c);
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('deploying');
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'deploying' });
+  });
+
+  it('case 2 failed: chain terminal → failed + fetchFailureLogs + barney copy', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_CLOSED } as any);
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 2, last_error: 'OOMKilled' } as any);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ lease_uuid: 'lease-1', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
+    const c = ctx();
+    const result = await handleDeployManifestError(
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true }), c);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Deployment failed: provision failed');
+    expect(result.error).toContain('OOMKilled');
+    expect(result.error).not.toContain('close_lease');
+  });
+
+  it('case 2 failed: OPERATION_CANCELLED skips fetchFailureLogs', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_CLOSED } as any);
+    const c = ctx();
+    const result = await handleDeployManifestError(
+      new ManifestMCPError(ManifestMCPErrorCode.OPERATION_CANCELLED, 'aborted', { partial: true }), c);
+    expect(result.success).toBe(false);
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(getLeaseLogs).not.toHaveBeenCalled();
   });
 });
