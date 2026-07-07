@@ -209,3 +209,47 @@ describe('C0 characterization — registry writes', () => {
     );
   });
 });
+
+describe('C0 characterization — connection/URL shaping', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  async function deployWithConnection(connection: unknown): Promise<{ url?: string; status?: string }> {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as never);
+    vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1', connection,
+    } as never);
+    const result = await executeConfirmedDeployApp(CONFIRMED_ARGS, CLIENT_MANAGER, makeOptions(), makePayload());
+    return result.data as { url?: string; status?: string };
+  }
+
+  it('shapes URL from top-level ports (IP:port)', async () => {
+    const data = await deployWithConnection({ host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } });
+    expect(data.url).toBe('127.0.0.1:32456');
+  });
+
+  it('promotes stack primary-service FQDN to https:// (no port)', async () => {
+    const data = await deployWithConnection({
+      host: '64.29.115.29',
+      services: {
+        db: { instances: [{ ports: { '3306/tcp': { host_ip: '0.0.0.0', host_port: 32100 } } }] },
+        wordpress: {
+          fqdn: 'wp-abc123.barney8.manifest0.net',
+          instances: [{ ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32769 } } }],
+        },
+      },
+    });
+    expect(data.url).toBe('https://wp-abc123.barney8.manifest0.net');
+  });
+
+  it('falls back to fred-status endpoints when getLeaseConnectionInfo throws', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as never);
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      endpoints: { '80/tcp': 'http://1.2.3.4:32456' },
+    });
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('connection endpoint failed'));
+    const result = await executeConfirmedDeployApp(CONFIRMED_ARGS, CLIENT_MANAGER, makeOptions(), makePayload());
+    expect((result.data as { url?: string }).url).toBe('1.2.3.4:32456');
+  });
+});
