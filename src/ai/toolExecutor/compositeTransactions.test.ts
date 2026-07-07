@@ -21,6 +21,7 @@ import {
   executeUpdateApp,
   executeConfirmedUpdateApp,
   buildFredAuthCtx,
+  classifyLeaseChainState,
   type BatchDeployEntry,
 } from './compositeTransactions';
 import type { ToolExecutorOptions, PayloadAttachment } from './types';
@@ -4214,5 +4215,36 @@ describe('buildFredAuthCtx', () => {
     expect(ctx.providerAuth).toBe(providerAuth);
     expect(typeof ctx.fetch).toBe('function');
     expect(ctx.logger).toBeDefined();
+  });
+});
+
+describe('classifyLeaseChainState', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('ACTIVE → running', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
+    expect(await classifyLeaseChainState('u')).toBe('running');
+  });
+
+  it('CLOSED/REJECTED/EXPIRED → failed', async () => {
+    for (const s of [LeaseState.LEASE_STATE_CLOSED, LeaseState.LEASE_STATE_REJECTED, LeaseState.LEASE_STATE_EXPIRED]) {
+      vi.mocked(getLease).mockResolvedValue({ state: s } as any);
+      expect(await classifyLeaseChainState('u')).toBe('failed');
+    }
+  });
+
+  it('PENDING / unspecified → deploying', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as any);
+    expect(await classifyLeaseChainState('u')).toBe('deploying');
+  });
+
+  it('null lease (unavailable) → failed (trim correctness fix)', async () => {
+    vi.mocked(getLease).mockResolvedValue(null as any);
+    expect(await classifyLeaseChainState('u')).toBe('failed');
+  });
+
+  it('getLease throw → failed, never throws', async () => {
+    vi.mocked(getLease).mockRejectedValue(new Error('rpc down'));
+    expect(await classifyLeaseChainState('u')).toBe('failed');
   });
 });

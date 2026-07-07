@@ -1475,6 +1475,33 @@ async function fallbackToChainState(
   };
 }
 
+/** Chain-truth verdict for an ambiguous post-lease deployManifest throw (§3.7 case-2). */
+type ChainDeployVerdict = 'running' | 'deploying' | 'failed';
+
+/**
+ * Slim getLease chain-check. ACTIVE → running; a non-terminal in-flight state
+ * (PENDING / unspecified) → deploying; a terminal state (CLOSED/REJECTED/EXPIRED)
+ * OR getLease unavailable (null or throw) → failed. Never throws.
+ */
+export async function classifyLeaseChainState(leaseUuid: string): Promise<ChainDeployVerdict> {
+  try {
+    const lease = await getLease(leaseUuid);
+    if (!lease) return 'failed';
+    if (lease.state === LeaseState.LEASE_STATE_ACTIVE) return 'running';
+    if (
+      lease.state === LeaseState.LEASE_STATE_CLOSED ||
+      lease.state === LeaseState.LEASE_STATE_REJECTED ||
+      lease.state === LeaseState.LEASE_STATE_EXPIRED
+    ) {
+      return 'failed';
+    }
+    return 'deploying';
+  } catch (error) {
+    logError('compositeTransactions.classifyLeaseChainState', error);
+    return 'failed';
+  }
+}
+
 // ============================================================================
 // deploy_app — single-app core helper (shared by single & batch paths)
 // ============================================================================
