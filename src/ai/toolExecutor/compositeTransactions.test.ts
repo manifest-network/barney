@@ -2555,6 +2555,38 @@ describe('executeConfirmedBatchDeploy', () => {
       expect('customDomain' in spec).toBe(false);
       expect('serviceName' in spec).toBe(false);
     });
+
+    it('caches customDomains in the registry after a successful domain deploy', async () => {
+      vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+        await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+        return makeDeployResult();
+      });
+      const reg = makeRegistry();
+      const updateSpy = vi.spyOn(reg, 'updateApp');
+      const entries = [
+        { app_name: 'cached', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'cached.example.com' },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ appRegistry: reg }));
+
+      const domainWrite = updateSpy.mock.calls.find((c) => Array.isArray((c[2] as any).customDomains));
+      expect(domainWrite).toBeDefined();
+      expect((domainWrite![2] as any).customDomains).toEqual([
+        { serviceName: '', customDomain: 'cached.example.com' },
+      ]);
+    });
+
+    it('lands a fatal in-deploy domain failure in failed[] (no non-fatal summary)', async () => {
+      // deployManifest owns the attach; a rejection there is terminal — the entry
+      // must land in failed[], never deployed[] with a customDomainError line.
+      vi.mocked(deployManifest).mockRejectedValue(new Error('set-domain rejected'));
+      const entries = [
+        { app_name: 'rej', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'rej.example.com' },
+      ];
+      const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+
+      expect(result.success).toBe(false); // all entries failed
+      expect(result.error).toContain('rej');
+    });
   });
 });
 

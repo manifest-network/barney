@@ -1750,6 +1750,22 @@ export async function executeConfirmedBatchDeploy(
         url: connectionUrl,
         connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
       });
+
+      // deployManifest attaches the domain on-chain but doesn't touch barney's
+      // registry. Mirror the single-deploy path: cache the attached domain so the
+      // DNS-polling driver + sidebar dot see it without an app_status round-trip.
+      if (customDomainArg !== '') {
+        try {
+          const prior = appRegistry.getAppByLease(address, result.lease_uuid)?.customDomains ?? [];
+          const others = prior.filter((d) => d.serviceName !== customDomainServiceName);
+          appRegistry.updateApp(address, result.lease_uuid, {
+            customDomains: [...others, { serviceName: customDomainServiceName, customDomain: customDomainArg }],
+          });
+        } catch (error) {
+          logError('compositeTransactions.executeConfirmedBatchDeploy.cacheCustomDomain', error);
+        }
+      }
+
       updateProgress('ready', 'App is live!');
       return { name, url: connectionUrl };
     },
