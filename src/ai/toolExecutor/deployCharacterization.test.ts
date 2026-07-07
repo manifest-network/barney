@@ -253,3 +253,42 @@ describe('C0 characterization — connection/URL shaping', () => {
     expect((result.data as { url?: string }).url).toBe('1.2.3.4:32456');
   });
 });
+
+describe('C0 characterization — failure paths', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('provision-fail: failed progress, updateApp(failed), "Deployment failed:" error', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as never);
+    vi.mocked(waitForLeaseReady).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      provision_status: 'failed',
+      last_error: 'container crashed',
+    } as never);
+    const onProgress = vi.fn();
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      CONFIRMED_ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry, onProgress }), makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    // SENTINEL — expected current value: 'Deployment failed: container crashed'
+    expect(result.error).toBe('Deployment failed: container crashed');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'new-lease-uuid', { status: 'failed' });
+    const phases = onProgress.mock.calls.map((c) => (c[0] as { phase: string }).phase);
+    expect(phases).toEqual(['creating_lease', 'uploading', 'provisioning', 'failed']);
+  });
+
+  it('create-lease reject: raw error surfaced, NO addApp (no lease exists)', async () => {
+    vi.mocked(cosmosTx).mockResolvedValue({ code: 1, rawLog: 'insufficient funds' } as never);
+    const onProgress = vi.fn();
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(
+      CONFIRMED_ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry, onProgress }), makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('insufficient funds');
+    expect(registry.addApp).not.toHaveBeenCalled();
+    expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'failed' }));
+  });
+});
