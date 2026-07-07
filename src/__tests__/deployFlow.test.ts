@@ -56,6 +56,14 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   cosmosQuery: vi.fn(),
 }));
 
+// C2 (ENG-279): the confirmed deploy path now delegates the create-lease →
+// upload → poll spine to deployManifest. Spread the original so manifest.ts's
+// buildManifest/mergeManifest re-exports survive.
+vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => ({
+  ...(await importOriginal()),
+  deployManifest: vi.fn(),
+}));
+
 vi.mock('../api/readClient', () => ({ getReadClient: vi.fn() }));
 
 const mockGetBalance = vi.fn();
@@ -75,6 +83,7 @@ import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
 import { waitForLeaseReady } from '../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-core';
+import { deployManifest } from '@manifest-network/manifest-mcp-fred';
 import { getReadClient } from '../api/readClient';
 import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from '../ai/toolExecutor/utils';
 
@@ -177,7 +186,29 @@ describe('Deploy Flow Integration', () => {
     expect(deployResult.requiresConfirmation).toBe(true);
     expect(deployResult.confirmationMessage).toContain('my-app');
 
-    // Step 2: Confirm deploy
+    // Step 2: Confirm deploy — C2: the spine is deployManifest. buildFredAuthCtx
+    // needs the read client's query; deployManifest fires onLeaseCreated (registry
+    // addApp + uploading) + a provisioning tick, then resolves with the connection
+    // used for URL shaping.
+    vi.mocked(getReadClient).mockResolvedValue(
+      { query: {} } as unknown as Awaited<ReturnType<typeof getReadClient>>,
+    );
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
+      await opts?.onLeaseCreated?.(LEASE_UUID, 'https://fred.example.com');
+      opts?.pollOptions?.onProgress?.({ state: LeaseState.LEASE_STATE_ACTIVE, phase: 'provisioning' } as never);
+      return {
+        lease_uuid: LEASE_UUID,
+        provider_uuid: PROVIDER_UUID,
+        provider_url: 'https://fred.example.com',
+        state: LeaseState.LEASE_STATE_ACTIVE,
+        connection: {
+          host: 'https://my-app.example.com',
+          ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 12345 } },
+        },
+      } as never;
+    });
+    // Retained old-spine mocks (still used by the stop step below and harmless
+    // for deploy now that deployManifest owns the spine).
     vi.mocked(cosmosTx).mockResolvedValue({
       module: 'billing', subcommand: 'create-lease', height: '100',
       code: 0, transactionHash: 'tx-hash-1', rawLog: '', events: [],

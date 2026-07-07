@@ -77,6 +77,19 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   cosmosTx: vi.fn(),
   setItemCustomDomain: vi.fn(),
 }));
+// C2 re-point: the confirmed single-deploy path now drives deployManifest +
+// getReadClient. Spread the original so manifest.ts's buildManifest/mergeManifest/
+// metaHashHex re-exports survive.
+vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => ({
+  ...(await importOriginal()),
+  deployManifest: vi.fn(),
+  TerminalChainStateError: class TerminalChainStateError extends Error {
+    constructor(m: string) { super(m); this.name = 'TerminalChainStateError'; }
+  },
+}));
+vi.mock('../../api/readClient', () => ({
+  getReadClient: vi.fn().mockResolvedValue({ query: {} }),
+}));
 vi.mock('../../utils/errors', async (orig) => {
   const actual = await orig<typeof import('../../utils/errors')>();
   return { ...actual, logError: vi.fn() };
@@ -96,7 +109,8 @@ vi.mock('../../api/leaseByCustomDomain', () => ({
 
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady } from '../../api/fred';
-import { cosmosTx } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx, ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-mcp-core';
+import { deployManifest } from '@manifest-network/manifest-mcp-fred';
 import { getLease } from '../../api/billing';
 
 const ADDRESS = 'manifest1abc';
@@ -138,6 +152,8 @@ const CONFIRMED_ARGS = {
 
 /** Happy path: lease created, uploaded, polled ACTIVE, instance-port URL. */
 function mockHappyPath() {
+  // RETAINED old-spine mocks — the still-legacy batch path (executeConfirmedBatchDeploy)
+  // calls mockHappyPath too, until C3 re-points it.
   vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as never);
   vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
   vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -149,6 +165,19 @@ function mockHappyPath() {
       instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }],
     },
   } as never);
+  // C2: the single-deploy path now drives deployManifest — fire onLeaseCreated
+  // (registry addApp + uploading phase), one provisioning tick, then resolve.
+  vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
+    await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+    opts?.pollOptions?.onProgress?.({ state: LeaseState.LEASE_STATE_ACTIVE, phase: 'provisioning' } as never);
+    return {
+      lease_uuid: 'new-lease-uuid',
+      provider_uuid: 'p1',
+      provider_url: 'https://fred.example.com',
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      connection: { host: '127.0.0.1', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    } as never;
+  });
 }
 
 describe('C0 characterization — executeConfirmedDeployApp happy path', () => {
@@ -217,11 +246,15 @@ describe('C0 characterization — connection/URL shaping', () => {
   beforeEach(() => vi.clearAllMocks());
 
   async function deployWithConnection(connection: unknown): Promise<{ url?: string; status?: string }> {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as never);
-    vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1', connection,
-    } as never);
+    // C2 re-point: URL shaping now runs off DeployResult.connection returned by
+    // deployManifest (deriveUrlFromConnection), no getLeaseConnectionInfo round-trip.
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
+      await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return {
+        lease_uuid: 'new-lease-uuid', provider_uuid: 'p1', provider_url: 'https://fred.example.com',
+        state: LeaseState.LEASE_STATE_ACTIVE, connection,
+      } as never;
+    });
     const result = await executeConfirmedDeployApp(CONFIRMED_ARGS, CLIENT_MANAGER, makeOptions(), makePayload());
     return result.data as { url?: string; status?: string };
   }
@@ -245,13 +278,22 @@ describe('C0 characterization — connection/URL shaping', () => {
     expect(data.url).toBe('https://wp-abc123.barney8.manifest0.net');
   });
 
-  it('falls back to fred-status endpoints when getLeaseConnectionInfo throws', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as never);
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-      endpoints: { '80/tcp': 'http://1.2.3.4:32456' },
+  it('falls back to resolveAppUrl (getLeaseConnectionInfo) when DeployResult.connection is absent', async () => {
+    // C2 re-point: when deployManifest returns no connection (degraded), the
+    // executor falls back to resolveAppUrl → getLeaseConnectionInfo. Pinned URL
+    // '1.2.3.4:32456' preserved; the fred-status-endpoints seam is gone (D-C:
+    // deployManifest is poll-only and owns connection resolution).
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
+      await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return {
+        lease_uuid: 'new-lease-uuid', provider_uuid: 'p1', provider_url: 'https://fred.example.com',
+        state: LeaseState.LEASE_STATE_ACTIVE, connectionError: 'no connection in result',
+      } as never;
     });
-    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('connection endpoint failed'));
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '1.2.3.4', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    } as never);
     const result = await executeConfirmedDeployApp(CONFIRMED_ARGS, CLIENT_MANAGER, makeOptions(), makePayload());
     expect((result.data as { url?: string }).url).toBe('1.2.3.4:32456');
   });
@@ -261,12 +303,15 @@ describe('C0 characterization — failure paths', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('provision-fail: failed progress, updateApp(failed), "Deployment failed:" error', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as never);
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-      provision_status: 'failed',
-      last_error: 'container crashed',
-    } as never);
+    // C2 re-point: a provision failure now surfaces as a deployManifest throw
+    // (ManifestMCPError) after onLeaseCreated + one provisioning tick; the
+    // chain-truth check (getLease terminal) resolves it to failed.
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
+      await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      opts?.pollOptions?.onProgress?.({ state: LeaseState.LEASE_STATE_ACTIVE, phase: 'provisioning' } as never);
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'container crashed');
+    });
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_CLOSED } as never);
     const onProgress = vi.fn();
     const registry = makeRegistry();
     const result = await executeConfirmedDeployApp(
@@ -282,7 +327,9 @@ describe('C0 characterization — failure paths', () => {
   });
 
   it('create-lease reject: raw error surfaced, NO addApp (no lease exists)', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 1, rawLog: 'insufficient funds' } as never);
+    // C2 re-point: create-lease reject = deployManifest throwing a raw Error
+    // BEFORE onLeaseCreated fires (no lease, case 1 in handleDeployManifestError).
+    vi.mocked(deployManifest).mockRejectedValue(new Error('insufficient funds'));
     const onProgress = vi.fn();
     const registry = makeRegistry();
     const result = await executeConfirmedDeployApp(
@@ -300,8 +347,13 @@ describe('C0 characterization — fallbackToChainState core (delta D-B frozen ha
   beforeEach(() => vi.clearAllMocks());
 
   it('poll throws but chain ACTIVE → still reports ready/running (must NOT report failed)', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as never);
-    vi.mocked(waitForLeaseReady).mockRejectedValue(new Error('poll network flake'));
+    // C2 re-point: the AMBIGUOUS post-lease poll throw = deployManifest rejecting
+    // with a ManifestMCPError after onLeaseCreated; classifyLeaseChainState reads
+    // getLease (ACTIVE) as the source of truth → running.
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
+      await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll network flake');
+    });
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as never);
 
     const onProgress = vi.fn();
@@ -319,8 +371,13 @@ describe('C0 characterization — fallbackToChainState core (delta D-B frozen ha
   });
 
   it('poll inconclusive + chain PENDING → deploying (still-in-flight pin)', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as never);
-    vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as never);
+    // C2 re-point: an inconclusive poll = deployManifest rejecting with a
+    // ManifestMCPError after onLeaseCreated; getLease PENDING (still in flight)
+    // → classifyLeaseChainState 'deploying'.
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
+      await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll inconclusive');
+    });
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as never);
 
     const registry = makeRegistry();
