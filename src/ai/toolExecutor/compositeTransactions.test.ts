@@ -4,7 +4,6 @@ import {
   deriveAppName,
   extractUrlFromFredStatus,
   extractServiceNamesFromPayload,
-  formatLeaseItems,
   parseAndValidateStackServices,
   executeDeployApp,
   executeConfirmedDeployApp,
@@ -643,35 +642,6 @@ describe('deriveUrlFromConnection', () => {
 
   it('returns undefined when nothing shapeable', () => {
     expect(deriveUrlFromConnection({ host: '' } as any)).toBeUndefined();
-  });
-});
-
-describe('formatLeaseItems', () => {
-  it('returns single item without service names', () => {
-    expect(formatLeaseItems('sku-123')).toEqual(['sku-123:1']);
-  });
-
-  it('returns single item for empty array', () => {
-    expect(formatLeaseItems('sku-123', [])).toEqual(['sku-123:1']);
-  });
-
-  it('returns items with service name suffixes', () => {
-    expect(formatLeaseItems('sku-123', ['web', 'db'])).toEqual([
-      'sku-123:1:web',
-      'sku-123:1:db',
-    ]);
-  });
-
-  it('handles single service name', () => {
-    expect(formatLeaseItems('sku-123', ['web'])).toEqual(['sku-123:1:web']);
-  });
-
-  it('throws on non-string service name', () => {
-    expect(() => formatLeaseItems('sku-123', [123 as unknown as string])).toThrow('Invalid service name');
-  });
-
-  it('throws on empty string service name', () => {
-    expect(() => formatLeaseItems('sku-123', [''])).toThrow('Invalid service name');
   });
 });
 
