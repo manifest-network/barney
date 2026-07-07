@@ -108,8 +108,7 @@ vi.mock('../../api/leaseByCustomDomain', () => ({
 }));
 
 import { getLeaseConnectionInfo } from '../../api/provider-api';
-import { waitForLeaseReady } from '../../api/fred';
-import { cosmosTx, ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-mcp-core';
+import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-mcp-core';
 import { deployManifest } from '@manifest-network/manifest-mcp-fred';
 import { getLease } from '../../api/billing';
 
@@ -152,21 +151,9 @@ const CONFIRMED_ARGS = {
 
 /** Happy path: lease created, uploaded, polled ACTIVE, instance-port URL. */
 function mockHappyPath() {
-  // RETAINED old-spine mocks — the still-legacy batch path (executeConfirmedBatchDeploy)
-  // calls mockHappyPath too, until C3 re-points it.
-  vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as never);
-  vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
-  vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-    lease_uuid: 'new-lease-uuid',
-    tenant: ADDRESS,
-    provider_uuid: 'p1',
-    connection: {
-      host: '127.0.0.1',
-      instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }],
-    },
-  } as never);
-  // C2: the single-deploy path now drives deployManifest — fire onLeaseCreated
-  // (registry addApp + uploading phase), one provisioning tick, then resolve.
+  // C2/C3: both the single-deploy and batch paths now drive deployManifest —
+  // fire onLeaseCreated (registry addApp + uploading phase), one provisioning
+  // tick, then resolve with the pinned instance-port connection.
   vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
     await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
     opts?.pollOptions?.onProgress?.({ state: LeaseState.LEASE_STATE_ACTIVE, phase: 'provisioning' } as never);
@@ -426,14 +413,18 @@ describe('C0 characterization — executeConfirmedBatchDeploy', () => {
   });
 
   it('partial failure: one create-lease reject lands in failed[], other in deployed[]', async () => {
-    vi.mocked(cosmosTx)
-      .mockResolvedValueOnce({ code: 0, transactionHash: 'h1', rawLog: '' } as never)
-      .mockResolvedValueOnce({ code: 1, rawLog: 'insufficient funds' } as never);
-    vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
-      connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
-    } as never);
+    // C3 re-point: the batch path now delegates to deployManifest — a raw create-lease
+    // rejection is deployManifest throwing before onLeaseCreated fires (case 1).
+    vi.mocked(deployManifest)
+      .mockImplementationOnce(async (_c, _s, opts) => {
+        await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+        return {
+          lease_uuid: 'new-lease-uuid', provider_uuid: 'p1', provider_url: 'https://fred.example.com',
+          state: LeaseState.LEASE_STATE_ACTIVE,
+          connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+        } as never;
+      })
+      .mockRejectedValueOnce(new Error('insufficient funds'));
 
     const result = await executeConfirmedBatchDeploy(
       { entries: [batchEntry('game1'), batchEntry('game2')] },
