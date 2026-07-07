@@ -92,12 +92,6 @@ vi.mock('../../utils/errors', async (orig) => {
   };
 });
 
-vi.mock('./utils', () => ({
-  extractLeaseUuidFromTxResult: vi.fn().mockReturnValue('new-lease-uuid'),
-  uploadPayloadToProvider: vi.fn().mockResolvedValue({ success: true, data: { message: 'ok' } }),
-  computePayloadHash: vi.fn(),
-}));
-
 vi.mock('../../registry/appRegistry', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../registry/appRegistry')>();
   return {
@@ -123,7 +117,6 @@ import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
 import { cosmosTx, setItemCustomDomain, ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-mcp-core';
 import { TerminalChainStateError, deployManifest } from '@manifest-network/manifest-mcp-fred';
-import { uploadPayloadToProvider } from './utils';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
 const ADDRESS = 'manifest1abc';
@@ -1837,7 +1830,6 @@ describe('executeConfirmedDeployApp', () => {
     // does NOT consume DeployResult.url
     expect(deployManifest).toHaveBeenCalledTimes(1);
     expect(cosmosTx).not.toHaveBeenCalled();
-    expect(uploadPayloadToProvider).not.toHaveBeenCalled();
     expect(waitForLeaseReady).not.toHaveBeenCalled();
     expect(setItemCustomDomain).not.toHaveBeenCalled();
     // registry addApp(deploying) fired in onLeaseCreated, then updateApp(running)

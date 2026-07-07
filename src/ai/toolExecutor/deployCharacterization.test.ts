@@ -94,11 +94,6 @@ vi.mock('../../utils/errors', async (orig) => {
   const actual = await orig<typeof import('../../utils/errors')>();
   return { ...actual, logError: vi.fn() };
 });
-vi.mock('./utils', () => ({
-  extractLeaseUuidFromTxResult: vi.fn().mockReturnValue('new-lease-uuid'),
-  uploadPayloadToProvider: vi.fn().mockResolvedValue({ success: true, data: { message: 'ok' } }),
-  computePayloadHash: vi.fn(),
-}));
 vi.mock('../../registry/appRegistry', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../registry/appRegistry')>();
   return { ...actual, validateAppName: vi.fn().mockReturnValue(null) };

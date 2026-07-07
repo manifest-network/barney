@@ -877,7 +877,8 @@ export async function executeDeployApp(
     args._generatedManifest = json;
   }
 
-  // Extract service names from file-uploaded stack manifests (JSON or YAML)
+  // Extract service names from the file-uploaded stack manifest (JSON only —
+  // non-JSON content was already rejected above).
   if (!args._serviceNames) {
     const names = extractServiceNamesFromPayload(payload.bytes);
     if (names.length > 0) {
@@ -1341,8 +1342,6 @@ interface DeployErrorContext {
   signing: SigningContext;
   appRegistry: NonNullable<ToolExecutorOptions['appRegistry']>;
   onProgress?: ToolExecutorOptions['onProgress'];
-  /** Set when a fatal set-domain failure raised this — still runs the case-2 chain-check. */
-  failedStep?: 'set_domain';
 }
 
 /**
@@ -1504,7 +1503,8 @@ export async function executeBatchDeploy(
 
     usedNames.add(name);
 
-    // Extract service names from stack manifests (JSON or YAML)
+    // Extract service names from the stack manifest payload (JSON only —
+    // batch entries are always JSON-serialized in-memory, never file uploads).
     const extractedNames = extractServiceNamesFromPayload(entry.payload.bytes);
     const serviceNames = extractedNames.length > 0 ? extractedNames : undefined;
 

@@ -72,12 +72,6 @@ vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
-vi.mock('../ai/toolExecutor/utils', () => ({
-  extractLeaseUuidFromTxResult: vi.fn(),
-  uploadPayloadToProvider: vi.fn(),
-  computePayloadHash: vi.fn(),
-}));
-
 import { getLeasesByTenant, getCreditEstimate, getLease } from '../api/billing';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
@@ -85,7 +79,6 @@ import { waitForLeaseReady } from '../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-core';
 import { deployManifest } from '@manifest-network/manifest-mcp-fred';
 import { getReadClient } from '../api/readClient';
-import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from '../ai/toolExecutor/utils';
 
 const ADDRESS = 'manifest1testaddr';
 const MOCK_QUERY_CLIENT = {} as Awaited<ReturnType<CosmosClientManager['getQueryClient']>>;
@@ -207,14 +200,12 @@ describe('Deploy Flow Integration', () => {
         },
       } as never;
     });
-    // Retained old-spine mocks (still used by the stop step below and harmless
-    // for deploy now that deployManifest owns the spine).
+    // Retained old-spine mock — still used by the stop step below, harmless
+    // for deploy now that deployManifest owns the spine.
     vi.mocked(cosmosTx).mockResolvedValue({
       module: 'billing', subcommand: 'create-lease', height: '100',
       code: 0, transactionHash: 'tx-hash-1', rawLog: '', events: [],
     } as Awaited<ReturnType<typeof cosmosTx>>);
-    vi.mocked(extractLeaseUuidFromTxResult).mockReturnValue(LEASE_UUID);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'uploaded' } });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
