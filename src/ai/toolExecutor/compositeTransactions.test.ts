@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
+import { formatConnectionUrl, extractPrimaryServicePorts, deriveUrlFromConnection } from './helpers';
 import {
   deriveAppName,
   extractUrlFromFredStatus,
@@ -578,6 +578,40 @@ describe('stack FQDN promotion — standalone service', () => {
 
     const withPorts = { ...connection, ports: primary!.ports, fqdn };
     expect(formatConnectionUrl(connection.host, withPorts)).toBe('pg-abc123.barney8.manifest0.net:31234');
+  });
+});
+
+describe('deriveUrlFromConnection', () => {
+  it('shapes a top-level-port URL', () => {
+    const out = deriveUrlFromConnection({
+      host: '127.0.0.1',
+      ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+    });
+    expect(out?.url).toBe('127.0.0.1:32456');
+  });
+
+  it('promotes instances[0].ports when top-level absent', () => {
+    const out = deriveUrlFromConnection({
+      host: '127.0.0.1',
+      instances: [{ instance_index: 0, container_id: 'c', image: 'i', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32000 } } }],
+    } as any);
+    expect(out?.url).toBe('127.0.0.1:32000');
+  });
+
+  it('promotes a stack primary service port + fqdn', () => {
+    const out = deriveUrlFromConnection({
+      host: 'provider.example.com',
+      services: {
+        web: { fqdn: 'app.example.com', instances: [{ ports: { '3000/tcp': { host_port: 30001 } } }] },
+        db: { instances: [{ ports: { '5432/tcp': { host_port: 30002 } } }] },
+      },
+    } as any);
+    expect(out?.url).toBe('https://app.example.com');
+    expect(out?.connection.fqdn).toBe('app.example.com');
+  });
+
+  it('returns undefined when nothing shapeable', () => {
+    expect(deriveUrlFromConnection({ host: '' } as any)).toBeUndefined();
   });
 });
 
