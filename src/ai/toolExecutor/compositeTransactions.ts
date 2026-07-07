@@ -37,6 +37,11 @@ import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import type { SigningContext } from './types';
 import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
+import { getReadClient } from '../../api/readClient';
+import { providerFetch } from '../../api/providerFetchAdapter';
+// ADR-036 D3: FredAuthCtx is not on the manifest-sdk facade yet (mono follow-up
+// filed); import direct from -fred, our existing direct dep.
+import type { FredAuthCtx } from '@manifest-network/manifest-mcp-fred';
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([
@@ -645,6 +650,27 @@ async function fetchFailureLogs(
 // ============================================================================
 // deploy_app
 // ============================================================================
+
+/**
+ * Assemble the FredAuthCtx deployManifest needs. `query` = read client's
+ * ManifestQueryClient (backs resolveProviderUrl); `chain` = the SIGNING
+ * clientManager (backs cosmosTx create-lease — never the read client's
+ * query-only manager); `fetch` = providerFetch (DEV proxy / PROD SSRF);
+ * `logger` = noopLogger; `providerAuth` = the single root-built minter.
+ */
+export async function buildFredAuthCtx(
+  clientManager: CosmosClientManager,
+  signing: SigningContext,
+): Promise<FredAuthCtx> {
+  const readClient = await getReadClient();
+  return {
+    query: readClient.query,
+    chain: clientManager,
+    fetch: providerFetch,
+    logger: noopLogger,
+    providerAuth: signing.providerAuth,
+  };
+}
 
 /**
  * Pre-validation for deploy_app. Returns confirmation result or error.

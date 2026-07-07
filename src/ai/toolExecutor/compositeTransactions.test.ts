@@ -20,6 +20,7 @@ import {
   executeConfirmedRestartApp,
   executeUpdateApp,
   executeConfirmedUpdateApp,
+  buildFredAuthCtx,
   type BatchDeployEntry,
 } from './compositeTransactions';
 import type { ToolExecutorOptions, PayloadAttachment } from './types';
@@ -98,6 +99,10 @@ vi.mock('../../registry/appRegistry', async (importOriginal) => {
 // override with `.mockResolvedValueOnce(...)` or `.mockRejectedValueOnce(...)`.
 vi.mock('../../api/leaseByCustomDomain', () => ({
   queryLeaseByCustomDomain: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('../../api/readClient', () => ({
+  getReadClient: vi.fn().mockResolvedValue({ query: { __tag: 'read-query-client' } }),
 }));
 
 import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing';
@@ -4189,5 +4194,25 @@ describe('deploy_app with custom_domain (Pass B)', () => {
       'compositeTransactions.executeDeployApp.queryLeaseByCustomDomain',
       expect.any(Error),
     );
+  });
+});
+
+describe('buildFredAuthCtx', () => {
+  it('wires query=readClient.query, chain=clientManager, providerAuth=signing.providerAuth', async () => {
+    const providerAuth = {
+      providerToken: vi.fn(),
+      leaseDataToken: vi.fn(),
+    };
+    const signing = {
+      providerAuth,
+      authTokens: { getAuthToken: vi.fn(), getLeaseDataAuthToken: vi.fn() },
+      withSign: <T,>(fn: () => Promise<T>) => fn(),
+    } as any;
+    const ctx = await buildFredAuthCtx(CLIENT_MANAGER, signing);
+    expect(ctx.query).toEqual({ __tag: 'read-query-client' });
+    expect(ctx.chain).toBe(CLIENT_MANAGER);
+    expect(ctx.providerAuth).toBe(providerAuth);
+    expect(typeof ctx.fetch).toBe('function');
+    expect(ctx.logger).toBeDefined();
   });
 });
