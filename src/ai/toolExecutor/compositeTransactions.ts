@@ -1925,6 +1925,13 @@ export async function executeConfirmedStopApp(
 
 /**
  * Pre-validation for fund_credits. Returns confirmation result or error.
+ *
+ * ENG-279 escape hatch (spec §7, D0): fund_credits deliberately stays on
+ * `cosmosTx(clientManager, 'billing', 'fund-credit', [address, denomString], true)`
+ * and is NOT migrated to `core.fundCredits`. Pure YAGNI: it's a working
+ * one-line chain TX with no provider/upload/poll orchestration to delete —
+ * the ENG-279 goal ("delete the hand-rolled deploy spine") simply doesn't
+ * apply. Migrating would add a dependency edge for zero behavior change.
  */
 export function executeFundCredits(
   args: Record<string, unknown>,
