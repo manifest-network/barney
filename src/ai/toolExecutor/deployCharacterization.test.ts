@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   executeConfirmedDeployApp,
+  executeConfirmedBatchDeploy,
 } from './compositeTransactions';
 // NOTE: executeConfirmedBatchDeploy is imported in Task 6 (its first use) and
 // getLease in Task 5 — deferred so every intermediate C0 `npm run build` gate
@@ -329,5 +330,61 @@ describe('C0 characterization — fallbackToChainState core (delta D-B frozen ha
     expect(result.success).toBe(true);
     expect((result.data as { status: string }).status).toBe('deploying');
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'new-lease-uuid', { status: 'deploying' });
+  });
+});
+
+describe('C0 characterization — executeConfirmedBatchDeploy', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function batchEntry(app_name: string) {
+    return { app_name, size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() };
+  }
+
+  it('pins summary shape (deployed[]/failed[]), per-entry writes, and batch progress', async () => {
+    mockHappyPath();
+    const onProgress = vi.fn();
+    const registry = makeRegistry();
+    const result = await executeConfirmedBatchDeploy(
+      { entries: [batchEntry('game1'), batchEntry('game2')] },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, onProgress }),
+    );
+
+    expect(result.success).toBe(true);
+    const data = result.data as { deployed: { name: string }[]; failed: unknown[] };
+    expect(data.deployed).toHaveLength(2);
+    expect(data.deployed.map((d) => d.name).sort()).toEqual(['game1', 'game2']);
+    expect(data.failed).toHaveLength(0);
+
+    // Per-entry registry writes: two addApp(deploying), two updateApp(running)
+    expect(registry.addApp).toHaveBeenCalledTimes(2);
+    expect(registry.updateApp).toHaveBeenCalledWith(
+      ADDRESS, 'new-lease-uuid', expect.objectContaining({ status: 'running' }),
+    );
+
+    // Batch progress carries a per-app `batch` array on the final emit
+    const lastProgress = onProgress.mock.calls[onProgress.mock.calls.length - 1][0] as { batch?: unknown };
+    expect(lastProgress.batch).toBeDefined();
+  });
+
+  it('partial failure: one create-lease reject lands in failed[], other in deployed[]', async () => {
+    vi.mocked(cosmosTx)
+      .mockResolvedValueOnce({ code: 0, transactionHash: 'h1', rawLog: '' } as never)
+      .mockResolvedValueOnce({ code: 1, rawLog: 'insufficient funds' } as never);
+    vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    } as never);
+
+    const result = await executeConfirmedBatchDeploy(
+      { entries: [batchEntry('game1'), batchEntry('game2')] },
+      CLIENT_MANAGER,
+      makeOptions(),
+    );
+
+    const data = result.data as { deployed: unknown[]; failed: unknown[] };
+    expect(data.deployed).toHaveLength(1);
+    expect(data.failed).toHaveLength(1);
   });
 });
