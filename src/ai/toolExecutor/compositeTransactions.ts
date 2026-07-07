@@ -1641,6 +1641,12 @@ export async function executeConfirmedBatchDeploy(
       const name = entry.app_name;
 
       const manifest = new TextDecoder().decode(entry.payload.bytes);
+
+      const customDomainArg =
+        typeof entry.customDomain === 'string' ? entry.customDomain : '';
+      const customDomainServiceName =
+        typeof entry.customDomainServiceName === 'string' ? entry.customDomainServiceName : '';
+
       const spec: ManifestDeploySpec = {
         manifest,
         sku: {
@@ -1648,6 +1654,13 @@ export async function executeConfirmedBatchDeploy(
           skuUuid: asSkuUuid(entry.skuUuid),
           providerUuid: asProviderUuid(entry.providerUuid),
         },
+        // Attach in-deploy: deployManifest sets the domain BEFORE upload (Traefik-safe).
+        ...(customDomainArg !== '' ? { customDomain: customDomainArg } : {}),
+        // OMIT serviceName when empty — the SDK throws on serviceName for a
+        // single-service lease. Only meaningful alongside a customDomain.
+        ...(customDomainArg !== '' && customDomainServiceName !== ''
+          ? { serviceName: customDomainServiceName }
+          : {}),
       };
 
       let capturedLeaseUuid: string | undefined;

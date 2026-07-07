@@ -2510,6 +2510,52 @@ describe('executeConfirmedBatchDeploy', () => {
     expect((result.data as any).deployed.map((d: any) => d.name)).toContain('game1');
     expect((result.data as any).failed).toContain('game2');
   });
+
+  describe('custom domain (in-deploy)', () => {
+    function mockDeploy() {
+      vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+        await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+        return makeDeployResult();
+      });
+    }
+
+    it('passes customDomain into the deploy spec and never calls setItemCustomDomain', async () => {
+      mockDeploy();
+      const entries = [
+        { app_name: 'a1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'a1.example.com' },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+
+      const spec = vi.mocked(deployManifest).mock.calls[0][1];
+      expect(spec.customDomain).toBe('a1.example.com');
+      expect(spec.serviceName).toBeUndefined();
+      expect(setItemCustomDomain).not.toHaveBeenCalled();
+    });
+
+    it('passes serviceName into the spec for a multi-service stack entry', async () => {
+      mockDeploy();
+      const entries = [
+        { app_name: 'wp', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), serviceNames: ['web', 'db'], customDomain: 'wp.example.com', customDomainServiceName: 'web' },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+
+      const spec = vi.mocked(deployManifest).mock.calls[0][1];
+      expect(spec.customDomain).toBe('wp.example.com');
+      expect(spec.serviceName).toBe('web');
+    });
+
+    it('omits customDomain and serviceName from the spec when the entry has none', async () => {
+      mockDeploy();
+      const entries = [
+        { app_name: 'plain', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+
+      const spec = vi.mocked(deployManifest).mock.calls[0][1];
+      expect('customDomain' in spec).toBe(false);
+      expect('serviceName' in spec).toBe(false);
+    });
+  });
 });
 
 // ============================================================================
