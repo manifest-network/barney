@@ -181,3 +181,31 @@ describe('C0 characterization — executeConfirmedDeployApp happy path', () => {
     expect(phases).toEqual(['creating_lease', 'uploading', 'provisioning', 'ready']);
   });
 });
+
+describe('C0 characterization — registry writes', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('pins addApp(deploying) then updateApp(running,url) field writes', async () => {
+    mockHappyPath();
+    const registry = makeRegistry();
+    await executeConfirmedDeployApp(CONFIRMED_ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry }), makePayload());
+
+    expect(registry.addApp).toHaveBeenCalledWith(
+      ADDRESS,
+      expect.objectContaining({
+        name: 'test-app',
+        leaseUuid: 'new-lease-uuid',
+        size: 'small',
+        providerUuid: 'p1',
+        providerUrl: 'https://fred.example.com',
+        status: 'deploying',
+      }),
+    );
+
+    expect(registry.updateApp).toHaveBeenCalledWith(
+      ADDRESS,
+      'new-lease-uuid',
+      expect.objectContaining({ status: 'running', url: '127.0.0.1:32456' }),
+    );
+  });
+});
