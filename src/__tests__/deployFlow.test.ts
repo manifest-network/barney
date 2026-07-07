@@ -160,9 +160,12 @@ describe('Deploy Flow Integration', () => {
       activeLeaseCount: 0n,
     } as Awaited<ReturnType<typeof getCreditEstimate>>);
 
-    const payloadBytes = new TextEncoder().encode('version: "3"');
+    // Must be valid JSON — the deploy SDK JSON.parses the manifest string,
+    // and the plan-phase guard (§3.9) now rejects non-JSON file uploads
+    // (e.g. raw docker-compose YAML) before reaching confirmation.
+    const payloadBytes = new TextEncoder().encode(JSON.stringify({ image: 'nginx', port: '80' }));
     const payload: PayloadAttachment = {
-      filename: 'docker-compose.yml',
+      filename: 'docker-compose.json',
       bytes: payloadBytes,
       size: payloadBytes.byteLength,
       hash: 'abc123',

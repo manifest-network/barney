@@ -146,6 +146,16 @@ function makePayload(): PayloadAttachment {
   };
 }
 
+// Valid-JSON counterpart to makePayload(), for executeDeployApp plan-phase
+// tests that exercise the file-attach path post-§3.9 (non-JSON payloads are
+// now rejected before reaching confirmation — see "rejects a non-JSON file
+// upload" below).
+function makeJsonPayload(filename = 'docker-compose.yml'): PayloadAttachment {
+  const json = JSON.stringify({ image: 'nginx', port: '80' });
+  const bytes = new TextEncoder().encode(json);
+  return { bytes, filename, size: bytes.length, hash: 'b'.repeat(64) };
+}
+
 function makeApp(overrides: Partial<AppEntry> = {}): AppEntry {
   return {
     name: 'my-app',
@@ -1040,14 +1050,17 @@ describe('executeDeployApp', () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    const result = await executeDeployApp({ image: 'redis', port: '6379', size: 'xxlarge' }, makeOptions(), makePayload());
+    // No payload attached — exercises the image-based manifest-build path
+    // (a payload would take precedence over `image` and, post-§3.9, would
+    // need to be valid JSON, which is irrelevant to what this test covers).
+    const result = await executeDeployApp({ image: 'redis', port: '6379', size: 'xxlarge' }, makeOptions());
     expect(result.success).toBe(true);
     // SAMPLE_TIERS cheapest is docker-micro (0.036/hr)
     expect(result.pendingAction?.args.size).toBe('docker-micro');
   });
 
   it('returns clean error when tier catalog is empty (loading/error state)', async () => {
-    const result = await executeDeployApp({ image: 'redis' }, makeOptions({ tiers: [] }), makePayload());
+    const result = await executeDeployApp({ image: 'redis' }, makeOptions({ tiers: [] }));
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/tier catalog unavailable/i);
   });
@@ -1056,8 +1069,8 @@ describe('executeDeployApp', () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    const a = await executeDeployApp({ image: 'redis', port: '6379', size: 'micro' }, makeOptions(), makePayload());
-    const b = await executeDeployApp({ image: 'redis', port: '6379', size: 'docker-micro' }, makeOptions(), makePayload());
+    const a = await executeDeployApp({ image: 'redis', port: '6379', size: 'micro' }, makeOptions());
+    const b = await executeDeployApp({ image: 'redis', port: '6379', size: 'docker-micro' }, makeOptions());
     expect(a.success).toBe(true);
     expect(b.success).toBe(true);
     expect(a.pendingAction?.args.size).toBe('docker-micro');
@@ -1095,7 +1108,7 @@ describe('executeDeployApp', () => {
       activeLeaseCount: 0n,
     } as any);
 
-    const result = await executeDeployApp({}, makeOptions(), makePayload());
+    const result = await executeDeployApp({}, makeOptions(), makeJsonPayload());
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
     expect(result.confirmationMessage).toContain('docker-compose');
@@ -1122,7 +1135,7 @@ describe('executeDeployApp', () => {
     const result = await executeDeployApp(
       { size: 'docker-micro' },
       makeOptions({ tiers: freeTier }),
-      makePayload(),
+      makeJsonPayload(),
     );
 
     expect(result.success).toBe(true);
@@ -1145,7 +1158,7 @@ describe('executeDeployApp', () => {
     const result = await executeDeployApp(
       { size: 'docker-micro' },
       makeOptions(),
-      makePayload(),
+      makeJsonPayload(),
     );
 
     expect(result.success).toBe(true);
@@ -1342,14 +1355,16 @@ describe('executeDeployApp', () => {
     const result = await executeDeployApp(
       { image: 'redis:8.4' },
       makeOptions(),
-      makePayload()  // file takes precedence
+      makeJsonPayload()  // file takes precedence
     );
 
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
     // Should use filename-derived name, not image-derived
     expect(result.confirmationMessage).toContain('docker-compose');
-    expect(result.pendingAction?.args._generatedManifest).toBeUndefined();
+    // Valid JSON file uploads are always captured as the editable manifest
+    // (§3.9 — the old .json-extension-only gate is gone).
+    expect(result.pendingAction?.args._generatedManifest).toBeDefined();
   });
 
   it('returns confirmation for stack deploy with services param', async () => {
@@ -1409,7 +1424,13 @@ describe('executeDeployApp', () => {
     expect(result.pendingAction?.args._serviceNames).toEqual(['web', 'db']);
   });
 
-  it('extracts service names from file-uploaded YAML stack manifest', async () => {
+  // Pre-§3.9, a YAML stack manifest fell through the (then extension-gated)
+  // JSON check and still reached service-name extraction / confirmation.
+  // §3.9 closes that: any non-JSON file content is rejected in the plan
+  // phase, so a YAML stack upload can no longer reach this far (it's also
+  // blocked earlier, at the file picker, by ALLOWED_FILE_EXTENSIONS — this
+  // is the belt-and-suspenders guard for content that slips past that).
+  it('rejects a file-uploaded YAML stack manifest instead of extracting service names', async () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
@@ -1438,9 +1459,8 @@ describe('executeDeployApp', () => {
 
     const result = await executeDeployApp({}, makeOptions(), payload);
 
-    expect(result.success).toBe(true);
-    expect(result.requiresConfirmation).toBe(true);
-    expect(result.pendingAction?.args._serviceNames).toEqual(['web', 'db']);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Manifest must be valid JSON — convert your YAML to JSON.');
   });
 
   it('returns error for invalid internal _serviceNames metadata', async () => {
@@ -1710,6 +1730,40 @@ describe('executeDeployApp', () => {
     expect(manifest.health_check).toEqual(customHealthCheck);
     expect(manifest.health_check.test[1]).toBe('pg_isready -U custom_user -d custom_db');
     expect(manifest.health_check.retries).toBe(10);
+  });
+
+  it('rejects a non-JSON file upload with a convert-to-JSON error', async () => {
+    const payload: PayloadAttachment = {
+      bytes: new TextEncoder().encode('image: nginx\nport: "80"\n'),
+      filename: 'compose.txt',
+      size: 24,
+      hash: 'deadbeef',
+    };
+    const result = await executeDeployApp({}, makeOptions(), payload);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Manifest must be valid JSON — convert your YAML to JSON.');
+  });
+
+  it('accepts a valid JSON file upload and stores it as the editable manifest', async () => {
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com' },
+    ] as any);
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      balances: [{ denom: DENOMS.PWR, amount: '100000000' }],
+    } as any);
+    const json = JSON.stringify({ image: 'nginx', port: '80' });
+    const payload: PayloadAttachment = {
+      bytes: new TextEncoder().encode(json),
+      filename: 'app.json',
+      size: json.length,
+      hash: 'abc123',
+    };
+    const result = await executeDeployApp({}, makeOptions(), payload);
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    if (result.success && result.requiresConfirmation) {
+      expect(result.pendingAction.args._generatedManifest).toBe(json);
+    }
   });
 });
 

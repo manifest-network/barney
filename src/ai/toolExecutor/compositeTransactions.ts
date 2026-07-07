@@ -850,15 +850,17 @@ export async function executeDeployApp(
     return { success: false, error: 'No file attached and no image specified. Attach a manifest file or specify a Docker image (e.g. deploy_app(image="redis:8.4")).' };
   }
 
-  // Make file-attached JSON manifests editable in the confirmation card
-  if (!args._generatedManifest && payload.filename?.endsWith('.json')) {
+  // File-attached manifests must be valid JSON — the deploy SDK JSON.parses
+  // + validates the manifest string (§3.9). Non-JSON (e.g. YAML) is rejected
+  // here so the user gets a clear signal before any TX.
+  if (!args._generatedManifest) {
+    const json = new TextDecoder().decode(payload.bytes);
     try {
-      const json = new TextDecoder().decode(payload.bytes);
-      JSON.parse(json); // validate it's valid JSON
-      args._generatedManifest = json;
+      JSON.parse(json);
     } catch {
-      // Not valid JSON — fall through to read-only display
+      return { success: false, error: 'Manifest must be valid JSON — convert your YAML to JSON.' };
     }
+    args._generatedManifest = json;
   }
 
   // Extract service names from file-uploaded stack manifests (JSON or YAML)
