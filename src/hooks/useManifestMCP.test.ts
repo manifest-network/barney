@@ -47,7 +47,7 @@ const mockCreateProviderAuth = vi.fn<(...args: unknown[]) => typeof mockProvider
   () => mockProviderAuth,
 );
 
-vi.mock('@manifest-network/manifest-mcp-fred', () => ({
+vi.mock('@manifest-network/manifest-sdk/deploy', () => ({
   createProviderAuth: (...args: unknown[]) => mockCreateProviderAuth(...args),
 }));
 

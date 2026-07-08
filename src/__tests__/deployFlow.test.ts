@@ -56,10 +56,11 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   cosmosQuery: vi.fn(),
 }));
 
-// C2 (ENG-279): the confirmed deploy path now delegates the create-lease →
-// upload → poll spine to deployManifest. Spread the original so manifest.ts's
-// buildManifest/mergeManifest re-exports survive.
-vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => ({
+// C2 (ENG-279): the confirmed deploy path delegates the create-lease → upload →
+// poll spine to deployManifest. ENG-483: it's imported from the SDK deploy
+// facade, so mock there. Spread the original facade; manifest.ts's
+// buildManifest/mergeManifest come from -fred (unmocked, real).
+vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   ...(await importOriginal()),
   deployManifest: vi.fn(),
 }));
@@ -77,7 +78,7 @@ import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
 import { waitForLeaseReady } from '../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-core';
-import { deployManifest } from '@manifest-network/manifest-mcp-fred';
+import { deployManifest } from '@manifest-network/manifest-sdk/deploy';
 import { getReadClient } from '../api/readClient';
 
 const ADDRESS = 'manifest1testaddr';

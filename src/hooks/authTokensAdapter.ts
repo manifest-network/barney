@@ -7,7 +7,7 @@
  * second `createProviderAuth`, which would re-open the same-lease/same-second
  * ADR-036 replay collision D2 exists to prevent.
  */
-import type { ProviderAuthPort } from '@manifest-network/manifest-mcp-fred';
+import type { ProviderAuthPort } from '@manifest-network/manifest-sdk/deploy';
 import type { AuthTokens } from '../ai/toolExecutor/types';
 
 export function createAuthTokensAdapter(
