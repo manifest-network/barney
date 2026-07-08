@@ -2197,7 +2197,7 @@ export async function executeConfirmedRestartApp(
     logError('compositeTransactions.executeConfirmedRestartApp', error);
     // 409 = lease is not in the right state for restart; don't mark as failed
     // because the app may still be running — only the restart was rejected.
-    if (error instanceof ProviderApiError && error.status === 409) {
+    if (ProviderApiError.isProviderApiError(error) && error.status === 409) {
       onProgress?.({ phase: 'failed', detail: 'App is not in a restartable state', operation: 'restart' });
       return { success: false, error: `Cannot restart "${name}": app is not in a restartable state.` };
     }
@@ -2296,7 +2296,7 @@ async function executeConfirmedBatchRestart(
         await restartLease(entry.providerUrl, entry.leaseUuid, authToken);
       } catch (error) {
         logError('executeConfirmedBatchRestart.restart', error);
-        if (error instanceof ProviderApiError && error.status === 409) {
+        if (ProviderApiError.isProviderApiError(error) && error.status === 409) {
           updateProgress('failed', 'Not in a restartable state');
           return null;
         }
@@ -2677,7 +2677,7 @@ export async function executeConfirmedUpdateApp(
     logError('compositeTransactions.executeConfirmedUpdateApp', error);
     // 409 = lease is not in the right state for update; don't mark as failed
     // because the app may still be running — only the update was rejected.
-    if (error instanceof ProviderApiError && error.status === 409) {
+    if (ProviderApiError.isProviderApiError(error) && error.status === 409) {
       onProgress?.({ phase: 'failed', detail: 'App is not in an updatable state', operation: 'update' });
       return { success: false, error: `Cannot update "${name}": app is not in an updatable state.` };
     }

@@ -9,8 +9,14 @@
  */
 
 import { z } from 'zod';
+// HTTP fns sourced from the SDK's browser-safe ./deploy facade (re-exports mono-fred
+// verbatim — identical fns + signatures). Barney's wrappers below own provider-URL +
+// ADR-036 auth + providerFetch injection; the LLM-vs-LogCard log truncation stays in
+// compositeQueries.ts. Use getLeaseLogs, never getAppLogs — the latter's 4000-char cap
+// would clip the full-logs LogCard.
 import {
   getLeaseStatus as fredGetLeaseStatus,
+  getLeaseLogs as fredGetLeaseLogs,
   getLeaseProvision as fredGetLeaseProvision,
   getLeaseReleases as fredGetLeaseReleases,
   restartLease as fredRestartLease,
@@ -21,14 +27,7 @@ import {
   type FredLeaseProvision,
   type FredActionResponse,
   type FredLeaseReleases,
-} from '@manifest-network/manifest-mcp-fred';
-// getLeaseLogs re-sourced to the aggregating SDK's browser-safe ./deploy subpath.
-// The SDK deploy barrel re-exports mono-fred's getLeaseLogs unchanged (identical fn +
-// signature: getLeaseLogs(providerUrl, leaseUuid, authToken, tail?, fetchFn?)). Barney's
-// wrapper below keeps owning provider-URL + ADR-036 auth + providerFetch injection; the
-// LLM-vs-LogCard truncation stays in compositeQueries.ts. Never getAppLogs — its
-// 4000-char cap would clip the full-logs LogCard.
-import { getLeaseLogs as fredGetLeaseLogs } from '@manifest-network/manifest-sdk/deploy';
+} from '@manifest-network/manifest-sdk/deploy';
 import { providerFetch } from './providerFetchAdapter';
 import { validateProviderUrl, normalizeBaseUrl } from './providerFetch';
 import { LeaseState } from './billing';
@@ -40,11 +39,11 @@ import {
   WS_LIVENESS_TIMEOUT_MS,
 } from '../config/constants';
 
-// Re-export types and classes from mono for backward compatibility
+// Re-export types and classes from the SDK facade for backward compatibility
 export {
   ProviderApiError,
   type FredLeaseStatus,
-} from '@manifest-network/manifest-mcp-fred';
+} from '@manifest-network/manifest-sdk/deploy';
 
 // ============================================================================
 // HTTP function wrappers — delegate to mono with providerFetch injected
@@ -536,7 +535,7 @@ async function waitViaWS(
         if (error instanceof DOMException && error.name === 'AbortError') throw error;
         if (opts.abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-        if (error instanceof ProviderApiError && PERMANENT_WS_CLOSE_CODES.has(error.status)) throw error;
+        if (ProviderApiError.isProviderApiError(error) && PERMANENT_WS_CLOSE_CODES.has(error.status)) throw error;
 
         logError(`fred.waitViaWS: connection dropped (attempt ${attempt + 1})`, error);
       } finally {
@@ -554,7 +553,7 @@ async function waitViaWS(
       if (error instanceof DOMException && error.name === 'AbortError') throw error;
       if (opts.abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-      if (error instanceof ProviderApiError && PERMANENT_WS_CLOSE_CODES.has(error.status)) throw error;
+      if (ProviderApiError.isProviderApiError(error) && PERMANENT_WS_CLOSE_CODES.has(error.status)) throw error;
 
       if (!everConnected) throw error;
 

@@ -9,10 +9,12 @@ import { ProviderApiError } from './provider-api';
 // which conflicts with vi.useFakeTimers() in polling tests.
 // The mock delegates getLeaseStatus to globalThis.fetch (stubbed per-test)
 // with the same LeaseState conversion mono does internally.
-vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@manifest-network/manifest-mcp-fred')>();
+vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@manifest-network/manifest-sdk/deploy')>();
   return {
     ...actual,
+    // Bare spy so the wrapper test can assert arg forwarding without a real HTTP call.
+    getLeaseLogs: vi.fn(),
     getLeaseStatus: vi.fn(async (providerUrl: string, leaseUuid: string, authToken: string) => {
       const url = `${providerUrl.replace(/\/+$/, '')}/v1/leases/${encodeURIComponent(leaseUuid)}/status`;
       const res = await globalThis.fetch(url, {
@@ -43,12 +45,6 @@ vi.mock('../utils/url', () => ({
 
 vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
-}));
-
-// getLeaseLogs is now sourced from the SDK's ./deploy subpath (PR 2). Mock it so the
-// wrapper test can assert argument forwarding without hitting the real HTTP fn.
-vi.mock('@manifest-network/manifest-sdk/deploy', () => ({
-  getLeaseLogs: vi.fn(),
 }));
 
 // providerFetch is the DEV-proxy / PROD-SSRF fetch adapter the wrapper injects as fetchFn.

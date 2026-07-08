@@ -11,16 +11,16 @@ import {
   getLeaseConnectionInfo as fredGetLeaseConnectionInfo,
   type ProviderHealthResponse,
   type LeaseConnectionResponse,
-} from '@manifest-network/manifest-mcp-fred';
+} from '@manifest-network/manifest-sdk/deploy';
 import { providerFetch } from './providerFetchAdapter';
 import { logError } from '../utils/errors';
 import { HEALTH_CHECK_TIMEOUT_MS } from '../config/constants';
 
-// Re-export types and classes from mono for backward compatibility
+// Re-export types and classes from the SDK facade for backward compatibility
 export {
   ProviderApiError,
   type ConnectionDetails,
-} from '@manifest-network/manifest-mcp-fred';
+} from '@manifest-network/manifest-sdk/deploy';
 
 // ============================================================================
 // Barney-specific functions

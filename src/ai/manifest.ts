@@ -19,8 +19,11 @@ import {
   normalizePorts as fredNormalizePorts,
   deriveAppNameFromImage as fredDeriveAppNameFromImage,
   metaHashHex,
-  type BuildManifestOptions as FredBuildManifestOptions,
-} from '@manifest-network/manifest-mcp-fred';
+} from '@manifest-network/manifest-sdk/deploy';
+// BuildManifestOptions is the one symbol not on any SDK facade subpath; source it
+// from -core (already a direct dep). Do NOT use the facade's ServiceConfig — it's
+// structurally divergent (ports optional, no `init`) and breaks toFredOptions.
+import type { BuildManifestOptions as FredBuildManifestOptions } from '@manifest-network/manifest-mcp-core';
 import { generatePassword, validatePayloadSize } from '../utils/hash';
 import { logError } from '../utils/errors';
 import type { PayloadAttachment } from './toolExecutor/types';
