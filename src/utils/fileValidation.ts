@@ -64,15 +64,15 @@ export function validateFile(file: File): { valid: boolean; error?: string } {
 }
 
 /**
- * Validates that file content is a well-formed manifest.
+ * Validates that uploaded file content is a well-formed JSON manifest.
  *
- * - JSON files: parsed and structurally validated (must have `image` or `services`)
- * - YAML files: lightweight check for required top-level keys (no parser available)
- * - .txt files: tries JSON first, then YAML-style check
+ * Uploads are limited to `.json` / `.txt` (see `validateFile`) and the deploy
+ * path is JSON-only (ENG-279 §3.9), so content is validated as JSON regardless
+ * of extension — a YAML-in-`.txt` file is rejected here rather than passing
+ * upload validation and failing later at deploy.
  */
 export function validateManifestContent(
   bytes: Uint8Array,
-  filename: string,
 ): { valid: boolean; error?: string } {
   let text: string;
   try {
@@ -85,20 +85,7 @@ export function validateManifestContent(
     return { valid: false, error: 'File is empty' };
   }
 
-  const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
-
-  if (ext === '.json') {
-    return validateJsonManifest(text);
-  }
-
-  if (ext === '.yaml' || ext === '.yml') {
-    return validateYamlManifest(text);
-  }
-
-  // .txt — try JSON first, fall back to YAML-style check
-  const jsonResult = validateJsonManifest(text);
-  if (jsonResult.valid) return jsonResult;
-  return validateYamlManifest(text);
+  return validateJsonManifest(text);
 }
 
 function validateJsonManifest(text: string): { valid: boolean; error?: string } {
@@ -145,72 +132,6 @@ function validateManifestStructure(manifest: Record<string, unknown>): { valid: 
 
   if (!manifest.image || typeof manifest.image !== 'string') {
     return { valid: false, error: 'Manifest is missing a valid "image" field' };
-  }
-
-  return { valid: true };
-}
-
-/**
- * Lightweight extraction of service names from YAML text.
- * Finds top-level `services:` block and collects immediate child keys.
- * Returns raw names (including potentially invalid ones) for callers to filter.
- */
-export function extractYamlServiceNames(text: string): string[] {
-  const lines = text.split('\n');
-  let inServices = false;
-  let indent = '';
-  const names: string[] = [];
-
-  for (const line of lines) {
-    if (/^services:\s*(#.*)?$/.test(line)) {
-      inServices = true;
-      continue;
-    }
-    if (!inServices) continue;
-
-    // Skip blank lines and comments
-    if (/^\s*(#.*)?$/.test(line)) continue;
-
-    // Non-indented line means we've left the services block
-    if (/^\S/.test(line)) break;
-
-    // Detect indent level from first child key
-    if (!indent) {
-      const match = line.match(/^(\s+)/);
-      if (!match) break;
-      indent = match[1];
-    }
-
-    // Lines at the child indent level that end with `:` are service names
-    if (line.startsWith(indent) && !line.startsWith(indent + ' ') && !line.startsWith(indent + '\t')) {
-      const match = line.match(/^\s+([\w][\w-]*):\s*(#.*)?$/);
-      if (match) names.push(match[1]);
-    }
-  }
-
-  return names;
-}
-
-function validateYamlManifest(text: string): { valid: boolean; error?: string } {
-  const hasImage = /^image:\s/m.test(text);
-  const hasServices = /^services:\s*(#.*)?$/m.test(text);
-
-  if (!hasImage && !hasServices) {
-    return { valid: false, error: 'Manifest must contain an "image" or "services" field' };
-  }
-
-  // For stack manifests, verify at least one valid service name is extractable
-  if (hasServices) {
-    const rawNames = extractYamlServiceNames(text);
-    if (rawNames.length === 0) {
-      return { valid: false, error: '"services" block must contain at least one service' };
-    }
-    // Validate extracted names against DNS label rules
-    for (const name of rawNames) {
-      if (!SERVICE_NAME_RE.test(name)) {
-        return { valid: false, error: `Invalid service name "${name}": must be a lowercase DNS label (a-z, 0-9, hyphens, 1-63 chars)` };
-      }
-    }
   }
 
   return { valid: true };

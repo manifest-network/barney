@@ -663,59 +663,6 @@ describe('extractServiceNamesFromPayload', () => {
     expect(extractServiceNamesFromPayload(bytes)).toEqual([]);
   });
 
-  it('extracts from YAML stack manifest', () => {
-    const yaml = [
-      'services:',
-      '  web:',
-      '    image: wordpress:6',
-      '    ports:',
-      '      80/tcp: {}',
-      '  db:',
-      '    image: mysql:9',
-      '    env:',
-      '      MYSQL_ROOT_PASSWORD: secret',
-    ].join('\n');
-    const bytes = new TextEncoder().encode(yaml);
-    expect(extractServiceNamesFromPayload(bytes)).toEqual(['web', 'db']);
-  });
-
-  it('extracts from YAML with comments', () => {
-    const yaml = [
-      '# Docker Compose stack',
-      'services: # main services',
-      '  frontend:',
-      '    image: nginx',
-      '  # backend database',
-      '  backend-db:',
-      '    image: postgres',
-    ].join('\n');
-    const bytes = new TextEncoder().encode(yaml);
-    expect(extractServiceNamesFromPayload(bytes)).toEqual(['frontend', 'backend-db']);
-  });
-
-  it('stops at next top-level YAML key', () => {
-    const yaml = [
-      'services:',
-      '  web:',
-      '    image: nginx',
-      'volumes:',
-      '  data:',
-      '    driver: local',
-    ].join('\n');
-    const bytes = new TextEncoder().encode(yaml);
-    expect(extractServiceNamesFromPayload(bytes)).toEqual(['web']);
-  });
-
-  it('returns empty for YAML single-service manifest', () => {
-    const yaml = [
-      'image: nginx',
-      'ports:',
-      '  80/tcp: {}',
-    ].join('\n');
-    const bytes = new TextEncoder().encode(yaml);
-    expect(extractServiceNamesFromPayload(bytes)).toEqual([]);
-  });
-
   it('returns empty for non-parseable content', () => {
     const bytes = new TextEncoder().encode('this is just plain text');
     expect(extractServiceNamesFromPayload(bytes)).toEqual([]);
@@ -733,17 +680,6 @@ describe('extractServiceNamesFromPayload', () => {
     expect(logError).toHaveBeenCalledWith(
       'extractServiceNamesFromPayload',
       expect.objectContaining({ message: expect.stringContaining('My_DB') }),
-    );
-  });
-
-  it('filters out invalid service names from YAML and logs', () => {
-    vi.mocked(logError).mockClear();
-    const yaml = 'services:\n  web:\n    image: nginx\n  BAD_NAME:\n    image: redis\n  cache:\n    image: redis';
-    const bytes = new TextEncoder().encode(yaml);
-    expect(extractServiceNamesFromPayload(bytes)).toEqual(['web', 'cache']);
-    expect(logError).toHaveBeenCalledWith(
-      'extractServiceNamesFromPayload',
-      expect.objectContaining({ message: expect.stringContaining('BAD_NAME') }),
     );
   });
 

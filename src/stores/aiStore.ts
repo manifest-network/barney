@@ -240,7 +240,7 @@ export const createAIStore = () =>
         const arrayBuffer = await file.arrayBuffer();
         const bytes = new Uint8Array(arrayBuffer);
 
-        const contentValidation = validateManifestContent(bytes, file.name);
+        const contentValidation = validateManifestContent(bytes);
         if (!contentValidation.valid) {
           return { error: contentValidation.error };
         }
