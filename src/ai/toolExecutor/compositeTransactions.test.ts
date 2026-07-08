@@ -3885,4 +3885,36 @@ describe('handleDeployManifestError', () => {
     expect(getLeaseProvision).not.toHaveBeenCalled();
     expect(getLeaseLogs).not.toHaveBeenCalled();
   });
+
+  // Defense-in-depth (Copilot PR #106): Case 2 keys off `leaseUuid` presence,
+  // not `error instanceof ManifestMCPError`. deployManifest currently always
+  // wraps post-lease throws in ManifestMCPError/TerminalChainStateError, so a
+  // plain Error with a leaseUuid can't happen today — but if that contract
+  // ever changes, the error must still be resolved via chain-truth, not
+  // misclassified as Case 1 ("no lease").
+  it('case 2 (defensive): plain Error WITH leaseUuid still runs the chain-check, not Case 1', async () => {
+    vi.mocked(getLease).mockResolvedValue(null as any); // → classifyLeaseChainState 'failed'
+    // No diagnostics (no last_error, no logs) so the error message is exact —
+    // isolates the assertion from mock state leaking across tests in this describe.
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 0 } as any);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ lease_uuid: 'lease-1', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
+    const c = ctx();
+    const result = await handleDeployManifestError(new Error('unexpected throw shape'), c);
+    expect(result.success).toBe(false);
+    // Proves the chain-check ran (Case 2), not Case 1: Case 1 never calls
+    // appRegistry.updateApp and would surface the bare message with no
+    // "Deployment failed:" prefix.
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'failed' });
+    expect(result.error).toBe('Deployment failed: unexpected throw shape');
+    expect(getLease).toHaveBeenCalledWith('lease-1');
+  });
+
+  it('case 2 (defensive): plain Error WITH leaseUuid, chain ACTIVE → running', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
+    const c = ctx();
+    const result = await handleDeployManifestError(new Error('unexpected throw shape'), c);
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('running');
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'running' });
+  });
 });

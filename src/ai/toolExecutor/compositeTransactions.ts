@@ -1346,8 +1346,15 @@ interface DeployErrorContext {
 
 /**
  * Classify a deployManifest throw into barney's registry/progress/ToolResult.
- * Case 1 (raw Error, no lease): surface raw error, no fetchFailureLogs.
- * Case 2 (ManifestMCPError, ambiguous): getLease chain-check → running/deploying/failed.
+ * Case 1 (raw Error with NO lease): create-lease rejected, no lease exists.
+ * Case 2 (any non-terminal error, leaseUuid present): chain is the source of
+ *   truth — getLease chain-check → running/deploying/failed. Keyed off
+ *   `leaseUuid` rather than `error instanceof ManifestMCPError`: deployManifest
+ *   currently wraps every post-lease throw in ManifestMCPError/
+ *   TerminalChainStateError, so this is unreachable today, but it's
+ *   defense-in-depth against that contract changing — an unexpected error
+ *   type with a lease must still be resolved via chain state, not
+ *   misclassified as "no lease" (Case 1).
  * Case 3 (TerminalChainStateError): straight failed, no chain-check.
  */
 export async function handleDeployManifestError(
@@ -1364,7 +1371,8 @@ export async function handleDeployManifestError(
   }
 
   // Case 2: ambiguous post-lease throw — chain is the source of truth.
-  if (error instanceof ManifestMCPError && leaseUuid) {
+  if (leaseUuid) {
+    const errMessage = error instanceof Error ? error.message : String(error);
     const verdict = await classifyLeaseChainState(leaseUuid);
     if (verdict === 'running') {
       appRegistry.updateApp(address, leaseUuid, { status: 'running' });
@@ -1385,20 +1393,20 @@ export async function handleDeployManifestError(
     }
     // verdict === 'failed'
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-    onProgress?.({ phase: 'failed', detail: error.message });
-    const skipLogs = error.code === ManifestMCPErrorCode.OPERATION_CANCELLED;
+    onProgress?.({ phase: 'failed', detail: errMessage });
+    const skipLogs = error instanceof ManifestMCPError && error.code === ManifestMCPErrorCode.OPERATION_CANCELLED;
     const diagnostics = skipLogs || !providerUrl
       ? null
       : await fetchFailureLogs(providerUrl, leaseUuid, address, signing);
     // barney copy — NOT the SDK's "…close_lease" text (barney has no close_lease tool).
     const errorMsg = diagnostics
-      ? `Deployment failed: ${error.message}\n\n${diagnostics}`
-      : `Deployment failed: ${error.message}`;
+      ? `Deployment failed: ${errMessage}\n\n${diagnostics}`
+      : `Deployment failed: ${errMessage}`;
     return { success: false, error: errorMsg };
   }
 
-  // Case 1: raw Error (or ManifestMCPError with no lease) — create-lease rejected,
-  // no lease exists. Surface the raw error; no failure-log fetch.
+  // Case 1: raw Error with NO lease (create-lease rejected) — surface the
+  // raw error; no failure-log fetch (there's no lease to fetch logs for).
   const message = error instanceof Error ? error.message : 'Deployment failed';
   onProgress?.({ phase: 'failed', detail: message });
   return { success: false, error: message };
