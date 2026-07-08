@@ -36,26 +36,45 @@ function decode(token: string) {
 
 describe('createAuthTokensAdapter', () => {
   it('produces ADR-036 provider tokens identical (minus timestamp) to the underlying port', async () => {
-    const { signer } = stubSigner();
-    const providerAuth = createProviderAuth(signer, { chainId: 'manifest-test' });
-    const adapter = createAuthTokensAdapter(providerAuth, ADDRESS);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2020-01-01T00:00:00Z'));
+    try {
+      const { signer } = stubSigner();
+      const providerAuth = createProviderAuth(signer, { chainId: 'manifest-test' });
+      const adapter = createAuthTokensAdapter(providerAuth, ADDRESS);
 
-    const direct = decode(await providerAuth.providerToken({ address: ADDRESS, leaseUuid: LEASE }));
-    const viaAdapter = decode(await adapter.getAuthToken(LEASE));
+      // Mint 1: first mint in this unix-second, AuthTimestampTracker's `last`
+      // starts at 0 so it resolves on microtasks alone — no timer to advance.
+      const direct = decode(await providerAuth.providerToken({ address: ADDRESS, leaseUuid: LEASE }));
 
-    // Address-binding: the adapter fills tenant from its bound address.
-    expect(viaAdapter.tenant).toBe(ADDRESS);
-    expect(viaAdapter.tenant).toBe(direct.tenant);
-    expect(viaAdapter.lease_uuid).toBe(LEASE);
-    expect(viaAdapter.lease_uuid).toBe(direct.lease_uuid);
-    expect(viaAdapter.pub_key).toBe(direct.pub_key);
-    expect(viaAdapter.signature).toBe(direct.signature);
-    // Same shared AuthTimestampTracker → monotonic, distinct per mint.
-    // NOTE: the two mints differ ONLY in `timestamp`, and the shared tracker
-    // blocks until the unix-second advances — so this test may take ~1s of real
-    // wall-clock time. That is correct + non-flaky (a deliberate wait), NOT a hang.
-    expect(typeof viaAdapter.timestamp).toBe('number');
-    expect(viaAdapter.timestamp).not.toBe(direct.timestamp);
+      // Mint 2: same unix-second as mint 1, so the shared tracker blocks inside
+      // `await new Promise(resolve => setTimeout(resolve, sleepMs))` until the
+      // second advances. Start it WITHOUT awaiting, then drive the fake clock
+      // forward — awaiting first would hang forever since fake timers never
+      // fire on their own.
+      const viaAdapterPromise = adapter.getAuthToken(LEASE);
+      await vi.advanceTimersByTimeAsync(1000);
+      const viaAdapter = decode(await viaAdapterPromise);
+
+      // Address-binding: the adapter fills tenant from its bound address.
+      expect(viaAdapter.tenant).toBe(ADDRESS);
+      expect(viaAdapter.tenant).toBe(direct.tenant);
+      expect(viaAdapter.lease_uuid).toBe(LEASE);
+      expect(viaAdapter.lease_uuid).toBe(direct.lease_uuid);
+      expect(viaAdapter.pub_key).toBe(direct.pub_key);
+      expect(viaAdapter.signature).toBe(direct.signature);
+      // Same shared AuthTimestampTracker → monotonic, distinct per mint.
+      // NOTE: the tracker's inter-mint wait is faked away via
+      // `vi.advanceTimersByTimeAsync`, so this no longer costs ~1s of real
+      // wall-clock time. The timestamp-differs check below is a light
+      // sanity check on the fake clock; the real delegation guarantee (that
+      // the adapter calls through to the same providerAuth instance) is
+      // covered by the second test below (the spy-port test).
+      expect(typeof viaAdapter.timestamp).toBe('number');
+      expect(viaAdapter.timestamp).not.toBe(direct.timestamp);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('delegates the SAME providerAuth instance (no second createProviderAuth)', async () => {
