@@ -158,7 +158,7 @@ Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored 
 
 `src/api/fred.ts` — Fred HTTP functions and WebSocket streaming for lease deployment status.
 
-HTTP functions are thin wrappers with Barney's CORS proxy/SSRF `fetchFn` adapter (`src/api/providerFetchAdapter.ts`) injected. Six (`getLeaseStatus`, `getLeaseProvision`, `getLeaseInfo`, `restartLease`, `updateLease`, `getLeaseReleases`) delegate to `@manifest-network/manifest-mcp-fred`; `getLeaseLogs` is re-sourced from `@manifest-network/manifest-sdk/deploy`.
+HTTP functions are thin wrappers with Barney's CORS proxy/SSRF `fetchFn` adapter (`src/api/providerFetchAdapter.ts`) injected. Five (`getLeaseStatus`, `getLeaseProvision`, `restartLease`, `updateLease`, `getLeaseReleases`) delegate to `@manifest-network/manifest-mcp-fred`; `getLeaseLogs` is re-sourced from `@manifest-network/manifest-sdk/deploy`.
 
 Barney-specific code that stays local:
 - `pollLeaseUntilReady()` — Polling loop with `checkChainState`, `getAuthToken`, count-based `maxAttempts`
@@ -191,7 +191,7 @@ The TX path splits by tool:
 | `skuTiers.ts` | `resolveSkuTiers(specs)` joins the chain SKU catalog with the env spec map and normalizes `basePrice` + `Unit` (PER_HOUR / PER_DAY) into `pricePerHour` display units. `hourlyPriceFromSku(sku)` is the unit→hourly converter. `getCheapestTier(tiers)` returns the lowest-`pricePerHour` entry (ties resolved by first occurrence) and is what `deploy_app` / `batch_deploy` use as the size default when the caller omits it. Returns `ResolvedSkuTier[]` ordered by env spec insertion order — that order drives the AI tool's `size.enum` and the `/help` table; the default tier is price-driven, not order-driven. Chain SKUs missing a spec entry — and spec entries missing a chain SKU — are dropped with a `logError` warning and omitted from the resolved list (config-drift policy). |
 | `bank.ts` | Cosmos SDK bank queries |
 | `tx.ts` | Transaction signing client and message builders for all Manifest modules (billing, SKU, provider management) |
-| `provider-api.ts` | Auth helpers, health check, connection info, upload — delegates to `@manifest-network/manifest-mcp-fred` with CORS proxy/SSRF adapter. Keeps `validateAuthTimestamp` and null-returning `getProviderHealth` locally |
+| `provider-api.ts` | Auth helpers, health check, connection info — delegates to `@manifest-network/manifest-mcp-fred` with CORS proxy/SSRF adapter. Keeps `validateAuthTimestamp` and null-returning `getProviderHealth` locally |
 | `fred.ts` | Fred HTTP wrappers (delegate to mono fred) + WebSocket streaming + Barney-specific polling |
 | `providerFetchAdapter.ts` | `fetchFn` adapter that injects DEV CORS proxy routing and PROD SSRF validation for mono's HTTP functions |
 | `morpheus.ts` | OpenAI-compatible SSE streaming client via `/api/morpheus/` proxy |

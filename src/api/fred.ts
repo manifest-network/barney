@@ -13,7 +13,6 @@ import {
   getLeaseStatus as fredGetLeaseStatus,
   getLeaseProvision as fredGetLeaseProvision,
   getLeaseReleases as fredGetLeaseReleases,
-  getLeaseInfo as fredGetLeaseInfo,
   restartLease as fredRestartLease,
   updateLease as fredUpdateLease,
   ProviderApiError,
@@ -21,7 +20,6 @@ import {
   type FredLeaseLogs,
   type FredLeaseProvision,
   type FredActionResponse,
-  type FredLeaseInfo,
   type FredLeaseReleases,
 } from '@manifest-network/manifest-mcp-fred';
 // getLeaseLogs re-sourced to the aggregating SDK's browser-safe ./deploy subpath.
@@ -45,16 +43,7 @@ import {
 // Re-export types and classes from mono for backward compatibility
 export {
   ProviderApiError,
-  MAX_TAIL,
   type FredLeaseStatus,
-  type FredLeaseLogs,
-  type FredLeaseProvision,
-  type FredActionResponse,
-  type FredLeaseInfo,
-  type FredLeaseRelease,
-  type FredLeaseReleases,
-  type FredInstanceInfo,
-  type FredServiceStatus,
 } from '@manifest-network/manifest-mcp-fred';
 
 // ============================================================================
@@ -83,12 +72,6 @@ export function getLeaseReleases(
   providerApiUrl: string, leaseUuid: string, authToken: string
 ): Promise<FredLeaseReleases> {
   return fredGetLeaseReleases(providerApiUrl, leaseUuid, authToken, providerFetch);
-}
-
-export function getLeaseInfo(
-  providerApiUrl: string, leaseUuid: string, authToken: string
-): Promise<FredLeaseInfo> {
-  return fredGetLeaseInfo(providerApiUrl, leaseUuid, authToken, providerFetch);
 }
 
 export function restartLease(

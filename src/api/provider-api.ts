@@ -9,7 +9,6 @@
 import {
   getProviderHealth as fredGetProviderHealth,
   getLeaseConnectionInfo as fredGetLeaseConnectionInfo,
-  uploadLeaseData as fredUploadLeaseData,
   type ProviderHealthResponse,
   type LeaseConnectionResponse,
 } from '@manifest-network/manifest-mcp-fred';
@@ -20,17 +19,8 @@ import { HEALTH_CHECK_TIMEOUT_MS } from '../config/constants';
 // Re-export types and classes from mono for backward compatibility
 export {
   ProviderApiError,
-  type LeaseConnectionResponse,
   type ConnectionDetails,
-  type InstanceInfo,
-  type ServiceConnectionDetails,
-  type ProviderHealthResponse,
-  type AuthTokenPayload,
 } from '@manifest-network/manifest-mcp-fred';
-
-// Re-export from utils/hash.ts for backward compatibility
-export { sha256Hex as computePayloadHash } from '../utils/hash';
-export { isValidMetaHash } from '../utils/hash';
 
 // ============================================================================
 // Barney-specific functions
@@ -89,17 +79,4 @@ export function getLeaseConnectionInfo(
   authToken: string
 ): Promise<LeaseConnectionResponse> {
   return fredGetLeaseConnectionInfo(providerApiUrl, leaseUuid, authToken, providerFetch);
-}
-
-/**
- * Uploads lease payload data to the provider's API.
- * Delegates to mono with CORS proxy/SSRF fetch adapter injected.
- */
-export function uploadLeaseData(
-  providerApiUrl: string,
-  leaseUuid: string,
-  payload: Uint8Array,
-  authToken: string
-): Promise<void> {
-  return fredUploadLeaseData(providerApiUrl, leaseUuid, payload, authToken, providerFetch);
 }
