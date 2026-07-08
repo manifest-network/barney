@@ -1373,6 +1373,7 @@ export async function handleDeployManifestError(
     }
     if (verdict === 'deploying') {
       appRegistry.updateApp(address, leaseUuid, { status: 'deploying' });
+      onProgress?.({ phase: 'failed', detail: `Provisioning timed out. Use app_status("${name}") to check progress.` });
       return {
         success: true,
         data: {
@@ -1735,14 +1736,18 @@ export async function executeConfirmedBatchDeploy(
       });
 
       // deployManifest attaches the domain on-chain but doesn't touch barney's
-      // registry. Mirror the single-deploy path: cache the attached domain so the
-      // DNS-polling driver + sidebar dot see it without an app_status round-trip.
-      if (customDomainArg !== '') {
+      // registry. Mirror the single-deploy path: cache the attached domain — derived
+      // from the SDK RESULT, not the request inputs — so the DNS-polling driver +
+      // sidebar dot see it without an app_status round-trip.
+      const attachedDomain =
+        typeof result.custom_domain === 'string' && result.custom_domain !== '' ? result.custom_domain : '';
+      const attachedServiceName = typeof result.service_name === 'string' ? result.service_name : '';
+      if (attachedDomain) {
         try {
           const prior = appRegistry.getAppByLease(address, result.lease_uuid)?.customDomains ?? [];
-          const others = prior.filter((d) => d.serviceName !== customDomainServiceName);
+          const others = prior.filter((d) => d.serviceName !== attachedServiceName);
           appRegistry.updateApp(address, result.lease_uuid, {
-            customDomains: [...others, { serviceName: customDomainServiceName, customDomain: customDomainArg }],
+            customDomains: [...others, { serviceName: attachedServiceName, customDomain: attachedDomain }],
           });
         } catch (error) {
           logError('compositeTransactions.executeConfirmedBatchDeploy.cacheCustomDomain', error);

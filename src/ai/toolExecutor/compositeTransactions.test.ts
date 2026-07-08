@@ -2519,9 +2519,11 @@ describe('executeConfirmedBatchDeploy', () => {
     });
 
     it('caches customDomains in the registry after a successful domain deploy', async () => {
+      // Cache write is gated on the SDK RESULT (mirrors single-deploy), not the
+      // request input — so the mock must echo the attach back on the result.
       vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
         await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
-        return makeDeployResult();
+        return makeDeployResult({ custom_domain: 'cached.example.com', service_name: '' });
       });
       const reg = makeRegistry();
       const updateSpy = vi.spyOn(reg, 'updateApp');
@@ -3801,6 +3803,11 @@ describe('handleDeployManifestError', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('deploying');
     expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'deploying' });
+    // Terminal onProgress must still fire so the ProgressCard doesn't stay stuck
+    // on the last 'provisioning' update (only 'ready'/'failed' clear it).
+    expect(c.onProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'failed', detail: expect.stringContaining('Provisioning timed out') }),
+    );
   });
 
   it('case 2 failed: chain terminal → failed + fetchFailureLogs + barney copy', async () => {
