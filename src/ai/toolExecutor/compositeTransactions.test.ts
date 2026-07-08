@@ -150,7 +150,7 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
 function makePayload(): PayloadAttachment {
   return {
     bytes: new Uint8Array([1, 2, 3]),
-    filename: 'docker-compose.yml',
+    filename: 'docker-compose.json',
     size: 3,
     hash: 'a'.repeat(64),
   };
@@ -173,7 +173,7 @@ function makeDeployResult(overrides: Partial<DeployResult> = {}): DeployResult {
 // tests that exercise the file-attach path post-§3.9 (non-JSON payloads are
 // now rejected before reaching confirmation — see "rejects a non-JSON file
 // upload" below).
-function makeJsonPayload(filename = 'docker-compose.yml'): PayloadAttachment {
+function makeJsonPayload(filename = 'docker-compose.json'): PayloadAttachment {
   const json = JSON.stringify({ image: 'nginx', port: '80' });
   const bytes = new TextEncoder().encode(json);
   return { bytes, filename, size: bytes.length, hash: 'b'.repeat(64) };
