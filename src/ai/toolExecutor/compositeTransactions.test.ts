@@ -2452,6 +2452,28 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(lastProgress.batch).toBeDefined();
   });
 
+  it('records the deployManifest-resolved providerUrl (onLeaseCreated arg), not the stale entry value', async () => {
+    // Regression guard (Copilot PR #106): the registry must record the URL
+    // deployManifest actually resolved (onLeaseCreated's 2nd arg), mirroring
+    // single-deploy — NOT entry.providerUrl. Use a DISTINCT resolved URL so the
+    // assertion fails if the code reverts to entry.providerUrl.
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://resolved.example.com');
+      return makeDeployResult();
+    });
+    const registry = makeRegistry();
+    const entries = [
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://stale.example.com', payload: makePayload() },
+    ];
+
+    await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ appRegistry: registry }));
+
+    expect(registry.addApp).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ providerUrl: 'https://resolved.example.com' }),
+    );
+  });
+
   it('records a raw create-lease rejection in failed[] and keeps the rest', async () => {
     vi.mocked(deployManifest)
       .mockImplementationOnce(async (_ctx, _spec, callOptions) => {

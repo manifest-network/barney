@@ -1649,7 +1649,10 @@ export async function executeConfirmedBatchDeploy(
 
       let capturedLeaseUuid: string | undefined;
       const callOptions: DeployCallOptions = {
-        onLeaseCreated: (leaseUuid) => {
+        // Use the providerUrl deployManifest resolved (its 2nd arg), mirroring
+        // the single-deploy path (:1155) — NOT entry.providerUrl — so the
+        // registry records the exact provider the SDK used for upload/poll.
+        onLeaseCreated: (leaseUuid, providerUrl) => {
           capturedLeaseUuid = leaseUuid;
           updateProgress('uploading', 'Uploading manifest...');
           try {
@@ -1658,7 +1661,7 @@ export async function executeConfirmedBatchDeploy(
               leaseUuid,
               size: entry.size,
               providerUuid: entry.providerUuid,
-              providerUrl: entry.providerUrl,
+              providerUrl,
               createdAt: Date.now(),
               status: 'deploying',
               manifest: sanitizeManifestForStorage(manifest),
