@@ -1488,7 +1488,7 @@ describe('executeDeployApp', () => {
     const result = await executeDeployApp({}, makeOptions(), payload);
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Manifest must be valid JSON — convert your YAML to JSON.');
+    expect(result.error).toBe('Manifest must be valid JSON — convert YAML/other formats to JSON first.');
   });
 
   it('returns error for invalid internal _serviceNames metadata', async () => {
@@ -1769,7 +1769,7 @@ describe('executeDeployApp', () => {
     };
     const result = await executeDeployApp({}, makeOptions(), payload);
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Manifest must be valid JSON — convert your YAML to JSON.');
+    expect(result.error).toBe('Manifest must be valid JSON — convert YAML/other formats to JSON first.');
   });
 
   it('accepts a valid JSON file upload and stores it as the editable manifest', async () => {
@@ -2472,6 +2472,37 @@ describe('executeConfirmedBatchDeploy', () => {
       expect.anything(),
       expect.objectContaining({ providerUrl: 'https://resolved.example.com' }),
     );
+  });
+
+  it('batch failure fetches diagnostics from the deployManifest-resolved providerUrl, not the stale entry value', async () => {
+    // Regression guard (Copilot PR #106): handleDeployManifestError's
+    // fetchFailureLogs must use the providerUrl deployManifest actually
+    // resolved (onLeaseCreated's 2nd arg), mirroring single-deploy — NOT
+    // entry.providerUrl. Use a DISTINCT resolved URL so the assertion fails
+    // if the code reverts to entry.providerUrl.
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('lease-x', 'https://resolved.example.com');
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true });
+    });
+    // getLease → null so classifyLeaseChainState's verdict is 'failed', which
+    // is what routes handleDeployManifestError into fetchFailureLogs.
+    // *Once: these mocks are shared across describes and vi.clearAllMocks()
+    // doesn't clear a configured resolved value — a persisting mockResolvedValue
+    // here would leak into later describes (e.g. executeConfirmedUpdateApp's
+    // rollback-detection getLeaseProvision call) that rely on the default
+    // (unconfigured) mock behavior.
+    vi.mocked(getLease).mockResolvedValueOnce(null as any);
+    vi.mocked(getLeaseProvision).mockResolvedValueOnce({ status: 'failed', fail_count: 1, last_error: 'OOMKilled' } as any);
+    vi.mocked(getLeaseLogs).mockResolvedValueOnce({ lease_uuid: 'lease-x', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
+
+    const entries = [
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://stale.example.com', payload: makePayload() },
+    ];
+
+    await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+
+    expect(getLeaseProvision).toHaveBeenCalledWith('https://resolved.example.com', 'lease-x', expect.anything());
+    expect(getLeaseProvision).not.toHaveBeenCalledWith('https://stale.example.com', 'lease-x', expect.anything());
   });
 
   it('records a raw create-lease rejection in failed[] and keeps the rest', async () => {

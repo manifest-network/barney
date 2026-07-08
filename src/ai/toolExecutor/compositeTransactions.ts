@@ -872,7 +872,7 @@ export async function executeDeployApp(
     try {
       JSON.parse(json);
     } catch {
-      return { success: false, error: 'Manifest must be valid JSON — convert your YAML to JSON.' };
+      return { success: false, error: 'Manifest must be valid JSON — convert YAML/other formats to JSON first.' };
     }
     args._generatedManifest = json;
   }
@@ -1648,12 +1648,14 @@ export async function executeConfirmedBatchDeploy(
       };
 
       let capturedLeaseUuid: string | undefined;
+      let capturedProviderUrl: string | undefined;
       const callOptions: DeployCallOptions = {
         // Use the providerUrl deployManifest resolved (its 2nd arg), mirroring
         // the single-deploy path (:1155) — NOT entry.providerUrl — so the
         // registry records the exact provider the SDK used for upload/poll.
         onLeaseCreated: (leaseUuid, providerUrl) => {
           capturedLeaseUuid = leaseUuid;
+          capturedProviderUrl = providerUrl;
           updateProgress('uploading', 'Uploading manifest...');
           try {
             appRegistry.addApp(address, {
@@ -1710,7 +1712,7 @@ export async function executeConfirmedBatchDeploy(
         const errResult = await handleDeployManifestError(error, {
           name,
           leaseUuid: capturedLeaseUuid,
-          providerUrl: entry.providerUrl,
+          providerUrl: capturedProviderUrl ?? entry.providerUrl,
           address,
           signing,
           appRegistry,
