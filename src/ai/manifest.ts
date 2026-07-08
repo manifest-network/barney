@@ -3,7 +3,7 @@
  * Builds a provider-compatible manifest JSON from a Docker image reference,
  * computes its SHA-256 hash, and returns a PayloadAttachment.
  *
- * Delegates core manifest construction to @manifest-network/manifest-mcp-fred,
+ * Delegates core manifest construction to the @manifest-network/manifest-sdk/deploy facade,
  * adding Barney-specific behavior: port string normalization, password generation,
  * tmpfs/expose string splitting, payload hashing, and error handling.
  *
@@ -171,7 +171,7 @@ function toFredOptions(opts: BuildManifestOptions): FredBuildManifestOptions {
  * Build a manifest JSON from Docker image parameters, compute its hash,
  * and return a PayloadAttachment ready for the deploy flow.
  *
- * Delegates manifest construction to @manifest-network/manifest-mcp-fred,
+ * Delegates manifest construction to the @manifest-network/manifest-sdk/deploy facade,
  * adding password generation, payload hashing, and size validation.
  */
 export async function buildManifest(opts: BuildManifestOptions): Promise<BuildManifestResult> {
@@ -241,7 +241,7 @@ export interface StackManifestOptions {
  * 1-63 chars, lowercase alphanumeric + hyphens, no leading/trailing hyphen.
  * Returns null if valid, or an error string describing the issue.
  *
- * Wraps @manifest-network/manifest-mcp-fred's validateServiceName (boolean)
+ * Wraps the SDK facade's validateServiceName (boolean)
  * with Barney's error message convention.
  */
 export function validateServiceName(name: string): string | null {
@@ -259,7 +259,7 @@ export function validateServiceName(name: string): string | null {
  *
  * The resulting manifest format: `{ "services": { "web": {...}, "db": {...} } }`
  *
- * Uses @manifest-network/manifest-mcp-fred's buildManifest per service,
+ * Uses the SDK facade's buildManifest per service,
  * with Barney-specific stack wrapping, password generation, and payload hashing.
  */
 export async function buildStackManifest(opts: StackManifestOptions): Promise<BuildManifestResult> {

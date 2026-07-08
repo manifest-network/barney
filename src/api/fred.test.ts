@@ -5,10 +5,10 @@ import { providerFetch } from './providerFetchAdapter';
 import { LeaseState } from './billing';
 import { ProviderApiError } from './provider-api';
 
-// Mock the mono fred module to bypass checkedFetch's AbortController timeout,
-// which conflicts with vi.useFakeTimers() in polling tests.
-// The mock delegates getLeaseStatus to globalThis.fetch (stubbed per-test)
-// with the same LeaseState conversion mono does internally.
+// Mock the SDK ./deploy facade (source of the fred HTTP fns) to bypass checkedFetch's
+// AbortController timeout, which conflicts with vi.useFakeTimers() in polling tests.
+// The mock delegates getLeaseStatus to globalThis.fetch (stubbed per-test) with the
+// same LeaseState conversion the real fn does internally.
 vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@manifest-network/manifest-sdk/deploy')>();
   return {

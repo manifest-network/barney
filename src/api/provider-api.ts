@@ -1,9 +1,9 @@
 /**
  * Provider API client — auth, health checks, connection info, payload upload.
  *
- * Most functions delegate to @manifest-network/manifest-mcp-fred with Barney's
- * CORS proxy/SSRF fetch adapter injected. Barney-specific code (validateAuthTimestamp,
- * null-returning getProviderHealth) stays here.
+ * Most functions delegate to the @manifest-network/manifest-sdk/deploy facade with
+ * Barney's CORS proxy/SSRF fetch adapter injected. Barney-specific code
+ * (validateAuthTimestamp, null-returning getProviderHealth) stays here.
  */
 
 import {

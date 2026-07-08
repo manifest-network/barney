@@ -1,19 +1,19 @@
 /**
  * Fred API client — WebSocket streaming + polling for lease deployment status.
  *
- * HTTP functions (getLeaseStatus, getLeaseLogs, etc.) delegate to
- * @manifest-network/manifest-mcp-fred with Barney's CORS proxy/SSRF
+ * HTTP functions (getLeaseStatus, getLeaseLogs, etc.) delegate to the
+ * @manifest-network/manifest-sdk/deploy facade with Barney's CORS proxy/SSRF
  * fetch adapter injected automatically.
  *
  * Browser-specific code (WebSocket, CORS proxy) stays here.
  */
 
 import { z } from 'zod';
-// HTTP fns sourced from the SDK's browser-safe ./deploy facade (re-exports mono-fred
-// verbatim — identical fns + signatures). Barney's wrappers below own provider-URL +
-// ADR-036 auth + providerFetch injection; the LLM-vs-LogCard log truncation stays in
-// compositeQueries.ts. Use getLeaseLogs, never getAppLogs — the latter's 4000-char cap
-// would clip the full-logs LogCard.
+// HTTP fns sourced from the SDK's browser-safe ./deploy facade, which re-exports
+// mono-fred verbatim (identical fns + signatures). Barney's wrappers below own
+// provider-URL + ADR-036 auth + providerFetch injection; the LLM-vs-LogCard log
+// truncation stays in compositeQueries.ts. Use getLeaseLogs, never getAppLogs —
+// the latter's 4000-char cap would clip the full-logs LogCard.
 import {
   getLeaseStatus as fredGetLeaseStatus,
   getLeaseLogs as fredGetLeaseLogs,
