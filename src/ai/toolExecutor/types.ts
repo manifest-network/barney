@@ -3,8 +3,7 @@
  */
 
 import type { CosmosClientManager, SignArbitraryResult } from '@manifest-network/manifest-sdk';
-import type { createAuthTokens } from '@manifest-network/manifest-sdk/deploy';
-import type { ProviderAuthPort } from '@manifest-network/manifest-mcp-fred';
+import type { createAuthTokens, ProviderAuthPort } from '@manifest-network/manifest-sdk/deploy';
 import type { DeployProgress } from '../progress';
 import type { AppEntry } from '../../registry/appRegistry';
 import type { MessageCard } from '../../contexts/aiTypes';

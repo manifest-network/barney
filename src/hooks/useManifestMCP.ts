@@ -11,9 +11,7 @@ import {
   type WalletProvider,
   type SignArbitraryResult,
 } from '@manifest-network/manifest-sdk';
-// ADR-036 D3: createProviderAuth is not re-exported on the @manifest-network/manifest-sdk
-// facade yet (ENG follow-up filed) — import from manifest-mcp-fred directly.
-import { createProviderAuth } from '@manifest-network/manifest-mcp-fred';
+import { createProviderAuth } from '@manifest-network/manifest-sdk/deploy';
 import { createAuthTokensAdapter } from './authTokensAdapter';
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import { RPC_ENDPOINT } from '../api/config';

@@ -43,9 +43,7 @@ import type { SigningContext } from './types';
 import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
 import { getReadClient } from '../../api/readClient';
 import { providerFetch } from '../../api/providerFetchAdapter';
-// ADR-036 D3: FredAuthCtx is not on the manifest-sdk facade yet (mono follow-up
-// filed); import direct from -fred, our existing direct dep.
-import { TerminalChainStateError, deployManifest, type FredAuthCtx, type DeployCallOptions } from '@manifest-network/manifest-mcp-fred';
+import { TerminalChainStateError, deployManifest, type FredAuthCtx, type DeployCallOptions } from '@manifest-network/manifest-sdk/deploy';
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([

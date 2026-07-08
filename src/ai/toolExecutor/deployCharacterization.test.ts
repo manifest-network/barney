@@ -77,10 +77,10 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   cosmosTx: vi.fn(),
   setItemCustomDomain: vi.fn(),
 }));
-// C2 re-point: the confirmed single-deploy path now drives deployManifest +
-// getReadClient. Spread the original so manifest.ts's buildManifest/mergeManifest/
-// metaHashHex re-exports survive.
-vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => ({
+// ENG-483: deployManifest + TerminalChainStateError are imported from the SDK
+// deploy facade, so mock there. Spread the original facade; manifest.ts's
+// buildManifest/mergeManifest/metaHashHex come from -fred (unmocked, real).
+vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   ...(await importOriginal()),
   deployManifest: vi.fn(),
   TerminalChainStateError: class TerminalChainStateError extends Error {
@@ -104,7 +104,7 @@ vi.mock('../../api/leaseByCustomDomain', () => ({
 
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-mcp-core';
-import { deployManifest } from '@manifest-network/manifest-mcp-fred';
+import { deployManifest } from '@manifest-network/manifest-sdk/deploy';
 import { getLease } from '../../api/billing';
 
 const ADDRESS = 'manifest1abc';

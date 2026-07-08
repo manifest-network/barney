@@ -118,7 +118,7 @@ executeConfirmedTool(toolName, args, clientManager, options, payload?)
 
 - `compositeQueries.ts` — read-only operations that resolve immediately.
 - `compositeTransactions.ts` — TX builders that *return* a confirmation request first; the actual signing happens in the `executeConfirmed*` companion when the user approves. `deploy_app`/`batch_deploy` delegate the create-lease → (set-domain) → upload → provision-poll spine to the SDK's `deployManifest` primitive (ENG-279). Deploy-path helpers live here: `buildFredAuthCtx`, `classifyLeaseChainState`, `handleDeployManifestError` (plus `deriveUrlFromConnection` in `helpers.ts`).
-- `deployManifest` (from `@manifest-network/manifest-mcp-fred`) now owns create-lease → set-domain → upload → provision-poll; barney's old hand-rolled orchestration (`transactions.ts`, then `toolExecutor/utils.ts` with `uploadPayloadToProvider`/`computePayloadHash`) is **deleted**.
+- `deployManifest` (imported from the `@manifest-network/manifest-sdk/deploy` facade, which re-exports mono-fred's implementation) now owns create-lease → set-domain → upload → provision-poll; barney's old hand-rolled orchestration (`transactions.ts`, then `toolExecutor/utils.ts` with `uploadPayloadToProvider`/`computePayloadHash`) is **deleted**.
 - `batchRunner.ts` — concurrency-bounded batch execution with shared signing mutex; used by `requestBatchDeploy` and bulk restart. Batch deploy calls `deployManifest` directly (never wrapped in `withSign` — that deadlocks).
 - `helpers.ts`, `types.ts` — shared types (`ToolResult`, `ToolExecutorOptions`, `PayloadAttachment`, `SigningContext`) and URL/port shaping helpers. ADR-036 tokens are minted by the single `createProviderAuth` instance built in `src/hooks/useManifestMCP.ts`, exposed on `SigningContext` as `providerAuth` (address-param) plus the `authTokens` address-binding adapter.
 
@@ -206,7 +206,7 @@ executeConfirmedDeployApp:
   1. Rebuild payload from confirmed manifest JSON (buildPayloadFromManifest)
   2. Build ManifestDeploySpec { manifest, sku:{resolved skuUuid,providerUuid}, customDomain?, serviceName? }
   3. buildFredAuthCtx(clientManager, signing) → FredAuthCtx { query, chain, fetch, logger, providerAuth }
-  4. deployManifest(ctx, spec, callOptions)          (@manifest-network/manifest-mcp-fred)
+  4. deployManifest(ctx, spec, callOptions)          (@manifest-network/manifest-sdk/deploy)
        ├─ create lease on-chain (cosmosTx, internal)     onProgress({ phase: 'creating_lease' })
        ├─ onLeaseCreated → addApp(status:'deploying')    onProgress({ phase: 'uploading' })
        ├─ optional set-domain (atomic, before upload)

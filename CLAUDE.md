@@ -169,7 +169,7 @@ Barney-specific code that stays local:
 
 The TX path splits by tool:
 
-- **`deploy_app` / `batch_deploy`** — delegate to the SDK's `deployManifest` primitive (`@manifest-network/manifest-mcp-fred`), which runs create-lease (via `cosmosTx` internally) → optional set-domain → payload upload → provision-poll as one call. barney no longer hand-rolls this spine.
+- **`deploy_app` / `batch_deploy`** — delegate to the SDK's `deployManifest` primitive (imported from the `@manifest-network/manifest-sdk/deploy` facade), which runs create-lease (via `cosmosTx` internally) → optional set-domain → payload upload → provision-poll as one call. barney no longer hand-rolls this spine.
 - **`stop_app` / `fund_credits` / `cosmos_tx`** — `cosmosTx()` from `@manifest-network/manifest-mcp-core` (billing `close-lease` / `fund-credit`, or the raw escape hatch). Uses manifestjs internally.
 - **`update_app` / `restart_app`** — provider HTTP via `updateLease` / `restartLease` (`src/api/fred.ts` → mono fred), authenticated with an ADR-036 token; no chain TX.
 - **`set_custom_domain`** — `setItemCustomDomain` from `@manifest-network/manifest-mcp-core` (standalone tool only; the deploy path attaches domains atomically *inside* `deployManifest`).
