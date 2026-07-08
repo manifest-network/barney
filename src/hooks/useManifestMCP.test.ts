@@ -39,11 +39,16 @@ vi.mock('@manifest-network/manifest-sdk', () => ({
   createSignerAdapter: (...args: unknown[]) => mockCreateSignerAdapter(...args),
 }));
 
-const mockAuthTokens = { getAuthToken: vi.fn(), getLeaseDataAuthToken: vi.fn() };
-const mockCreateAuthTokens = vi.fn<(...args: unknown[]) => typeof mockAuthTokens>(() => mockAuthTokens);
+const mockProviderAuth = {
+  providerToken: vi.fn().mockResolvedValue('provider-token'),
+  leaseDataToken: vi.fn().mockResolvedValue('lease-data-token'),
+};
+const mockCreateProviderAuth = vi.fn<(...args: unknown[]) => typeof mockProviderAuth>(
+  () => mockProviderAuth,
+);
 
-vi.mock('@manifest-network/manifest-sdk/deploy', () => ({
-  createAuthTokens: (...args: unknown[]) => mockCreateAuthTokens(...args),
+vi.mock('@manifest-network/manifest-mcp-fred', () => ({
+  createProviderAuth: (...args: unknown[]) => mockCreateProviderAuth(...args),
 }));
 
 // Keep the mutex trivial: withSign runs the fn inline; signArbitraryWithMutex
@@ -108,15 +113,25 @@ afterEach(() => {
 });
 
 describe('useManifestMCP signing capability gate', () => {
-  it('exposes a SigningContext when the wallet supports signArbitrary', () => {
+  it('exposes a SigningContext whose authTokens delegate to a single createProviderAuth', async () => {
     render();
     expect(captured?.signing).toBeDefined();
-    expect(captured?.signing?.authTokens).toBe(mockAuthTokens);
     expect(captured?.signing?.withSign).toBe(mockWithSign);
-    expect(mockCreateAuthTokens).toHaveBeenCalledWith(
+
+    // ONE minter, built from the signer adapter + chain id.
+    expect(mockCreateProviderAuth).toHaveBeenCalledTimes(1);
+    expect(mockCreateProviderAuth).toHaveBeenCalledWith(
       { type: 'signer-adapter' },
       { chainId: 'manifest-test' },
     );
+
+    // authTokens is a thin address-binding adapter over THAT instance.
+    await captured?.signing?.authTokens.getAuthToken('lease-1' as never);
+    expect(mockProviderAuth.providerToken).toHaveBeenCalledWith({
+      address: 'manifest1test',
+      leaseUuid: 'lease-1',
+    });
+
     // Connected: clientManager present.
     expect(captured?.clientManager).toBe(mockManager);
     expect(captured?.isConnected).toBe(true);
@@ -128,8 +143,8 @@ describe('useManifestMCP signing capability gate', () => {
     // The regression guard: no SigningContext for a signArbitrary-less wallet,
     // so the tool executor fast-fails before any billed action.
     expect(captured?.signing).toBeUndefined();
-    // The auth-token factory must NOT be built when the wallet cannot sign.
-    expect(mockCreateAuthTokens).not.toHaveBeenCalled();
+    // The minter must NOT be built when the wallet cannot sign.
+    expect(mockCreateProviderAuth).not.toHaveBeenCalled();
     expect(mockCreateSignerAdapter).not.toHaveBeenCalled();
     // Chain TXs/queries still work: clientManager is present and connected.
     expect(captured?.clientManager).toBe(mockManager);

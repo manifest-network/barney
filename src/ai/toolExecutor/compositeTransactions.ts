@@ -7,9 +7,15 @@ import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import {
   asFqdn,
   asLeaseUuid,
+  asSkuUuid,
+  asProviderUuid,
   cosmosTx,
   noopLogger,
   setItemCustomDomain as monoSetItemCustomDomain,
+  ManifestMCPError,
+  ManifestMCPErrorCode,
+  type ManifestDeploySpec,
+  type DeployResult,
 } from '@manifest-network/manifest-mcp-core';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
@@ -21,8 +27,7 @@ import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
-import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from './utils';
-import { BACKEND_SERVICE_NAMES, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
+import { BACKEND_SERVICE_NAMES, deriveUrlFromConnection, extractPrimaryServicePorts, formatConnectionUrl, TCP_ONLY_PORTS, parseContainerPort } from './helpers';
 import { isValidFqdn, normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
@@ -37,6 +42,11 @@ import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import type { SigningContext } from './types';
 import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
+import { getReadClient } from '../../api/readClient';
+import { providerFetch } from '../../api/providerFetchAdapter';
+// ADR-036 D3: FredAuthCtx is not on the manifest-sdk facade yet (mono follow-up
+// filed); import direct from -fred, our existing direct dep.
+import { TerminalChainStateError, deployManifest, type FredAuthCtx, type DeployCallOptions } from '@manifest-network/manifest-mcp-fred';
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([
@@ -186,23 +196,6 @@ export function extractServiceNamesFromPayload(bytes: Uint8Array): string[] {
   }
 
   return valid;
-}
-
-/**
- * Format lease items for create-lease command.
- * Single-service: ['sku-uuid:1']
- * Stack (multi-service): ['sku-uuid:1:web', 'sku-uuid:1:db', ...]
- */
-export function formatLeaseItems(skuUuid: string, serviceNames?: string[]): string[] {
-  if (!serviceNames || serviceNames.length === 0) {
-    return [`${skuUuid}:1`];
-  }
-  for (const name of serviceNames) {
-    if (typeof name !== 'string' || !name) {
-      throw new Error(`Invalid service name in lease items: ${JSON.stringify(name)}`);
-    }
-  }
-  return serviceNames.map(name => `${skuUuid}:1:${name}`);
 }
 
 /** Coerce a string-or-number tool arg to string; reject objects/arrays/booleans. */
@@ -647,6 +640,27 @@ async function fetchFailureLogs(
 // ============================================================================
 
 /**
+ * Assemble the FredAuthCtx deployManifest needs. `query` = read client's
+ * ManifestQueryClient (backs resolveProviderUrl); `chain` = the SIGNING
+ * clientManager (backs cosmosTx create-lease — never the read client's
+ * query-only manager); `fetch` = providerFetch (DEV proxy / PROD SSRF);
+ * `logger` = noopLogger; `providerAuth` = the single root-built minter.
+ */
+export async function buildFredAuthCtx(
+  clientManager: CosmosClientManager,
+  signing: SigningContext,
+): Promise<FredAuthCtx> {
+  const readClient = await getReadClient();
+  return {
+    query: readClient.query,
+    chain: clientManager,
+    fetch: providerFetch,
+    logger: noopLogger,
+    providerAuth: signing.providerAuth,
+  };
+}
+
+/**
  * Pre-validation for deploy_app. Returns confirmation result or error.
  */
 export async function executeDeployApp(
@@ -850,18 +864,21 @@ export async function executeDeployApp(
     return { success: false, error: 'No file attached and no image specified. Attach a manifest file or specify a Docker image (e.g. deploy_app(image="redis:8.4")).' };
   }
 
-  // Make file-attached JSON manifests editable in the confirmation card
-  if (!args._generatedManifest && payload.filename?.endsWith('.json')) {
+  // File-attached manifests must be valid JSON — the deploy SDK JSON.parses
+  // + validates the manifest string (§3.9). Non-JSON (e.g. YAML) is rejected
+  // here so the user gets a clear signal before any TX.
+  if (!args._generatedManifest) {
+    const json = new TextDecoder().decode(payload.bytes);
     try {
-      const json = new TextDecoder().decode(payload.bytes);
-      JSON.parse(json); // validate it's valid JSON
-      args._generatedManifest = json;
+      JSON.parse(json);
     } catch {
-      // Not valid JSON — fall through to read-only display
+      return { success: false, error: 'Manifest must be valid JSON — convert YAML/other formats to JSON first.' };
     }
+    args._generatedManifest = json;
   }
 
-  // Extract service names from file-uploaded stack manifests (JSON or YAML)
+  // Extract service names from the file-uploaded stack manifest (JSON only —
+  // non-JSON content was already rejected above).
   if (!args._serviceNames) {
     const names = extractServiceNamesFromPayload(payload.bytes);
     if (names.length > 0) {
@@ -1072,7 +1089,10 @@ export async function executeDeployApp(
 }
 
 /**
- * Execute deploy_app after user confirmation.
+ * Execute deploy_app after user confirmation. Delegates the create-lease →
+ * (set-domain) → upload → poll spine to the SDK's deployManifest primitive
+ * (ENG-279 §3.2). barney keeps the plan phase, registry state machine,
+ * progress UI, and URL shaping around it.
  */
 export async function executeConfirmedDeployApp(
   args: Record<string, unknown>,
@@ -1084,11 +1104,11 @@ export async function executeConfirmedDeployApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
-  // Reconstruct payload from stored manifest JSON (image-based deploy)
+  // Reconstruct payload from stored manifest JSON (image/stack deploy). This
+  // strips MANIFEST_NOTICE_KEY, so payload.bytes are the byte-exact upload body.
   if (!payload && typeof args._generatedManifest === 'string') {
     payload = await buildPayloadFromManifest(args._generatedManifest);
   }
-
   if (!payload) return { success: false, error: 'Payload missing' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
 
@@ -1097,354 +1117,299 @@ export async function executeConfirmedDeployApp(
   const skuUuid = args.skuUuid as string;
   const providerUuid = args.providerUuid as string;
   const providerUrl = args.providerUrl as string;
-  const metaHashHex = payload.hash;
 
-  // Create lease
+  // The exact JSON deployManifest will JSON.parse + validateManifest + hash
+  // (its meta_hash must match the uploaded body — buildPayloadFromManifest
+  // already stripped _notice, §3.9).
+  const manifestJson = new TextDecoder().decode(payload.bytes);
+
+  // Custom domain: pre-validated in the plan phase. Attach IN-deploy via the
+  // spec (deployManifest sets it before upload — Traefik-safe). barney no
+  // longer calls monoSetItemCustomDomain itself (would double-set, §3.10).
+  const customDomainArg = typeof args.customDomain === 'string' ? args.customDomain : '';
+  const customDomainServiceName = typeof args.customDomainServiceName === 'string' ? args.customDomainServiceName : '';
+
+  const spec: ManifestDeploySpec = {
+    manifest: manifestJson,
+    sku: {
+      kind: 'resolved',
+      skuUuid: asSkuUuid(skuUuid),
+      providerUuid: asProviderUuid(providerUuid),
+    },
+    ...(customDomainArg !== '' ? { customDomain: customDomainArg } : {}),
+    // OMIT serviceName when empty — deployManifest throws if it is set on a
+    // single-service lease (§3.10). Only meaningful with a customDomain.
+    ...(customDomainArg !== '' && customDomainServiceName !== ''
+      ? { serviceName: customDomainServiceName }
+      : {}),
+  };
+
   onProgress?.({ phase: 'creating_lease', detail: 'Creating lease on-chain...' });
 
-  const serviceNamesResult = validateInternalServiceNames(args._serviceNames, 'deploy_app');
-  if (serviceNamesResult.error) {
-    onProgress?.({ phase: 'failed', detail: serviceNamesResult.error });
-    return { success: false, error: serviceNamesResult.error };
-  }
-  const leaseItems = formatLeaseItems(skuUuid, serviceNamesResult.serviceNames);
-  const cmdArgs = ['--meta-hash', metaHashHex, ...leaseItems];
-  const result = await cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true);
+  // Captured from onLeaseCreated (runs OUTSIDE deployManifest's try/catch); the
+  // error handler + checkChainState both read these.
+  let capturedLeaseUuid: string | undefined;
+  let capturedProviderUrl: string | undefined;
 
-  if (result.code !== 0) {
-    onProgress?.({ phase: 'failed', detail: result.rawLog ?? 'Transaction failed' });
-    return { success: false, error: result.rawLog ?? 'Failed to create lease' };
-  }
+  const callOptions: DeployCallOptions = {
+    onLeaseCreated: (leaseUuid, url) => {
+      capturedLeaseUuid = leaseUuid;
+      capturedProviderUrl = url;
+      onProgress?.({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
+      try {
+        appRegistry.addApp(address, {
+          name,
+          leaseUuid,
+          size,
+          providerUuid,
+          providerUrl: url,
+          createdAt: Date.now(),
+          status: 'deploying',
+          manifest: sanitizeManifestForStorage(manifestJson),
+        });
+      } catch (error) {
+        // Lease already on-chain — log, don't abort.
+        logError('compositeTransactions.executeConfirmedDeployApp.addApp', error);
+      }
+    },
+    abortSignal: signal, // top-level, NOT inside pollOptions
+    pollOptions: {
+      intervalMs: FRED_POLL_INTERVAL_MS,
+      timeoutMs: AI_DEPLOY_PROVISION_TIMEOUT_MS,
+      onProgress: (status) => {
+        onProgress?.({ phase: 'provisioning', detail: status.phase || 'Provisioning...', fredStatus: status });
+      },
+      // null-on-404 / NEVER-throw: the SDK poll PROPAGATES checkChainState
+      // errors (§3.8). Early rejected/closed detection only.
+      checkChainState: async (): Promise<TerminalChainState | null> => {
+        try {
+          const lease = capturedLeaseUuid ? await getLease(capturedLeaseUuid) : null;
+          if (!lease) return null;
+          if (lease.state === LeaseState.LEASE_STATE_CLOSED) return { state: 'closed' };
+          if (lease.state === LeaseState.LEASE_STATE_REJECTED) return { state: 'rejected' };
+          if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return { state: 'expired' };
+          return null;
+        } catch (error) {
+          logError('compositeTransactions.executeConfirmedDeployApp.checkChainState', error);
+          return null;
+        }
+      },
+    },
+  };
 
-  const leaseUuid = extractLeaseUuidFromTxResult(result);
-  if (!leaseUuid) {
-    onProgress?.({ phase: 'failed', detail: 'Could not extract lease UUID from transaction' });
-    return { success: false, error: 'Lease created but could not extract UUID. Check your leases manually.' };
-  }
-
-  // Add to registry (store manifest for re-deploy, secrets stripped)
-  const manifestJson = new TextDecoder().decode(payload.bytes);
+  let result: DeployResult;
   try {
-    appRegistry.addApp(address, {
-      name,
-      leaseUuid,
-      size,
-      providerUuid,
-      providerUrl,
-      createdAt: Date.now(),
-      status: 'deploying',
-      manifest: sanitizeManifestForStorage(manifestJson),
-    });
+    const ctx = await buildFredAuthCtx(clientManager, signing);
+    result = await deployManifest(ctx, spec, callOptions);
   } catch (error) {
-    // Lease already created on-chain — log but don't abort the deploy flow
-    logError('compositeTransactions.executeConfirmedDeployApp.addApp', error);
+    return await handleDeployManifestError(error, {
+      name,
+      leaseUuid: capturedLeaseUuid,
+      providerUrl: capturedProviderUrl ?? providerUrl,
+      address,
+      signing,
+      appRegistry,
+      onProgress,
+    });
   }
 
-  // Optional: attach custom domain BEFORE manifest upload so Traefik picks
-  // up the per-item custom_domain label as soon as the container is up.
-  // A failure here is non-fatal: the deploy proceeds, the user is left in
-  // the existing 2-step state and can retry set_custom_domain standalone.
-  // Type is module-scoped (`DomainAttachResult`) so the batch path and
-  // `fallbackToChainState` can use the same shape.
-  const customDomainArg = typeof args.customDomain === 'string' ? args.customDomain : '';
-  let domainAttach: DomainAttachResult = { kind: 'none' };
-  if (customDomainArg !== '') {
-    const customDomainServiceName = typeof args.customDomainServiceName === 'string' ? args.customDomainServiceName : '';
-    try {
-      const domainResult = await monoSetItemCustomDomain(
-        { chain: clientManager, logger: noopLogger },
-        {
-          leaseUuid: asLeaseUuid(leaseUuid),
-          customDomain: asFqdn(customDomainArg),
-          ...(customDomainServiceName !== '' ? { serviceName: customDomainServiceName } : {}),
-        },
-      );
-      domainAttach = domainResult.code === 0
-        ? { kind: 'attached', customDomain: customDomainArg, serviceName: customDomainServiceName }
-        : { kind: 'failed', error: `chain rejected with code ${domainResult.code}` };
-    } catch (err) {
-      logError('compositeTransactions.executeConfirmedDeployApp.setItemCustomDomain', err);
-      domainAttach = { kind: 'failed', error: err instanceof Error ? err.message : 'unknown error' };
-    }
-  }
+  const leaseUuid = result.lease_uuid;
 
-  // Upload payload
-  onProgress?.({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
+  // URL shaping — never DeployResult.url (regresses stacks/FQDN, §3.6). Prefer
+  // the no-round-trip shaper; fall back to resolveAppUrl only when connection
+  // is absent (the degraded branch).
+  const shaped = result.connection ? deriveUrlFromConnection(result.connection) : undefined;
+  const { url: connectionUrl, connection } = shaped
+    ?? await resolveAppUrl(
+      result.provider_url,
+      leaseUuid,
+      { state: result.state } as FredLeaseStatus,
+      address,
+      signing,
+      'compositeTransactions.executeConfirmedDeployApp',
+    );
 
-  const uploadResult = await uploadPayloadToProvider(
-    providerUrl,
-    asLeaseUuid(leaseUuid),
-    metaHashHex,
-    payload.bytes,
-    signing.authTokens
-  );
+  // Custom-domain attach outcome comes from deployManifest's result (it set the
+  // domain internally). Cache it so the DNS polling driver + sidebar dot see it.
+  const attachedDomain = typeof result.custom_domain === 'string' && result.custom_domain !== ''
+    ? result.custom_domain
+    : undefined;
+  const attachedServiceName = typeof result.service_name === 'string' ? result.service_name : '';
 
-  if (!uploadResult.success) {
-    onProgress?.({ phase: 'failed', detail: `Upload failed: ${uploadResult.error}` });
-    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-    return {
-      success: false,
-      error: `Lease created but upload failed: ${normalizeErrorPunctuation(uploadResult.error)}. The lease ${leaseUuid} is active — you may need to stop it.`,
+  let customDomainsUpdate: object = {};
+  if (attachedDomain) {
+    const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
+    const others = prior.filter((d) => d.serviceName !== attachedServiceName);
+    customDomainsUpdate = {
+      customDomains: [...others, { serviceName: attachedServiceName, customDomain: attachedDomain }],
     };
   }
 
-  // Poll fred for readiness
-  onProgress?.({ phase: 'provisioning', detail: 'Waiting for deployment...' });
+  appRegistry.updateApp(address, leaseUuid, {
+    status: 'running',
+    url: connectionUrl,
+    connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+    ...customDomainsUpdate,
+  });
+  onProgress?.({ phase: 'ready', detail: 'App is live!' });
 
-  try {
-    const refreshAuthToken = () => signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
-    const authToken = await refreshAuthToken();
+  const expectedCnameTarget = attachedDomain
+    ? resolveExpectedCnameTarget(connection, attachedServiceName)
+    : undefined;
+  const isApexAttached = typeof args.customDomainWarning === 'string' && args.customDomainWarning.length > 0;
+  const recordKind = isApexAttached
+    ? `an ${apexRecordKindLabel(true)} record (apex domains cannot use CNAME)`
+    : `a ${apexRecordKindLabel(false)}`;
 
-    const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
-      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
-      intervalMs: FRED_POLL_INTERVAL_MS,
-      abortSignal: signal,
-      onProgress: (status) => {
-        onProgress?.({
-          phase: 'provisioning',
-          detail: status.phase || 'Provisioning...',
-          fredStatus: status,
-        });
-      },
-      getAuthToken: refreshAuthToken,
-      // Check chain state to detect rejected/closed leases
-      checkChainState: async (): Promise<TerminalChainState | null> => {
-        const lease = await getLease(leaseUuid);
-        if (!lease) return { state: 'closed' };
-        if (lease.state === LeaseState.LEASE_STATE_CLOSED) return { state: 'closed' };
-        if (lease.state === LeaseState.LEASE_STATE_REJECTED) return { state: 'rejected' };
-        if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return { state: 'expired' };
-        return null;
-      },
-    });
+  const message = attachedDomain
+    ? `App "${name}" is live. Custom domain "${attachedDomain}" attached — add ${recordKind} at your registrar pointing at ${expectedCnameTarget ?? '<provider FQDN>'}.`
+    : `App "${name}" is live!`;
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
-      const { url: connectionUrl, connection } = await resolveAppUrl(
-        providerUrl, leaseUuid, fredStatus, address, signing,
-        'compositeTransactions.executeConfirmedDeployApp'
-      );
+  const displayCard = {
+    type: 'app' as const,
+    data: {
+      name,
+      url: connectionUrl,
+      status: 'running',
+      connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+      ...(attachedDomain
+        ? {
+            customDomain: {
+              fqdn: attachedDomain,
+              leaseUuid,
+              serviceName: attachedServiceName,
+              expectedCnameTarget,
+              isApex: isApexAttached,
+            },
+          }
+        : {}),
+    },
+  };
 
-      // Cache the just-attached custom domain so the DNS polling driver
-      // (mounted in MainLayout) sees it without waiting for the user to run
-      // `app_status`. Merge against existing entries — multi-service stacks
-      // can have N domains.
-      let customDomainsUpdate: { customDomains: { serviceName: string; customDomain: string }[] } | object = {};
-      if (domainAttach.kind === 'attached') {
-        const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
-        const others = prior.filter((d) => d.serviceName !== domainAttach.serviceName);
-        customDomainsUpdate = {
-          customDomains: [...others, { serviceName: domainAttach.serviceName, customDomain: domainAttach.customDomain }],
-        };
-      }
-      appRegistry.updateApp(address, leaseUuid, {
-        status: 'running',
-        url: connectionUrl,
-        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
-        ...customDomainsUpdate,
-      });
-      onProgress?.({ phase: 'ready', detail: 'App is live!' });
-
-      // No CustomDomainCard auto-emission on the deploy path. The deploy result
-      // is the primary surface here. DNS progress (4-state polling) is available
-      // by running app_status (chat or sidebar click), which surfaces the
-      // CustomDomainCard for the now-attached domain — same component, just
-      // discovered separately to keep the deploy success surface uncluttered.
-
-      const expectedCnameTarget = domainAttach.kind === 'attached'
-        ? resolveExpectedCnameTarget(connection, domainAttach.serviceName)
-        : undefined;
-      const isApexAttached = typeof args.customDomainWarning === 'string' && args.customDomainWarning.length > 0;
-      const recordKind = isApexAttached
-        ? `an ${apexRecordKindLabel(true)} record (apex domains cannot use CNAME)`
-        : `a ${apexRecordKindLabel(false)}`;
-
-      let message: string;
-      switch (domainAttach.kind) {
-        case 'failed':
-          message = `App "${name}" is live, but the custom-domain attach failed (${domainAttach.error}). Run \`set_custom_domain\` to try again.`;
-          break;
-        case 'attached': {
-          const target = expectedCnameTarget ?? '<provider FQDN>';
-          message = `App "${name}" is live. Custom domain "${domainAttach.customDomain}" attached — add ${recordKind} at your registrar pointing at ${target}.`;
-          break;
-        }
-        case 'none':
-          message = `App "${name}" is live!`;
-          break;
-      }
-
-      // Emit a single rich `app` displayCard. When a custom domain attached,
-      // the AppCard embeds a DomainRow that reads its live DNS status from
-      // the shared `dnsStatuses` slice (no per-card polling).
-      const displayCard = {
-        type: 'app' as const,
-        data: {
-          name,
-          url: connectionUrl,
-          status: 'running',
-          connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
-          ...(domainAttach.kind === 'attached'
-            ? {
-                customDomain: {
-                  fqdn: domainAttach.customDomain,
-                  leaseUuid,
-                  serviceName: domainAttach.serviceName,
-                  expectedCnameTarget,
-                  isApex: isApexAttached,
-                },
-              }
-            : {}),
-        },
-      };
-
-      return {
-        success: true,
-        data: {
-          message,
-          name,
-          url: connectionUrl,
-          status: 'running',
-          ...(domainAttach.kind === 'attached' ? {
-            custom_domain: domainAttach.customDomain,
-            service_name: domainAttach.serviceName,
-            expected_cname_target: expectedCnameTarget,
-            is_apex: isApexAttached,
-          } : {}),
-          ...(domainAttach.kind === 'failed' ? { custom_domain_error: domainAttach.error } : {}),
-        },
-        displayCard,
-      };
-    }
-
-    if (
-      fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
-      fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
-      fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
-      fredStatus.provision_status === 'failed'
-    ) {
-      appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-      onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Deployment failed' });
-
-      const diagnostics = await fetchFailureLogs(providerUrl, leaseUuid, address, signing);
-      const errorMsg = diagnostics
-        ? `Deployment failed: ${fredStatus.last_error || 'Unknown error'}\n\n${diagnostics}`
-        : `Deployment failed: ${fredStatus.last_error || 'Unknown error'}`;
-
-      return {
-        success: false,
-        error: errorMsg,
-      };
-    }
-
-    // Fred didn't confirm — fall back to chain state. Thread domainAttach so
-    // the fallback can preserve customDomains cache + message detail.
-    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress, domainAttach);
-  } catch (error) {
-    logError('compositeTransactions.executeConfirmedDeployApp.polling', error);
-    // Polling failed but lease+upload succeeded — check chain state to determine actual status.
-    // Don't use diagnostics alone to decide failure: they may describe a still-running app.
-    return await fallbackToChainState(name, leaseUuid, appRegistry, address, onProgress, domainAttach);
-  }
-}
-
-/**
- * Custom-domain attach outcome carried from the deploy executor through to
- * `fallbackToChainState`. The success branch (line :1233+) reads this to
- * tailor the result message and registry write; the fallback path mirrors
- * that behavior so a fred-times-out + chain-ACTIVE case doesn't silently
- * drop the customDomains cache (sidebar dot would go blank).
- */
-type DomainAttachResult =
-  | { kind: 'none' }
-  | { kind: 'attached'; customDomain: string; serviceName: string }
-  | { kind: 'failed'; error: string };
-
-/**
- * When fred polling doesn't confirm readiness, check the chain state.
- * If the lease is ACTIVE on chain, trust it and mark the app as running.
- *
- * `domainAttach` is threaded from the caller so this path preserves the
- * customDomains cache (DNS polling driver + sidebar dot need it) and the
- * "domain attached" message detail. Without it, fred-times-out becomes a
- * silent UX loss: the user sees "live!" with no clue the domain attached.
- * Defaults to `{ kind: 'none' }` so future callers don't have to thread it
- * if they have no domain to preserve.
- */
-async function fallbackToChainState(
-  name: string,
-  leaseUuid: string,
-  appRegistry: ToolExecutorOptions['appRegistry'],
-  address: string,
-  onProgress?: ToolExecutorOptions['onProgress'],
-  domainAttach: DomainAttachResult = { kind: 'none' },
-): Promise<ToolResult> {
-  try {
-    const lease = await getLease(leaseUuid);
-    if (lease && lease.state === LeaseState.LEASE_STATE_ACTIVE) {
-      // Chain says ACTIVE — trust it. When a custom domain attached on the
-      // way in, mirror the success-branch behavior at :1243-1255: keep the
-      // customDomains cache populated so the DNS polling driver and the
-      // sidebar dot see the attached domain. Without this, fred-timeout
-      // silently drops customDomains and the user sees "live app" with no
-      // sign the domain attached.
-      let customDomainsUpdate: object = {};
-      if (domainAttach.kind === 'attached' && appRegistry) {
-        const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
-        const others = prior.filter((d) => d.serviceName !== domainAttach.serviceName);
-        customDomainsUpdate = {
-          customDomains: [
-            ...others,
-            { serviceName: domainAttach.serviceName, customDomain: domainAttach.customDomain },
-          ],
-        };
-      }
-      appRegistry?.updateApp(address, leaseUuid, { status: 'running', ...customDomainsUpdate });
-      onProgress?.({ phase: 'ready', detail: 'App is live!' });
-
-      let message: string;
-      switch (domainAttach.kind) {
-        case 'attached':
-          message = `App "${name}" is live. Custom domain "${domainAttach.customDomain}" attached — check the sidebar for DNS status, or run app_status for record details.`;
-          break;
-        case 'failed':
-          message = `App "${name}" is live, but the custom-domain attach failed (${domainAttach.error}). Run \`set_custom_domain\` to try again.`;
-          break;
-        case 'none':
-          message = `App "${name}" is live!`;
-          break;
-      }
-
-      return {
-        success: true,
-        data: {
-          message,
-          name,
-          status: 'running',
-          ...(domainAttach.kind === 'attached' ? {
-            custom_domain: domainAttach.customDomain,
-            service_name: domainAttach.serviceName,
-          } : {}),
-          ...(domainAttach.kind === 'failed' ? { custom_domain_error: domainAttach.error } : {}),
-        },
-      };
-    }
-  } catch (error) {
-    logError('compositeTransactions.fallbackToChainState', error);
-  }
-
-  // Chain state unknown or not active — keep as deploying. Domain attach
-  // outcome doesn't surface here: the deploy itself didn't conclude, so
-  // surfacing "attached!" would mislead.
-  appRegistry?.updateApp(address, leaseUuid, { status: 'deploying' });
-  onProgress?.({ phase: 'failed', detail: `Provisioning timed out. Use app_status("${name}") to check progress.` });
   return {
     success: true,
     data: {
-      message: `App "${name}" is still deploying. Use app_status("${name}") to check progress.`,
+      message,
       name,
-      status: 'deploying',
+      url: connectionUrl,
+      status: 'running',
+      ...(attachedDomain
+        ? {
+            custom_domain: attachedDomain,
+            service_name: attachedServiceName,
+            expected_cname_target: expectedCnameTarget,
+            is_apex: isApexAttached,
+          }
+        : {}),
     },
+    displayCard,
   };
+}
+
+/** Chain-truth verdict for an ambiguous post-lease deployManifest throw (§3.7 case-2). */
+type ChainDeployVerdict = 'running' | 'deploying' | 'failed';
+
+/**
+ * Slim getLease chain-check. ACTIVE → running; a non-terminal in-flight state
+ * (PENDING / unspecified) → deploying; a terminal state (CLOSED/REJECTED/EXPIRED)
+ * OR getLease unavailable (null or throw) → failed. Never throws.
+ */
+export async function classifyLeaseChainState(leaseUuid: string): Promise<ChainDeployVerdict> {
+  try {
+    const lease = await getLease(leaseUuid);
+    if (!lease) return 'failed';
+    if (lease.state === LeaseState.LEASE_STATE_ACTIVE) return 'running';
+    if (
+      lease.state === LeaseState.LEASE_STATE_CLOSED ||
+      lease.state === LeaseState.LEASE_STATE_REJECTED ||
+      lease.state === LeaseState.LEASE_STATE_EXPIRED
+    ) {
+      return 'failed';
+    }
+    return 'deploying';
+  } catch (error) {
+    logError('compositeTransactions.classifyLeaseChainState', error);
+    return 'failed';
+  }
+}
+
+interface DeployErrorContext {
+  name: string;
+  /** From the caller's captured onLeaseCreated value. undefined ⇒ case 1 (no lease). */
+  leaseUuid?: string;
+  providerUrl?: string;
+  address: string;
+  signing: SigningContext;
+  appRegistry: NonNullable<ToolExecutorOptions['appRegistry']>;
+  onProgress?: ToolExecutorOptions['onProgress'];
+}
+
+/**
+ * Classify a deployManifest throw into barney's registry/progress/ToolResult.
+ * Case 1 (raw Error with NO lease): create-lease rejected, no lease exists.
+ * Case 2 (any non-terminal error, leaseUuid present): chain is the source of
+ *   truth — getLease chain-check → running/deploying/failed. Keyed off
+ *   `leaseUuid` rather than `error instanceof ManifestMCPError`: deployManifest
+ *   currently wraps every post-lease throw in ManifestMCPError/
+ *   TerminalChainStateError, so this is unreachable today, but it's
+ *   defense-in-depth against that contract changing — an unexpected error
+ *   type with a lease must still be resolved via chain state, not
+ *   misclassified as "no lease" (Case 1).
+ * Case 3 (TerminalChainStateError): straight failed, no chain-check.
+ */
+export async function handleDeployManifestError(
+  error: unknown,
+  ctx: DeployErrorContext,
+): Promise<ToolResult> {
+  const { name, leaseUuid, providerUrl, address, signing, appRegistry, onProgress } = ctx;
+
+  // Case 3: chain-terminal — definitively failed, no chain re-check.
+  if (error instanceof TerminalChainStateError) {
+    if (leaseUuid) appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    onProgress?.({ phase: 'failed', detail: error.message });
+    return { success: false, error: `Deployment failed: ${error.message}` };
+  }
+
+  // Case 2: ambiguous post-lease throw — chain is the source of truth.
+  if (leaseUuid) {
+    const errMessage = error instanceof Error ? error.message : String(error);
+    const verdict = await classifyLeaseChainState(leaseUuid);
+    if (verdict === 'running') {
+      appRegistry.updateApp(address, leaseUuid, { status: 'running' });
+      onProgress?.({ phase: 'ready', detail: 'App is live!' });
+      return { success: true, data: { message: `App "${name}" is live!`, name, status: 'running' } };
+    }
+    if (verdict === 'deploying') {
+      appRegistry.updateApp(address, leaseUuid, { status: 'deploying' });
+      onProgress?.({ phase: 'failed', detail: `Provisioning timed out. Use app_status("${name}") to check progress.` });
+      return {
+        success: true,
+        data: {
+          message: `App "${name}" is still deploying. Use app_status("${name}") to check progress.`,
+          name,
+          status: 'deploying',
+        },
+      };
+    }
+    // verdict === 'failed'
+    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    onProgress?.({ phase: 'failed', detail: errMessage });
+    const skipLogs = error instanceof ManifestMCPError && error.code === ManifestMCPErrorCode.OPERATION_CANCELLED;
+    const diagnostics = skipLogs || !providerUrl
+      ? null
+      : await fetchFailureLogs(providerUrl, leaseUuid, address, signing);
+    // barney copy — NOT the SDK's "…close_lease" text (barney has no close_lease tool).
+    const errorMsg = diagnostics
+      ? `Deployment failed: ${errMessage}\n\n${diagnostics}`
+      : `Deployment failed: ${errMessage}`;
+    return { success: false, error: errorMsg };
+  }
+
+  // Case 1: raw Error with NO lease (create-lease rejected) — surface the
+  // raw error; no failure-log fetch (there's no lease to fetch logs for).
+  const message = error instanceof Error ? error.message : 'Deployment failed';
+  onProgress?.({ phase: 'failed', detail: message });
+  return { success: false, error: message };
 }
 
 // ============================================================================
@@ -1547,7 +1512,8 @@ export async function executeBatchDeploy(
 
     usedNames.add(name);
 
-    // Extract service names from stack manifests (JSON or YAML)
+    // Extract service names from the stack manifest payload (JSON only —
+    // batch entries are always JSON-serialized in-memory, never file uploads).
     const extractedNames = extractServiceNamesFromPayload(entry.payload.bytes);
     const serviceNames = extractedNames.length > 0 ? extractedNames : undefined;
 
@@ -1628,10 +1594,13 @@ export async function executeBatchDeploy(
 /**
  * Execute batch deploy after user confirmation.
  *
- * Runs per-app deploy pipelines concurrently (bounded by AI_BATCH_DEPLOY_CONCURRENCY).
- * A signing mutex serializes wallet operations (cosmosTx, signArbitrary) to avoid
- * nonce collisions, while non-signing work (HTTP uploads, WS waits, status checks)
- * runs in parallel.
+ * Runs per-app deploy pipelines concurrently (bounded by AI_BATCH_DEPLOY_CONCURRENCY)
+ * by delegating each entry to the SDK `deployManifest` primitive (mirrors the
+ * single-deploy path). Serialization of wallet operations is already provided by
+ * CosmosClientManager.withBroadcastLock (create-lease broadcasts) and the
+ * mutex-wrapped signArbitrary inside providerAuth (ADR-036 token mints) — so
+ * deployManifest runs DIRECTLY under runBatchWithConcurrency, never inside
+ * signing.withSign (that would deadlock, see §3.11 below).
  */
 export async function executeConfirmedBatchDeploy(
   args: Record<string, unknown>,
@@ -1648,9 +1617,11 @@ export async function executeConfirmedBatchDeploy(
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
 
-  const { withSign } = signing;
-
   const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
+
+  // getReadClient is a cached singleton, so the FredAuthCtx is assembled once
+  // and shared across every entry (correctness-neutral, avoids redundant awaits).
+  const ctx = await buildFredAuthCtx(clientManager, signing);
 
   const { succeeded, failed, batchProgress } = await runBatchWithConcurrency({
     entries: batchEntries,
@@ -1661,175 +1632,143 @@ export async function executeConfirmedBatchDeploy(
     executeOne: async (entry, _i, updateProgress) => {
       const name = entry.app_name;
 
-      // ---- Create lease (signing) ----
-      updateProgress('creating_lease', 'Creating lease on-chain...');
+      const manifest = new TextDecoder().decode(entry.payload.bytes);
 
-      const cmdArgs = ['--meta-hash', entry.payload.hash, ...formatLeaseItems(entry.skuUuid, entry.serviceNames)];
-      const txResult = await withSign(() => cosmosTx(clientManager, 'billing', 'create-lease', cmdArgs, true));
+      const customDomainArg =
+        typeof entry.customDomain === 'string' ? entry.customDomain : '';
+      const customDomainServiceName =
+        typeof entry.customDomainServiceName === 'string' ? entry.customDomainServiceName : '';
 
-      if (txResult.code !== 0) {
-        updateProgress('failed', txResult.rawLog ?? 'Transaction failed');
-        return null;
-      }
+      const spec: ManifestDeploySpec = {
+        manifest,
+        sku: {
+          kind: 'resolved',
+          skuUuid: asSkuUuid(entry.skuUuid),
+          providerUuid: asProviderUuid(entry.providerUuid),
+        },
+        // Attach in-deploy: deployManifest sets the domain BEFORE upload (Traefik-safe).
+        ...(customDomainArg !== '' ? { customDomain: customDomainArg } : {}),
+        // OMIT serviceName when empty — the SDK throws on serviceName for a
+        // single-service lease. Only meaningful alongside a customDomain.
+        ...(customDomainArg !== '' && customDomainServiceName !== ''
+          ? { serviceName: customDomainServiceName }
+          : {}),
+      };
 
-      const leaseUuid = extractLeaseUuidFromTxResult(txResult);
-      if (!leaseUuid) {
-        updateProgress('failed', 'Could not extract lease UUID');
-        return null;
-      }
-
-      try {
-        appRegistry.addApp(address, {
-          name,
-          leaseUuid,
-          size: entry.size,
-          providerUuid: entry.providerUuid,
-          providerUrl: entry.providerUrl,
-          createdAt: Date.now(),
-          status: 'deploying',
-          manifest: sanitizeManifestForStorage(new TextDecoder().decode(entry.payload.bytes)),
-        });
-      } catch (error) {
-        logError('compositeTransactions.executeConfirmedBatchDeploy.addApp', error);
-      }
-
-      // ---- Attach custom domain (signing) ----
-      // Mirrors single-deploy ordering at :1154-1180. Attach BEFORE upload so
-      // Traefik picks up the per-item custom_domain label as soon as the
-      // container comes up. Failure is non-fatal: the deploy proceeds and
-      // the failure surfaces via `customDomainError` on the returned
-      // BatchSuccessItem (rendered in summary by summarizeBatchResult).
-      // `domainAttach` is also threaded into the fallback path below so a
-      // fred-times-out + chain-ACTIVE case preserves the customDomains
-      // cache (same shape as the single-deploy attach outcome at :1163).
-      let domainAttach: DomainAttachResult = { kind: 'none' };
-      if (entry.customDomain) {
-        const requestedDomain = entry.customDomain;
-        const requestedService = entry.customDomainServiceName ?? '';
-        try {
-          const domainResult = await withSign(() => monoSetItemCustomDomain(
-            { chain: clientManager, logger: noopLogger },
-            {
-              leaseUuid: asLeaseUuid(leaseUuid),
-              customDomain: asFqdn(requestedDomain),
-              ...(requestedService !== '' ? { serviceName: requestedService } : {}),
-            },
-          ));
-          if (domainResult.code === 0) {
-            domainAttach = { kind: 'attached', customDomain: requestedDomain, serviceName: requestedService };
-            // Cache the just-attached domain so the DNS polling driver sees
-            // it without waiting for the user to run `app_status`. Merge
-            // against existing entries — multi-service stacks can have
-            // N domains. Mirrors single-deploy at :1243-1255.
-            //
-            // This happy-path write is mutually exclusive with the new
-            // customDomains merge in `fallbackToChainState`: that path only
-            // fires when fred doesn't confirm, at which point the cache
-            // here is already correct and the fallback's write is
-            // idempotent against it.
-            try {
-              const prior = appRegistry.getAppByLease(address, leaseUuid)?.customDomains ?? [];
-              const others = prior.filter((d) => d.serviceName !== requestedService);
-              appRegistry.updateApp(address, leaseUuid, {
-                customDomains: [...others, { serviceName: requestedService, customDomain: requestedDomain }],
-              });
-            } catch (error) {
-              logError('compositeTransactions.executeConfirmedBatchDeploy.cacheCustomDomain', error);
-            }
-          } else {
-            domainAttach = { kind: 'failed', error: `chain rejected with code ${domainResult.code}` };
+      let capturedLeaseUuid: string | undefined;
+      let capturedProviderUrl: string | undefined;
+      const callOptions: DeployCallOptions = {
+        // Use the providerUrl deployManifest resolved (its 2nd arg), mirroring
+        // the single-deploy path (:1155) — NOT entry.providerUrl — so the
+        // registry records the exact provider the SDK used for upload/poll.
+        onLeaseCreated: (leaseUuid, providerUrl) => {
+          capturedLeaseUuid = leaseUuid;
+          capturedProviderUrl = providerUrl;
+          updateProgress('uploading', 'Uploading manifest...');
+          try {
+            appRegistry.addApp(address, {
+              name,
+              leaseUuid,
+              size: entry.size,
+              providerUuid: entry.providerUuid,
+              providerUrl,
+              createdAt: Date.now(),
+              status: 'deploying',
+              manifest: sanitizeManifestForStorage(manifest),
+            });
+          } catch (error) {
+            logError('compositeTransactions.executeConfirmedBatchDeploy.addApp', error);
           }
-        } catch (err) {
-          logError('compositeTransactions.executeConfirmedBatchDeploy.setItemCustomDomain', err);
-          domainAttach = { kind: 'failed', error: err instanceof Error ? err.message : 'unknown error' };
-        }
-      }
-
-      // ---- Upload payload (signing) ----
-      updateProgress('uploading', 'Uploading manifest...');
-
-      const uploadResult = await uploadPayloadToProvider(
-        entry.providerUrl,
-        asLeaseUuid(leaseUuid),
-        entry.payload.hash,
-        entry.payload.bytes,
-        signing.authTokens
-      );
-
-      if (!uploadResult.success) {
-        updateProgress('failed', `Upload failed: ${uploadResult.error}`);
-        appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-        return null;
-      }
-
-      // ---- Wait for ready (no signing except auth refresh) ----
-      updateProgress('provisioning', 'Waiting for deployment...');
-
-      try {
-        const refreshAuthToken = () => signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
-        const authToken = await refreshAuthToken();
-
-        const fredStatus = await waitForLeaseReady(entry.providerUrl, leaseUuid, authToken, {
-          maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+        },
+        abortSignal: signal,
+        pollOptions: {
           intervalMs: FRED_POLL_INTERVAL_MS,
-          abortSignal: signal,
+          timeoutMs: AI_DEPLOY_PROVISION_TIMEOUT_MS,
           onProgress: (status) => {
             updateProgress('provisioning', status.phase || 'Provisioning...');
           },
-          getAuthToken: refreshAuthToken,
+          // Null-on-404 / never-throw: the SDK poll re-raises whatever this
+          // returns or throws, so it must only surface terminal states.
           checkChainState: async (): Promise<TerminalChainState | null> => {
-            const lease = await getLease(leaseUuid);
-            if (!lease) return { state: 'closed' };
-            if (lease.state === LeaseState.LEASE_STATE_CLOSED) return { state: 'closed' };
-            if (lease.state === LeaseState.LEASE_STATE_REJECTED) return { state: 'rejected' };
-            if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return { state: 'expired' };
-            return null;
+            try {
+              const lease = capturedLeaseUuid ? await getLease(capturedLeaseUuid) : null;
+              if (!lease) return null;
+              if (lease.state === LeaseState.LEASE_STATE_CLOSED) return { state: 'closed' };
+              if (lease.state === LeaseState.LEASE_STATE_REJECTED) return { state: 'rejected' };
+              if (lease.state === LeaseState.LEASE_STATE_EXPIRED) return { state: 'expired' };
+              return null;
+            } catch (error) {
+              logError('compositeTransactions.executeConfirmedBatchDeploy.checkChainState', error);
+              return null;
+            }
           },
-        });
+        },
+      };
 
-        if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
-          const { url: connectionUrl, connection } = await resolveAppUrl(
-            entry.providerUrl, leaseUuid, fredStatus, address, signing,
-            'executeConfirmedBatchDeploy'
-          );
+      updateProgress('creating_lease', 'Creating lease on-chain...');
 
-          appRegistry.updateApp(address, leaseUuid, { status: 'running', url: connectionUrl, connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined });
-          updateProgress('ready', 'App is live!');
-          return {
-            name,
-            url: connectionUrl,
-            ...(domainAttach.kind === 'failed' ? { customDomainError: domainAttach.error } : {}),
-          };
-        }
-
-        if (
-          fredStatus.state === LeaseState.LEASE_STATE_CLOSED ||
-          fredStatus.state === LeaseState.LEASE_STATE_REJECTED ||
-          fredStatus.state === LeaseState.LEASE_STATE_EXPIRED ||
-          fredStatus.provision_status === 'failed'
-        ) {
-          appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-          updateProgress('failed', fredStatus.last_error || 'Deployment failed');
-          return null;
-        }
-
-        const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
-          updateProgress(p.phase, p.detail);
-        }, domainAttach);
-        return fbResult.success ? {
-          name,
-          ...(domainAttach.kind === 'failed' ? { customDomainError: domainAttach.error } : {}),
-        } : null;
+      // §3.11: call deployManifest DIRECTLY — NEVER wrap it in signing.withSign.
+      // withSign holds the mutex until the wrapped fn resolves; deployManifest
+      // internally mints ADR-036 tokens via the SAME mutex-wrapped signArbitrary,
+      // so a wrap would await a lock it already holds -> deadlock (non-reentrant).
+      // Broadcasts are already serialized by CosmosClientManager.withBroadcastLock
+      // and each token mint by the signing mutex inside providerAuth.
+      let result: DeployResult;
+      try {
+        result = await deployManifest(ctx, spec, callOptions);
       } catch (error) {
-        logError('executeConfirmedBatchDeploy.poll', error);
-        const fbResult = await fallbackToChainState(name, leaseUuid, appRegistry, address, (p) => {
-          updateProgress(p.phase, p.detail);
-        }, domainAttach);
-        return fbResult.success ? {
+        const errResult = await handleDeployManifestError(error, {
           name,
-          ...(domainAttach.kind === 'failed' ? { customDomainError: domainAttach.error } : {}),
-        } : null;
+          leaseUuid: capturedLeaseUuid,
+          providerUrl: capturedProviderUrl ?? entry.providerUrl,
+          address,
+          signing,
+          appRegistry,
+          onProgress: (p) => updateProgress(p.phase, p.detail),
+        });
+        if (errResult.success) return { name };
+        updateProgress('failed', errResult.error ?? 'Deployment failed');
+        return null;
       }
+
+      const shaped = result.connection ? deriveUrlFromConnection(result.connection) : undefined;
+      const { url: connectionUrl, connection } = shaped
+        ?? await resolveAppUrl(
+          result.provider_url,
+          result.lease_uuid,
+          { state: result.state } as FredLeaseStatus,
+          address,
+          signing,
+          'executeConfirmedBatchDeploy',
+        );
+
+      appRegistry.updateApp(address, result.lease_uuid, {
+        status: 'running',
+        url: connectionUrl,
+        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+      });
+
+      // deployManifest attaches the domain on-chain but doesn't touch barney's
+      // registry. Mirror the single-deploy path: cache the attached domain — derived
+      // from the SDK RESULT, not the request inputs — so the DNS-polling driver +
+      // sidebar dot see it without an app_status round-trip.
+      const attachedDomain =
+        typeof result.custom_domain === 'string' && result.custom_domain !== '' ? result.custom_domain : '';
+      const attachedServiceName = typeof result.service_name === 'string' ? result.service_name : '';
+      if (attachedDomain) {
+        try {
+          const prior = appRegistry.getAppByLease(address, result.lease_uuid)?.customDomains ?? [];
+          const others = prior.filter((d) => d.serviceName !== attachedServiceName);
+          appRegistry.updateApp(address, result.lease_uuid, {
+            customDomains: [...others, { serviceName: attachedServiceName, customDomain: attachedDomain }],
+          });
+        } catch (error) {
+          logError('compositeTransactions.executeConfirmedBatchDeploy.cacheCustomDomain', error);
+        }
+      }
+
+      updateProgress('ready', 'App is live!');
+      return { name, url: connectionUrl };
     },
   });
 
@@ -1851,6 +1790,15 @@ export async function executeConfirmedBatchDeploy(
 /**
  * Pre-validation for stop_app. Returns confirmation result or error.
  * Supports app_name="all" to stop every running/deploying app at once.
+ *
+ * ENG-279 escape hatch (spec §7, D0): stop_app deliberately stays on
+ * `cosmosTx(clientManager, 'billing', 'close-lease', …)` and is NOT migrated
+ * to `@manifest-network/manifest-mcp-core`'s `stopApp`. This is a genuine
+ * capability gap, not laziness: `core.stopApp` drops the TX `rawLog` (barney
+ * surfaces it in the ConfirmationCard result) and forces a synchronous
+ * broadcast, whereas the bulk path here fires close-lease async
+ * (`cosmosTx(..., false)`) so "stop all" doesn't serialize N confirmations.
+ * Keep on cosmosTx until core exposes rawLog + async broadcast.
  */
 export async function executeStopApp(
   args: Record<string, unknown>,
@@ -1995,6 +1943,13 @@ export async function executeConfirmedStopApp(
 
 /**
  * Pre-validation for fund_credits. Returns confirmation result or error.
+ *
+ * ENG-279 escape hatch (spec §7, D0): fund_credits deliberately stays on
+ * `cosmosTx(clientManager, 'billing', 'fund-credit', [address, denomString], true)`
+ * and is NOT migrated to `core.fundCredits`. Pure YAGNI: it's a working
+ * one-line chain TX with no provider/upload/poll orchestration to delete —
+ * the ENG-279 goal ("delete the hand-rolled deploy spine") simply doesn't
+ * apply. Migrating would add a dependency edge for zero behavior change.
  */
 export function executeFundCredits(
   args: Record<string, unknown>,
@@ -2203,6 +2158,18 @@ export async function executeRestartApp(
 /**
  * Execute restart_app after user confirmation.
  * Supports batch restart when args.entries is present (from app_name="all" or comma-separated).
+ *
+ * ENG-279 no-migration note (spec §3.13, §7): restart_app and update_app got
+ * NO deploy-path rewrite. They already call mono's low-level fred http ops
+ * (`restartLease` / `updateLease` from `../../api/fred`, which delegate to
+ * `@manifest-network/manifest-mcp-fred`), so the ENG-279 "route through
+ * fred/core ops" goal was already satisfied for them at the http-function
+ * level. Their ONLY change from ENG-279 is transparent and came via C1:
+ * `signing.authTokens.getAuthToken` is now the address-binding adapter over
+ * the single `providerAuth` minter — no per-tool edit here. They keep
+ * `waitForLeaseReady` (fred http tools are fire-and-return with no internal
+ * poll); do not "finish migrating" them to deployManifest — that primitive
+ * is create-lease + deploy, not update/restart.
  */
 export async function executeConfirmedRestartApp(
   args: Record<string, unknown>,

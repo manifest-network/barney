@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
+import { formatConnectionUrl, extractPrimaryServicePorts, deriveUrlFromConnection } from './helpers';
 import {
   deriveAppName,
   extractUrlFromFredStatus,
   extractServiceNamesFromPayload,
-  formatLeaseItems,
   parseAndValidateStackServices,
   executeDeployApp,
   executeConfirmedDeployApp,
@@ -20,10 +19,13 @@ import {
   executeConfirmedRestartApp,
   executeUpdateApp,
   executeConfirmedUpdateApp,
+  buildFredAuthCtx,
+  classifyLeaseChainState,
+  handleDeployManifestError,
   type BatchDeployEntry,
 } from './compositeTransactions';
 import type { ToolExecutorOptions, PayloadAttachment } from './types';
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager, DeployResult } from '@manifest-network/manifest-mcp-core';
 import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
 import { LeaseState } from '../../api/billing';
@@ -72,6 +74,16 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   setItemCustomDomain: vi.fn(),
 }));
 
+// B4: spread importOriginal so manifest.ts's buildManifest/mergeManifest/metaHashHex
+// re-exports survive — a full-replace mock would nuke them and break existing tests.
+vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => ({
+  ...(await importOriginal()),
+  deployManifest: vi.fn(),
+  TerminalChainStateError: class TerminalChainStateError extends Error {
+    constructor(m: string) { super(m); this.name = 'TerminalChainStateError'; }
+  },
+}));
+
 vi.mock('../../utils/errors', async (orig) => {
   const actual = await orig<typeof import('../../utils/errors')>();
   return {
@@ -79,12 +91,6 @@ vi.mock('../../utils/errors', async (orig) => {
     logError: vi.fn(),
   };
 });
-
-vi.mock('./utils', () => ({
-  extractLeaseUuidFromTxResult: vi.fn().mockReturnValue('new-lease-uuid'),
-  uploadPayloadToProvider: vi.fn().mockResolvedValue({ success: true, data: { message: 'ok' } }),
-  computePayloadHash: vi.fn(),
-}));
 
 vi.mock('../../registry/appRegistry', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../registry/appRegistry')>();
@@ -100,13 +106,17 @@ vi.mock('../../api/leaseByCustomDomain', () => ({
   queryLeaseByCustomDomain: vi.fn().mockResolvedValue(null),
 }));
 
+vi.mock('../../api/readClient', () => ({
+  getReadClient: vi.fn().mockResolvedValue({ query: { __tag: 'read-query-client' } }),
+}));
+
 import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
-import { cosmosTx, setItemCustomDomain } from '@manifest-network/manifest-mcp-core';
-import { uploadPayloadToProvider } from './utils';
+import { cosmosTx, setItemCustomDomain, ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-mcp-core';
+import { TerminalChainStateError, deployManifest } from '@manifest-network/manifest-mcp-fred';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
 const ADDRESS = 'manifest1abc';
@@ -125,6 +135,7 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
     address: ADDRESS,
     appRegistry: makeRegistry(),
     signing: {
+      providerAuth: { providerToken: vi.fn(), leaseDataToken: vi.fn() },
       authTokens: {
         getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
         getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),
@@ -139,10 +150,33 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
 function makePayload(): PayloadAttachment {
   return {
     bytes: new Uint8Array([1, 2, 3]),
-    filename: 'docker-compose.yml',
+    filename: 'docker-compose.json',
     size: 3,
     hash: 'a'.repeat(64),
   };
+}
+
+function makeDeployResult(overrides: Partial<DeployResult> = {}): DeployResult {
+  return {
+    lease_uuid: 'new-lease-uuid' as DeployResult['lease_uuid'],
+    provider_url: 'https://fred.example.com',
+    state: LeaseState.LEASE_STATE_ACTIVE,
+    connection: {
+      host: '127.0.0.1',
+      ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+    },
+    ...overrides,
+  } as DeployResult;
+}
+
+// Valid-JSON counterpart to makePayload(), for executeDeployApp plan-phase
+// tests that exercise the file-attach path post-§3.9 (non-JSON payloads are
+// now rejected before reaching confirmation — see "rejects a non-JSON file
+// upload" below).
+function makeJsonPayload(filename = 'docker-compose.json'): PayloadAttachment {
+  const json = JSON.stringify({ image: 'nginx', port: '80' });
+  const bytes = new TextEncoder().encode(json);
+  return { bytes, filename, size: bytes.length, hash: 'b'.repeat(64) };
 }
 
 function makeApp(overrides: Partial<AppEntry> = {}): AppEntry {
@@ -570,32 +604,37 @@ describe('stack FQDN promotion — standalone service', () => {
   });
 });
 
-describe('formatLeaseItems', () => {
-  it('returns single item without service names', () => {
-    expect(formatLeaseItems('sku-123')).toEqual(['sku-123:1']);
+describe('deriveUrlFromConnection', () => {
+  it('shapes a top-level-port URL', () => {
+    const out = deriveUrlFromConnection({
+      host: '127.0.0.1',
+      ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
+    });
+    expect(out?.url).toBe('127.0.0.1:32456');
   });
 
-  it('returns single item for empty array', () => {
-    expect(formatLeaseItems('sku-123', [])).toEqual(['sku-123:1']);
+  it('promotes instances[0].ports when top-level absent', () => {
+    const out = deriveUrlFromConnection({
+      host: '127.0.0.1',
+      instances: [{ instance_index: 0, container_id: 'c', image: 'i', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32000 } } }],
+    } as any);
+    expect(out?.url).toBe('127.0.0.1:32000');
   });
 
-  it('returns items with service name suffixes', () => {
-    expect(formatLeaseItems('sku-123', ['web', 'db'])).toEqual([
-      'sku-123:1:web',
-      'sku-123:1:db',
-    ]);
+  it('promotes a stack primary service port + fqdn', () => {
+    const out = deriveUrlFromConnection({
+      host: 'provider.example.com',
+      services: {
+        web: { fqdn: 'app.example.com', instances: [{ ports: { '3000/tcp': { host_port: 30001 } } }] },
+        db: { instances: [{ ports: { '5432/tcp': { host_port: 30002 } } }] },
+      },
+    } as any);
+    expect(out?.url).toBe('https://app.example.com');
+    expect(out?.connection.fqdn).toBe('app.example.com');
   });
 
-  it('handles single service name', () => {
-    expect(formatLeaseItems('sku-123', ['web'])).toEqual(['sku-123:1:web']);
-  });
-
-  it('throws on non-string service name', () => {
-    expect(() => formatLeaseItems('sku-123', [123 as unknown as string])).toThrow('Invalid service name');
-  });
-
-  it('throws on empty string service name', () => {
-    expect(() => formatLeaseItems('sku-123', [''])).toThrow('Invalid service name');
+  it('returns undefined when nothing shapeable', () => {
+    expect(deriveUrlFromConnection({ host: '' } as any)).toBeUndefined();
   });
 });
 
@@ -1039,14 +1078,17 @@ describe('executeDeployApp', () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    const result = await executeDeployApp({ image: 'redis', port: '6379', size: 'xxlarge' }, makeOptions(), makePayload());
+    // No payload attached — exercises the image-based manifest-build path
+    // (a payload would take precedence over `image` and, post-§3.9, would
+    // need to be valid JSON, which is irrelevant to what this test covers).
+    const result = await executeDeployApp({ image: 'redis', port: '6379', size: 'xxlarge' }, makeOptions());
     expect(result.success).toBe(true);
     // SAMPLE_TIERS cheapest is docker-micro (0.036/hr)
     expect(result.pendingAction?.args.size).toBe('docker-micro');
   });
 
   it('returns clean error when tier catalog is empty (loading/error state)', async () => {
-    const result = await executeDeployApp({ image: 'redis' }, makeOptions({ tiers: [] }), makePayload());
+    const result = await executeDeployApp({ image: 'redis' }, makeOptions({ tiers: [] }));
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/tier catalog unavailable/i);
   });
@@ -1055,8 +1097,8 @@ describe('executeDeployApp', () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    const a = await executeDeployApp({ image: 'redis', port: '6379', size: 'micro' }, makeOptions(), makePayload());
-    const b = await executeDeployApp({ image: 'redis', port: '6379', size: 'docker-micro' }, makeOptions(), makePayload());
+    const a = await executeDeployApp({ image: 'redis', port: '6379', size: 'micro' }, makeOptions());
+    const b = await executeDeployApp({ image: 'redis', port: '6379', size: 'docker-micro' }, makeOptions());
     expect(a.success).toBe(true);
     expect(b.success).toBe(true);
     expect(a.pendingAction?.args.size).toBe('docker-micro');
@@ -1094,7 +1136,7 @@ describe('executeDeployApp', () => {
       activeLeaseCount: 0n,
     } as any);
 
-    const result = await executeDeployApp({}, makeOptions(), makePayload());
+    const result = await executeDeployApp({}, makeOptions(), makeJsonPayload());
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
     expect(result.confirmationMessage).toContain('docker-compose');
@@ -1121,7 +1163,7 @@ describe('executeDeployApp', () => {
     const result = await executeDeployApp(
       { size: 'docker-micro' },
       makeOptions({ tiers: freeTier }),
-      makePayload(),
+      makeJsonPayload(),
     );
 
     expect(result.success).toBe(true);
@@ -1144,7 +1186,7 @@ describe('executeDeployApp', () => {
     const result = await executeDeployApp(
       { size: 'docker-micro' },
       makeOptions(),
-      makePayload(),
+      makeJsonPayload(),
     );
 
     expect(result.success).toBe(true);
@@ -1341,14 +1383,16 @@ describe('executeDeployApp', () => {
     const result = await executeDeployApp(
       { image: 'redis:8.4' },
       makeOptions(),
-      makePayload()  // file takes precedence
+      makeJsonPayload()  // file takes precedence
     );
 
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
     // Should use filename-derived name, not image-derived
     expect(result.confirmationMessage).toContain('docker-compose');
-    expect(result.pendingAction?.args._generatedManifest).toBeUndefined();
+    // Valid JSON file uploads are always captured as the editable manifest
+    // (§3.9 — the old .json-extension-only gate is gone).
+    expect(result.pendingAction?.args._generatedManifest).toBeDefined();
   });
 
   it('returns confirmation for stack deploy with services param', async () => {
@@ -1408,7 +1452,13 @@ describe('executeDeployApp', () => {
     expect(result.pendingAction?.args._serviceNames).toEqual(['web', 'db']);
   });
 
-  it('extracts service names from file-uploaded YAML stack manifest', async () => {
+  // Pre-§3.9, a YAML stack manifest fell through the (then extension-gated)
+  // JSON check and still reached service-name extraction / confirmation.
+  // §3.9 closes that: any non-JSON file content is rejected in the plan
+  // phase, so a YAML stack upload can no longer reach this far (it's also
+  // blocked earlier, at the file picker, by ALLOWED_FILE_EXTENSIONS — this
+  // is the belt-and-suspenders guard for content that slips past that).
+  it('rejects a file-uploaded YAML stack manifest instead of extracting service names', async () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
     ]);
@@ -1437,9 +1487,8 @@ describe('executeDeployApp', () => {
 
     const result = await executeDeployApp({}, makeOptions(), payload);
 
-    expect(result.success).toBe(true);
-    expect(result.requiresConfirmation).toBe(true);
-    expect(result.pendingAction?.args._serviceNames).toEqual(['web', 'db']);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Manifest must be valid JSON — convert YAML/other formats to JSON first.');
   });
 
   it('returns error for invalid internal _serviceNames metadata', async () => {
@@ -1710,489 +1759,184 @@ describe('executeDeployApp', () => {
     expect(manifest.health_check.test[1]).toBe('pg_isready -U custom_user -d custom_db');
     expect(manifest.health_check.retries).toBe(10);
   });
+
+  it('rejects a non-JSON file upload with a convert-to-JSON error', async () => {
+    const payload: PayloadAttachment = {
+      bytes: new TextEncoder().encode('image: nginx\nport: "80"\n'),
+      filename: 'compose.txt',
+      size: 24,
+      hash: 'deadbeef',
+    };
+    const result = await executeDeployApp({}, makeOptions(), payload);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Manifest must be valid JSON — convert YAML/other formats to JSON first.');
+  });
+
+  it('accepts a valid JSON file upload and stores it as the editable manifest', async () => {
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com' },
+    ] as any);
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      balances: [{ denom: DENOMS.PWR, amount: '100000000' }],
+    } as any);
+    const json = JSON.stringify({ image: 'nginx', port: '80' });
+    const payload: PayloadAttachment = {
+      bytes: new TextEncoder().encode(json),
+      filename: 'app.json',
+      size: json.length,
+      hash: 'abc123',
+    };
+    const result = await executeDeployApp({}, makeOptions(), payload);
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+    if (result.success && result.requiresConfirmation) {
+      expect(result.pendingAction.args._generatedManifest).toBe(json);
+    }
+  });
 });
 
 describe('executeConfirmedDeployApp', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns user-facing error for invalid internal _serviceNames metadata', async () => {
-    const onProgress = vi.fn();
-    const result = await executeConfirmedDeployApp(
-      {
-        app_name: 'test-app',
-        size: 'small',
-        skuUuid: 'sku-1',
-        providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        _serviceNames: 'web',
-      },
-      CLIENT_MANAGER,
-      makeOptions({ onProgress }),
-      makePayload()
-    );
+  // deployManifest stub: fire onLeaseCreated (registry addApp + uploading phase),
+  // one provisioning progress tick, then resolve with the given DeployResult.
+  function mockDeploySuccess(result: Partial<import('@manifest-network/manifest-mcp-core').DeployResult>) {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
+      await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      opts?.pollOptions?.onProgress?.({ state: LeaseState.LEASE_STATE_ACTIVE, phase: 'provisioning' } as any);
+      return {
+        lease_uuid: 'new-lease-uuid',
+        provider_uuid: 'p1',
+        provider_url: 'https://fred.example.com',
+        state: LeaseState.LEASE_STATE_ACTIVE,
+        ...result,
+      } as any;
+    });
+  }
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Invalid stack service metadata');
+  const ARGS = { app_name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' };
+
+  it('deploys via deployManifest and shapes URL from connection (top-level ports)', async () => {
+    mockDeploySuccess({
+      connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    });
+    const onProgress = vi.fn();
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry, onProgress }), makePayload());
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('running');
+    expect((result.data as any).url).toBe('127.0.0.1:32456');
+    // does NOT consume DeployResult.url
+    expect(deployManifest).toHaveBeenCalledTimes(1);
     expect(cosmosTx).not.toHaveBeenCalled();
-    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'failed' }));
-  });
-
-  it('creates lease, uploads, and polls to ready — extracts port from instances', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-    });
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid',
-      tenant: ADDRESS,
-      provider_uuid: 'p1',
-      connection: {
-        host: '127.0.0.1',
-        instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }],
-      },
-    });
-
-    const onProgress = vi.fn();
-    const registry = makeRegistry();
-    const options = makeOptions({ appRegistry: registry, onProgress });
-
-    const result = await executeConfirmedDeployApp(
-      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
-      CLIENT_MANAGER,
-      options,
-      makePayload()
-    );
-
-    expect(result.success).toBe(true);
-    expect((result.data as any).status).toBe('running');
-    expect((result.data as any).url).toBe('127.0.0.1:32456');
-    expect(onProgress).toHaveBeenCalled();
-    expect(registry.addApp).toHaveBeenCalled();
-    expect(getLeaseConnectionInfo).toHaveBeenCalled();
-
-    // Verify waitForLeaseReady receives getAuthToken callback for token refresh
-    const pollCall = vi.mocked(waitForLeaseReady).mock.calls[0];
-    expect(pollCall[3]).toHaveProperty('getAuthToken');
-    expect(typeof pollCall[3]!.getAuthToken).toBe('function');
-
-    // Emits an `app` displayCard with url/status and connection
+    expect(waitForLeaseReady).not.toHaveBeenCalled();
+    expect(setItemCustomDomain).not.toHaveBeenCalled();
+    // registry addApp(deploying) fired in onLeaseCreated, then updateApp(running)
+    expect(registry.addApp).toHaveBeenCalledWith(ADDRESS, expect.objectContaining({ status: 'deploying', leaseUuid: 'new-lease-uuid' }));
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'new-lease-uuid', expect.objectContaining({ status: 'running', url: '127.0.0.1:32456' }));
+    // progress sequence
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'creating_lease' }));
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'uploading' }));
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'provisioning' }));
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+    // app displayCard
     expect(result.success && !result.requiresConfirmation && result.displayCard?.type).toBe('app');
-    if (result.success && !result.requiresConfirmation && result.displayCard?.type === 'app') {
-      expect(result.displayCard.data.url).toBe('127.0.0.1:32456');
-      expect(result.displayCard.data.status).toBe('running');
-      expect(result.displayCard.data.customDomain).toBeUndefined();
-    }
   });
 
-  it('creates lease, uploads, and polls to ready — extracts port from top-level ports', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
+  it('builds a kind:resolved spec with the _notice-stripped manifest', async () => {
+    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_port: 1 } } } });
+    const json = JSON.stringify({ image: 'nginx', port: '80', _notice: 'display-only' });
+    await executeConfirmedDeployApp(
+      { ...ARGS, _generatedManifest: json },
+      CLIENT_MANAGER,
+      makeOptions(),
+      undefined,
+    );
+    const [, spec] = vi.mocked(deployManifest).mock.calls[0];
+    expect(spec.sku).toEqual({ kind: 'resolved', skuUuid: 'sku-1', providerUuid: 'p1' });
+    expect(spec.manifest).not.toContain('_notice');
+    expect(JSON.parse(spec.manifest)).toEqual({ image: 'nginx', port: '80' });
+    expect(spec.customDomain).toBeUndefined();
+    expect(spec.serviceName).toBeUndefined();
+  });
+
+  it('passes customDomain into the spec and omits empty serviceName', async () => {
+    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_port: 1 } } }, custom_domain: 'app.example.com' });
+    await executeConfirmedDeployApp(
+      { ...ARGS, customDomain: 'app.example.com', customDomainServiceName: '' },
+      CLIENT_MANAGER,
+      makeOptions(),
+      makePayload(),
+    );
+    const [, spec] = vi.mocked(deployManifest).mock.calls[0];
+    expect(spec.customDomain).toBe('app.example.com');
+    expect('serviceName' in spec).toBe(false);
+    // barney no longer double-sets the domain itself
+    expect(setItemCustomDomain).not.toHaveBeenCalled();
+  });
+
+  it('includes serviceName only alongside a non-empty customDomain', async () => {
+    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_port: 1 } } }, custom_domain: 'app.example.com', service_name: 'web' });
+    await executeConfirmedDeployApp(
+      { ...ARGS, customDomain: 'app.example.com', customDomainServiceName: 'web' },
+      CLIENT_MANAGER,
+      makeOptions(),
+      makePayload(),
+    );
+    const [, spec] = vi.mocked(deployManifest).mock.calls[0];
+    expect(spec.serviceName).toBe('web');
+  });
+
+  it('falls back to resolveAppUrl when DeployResult.connection is absent', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
+      await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return { lease_uuid: 'new-lease-uuid', provider_uuid: 'p1', provider_url: 'https://fred.example.com', state: LeaseState.LEASE_STATE_ACTIVE, connectionError: 'boom' } as any;
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid',
-      tenant: ADDRESS,
-      provider_uuid: 'p1',
-      connection: {
-        host: '127.0.0.1',
-        ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
-      },
-    });
-
-    const registry = makeRegistry();
-    const result = await executeConfirmedDeployApp(
-      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry }),
-      makePayload()
-    );
-
+      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '9.9.9.9', ports: { '80/tcp': { host_port: 40000 } } },
+    } as any);
+    const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions(), makePayload());
     expect(result.success).toBe(true);
-    expect((result.data as any).url).toBe('127.0.0.1:32456');
+    expect((result.data as any).url).toBe('9.9.9.9:40000');
+    expect(getLeaseConnectionInfo).toHaveBeenCalled();
   });
 
-  it('falls back to fred status when connection endpoint fails', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-      endpoints: { '80/tcp': 'http://1.2.3.4:32456' },
+  it('routes a deployManifest throw through handleDeployManifestError (chain ACTIVE → running)', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
+      await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true });
     });
-    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('connection endpoint failed'));
-
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
     const registry = makeRegistry();
-    const result = await executeConfirmedDeployApp(
-      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry }),
-      makePayload()
-    );
-
+    const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry }), makePayload());
     expect(result.success).toBe(true);
-    expect((result.data as any).url).toBe('1.2.3.4:32456');
+    expect((result.data as any).status).toBe('running');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'new-lease-uuid', { status: 'running' });
   });
 
-  it('handles lease creation failure', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 1, rawLog: 'insufficient funds' } as any);
-
+  it('surfaces a create-lease raw error (case 1, no lease)', async () => {
+    vi.mocked(deployManifest).mockRejectedValue(new Error('insufficient funds'));
     const onProgress = vi.fn();
-    const result = await executeConfirmedDeployApp(
-      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
-      CLIENT_MANAGER,
-      makeOptions({ onProgress }),
-      makePayload()
-    );
-
+    const registry = makeRegistry();
+    const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry, onProgress }), makePayload());
     expect(result.success).toBe(false);
-    expect(result.error).toContain('insufficient funds');
+    expect(result.error).toBe('insufficient funds');
+    expect(registry.addApp).not.toHaveBeenCalled();
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'failed' }));
   });
 
-  it('handles upload failure', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: false, error: 'upload error' });
-
-    const registry = makeRegistry();
-    const result = await executeConfirmedDeployApp(
-      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry }),
-      makePayload()
-    );
-
+  it('rejects when payload is missing', async () => {
+    const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions(), undefined);
     expect(result.success).toBe(false);
-    expect(result.error).toContain('upload failed');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'new-lease-uuid', { status: 'failed' });
+    expect(result.error).toBe('Payload missing');
   });
 
-  it('includes logs and provision last_error in failure message', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_CLOSED,
-      last_error: 'container crashed',
-    });
-    vi.mocked(getLeaseProvision).mockResolvedValue({
-      status: 'failed',
-      fail_count: 3,
-      last_error: 'OOMKilled',
-    });
-    vi.mocked(getLeaseLogs).mockResolvedValue({
-      lease_uuid: 'lease-1',
-      tenant: 'manifest1test',
-      provider_uuid: 'p1',
-      logs: { '0': 'Error: out of memory' },
-    });
-
-    const registry = makeRegistry();
-    const result = await executeConfirmedDeployApp(
-      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry }),
-      makePayload()
-    );
-
+  it('rejects when wallet cannot sign', async () => {
+    const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions({ signing: undefined }), makePayload());
     expect(result.success).toBe(false);
-    expect(result.error).toContain('container crashed');
-    expect(result.error).toContain('OOMKilled');
-    expect(result.error).toContain('out of memory');
-  });
-
-  it('still reports failure when log/provision fetch fails', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_REJECTED,
-      last_error: 'rejected by provider',
-    });
-    vi.mocked(getLeaseProvision).mockRejectedValue(new Error('network error'));
-    vi.mocked(getLeaseLogs).mockRejectedValue(new Error('network error'));
-
-    const registry = makeRegistry();
-    const result = await executeConfirmedDeployApp(
-      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry }),
-      makePayload()
-    );
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('rejected by provider');
-  });
-
-  it('falls back to chain state when polling throws', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockRejectedValue(new Error('polling timeout'));
-
-    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
-
-    const registry = makeRegistry();
-    const result = await executeConfirmedDeployApp(
-      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry }),
-      makePayload()
-    );
-
-    // Should fall back to chain state which says ACTIVE
-    expect(result.success).toBe(true);
-    expect((result.data as any).status).toBe('running');
-  });
-
-  it('calls onProgress with failed phase when provisioning times out and chain is not active', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    // waitForLeaseReady returns PENDING (non-terminal) — simulates timeout exhaustion
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_PENDING,
-    });
-    // Chain state is also not ACTIVE
-    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as any);
-
-    const onProgress = vi.fn();
-    const registry = makeRegistry();
-    const result = await executeConfirmedDeployApp(
-      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry, onProgress }),
-      makePayload()
-    );
-
-    expect(result.success).toBe(true);
-    expect((result.data as any).status).toBe('deploying');
-    expect((result.data as any).message).toContain('still deploying');
-    // Verify onProgress was called with failed phase to clear ProgressCard
-    expect(onProgress).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: 'failed', detail: expect.stringContaining('timed out') })
-    );
-  });
-
-  it('succeeds without URL when connection endpoint fails and fred has no endpoints', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-    });
-    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('404 not found'));
-
-    const registry = makeRegistry();
-    const result = await executeConfirmedDeployApp(
-      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry }),
-      makePayload()
-    );
-
-    expect(result.success).toBe(true);
-    expect((result.data as any).status).toBe('running');
-    expect((result.data as any).url).toBeUndefined();
-  });
-
-  it('reconstructs payload from _generatedManifest when no payload provided', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-    });
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid',
-      tenant: ADDRESS,
-      provider_uuid: 'p1',
-      connection: {
-        host: '127.0.0.1',
-        ports: { '6379/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
-      },
-    });
-
-    const registry = makeRegistry();
-    const manifestJson = JSON.stringify({ image: 'redis:8.4', ports: { '6379/tcp': {} } }, null, 2);
-    const result = await executeConfirmedDeployApp(
-      {
-        app_name: 'redis',
-        size: 'micro',
-        skuUuid: 'sku-1',
-        providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        _generatedManifest: manifestJson,
-      },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry })
-      // No payload argument
-    );
-
-    expect(result.success).toBe(true);
-    expect((result.data as any).status).toBe('running');
-    // Verify the manifest was uploaded
-    expect(uploadPayloadToProvider).toHaveBeenCalled();
-    const uploadCall = vi.mocked(uploadPayloadToProvider).mock.calls[0];
-    // The hash should be consistent
-    expect(uploadCall[2]).toHaveLength(64);
-  });
-
-  it('resolves URL from services-only connection response (stack deploy)', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-    });
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid',
-      tenant: ADDRESS,
-      provider_uuid: 'p1',
-      connection: {
-        host: '1.2.3.4',
-        services: {
-          db: { instances: [{ instance_index: 0, container_id: 'db1', image: 'postgres', status: 'running', ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32100 } } }] },
-          web: { instances: [{ instance_index: 0, container_id: 'web1', image: 'nginx', status: 'running', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32200 } } }] },
-        },
-      },
-    });
-
-    const registry = makeRegistry();
-    const result = await executeConfirmedDeployApp(
-      { name: 'my-stack', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry }),
-      makePayload()
-    );
-
-    expect(result.success).toBe(true);
-    expect((result.data as any).url).toBe('1.2.3.4:32200');
-    expect((result.data as any).status).toBe('running');
-  });
-
-  // Regression: when fred throws (or times out) and chain confirms ACTIVE,
-  // fallbackToChainState used to write `{ status: 'running' }` only — the
-  // customDomains cache was dropped (sidebar dot blank) and the result
-  // message said "live!" with no clue the domain attached. Threading
-  // domainAttach through preserves both. See PR #93 Copilot 3236837791.
-  it('preserves customDomain in fallbackToChainState when fred throws but chain is ACTIVE', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'h', rawLog: '' } as any);
-    vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    // Fred throws (network error / connection refused) — drops into the
-    // catch arm at compositeTransactions.ts :1357 → fallbackToChainState.
-    vi.mocked(waitForLeaseReady).mockRejectedValue(new Error('fred unreachable'));
-    // Chain says ACTIVE → fallback takes the recovery branch.
-    vi.mocked(getLease).mockResolvedValue({
-      leaseUuid: 'new-lease-uuid', tenant: ADDRESS, state: LeaseState.LEASE_STATE_ACTIVE, items: [],
-    } as any);
-
-    const registry = makeRegistry();
-    const updateSpy = vi.spyOn(registry, 'updateApp');
-
-    const result = await executeConfirmedDeployApp(
-      {
-        app_name: 'redis', skuUuid: 'sku-1', providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        _generatedManifest: '{"image":"redis"}',
-        customDomain: 'redis.example.com',
-        customDomainServiceName: '',
-      },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry }),
-      makePayload(),
-    );
-
-    expect(result.success).toBe(true);
-    const data = result.data as any;
-    expect(data.status).toBe('running');
-    expect(data.custom_domain).toBe('redis.example.com');
-    expect(data.message).toMatch(/redis\.example\.com/);
-    // Sidebar dot depends on this cache write — fallback must mirror the
-    // success branch's :1243-1255 customDomains merge.
-    const cacheWrite = updateSpy.mock.calls.find(
-      (c) => Array.isArray((c[2] as any).customDomains)
-    );
-    expect(cacheWrite).toBeDefined();
-    expect((cacheWrite![2] as any).customDomains).toEqual([
-      { serviceName: '', customDomain: 'redis.example.com' },
-    ]);
-    // The attach TX shape: ctx carries the clientManager (as `chain`) plus a
-    // logger; input mirrors the deploy args with serviceName omitted when empty.
-    const attachCall = vi.mocked(setItemCustomDomain).mock.calls[0];
-    expect(attachCall[0]).toMatchObject({ chain: CLIENT_MANAGER });
-    expect(attachCall[0]).toHaveProperty('logger');
-    expect(attachCall[1]).toEqual({ leaseUuid: 'new-lease-uuid', customDomain: 'redis.example.com' });
-    expect((attachCall[1] as { serviceName?: string }).serviceName).toBeUndefined();
-  });
-
-  // Companion to the success attach: a non-zero setItemCustomDomain code is
-  // non-fatal — the deploy still succeeds, but the result surfaces the attach
-  // failure (custom_domain_error + an "attach failed" message) and omits the
-  // custom_domain success fields. Mirrors compositeTransactions.ts :1161-1166
-  // (domainAttach kind:'failed') + the :1313 custom_domain_error surfacing.
-  it('surfaces attach-failed outcome when setItemCustomDomain returns a non-zero code', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid',
-      tenant: ADDRESS,
-      provider_uuid: 'p1',
-      connection: {
-        host: '127.0.0.1',
-        ports: { '6379/tcp': { host_ip: '0.0.0.0', host_port: 32456 } },
-      },
-    });
-    // Attach TX broadcasts but the chain rejects it with a non-zero code.
-    vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 5, transactionHash: 'dh', rawLog: '' } as any);
-
-    const result = await executeConfirmedDeployApp(
-      {
-        app_name: 'redis', skuUuid: 'sku-1', providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        _generatedManifest: '{"image":"redis"}',
-        customDomain: 'redis.example.com',
-        customDomainServiceName: '',
-      },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: makeRegistry() }),
-      makePayload(),
-    );
-
-    // Deploy still succeeds; the attach failure is reported alongside.
-    expect(result.success).toBe(true);
-    const data = result.data as any;
-    expect(data.status).toBe('running');
-    expect(data.custom_domain_error).toBe('chain rejected with code 5');
-    // Success-only fields are omitted on the failed branch.
-    expect(data.custom_domain).toBeUndefined();
-    expect(data.message).toMatch(/custom-domain attach failed/i);
-  });
-
-  it('normalizes trailing-period on uploadResult.error so the chat-visible message has no double period', async () => {
-    // Pass-9 follow-up: the error string interpolated into the user-visible
-    // "Lease created but upload failed: …. The lease … is active…" template
-    // routes through `normalizeErrorPunctuation`. An upstream error ending
-    // in `.` (chain responses + ToolResult.error all-common) used to print
-    // as `… failed: provider rejected the payload..  The lease …` — double
-    // period. Now the strip-then-append happens at the boundary so the
-    // visible string has exactly one `.` before the next sentence.
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({
-      success: false,
-      error: 'provider rejected the payload.',
-    });
-
-    const result = await executeConfirmedDeployApp(
-      { name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: makeRegistry() }),
-      makePayload(),
-    );
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Lease created but upload failed:');
-    expect(result.error).toContain('provider rejected the payload.');
-    // The critical no-double-period assertion — would have failed pre-fix.
-    expect(result.error).not.toMatch(/\.\./);
-    // And the boundary is intact: the helper's stripped tail is followed by
-    // the template's own `.` continuation, then the next sentence.
-    expect(result.error).toContain('the payload. The lease');
+    expect(result.error).toContain('does not support message signing');
   });
 });
 
@@ -2676,287 +2420,189 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(result.error).toContain('No entries');
   });
 
-  it('deploys all apps in parallel and reports results', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-    });
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid',
-      tenant: ADDRESS,
-      provider_uuid: 'p1',
-      connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
+  it('deploys all apps in parallel via deployManifest and reports results', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult();
     });
 
     const onProgress = vi.fn();
     const registry = makeRegistry();
     const entries = [
-      {
-        app_name: 'game1',
-        size: 'micro',
-        skuUuid: 'sku-1',
-        providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        payload: makePayload(),
-      },
-      {
-        app_name: 'game2',
-        size: 'micro',
-        skuUuid: 'sku-1',
-        providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        payload: makePayload(),
-      },
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+      { app_name: 'game2', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
     ];
 
-    const result = await executeConfirmedBatchDeploy(
-      { entries },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry, onProgress })
-    );
+    const opts = makeOptions({ appRegistry: registry, onProgress });
+    // §3.11: deployManifest must NOT be wrapped in signing.withSign (deadlock).
+    const withSignSpy = vi.spyOn(opts.signing!, 'withSign');
+
+    const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
 
     expect(result.success).toBe(true);
     const data = result.data as any;
     expect(data.deployed).toHaveLength(2);
-    expect(data.deployed.map((d: any) => d.name)).toContain('game1');
-    expect(data.deployed.map((d: any) => d.name)).toContain('game2');
+    expect(data.deployed.map((d: any) => d.name)).toEqual(expect.arrayContaining(['game1', 'game2']));
     expect(data.failed).toHaveLength(0);
-    expect(onProgress).toHaveBeenCalled();
-    // Verify batch progress was emitted
-    const lastProgressCall = onProgress.mock.calls[onProgress.mock.calls.length - 1][0];
-    expect(lastProgressCall.batch).toBeDefined();
+    expect(deployManifest).toHaveBeenCalledTimes(2);
+    expect(withSignSpy).not.toHaveBeenCalled();
+    // Batch delegates domain attach to deployManifest — never a direct set call.
+    expect(setItemCustomDomain).not.toHaveBeenCalled();
+    const lastProgress = onProgress.mock.calls.at(-1)![0];
+    expect(lastProgress.batch).toBeDefined();
   });
 
-  it('handles partial failure gracefully', async () => {
-    // First call succeeds, second fails
-    vi.mocked(cosmosTx)
-      .mockResolvedValueOnce({ code: 0, transactionHash: 'hash1', rawLog: '' } as any)
-      .mockResolvedValueOnce({ code: 1, rawLog: 'insufficient funds' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
+  it('records the deployManifest-resolved providerUrl (onLeaseCreated arg), not the stale entry value', async () => {
+    // Regression guard (Copilot PR #106): the registry must record the URL
+    // deployManifest actually resolved (onLeaseCreated's 2nd arg), mirroring
+    // single-deploy — NOT entry.providerUrl. Use a DISTINCT resolved URL so the
+    // assertion fails if the code reverts to entry.providerUrl.
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://resolved.example.com');
+      return makeDeployResult();
     });
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid',
-      tenant: ADDRESS,
-      provider_uuid: 'p1',
-      connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
+    const registry = makeRegistry();
+    const entries = [
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://stale.example.com', payload: makePayload() },
+    ];
+
+    await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ appRegistry: registry }));
+
+    expect(registry.addApp).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ providerUrl: 'https://resolved.example.com' }),
+    );
+  });
+
+  it('batch failure fetches diagnostics from the deployManifest-resolved providerUrl, not the stale entry value', async () => {
+    // Regression guard (Copilot PR #106): handleDeployManifestError's
+    // fetchFailureLogs must use the providerUrl deployManifest actually
+    // resolved (onLeaseCreated's 2nd arg), mirroring single-deploy — NOT
+    // entry.providerUrl. Use a DISTINCT resolved URL so the assertion fails
+    // if the code reverts to entry.providerUrl.
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('lease-x', 'https://resolved.example.com');
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true });
     });
+    // getLease → null so classifyLeaseChainState's verdict is 'failed', which
+    // is what routes handleDeployManifestError into fetchFailureLogs.
+    // *Once: these mocks are shared across describes and vi.clearAllMocks()
+    // doesn't clear a configured resolved value — a persisting mockResolvedValue
+    // here would leak into later describes (e.g. executeConfirmedUpdateApp's
+    // rollback-detection getLeaseProvision call) that rely on the default
+    // (unconfigured) mock behavior.
+    vi.mocked(getLease).mockResolvedValueOnce(null as any);
+    vi.mocked(getLeaseProvision).mockResolvedValueOnce({ status: 'failed', fail_count: 1, last_error: 'OOMKilled' } as any);
+    vi.mocked(getLeaseLogs).mockResolvedValueOnce({ lease_uuid: 'lease-x', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
+
+    const entries = [
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://stale.example.com', payload: makePayload() },
+    ];
+
+    await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+
+    expect(getLeaseProvision).toHaveBeenCalledWith('https://resolved.example.com', 'lease-x', expect.anything());
+    expect(getLeaseProvision).not.toHaveBeenCalledWith('https://stale.example.com', 'lease-x', expect.anything());
+  });
+
+  it('records a raw create-lease rejection in failed[] and keeps the rest', async () => {
+    vi.mocked(deployManifest)
+      .mockImplementationOnce(async (_ctx, _spec, callOptions) => {
+        await callOptions?.onLeaseCreated?.('lease-1', 'https://fred.example.com');
+        return makeDeployResult();
+      })
+      .mockRejectedValueOnce(new Error('insufficient funds'));
 
     const registry = makeRegistry();
     const entries = [
-      {
-        app_name: 'game1',
-        size: 'micro',
-        skuUuid: 'sku-1',
-        providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        payload: makePayload(),
-      },
-      {
-        app_name: 'game2',
-        size: 'micro',
-        skuUuid: 'sku-1',
-        providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        payload: makePayload(),
-      },
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+      { app_name: 'game2', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
     ];
 
-    const result = await executeConfirmedBatchDeploy(
-      { entries },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry })
-    );
+    const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ appRegistry: registry }));
 
     expect(result.success).toBe(true);
     expect((result.data as any).deployed.map((d: any) => d.name)).toContain('game1');
     expect((result.data as any).failed).toContain('game2');
   });
 
-  it('includes service names in lease items for stack deploys', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-    });
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid',
-      tenant: ADDRESS,
-      provider_uuid: 'p1',
-      connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
-    });
-
-    const registry = makeRegistry();
-    const entries = [
-      {
-        app_name: 'wordpress',
-        size: 'small',
-        skuUuid: 'sku-1',
-        providerUuid: 'p1',
-        providerUrl: 'https://fred.example.com',
-        payload: makePayload(),
-        serviceNames: ['web', 'db'],
-      },
-    ];
-
-    await executeConfirmedBatchDeploy(
-      { entries },
-      CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry })
-    );
-
-    // Verify cosmosTx was called with service-name-qualified lease items
-    const txCall = vi.mocked(cosmosTx).mock.calls[0];
-    const cmdArgs = txCall[3] as string[];
-    expect(cmdArgs).toContain('sku-1:1:web');
-    expect(cmdArgs).toContain('sku-1:1:db');
-    // Should NOT contain the single-service format
-    expect(cmdArgs).not.toContain('sku-1:1');
-  });
-
-  // Regression: prior to this fix, mergeBatchDeployConfirmations coalesced
-  // multi-app AI deploys with custom_domain into a single batch_deploy, but
-  // SingleDeployEntry didn't carry the domain fields, so the attach TX was
-  // silently dropped. Deploys succeeded; user only noticed when DNS failed.
-  // See PR #93 Copilot comment 3236552254.
-  describe('custom domain attach', () => {
-    function makeDomainOptions(reg = makeRegistry()) {
-      vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-      vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-      vi.mocked(waitForLeaseReady).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
-      vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-        lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
-        connection: { host: '127.0.0.1', instances: [{ instance_index: 0, container_id: 'abc', image: 'test', status: 'running', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }] },
+  describe('custom domain (in-deploy)', () => {
+    function mockDeploy() {
+      vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+        await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+        return makeDeployResult();
       });
-      return { reg, opts: makeOptions({ appRegistry: reg }) };
     }
 
-    it('attaches custom domains for entries that include them', async () => {
-      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
-      const { opts } = makeDomainOptions();
+    it('passes customDomain into the deploy spec and never calls setItemCustomDomain', async () => {
+      mockDeploy();
       const entries = [
         { app_name: 'a1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'a1.example.com' },
-        { app_name: 'a2', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'a2.example.com' },
       ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
 
-      const calls = vi.mocked(setItemCustomDomain).mock.calls;
-      expect(calls).toHaveLength(2);
-      // core@0.15: domain now lives in the input object (arg index 1), not positional arg 2.
-      const domains = calls.map((c) => (c[1] as { customDomain?: string }).customDomain);
-      expect(domains).toContain('a1.example.com');
-      expect(domains).toContain('a2.example.com');
-    });
-
-    it('passes serviceName option when entry.customDomainServiceName is non-empty', async () => {
-      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
-      const { opts } = makeDomainOptions();
-      const entries = [
-        { app_name: 'wp', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), serviceNames: ['web', 'db'], customDomain: 'wp.example.com', customDomainServiceName: 'web' },
-      ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
-
-      // core@0.15: domain + serviceName now live in the input object (arg index 1).
-      const input = vi.mocked(setItemCustomDomain).mock.calls[0][1] as { customDomain?: string; serviceName?: string };
-      expect(input.customDomain).toBe('wp.example.com');
-      expect(input.serviceName).toBe('web');
-    });
-
-    it('does not call setItemCustomDomain when entry has no customDomain', async () => {
-      const { opts } = makeDomainOptions();
-      const entries = [
-        { app_name: 'plain', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
-      ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+      const spec = vi.mocked(deployManifest).mock.calls[0][1];
+      expect(spec.customDomain).toBe('a1.example.com');
+      expect(spec.serviceName).toBeUndefined();
       expect(setItemCustomDomain).not.toHaveBeenCalled();
     });
 
-    it('surfaces domain attach failure in summary without aborting the batch', async () => {
-      // One success, one chain-rejection (code !== 0). Deploy itself still succeeds.
-      vi.mocked(setItemCustomDomain)
-        .mockResolvedValueOnce({ code: 0, transactionHash: 'dh1', rawLog: '' } as any)
-        .mockResolvedValueOnce({ code: 7, transactionHash: 'dh2', rawLog: 'reserved zone' } as any);
-      const { opts } = makeDomainOptions();
+    it('passes serviceName into the spec for a multi-service stack entry', async () => {
+      mockDeploy();
       const entries = [
-        { app_name: 'ok', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'ok.example.com' },
-        { app_name: 'rej', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'rej.example.com' },
+        { app_name: 'wp', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), serviceNames: ['web', 'db'], customDomain: 'wp.example.com', customDomainServiceName: 'web' },
       ];
-      const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
 
-      expect(result.success).toBe(true);
-      const data = result.data as any;
-      // Both deploys still in the deployed list — domain failure doesn't promote to deploy failure.
-      expect(data.deployed.map((d: any) => d.name)).toEqual(expect.arrayContaining(['ok', 'rej']));
-      expect(data.failed).toHaveLength(0);
-      // Summary message calls out the domain failure distinctly.
-      expect(data.message).toMatch(/Custom domain attach failed for: rej \(chain rejected with code 7\)/);
+      const spec = vi.mocked(deployManifest).mock.calls[0][1];
+      expect(spec.customDomain).toBe('wp.example.com');
+      expect(spec.serviceName).toBe('web');
     });
 
-    it('caches customDomains in registry after successful attach', async () => {
-      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
-      const { reg, opts } = makeDomainOptions();
+    it('omits customDomain and serviceName from the spec when the entry has none', async () => {
+      mockDeploy();
+      const entries = [
+        { app_name: 'plain', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+      ];
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+
+      const spec = vi.mocked(deployManifest).mock.calls[0][1];
+      expect('customDomain' in spec).toBe(false);
+      expect('serviceName' in spec).toBe(false);
+    });
+
+    it('caches customDomains in the registry after a successful domain deploy', async () => {
+      // Cache write is gated on the SDK RESULT (mirrors single-deploy), not the
+      // request input — so the mock must echo the attach back on the result.
+      vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+        await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+        return makeDeployResult({ custom_domain: 'cached.example.com', service_name: '' });
+      });
+      const reg = makeRegistry();
       const updateSpy = vi.spyOn(reg, 'updateApp');
       const entries = [
         { app_name: 'cached', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'cached.example.com' },
       ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ appRegistry: reg }));
 
-      // Among the multiple updateApp calls during the deploy, one must include
-      // the just-attached customDomains entry.
-      const domainUpdate = updateSpy.mock.calls.find(
-        (c) => Array.isArray((c[2] as any).customDomains)
-      );
-      expect(domainUpdate).toBeDefined();
-      expect((domainUpdate![2] as any).customDomains).toEqual([
+      const domainWrite = updateSpy.mock.calls.find((c) => Array.isArray((c[2] as any).customDomains));
+      expect(domainWrite).toBeDefined();
+      expect((domainWrite![2] as any).customDomains).toEqual([
         { serviceName: '', customDomain: 'cached.example.com' },
       ]);
     });
 
-    // Regression: when fred throws (or times out) and chain confirms ACTIVE,
-    // the batch fallback path used to drop the customDomains cache. The
-    // happy-path inline write at :1700 has already run by then, so the
-    // fallback's new merge is idempotent against it. This test verifies
-    // both writes happen and the entry still lands in deployed[].
-    // See PR #93 Copilot 3236837791.
-    it('preserves customDomains in fallback path when fred throws but chain is ACTIVE', async () => {
-      vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'h', rawLog: '' } as any);
-      vi.mocked(setItemCustomDomain).mockResolvedValue({ code: 0, transactionHash: 'dh', rawLog: '' } as any);
-      vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'ok' } });
-      vi.mocked(waitForLeaseReady).mockRejectedValue(new Error('fred unreachable'));
-      vi.mocked(getLease).mockResolvedValue({
-        leaseUuid: 'new-lease-uuid', tenant: ADDRESS, state: LeaseState.LEASE_STATE_ACTIVE, items: [],
-      } as any);
+    it('lands a fatal in-deploy domain failure in failed[] (no non-fatal summary)', async () => {
+      // deployManifest owns the attach; a rejection there is terminal — the entry
+      // must land in failed[], never deployed[] as a non-fatal annotation.
+      vi.mocked(deployManifest).mockRejectedValue(new Error('set-domain rejected'));
+      const entries = [
+        { app_name: 'rej', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'rej.example.com' },
+      ];
+      const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
 
-      const reg = makeRegistry();
-      const updateSpy = vi.spyOn(reg, 'updateApp');
-      const entries = [{
-        app_name: 'redis', size: 'micro',
-        skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com',
-        payload: makePayload(),
-        customDomain: 'redis.example.com',
-      }];
-
-      const result = await executeConfirmedBatchDeploy(
-        { entries },
-        CLIENT_MANAGER,
-        makeOptions({ appRegistry: reg }),
-      );
-
-      expect(result.success).toBe(true);
-      // Entry still in deployed[] — chain ACTIVE via fallback.
-      expect((result.data as any).deployed.map((d: any) => d.name)).toContain('redis');
-      // Both the happy-path inline write (:1700) and the fallback merge
-      // produce customDomains writes. At least one must be present and
-      // carry the attached entry — sidebar dot depends on it.
-      const cacheWrites = updateSpy.mock.calls.filter(
-        (c) => Array.isArray((c[2] as any).customDomains)
-      );
-      expect(cacheWrites.length).toBeGreaterThanOrEqual(1);
-      expect((cacheWrites[cacheWrites.length - 1][2] as any).customDomains).toEqual([
-        { serviceName: '', customDomain: 'redis.example.com' },
-      ]);
+      expect(result.success).toBe(false); // all entries failed
+      expect(result.error).toContain('rej');
     });
   });
 });
@@ -4100,5 +3746,175 @@ describe('deploy_app with custom_domain (Pass B)', () => {
       'compositeTransactions.executeDeployApp.queryLeaseByCustomDomain',
       expect.any(Error),
     );
+  });
+});
+
+describe('buildFredAuthCtx', () => {
+  it('wires query=readClient.query, chain=clientManager, providerAuth=signing.providerAuth', async () => {
+    const providerAuth = {
+      providerToken: vi.fn(),
+      leaseDataToken: vi.fn(),
+    };
+    const signing = {
+      providerAuth,
+      authTokens: { getAuthToken: vi.fn(), getLeaseDataAuthToken: vi.fn() },
+      withSign: <T,>(fn: () => Promise<T>) => fn(),
+    } as any;
+    const ctx = await buildFredAuthCtx(CLIENT_MANAGER, signing);
+    expect(ctx.query).toEqual({ __tag: 'read-query-client' });
+    expect(ctx.chain).toBe(CLIENT_MANAGER);
+    expect(ctx.providerAuth).toBe(providerAuth);
+    expect(typeof ctx.fetch).toBe('function');
+    expect(ctx.logger).toBeDefined();
+  });
+});
+
+describe('classifyLeaseChainState', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('ACTIVE → running', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
+    expect(await classifyLeaseChainState('u')).toBe('running');
+  });
+
+  it('CLOSED/REJECTED/EXPIRED → failed', async () => {
+    for (const s of [LeaseState.LEASE_STATE_CLOSED, LeaseState.LEASE_STATE_REJECTED, LeaseState.LEASE_STATE_EXPIRED]) {
+      vi.mocked(getLease).mockResolvedValue({ state: s } as any);
+      expect(await classifyLeaseChainState('u')).toBe('failed');
+    }
+  });
+
+  it('PENDING / unspecified → deploying', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as any);
+    expect(await classifyLeaseChainState('u')).toBe('deploying');
+  });
+
+  it('null lease (unavailable) → failed (trim correctness fix)', async () => {
+    vi.mocked(getLease).mockResolvedValue(null as any);
+    expect(await classifyLeaseChainState('u')).toBe('failed');
+  });
+
+  it('getLease throw → failed, never throws', async () => {
+    vi.mocked(getLease).mockRejectedValue(new Error('rpc down'));
+    expect(await classifyLeaseChainState('u')).toBe('failed');
+  });
+});
+
+describe('handleDeployManifestError', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function ctx(overrides: Record<string, unknown> = {}) {
+    return {
+      name: 'test-app',
+      leaseUuid: 'lease-1',
+      providerUrl: 'https://fred.example.com',
+      address: ADDRESS,
+      signing: makeOptions().signing!,
+      appRegistry: makeRegistry([{ name: 'test-app', leaseUuid: 'lease-1', size: 'small', providerUuid: 'p1', providerUrl: 'x', createdAt: 0, status: 'deploying' } as AppEntry]),
+      onProgress: vi.fn(),
+      ...overrides,
+    } as any;
+  }
+
+  it('case 1: raw Error (no lease) surfaces the raw message, no failure-log fetch', async () => {
+    const c = ctx({ leaseUuid: undefined, providerUrl: undefined });
+    const result = await handleDeployManifestError(new Error('insufficient funds'), c);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('insufficient funds');
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(getLeaseLogs).not.toHaveBeenCalled();
+    expect(c.onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'failed' }));
+  });
+
+  it('case 3: TerminalChainStateError → updateApp(failed), no chain-check', async () => {
+    const c = ctx();
+    // Real TerminalChainStateError ctor is (leaseUuid, chainState, ctx?); the mock's
+    // 1-arg ctor uses only the first arg as the message. Second arg satisfies the type.
+    const result = await handleDeployManifestError(new TerminalChainStateError('lease rejected', 'rejected'), c);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('lease rejected');
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'failed' });
+    expect(getLease).not.toHaveBeenCalled();
+  });
+
+  it('case 2 running: chain ACTIVE → running + ready progress (not failed)', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
+    const c = ctx();
+    const result = await handleDeployManifestError(
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true }), c);
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('running');
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'running' });
+    expect(c.onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+  });
+
+  it('case 2 deploying: chain PENDING → non-failed still-provisioning result', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as any);
+    const c = ctx();
+    const result = await handleDeployManifestError(
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true }), c);
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('deploying');
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'deploying' });
+    // Terminal onProgress must still fire so the ProgressCard doesn't stay stuck
+    // on the last 'provisioning' update (only 'ready'/'failed' clear it).
+    expect(c.onProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'failed', detail: expect.stringContaining('Provisioning timed out') }),
+    );
+  });
+
+  it('case 2 failed: chain terminal → failed + fetchFailureLogs + barney copy', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_CLOSED } as any);
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 2, last_error: 'OOMKilled' } as any);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ lease_uuid: 'lease-1', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
+    const c = ctx();
+    const result = await handleDeployManifestError(
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true }), c);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Deployment failed: provision failed');
+    expect(result.error).toContain('OOMKilled');
+    expect(result.error).not.toContain('close_lease');
+  });
+
+  it('case 2 failed: OPERATION_CANCELLED skips fetchFailureLogs', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_CLOSED } as any);
+    const c = ctx();
+    const result = await handleDeployManifestError(
+      new ManifestMCPError(ManifestMCPErrorCode.OPERATION_CANCELLED, 'aborted', { partial: true }), c);
+    expect(result.success).toBe(false);
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(getLeaseLogs).not.toHaveBeenCalled();
+  });
+
+  // Defense-in-depth (Copilot PR #106): Case 2 keys off `leaseUuid` presence,
+  // not `error instanceof ManifestMCPError`. deployManifest currently always
+  // wraps post-lease throws in ManifestMCPError/TerminalChainStateError, so a
+  // plain Error with a leaseUuid can't happen today — but if that contract
+  // ever changes, the error must still be resolved via chain-truth, not
+  // misclassified as Case 1 ("no lease").
+  it('case 2 (defensive): plain Error WITH leaseUuid still runs the chain-check, not Case 1', async () => {
+    vi.mocked(getLease).mockResolvedValue(null as any); // → classifyLeaseChainState 'failed'
+    // No diagnostics (no last_error, no logs) so the error message is exact —
+    // isolates the assertion from mock state leaking across tests in this describe.
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 0 } as any);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ lease_uuid: 'lease-1', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
+    const c = ctx();
+    const result = await handleDeployManifestError(new Error('unexpected throw shape'), c);
+    expect(result.success).toBe(false);
+    // Proves the chain-check ran (Case 2), not Case 1: Case 1 never calls
+    // appRegistry.updateApp and would surface the bare message with no
+    // "Deployment failed:" prefix.
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'failed' });
+    expect(result.error).toBe('Deployment failed: unexpected throw shape');
+    expect(getLease).toHaveBeenCalledWith('lease-1');
+  });
+
+  it('case 2 (defensive): plain Error WITH leaseUuid, chain ACTIVE → running', async () => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
+    const c = ctx();
+    const result = await handleDeployManifestError(new Error('unexpected throw shape'), c);
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('running');
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'running' });
   });
 });

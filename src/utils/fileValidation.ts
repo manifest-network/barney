@@ -9,14 +9,11 @@ import { MAX_FILENAME_LENGTH } from '../config/constants';
 /** Allowed MIME types for file uploads */
 export const ALLOWED_FILE_TYPES = [
   'text/plain',
-  'text/yaml',
-  'text/x-yaml',
-  'application/x-yaml',
   'application/json',
 ];
 
 /** Allowed file extensions */
-export const ALLOWED_FILE_EXTENSIONS = ['.yaml', '.yml', '.json', '.txt'];
+export const ALLOWED_FILE_EXTENSIONS = ['.json', '.txt'];
 
 /**
  * Validates a file before upload to prevent malicious file uploads.
@@ -55,12 +52,12 @@ export function validateFile(file: File): { valid: boolean; error?: string } {
 
   // Always validate extension (defense-in-depth: MIME types can be unreliable)
   if (!ALLOWED_FILE_EXTENSIONS.includes(fileExtension)) {
-    return { valid: false, error: `File extension "${fileExtension || '(none)'}" is not allowed. Use .yaml, .yml, .json, or .txt files.` };
+    return { valid: false, error: `File extension "${fileExtension || '(none)'}" is not allowed. Use .json or .txt files.` };
   }
 
   // Also validate MIME type when the browser provides one
   if (file.type && !ALLOWED_FILE_TYPES.includes(file.type)) {
-    return { valid: false, error: `File type "${file.type}" is not allowed. Use .yaml, .yml, .json, or .txt files.` };
+    return { valid: false, error: `File type "${file.type}" is not allowed. Use .json or .txt files.` };
   }
 
   return { valid: true };

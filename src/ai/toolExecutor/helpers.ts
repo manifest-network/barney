@@ -3,6 +3,8 @@
  * Extracted from compositeTransactions to avoid peer-dependency from compositeQueries.
  */
 
+import type { ConnectionDetails } from '@manifest-network/manifest-mcp-core';
+
 import { isValidFqdn } from '../../utils/connection';
 
 /** Service names that indicate a primary (user-facing) service in a stack. */
@@ -162,6 +164,37 @@ export function formatConnectionUrl(
   // Last resort: bare host
   if (!host) return undefined;
   return host.replace(/^https?:\/\//, '');
+}
+
+/**
+ * Shape an app URL from a DeployResult.connection with no extra API call.
+ * Mirrors resolveAppUrl's connection block: ports = top-level ?? instances[0]
+ * ?? primary-stack-service; FQDN promoted from the primary service when absent.
+ * Returns undefined when neither a URL nor ports can be derived — caller then
+ * falls back to resolveAppUrl (the network path).
+ */
+export function deriveUrlFromConnection(
+  connection: ConnectionDetails,
+): { url?: string; connection: ConnectionDetails } | undefined {
+  let ports: Record<string, unknown> | undefined =
+    connection.ports ?? connection.instances?.[0]?.ports;
+
+  let fqdn = connection.fqdn;
+  if (!ports && connection.services) {
+    const primary = extractPrimaryServicePorts(connection.services);
+    if (primary) {
+      ports = primary.ports;
+      if (!fqdn) {
+        const svc = connection.services[primary.serviceName];
+        fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
+      }
+    }
+  }
+
+  const withPorts = { ...connection, ports, fqdn };
+  const url = formatConnectionUrl(connection.host, withPorts);
+  if (url || withPorts.ports) return { url, connection: withPorts };
+  return undefined;
 }
 
 // Re-export from shared module so existing tool-executor consumers don't break.

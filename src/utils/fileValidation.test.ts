@@ -22,7 +22,7 @@ function createMockFile(
 describe('validateFile', () => {
   describe('empty file validation', () => {
     it('rejects empty files', () => {
-      const file = createMockFile('test.yaml', 0, 'text/yaml');
+      const file = createMockFile('test.json', 0, 'application/json');
       const result = validateFile(file);
       expect(result.valid).toBe(false);
       expect(result.error).toBe('File is empty');
@@ -31,20 +31,20 @@ describe('validateFile', () => {
 
   describe('file size validation', () => {
     it('accepts files within size limit', () => {
-      const file = createMockFile('test.yaml', 1024, 'text/yaml');
+      const file = createMockFile('test.json', 1024, 'application/json');
       const result = validateFile(file);
       expect(result.valid).toBe(true);
     });
 
     it('rejects files exceeding size limit', () => {
-      const file = createMockFile('test.yaml', MAX_PAYLOAD_SIZE + 1, 'text/yaml');
+      const file = createMockFile('test.json', MAX_PAYLOAD_SIZE + 1, 'application/json');
       const result = validateFile(file);
       expect(result.valid).toBe(false);
       expect(result.error).toContain('exceeds maximum size');
     });
 
     it('accepts files at exactly the size limit', () => {
-      const file = createMockFile('test.yaml', MAX_PAYLOAD_SIZE, 'text/yaml');
+      const file = createMockFile('test.json', MAX_PAYLOAD_SIZE, 'application/json');
       const result = validateFile(file);
       expect(result.valid).toBe(true);
     });
@@ -52,14 +52,14 @@ describe('validateFile', () => {
 
   describe('filename length validation', () => {
     it('accepts normal filenames', () => {
-      const file = createMockFile('deployment.yaml', 100, 'text/yaml');
+      const file = createMockFile('deployment.json', 100, 'application/json');
       const result = validateFile(file);
       expect(result.valid).toBe(true);
     });
 
     it('rejects filenames exceeding max length', () => {
-      const longName = 'a'.repeat(MAX_FILENAME_LENGTH + 1) + '.yaml';
-      const file = createMockFile(longName, 100, 'text/yaml');
+      const longName = 'a'.repeat(MAX_FILENAME_LENGTH + 1) + '.json';
+      const file = createMockFile(longName, 100, 'application/json');
       const result = validateFile(file);
       expect(result.valid).toBe(false);
       expect(result.error).toBe('Filename is too long');
@@ -67,16 +67,18 @@ describe('validateFile', () => {
   });
 
   describe('file extension validation', () => {
-    it('accepts .yaml extension', () => {
-      const file = createMockFile('config.yaml', 100, 'text/yaml');
+    it('rejects .yaml extension (SDK is JSON-only)', () => {
+      const file = createMockFile('config.yaml', 100, '');
       const result = validateFile(file);
-      expect(result.valid).toBe(true);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('extension ".yaml" is not allowed');
     });
 
-    it('accepts .yml extension', () => {
-      const file = createMockFile('config.yml', 100, 'text/yaml');
+    it('rejects .yml extension (SDK is JSON-only)', () => {
+      const file = createMockFile('config.yml', 100, '');
       const result = validateFile(file);
-      expect(result.valid).toBe(true);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('extension ".yml" is not allowed');
     });
 
     it('accepts .json extension', () => {
@@ -106,7 +108,7 @@ describe('validateFile', () => {
     });
 
     it('handles uppercase extensions (case insensitive)', () => {
-      const file = createMockFile('config.YAML', 100, 'text/yaml');
+      const file = createMockFile('config.JSON', 100, 'application/json');
       const result = validateFile(file);
       expect(result.valid).toBe(true);
     });
@@ -123,7 +125,7 @@ describe('validateFile', () => {
     });
 
     it('rejects disallowed MIME types', () => {
-      const file = createMockFile('test.yaml', 100, 'application/octet-stream');
+      const file = createMockFile('test.json', 100, 'application/octet-stream');
       const result = validateFile(file);
       expect(result.valid).toBe(false);
       expect(result.error).toContain('File type');
@@ -131,7 +133,7 @@ describe('validateFile', () => {
 
     it('accepts files with no MIME type (relies on extension)', () => {
       // Some browsers don't set MIME type - extension should still be validated
-      const file = createMockFile('test.yaml', 100, '');
+      const file = createMockFile('test.json', 100, '');
       const result = validateFile(file);
       expect(result.valid).toBe(true);
     });
@@ -139,27 +141,14 @@ describe('validateFile', () => {
 });
 
 describe('ALLOWED_FILE_TYPES', () => {
-  it('includes text/plain', () => {
-    expect(ALLOWED_FILE_TYPES).toContain('text/plain');
-  });
-
-  it('includes YAML types', () => {
-    expect(ALLOWED_FILE_TYPES).toContain('text/yaml');
-    expect(ALLOWED_FILE_TYPES).toContain('text/x-yaml');
-    expect(ALLOWED_FILE_TYPES).toContain('application/x-yaml');
-  });
-
-  it('includes application/json', () => {
-    expect(ALLOWED_FILE_TYPES).toContain('application/json');
+  it('contains only plain-text and JSON MIME types', () => {
+    expect(ALLOWED_FILE_TYPES).toEqual(['text/plain', 'application/json']);
   });
 });
 
 describe('ALLOWED_FILE_EXTENSIONS', () => {
-  it('includes expected extensions', () => {
-    expect(ALLOWED_FILE_EXTENSIONS).toContain('.yaml');
-    expect(ALLOWED_FILE_EXTENSIONS).toContain('.yml');
-    expect(ALLOWED_FILE_EXTENSIONS).toContain('.json');
-    expect(ALLOWED_FILE_EXTENSIONS).toContain('.txt');
+  it('contains only .json and .txt', () => {
+    expect(ALLOWED_FILE_EXTENSIONS).toEqual(['.json', '.txt']);
   });
 });
 

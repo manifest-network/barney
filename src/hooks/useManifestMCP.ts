@@ -11,7 +11,10 @@ import {
   type WalletProvider,
   type SignArbitraryResult,
 } from '@manifest-network/manifest-sdk';
-import { createAuthTokens } from '@manifest-network/manifest-sdk/deploy';
+// ADR-036 D3: createProviderAuth is not re-exported on the @manifest-network/manifest-sdk
+// facade yet (ENG follow-up filed) — import from manifest-mcp-fred directly.
+import { createProviderAuth } from '@manifest-network/manifest-mcp-fred';
+import { createAuthTokensAdapter } from './authTokensAdapter';
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import { RPC_ENDPOINT } from '../api/config';
 import { CHAIN_NAME, CHAIN_ID, GAS_PRICE } from '../config/chain';
@@ -150,12 +153,20 @@ export function useManifestMCP(): UseManifestMCPResult {
         // hit the wallet concurrently.
         const canSign = typeof signArbitraryRef.current === 'function';
         const signingContext: SigningContext | undefined = canSign
-          ? {
-              authTokens: createAuthTokens(createSignerAdapter(walletProvider, 'manifest'), {
-                chainId: CHAIN_ID,
-              }),
-              withSign: mutex.withSign,
-            }
+          ? (() => {
+              // ONE ADR-036 minter (one AuthTimestampTracker). authTokens is a thin
+              // address-binding adapter over THIS instance — never a 2nd
+              // createProviderAuth (D2 same-lease/same-second replay guard).
+              const providerAuth = createProviderAuth(
+                createSignerAdapter(walletProvider, 'manifest'),
+                { chainId: CHAIN_ID },
+              );
+              return {
+                providerAuth,
+                authTokens: createAuthTokensAdapter(providerAuth, address),
+                withSign: mutex.withSign,
+              };
+            })()
           : undefined;
 
         if (isMounted) {

@@ -56,6 +56,14 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
   cosmosQuery: vi.fn(),
 }));
 
+// C2 (ENG-279): the confirmed deploy path now delegates the create-lease →
+// upload → poll spine to deployManifest. Spread the original so manifest.ts's
+// buildManifest/mergeManifest re-exports survive.
+vi.mock('@manifest-network/manifest-mcp-fred', async (importOriginal) => ({
+  ...(await importOriginal()),
+  deployManifest: vi.fn(),
+}));
+
 vi.mock('../api/readClient', () => ({ getReadClient: vi.fn() }));
 
 const mockGetBalance = vi.fn();
@@ -64,19 +72,13 @@ vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
-vi.mock('../ai/toolExecutor/utils', () => ({
-  extractLeaseUuidFromTxResult: vi.fn(),
-  uploadPayloadToProvider: vi.fn(),
-  computePayloadHash: vi.fn(),
-}));
-
 import { getLeasesByTenant, getCreditEstimate, getLease } from '../api/billing';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
 import { waitForLeaseReady } from '../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-mcp-core';
+import { deployManifest } from '@manifest-network/manifest-mcp-fred';
 import { getReadClient } from '../api/readClient';
-import { extractLeaseUuidFromTxResult, uploadPayloadToProvider } from '../ai/toolExecutor/utils';
 
 const ADDRESS = 'manifest1testaddr';
 const MOCK_QUERY_CLIENT = {} as Awaited<ReturnType<CosmosClientManager['getQueryClient']>>;
@@ -123,6 +125,7 @@ describe('Deploy Flow Integration', () => {
       appRegistry: registry,
       onProgress: (p: DeployProgress) => progressEvents.push(p),
       signing: {
+        providerAuth: { providerToken: vi.fn(), leaseDataToken: vi.fn() },
         authTokens: {
           getAuthToken: vi.fn().mockResolvedValue('auth-token'),
           getLeaseDataAuthToken: vi.fn().mockResolvedValue('lease-data-auth-token'),
@@ -159,9 +162,12 @@ describe('Deploy Flow Integration', () => {
       activeLeaseCount: 0n,
     } as Awaited<ReturnType<typeof getCreditEstimate>>);
 
-    const payloadBytes = new TextEncoder().encode('version: "3"');
+    // Must be valid JSON — the deploy SDK JSON.parses the manifest string,
+    // and the plan-phase guard (§3.9) now rejects non-JSON file uploads
+    // (e.g. raw docker-compose YAML) before reaching confirmation.
+    const payloadBytes = new TextEncoder().encode(JSON.stringify({ image: 'nginx', port: '80' }));
     const payload: PayloadAttachment = {
-      filename: 'docker-compose.yml',
+      filename: 'docker-compose.json',
       bytes: payloadBytes,
       size: payloadBytes.byteLength,
       hash: 'abc123',
@@ -173,13 +179,33 @@ describe('Deploy Flow Integration', () => {
     expect(deployResult.requiresConfirmation).toBe(true);
     expect(deployResult.confirmationMessage).toContain('my-app');
 
-    // Step 2: Confirm deploy
+    // Step 2: Confirm deploy — C2: the spine is deployManifest. buildFredAuthCtx
+    // needs the read client's query; deployManifest fires onLeaseCreated (registry
+    // addApp + uploading) + a provisioning tick, then resolves with the connection
+    // used for URL shaping.
+    vi.mocked(getReadClient).mockResolvedValue(
+      { query: {} } as unknown as Awaited<ReturnType<typeof getReadClient>>,
+    );
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
+      await opts?.onLeaseCreated?.(LEASE_UUID, 'https://fred.example.com');
+      opts?.pollOptions?.onProgress?.({ state: LeaseState.LEASE_STATE_ACTIVE, phase: 'provisioning' } as never);
+      return {
+        lease_uuid: LEASE_UUID,
+        provider_uuid: PROVIDER_UUID,
+        provider_url: 'https://fred.example.com',
+        state: LeaseState.LEASE_STATE_ACTIVE,
+        connection: {
+          host: 'https://my-app.example.com',
+          ports: { '80/tcp': { host_ip: '1.2.3.4', host_port: 12345 } },
+        },
+      } as never;
+    });
+    // Retained old-spine mock — still used by the stop step below, harmless
+    // for deploy now that deployManifest owns the spine.
     vi.mocked(cosmosTx).mockResolvedValue({
       module: 'billing', subcommand: 'create-lease', height: '100',
       code: 0, transactionHash: 'tx-hash-1', rawLog: '', events: [],
     } as Awaited<ReturnType<typeof cosmosTx>>);
-    vi.mocked(extractLeaseUuidFromTxResult).mockReturnValue(LEASE_UUID);
-    vi.mocked(uploadPayloadToProvider).mockResolvedValue({ success: true, data: { message: 'uploaded' } });
     vi.mocked(waitForLeaseReady).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
