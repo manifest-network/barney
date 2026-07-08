@@ -228,7 +228,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 
 | Hook | Purpose |
 |------|---------|
-| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-sdk` (builds the `CosmosClientManager` + `SigningContext` = `{ authTokens, withSign }`) |
+| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-sdk` (builds the `CosmosClientManager` + `SigningContext` = `{ providerAuth, authTokens, withSign }`) |
 | `useAutoScroll` | MutationObserver-based auto-scroll that respects user scroll position |
 | `useInputHistory` | Arrow-key navigation through past chat inputs |
 | `useAI` | Zustand store consumer — selects all public state/actions via `useShallow` |
