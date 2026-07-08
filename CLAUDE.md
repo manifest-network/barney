@@ -249,7 +249,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `hash.ts` | `sha256()`, `sha256Hex()`, `toHex()`, `toBytes()`, `generatePassword()`, `validatePayloadSize()`, `getPayloadSize()`, `isValidMetaHash()`; `MAX_PAYLOAD_SIZE` (5KB) |
 | `json.ts` | `bigIntReplacer` — `JSON.stringify` replacer that converts `bigint` values to strings to avoid serialization errors |
 | `format.ts` | Amount conversion (`toBaseUnits`, `fromBaseUnits`), date/duration formatting, UUID validation |
-| `fileValidation.ts` | Upload validation: size limits, allowed extensions (`.json`, `.txt` — YAML dropped; the deploy path is JSON-only since `deployManifest` JSON-parses the manifest), MIME type checks, manifest content validation (`validateManifestContent`), YAML service name extraction (`extractYamlServiceNames`, still used for `.txt` content) |
+| `fileValidation.ts` | Upload validation: size limits, allowed extensions (`.json`, `.txt` — YAML dropped; the deploy path is JSON-only since `deployManifest` JSON-parses the manifest, so `.txt` content must parse as JSON too), MIME type checks, JSON-only manifest content validation (`validateManifestContent`) |
 | `pricing.ts` | BigInt-based cost calculations (`formatCostPerHour`, `calculateEstimatedCost`) to avoid integer overflow |
 | `leaseState.ts` | Lease state display helpers — badge classes, labels, colors, filter mapping |
 | `address.ts` | Bech32 address validation (`isValidBech32Address`) and truncation (`truncateAddress`) |

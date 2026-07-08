@@ -34,7 +34,6 @@ import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 import { getDomainForService } from '../../api/leaseDomains';
 import { validateAll, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { validateAppName, sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
-import { extractYamlServiceNames } from '../../utils/fileValidation';
 import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, getServiceNames, type ServiceConfig, type HealthCheckConfig } from '../manifest';
 import { MANIFEST_NOTICE_KEY } from '../../config/constants';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
@@ -147,9 +146,10 @@ function resolveMultiAppNames(
 }
 
 /**
- * Extract service names from a payload that may be JSON or YAML.
- * Tries JSON.parse first (via getServiceNames), then falls back to
- * lightweight YAML extraction for .yaml/.yml uploads.
+ * Extract service names from a JSON stack-manifest payload.
+ * Deploy payloads are JSON — the plan-phase `JSON.parse` guard rejects non-JSON
+ * uploads before this runs, and batch payloads are internally-generated JSON.
+ * Non-JSON or single-service manifests yield an empty list.
  */
 export function extractServiceNamesFromPayload(bytes: Uint8Array): string[] {
   let text: string;
@@ -161,18 +161,13 @@ export function extractServiceNamesFromPayload(bytes: Uint8Array): string[] {
 
   let raw: string[] = [];
 
-  // Try JSON first
+  // Parse JSON and pull the stack's service names (non-JSON → no names)
   try {
     const parsed: unknown = JSON.parse(text);
     const names = getServiceNames(parsed);
     if (names.length > 0) raw = names;
   } catch {
-    // Not JSON — try YAML extraction below
-  }
-
-  // YAML fallback: use shared extraction from fileValidation
-  if (raw.length === 0) {
-    raw = extractYamlServiceNames(text);
+    // Not JSON — no service names to extract
   }
 
   // Validate and deduplicate
