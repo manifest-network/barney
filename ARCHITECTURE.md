@@ -117,10 +117,10 @@ executeConfirmedTool(toolName, args, clientManager, options, payload?)
 ```
 
 - `compositeQueries.ts` — read-only operations that resolve immediately.
-- `compositeTransactions.ts` — TX builders that *return* a confirmation request first; the actual signing happens in the `executeConfirmed*` companion when the user approves.
-- (removed) — lease creation now lives in `compositeTransactions.ts` (via `cosmosTx` `billing create-lease`) and payload upload in `utils.ts` (`uploadPayloadToProvider`); the old `transactions.ts` was deleted.
-- `batchRunner.ts` — concurrency-bounded batch execution with shared signing mutex; used by `requestBatchDeploy` and bulk restart.
-- `helpers.ts`, `utils.ts`, `types.ts` — shared types (`ToolResult`, `ToolExecutorOptions`, `PayloadAttachment`, `SigningContext`), ADR-036 token minting via the injected `authTokens` factory, and payload upload helpers. (The token factory itself is built in `src/hooks/useManifestMCP.ts`.)
+- `compositeTransactions.ts` — TX builders that *return* a confirmation request first; the actual signing happens in the `executeConfirmed*` companion when the user approves. `deploy_app`/`batch_deploy` delegate the create-lease → (set-domain) → upload → provision-poll spine to the SDK's `deployManifest` primitive (ENG-279). Deploy-path helpers live here: `buildFredAuthCtx`, `classifyLeaseChainState`, `handleDeployManifestError` (plus `deriveUrlFromConnection` in `helpers.ts`).
+- `deployManifest` (from `@manifest-network/manifest-mcp-fred`) now owns create-lease → set-domain → upload → provision-poll; barney's old hand-rolled orchestration (`transactions.ts`, then `toolExecutor/utils.ts` with `uploadPayloadToProvider`/`computePayloadHash`) is **deleted**.
+- `batchRunner.ts` — concurrency-bounded batch execution with shared signing mutex; used by `requestBatchDeploy` and bulk restart. Batch deploy calls `deployManifest` directly (never wrapped in `withSign` — that deadlocks).
+- `helpers.ts`, `types.ts` — shared types (`ToolResult`, `ToolExecutorOptions`, `PayloadAttachment`, `SigningContext`) and URL/port shaping helpers. ADR-036 tokens are minted by the single `createProviderAuth` instance built in `src/hooks/useManifestMCP.ts`, exposed on `SigningContext` as `providerAuth` (address-param) plus the `authTokens` address-binding adapter.
 
 ### 4. Chain & provider clients (`src/api/`)
 
@@ -203,18 +203,24 @@ executeConfirmedTool('deploy_app', args, clientManager, options, payload)
    │
    ▼
 executeConfirmedDeployApp:
-  1. Resolve provider + SKU from on-chain catalog (api/sku.ts)
-  2. Create lease via cosmosTx('billing','create-lease'), broadcast under signing.withSign  (@manifest-network/manifest-mcp-core)
-       onProgress({ phase: 'creating_lease' })
-  3. Mint ADR-036 auth token (signing.authTokens)     (toolExecutor/utils.ts)
-  4. Upload payload to provider (HTTP)               (toolExecutor/utils.ts)
-       onProgress({ phase: 'uploading' })
-  5. waitForLeaseReady → WebSocket /v1/leases/{uuid}/events with polling fallback (api/fred.ts)
-       onProgress({ phase: 'provisioning' })
-  6. Resolve connection info → AppCard rendered
+  1. Rebuild payload from confirmed manifest JSON (buildPayloadFromManifest)
+  2. Build ManifestDeploySpec { manifest, sku:{resolved skuUuid,providerUuid}, customDomain?, serviceName? }
+  3. buildFredAuthCtx(clientManager, signing) → FredAuthCtx { query, chain, fetch, logger, providerAuth }
+  4. deployManifest(ctx, spec, callOptions)          (@manifest-network/manifest-mcp-fred)
+       ├─ create lease on-chain (cosmosTx, internal)     onProgress({ phase: 'creating_lease' })
+       ├─ onLeaseCreated → addApp(status:'deploying')    onProgress({ phase: 'uploading' })
+       ├─ optional set-domain (atomic, before upload)
+       ├─ upload manifest payload to provider (HTTP)
+       └─ poll provision until ready                     onProgress({ phase: 'provisioning' })
+            checkChainState → early rejected/closed detection (getLease)
+  5. On throw → handleDeployManifestError (3-branch:
+       pre-lease fail / ambiguous post-lease → classifyLeaseChainState / provision timeout)
+  6. Shape URL from result.connection (deriveUrlFromConnection; resolveAppUrl fallback)
+  7. updateApp(status:'running', url, connection, customDomains) → AppCard rendered
        onProgress({ phase: 'ready' })
-  7. Persist AppEntry to registry (registry/appRegistry.ts)
 ```
+
+⚠️ `deployManifest` is called **directly**, never wrapped in `signing.withSign`: it mints its own ADR-036 lease-data token through the same non-reentrant signing mutex, so wrapping it would deadlock. Serialization comes from `CosmosClientManager.withBroadcastLock` + the mutex-wrapped `signArbitrary`.
 
 ### C. First-connect account setup
 

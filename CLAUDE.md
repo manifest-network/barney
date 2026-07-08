@@ -78,10 +78,10 @@ The AI assistant uses a 3-layer architecture:
    - **Entry point** (`index.ts`): Contains `QUERY_TOOLS`/`TX_TOOLS` sets and `executeTool()` dispatcher
    - **Types** (`types.ts`): `ToolResult`, `ToolExecutorOptions`, `PayloadAttachment`, etc.
    - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`, `request_faucet`
-   - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`, `set_custom_domain`
-   - **Batch runner** (`batchRunner.ts`): Shared batch execution infrastructure — `createSigningMutex`, `runBatchWithConcurrency`, `computeOverallPhase`, `summarizeBatchResult`. Used by batch deploy and batch restart.
-   - **Helpers** (`helpers.ts`): Shared functions — `extractPrimaryServicePorts`, `formatConnectionUrl`
-   - **Utils** (`utils.ts`): payload upload with ADR-036 auth (`uploadPayloadToProvider`, minting the lease-data token via the injected `authTokens` factory) and hashing (`computePayloadHash`). The ADR-036 token factory is built by `createAuthTokens` in `src/hooks/useManifestMCP.ts`, not here
+   - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`, `set_custom_domain`. `deploy_app`/`batch_deploy` delegate the create-lease → (set-domain) → upload → provision-poll spine to the SDK's `deployManifest` primitive (ENG-279 deploy-path rewrite); barney keeps the plan phase, registry state machine, progress UI, and URL shaping around it. Deploy-path helpers live here: `buildFredAuthCtx` (assembles the `FredAuthCtx` deployManifest needs), `classifyLeaseChainState` + `handleDeployManifestError` (3-branch post-throw error handler)
+   - **Batch runner** (`batchRunner.ts`): Shared batch execution infrastructure — `createSigningMutex`, `runBatchWithConcurrency`, `computeOverallPhase`, `summarizeBatchResult`. Used by batch deploy and batch restart. Batch deploy calls `deployManifest` **directly** under `runBatchWithConcurrency` (NOT wrapped in `withSign` — that would deadlock; see Transaction Path)
+   - **Helpers** (`helpers.ts`): Shared functions — `extractPrimaryServicePorts`, `formatConnectionUrl`, `deriveUrlFromConnection` (shapes the app URL from `DeployResult.connection` with no extra round-trip)
+   - **ADR-036 auth**: consolidated to a single `createProviderAuth` minter built once at the `useManifestMCP` root (`src/hooks/useManifestMCP.ts`). `authTokens` is a thin address-binding adapter over that same instance (`src/hooks/authTokensAdapter.ts`), and `providerAuth` is a required field on `SigningContext`. `deployManifest` handles payload upload + SHA-256 hashing internally, so barney's old `toolExecutor/utils.ts` (`uploadPayloadToProvider` / `computePayloadHash`) was deleted
    - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
    - **Internal pseudo-tool**: `batch_deploy` — orchestrates multi-app deploys from the UI. Not declared in `AI_TOOLS` and never exposed to the model; routed through `executeConfirmedTool` (case `'batch_deploy'`) by the `requestBatchDeploy` AI store action (e.g. `useAI().requestBatchDeploy`)
 
@@ -167,13 +167,20 @@ Barney-specific code that stays local:
 
 ### Transaction Path
 
-AI tools use `cosmosTx()` from `@manifest-network/manifest-mcp-core` (shared MCP library that uses manifestjs internally).
+The TX path splits by tool:
+
+- **`deploy_app` / `batch_deploy`** — delegate to the SDK's `deployManifest` primitive (`@manifest-network/manifest-mcp-fred`), which runs create-lease (via `cosmosTx` internally) → optional set-domain → payload upload → provision-poll as one call. barney no longer hand-rolls this spine.
+- **`stop_app` / `fund_credits` / `cosmos_tx`** — `cosmosTx()` from `@manifest-network/manifest-mcp-core` (billing `close-lease` / `fund-credit`, or the raw escape hatch). Uses manifestjs internally.
+- **`update_app` / `restart_app`** — provider HTTP via `updateLease` / `restartLease` (`src/api/fred.ts` → mono fred), authenticated with an ADR-036 token; no chain TX.
+- **`set_custom_domain`** — `setItemCustomDomain` from `@manifest-network/manifest-mcp-core` (standalone tool only; the deploy path attaches domains atomically *inside* `deployManifest`).
+
+⚠️ **Never wrap `deployManifest` in `signing.withSign`.** It mints its own ADR-036 lease-data token through the same non-reentrant signing mutex, so wrapping it deadlocks (deployManifest → `providerAuth.leaseDataToken` → same mutex → circular wait). Chain-TX serialization comes from `CosmosClientManager.withBroadcastLock` plus the mutex-wrapped `signArbitrary` instead — `withSign` is for the raw `cosmosTx` tools (`stop_app`, `fund_credits`, `cosmos_tx`).
 
 ### Wallet Integration
 
 - cosmos-kit provides wallet abstraction (Web3Auth is the only enabled wallet provider in `src/main.tsx`; Leap, Cosmostation, Ledger packages are installed but not imported)
 - `CosmosClientManager` from `@manifest-network/manifest-sdk` wraps the signer for MCP operations
-- `signArbitrary` (wrapped in a signing mutex and consumed by the `createAuthTokens` factory exposed as `SigningContext.authTokens`) backs ADR-036 off-chain authentication (payload uploads to providers, fred status queries)
+- `signArbitrary` (wrapped in a signing mutex) backs the single `createProviderAuth` ADR-036 minter built once at the `useManifestMCP` root. `SigningContext` exposes it as `providerAuth` (address-param, consumed by `deployManifest`'s `FredAuthCtx`) plus `authTokens`, a thin address-binding adapter over the SAME instance (`authTokensAdapter.ts`) — one `AuthTimestampTracker`, never a second minter (D2 same-lease/same-second replay guard). ADR-036 tokens authenticate payload uploads, provider connection/status queries, and fred WebSocket events
 
 ### API Layer (`src/api/`)
 
@@ -221,7 +228,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 
 | Hook | Purpose |
 |------|---------|
-| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-sdk` (builds the `CosmosClientManager` + `SigningContext` = `{ authTokens, withSign }`) |
+| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-sdk` (builds the `CosmosClientManager` + `SigningContext` = `{ providerAuth, authTokens, withSign }`) |
 | `useAutoScroll` | MutationObserver-based auto-scroll that respects user scroll position |
 | `useInputHistory` | Arrow-key navigation through past chat inputs |
 | `useAI` | Zustand store consumer — selects all public state/actions via `useShallow` |
@@ -242,7 +249,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `hash.ts` | `sha256()`, `sha256Hex()`, `toHex()`, `toBytes()`, `generatePassword()`, `validatePayloadSize()`, `getPayloadSize()`, `isValidMetaHash()`; `MAX_PAYLOAD_SIZE` (5KB) |
 | `json.ts` | `bigIntReplacer` — `JSON.stringify` replacer that converts `bigint` values to strings to avoid serialization errors |
 | `format.ts` | Amount conversion (`toBaseUnits`, `fromBaseUnits`), date/duration formatting, UUID validation |
-| `fileValidation.ts` | Upload validation: size limits, allowed extensions (`.yaml`, `.yml`, `.json`, `.txt`), MIME type checks, manifest content validation (`validateManifestContent`), YAML service name extraction (`extractYamlServiceNames`) |
+| `fileValidation.ts` | Upload validation: size limits, allowed extensions (`.json`, `.txt` — YAML dropped; the deploy path is JSON-only since `deployManifest` JSON-parses the manifest), MIME type checks, manifest content validation (`validateManifestContent`), YAML service name extraction (`extractYamlServiceNames`, still used for `.txt` content) |
 | `pricing.ts` | BigInt-based cost calculations (`formatCostPerHour`, `calculateEstimatedCost`) to avoid integer overflow |
 | `leaseState.ts` | Lease state display helpers — badge classes, labels, colors, filter mapping |
 | `address.ts` | Bech32 address validation (`isValidBech32Address`) and truncation (`truncateAddress`) |
