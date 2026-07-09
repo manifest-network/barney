@@ -1,9 +1,9 @@
 /**
  * Provider API client — auth, health checks, connection info, payload upload.
  *
- * Most functions delegate to @manifest-network/manifest-mcp-fred with Barney's
- * CORS proxy/SSRF fetch adapter injected. Barney-specific code (validateAuthTimestamp,
- * null-returning getProviderHealth) stays here.
+ * Most functions delegate to the @manifest-network/manifest-sdk/deploy facade with
+ * Barney's CORS proxy/SSRF fetch adapter injected. Barney-specific code
+ * (validateAuthTimestamp, null-returning getProviderHealth) stays here.
  */
 
 import {
@@ -11,16 +11,16 @@ import {
   getLeaseConnectionInfo as fredGetLeaseConnectionInfo,
   type ProviderHealthResponse,
   type LeaseConnectionResponse,
-} from '@manifest-network/manifest-mcp-fred';
+} from '@manifest-network/manifest-sdk/deploy';
 import { providerFetch } from './providerFetchAdapter';
 import { logError } from '../utils/errors';
 import { HEALTH_CHECK_TIMEOUT_MS } from '../config/constants';
 
-// Re-export types and classes from mono for backward compatibility
+// Re-export types and classes from the SDK facade for backward compatibility
 export {
   ProviderApiError,
   type ConnectionDetails,
-} from '@manifest-network/manifest-mcp-fred';
+} from '@manifest-network/manifest-sdk/deploy';
 
 // ============================================================================
 // Barney-specific functions

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createProviderAuth } from '@manifest-network/manifest-mcp-fred';
+import { createProviderAuth } from '@manifest-network/manifest-sdk/deploy';
 import { asLeaseUuid } from '@manifest-network/manifest-sdk';
 import type { Signer } from '@manifest-network/manifest-mcp-core';
 import { createAuthTokensAdapter } from './authTokensAdapter';
