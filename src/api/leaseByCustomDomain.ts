@@ -1,14 +1,5 @@
-import { liftedinit } from '@manifest-network/manifestjs';
-import type { QueryLeaseByCustomDomainResponse } from '@manifest-network/manifestjs/dist/codegen/liftedinit/billing/v1/query';
 import type { Lease } from './billing';
-import { fixEnumField, getQueryClient, lcdConvert, queryWithNotFound } from './queryClient';
-
-const { QueryLeaseByCustomDomainResponse: QueryLeaseByCustomDomainResponseConverter, leaseStateFromJSON } =
-  liftedinit.billing.v1;
-
-function fixLeaseEnums(lease: Lease): Lease {
-  return fixEnumField(lease, 'state', leaseStateFromJSON);
-}
+import { getReadClient } from './readClient';
 
 export interface LeaseByCustomDomainResult {
   lease: Lease;
@@ -18,27 +9,21 @@ export interface LeaseByCustomDomainResult {
 
 /**
  * Query the chain for a lease by its custom domain.
- * Returns null when no lease holds that domain (chain 404).
+ * Returns null when no lease holds that domain (chain NOT_FOUND).
+ *
+ * ENG-536/537: the SDK read client's typed getLeaseByCustomDomain returns
+ * `{ lease, serviceName } | null` — null on NOT_FOUND (grpc code:5), throw on a
+ * transport failure — and decodes numeric enums, so barney no longer needs its
+ * own LCD client / lcdConvert / fixEnumField / 404 string-matching.
  */
 export async function queryLeaseByCustomDomain(
   fqdn: string,
 ): Promise<LeaseByCustomDomainResult | null> {
-  const client = await getQueryClient();
-  const data = await queryWithNotFound(
-    () => client.liftedinit.billing.v1.leaseByCustomDomain({ customDomain: fqdn }),
-    null,
-  );
-  if (!data) return null;
-
-  const converted: QueryLeaseByCustomDomainResponse = lcdConvert(
-    data,
-    QueryLeaseByCustomDomainResponseConverter,
-  );
-
-  const lease = fixLeaseEnums(converted.lease);
+  const result = await (await getReadClient()).getLeaseByCustomDomain(fqdn);
+  if (result === null) return null;
   return {
-    lease,
-    leaseUuid: lease.uuid,
-    serviceName: converted.serviceName,
+    lease: result.lease,
+    leaseUuid: result.lease.uuid,
+    serviceName: result.serviceName,
   };
 }

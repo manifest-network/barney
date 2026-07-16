@@ -10,7 +10,7 @@ import type {
   QueryCreditEstimateResponse,
 } from '@manifest-network/manifestjs/dist/codegen/liftedinit/billing/v1/query';
 import type { PageResponse } from '@manifest-network/manifestjs/dist/codegen/cosmos/base/query/v1beta1/pagination';
-import { getQueryClient, queryWithNotFound, lcdConvert, fixEnumField } from './queryClient';
+import { isNotFoundError } from '@manifest-network/manifest-sdk';
 import { getReadClient } from './readClient';
 
 // Re-export manifestjs types for consumers (Coin is exported from bank.ts)
@@ -23,15 +23,6 @@ export type LeaseState = (typeof LeaseState)[keyof typeof LeaseState];
 
 // Conversion functions from manifestjs
 const { leaseStateFromJSON: fromJSON, leaseStateToJSON: toJSON } = liftedinit.billing.v1;
-
-// fromAmino converters for query responses
-const {
-  QueryLeaseResponse: QueryLeaseResponseConverter,
-  QueryLeasesResponse: QueryLeasesResponseConverter,
-  QueryCreditAccountResponse: QueryCreditAccountResponseConverter,
-  QueryCreditAddressResponse: QueryCreditAddressResponseConverter,
-  QueryCreditEstimateResponse: QueryCreditEstimateResponseConverter,
-} = liftedinit.billing.v1;
 
 export function leaseStateToString(state: LeaseState): string {
   return toJSON(state);
@@ -51,52 +42,58 @@ export const LEASE_STATE_MAP: Record<string, LeaseState> = {
 
 export const LEASE_STATE_FILTERS = ['all', ...Object.keys(LEASE_STATE_MAP)] as const;
 
-// fromAmino doesn't convert enum strings to numeric values; LCD returns strings like "LEASE_STATE_ACTIVE"
-// but LeaseState enum keys are numeric (0, 1, 2, ...). This fixes the mismatch.
-function fixLeaseEnums(lease: Lease): Lease {
-  return fixEnumField(lease, 'state', fromJSON);
-}
+// The typed read defaults limit to 50; barney's un-paginated "list a tenant's
+// leases" must not silently truncate (list_apps reconcile). A wallet realistically
+// holds far fewer than this cap.
+const LEASES_LIST_LIMIT = 1000n;
+
+// ENG-536/537: all reads go through the SDK read client. Typed methods (getLease,
+// getLeasesByTenant, getBillingParams) return branded, numeric-enum-decoded data;
+// the credit family has no typed method and rides `client.query` (the LCD-adapter
+// drop-down — same numeric-enum decode). Not-found surfaces as a classified
+// NOT_FOUND error (grpc code:5), detected with isNotFoundError. No lcdConvert /
+// fixEnumField / queryWithNotFound / parallel LCD client.
 
 export async function getCreditAccount(tenant: string): Promise<QueryCreditAccountResponse> {
   const creditAddress = await getCreditAddress(tenant);
-
-  const client = await getQueryClient();
-  const data = await queryWithNotFound(
-    () => client.liftedinit.billing.v1.creditAccount({ tenant }),
-    null,
-  );
-
-  if (data) {
-    return lcdConvert(data, QueryCreditAccountResponseConverter);
+  const client = await getReadClient();
+  try {
+    return await client.query.liftedinit.billing.v1.creditAccount({ tenant });
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      // No credit account yet (every new user) — synthesize a zero-account.
+      // Product policy that stays in barney (the SDK's composite getBalance
+      // returns credits:null; barney prefers a zero-shaped account here).
+      return {
+        creditAccount: {
+          tenant,
+          creditAddress,
+          activeLeaseCount: 0n,
+          pendingLeaseCount: 0n,
+          reservedAmounts: [],
+        },
+        balances: [],
+        availableBalances: [],
+      };
+    }
+    throw error;
   }
-
-  return {
-    creditAccount: {
-      tenant,
-      creditAddress,
-      activeLeaseCount: 0n,
-      pendingLeaseCount: 0n,
-      reservedAmounts: [],
-    },
-    balances: [],
-    availableBalances: [],
-  };
 }
 
 export async function getCreditAddress(tenant: string): Promise<string> {
-  const client = await getQueryClient();
-  const data = await client.liftedinit.billing.v1.creditAddress({ tenant });
-  return lcdConvert(data, QueryCreditAddressResponseConverter).creditAddress;
+  const client = await getReadClient();
+  const data = await client.query.liftedinit.billing.v1.creditAddress({ tenant });
+  return data.creditAddress;
 }
 
 export async function getCreditEstimate(tenant: string): Promise<QueryCreditEstimateResponse | null> {
-  const client = await getQueryClient();
-  const data = await queryWithNotFound(
-    () => client.liftedinit.billing.v1.creditEstimate({ tenant }),
-    null,
-  );
-  if (!data) return null;
-  return lcdConvert(data, QueryCreditEstimateResponseConverter);
+  const client = await getReadClient();
+  try {
+    return await client.query.liftedinit.billing.v1.creditEstimate({ tenant });
+  } catch (error) {
+    if (isNotFoundError(error)) return null;
+    throw error;
+  }
 }
 
 export async function getBillingParams(): Promise<BillingParams> {
@@ -105,59 +102,41 @@ export async function getBillingParams(): Promise<BillingParams> {
 }
 
 export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState): Promise<Lease[]> {
-  const client = await getQueryClient();
-  const data = await client.liftedinit.billing.v1.leasesByTenant({
+  const client = await getReadClient();
+  const { leases } = await client.getLeasesByTenant({
     tenant,
     stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
+    limit: LEASES_LIST_LIMIT,
   });
-  return lcdConvert(data, QueryLeasesResponseConverter).leases.map(fixLeaseEnums);
+  return leases;
 }
 
 export async function getLeasesByTenantPaginated(
   tenant: string,
   params?: { stateFilter?: LeaseState; limit?: number; offset?: number; reverse?: boolean }
 ): Promise<PaginatedLeasesResponse> {
-  const client = await getQueryClient();
-  const data = await client.liftedinit.billing.v1.leasesByTenant({
+  const client = await getReadClient();
+  const { leases, total } = await client.getLeasesByTenant({
     tenant,
     stateFilter: params?.stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
-    pagination: buildPageRequest({
-      limit: params?.limit,
-      offset: params?.offset,
-      countTotal: true,
-      reverse: params?.reverse,
-    }),
+    limit: params?.limit !== undefined ? BigInt(params.limit) : undefined,
+    offset: params?.offset !== undefined ? BigInt(params.offset) : undefined,
+    reverse: params?.reverse,
   });
-  const converted = lcdConvert(data, QueryLeasesResponseConverter);
+  // The typed read returns { leases, total }; barney's shape carries a PageResponse.
+  // Only `pagination.total` is consumed (lease_history), so a minimal envelope suffices.
   return {
-    leases: converted.leases.map(fixLeaseEnums),
-    pagination: converted.pagination,
+    leases,
+    pagination: { nextKey: new Uint8Array(), total },
   };
 }
 
 export async function getLease(leaseUuid: string): Promise<Lease | null> {
-  const client = await getQueryClient();
-  const data = await queryWithNotFound(
-    () => client.liftedinit.billing.v1.lease({ leaseUuid }),
-    null,
-  );
-  if (!data) return null;
-  return fixLeaseEnums(lcdConvert(data, QueryLeaseResponseConverter).lease);
+  const client = await getReadClient();
+  return client.getLease(leaseUuid);
 }
 
 export interface PaginatedLeasesResponse {
   leases: Lease[];
   pagination?: PageResponse;
 }
-
-function buildPageRequest(params?: { limit?: number; offset?: number; countTotal?: boolean; reverse?: boolean }) {
-  if (!params) return undefined;
-  return {
-    key: new Uint8Array(),
-    offset: BigInt(params.offset ?? 0),
-    limit: BigInt(params.limit ?? 0),
-    countTotal: params.countTotal ?? false,
-    reverse: params.reverse ?? false,
-  };
-}
-
