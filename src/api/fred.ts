@@ -49,40 +49,48 @@ export {
 // HTTP function wrappers — delegate to mono with providerFetch injected
 // ============================================================================
 
+// 0.18+ (ENG-490): every fred HTTP fn gained a trailing `allowLoopback=false` arg.
+// In DEV the provider URL is localhost; without allowLoopback the SDK's internal
+// validateProviderUrl throws (non-HTTPS/loopback) before providerFetch or the dev
+// CORS proxy is ever reached. The dev /proxy-provider tunnel still routes the real
+// request — this only relaxes the SDK's own URL guard.
+const ALLOW_LOOPBACK = import.meta.env.DEV;
+
 export function getLeaseStatus(
   providerApiUrl: string, leaseUuid: string, authToken: string
 ): Promise<FredLeaseStatus> {
-  return fredGetLeaseStatus(providerApiUrl, leaseUuid, authToken, providerFetch);
+  // signal is arg #5, allowLoopback #6 — pass undefined for the unused signal slot.
+  return fredGetLeaseStatus(providerApiUrl, leaseUuid, authToken, providerFetch, undefined, ALLOW_LOOPBACK);
 }
 
 export function getLeaseLogs(
   providerApiUrl: string, leaseUuid: string, authToken: string, tail = 100
 ): Promise<FredLeaseLogs> {
-  return fredGetLeaseLogs(providerApiUrl, leaseUuid, authToken, tail, providerFetch);
+  return fredGetLeaseLogs(providerApiUrl, leaseUuid, authToken, tail, providerFetch, ALLOW_LOOPBACK);
 }
 
 export function getLeaseProvision(
   providerApiUrl: string, leaseUuid: string, authToken: string
 ): Promise<FredLeaseProvision> {
-  return fredGetLeaseProvision(providerApiUrl, leaseUuid, authToken, providerFetch);
+  return fredGetLeaseProvision(providerApiUrl, leaseUuid, authToken, providerFetch, ALLOW_LOOPBACK);
 }
 
 export function getLeaseReleases(
   providerApiUrl: string, leaseUuid: string, authToken: string
 ): Promise<FredLeaseReleases> {
-  return fredGetLeaseReleases(providerApiUrl, leaseUuid, authToken, providerFetch);
+  return fredGetLeaseReleases(providerApiUrl, leaseUuid, authToken, providerFetch, ALLOW_LOOPBACK);
 }
 
 export function restartLease(
   providerApiUrl: string, leaseUuid: string, authToken: string
 ): Promise<FredActionResponse> {
-  return fredRestartLease(providerApiUrl, leaseUuid, authToken, providerFetch);
+  return fredRestartLease(providerApiUrl, leaseUuid, authToken, providerFetch, ALLOW_LOOPBACK);
 }
 
 export function updateLease(
   providerApiUrl: string, leaseUuid: string, payload: Uint8Array, authToken: string
 ): Promise<FredActionResponse> {
-  return fredUpdateLease(providerApiUrl, leaseUuid, payload, authToken, providerFetch);
+  return fredUpdateLease(providerApiUrl, leaseUuid, payload, authToken, providerFetch, ALLOW_LOOPBACK);
 }
 
 // ============================================================================

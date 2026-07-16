@@ -553,6 +553,7 @@ describe('getLeaseLogs wrapper', () => {
       AUTH_TOKEN,
       100,
       providerFetch,
+      import.meta.env.DEV, // allowLoopback (ENG-490)
     );
   });
 
@@ -567,6 +568,7 @@ describe('getLeaseLogs wrapper', () => {
       AUTH_TOKEN,
       500,
       providerFetch,
+      import.meta.env.DEV, // allowLoopback (ENG-490)
     );
   });
 });

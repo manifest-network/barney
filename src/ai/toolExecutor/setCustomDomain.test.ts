@@ -360,6 +360,7 @@ describe('executeConfirmedSetCustomDomain', () => {
       custom_domain: 'app.example.com',
       transactionHash: 'HASH123',
       code: 0,
+      confirmed: true, // 0.19.0: SetItemCustomDomainResult carries the broadcast-confirmation flag (ENG-494)
       ...overrides,
     };
     // core@0.15's SetItemCustomDomainResult brands lease_uuid/custom_domain
