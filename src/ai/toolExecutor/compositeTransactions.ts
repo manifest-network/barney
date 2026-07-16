@@ -18,7 +18,7 @@ import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
-import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
+import { getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus } from '../../api/fred';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
@@ -38,8 +38,9 @@ import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import type { SigningContext } from './types';
 import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
-import { TerminalChainStateError, deployManifest, stopApp, setItemCustomDomain as monoSetItemCustomDomain, type FredAuthCtx, type DeployCallOptions, type StopAppResult } from '@manifest-network/manifest-sdk/deploy';
+import { TerminalChainStateError, deployManifest, stopApp, setItemCustomDomain as monoSetItemCustomDomain, waitForLeaseStatus, isLeaseFailureTerminal, type FredAuthCtx, type DeployCallOptions, type StopAppResult, type TerminalChainState } from '@manifest-network/manifest-sdk/deploy';
 import { buildBarneyCtx } from './capabilityCtx';
+import { browserEventTransport } from '../../api/eventTransport';
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([
@@ -2146,21 +2147,21 @@ export async function executeRestartApp(
  * Execute restart_app after user confirmation.
  * Supports batch restart when args.entries is present (from app_name="all" or comma-separated).
  *
- * ENG-279 no-migration note (spec §3.13, §7): restart_app and update_app got
- * NO deploy-path rewrite. They already call mono's low-level fred http ops
- * (`restartLease` / `updateLease` from `../../api/fred`, which source them from the
- * `@manifest-network/manifest-sdk/deploy` facade), so the ENG-279 "route through
- * fred/core ops" goal was already satisfied for them at the http-function
- * level. Their ONLY change from ENG-279 is transparent and came via C1:
- * `signing.authTokens.getAuthToken` is now the address-binding adapter over
- * the single `providerAuth` minter — no per-tool edit here. They keep
- * `waitForLeaseReady` (fred http tools are fire-and-return with no internal
- * poll); do not "finish migrating" them to deployManifest — that primitive
- * is create-lease + deploy, not update/restart.
+ * restart_app and update_app got NO deploy-path rewrite: they call mono's
+ * low-level fred http ops (`restartLease` / `updateLease` from `../../api/fred`,
+ * which source them from the `@manifest-network/manifest-sdk/deploy` facade) to
+ * issue the action, then (ENG-312 Phase 6) wait for readiness via the SDK's
+ * `waitForLeaseStatus` with a browser `EventTransport` (WS live-status, poll
+ * fallback). Do not "finish migrating" them to `deployManifest` — that
+ * primitive is create-lease + deploy, not update/restart.
+ *
+ * ⚠️ The readiness wait mints its own per-poll ADR-036 status token through
+ * `ctx.providerAuth` (the same non-reentrant signing mutex), so it must NEVER
+ * be wrapped in `signing.withSign` — that would deadlock.
  */
 export async function executeConfirmedRestartApp(
   args: Record<string, unknown>,
-  _clientManager: CosmosClientManager,
+  clientManager: CosmosClientManager,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
   const { address, appRegistry, signing, onProgress, signal } = options;
@@ -2171,8 +2172,15 @@ export async function executeConfirmedRestartApp(
   // Batch restart
   const entries = args.entries as Array<{ app_name: string; leaseUuid: string; providerUrl: string }> | undefined;
   if (entries && entries.length > 0) {
-    return executeConfirmedBatchRestart(entries, address, appRegistry, signing, onProgress, signal);
+    return executeConfirmedBatchRestart(entries, address, appRegistry, signing, onProgress, signal, clientManager);
   }
+
+  // ENG-312 Phase 6: the readiness wait now runs through the SDK's
+  // waitForLeaseStatus with a browser EventTransport (WS live-status, poll
+  // fallback). It mints its own per-poll ADR-036 status token via
+  // ctx.providerAuth — NEVER wrap it in signing.withSign (reentrant mutex
+  // deadlock).
+  const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
 
   // Single restart
   const name = args.app_name as string;
@@ -2205,12 +2213,11 @@ export async function executeConfirmedRestartApp(
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for app to come back up...', operation: 'restart' });
 
   try {
-    const authToken = await refreshAuthToken();
-    const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
-      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+    const fredStatus = await waitForLeaseStatus(ctx, asLeaseUuid(leaseUuid), {
+      timeout: AI_DEPLOY_PROVISION_TIMEOUT_MS,
       intervalMs: FRED_POLL_INTERVAL_MS,
-      abortSignal: signal,
-      onProgress: (status) => {
+      signal,
+      onStatus: (status) => {
         onProgress?.({
           phase: 'provisioning',
           detail: status.phase || 'Waiting for restart...',
@@ -2218,10 +2225,9 @@ export async function executeConfirmedRestartApp(
           operation: 'restart',
         });
       },
-      getAuthToken: refreshAuthToken,
     });
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
+    if (!isLeaseFailureTerminal(fredStatus)) {
       const { url: connectionUrl, connection } = await resolveAppUrl(
         providerUrl, leaseUuid, fredStatus, address, signing,
         'compositeTransactions.executeConfirmedRestartApp'
@@ -2266,9 +2272,14 @@ async function executeConfirmedBatchRestart(
   appRegistry: ToolExecutorOptions['appRegistry'] & object,
   signing: SigningContext,
   onProgress: ToolExecutorOptions['onProgress'],
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  clientManager: CosmosClientManager
 ): Promise<ToolResult> {
   const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
+
+  // One shared ctx for all concurrent waits (WS live-status via the browser
+  // EventTransport; poll fallback). Never wrapped in signing.withSign.
+  const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
 
   const { succeeded, failed, batchProgress } = await runBatchWithConcurrency({
     entries: batchEntries,
@@ -2304,18 +2315,16 @@ async function executeConfirmedBatchRestart(
       updateProgress('provisioning', 'Waiting for app to come back up...');
 
       try {
-        const authToken = await refreshAuthToken();
-        const fredStatus = await waitForLeaseReady(entry.providerUrl, entry.leaseUuid, authToken, {
-          maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+        const fredStatus = await waitForLeaseStatus(ctx, asLeaseUuid(entry.leaseUuid), {
+          timeout: AI_DEPLOY_PROVISION_TIMEOUT_MS,
           intervalMs: FRED_POLL_INTERVAL_MS,
-          abortSignal: signal,
-          onProgress: (status) => {
+          signal,
+          onStatus: (status) => {
             updateProgress('provisioning', status.phase || 'Restarting...');
           },
-          getAuthToken: refreshAuthToken,
         });
 
-        if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
+        if (!isLeaseFailureTerminal(fredStatus)) {
           const { url: connectionUrl, connection } = await resolveAppUrl(
             entry.providerUrl, entry.leaseUuid, fredStatus, address, signing,
             'executeConfirmedBatchRestart'
@@ -2639,7 +2648,7 @@ export async function executeUpdateApp(
  */
 export async function executeConfirmedUpdateApp(
   args: Record<string, unknown>,
-  _clientManager: CosmosClientManager,
+  clientManager: CosmosClientManager,
   options: ToolExecutorOptions,
   payload?: PayloadAttachment
 ): Promise<ToolResult> {
@@ -2690,16 +2699,19 @@ export async function executeConfirmedUpdateApp(
   const manifestJson = new TextDecoder().decode(payload.bytes);
   appRegistry.updateApp(address, leaseUuid, { manifest: sanitizeManifestForStorage(manifestJson) });
 
-  // Poll for readiness
+  // Poll for readiness. ENG-312 Phase 6: SDK waitForLeaseStatus with a browser
+  // EventTransport (WS live-status, poll fallback). It mints its own per-poll
+  // ADR-036 status token via ctx.providerAuth — never wrap in signing.withSign.
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for app to come back up...', operation: 'update' });
 
+  const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
+
   try {
-    const authToken = await refreshAuthToken();
-    const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
-      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+    const fredStatus = await waitForLeaseStatus(ctx, asLeaseUuid(leaseUuid), {
+      timeout: AI_DEPLOY_PROVISION_TIMEOUT_MS,
       intervalMs: FRED_POLL_INTERVAL_MS,
-      abortSignal: signal,
-      onProgress: (status) => {
+      signal,
+      onStatus: (status) => {
         onProgress?.({
           phase: 'provisioning',
           detail: status.phase || 'Waiting for update...',
@@ -2707,10 +2719,9 @@ export async function executeConfirmedUpdateApp(
           operation: 'update',
         });
       },
-      getAuthToken: refreshAuthToken,
     });
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
+    if (!isLeaseFailureTerminal(fredStatus)) {
       // Rollback detection: check /provision for last_error.
       // Fred settles the rollback before emitting the terminal WS event or
       // transitioning provision out of a transient state, so by the time we

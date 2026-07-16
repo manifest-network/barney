@@ -44,8 +44,6 @@ vi.mock('../api/provider-api', () => ({
 }));
 
 vi.mock('../api/fred', () => ({
-  getLeaseStatus: vi.fn(),
-  waitForLeaseReady: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
 }));
@@ -78,7 +76,6 @@ vi.mock('../utils/errors', () => ({
 import { getLeasesByTenant, getCreditEstimate } from '../api/billing';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
-import { waitForLeaseReady } from '../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
 import { deployManifest, stopApp, appStatus } from '@manifest-network/manifest-sdk/deploy';
 import { getReadClient } from '../api/readClient';
@@ -209,9 +206,6 @@ describe('Deploy Flow Integration', () => {
       module: 'billing', subcommand: 'create-lease', height: '100',
       code: 0, transactionHash: 'tx-hash-1', rawLog: '', events: [],
     } as Awaited<ReturnType<typeof cosmosTx>>);
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-    });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
       lease_uuid: LEASE_UUID,
       tenant: ADDRESS,

@@ -61,7 +61,6 @@ vi.mock('../../api/provider-api', async (importOriginal) => {
 });
 
 vi.mock('../../api/fred', () => ({
-  waitForLeaseReady: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
   restartLease: vi.fn(),
@@ -81,6 +80,8 @@ vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   deployManifest: vi.fn(),
   stopApp: vi.fn(),
   setItemCustomDomain: vi.fn(),
+  waitForLeaseStatus: vi.fn(),
+  isLeaseFailureTerminal: vi.fn(),
   TerminalChainStateError: class TerminalChainStateError extends Error {
     constructor(m: string) { super(m); this.name = 'TerminalChainStateError'; }
   },
@@ -116,11 +117,11 @@ import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
-import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
+import { getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
 import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
 import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
-import { TerminalChainStateError, deployManifest, stopApp } from '@manifest-network/manifest-sdk/deploy';
+import { TerminalChainStateError, deployManifest, stopApp, waitForLeaseStatus, isLeaseFailureTerminal } from '@manifest-network/manifest-sdk/deploy';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
 const ADDRESS = 'manifest1abc';
@@ -1770,7 +1771,7 @@ describe('executeConfirmedDeployApp', () => {
     // does NOT consume DeployResult.url
     expect(deployManifest).toHaveBeenCalledTimes(1);
     expect(cosmosTx).not.toHaveBeenCalled();
-    expect(waitForLeaseReady).not.toHaveBeenCalled();
+    expect(waitForLeaseStatus).not.toHaveBeenCalled();
     expect(setItemCustomDomain).not.toHaveBeenCalled();
     // registry addApp(deploying) fired in onLeaseCreated, then updateApp(running)
     expect(registry.addApp).toHaveBeenCalledWith(ADDRESS, expect.objectContaining({ status: 'deploying', leaseUuid: 'new-lease-uuid' }));
@@ -2683,11 +2684,16 @@ describe('executeRestartApp', () => {
 });
 
 describe('executeConfirmedRestartApp', () => {
-  beforeEach(() => vi.clearAllMocks());
+  // clearAllMocks() keeps mockReturnValue across tests, so re-seed the default
+  // (success terminal) each time; the poll-failure test overrides to true.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(false);
+  });
 
   it('restarts app and polls to ready', async () => {
     vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -2735,10 +2741,11 @@ describe('executeConfirmedRestartApp', () => {
 
   it('handles poll failure (non-active state)', async () => {
     vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
       last_error: 'container crashed',
     });
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(true);
 
     const app = makeApp();
     const registry = makeRegistry([app]);
@@ -2755,7 +2762,7 @@ describe('executeConfirmedRestartApp', () => {
 
   it('restarts multiple apps in batch and returns summary', async () => {
     vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -2804,7 +2811,7 @@ describe('executeConfirmedRestartApp', () => {
     vi.mocked(restartLease)
       .mockResolvedValueOnce({ status: 'restarting' })
       .mockRejectedValueOnce(new ProviderApiError(409, 'not restartable'));
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -3309,11 +3316,16 @@ describe('executeUpdateApp', () => {
 });
 
 describe('executeConfirmedUpdateApp', () => {
-  beforeEach(() => vi.clearAllMocks());
+  // clearAllMocks() keeps mockReturnValue across tests, so re-seed the default
+  // (success terminal) each time; the poll-failure test overrides to true.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(false);
+  });
 
   it('updates app and polls to ready', async () => {
     vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -3368,10 +3380,11 @@ describe('executeConfirmedUpdateApp', () => {
 
   it('handles poll failure (non-active state)', async () => {
     vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
       last_error: 'container crashed',
     });
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(true);
 
     const app = makeApp();
     const registry = makeRegistry([app]);
@@ -3401,7 +3414,7 @@ describe('executeConfirmedUpdateApp', () => {
 
   it('reconstructs payload from _generatedManifest when no payload provided', async () => {
     vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -3439,7 +3452,7 @@ describe('executeConfirmedUpdateApp', () => {
     // provision.last_error mid-sentence; without normalization an upstream
     // error ending in `.` would double-up.
     vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({

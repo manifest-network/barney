@@ -66,7 +66,6 @@ vi.mock('../../api/provider-api', async (importOriginal) => {
   return { ...actual, getLeaseConnectionInfo: vi.fn() };
 });
 vi.mock('../../api/fred', () => ({
-  waitForLeaseReady: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
   restartLease: vi.fn(),

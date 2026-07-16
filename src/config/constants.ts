@@ -111,18 +111,9 @@ export const AI_BATCH_DEPLOY_CONCURRENCY = getNumericConfig('PUBLIC_AI_BATCH_DEP
 // Fred WebSocket / Polling Constants
 // ============================================
 
-/** Default polling interval for Fred status checks (milliseconds) */
+/** Default polling interval for Fred status checks (milliseconds). Passed as
+ *  intervalMs to the SDK's waitForLeaseStatus (also its WS-fallback poll cadence). */
 export const FRED_POLL_INTERVAL_MS = 3000;
-
-/** Delay before reconnecting after a WebSocket connection drop (milliseconds) */
-export const WS_RECONNECT_DELAY_MS = 1000;
-
-/** Maximum number of WebSocket reconnection attempts before falling back to polling */
-export const WS_MAX_RECONNECT_ATTEMPTS = 2;
-
-/** Timeout for WebSocket liveness — if no data received within this window, reconnect (milliseconds).
- * Fred sends ping frames every 30s, so 45s gives comfortable headroom. */
-export const WS_LIVENESS_TIMEOUT_MS = 45_000;
 
 // ============================================
 // Custom Domain DNS Polling Constants
