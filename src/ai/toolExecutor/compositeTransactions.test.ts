@@ -79,6 +79,7 @@ vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
 vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   ...(await importOriginal()),
   deployManifest: vi.fn(),
+  stopApp: vi.fn(),
   setItemCustomDomain: vi.fn(),
   TerminalChainStateError: class TerminalChainStateError extends Error {
     constructor(m: string) { super(m); this.name = 'TerminalChainStateError'; }
@@ -119,7 +120,7 @@ import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updat
 import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
 import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
 import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
-import { TerminalChainStateError, deployManifest } from '@manifest-network/manifest-sdk/deploy';
+import { TerminalChainStateError, deployManifest, stopApp } from '@manifest-network/manifest-sdk/deploy';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
 const ADDRESS = 'manifest1abc';
@@ -1970,8 +1971,8 @@ describe('executeStopApp', () => {
 describe('executeConfirmedStopApp', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('closes lease and updates registry', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+  it('closes lease and updates registry (single, blocking)', async () => {
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as any);
 
     const app = makeApp();
     const registry = makeRegistry([app]);
@@ -1984,10 +1985,16 @@ describe('executeConfirmedStopApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('stopped');
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'stopped' });
+    // single path blocks on confirmation
+    expect(stopApp).toHaveBeenCalledWith(
+      expect.anything(),
+      { leaseUuid: app.leaseUuid },
+      { waitForConfirmation: true }
+    );
   });
 
-  it('stops multiple apps in bulk and returns summary', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+  it('stops multiple apps in bulk (async, non-blocking) and returns summary', async () => {
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as any);
 
     const apps = [
       makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
@@ -2005,13 +2012,16 @@ describe('executeConfirmedStopApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).stopped).toEqual(['redis', 'postgres']);
     expect((result.data as any).failed).toHaveLength(0);
-    expect(cosmosTx).toHaveBeenCalledTimes(2);
+    expect(stopApp).toHaveBeenCalledTimes(2);
+    // bulk path fires async (no block-inclusion wait)
+    expect(stopApp).toHaveBeenNthCalledWith(1, expect.anything(), { leaseUuid: 'uuid-1' }, { waitForConfirmation: false });
+    expect(stopApp).toHaveBeenNthCalledWith(2, expect.anything(), { leaseUuid: 'uuid-2' }, { waitForConfirmation: false });
   });
 
   it('handles partial failures in bulk stop', async () => {
-    vi.mocked(cosmosTx)
-      .mockResolvedValueOnce({ code: 0, transactionHash: 'hash', rawLog: '' } as any)
-      .mockResolvedValueOnce({ code: 1, rawLog: 'some error' } as any);
+    vi.mocked(stopApp)
+      .mockResolvedValueOnce({ outcome: 'stopped' } as any)
+      .mockRejectedValueOnce(new Error('some error'));
 
     const apps = [
       makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
@@ -2031,26 +2041,25 @@ describe('executeConfirmedStopApp', () => {
     expect((result.data as any).failed).toEqual(['postgres']);
   });
 
-  it('treats lease-not-active as success in bulk stop', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 1, rawLog: 'lease not active' } as any);
+  it('treats an already-inactive lease as success (single)', async () => {
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'already_inactive' } as any);
 
     const apps = [makeApp({ name: 'redis', leaseUuid: 'uuid-1' })];
     const registry = makeRegistry(apps);
-    const entries = [{ app_name: 'redis', leaseUuid: 'uuid-1' }];
 
     const result = await executeConfirmedStopApp(
-      { app_name: 'all', entries },
+      { app_name: 'redis', leaseUuid: 'uuid-1' },
       CLIENT_MANAGER,
       makeOptions({ appRegistry: registry })
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as any).stopped).toEqual(['redis']);
+    expect((result.data as any).message).toContain('already inactive');
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'uuid-1', { status: 'stopped' });
   });
 
   it('returns failure when all bulk stops fail', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 1, rawLog: 'error' } as any);
+    vi.mocked(stopApp).mockRejectedValue(new Error('error'));
 
     const apps = [
       makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),

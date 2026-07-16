@@ -3,7 +3,7 @@
  * These return requiresConfirmation first, then execute after user approval.
  */
 
-import type { CosmosClientManager, ManifestDeploySpec, DeployResult } from '@manifest-network/manifest-sdk';
+import type { CosmosClientManager, ManifestDeploySpec, DeployResult, TxCtx } from '@manifest-network/manifest-sdk';
 import {
   asFqdn,
   asLeaseUuid,
@@ -38,7 +38,7 @@ import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import type { SigningContext } from './types';
 import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
-import { TerminalChainStateError, deployManifest, setItemCustomDomain as monoSetItemCustomDomain, type FredAuthCtx, type DeployCallOptions } from '@manifest-network/manifest-sdk/deploy';
+import { TerminalChainStateError, deployManifest, stopApp, setItemCustomDomain as monoSetItemCustomDomain, type FredAuthCtx, type DeployCallOptions, type StopAppResult } from '@manifest-network/manifest-sdk/deploy';
 import { buildBarneyCtx } from './capabilityCtx';
 
 /** Env var names that could compromise the container runtime or host. */
@@ -1776,14 +1776,14 @@ export async function executeConfirmedBatchDeploy(
  * Pre-validation for stop_app. Returns confirmation result or error.
  * Supports app_name="all" to stop every running/deploying app at once.
  *
- * ENG-279 escape hatch (spec §7, D0): stop_app deliberately stays on
- * `cosmosTx(clientManager, 'billing', 'close-lease', …)` and is NOT migrated
- * to `@manifest-network/manifest-mcp-core`'s `stopApp`. This is a genuine
- * capability gap, not laziness: `core.stopApp` drops the TX `rawLog` (barney
- * surfaces it in the ConfirmationCard result) and forces a synchronous
- * broadcast, whereas the bulk path here fires close-lease async
- * (`cosmosTx(..., false)`) so "stop all" doesn't serialize N confirmations.
- * Keep on cosmosTx until core exposes rawLog + async broadcast.
+ * ENG-312 Phase 4: the confirmed execution (`executeConfirmedStopApp`)
+ * delegates to the SDK's `stopApp` primitive, which pre-queries the
+ * authoritative on-chain state and dispatches ACTIVE→close-lease /
+ * PENDING→cancel-lease / terminal→no-op. Idempotency is now internal to that
+ * pre-query (`outcome: 'already_inactive'`) — barney no longer string-matches
+ * a `rawLog`. The bulk path fires `stopApp` with `waitForConfirmation: false`
+ * so "stop all" doesn't serialize N block confirmations; the single path uses
+ * `waitForConfirmation: true`.
  */
 export async function executeStopApp(
   args: Record<string, unknown>,
@@ -1849,22 +1849,32 @@ export async function executeConfirmedStopApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
-  // Bulk stop — fire close-lease TXs without waiting for on-chain
-  // confirmation (waitForConfirmation=false). This sends all TXs in
-  // quick succession (~100ms each for signing + broadcast) instead of
-  // waiting ~6s per TX for block inclusion. Registry is updated
-  // optimistically; reconcileWithChain corrects any discrepancies later.
+  // stopApp only needs the tx-path capability slice: the signing
+  // CosmosClientManager (broadcast + withBroadcastLock) + a logger. Reuse the
+  // ONE store manager so async bulk broadcasts share its sequence cache.
+  const ctx: TxCtx = { chain: clientManager, logger: noopLogger };
+
+  // Bulk stop — fire stopApp with waitForConfirmation:false so each TX
+  // broadcasts at SYNC/CheckTx level and returns as soon as it hits the
+  // mempool (~100ms each) instead of waiting ~6s per TX for block inclusion.
+  // Registry is updated optimistically; reconcileWithChain corrects any
+  // discrepancies later. ENG-312 Phase 4 behaviour delta: the async path
+  // returns hash-only (no DeliverTx result), so a TX that broadcasts but
+  // later fails at execution still marks the registry 'stopped' — reconcile
+  // fixes it. stopApp's pre-query short-circuits leases already terminal at
+  // call time to outcome:'already_inactive' (no doomed broadcast).
   const entries = args.entries as Array<{ app_name: string; leaseUuid: string }> | undefined;
   if (entries && entries.length > 0) {
     const stopped: string[] = [];
     const failed: string[] = [];
 
     for (const entry of entries) {
-      const result = await cosmosTx(clientManager, 'billing', 'close-lease', [entry.leaseUuid], false);
-      if (result.code === 0 || result.rawLog?.includes('lease not active')) {
+      try {
+        await stopApp(ctx, { leaseUuid: asLeaseUuid(entry.leaseUuid) }, { waitForConfirmation: false });
         appRegistry.updateApp(address, entry.leaseUuid, { status: 'stopped' });
         stopped.push(entry.app_name);
-      } else {
+      } catch (err) {
+        logError('compositeTransactions.executeConfirmedStopApp.bulk', err);
         failed.push(entry.app_name);
       }
     }
@@ -1888,38 +1898,30 @@ export async function executeConfirmedStopApp(
     };
   }
 
-  // Single stop
+  // Single stop — block on confirmation so the chat reply reflects the
+  // authoritative outcome. All non-throwing outcomes (stopped / cancelled /
+  // already_inactive) map the registry to 'stopped'; a throw is a real
+  // failure.
   const name = args.app_name as string;
   const leaseUuid = args.leaseUuid as string;
 
-  const result = await cosmosTx(clientManager, 'billing', 'close-lease', [leaseUuid], true);
-
-  if (result.code !== 0) {
-    // If the lease is already not active on-chain, treat as successfully stopped
-    if (result.rawLog?.includes('lease not active')) {
-      appRegistry.updateApp(address, leaseUuid, { status: 'stopped' });
-      return {
-        success: true,
-        data: {
-          message: `App "${name}" has been stopped (lease was already inactive).`,
-          app_name: name,
-          status: 'stopped',
-        },
-      };
-    }
-    return { success: false, error: result.rawLog ?? 'Failed to stop app' };
+  try {
+    const result: StopAppResult = await stopApp(ctx, { leaseUuid: asLeaseUuid(leaseUuid) }, { waitForConfirmation: true });
+    appRegistry.updateApp(address, leaseUuid, { status: 'stopped' });
+    const message = result.outcome === 'already_inactive'
+      ? `App "${name}" has been stopped (lease was already inactive).`
+      : `App "${name}" has been stopped.`;
+    return {
+      success: true,
+      data: {
+        message,
+        app_name: name,
+        status: 'stopped',
+      },
+    };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to stop app' };
   }
-
-  appRegistry.updateApp(address, leaseUuid, { status: 'stopped' });
-
-  return {
-    success: true,
-    data: {
-      message: `App "${name}" has been stopped.`,
-      app_name: name,
-      status: 'stopped',
-    },
-  };
 }
 
 // ============================================================================

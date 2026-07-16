@@ -63,6 +63,7 @@ vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
 vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   ...(await importOriginal()),
   deployManifest: vi.fn(),
+  stopApp: vi.fn(),
 }));
 
 vi.mock('../api/readClient', () => ({ getReadClient: vi.fn() }));
@@ -78,7 +79,7 @@ import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
 import { waitForLeaseReady } from '../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
-import { deployManifest } from '@manifest-network/manifest-sdk/deploy';
+import { deployManifest, stopApp } from '@manifest-network/manifest-sdk/deploy';
 import { getReadClient } from '../api/readClient';
 
 const ADDRESS = 'manifest1testaddr';
@@ -262,12 +263,10 @@ describe('Deploy Flow Integration', () => {
     expect(stopResult.success).toBe(true);
     expect(stopResult.requiresConfirmation).toBe(true);
 
-    // Step 6: Confirm stop — use args from pendingAction (includes leaseUuid)
+    // Step 6: Confirm stop — use args from pendingAction (includes leaseUuid).
+    // stop_app now delegates to the SDK's stopApp primitive (ENG-312 Phase 4).
     const stopArgs = stopResult.pendingAction!.args;
-    vi.mocked(cosmosTx).mockResolvedValue({
-      module: 'billing', subcommand: 'close-lease', height: '101',
-      code: 0, transactionHash: 'tx-hash-2', rawLog: '', events: [],
-    } as Awaited<ReturnType<typeof cosmosTx>>);
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as Awaited<ReturnType<typeof stopApp>>);
 
     const confirmedStop = await executeConfirmedTool('stop_app', stopArgs, CLIENT_MANAGER, options);
     expect(confirmedStop.success).toBe(true);
