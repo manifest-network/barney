@@ -3,7 +3,7 @@
  * faucet functions, plus Barney-specific drip-and-verify logic for account setup.
  */
 
-import { requestFaucetCredit } from '@manifest-network/manifest-mcp-chain';
+import { requestFaucetCredit } from '@manifest-network/manifest-sdk/faucet';
 
 import { ACCOUNT_SETUP_POLL_INTERVAL_MS, ACCOUNT_SETUP_POLL_TIMEOUT_MS } from '../config/constants';
 import { runtimeConfig } from '../config/runtimeConfig';

@@ -25,9 +25,13 @@ vi.mock('../hooks/useAI', () => ({
   useAI: () => ({ sendMessage, dnsStatuses }),
 }));
 
-vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@manifest-network/manifest-mcp-core')>()),
+vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/deploy')>()),
   setItemCustomDomain: vi.fn(),
+}));
+
+vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/chain')>()),
   cosmosTx: vi.fn(),
 }));
 
@@ -41,13 +45,13 @@ vi.mock('../utils/errors', () => ({ logError: vi.fn() }));
 
 import { executeTool, executeConfirmedTool } from '../ai/toolExecutor';
 import { makeRegistry } from '../ai/toolExecutor/testHelpers';
-import { setItemCustomDomain } from '@manifest-network/manifest-mcp-core';
+import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
 import { getLeaseItemsForLease } from '../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../api/leaseByCustomDomain';
 import { CustomDomainCard } from '../components/ai/CustomDomainCard';
 import { dnsStatusKey } from '../stores/aiStore';
 import type { AppEntry } from '../registry/appRegistry';
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import type { CustomDomainCardData } from '../contexts/aiTypes';
 
 // --- Fixtures -----------------------------------------------------------

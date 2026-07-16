@@ -4,7 +4,7 @@
  */
 
 import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
-import { cosmosQuery } from '@manifest-network/manifest-mcp-core';
+import { cosmosQuery } from '@manifest-network/manifest-sdk/chain';
 import type { ManifestReadClient } from '@manifest-network/manifest-sdk';
 import { getReadClient } from '../../api/readClient';
 import {
@@ -21,7 +21,7 @@ import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import { getDomainAssignments } from '../../api/leaseDomains';
 import type { Lease } from '../../api/billing';
-import { requestFaucet } from '@manifest-network/manifest-mcp-chain';
+import { requestFaucet } from '@manifest-network/manifest-sdk/faucet';
 import { isFaucetEnabled, getFaucetBaseUrl, FAUCET_COOLDOWN_HOURS } from '../../api/faucet';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';

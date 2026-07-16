@@ -3,20 +3,17 @@
  * These return requiresConfirmation first, then execute after user approval.
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
+import type { CosmosClientManager, ManifestDeploySpec, DeployResult } from '@manifest-network/manifest-sdk';
 import {
   asFqdn,
   asLeaseUuid,
   asSkuUuid,
   asProviderUuid,
-  cosmosTx,
   noopLogger,
-  setItemCustomDomain as monoSetItemCustomDomain,
   ManifestMCPError,
   ManifestMCPErrorCode,
-  type ManifestDeploySpec,
-  type DeployResult,
-} from '@manifest-network/manifest-mcp-core';
+} from '@manifest-network/manifest-sdk';
+import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
@@ -43,7 +40,7 @@ import type { SigningContext } from './types';
 import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
 import { getReadClient } from '../../api/readClient';
 import { providerFetch } from '../../api/providerFetchAdapter';
-import { TerminalChainStateError, deployManifest, type FredAuthCtx, type DeployCallOptions } from '@manifest-network/manifest-sdk/deploy';
+import { TerminalChainStateError, deployManifest, setItemCustomDomain as monoSetItemCustomDomain, type FredAuthCtx, type DeployCallOptions } from '@manifest-network/manifest-sdk/deploy';
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([

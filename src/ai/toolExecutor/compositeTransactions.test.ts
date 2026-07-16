@@ -25,7 +25,7 @@ import {
   type BatchDeployEntry,
 } from './compositeTransactions';
 import type { ToolExecutorOptions, PayloadAttachment } from './types';
-import type { CosmosClientManager, DeployResult } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager, DeployResult } from '@manifest-network/manifest-sdk';
 import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
 import { LeaseState } from '../../api/billing';
@@ -68,10 +68,9 @@ vi.mock('../../api/fred', () => ({
   updateLease: vi.fn(),
 }));
 
-vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
-  ...(await importOriginal()),
+vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/chain')>()),
   cosmosTx: vi.fn(),
-  setItemCustomDomain: vi.fn(),
 }));
 
 // ENG-483: deployManifest + TerminalChainStateError are imported from the SDK
@@ -80,6 +79,7 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
 vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   ...(await importOriginal()),
   deployManifest: vi.fn(),
+  setItemCustomDomain: vi.fn(),
   TerminalChainStateError: class TerminalChainStateError extends Error {
     constructor(m: string) { super(m); this.name = 'TerminalChainStateError'; }
   },
@@ -116,7 +116,9 @@ import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
-import { cosmosTx, setItemCustomDomain, ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-mcp-core';
+import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
+import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
+import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
 import { TerminalChainStateError, deployManifest } from '@manifest-network/manifest-sdk/deploy';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
@@ -1737,7 +1739,7 @@ describe('executeConfirmedDeployApp', () => {
 
   // deployManifest stub: fire onLeaseCreated (registry addApp + uploading phase),
   // one provisioning progress tick, then resolve with the given DeployResult.
-  function mockDeploySuccess(result: Partial<import('@manifest-network/manifest-mcp-core').DeployResult>) {
+  function mockDeploySuccess(result: Partial<import('@manifest-network/manifest-sdk').DeployResult>) {
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
       await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
       opts?.pollOptions?.onProgress?.({ state: LeaseState.LEASE_STATE_ACTIVE, phase: 'provisioning' } as any);

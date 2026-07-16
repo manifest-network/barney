@@ -7,7 +7,7 @@ import {
 // getLease in Task 5 — deferred so every intermediate C0 `npm run build` gate
 // stays free of noUnusedLocals (TS6133) errors.
 import type { ToolExecutorOptions, PayloadAttachment } from './types';
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import { makeRegistry } from './testHelpers';
 import { LeaseState } from '../../api/billing';
 
@@ -72,10 +72,9 @@ vi.mock('../../api/fred', () => ({
   restartLease: vi.fn(),
   updateLease: vi.fn(),
 }));
-vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
-  ...(await importOriginal()),
+vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/chain')>()),
   cosmosTx: vi.fn(),
-  setItemCustomDomain: vi.fn(),
 }));
 // ENG-483: deployManifest + TerminalChainStateError are imported from the SDK
 // deploy facade, so mock there. Spread the original facade; manifest.ts's
@@ -83,6 +82,7 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
 vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   ...(await importOriginal()),
   deployManifest: vi.fn(),
+  setItemCustomDomain: vi.fn(),
   TerminalChainStateError: class TerminalChainStateError extends Error {
     constructor(m: string) { super(m); this.name = 'TerminalChainStateError'; }
   },
@@ -103,7 +103,7 @@ vi.mock('../../api/leaseByCustomDomain', () => ({
 }));
 
 import { getLeaseConnectionInfo } from '../../api/provider-api';
-import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-mcp-core';
+import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
 import { deployManifest } from '@manifest-network/manifest-sdk/deploy';
 import { getLease } from '../../api/billing';
 

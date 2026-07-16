@@ -3,7 +3,7 @@
  * Extracted from compositeTransactions to avoid peer-dependency from compositeQueries.
  */
 
-import type { ConnectionDetails } from '@manifest-network/manifest-mcp-core';
+import type { ConnectionDetails } from '@manifest-network/manifest-sdk/deploy';
 
 import { isValidFqdn } from '../../utils/connection';
 

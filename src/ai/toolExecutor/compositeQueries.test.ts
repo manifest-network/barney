@@ -12,7 +12,7 @@ import {
   executeRequestFaucet,
 } from './compositeQueries';
 import type { ToolExecutorOptions } from './types';
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
 
@@ -65,12 +65,12 @@ vi.mock('../../api/faucet', () => ({
   FAUCET_COOLDOWN_HOURS: 24,
 }));
 
-vi.mock('@manifest-network/manifest-mcp-chain', () => ({
+vi.mock('@manifest-network/manifest-sdk/faucet', () => ({
   requestFaucet: vi.fn(),
 }));
 
-vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
-  ...(await importOriginal()),
+vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/chain')>()),
   cosmosQuery: vi.fn(),
 }));
 
@@ -97,10 +97,10 @@ import { getLeasesByTenant, getLeasesByTenantPaginated, getLease } from '../../a
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import { cosmosQuery } from '@manifest-network/manifest-mcp-core';
+import { cosmosQuery } from '@manifest-network/manifest-sdk/chain';
 import { getReadClient } from '../../api/readClient';
 import { isFaucetEnabled } from '../../api/faucet';
-import { requestFaucet } from '@manifest-network/manifest-mcp-chain';
+import { requestFaucet } from '@manifest-network/manifest-sdk/faucet';
 import { logError } from '../../utils/errors';
 
 const ADDRESS = 'manifest1abc';

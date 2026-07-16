@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createProviderAuth } from '@manifest-network/manifest-sdk/deploy';
 import { asLeaseUuid } from '@manifest-network/manifest-sdk';
-import type { Signer } from '@manifest-network/manifest-mcp-core';
+import type { Signer } from '@manifest-network/manifest-sdk';
 import { createAuthTokensAdapter } from './authTokensAdapter';
 
 const ADDRESS = 'manifest1test000000000000000000000000000000';
