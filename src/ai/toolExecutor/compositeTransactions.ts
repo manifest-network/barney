@@ -38,9 +38,8 @@ import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import type { SigningContext } from './types';
 import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
-import { getReadClient } from '../../api/readClient';
-import { providerFetch } from '../../api/providerFetchAdapter';
 import { TerminalChainStateError, deployManifest, setItemCustomDomain as monoSetItemCustomDomain, type FredAuthCtx, type DeployCallOptions } from '@manifest-network/manifest-sdk/deploy';
+import { buildBarneyCtx } from './capabilityCtx';
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([
@@ -640,14 +639,10 @@ export async function buildFredAuthCtx(
   clientManager: CosmosClientManager,
   signing: SigningContext,
 ): Promise<FredAuthCtx> {
-  const readClient = await getReadClient();
-  return {
-    query: readClient.query,
-    chain: clientManager,
-    fetch: providerFetch,
-    logger: noopLogger,
-    providerAuth: signing.providerAuth,
-  };
+  // Delegates to the shared capability-ctx factory (Phase 3). Kept as a named
+  // export for the existing deploy-path call sites; buildBarneyCtx additionally
+  // sets allowLoopback and the optional `events` WS seam.
+  return buildBarneyCtx(clientManager, signing);
 }
 
 /**
