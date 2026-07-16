@@ -64,6 +64,7 @@ vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   ...(await importOriginal()),
   deployManifest: vi.fn(),
   stopApp: vi.fn(),
+  appStatus: vi.fn(),
 }));
 
 vi.mock('../api/readClient', () => ({ getReadClient: vi.fn() }));
@@ -74,12 +75,12 @@ vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
-import { getLeasesByTenant, getCreditEstimate, getLease } from '../api/billing';
+import { getLeasesByTenant, getCreditEstimate } from '../api/billing';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
 import { waitForLeaseReady } from '../api/fred';
 import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
-import { deployManifest, stopApp } from '@manifest-network/manifest-sdk/deploy';
+import { deployManifest, stopApp, appStatus } from '@manifest-network/manifest-sdk/deploy';
 import { getReadClient } from '../api/readClient';
 
 const ADDRESS = 'manifest1testaddr';
@@ -248,8 +249,14 @@ describe('Deploy Flow Integration', () => {
     expect(listData.apps[0].name).toBe('my-app');
     expect(listData.apps[0].status).toBe('running');
 
-    // Step 4: App status
-    vi.mocked(getLease).mockResolvedValue({ state: 2, items: [] } as unknown as Awaited<ReturnType<typeof getLease>>);
+    // Step 4: App status — signer present, so it routes through the SDK
+    // appStatus primitive (ENG-312 Phase 5). getReadClient is already mocked
+    // above so buildBarneyCtx resolves its ctx.query.
+    vi.mocked(appStatus).mockResolvedValue({
+      lease_uuid: LEASE_UUID,
+      chainState: { state: 2, providerUuid: PROVIDER_UUID, createdAt: '', closedAt: undefined, items: [] },
+      fredStatus: { state: 2 },
+    } as unknown as Awaited<ReturnType<typeof appStatus>>);
 
     const statusResult = await executeTool('app_status', { app_name: 'my-app' }, options);
     expect(statusResult.success).toBe(true);

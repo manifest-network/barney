@@ -13,14 +13,16 @@ import {
   getLease,
   LeaseState,
   LEASE_STATE_MAP,
+  type LeaseItem,
 } from '../../api/billing';
 import { getProviders, getSKUs, Unit } from '../../api/sku';
-import { getProviderHealth, getLeaseConnectionInfo } from '../../api/provider-api';
-import { getLeaseStatus, getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
+import { getProviderHealth } from '../../api/provider-api';
+import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
+import { appStatus, type FredLeaseStatus, type ConnectionDetails } from '@manifest-network/manifest-sdk/deploy';
+import { buildBarneyCtx } from './capabilityCtx';
 import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import { getDomainAssignments } from '../../api/leaseDomains';
-import type { Lease } from '../../api/billing';
 import { requestFaucet } from '@manifest-network/manifest-sdk/faucet';
 import { isFaucetEnabled, getFaucetBaseUrl, FAUCET_COOLDOWN_HOURS } from '../../api/faucet';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
@@ -130,36 +132,53 @@ export async function executeAppStatus(
   const app = appRegistry.findApp(address, name);
   if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
-  // Get chain state
+  // Chain state + fred status. ENG-312 Phase 5: the SDK's appStatus primitive
+  // does the whole read in one call — chain lease (state + items), provider-URL
+  // resolution, ADR-036 status token, fred lease-status + connection info —
+  // swallowing provider/fred errors into optional result fields. It needs a
+  // signer (providerAuth) + a client manager; when either is absent we fall
+  // back to a chain-only read (custom-domain surfacing still works without a
+  // provider round-trip).
   let chainState = 'unknown';
   let leaseState: LeaseState | null = null;
-  let lease: Lease | null = null;
-  try {
-    lease = await getLease(app.leaseUuid);
-    throwIfAborted(signal, 'app_status');
-    if (lease) {
-      leaseState = lease.state as LeaseState;
-      chainState = LEASE_STATE_LABELS[leaseState]?.toLowerCase() ?? 'unknown';
-    }
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error;
-    logError('compositeQueries.executeAppStatus.chainState', error);
-  }
+  let leaseItems: LeaseItem[] = [];
+  let haveChainData = false;
+  let fredStatus: FredLeaseStatus | null = null;
+  let refreshedConnection: ConnectionDetails | undefined;
 
-  // Get fred status if app could be active
-  let fredStatus = null;
-  if (
-    (app.status === 'running' || app.status === 'deploying') &&
-    app.providerUrl &&
-    signing
-  ) {
+  if (signing && options.clientManager) {
     try {
-      const authToken = await signing.authTokens.getAuthToken(asLeaseUuid(app.leaseUuid));
+      const ctx = await buildBarneyCtx(options.clientManager, signing);
       throwIfAborted(signal, 'app_status');
-      fredStatus = await getLeaseStatus(app.providerUrl, app.leaseUuid, authToken);
+      const st = await appStatus(ctx, { address, leaseUuid: app.leaseUuid });
+      throwIfAborted(signal, 'app_status');
+      leaseState = st.chainState.state as LeaseState;
+      chainState = LEASE_STATE_LABELS[leaseState]?.toLowerCase() ?? 'unknown';
+      leaseItems = st.chainState.items;
+      haveChainData = true;
+      fredStatus = st.fredStatus ?? null;
+      refreshedConnection = st.connection;
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') throw error;
-      logError('compositeQueries.executeAppStatus.fredStatus', error);
+      // appStatus throws (QUERY_FAILED) when the lease is absent on chain, and
+      // on transient query failures; either way leave chainState 'unknown' so
+      // no reconcile fires — matching the prior getLease-returned-null path.
+      logError('compositeQueries.executeAppStatus.appStatus', error);
+    }
+  } else {
+    // No signer / client manager: chain-only read for state + items.
+    try {
+      const lease = await getLease(app.leaseUuid);
+      throwIfAborted(signal, 'app_status');
+      if (lease) {
+        leaseState = lease.state as LeaseState;
+        chainState = LEASE_STATE_LABELS[leaseState]?.toLowerCase() ?? 'unknown';
+        leaseItems = lease.items ?? [];
+        haveChainData = true;
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      logError('compositeQueries.executeAppStatus.chainState', error);
     }
   }
 
@@ -182,39 +201,32 @@ export async function executeAppStatus(
         if (app.status !== 'running') {
           currentStatus = 'running';
         }
-        // Fetch connection details from provider API
+        // Connection details were fetched by appStatus alongside the status
+        // read (its own errors already swallowed → refreshedConnection undefined).
         let connectionRefreshed = false;
-        if (signing && app.providerUrl) {
-          try {
-            const infoAuthToken = await signing.authTokens.getAuthToken(asLeaseUuid(app.leaseUuid));
-            const connResponse = await getLeaseConnectionInfo(app.providerUrl, app.leaseUuid, infoAuthToken);
-            if (connResponse.connection) {
-              const conn = connResponse.connection;
-              // Stack deployments: extract primary service ports/fqdn when no top-level values
-              if (!conn.ports && !conn.instances?.[0]?.ports && conn.services) {
-                const primary = extractPrimaryServicePorts(conn.services);
-                if (primary) {
-                  // Promote primary service's FQDN to top-level for formatConnectionUrl
-                  let fqdn = conn.fqdn;
-                  if (!fqdn) {
-                    const svc = conn.services[primary.serviceName];
-                    fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
-                  }
-                  appConnection = JSON.parse(JSON.stringify({ ...conn, ports: primary.ports, fqdn }));
-                } else {
-                  appConnection = JSON.parse(JSON.stringify(conn));
-                }
-              } else {
-                appConnection = JSON.parse(JSON.stringify(conn));
+        if (refreshedConnection) {
+          const conn = refreshedConnection;
+          // Stack deployments: extract primary service ports/fqdn when no top-level values
+          if (!conn.ports && !conn.instances?.[0]?.ports && conn.services) {
+            const primary = extractPrimaryServicePorts(conn.services);
+            if (primary) {
+              // Promote primary service's FQDN to top-level for formatConnectionUrl
+              let fqdn = conn.fqdn;
+              if (!fqdn) {
+                const svc = conn.services[primary.serviceName];
+                fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
               }
-              if (conn.host) {
-                appUrl = conn.host;
-              }
-              connectionRefreshed = true;
+              appConnection = JSON.parse(JSON.stringify({ ...conn, ports: primary.ports, fqdn }));
+            } else {
+              appConnection = JSON.parse(JSON.stringify(conn));
             }
-          } catch (error) {
-            logError('compositeQueries.executeAppStatus.connection', error);
+          } else {
+            appConnection = JSON.parse(JSON.stringify(conn));
           }
+          if (conn.host) {
+            appUrl = conn.host;
+          }
+          connectionRefreshed = true;
         }
         if (app.status !== 'running' || connectionRefreshed) {
           appRegistry.updateApp(address, app.leaseUuid, {
@@ -262,8 +274,8 @@ export async function executeAppStatus(
   // Surface custom domains from chain (single seam — see leaseDomains.ts) and
   // refresh the AppEntry cache so the DNS polling driver (mounted in MainLayout) knows what to watch
   // without an extra chain round-trip per render.
-  const customDomains = getDomainAssignments(lease?.items);
-  if (lease) {
+  const customDomains = getDomainAssignments(leaseItems);
+  if (haveChainData) {
     appRegistry.updateApp(address, app.leaseUuid, { customDomains });
   }
 
@@ -320,7 +332,6 @@ export async function executeAppStatus(
     //   - single-item (any name shape): attach allowed, auto-pick the lone item
     //   - multi-item with ≥1 named: attach allowed, picker shows named only
     //   - multi-item, all unnamed: chain rejects → don't show form
-    const leaseItems = lease?.items ?? [];
     const namedServiceNames = leaseItems
       .filter((i) => i.serviceName !== '')
       .map((i) => i.serviceName);
