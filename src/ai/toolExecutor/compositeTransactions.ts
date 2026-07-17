@@ -656,6 +656,193 @@ export async function buildFredAuthCtx(
 /**
  * Pre-validation for deploy_app. Returns confirmation result or error.
  */
+/**
+ * Options controlling how {@link buildImageManifestFromArgs} differs between the
+ * deploy and update image paths. Encoding the differences as explicit flags
+ * (rather than two hand-maintained copies) keeps the shell-injection-safe token
+ * append and the validateEnvNames blocklist in exactly one place (ENG-575).
+ */
+interface ImageManifestBuildOptions {
+  /** deploy=true / update=false — on update the old-manifest merge carries env forward. */
+  applyEnvDefaults: boolean;
+  /**
+   * deploy=true / update=false — same rationale as env: on update the old
+   * manifest's health_check carries forward via mergeManifest, so the generic
+   * KNOWN_IMAGES default must not clobber it here.
+   */
+  applyHealthCheckDefault: boolean;
+  /** deploy=true / update=false — update targets an existing app, so no derive. */
+  deriveAppName: boolean;
+  /** logError label prefix, e.g. 'executeDeployApp'. */
+  errorContext: string;
+}
+
+/**
+ * Build a single-service manifest from image-based tool args — the shared spine
+ * of the deploy and update image paths. Parses/validates env, command, args,
+ * health_check, and labels JSON; merges KNOWN_IMAGES defaults; resolves
+ * generated passwords; applies the shell-injection-safe OPENCLAW_GATEWAY_TOKEN
+ * append; coerces port/user/tmpfs; and builds the manifest.
+ *
+ * Mutates `args` in place exactly as the inline blocks did: fills
+ * port/user/tmpfs from known defaults, stores `_generatedManifest`, and (when
+ * `deriveAppName`) fills `app_name`. Returns the built payload or an error
+ * string for the caller to surface as a ToolResult.
+ */
+async function buildImageManifestFromArgs(
+  args: Record<string, unknown>,
+  opts: ImageManifestBuildOptions,
+): Promise<{ error: string } | { payload: PayloadAttachment }> {
+  let env: Record<string, string> | undefined;
+  if (typeof args.env === 'string' && args.env) {
+    try {
+      env = JSON.parse(args.env);
+      if (typeof env !== 'object' || env === null || Array.isArray(env)) {
+        return { error: 'env must be a JSON object (e.g. \'{"KEY":"value"}\').' };
+      }
+    } catch (error) {
+      logError(`compositeTransactions.${opts.errorContext}.parseEnv`, error);
+      return { error: 'Invalid env JSON string. Expected format: \'{"KEY":"value"}\'.' };
+    }
+  }
+
+  if (env) {
+    for (const [k, v] of Object.entries(env)) {
+      if (typeof v !== 'string') {
+        return { error: `Env var "${k}" must have a string value, got ${typeof v}.` };
+      }
+    }
+    const envError = validateEnvNames(env);
+    if (envError) return { error: envError };
+  }
+
+  // Parse command/args JSON arrays
+  let command: string[] | undefined;
+  if (typeof args.command === 'string' && args.command) {
+    try {
+      command = JSON.parse(args.command);
+      if (!Array.isArray(command) || !command.every((s) => typeof s === 'string')) {
+        return { error: 'command must be a JSON array of strings (e.g. \'["sh", "-c"]\').' };
+      }
+    } catch {
+      return { error: 'Invalid command JSON. Expected a JSON array of strings (e.g. \'["sh", "-c"]\').' };
+    }
+  }
+
+  let cmdArgs: string[] | undefined;
+  if (typeof args.args === 'string' && args.args) {
+    try {
+      cmdArgs = JSON.parse(args.args);
+      if (!Array.isArray(cmdArgs) || !cmdArgs.every((s) => typeof s === 'string')) {
+        return { error: 'args must be a JSON array of strings (e.g. \'["echo hello"]\').' };
+      }
+    } catch {
+      return { error: 'Invalid args JSON. Expected a JSON array of strings (e.g. \'["echo hello"]\').' };
+    }
+  }
+
+  // Parse health_check from JSON string
+  let healthCheck: HealthCheckConfig | undefined;
+  if (typeof args.health_check === 'string' && args.health_check) {
+    try {
+      healthCheck = JSON.parse(args.health_check);
+      if (typeof healthCheck !== 'object' || healthCheck === null || Array.isArray(healthCheck)) {
+        return { error: 'health_check must be a JSON object.' };
+      }
+      if (!Array.isArray(healthCheck.test) || healthCheck.test.length < 2 || !healthCheck.test.every(el => typeof el === 'string')) {
+        return { error: 'health_check.test must be an array of strings with at least 2 elements (e.g. ["CMD-SHELL", "curl -f http://localhost"]).' };
+      }
+    } catch {
+      return { error: 'Invalid health_check JSON.' };
+    }
+  }
+
+  // Parse labels from JSON string
+  let labels: Record<string, string> | undefined;
+  if (typeof args.labels === 'string' && args.labels) {
+    try {
+      labels = JSON.parse(args.labels);
+      if (typeof labels !== 'object' || labels === null || Array.isArray(labels)) {
+        return { error: 'labels must be a JSON object.' };
+      }
+      for (const [k, v] of Object.entries(labels)) {
+        if (typeof v !== 'string') {
+          return { error: `Label "${k}" must have a string value, got ${typeof v}.` };
+        }
+      }
+    } catch {
+      return { error: 'Invalid labels JSON.' };
+    }
+  }
+
+  // Known image safety net: merge defaults for port, user, tmpfs, command, args
+  // (and, gated by opts, env + health_check — see ImageManifestBuildOptions).
+  const knownConfig = findKnownImage(args.image as string);
+  if (knownConfig) {
+    if (!args.port && knownConfig.port) args.port = knownConfig.port;
+    if (opts.applyEnvDefaults && knownConfig.env) {
+      env = env ? { ...knownConfig.env, ...env } : { ...knownConfig.env };
+    }
+    if (!args.user && knownConfig.user) args.user = knownConfig.user;
+    if (!args.tmpfs && knownConfig.tmpfs) args.tmpfs = knownConfig.tmpfs;
+    if (!command && knownConfig.command) command = [...knownConfig.command];
+    if (!cmdArgs && knownConfig.args) cmdArgs = [...knownConfig.args];
+    if (opts.applyHealthCheckDefault && !healthCheck && knownConfig.health_check) {
+      healthCheck = { ...knownConfig.health_check };
+    }
+  }
+
+  // Pre-generate env passwords so the same value can be shared with args
+  if (env) {
+    for (const key of Object.keys(env)) {
+      env[key] = resolveGeneratedPassword(env[key]);
+    }
+  }
+
+  // Append --token to the shell command string for openclaw.
+  // Use shell variable expansion instead of interpolating the raw value to prevent
+  // shell injection if the token contains metacharacters.
+  if (env?.OPENCLAW_GATEWAY_TOKEN && cmdArgs?.length === 1 && command?.[0] === '/bin/sh') {
+    cmdArgs[0] += ' --token "$OPENCLAW_GATEWAY_TOKEN"';
+  }
+
+  // Coerce port/user/tmpfs — LLMs frequently produce numbers instead of strings
+  const portResult = coerceStringArg(args.port, 'port');
+  if (portResult.error) return { error: portResult.error };
+  const userResult = coerceStringArg(args.user, 'user');
+  if (userResult.error) return { error: userResult.error };
+  const tmpfsResult = coerceTmpfsArg(args.tmpfs);
+  if (tmpfsResult.error) return { error: tmpfsResult.error };
+
+  let manifestResult;
+  try {
+    manifestResult = await buildManifest({
+      image: args.image as string,
+      port: portResult.value,
+      env,
+      user: userResult.value,
+      tmpfs: tmpfsResult.value,
+      command,
+      args: cmdArgs,
+      health_check: healthCheck,
+      stop_grace_period: args.stop_grace_period as string | undefined,
+      init: typeof args.init === 'boolean' ? args.init : undefined,
+      expose: args.expose as string | undefined,
+      labels,
+    });
+  } catch (error) {
+    logError(`compositeTransactions.${opts.errorContext}.buildManifest`, error);
+    return { error: error instanceof Error ? error.message : 'Failed to build manifest' };
+  }
+
+  if (opts.deriveAppName && !args.app_name) {
+    args.app_name = manifestResult.derivedAppName;
+  }
+  // Store generated manifest JSON for the confirmation round-trip
+  args._generatedManifest = manifestResult.json;
+  return { payload: manifestResult.payload };
+}
+
 export async function executeDeployApp(
   args: Record<string, unknown>,
   options: ToolExecutorOptions,
@@ -705,150 +892,14 @@ export async function executeDeployApp(
 
   // Image-based deploy: build manifest from args when no file is attached
   if (!payload && args.image) {
-    let env: Record<string, string> | undefined;
-    if (typeof args.env === 'string' && args.env) {
-      try {
-        env = JSON.parse(args.env);
-        if (typeof env !== 'object' || env === null || Array.isArray(env)) {
-          return { success: false, error: 'env must be a JSON object (e.g. \'{"KEY":"value"}\').' };
-        }
-      } catch (error) {
-        logError('compositeTransactions.executeDeployApp.parseEnv', error);
-        return { success: false, error: 'Invalid env JSON string. Expected format: \'{"KEY":"value"}\'.' };
-      }
-    }
-
-    if (env) {
-      for (const [k, v] of Object.entries(env)) {
-        if (typeof v !== 'string') {
-          return { success: false, error: `Env var "${k}" must have a string value, got ${typeof v}.` };
-        }
-      }
-      const envError = validateEnvNames(env);
-      if (envError) return { success: false, error: envError };
-    }
-
-    // Parse command/args JSON arrays
-    let command: string[] | undefined;
-    if (typeof args.command === 'string' && args.command) {
-      try {
-        command = JSON.parse(args.command);
-        if (!Array.isArray(command) || !command.every((s) => typeof s === 'string')) {
-          return { success: false, error: 'command must be a JSON array of strings (e.g. \'["sh", "-c"]\').' };
-        }
-      } catch {
-        return { success: false, error: 'Invalid command JSON. Expected a JSON array of strings (e.g. \'["sh", "-c"]\').' };
-      }
-    }
-
-    let cmdArgs: string[] | undefined;
-    if (typeof args.args === 'string' && args.args) {
-      try {
-        cmdArgs = JSON.parse(args.args);
-        if (!Array.isArray(cmdArgs) || !cmdArgs.every((s) => typeof s === 'string')) {
-          return { success: false, error: 'args must be a JSON array of strings (e.g. \'["echo hello"]\').' };
-        }
-      } catch {
-        return { success: false, error: 'Invalid args JSON. Expected a JSON array of strings (e.g. \'["echo hello"]\').' };
-      }
-    }
-
-    // Parse health_check from JSON string
-    let healthCheck: HealthCheckConfig | undefined;
-    if (typeof args.health_check === 'string' && args.health_check) {
-      try {
-        healthCheck = JSON.parse(args.health_check);
-        if (typeof healthCheck !== 'object' || healthCheck === null || Array.isArray(healthCheck)) {
-          return { success: false, error: 'health_check must be a JSON object.' };
-        }
-        if (!Array.isArray(healthCheck.test) || healthCheck.test.length < 2 || !healthCheck.test.every(el => typeof el === 'string')) {
-          return { success: false, error: 'health_check.test must be an array of strings with at least 2 elements (e.g. ["CMD-SHELL", "curl -f http://localhost"]).' };
-        }
-      } catch {
-        return { success: false, error: 'Invalid health_check JSON.' };
-      }
-    }
-
-    // Parse labels from JSON string
-    let labels: Record<string, string> | undefined;
-    if (typeof args.labels === 'string' && args.labels) {
-      try {
-        labels = JSON.parse(args.labels);
-        if (typeof labels !== 'object' || labels === null || Array.isArray(labels)) {
-          return { success: false, error: 'labels must be a JSON object.' };
-        }
-        for (const [k, v] of Object.entries(labels)) {
-          if (typeof v !== 'string') {
-            return { success: false, error: `Label "${k}" must have a string value, got ${typeof v}.` };
-          }
-        }
-      } catch {
-        return { success: false, error: 'Invalid labels JSON.' };
-      }
-    }
-
-    // Known image safety net: merge defaults for port, env, user, tmpfs, command, args, health_check
-    const knownConfig = findKnownImage(args.image as string);
-    if (knownConfig) {
-      if (!args.port && knownConfig.port) args.port = knownConfig.port;
-      if (!env && knownConfig.env) env = { ...knownConfig.env };
-      else if (knownConfig.env) env = { ...knownConfig.env, ...env };
-      if (!args.user && knownConfig.user) args.user = knownConfig.user;
-      if (!args.tmpfs && knownConfig.tmpfs) args.tmpfs = knownConfig.tmpfs;
-      if (!command && knownConfig.command) command = [...knownConfig.command];
-      if (!cmdArgs && knownConfig.args) cmdArgs = [...knownConfig.args];
-      if (!healthCheck && knownConfig.health_check) healthCheck = { ...knownConfig.health_check };
-    }
-
-    // Pre-generate env passwords so the same value can be shared with args
-    if (env) {
-      for (const key of Object.keys(env)) {
-        env[key] = resolveGeneratedPassword(env[key]);
-      }
-    }
-
-    // Append --token to the shell command string for openclaw.
-    // Use shell variable expansion instead of interpolating the raw value to prevent
-    // shell injection if the token contains metacharacters.
-    if (env?.OPENCLAW_GATEWAY_TOKEN && cmdArgs?.length === 1 && command?.[0] === '/bin/sh') {
-      cmdArgs[0] += ' --token "$OPENCLAW_GATEWAY_TOKEN"';
-    }
-
-    // Coerce port/user/tmpfs — LLMs frequently produce numbers instead of strings
-    const portResult = coerceStringArg(args.port, 'port');
-    if (portResult.error) return { success: false, error: portResult.error };
-    const userResult = coerceStringArg(args.user, 'user');
-    if (userResult.error) return { success: false, error: userResult.error };
-    const tmpfsResult = coerceTmpfsArg(args.tmpfs);
-    if (tmpfsResult.error) return { success: false, error: tmpfsResult.error };
-
-    let manifestResult;
-    try {
-      manifestResult = await buildManifest({
-        image: args.image as string,
-        port: portResult.value,
-        env,
-        user: userResult.value,
-        tmpfs: tmpfsResult.value,
-        command,
-        args: cmdArgs,
-        health_check: healthCheck,
-        stop_grace_period: args.stop_grace_period as string | undefined,
-        init: typeof args.init === 'boolean' ? args.init : undefined,
-        expose: args.expose as string | undefined,
-        labels,
-      });
-    } catch (error) {
-      logError('compositeTransactions.executeDeployApp.buildManifest', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to build manifest' };
-    }
-
-    payload = manifestResult.payload;
-    if (!args.app_name) {
-      args.app_name = manifestResult.derivedAppName;
-    }
-    // Store generated manifest JSON for the confirmation round-trip
-    args._generatedManifest = manifestResult.json;
+    const built = await buildImageManifestFromArgs(args, {
+      applyEnvDefaults: true,
+      applyHealthCheckDefault: true,
+      deriveAppName: true,
+      errorContext: 'executeDeployApp',
+    });
+    if ('error' in built) return { success: false, error: built.error };
+    payload = built.payload;
   }
 
   if (!payload) {
@@ -2409,146 +2460,19 @@ export async function executeUpdateApp(
     args._serviceNames = parsed.serviceNames;
   }
 
-  // Image-based update: build manifest from args when no file is attached
+  // Image-based update: build manifest from args when no file is attached.
+  // Env + health_check KNOWN_IMAGES defaults are skipped (applyEnvDefaults/
+  // applyHealthCheckDefault=false) — the old-manifest merge carries those
+  // forward — and app-name is not derived (the app already exists).
   if (!payload && args.image) {
-    let env: Record<string, string> | undefined;
-    if (typeof args.env === 'string' && args.env) {
-      try {
-        env = JSON.parse(args.env);
-        if (typeof env !== 'object' || env === null || Array.isArray(env)) {
-          return { success: false, error: 'env must be a JSON object (e.g. \'{"KEY":"value"}\').' };
-        }
-      } catch (error) {
-        logError('compositeTransactions.executeUpdateApp.parseEnv', error);
-        return { success: false, error: 'Invalid env JSON string. Expected format: \'{"KEY":"value"}\'.' };
-      }
-    }
-
-    if (env) {
-      for (const [k, v] of Object.entries(env)) {
-        if (typeof v !== 'string') {
-          return { success: false, error: `Env var "${k}" must have a string value, got ${typeof v}.` };
-        }
-      }
-      const envError = validateEnvNames(env);
-      if (envError) return { success: false, error: envError };
-    }
-
-    // Parse command/args JSON arrays
-    let command: string[] | undefined;
-    if (typeof args.command === 'string' && args.command) {
-      try {
-        command = JSON.parse(args.command);
-        if (!Array.isArray(command) || !command.every((s) => typeof s === 'string')) {
-          return { success: false, error: 'command must be a JSON array of strings (e.g. \'["sh", "-c"]\').' };
-        }
-      } catch {
-        return { success: false, error: 'Invalid command JSON. Expected a JSON array of strings (e.g. \'["sh", "-c"]\').' };
-      }
-    }
-
-    let cmdArgs: string[] | undefined;
-    if (typeof args.args === 'string' && args.args) {
-      try {
-        cmdArgs = JSON.parse(args.args);
-        if (!Array.isArray(cmdArgs) || !cmdArgs.every((s) => typeof s === 'string')) {
-          return { success: false, error: 'args must be a JSON array of strings (e.g. \'["echo hello"]\').' };
-        }
-      } catch {
-        return { success: false, error: 'Invalid args JSON. Expected a JSON array of strings (e.g. \'["echo hello"]\').' };
-      }
-    }
-
-    // Parse health_check from JSON string
-    let healthCheck: HealthCheckConfig | undefined;
-    if (typeof args.health_check === 'string' && args.health_check) {
-      try {
-        healthCheck = JSON.parse(args.health_check);
-        if (typeof healthCheck !== 'object' || healthCheck === null || Array.isArray(healthCheck)) {
-          return { success: false, error: 'health_check must be a JSON object.' };
-        }
-        if (!Array.isArray(healthCheck.test) || healthCheck.test.length < 2 || !healthCheck.test.every(el => typeof el === 'string')) {
-          return { success: false, error: 'health_check.test must be an array of strings with at least 2 elements (e.g. ["CMD-SHELL", "curl -f http://localhost"]).' };
-        }
-      } catch {
-        return { success: false, error: 'Invalid health_check JSON.' };
-      }
-    }
-
-    // Parse labels from JSON string
-    let labels: Record<string, string> | undefined;
-    if (typeof args.labels === 'string' && args.labels) {
-      try {
-        labels = JSON.parse(args.labels);
-        if (typeof labels !== 'object' || labels === null || Array.isArray(labels)) {
-          return { success: false, error: 'labels must be a JSON object.' };
-        }
-        for (const [k, v] of Object.entries(labels)) {
-          if (typeof v !== 'string') {
-            return { success: false, error: `Label "${k}" must have a string value, got ${typeof v}.` };
-          }
-        }
-      } catch {
-        return { success: false, error: 'Invalid labels JSON.' };
-      }
-    }
-
-    // Known image safety net: merge defaults for port, user, tmpfs, command, args.
-    // Env defaults are skipped for updates — the old manifest merge handles env carry-forward.
-    const knownConfig = findKnownImage(args.image as string);
-    if (knownConfig) {
-      if (!args.port && knownConfig.port) args.port = knownConfig.port;
-      if (!args.user && knownConfig.user) args.user = knownConfig.user;
-      if (!args.tmpfs && knownConfig.tmpfs) args.tmpfs = knownConfig.tmpfs;
-      if (!command && knownConfig.command) command = [...knownConfig.command];
-      if (!cmdArgs && knownConfig.args) cmdArgs = [...knownConfig.args];
-    }
-
-    // Pre-generate env passwords so the same value can be shared with args
-    if (env) {
-      for (const key of Object.keys(env)) {
-        env[key] = resolveGeneratedPassword(env[key]);
-      }
-    }
-
-    // Append --token to the shell command string for openclaw.
-    // Use shell variable expansion instead of interpolating the raw value to prevent
-    // shell injection if the token contains metacharacters.
-    if (env?.OPENCLAW_GATEWAY_TOKEN && cmdArgs?.length === 1 && command?.[0] === '/bin/sh') {
-      cmdArgs[0] += ' --token "$OPENCLAW_GATEWAY_TOKEN"';
-    }
-
-    // Coerce port/user/tmpfs — LLMs frequently produce numbers instead of strings
-    const portResult = coerceStringArg(args.port, 'port');
-    if (portResult.error) return { success: false, error: portResult.error };
-    const userResult = coerceStringArg(args.user, 'user');
-    if (userResult.error) return { success: false, error: userResult.error };
-    const tmpfsResult = coerceTmpfsArg(args.tmpfs);
-    if (tmpfsResult.error) return { success: false, error: tmpfsResult.error };
-
-    let manifestResult;
-    try {
-      manifestResult = await buildManifest({
-        image: args.image as string,
-        port: portResult.value,
-        env,
-        user: userResult.value,
-        tmpfs: tmpfsResult.value,
-        command,
-        args: cmdArgs,
-        health_check: healthCheck,
-        stop_grace_period: args.stop_grace_period as string | undefined,
-        init: typeof args.init === 'boolean' ? args.init : undefined,
-        expose: args.expose as string | undefined,
-        labels,
-      });
-    } catch (error) {
-      logError('compositeTransactions.executeUpdateApp.buildManifest', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to build manifest' };
-    }
-
-    payload = manifestResult.payload;
-    args._generatedManifest = manifestResult.json;
+    const built = await buildImageManifestFromArgs(args, {
+      applyEnvDefaults: false,
+      applyHealthCheckDefault: false,
+      deriveAppName: false,
+      errorContext: 'executeUpdateApp',
+    });
+    if ('error' in built) return { success: false, error: built.error };
+    payload = built.payload;
   }
 
   if (!payload) {
