@@ -693,6 +693,13 @@ async function buildImageManifestFromArgs(
   args: Record<string, unknown>,
   opts: ImageManifestBuildOptions,
 ): Promise<{ error: string } | { payload: PayloadAttachment }> {
+  // Callers gate on truthy args.image, but the model can emit a non-string
+  // (number/object). findKnownImage/buildManifest call string methods on it, so
+  // reject upfront with a clear message rather than surfacing a raw TypeError.
+  if (typeof args.image !== 'string' || !args.image) {
+    return { error: 'image must be a non-empty string (e.g. "redis:8.4").' };
+  }
+
   let env: Record<string, string> | undefined;
   if (typeof args.env === 'string' && args.env) {
     try {

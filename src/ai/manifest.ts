@@ -26,6 +26,7 @@ import {
 import type { BuildManifestOptions as FredBuildManifestOptions } from '@manifest-network/manifest-mcp-core';
 import { generatePassword, validatePayloadSize } from '../utils/hash';
 import { logError } from '../utils/errors';
+import { GENERATED_PASSWORD_MARKER } from '../config/constants';
 import type { PayloadAttachment } from './toolExecutor/types';
 
 /**
@@ -107,17 +108,6 @@ export interface BuildManifestOptions {
   labels?: Record<string, string>;
   depends_on?: Record<string, { condition: string }>;
 }
-
-/**
- * Internal sentinel that requests a generated password be appended in place of
- * the marker. Used ONLY by curated KNOWN_IMAGES/KNOWN_STACKS defaults (e.g.
- * neo4j's `NEO4J_AUTH: 'neo4j/{{GENERATED_PASSWORD}}'` → `neo4j/<random>`), not
- * exposed to users. A bare trailing "/" was previously the marker, which
- * silently corrupted legitimate trailing-slash values like
- * `NEXTAUTH_URL=https://app/` (ENG-574); the explicit token can't collide with
- * a real value.
- */
-export const GENERATED_PASSWORD_MARKER = '{{GENERATED_PASSWORD}}';
 
 /**
  * Resolve a single env value's password convention:

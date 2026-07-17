@@ -5,7 +5,8 @@
  * 2. Tool executor — safety net to merge known defaults when the model omits args
  */
 
-import { type HealthCheckConfig, GENERATED_PASSWORD_MARKER } from './manifest';
+import type { HealthCheckConfig } from './manifest';
+import { GENERATED_PASSWORD_MARKER } from '../config/constants';
 
 export interface KnownImageConfig {
   /** Canonical image name (without tag), e.g. "postgres" */
