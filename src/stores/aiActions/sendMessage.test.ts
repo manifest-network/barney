@@ -158,6 +158,39 @@ describe('sendMessage', () => {
       expect(store.getState().messages).toHaveLength(0);
     });
 
+    it('supersedes a stale pending confirmation instead of orphaning its tool message (ENG-573)', async () => {
+      mockProcessStream.mockResolvedValue(makeStreamResult({ toolCalls: [] }));
+      const store = setupStore({
+        pendingConfirmation: {
+          id: 'conf_1',
+          action: { id: 'call_1', toolName: 'deploy_app', args: {}, description: 'Deploy app-a?' },
+          messageId: 'tool_a',
+        },
+        messages: [
+          {
+            id: 'tool_a',
+            role: 'tool' as const,
+            content: 'Awaiting confirmation...',
+            timestamp: 1000,
+            toolName: 'deploy_app',
+            awaitingConfirmation: true,
+            isStreaming: false,
+          },
+        ],
+      });
+
+      await store.getState().sendMessage('actually, what is running?');
+
+      // The prior confirmation is cleared, not overwritten.
+      expect(store.getState().pendingConfirmation).toBeNull();
+      // Its tool message is marked superseded and no longer awaiting confirmation.
+      const priorMsg = store.getState().messages.find((m) => m.id === 'tool_a');
+      expect(priorMsg?.awaitingConfirmation).toBe(false);
+      expect(priorMsg?.content).toMatch(/superseded/i);
+      // The new request still proceeded (user message was appended).
+      expect(store.getState().messages.some((m) => m.role === 'user')).toBe(true);
+    });
+
     it('returns early when already streaming', async () => {
       const store = setupStore({ isStreaming: true });
       const before = store.getState().messages.length;
