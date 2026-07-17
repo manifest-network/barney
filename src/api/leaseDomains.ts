@@ -21,7 +21,7 @@ export interface DomainAssignment {
  *
  * Writers (`executeConfirmedSetCustomDomain`, `executeConfirmedDeployApp`
  * with `customDomain`) don't go through this seam — they hand off directly to
- * mono's `core.setItemCustomDomain` since each TX mutates one record.
+ * the SDK's `setItemCustomDomain` since each TX mutates one record.
  *
  * If the chain ever exposes `LeaseItem.customDomains: string[]` (SAN certs,
  * multiple aliases per service), `getDomainAssignments` becomes a `flatMap`

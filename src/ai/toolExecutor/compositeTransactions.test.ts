@@ -2759,6 +2759,43 @@ describe('executeConfirmedRestartApp', () => {
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
   });
 
+  it('marks the app failed when the readiness wait rejects (timeout/error, no abort)', async () => {
+    // ENG-312: waitForLeaseStatus REJECTS on timeout; restore the "mark failed"
+    // guarantee the deleted waitForLeaseReady provided by falling through.
+    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('deadline exceeded'));
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('may still be in progress');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+  });
+
+  it('does NOT mark the app failed when the wait is aborted (user interrupt)', async () => {
+    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const controller = new AbortController();
+    controller.abort();
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal })
+    );
+
+    expect(result.success).toBe(false);
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+  });
+
   it('restarts multiple apps in batch and returns summary', async () => {
     vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
     vi.mocked(waitForLeaseStatus).mockResolvedValue({
@@ -3396,6 +3433,24 @@ describe('executeConfirmedUpdateApp', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('container crashed');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+  });
+
+  it('marks the app failed when the readiness wait rejects (timeout/error, no abort)', async () => {
+    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('deadline exceeded'));
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('may still be in progress');
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
   });
 

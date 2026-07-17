@@ -1586,7 +1586,7 @@ export async function executeBatchDeploy(
  * CosmosClientManager.withBroadcastLock (create-lease broadcasts) and the
  * mutex-wrapped signArbitrary inside providerAuth (ADR-036 token mints) — so
  * deployManifest runs DIRECTLY under runBatchWithConcurrency, never inside
- * signing.withSign (that would deadlock, see §3.11 below).
+ * a caller-side signing mutex / sign-lock (that would deadlock, see §3.11 below).
  */
 export async function executeConfirmedBatchDeploy(
   args: Record<string, unknown>,
@@ -1693,8 +1693,8 @@ export async function executeConfirmedBatchDeploy(
 
       updateProgress('creating_lease', 'Creating lease on-chain...');
 
-      // §3.11: call deployManifest DIRECTLY — NEVER wrap it in signing.withSign.
-      // withSign holds the mutex until the wrapped fn resolves; deployManifest
+      // §3.11: call deployManifest DIRECTLY — NEVER wrap it in a caller-side sign-lock.
+      // Such a lock holds the mutex until the wrapped fn resolves; deployManifest
       // internally mints ADR-036 tokens via the SAME mutex-wrapped signArbitrary,
       // so a wrap would await a lock it already holds -> deadlock (non-reentrant).
       // Broadcasts are already serialized by CosmosClientManager.withBroadcastLock
@@ -1932,12 +1932,13 @@ export async function executeConfirmedStopApp(
 /**
  * Pre-validation for fund_credits. Returns confirmation result or error.
  *
- * ENG-279 escape hatch (spec §7, D0): fund_credits deliberately stays on
+ * The fund_credits TOOL deliberately stays on
  * `cosmosTx(clientManager, 'billing', 'fund-credit', [address, denomString], true)`
- * and is NOT migrated to `core.fundCredits`. Pure YAGNI: it's a working
- * one-line chain TX with no provider/upload/poll orchestration to delete —
- * the ENG-279 goal ("delete the hand-rolled deploy spine") simply doesn't
- * apply. Migrating would add a dependency edge for zero behavior change.
+ * and is NOT routed through the SDK's `fundCredits` primitive (which account
+ * setup DOES use — see `useAccountSetup`). Pure YAGNI: it's a working one-line
+ * chain TX with no provider/upload/poll orchestration to delete, so the
+ * migration goal ("delete the hand-rolled deploy spine") doesn't apply here;
+ * routing it through `fundCredits` would add indirection for zero behavior change.
  */
 export function executeFundCredits(
   args: Record<string, unknown>,
@@ -2157,7 +2158,7 @@ export async function executeRestartApp(
  *
  * ⚠️ The readiness wait mints its own per-poll ADR-036 status token through
  * `ctx.providerAuth` (the same non-reentrant signing mutex), so it must NEVER
- * be wrapped in `signing.withSign` — that would deadlock.
+ * be wrapped in a caller-side signing mutex / sign-lock — that would deadlock.
  */
 export async function executeConfirmedRestartApp(
   args: Record<string, unknown>,
@@ -2178,7 +2179,7 @@ export async function executeConfirmedRestartApp(
   // ENG-312 Phase 6: the readiness wait now runs through the SDK's
   // waitForLeaseStatus with a browser EventTransport (WS live-status, poll
   // fallback). It mints its own per-poll ADR-036 status token via
-  // ctx.providerAuth — NEVER wrap it in signing.withSign (reentrant mutex
+  // ctx.providerAuth — NEVER wrap it in a caller-side sign-lock (reentrant mutex
   // deadlock).
   const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
 
@@ -2258,6 +2259,15 @@ export async function executeConfirmedRestartApp(
   } catch (error) {
     logError('compositeTransactions.executeConfirmedRestartApp.polling', error);
     onProgress?.({ phase: 'failed', detail: 'Restart polling failed', operation: 'restart' });
+    // ENG-312: waitForLeaseStatus REJECTS on timeout/abort (the deleted
+    // waitForLeaseReady resolved a status instead, so this fell through to the
+    // "non-active terminal" branch that marked the app failed). Restore that on a
+    // genuine timeout/error so registry-driven surfaces don't keep showing a
+    // possibly-broken app as 'running' (app_status/reconcile corrects it, and it
+    // mirrors the batch path). On a USER abort (a new chat message aborted the
+    // shared signal), leave status untouched — the restart likely still proceeds
+    // provider-side.
+    if (!signal?.aborted) appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     return { success: false, error: `Restart may still be in progress. Use app_status("${name}") to check.` };
   }
 }
@@ -2278,7 +2288,7 @@ async function executeConfirmedBatchRestart(
   const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
 
   // One shared ctx for all concurrent waits (WS live-status via the browser
-  // EventTransport; poll fallback). Never wrapped in signing.withSign.
+  // EventTransport; poll fallback). Never wrapped in a caller-side sign-lock.
   const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
 
   const { succeeded, failed, batchProgress } = await runBatchWithConcurrency({
@@ -2344,7 +2354,9 @@ async function executeConfirmedBatchRestart(
         return null;
       } catch (error) {
         logError('executeConfirmedBatchRestart.poll', error);
-        appRegistry.updateApp(address, entry.leaseUuid, { status: 'failed' });
+        // Mark failed on a genuine timeout/error, but not on a user abort (the
+        // restart likely still proceeds provider-side) — matches the single path.
+        if (!signal?.aborted) appRegistry.updateApp(address, entry.leaseUuid, { status: 'failed' });
         updateProgress('failed', `Restart polling failed for "${name}". Use app_status("${name}") to check.`);
         return null;
       }
@@ -2701,7 +2713,7 @@ export async function executeConfirmedUpdateApp(
 
   // Poll for readiness. ENG-312 Phase 6: SDK waitForLeaseStatus with a browser
   // EventTransport (WS live-status, poll fallback). It mints its own per-poll
-  // ADR-036 status token via ctx.providerAuth — never wrap in signing.withSign.
+  // ADR-036 status token via ctx.providerAuth — never wrap in a caller-side sign-lock.
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for app to come back up...', operation: 'update' });
 
   const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
@@ -2791,6 +2803,10 @@ export async function executeConfirmedUpdateApp(
   } catch (error) {
     logError('compositeTransactions.executeConfirmedUpdateApp.polling', error);
     onProgress?.({ phase: 'failed', detail: 'Update polling failed', operation: 'update' });
+    // ENG-312: waitForLeaseStatus REJECTS on timeout/abort. Mark failed on a
+    // genuine timeout/error (not a user abort) so registry surfaces don't keep
+    // showing it 'running'; app_status/reconcile corrects it. (See restart.)
+    if (!signal?.aborted) appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     return { success: false, error: `Update may still be in progress. Use app_status("${name}") to check.` };
   }
 }
@@ -2981,8 +2997,9 @@ export async function executeSetCustomDomain(
 /**
  * Execute set_custom_domain after user confirmation.
  *
- * Delegates the broadcast to mono's `core.setItemCustomDomain` helper (which
- * routes through `cosmosTx` + `set-item-custom-domain` CLI form) so validation,
+ * Delegates the broadcast to the SDK's `setItemCustomDomain` helper (from
+ * `@manifest-network/manifest-sdk/deploy`, imported as `monoSetItemCustomDomain`,
+ * which routes through `cosmosTx` + `set-item-custom-domain` CLI form) so validation,
  * canonicalization, and the result shape stay consistent with the MCP surface
  * and direct-CLI users.
  */
