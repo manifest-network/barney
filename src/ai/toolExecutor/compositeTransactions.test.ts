@@ -145,7 +145,6 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
         getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
         getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),
       },
-      withSign: <T,>(fn: () => Promise<T>) => fn(),
     },
     tiers: SAMPLE_TIERS,
     ...overrides,
@@ -2383,8 +2382,6 @@ describe('executeConfirmedBatchDeploy', () => {
     ];
 
     const opts = makeOptions({ appRegistry: registry, onProgress });
-    // §3.11: deployManifest must NOT be wrapped in signing.withSign (deadlock).
-    const withSignSpy = vi.spyOn(opts.signing!, 'withSign');
 
     const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
 
@@ -2394,7 +2391,9 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(data.deployed.map((d: any) => d.name)).toEqual(expect.arrayContaining(['game1', 'game2']));
     expect(data.failed).toHaveLength(0);
     expect(deployManifest).toHaveBeenCalledTimes(2);
-    expect(withSignSpy).not.toHaveBeenCalled();
+    // ENG-312 Phase 8: signing.withSign no longer exists — deployManifest holds
+    // the broadcast lock internally, so the old "not wrapped in withSign"
+    // deadlock guard is structurally impossible now.
     // Batch delegates domain attach to deployManifest — never a direct set call.
     expect(setItemCustomDomain).not.toHaveBeenCalled();
     const lastProgress = onProgress.mock.calls.at(-1)![0];
@@ -3719,7 +3718,6 @@ describe('buildFredAuthCtx', () => {
     const signing = {
       providerAuth,
       authTokens: { getAuthToken: vi.fn(), getLeaseDataAuthToken: vi.fn() },
-      withSign: <T,>(fn: () => Promise<T>) => fn(),
     } as any;
     const ctx = await buildFredAuthCtx(CLIENT_MANAGER, signing);
     expect(ctx.query).toEqual({ __tag: 'read-query-client' });

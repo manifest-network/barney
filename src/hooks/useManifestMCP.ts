@@ -162,7 +162,6 @@ export function useManifestMCP(): UseManifestMCPResult {
               return {
                 providerAuth,
                 authTokens: createAuthTokensAdapter(providerAuth, address),
-                withSign: mutex.withSign,
               };
             })()
           : undefined;

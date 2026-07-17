@@ -787,7 +787,6 @@ const mockSigning = {
     getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
     getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),
   },
-  withSign: <T,>(fn: () => Promise<T>) => fn(),
 };
 
 describe('executeGetLogs', () => {

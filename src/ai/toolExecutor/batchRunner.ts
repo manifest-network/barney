@@ -15,14 +15,11 @@ import type { SignResult, ToolResult } from './types';
 // ---------------------------------------------------------------------------
 
 export interface SigningMutex {
-  /** Serialize any async wallet operation (cosmosTx, signArbitrary). */
-  withSign: <T>(fn: () => Promise<T>) => Promise<T>;
   /**
    * Mutex-wrapped signArbitrary — only the signing call is serialized,
    * not subsequent HTTP work that uses the resulting token/signature.
-   *
-   * `withSign` and `signArbitraryWithMutex` share the same lock.
-   * Do NOT call one while holding the other (would deadlock).
+   * ENG-312 Phase 8: the public `withSign` escape hatch was removed (chain-TX
+   * serialization is now SDK-internal); the same lock still backs this method.
    */
   signArbitraryWithMutex: (address: string, data: string) => Promise<SignResult>;
 }
@@ -47,7 +44,9 @@ export function createSigningMutex(
   const signArbitraryWithMutex = (addr: string, data: string) =>
     withSign(() => signArbitrary(addr, data));
 
-  return { withSign, signArbitraryWithMutex };
+  // `withSign` stays as an internal closure backing signArbitraryWithMutex, but
+  // is no longer exposed publicly (ENG-312 Phase 8).
+  return { signArbitraryWithMutex };
 }
 
 // ---------------------------------------------------------------------------

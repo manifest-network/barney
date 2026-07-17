@@ -34,39 +34,19 @@ describe('createSigningMutex', () => {
     expect(results[2].signature).toBe('sig-3');
   });
 
-  it('withSign serializes arbitrary async functions', async () => {
-    const signArbitrary = vi.fn().mockResolvedValue({
-      pub_key: { type: 't', value: 'v' },
-      signature: 'sig',
-    });
-    const { withSign } = createSigningMutex(signArbitrary);
+  it('releases the lock when a signArbitrary call rejects', async () => {
+    // ENG-312 Phase 8: withSign is no longer public — exercise lock release via
+    // signArbitraryWithMutex (which the internal withSign backs).
+    const signArbitrary = vi.fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({ pub_key: { type: 't', value: 'v' }, signature: 'sig' });
+    const { signArbitraryWithMutex } = createSigningMutex(signArbitrary);
 
-    const order: string[] = [];
-    const task = (label: string) => withSign(async () => {
-      order.push(`${label}-start`);
-      await new Promise((r) => setTimeout(r, 5));
-      order.push(`${label}-end`);
-      return label;
-    });
+    await expect(signArbitraryWithMutex('addr', 'a')).rejects.toThrow('boom');
 
-    const results = await Promise.all([task('a'), task('b')]);
-    expect(order).toEqual(['a-start', 'a-end', 'b-start', 'b-end']);
-    expect(results).toEqual(['a', 'b']);
-  });
-
-  it('releases lock on error', async () => {
-    const signArbitrary = vi.fn().mockResolvedValue({
-      pub_key: { type: 't', value: 'v' },
-      signature: 'sig',
-    });
-    const { withSign } = createSigningMutex(signArbitrary);
-
-    const failing = withSign(async () => { throw new Error('boom'); });
-    await expect(failing).rejects.toThrow('boom');
-
-    // Next call should still work (lock was released)
-    const result = await withSign(async () => 'ok');
-    expect(result).toBe('ok');
+    // Next call still works → the lock was released after the rejection.
+    const result = await signArbitraryWithMutex('addr', 'b');
+    expect(result.signature).toBe('sig');
   });
 });
 

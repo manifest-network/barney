@@ -51,12 +51,10 @@ vi.mock('@manifest-network/manifest-sdk/deploy', () => ({
   createProviderAuth: (...args: unknown[]) => mockCreateProviderAuth(...args),
 }));
 
-// Keep the mutex trivial: withSign runs the fn inline; signArbitraryWithMutex
-// forwards to the wrapped fn. We only need identity to thread into SigningContext.
-const mockWithSign = vi.fn((fn: () => unknown) => fn());
+// Keep the mutex trivial: signArbitraryWithMutex forwards to the wrapped fn.
+// ENG-312 Phase 8: the mutex no longer exposes a public withSign.
 vi.mock('../ai/toolExecutor/batchRunner', () => ({
   createSigningMutex: (signArbitrary: unknown) => ({
-    withSign: mockWithSign,
     signArbitraryWithMutex: signArbitrary,
   }),
 }));
@@ -116,7 +114,6 @@ describe('useManifestMCP signing capability gate', () => {
   it('exposes a SigningContext whose authTokens delegate to a single createProviderAuth', async () => {
     render();
     expect(captured?.signing).toBeDefined();
-    expect(captured?.signing?.withSign).toBe(mockWithSign);
 
     // ONE minter, built from the signer adapter + chain id.
     expect(mockCreateProviderAuth).toHaveBeenCalledTimes(1);

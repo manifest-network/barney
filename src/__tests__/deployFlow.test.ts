@@ -130,7 +130,6 @@ describe('Deploy Flow Integration', () => {
           getAuthToken: vi.fn().mockResolvedValue('auth-token'),
           getLeaseDataAuthToken: vi.fn().mockResolvedValue('lease-data-auth-token'),
         },
-        withSign: <T,>(fn: () => Promise<T>) => fn(),
       },
       tiers: [
         { skuName: 'docker-micro', skuUuid: 'sku-micro', providerUuid: PROVIDER_UUID, cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
