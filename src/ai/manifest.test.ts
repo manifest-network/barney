@@ -127,15 +127,31 @@ describe('buildManifest', () => {
     expect(parsed.env.POSTGRES_DB).toBe('mydb');
   });
 
-  it('appends generated password to env values ending with "/"', async () => {
+  it('appends a generated password in place of the {{GENERATED_PASSWORD}} marker', async () => {
     const result = await buildManifest({
       image: 'neo4j:latest',
-      env: { NEO4J_AUTH: 'neo4j/' },
+      env: { NEO4J_AUTH: 'neo4j/{{GENERATED_PASSWORD}}' },
     });
     const parsed = JSON.parse(result.json);
 
     expect(parsed.env.NEO4J_AUTH).toMatch(/^neo4j\/[A-Za-z0-9]{16}$/);
     expect(parsed.env.NEO4J_AUTH.length).toBe(5 + 1 + 16); // "neo4j" + "/" + 16-char password
+  });
+
+  it('preserves legitimate env values ending in "/" (no longer a password marker) (ENG-574)', async () => {
+    const result = await buildManifest({
+      image: 'myapp:latest',
+      env: {
+        NEXTAUTH_URL: 'https://app.example.com/',
+        BASE_PATH: '/',
+        MOUNT: '/data/',
+      },
+    });
+    const parsed = JSON.parse(result.json);
+
+    expect(parsed.env.NEXTAUTH_URL).toBe('https://app.example.com/');
+    expect(parsed.env.BASE_PATH).toBe('/');
+    expect(parsed.env.MOUNT).toBe('/data/');
   });
 
   it('preserves non-empty env values', async () => {

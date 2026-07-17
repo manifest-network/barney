@@ -130,6 +130,29 @@ describe('isPrivateHost (SSRF protection via ipaddr.js)', () => {
     expect(isPrivateHost('ff02::1')).toBe(true); // Multicast
   });
 
+  // IPv4-embedded IPv6 literals must not slip past the IPv4 range block by
+  // classifying as their own ipaddr.js range (ENG-572).
+  it('blocks IPv4-mapped IPv6 literals (SSRF bypass prevention)', () => {
+    expect(isPrivateHost('::ffff:169.254.169.254')).toBe(true); // metadata
+    expect(isPrivateHost('::ffff:127.0.0.1')).toBe(true); // loopback
+    expect(isPrivateHost('::ffff:10.0.0.1')).toBe(true); // LAN
+    // Bracketed form (as URL.hostname yields) is stripped and blocked too
+    expect(isPrivateHost('[::ffff:169.254.169.254]')).toBe(true);
+  });
+
+  it('blocks NAT64 (rfc6052) literals', () => {
+    expect(isPrivateHost('64:ff9b::a9fe:a9fe')).toBe(true); // ->169.254.169.254
+    expect(isPrivateHost('64:ff9b::7f00:1')).toBe(true); // ->127.0.0.1
+  });
+
+  it('blocks carrier-grade NAT (CGNAT) range', () => {
+    expect(isPrivateHost('100.64.0.1')).toBe(true);
+    expect(isPrivateHost('100.127.255.255')).toBe(true);
+    // 100.63.x and 100.128.x are outside 100.64.0.0/10
+    expect(isPrivateHost('100.63.0.1')).toBe(false);
+    expect(isPrivateHost('100.128.0.1')).toBe(false);
+  });
+
   it('allows non-IP hostnames (DNS resolution happens later)', () => {
     // Invalid IPs that aren't valid hostnames are allowed through
     // (they'll fail at DNS resolution)

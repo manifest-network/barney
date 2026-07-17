@@ -1008,6 +1008,14 @@ describe('executeDeployApp', () => {
     expect(result.error).toContain('No file attached and no image specified');
   });
 
+  it('returns a friendly error when image is a non-string (PR#114 hardening)', async () => {
+    // A malformed model call with a numeric image would otherwise reach
+    // findKnownImage(...).replace and throw a raw TypeError.
+    const result = await executeDeployApp({ image: 12345 as unknown as string }, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/image must be a non-empty string/i);
+  });
+
   it('returns error without wallet', async () => {
     const result = await executeDeployApp({}, makeOptions({ address: undefined }), makePayload());
     expect(result.success).toBe(false);

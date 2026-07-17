@@ -166,3 +166,16 @@ export const ACCOUNT_SETUP_ERROR_DELAY_MS = 5_000;
 
 /** Key used to carry a display-only notice through manifest JSON. Stripped before upload. */
 export const MANIFEST_NOTICE_KEY = '_notice' as const;
+
+/**
+ * Internal sentinel that requests a generated password be appended in place of
+ * the marker. Used ONLY by curated KNOWN_IMAGES/KNOWN_STACKS defaults (e.g.
+ * neo4j's `NEO4J_AUTH: 'neo4j/{{GENERATED_PASSWORD}}'` → `neo4j/<random>`), not
+ * exposed to users. A bare trailing "/" was previously the marker, which
+ * silently corrupted legitimate trailing-slash values like
+ * `NEXTAUTH_URL=https://app/` (ENG-574); the explicit token can't collide with
+ * a real value. Lives here (a leaf module) rather than in manifest.ts so
+ * knownImages.ts can reference it without a runtime edge into the manifest
+ * builder + its SDK dependency.
+ */
+export const GENERATED_PASSWORD_MARKER = '{{GENERATED_PASSWORD}}';

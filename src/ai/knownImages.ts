@@ -6,13 +6,14 @@
  */
 
 import type { HealthCheckConfig } from './manifest';
+import { GENERATED_PASSWORD_MARKER } from '../config/constants';
 
 export interface KnownImageConfig {
   /** Canonical image name (without tag), e.g. "postgres" */
   image: string;
   /** Default exposed port(s), comma-separated for multiple */
   port: string;
-  /** Required/recommended env vars. Empty string = auto-generated password. Trailing "/" = append generated password. */
+  /** Required/recommended env vars. Empty string = auto-generated password. A trailing `{{GENERATED_PASSWORD}}` marker = prefix with a generated password appended. */
   env?: Record<string, string>;
   /** Container user override (uid:gid) */
   user?: string;
@@ -42,7 +43,7 @@ export const KNOWN_IMAGES: readonly KnownImageConfig[] = [
   { image: 'mysql', port: '3306', env: { MYSQL_ROOT_PASSWORD: '' }, tmpfs: '/var/run/mysqld', health_check: { test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' } },
   { image: 'mariadb', port: '3306', env: { MARIADB_ROOT_PASSWORD: '' }, health_check: { test: ['CMD-SHELL', 'mariadb-admin ping -h 127.0.0.1'], interval: '10s', timeout: '5s', retries: 5, start_period: '30s' } },
   { image: 'mongo', port: '27017', env: { MONGO_INITDB_ROOT_USERNAME: 'admin', MONGO_INITDB_ROOT_PASSWORD: '' }, aliases: ['mongodb'] },
-  { image: 'neo4j', port: '7474,7687', env: { NEO4J_AUTH: 'neo4j/' } },
+  { image: 'neo4j', port: '7474,7687', env: { NEO4J_AUTH: `neo4j/${GENERATED_PASSWORD_MARKER}` } },
   { image: 'redis', port: '6379', aliases: ['valkey'], health_check: { test: ['CMD', 'redis-cli', 'ping'], interval: '10s', timeout: '3s', retries: 3, start_period: '5s' } },
   { image: 'memcached', port: '11211' },
   { image: 'clickhouse-server', port: '8123,9000', aliases: ['clickhouse/clickhouse-server', 'clickhouse'] },
@@ -248,7 +249,9 @@ export function generateImageReferenceForPrompt(): string {
     if (cfg.env) {
       const envParts = Object.entries(cfg.env).map(([k, v]) => {
         if (v === '') return `${k}=""`;
-        if (v.endsWith('/')) return `${k}="${v}<password>"`;
+        if (v.endsWith(GENERATED_PASSWORD_MARKER)) {
+          return `${k}="${v.slice(0, -GENERATED_PASSWORD_MARKER.length)}<password>"`;
+        }
         return `${k}="${v}"`;
       });
       parts.push(`env={${envParts.join(', ')}}`);

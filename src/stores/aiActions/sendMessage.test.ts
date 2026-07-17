@@ -158,6 +158,114 @@ describe('sendMessage', () => {
       expect(store.getState().messages).toHaveLength(0);
     });
 
+    it('supersedes a stale pending confirmation instead of orphaning its tool message (ENG-573)', async () => {
+      mockProcessStream.mockResolvedValue(makeStreamResult({ toolCalls: [] }));
+      const store = setupStore({
+        pendingConfirmation: {
+          id: 'conf_1',
+          action: { id: 'call_1', toolName: 'deploy_app', args: {}, description: 'Deploy app-a?' },
+          messageId: 'tool_a',
+        },
+        messages: [
+          {
+            id: 'tool_a',
+            role: 'tool' as const,
+            content: 'Awaiting confirmation...',
+            timestamp: 1000,
+            toolName: 'deploy_app',
+            awaitingConfirmation: true,
+            isStreaming: false,
+          },
+        ],
+      });
+
+      await store.getState().sendMessage('actually, what is running?');
+
+      // The prior confirmation is cleared, not overwritten.
+      expect(store.getState().pendingConfirmation).toBeNull();
+      // Its tool message is marked superseded and no longer awaiting confirmation.
+      const priorMsg = store.getState().messages.find((m) => m.id === 'tool_a');
+      expect(priorMsg?.awaitingConfirmation).toBe(false);
+      expect(priorMsg?.content).toMatch(/superseded/i);
+      // The new request still proceeded (user message was appended).
+      expect(store.getState().messages.some((m) => m.role === 'user')).toBe(true);
+    });
+
+    // --- Verifying Copilot's PR#114 comment: does superseding leave a stale
+    // pendingPayload that gets reused / adds a bogus "(File attached)" note? ---
+
+    it('clears pendingPayload on the very turn that ends in a confirmation (so none survives to the card) — refutes Copilot premise', async () => {
+      // A file-upload deploy: the turn produces a confirmation and stops.
+      mockProcessStream.mockResolvedValue(
+        makeStreamResult({ toolCalls: [{ id: 'c1', type: 'function', function: { name: 'deploy_app', arguments: {} } }] }),
+      );
+      // Simulate setSingleConfirmation: the tool turn sets a pending confirmation and halts.
+      mockProcessToolCalls.mockImplementation((_get: unknown, set: (p: Record<string, unknown>) => void) => {
+        set({ pendingConfirmation: { id: 'conf', action: { id: 'c1', toolName: 'deploy_app', args: {}, description: 'Deploy?' }, messageId: 'm' } });
+        return Promise.resolve({ shouldContinue: false });
+      });
+      const store = setupStore({
+        pendingPayload: { bytes: new Uint8Array([1]), filename: 'app.json', size: 1, hash: 'abc' },
+      });
+
+      await store.getState().sendMessage('deploy this');
+
+      // The card is up...
+      expect(store.getState().pendingConfirmation).not.toBeNull();
+      // ...and pendingPayload was cleared by sendMessage's finally. So by the time
+      // the user could send again, there is no payload left to reuse.
+      expect(store.getState().pendingPayload).toBeNull();
+    });
+
+    it('adds no "(File attached)" note when superseding a confirmation whose payload is already cleared', async () => {
+      mockProcessStream.mockResolvedValue(makeStreamResult({ toolCalls: [] }));
+      const store = setupStore({
+        pendingPayload: null, // state the prior turn's finally leaves behind
+        pendingConfirmation: {
+          id: 'conf',
+          action: { id: 'c1', toolName: 'deploy_app', args: {}, description: 'Deploy?' },
+          messageId: 'tool_a',
+        },
+        messages: [
+          { id: 'tool_a', role: 'tool' as const, content: 'Awaiting confirmation...', timestamp: 1000, toolName: 'deploy_app', awaitingConfirmation: true, isStreaming: false },
+        ],
+      });
+
+      await store.getState().sendMessage('what is running?');
+
+      const userMsg = store.getState().messages.find((m) => m.role === 'user');
+      expect(userMsg?.content).toBe('what is running?');
+      expect(userMsg?.content).not.toMatch(/File attached/);
+      expect(store.getState().pendingConfirmation).toBeNull();
+    });
+
+    it('keeps a FRESH attachment consistent (note + payload both present) — Copilot fix would break this', async () => {
+      // Adversarial case: a confirmation is open AND the user attaches a new file,
+      // then sends. The note is computed from pendingPayload at the top of send;
+      // supersede must NOT clear pendingPayload or the note would reference a
+      // payload that no longer exists (the exact mismatch Copilot's fix creates).
+      mockProcessStream.mockResolvedValue(makeStreamResult({ toolCalls: [] }));
+      const store = setupStore({
+        pendingPayload: { bytes: new Uint8Array([1]), filename: 'fresh.json', size: 1, hash: 'def' },
+        pendingConfirmation: {
+          id: 'conf',
+          action: { id: 'c1', toolName: 'stop_app', args: {}, description: 'Stop?' },
+          messageId: 'tool_a',
+        },
+        messages: [
+          { id: 'tool_a', role: 'tool' as const, content: 'Awaiting confirmation...', timestamp: 1000, toolName: 'stop_app', awaitingConfirmation: true, isStreaming: false },
+        ],
+      });
+
+      await store.getState().sendMessage('deploy it');
+
+      const userMsg = store.getState().messages.find((m) => m.role === 'user');
+      // The note IS present (user attached a fresh file) and the payload was
+      // available to the turn — note and payload stay consistent.
+      expect(userMsg?.content).toContain('(File attached: fresh.json)');
+      expect(store.getState().pendingConfirmation).toBeNull();
+    });
+
     it('returns early when already streaming', async () => {
       const store = setupStore({ isStreaming: true });
       const before = store.getState().messages.length;

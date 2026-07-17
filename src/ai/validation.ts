@@ -23,6 +23,13 @@ const BLOCKED_IP_RANGES = new Set([
   'linkLocal', // 169.254.x.x, fe80::/10
   'multicast', // 224.0.0.0/4, ff00::/8
   'reserved', // Various reserved ranges
+  'carrierGradeNat', // 100.64.0.0/10 — shared CGNAT space, reaches LAN gateways
+  // IPv6 forms that embed an IPv4 address: without these, literals like
+  // ::ffff:169.254.169.254 (ipv4Mapped) or 64:ff9b::a9fe:a9fe (NAT64) classify
+  // as their own range and slip past the IPv4 block above, re-opening the
+  // metadata/loopback/LAN target that block exists to close.
+  'ipv4Mapped', // ::ffff:0:0/96 — IPv4-mapped IPv6
+  'rfc6052', // 64:ff9b::/96 — NAT64 well-known prefix
   'benchmarking', // 198.18.0.0/15
   'amt', // 192.52.193.0/24
   'as112', // 192.31.196.0/24, 192.175.48.0/24

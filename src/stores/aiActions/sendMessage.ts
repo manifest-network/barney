@@ -45,6 +45,36 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
 
   set({ lastMessageTime: now, isStreaming: true });
 
+  // Supersede any ConfirmationCard still open from a previous turn. A pending
+  // confirmation coexists with isStreaming=false while it waits for the user,
+  // so without this the new turn would stream a second tx tool whose
+  // confirmation overwrites the pending one via setSingleConfirmation —
+  // orphaning the prior tool message (awaitingConfirmation=true with no
+  // confirm/cancel path, chat wedged until reload). The UI-direct actions
+  // (requestStopApp/requestBatchDeploy) gate on pendingConfirmation for the
+  // same reason; the model-driven path is the remaining gap. Clearing it here
+  // also lets the confirmation-timeout watcher release the prior timer.
+  //
+  // pendingPayload is intentionally NOT cleared here (unlike cancelActionFn):
+  // the superseded confirmation's payload was snapshotted into
+  // pendingConfirmation.action.payload (setSingleConfirmation) and is discarded
+  // with it, and the store's pendingPayload was already nulled by the finally of
+  // the turn that created the confirmation. If it is non-null now it is a FRESH
+  // user attachment for THIS message — the "(File attached)" note above was
+  // computed from it — so clearing it would drop the user's file and leave the
+  // note pointing at a payload that no longer exists.
+  const staleConfirmation = get().pendingConfirmation;
+  if (staleConfirmation) {
+    set({
+      pendingConfirmation: null,
+      messages: get().messages.map((m) =>
+        m.id === staleConfirmation.messageId
+          ? { ...m, content: 'Superseded by a new request — this transaction was not submitted.', isStreaming: false, awaitingConfirmation: false }
+          : m,
+      ),
+    });
+  }
+
   const { abortController: oldAbort } = get();
   if (oldAbort) {
     oldAbort.abort();

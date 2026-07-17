@@ -26,6 +26,7 @@ import {
 import type { BuildManifestOptions as FredBuildManifestOptions } from '@manifest-network/manifest-sdk/deploy';
 import { generatePassword, validatePayloadSize } from '../utils/hash';
 import { logError } from '../utils/errors';
+import { GENERATED_PASSWORD_MARKER } from '../config/constants';
 import type { PayloadAttachment } from './toolExecutor/types';
 
 /**
@@ -109,18 +110,31 @@ export interface BuildManifestOptions {
 }
 
 /**
- * Auto-generate passwords for empty env values and values ending with "/".
+ * Resolve a single env value's password convention:
+ * - empty string      → a freshly generated password
+ * - `...{{GENERATED_PASSWORD}}` → the prefix with a generated password appended
+ * - anything else      → returned unchanged
+ * `passwordFn` lets callers share one password across a service group.
+ */
+export function resolveGeneratedPassword(
+  value: string,
+  passwordFn: () => string = generatePassword,
+): string {
+  if (value === '') return passwordFn();
+  if (value.endsWith(GENERATED_PASSWORD_MARKER)) {
+    return value.slice(0, -GENERATED_PASSWORD_MARKER.length) + passwordFn();
+  }
+  return value;
+}
+
+/**
+ * Auto-generate passwords for empty env values and values carrying the
+ * generated-password marker. See {@link resolveGeneratedPassword}.
  */
 function processEnv(env: Record<string, string>): Record<string, string> {
   const processed: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    if (value === '') {
-      processed[key] = generatePassword();
-    } else if (value.endsWith('/')) {
-      processed[key] = value + generatePassword();
-    } else {
-      processed[key] = value;
-    }
+    processed[key] = resolveGeneratedPassword(value);
   }
   return processed;
 }
