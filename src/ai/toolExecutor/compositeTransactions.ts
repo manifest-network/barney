@@ -654,9 +654,6 @@ export async function buildFredAuthCtx(
 }
 
 /**
- * Pre-validation for deploy_app. Returns confirmation result or error.
- */
-/**
  * Options controlling how {@link buildImageManifestFromArgs} differs between the
  * deploy and update image paths. Encoding the differences as explicit flags
  * (rather than two hand-maintained copies) keeps the shell-injection-safe token
@@ -850,6 +847,12 @@ async function buildImageManifestFromArgs(
   return { payload: manifestResult.payload };
 }
 
+/**
+ * Pre-validation for deploy_app. Builds/validates the manifest from the tool
+ * args (or attached payload) and returns a confirmation result
+ * (`requiresConfirmation`) or an error; the broadcast happens later in
+ * `executeConfirmedDeployApp`.
+ */
 export async function executeDeployApp(
   args: Record<string, unknown>,
   options: ToolExecutorOptions,
