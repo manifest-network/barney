@@ -80,7 +80,7 @@ function setSingleConfirmation(
   conf: CollectedConfirmation,
 ): void {
   const toolName = conf.result.pendingAction?.toolName || conf.toolCall.function.name;
-  const actionPayload = (toolName === 'deploy_app' || toolName === 'create_lease' || toolName === 'update_app')
+  const actionPayload = (toolName === 'deploy_app' || toolName === 'update_app')
     ? get().pendingPayload ?? undefined
     : undefined;
 

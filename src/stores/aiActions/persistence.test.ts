@@ -3,10 +3,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../ai/validation', () => ({
   validateSettings: vi.fn((data: unknown) => data),
   validateChatHistory: vi.fn((data: unknown) => (Array.isArray(data) ? data : [])),
-  validateEndpointUrl: vi.fn((url: string) => {
-    if (url.startsWith('http://') || url.startsWith('https://')) return url;
-    return null;
-  }),
 }));
 
 vi.mock('../../utils/errors', () => ({

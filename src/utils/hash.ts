@@ -7,7 +7,7 @@
  * Strings are UTF-8 encoded. Uint8Array views are copied to ensure the
  * result is not a view into a larger ArrayBuffer.
  */
-export function toBytes(data: string | Uint8Array): Uint8Array {
+function toBytes(data: string | Uint8Array): Uint8Array {
   return typeof data === 'string'
     ? new TextEncoder().encode(data)
     : new Uint8Array(data);
@@ -30,18 +30,6 @@ export async function sha256(data: string | Uint8Array): Promise<Uint8Array> {
   // fresh Uint8Array backed by ArrayBuffer, so the assertion is safe.
   const hashBuffer = await crypto.subtle.digest('SHA-256', bytes as Uint8Array<ArrayBuffer>);
   return new Uint8Array(hashBuffer);
-}
-
-/**
- * Computes SHA-256 hash of the given data and returns it as a hex string.
- * Convenience function that combines sha256() and toHex().
- *
- * @param data - The data to hash (string or Uint8Array)
- * @returns The hash as a 64-character hex string
- */
-export async function sha256Hex(data: string | Uint8Array): Promise<string> {
-  const hash = await sha256(data);
-  return toHex(hash);
 }
 
 /**
@@ -86,18 +74,4 @@ export const MAX_PAYLOAD_SIZE = 5 * 1024;
  */
 export function validatePayloadSize(data: string | Uint8Array): boolean {
   return toBytes(data).length <= MAX_PAYLOAD_SIZE;
-}
-
-/**
- * Gets the size of a payload in bytes.
- */
-export function getPayloadSize(data: string | Uint8Array): number {
-  return toBytes(data).length;
-}
-
-/**
- * Validates that a string is a valid SHA-256 hex hash (64 hex characters).
- */
-export function isValidMetaHash(hash: string): boolean {
-  return /^[0-9a-f]{64}$/i.test(hash);
 }

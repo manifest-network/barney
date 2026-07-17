@@ -39,7 +39,6 @@ vi.mock('../../ai/validation', () => ({
     const trimmed = input?.trim?.();
     return trimmed && trimmed.length > 0 ? trimmed : null;
   }),
-  validateEndpointUrl: vi.fn((url: string) => url),
   validateSettings: vi.fn((data: unknown) => data),
   validateChatHistory: vi.fn(() => []),
   sanitizeToolArgs: vi.fn((args: unknown) => args),

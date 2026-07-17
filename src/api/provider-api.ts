@@ -3,7 +3,7 @@
  *
  * Most functions delegate to the @manifest-network/manifest-sdk/deploy facade with
  * Barney's CORS proxy/SSRF fetch adapter injected. Barney-specific code
- * (validateAuthTimestamp, null-returning getProviderHealth) stays here.
+ * (null-returning getProviderHealth) stays here.
  */
 
 import {
@@ -25,30 +25,6 @@ export {
 // ============================================================================
 // Barney-specific functions
 // ============================================================================
-
-const MAX_AUTH_TOKEN_AGE_SECONDS = 60;
-const MAX_AUTH_TOKEN_FUTURE_SECONDS = 10;
-
-/**
- * Validates that a timestamp is recent enough for auth token use.
- * Client-side freshness check — rejects stale or future timestamps.
- */
-export function validateAuthTimestamp(timestamp: number): void {
-  if (!Number.isFinite(timestamp)) {
-    throw new Error('Auth timestamp must be a finite number');
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const age = now - timestamp;
-
-  if (age > MAX_AUTH_TOKEN_AGE_SECONDS) {
-    throw new Error(`Auth token expired: timestamp is ${age}s old (max ${MAX_AUTH_TOKEN_AGE_SECONDS}s)`);
-  }
-
-  if (age < -MAX_AUTH_TOKEN_FUTURE_SECONDS) {
-    throw new Error(`Auth token timestamp is ${-age}s in the future (max ${MAX_AUTH_TOKEN_FUTURE_SECONDS}s)`);
-  }
-}
 
 /**
  * Checks the health status of a provider's API.

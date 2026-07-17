@@ -26,10 +26,6 @@ vi.mock('../utils/hash', () => ({
 }));
 
 vi.mock('../ai/validation', () => ({
-  validateEndpointUrl: vi.fn((url: string) => {
-    if (url.startsWith('http://') || url.startsWith('https://')) return url;
-    return null;
-  }),
   validateSettings: vi.fn((data: unknown) => data),
   validateChatHistory: vi.fn((data: unknown) => data),
   sanitizeToolArgs: vi.fn((args: unknown) => args),

@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
-  validateAuthTimestamp,
   getProviderHealth,
 } from './provider-api';
 
@@ -21,57 +20,7 @@ vi.mock('../utils/errors', () => ({
 }));
 
 // Auth, connection, upload, and ProviderApiError tests are in mono's test suite.
-// Tests below cover Barney-specific behavior: timestamp validation and null-return health check.
-
-describe('validateAuthTimestamp', () => {
-  it('accepts current timestamp', () => {
-    const now = Math.floor(Date.now() / 1000);
-    expect(() => validateAuthTimestamp(now)).not.toThrow();
-  });
-
-  it('accepts timestamp 30 seconds ago', () => {
-    const thirtySecAgo = Math.floor(Date.now() / 1000) - 30;
-    expect(() => validateAuthTimestamp(thirtySecAgo)).not.toThrow();
-  });
-
-  it('rejects timestamp 90 seconds ago', () => {
-    const ninetySecAgo = Math.floor(Date.now() / 1000) - 90;
-    expect(() => validateAuthTimestamp(ninetySecAgo)).toThrow('expired');
-  });
-
-  it('rejects timestamp 15 seconds in the future', () => {
-    const fifteenSecFuture = Math.floor(Date.now() / 1000) + 15;
-    expect(() => validateAuthTimestamp(fifteenSecFuture)).toThrow('future');
-  });
-
-  it('rejects NaN', () => {
-    expect(() => validateAuthTimestamp(NaN)).toThrow('finite number');
-  });
-
-  it('rejects Infinity', () => {
-    expect(() => validateAuthTimestamp(Infinity)).toThrow('finite number');
-  });
-
-  it('accepts timestamp exactly 60 seconds ago', () => {
-    const exactLimit = Math.floor(Date.now() / 1000) - 60;
-    expect(() => validateAuthTimestamp(exactLimit)).not.toThrow();
-  });
-
-  it('rejects timestamp 61 seconds ago', () => {
-    const justPast = Math.floor(Date.now() / 1000) - 61;
-    expect(() => validateAuthTimestamp(justPast)).toThrow('expired');
-  });
-
-  it('accepts timestamp exactly 10 seconds in the future', () => {
-    const exactFuture = Math.floor(Date.now() / 1000) + 10;
-    expect(() => validateAuthTimestamp(exactFuture)).not.toThrow();
-  });
-
-  it('rejects timestamp 11 seconds in the future', () => {
-    const justFuture = Math.floor(Date.now() / 1000) + 11;
-    expect(() => validateAuthTimestamp(justFuture)).toThrow('future');
-  });
-});
+// Tests below cover Barney-specific behavior: null-return health check.
 
 // Public URL used in tests to pass SSRF validation
 const PROVIDER_URL = 'https://provider.example.com';
