@@ -44,8 +44,6 @@
     "@cosmos-kit/react": "2.22.3",
     "@cosmos-kit/web3auth": "npm:@manifest-network/web3auth@2.16.6-ll.1",
     "@interchain-ui/react": "1.26.2",
-    "@manifest-network/manifest-mcp-chain": "0.19.0",
-    "@manifest-network/manifest-mcp-core": "0.19.0",
     "@manifest-network/manifest-sdk": "0.19.0",
     "@manifest-network/manifestjs": "2.4.1",
     "axios": "1.13.2",

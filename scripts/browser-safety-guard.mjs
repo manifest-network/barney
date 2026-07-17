@@ -12,7 +12,7 @@ export function forbiddenNodeOnlyImport(request, issuer) {
   for (const { name, re } of always) {
     if (re.test(req)) return `forbidden node-only import "${req}" (${name}) from ${iss || 'entry'}`;
   }
-  const benignIssuer = /node_modules[\\/](@modelcontextprotocol[\\/]sdk|@manifest-network[\\/]manifest-mcp-chain)[\\/]/.test(iss);
+  const benignIssuer = /node_modules[\\/](@modelcontextprotocol[\\/]sdk)[\\/]/.test(iss);
   if (!benignIssuer) {
     const builtins = [
       { name: 'undici', re: /^undici(\/|$)/ },

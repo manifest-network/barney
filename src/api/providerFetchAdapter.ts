@@ -1,8 +1,8 @@
 /**
  * Fetch adapter for provider API requests.
  * Wraps Barney's SSRF validation and DEV CORS proxy routing into a
- * fetch-compatible function that can be passed as `fetchFn` to
- * @manifest-network/manifest-mcp-fred HTTP functions.
+ * fetch-compatible function that can be passed as `fetchFn` to the SDK deploy
+ * facade's provider HTTP functions (`@manifest-network/manifest-sdk/deploy`).
  */
 
 import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
