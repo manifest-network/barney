@@ -197,7 +197,7 @@ describe('sendMessage', () => {
     it('clears pendingPayload on the very turn that ends in a confirmation (so none survives to the card) — refutes Copilot premise', async () => {
       // A file-upload deploy: the turn produces a confirmation and stops.
       mockProcessStream.mockResolvedValue(
-        makeStreamResult({ toolCalls: [{ id: 'c1', function: { name: 'deploy_app', arguments: {} } }] }),
+        makeStreamResult({ toolCalls: [{ id: 'c1', type: 'function', function: { name: 'deploy_app', arguments: {} } }] }),
       );
       // Simulate setSingleConfirmation: the tool turn sets a pending confirmation and halts.
       mockProcessToolCalls.mockImplementation((_get: unknown, set: (p: Record<string, unknown>) => void) => {
