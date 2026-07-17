@@ -109,18 +109,42 @@ export interface BuildManifestOptions {
 }
 
 /**
- * Auto-generate passwords for empty env values and values ending with "/".
+ * Internal sentinel that requests a generated password be appended in place of
+ * the marker. Used ONLY by curated KNOWN_IMAGES/KNOWN_STACKS defaults (e.g.
+ * neo4j's `NEO4J_AUTH: 'neo4j/{{GENERATED_PASSWORD}}'` → `neo4j/<random>`), not
+ * exposed to users. A bare trailing "/" was previously the marker, which
+ * silently corrupted legitimate trailing-slash values like
+ * `NEXTAUTH_URL=https://app/` (ENG-574); the explicit token can't collide with
+ * a real value.
+ */
+export const GENERATED_PASSWORD_MARKER = '{{GENERATED_PASSWORD}}';
+
+/**
+ * Resolve a single env value's password convention:
+ * - empty string      → a freshly generated password
+ * - `...{{GENERATED_PASSWORD}}` → the prefix with a generated password appended
+ * - anything else      → returned unchanged
+ * `passwordFn` lets callers share one password across a service group.
+ */
+export function resolveGeneratedPassword(
+  value: string,
+  passwordFn: () => string = generatePassword,
+): string {
+  if (value === '') return passwordFn();
+  if (value.endsWith(GENERATED_PASSWORD_MARKER)) {
+    return value.slice(0, -GENERATED_PASSWORD_MARKER.length) + passwordFn();
+  }
+  return value;
+}
+
+/**
+ * Auto-generate passwords for empty env values and values carrying the
+ * generated-password marker. See {@link resolveGeneratedPassword}.
  */
 function processEnv(env: Record<string, string>): Record<string, string> {
   const processed: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    if (value === '') {
-      processed[key] = generatePassword();
-    } else if (value.endsWith('/')) {
-      processed[key] = value + generatePassword();
-    } else {
-      processed[key] = value;
-    }
+    processed[key] = resolveGeneratedPassword(value);
   }
   return processed;
 }

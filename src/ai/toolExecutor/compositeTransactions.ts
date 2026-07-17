@@ -34,7 +34,7 @@ import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 import { getDomainForService } from '../../api/leaseDomains';
 import { validateAll, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { validateAppName, sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
-import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, getServiceNames, type ServiceConfig, type HealthCheckConfig } from '../manifest';
+import { buildManifest, buildStackManifest, mergeManifest, validateServiceName, getServiceNames, resolveGeneratedPassword, type ServiceConfig, type HealthCheckConfig } from '../manifest';
 import { MANIFEST_NOTICE_KEY } from '../../config/constants';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
@@ -682,8 +682,7 @@ export async function executeDeployApp(
     for (const svc of Object.values(parsed.services)) {
       if (svc.env) {
         for (const key of Object.keys(svc.env)) {
-          if (svc.env[key] === '') svc.env[key] = sharedPassword;
-          else if (svc.env[key].endsWith('/')) svc.env[key] += sharedPassword;
+          svc.env[key] = resolveGeneratedPassword(svc.env[key], () => sharedPassword);
         }
       }
     }
@@ -804,8 +803,7 @@ export async function executeDeployApp(
     // Pre-generate env passwords so the same value can be shared with args
     if (env) {
       for (const key of Object.keys(env)) {
-        if (env[key] === '') env[key] = generatePassword();
-        else if (env[key].endsWith('/')) env[key] += generatePassword();
+        env[key] = resolveGeneratedPassword(env[key]);
       }
     }
 
@@ -2392,8 +2390,7 @@ export async function executeUpdateApp(
     for (const svc of Object.values(parsed.services)) {
       if (svc.env) {
         for (const key of Object.keys(svc.env)) {
-          if (svc.env[key] === '') svc.env[key] = sharedPassword;
-          else if (svc.env[key].endsWith('/')) svc.env[key] += sharedPassword;
+          svc.env[key] = resolveGeneratedPassword(svc.env[key], () => sharedPassword);
         }
       }
     }
@@ -2510,8 +2507,7 @@ export async function executeUpdateApp(
     // Pre-generate env passwords so the same value can be shared with args
     if (env) {
       for (const key of Object.keys(env)) {
-        if (env[key] === '') env[key] = generatePassword();
-        else if (env[key].endsWith('/')) env[key] += generatePassword();
+        env[key] = resolveGeneratedPassword(env[key]);
       }
     }
 
