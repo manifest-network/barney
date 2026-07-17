@@ -8,8 +8,9 @@ import type { SigningContext } from './types';
 /**
  * The one capability ctx barney threads into every SDK provider op.
  *
- * A single value satisfies each op's ctx param because they are Pick-subsets:
- *  - `FredAuthCtx` (deployManifest, appStatus, restartApp, updateApp) — query+chain+
+ * A single value satisfies each op's ctx param because they are Pick-subsets
+ * (naming the SDK ops barney actually threads this ctx into):
+ *  - `FredAuthCtx` (deployManifest, appStatus) — query+chain+
  *    fetch+logger+allowLoopback?+providerAuth;
  *  - `WaitForLeaseStatusCtx` (waitForLeaseStatus) — adds the optional `events` WS transport.
  *

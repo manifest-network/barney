@@ -41,7 +41,7 @@ export function AppShell() {
   const toast = useToast();
 
   // Account-setup funding needs the signing CosmosClientManager (the same
-  // aiStore singleton wired via setSigning below). Expose it via a ref so
+  // aiStore singleton wired via setClientManager below). Expose it via a ref so
   // useAccountSetup's effect deps stay stable; it's read lazily at funding time.
   const clientManagerRef = useRef(clientManager);
   useEffect(() => { clientManagerRef.current = clientManager; }, [clientManager]);
