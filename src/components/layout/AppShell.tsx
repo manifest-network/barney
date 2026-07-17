@@ -37,12 +37,14 @@ function isPopupClosedError(msg: string): boolean {
 export function AppShell() {
   const { setClientManager, setAddress, setSigning } = useAI();
   const { clientManager, address, signing } = useManifestMCP();
-  const { isWalletConnected, isWalletConnecting, openView, getOfflineSigner, status, message, disconnect } = useChain(CHAIN_NAME);
+  const { isWalletConnected, isWalletConnecting, openView, status, message, disconnect } = useChain(CHAIN_NAME);
   const toast = useToast();
 
-  // Account-setup flow needs direct getOfflineSigner access via a ref.
-  const getOfflineSignerRef = useRef(getOfflineSigner);
-  useEffect(() => { getOfflineSignerRef.current = getOfflineSigner; }, [getOfflineSigner]);
+  // Account-setup funding needs the signing CosmosClientManager (the same
+  // aiStore singleton wired via setSigning below). Expose it via a ref so
+  // useAccountSetup's effect deps stay stable; it's read lazily at funding time.
+  const clientManagerRef = useRef(clientManager);
+  useEffect(() => { clientManagerRef.current = clientManager; }, [clientManager]);
 
   // Invalidate chain-scoped caches when the connected address changes (different
   // wallet, possibly different chain → different governance Params).
@@ -84,7 +86,7 @@ export function AppShell() {
     }
   }, [status, message, disconnect, toast]);
 
-  const setupState = useAccountSetup({ address, isWalletConnected, getOfflineSignerRef });
+  const setupState = useAccountSetup({ address, isWalletConnected, clientManagerRef });
 
   // Page transition: defer content swap until exit animation completes.
   // `exiting` is derived (not state) so we avoid calling setState in the effect body.

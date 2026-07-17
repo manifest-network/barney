@@ -3,7 +3,7 @@
  *
  * On first wallet connect (no localStorage key), runs a sequential pipeline:
  * 1. Check PWR → if low, faucetDripAndVerify → retry once → stop on failure
- * 2. Check credits → if low, fundCredit → verify TX result → retry once → stop on failure
+ * 2. Check credits → if low, fundCredits (SDK) → verify TX code → retry once → stop on failure
  *
  * Each faucet step verifies token delivery on-chain by polling getBalance()
  * until the balance increases above the pre-drip snapshot.
@@ -21,12 +21,12 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import type { OfflineSigner } from '@cosmjs/proto-signing';
+import { noopLogger, type CosmosClientManager, type TxCtx } from '@manifest-network/manifest-sdk';
+import { fundCredits } from '@manifest-network/manifest-sdk/deploy';
 import { getBalance } from '../api/bank';
 import { getCreditAccount } from '../api/billing';
 import { DENOMS } from '../api/config';
 import { faucetDripAndVerify, isFaucetEnabled } from '../api/faucet';
-import { fundCredit } from '../api/tx';
 import { fromBaseUnits, toBaseUnits } from '../utils/format';
 import { logError } from '../utils/errors';
 import { createVersionedStorage } from '../utils/versionedStorage';
@@ -42,8 +42,14 @@ import {
 export interface UseAccountSetupOptions {
   address: string | undefined;
   isWalletConnected: boolean;
-  /** Stable ref wrapping cosmos-kit's getOfflineSigner (avoids unstable closure in effect deps). */
-  getOfflineSignerRef: React.RefObject<() => OfflineSigner>;
+  /**
+   * Stable ref to the signing `CosmosClientManager` (the aiStore singleton that
+   * `AppShell.setSigning` also uses — never a fresh manager, which would break
+   * sync-broadcast sequencing). Read lazily at funding time so effect deps stay
+   * stable. ENG-312 Phase 7: replaced the raw OfflineSigner ref now that credit
+   * funding goes through the SDK's `fundCredits(TxCtx)`.
+   */
+  clientManagerRef: React.RefObject<CosmosClientManager | null>;
 }
 
 export type SetupPhase = 'checking' | 'faucet' | 'funding' | 'complete';
@@ -132,7 +138,7 @@ const INITIAL_SETUP_STATE: AccountSetupState = { isInitialSetup: false, phase: '
 export function useAccountSetup({
   address,
   isWalletConnected,
-  getOfflineSignerRef,
+  clientManagerRef,
 }: UseAccountSetupOptions): AccountSetupState {
   const addressRef = useRef(address);
   const lastEffectAddressRef = useRef<string | undefined>(undefined);
@@ -282,17 +288,23 @@ export function useAccountSetup({
 
           setSetupState({ isInitialSetup: true, phase: 'funding' });
 
+          // fundCredits forwards `amount` verbatim into the billing fund-credit
+          // TX, and downstream parseAmount requires a <number><denom> coin string
+          // (a bare micro-digit string throws "Missing denomination"). Mirror the
+          // fund_credits tool's denomString. Self-fund: the SDK defaults the
+          // recipient to the connected signer's own address (no `tenant`).
+          const creditCoin = `${toBaseUnits(ACCOUNT_SETUP_CREDIT_AMOUNT, DENOMS.PWR)}${DENOMS.PWR}`;
+
           let fundSucceeded = false;
           try {
-            const signer = getOfflineSignerRef.current();
-            const result = await fundCredit(signer, targetAddress, targetAddress, {
-              denom: DENOMS.PWR,
-              amount: toBaseUnits(ACCOUNT_SETUP_CREDIT_AMOUNT, DENOMS.PWR),
-            });
+            const clientManager = clientManagerRef.current;
+            if (!clientManager) throw new Error('Signing client not ready');
+            const ctx: TxCtx = { chain: clientManager, logger: noopLogger };
+            const result = await fundCredits(ctx, { amount: creditCoin });
             if (signal.aborted || addressRef.current !== targetAddress) return;
-            fundSucceeded = result.success;
+            fundSucceeded = result.code === 0;
             if (!fundSucceeded) {
-              logError('useAccountSetup.fundCredits', result.error);
+              logError('useAccountSetup.fundCredits', new Error(`fund-credit failed (code ${result.code})${result.rawLog ? `: ${result.rawLog}` : ''}`));
             }
           } catch (error) {
             logError('useAccountSetup.fundCredits', error);
@@ -306,14 +318,13 @@ export function useAccountSetup({
             setSetupState({ isInitialSetup: true, phase: 'funding' });
 
             try {
-              const signer = getOfflineSignerRef.current();
-              const retryResult = await fundCredit(signer, targetAddress, targetAddress, {
-                denom: DENOMS.PWR,
-                amount: toBaseUnits(ACCOUNT_SETUP_CREDIT_AMOUNT, DENOMS.PWR),
-              });
+              const clientManager = clientManagerRef.current;
+              if (!clientManager) throw new Error('Signing client not ready');
+              const ctx: TxCtx = { chain: clientManager, logger: noopLogger };
+              const retryResult = await fundCredits(ctx, { amount: creditCoin });
               if (signal.aborted || addressRef.current !== targetAddress) return;
-              if (!retryResult.success) {
-                logError('useAccountSetup.fundCredits', retryResult.error);
+              if (retryResult.code !== 0) {
+                logError('useAccountSetup.fundCredits', new Error(`fund-credit failed (code ${retryResult.code})${retryResult.rawLog ? `: ${retryResult.rawLog}` : ''}`));
                 setupError = 'Could not activate credits. Please try again later.';
                 setSetupState({ isInitialSetup: true, phase: 'funding', error: setupError });
                 finishWithError(targetAddress, signal);
@@ -363,7 +374,7 @@ export function useAccountSetup({
       if (dismissTimerRef.current !== null) clearTimeout(dismissTimerRef.current);
       abortController.abort();
     };
-  }, [isWalletConnected, address, getOfflineSignerRef]);
+  }, [isWalletConnected, address, clientManagerRef]);
 
   return setupState;
 }

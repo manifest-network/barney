@@ -19,8 +19,8 @@ vi.mock('../api/faucet', () => ({
   isFaucetEnabled: vi.fn(),
 }));
 
-vi.mock('../api/tx', () => ({
-  fundCredit: vi.fn(),
+vi.mock('@manifest-network/manifest-sdk/deploy', () => ({
+  fundCredits: vi.fn(),
 }));
 
 vi.mock('../api/config', () => ({
@@ -43,12 +43,14 @@ vi.mock('../utils/errors', () => ({
 import { getBalance } from '../api/bank';
 import { getCreditAccount } from '../api/billing';
 import { faucetDripAndVerify, isFaucetEnabled } from '../api/faucet';
-import { fundCredit } from '../api/tx';
+import { fundCredits } from '@manifest-network/manifest-sdk/deploy';
 import { logError } from '../utils/errors';
 
 // --- Helpers ---
 
-const mockGetOfflineSigner = vi.fn().mockReturnValue({ getAccounts: vi.fn() });
+// fundCredits is mocked, so the ctx it receives is ignored — the ref just needs
+// a non-null CosmosClientManager to pass the funding-phase readiness guard.
+const mockClientManager = {} as any;
 
 /** Wrapper component that calls useAccountSetup with given options and captures state. */
 const Wrapper: FC<{ hookProps: UseAccountSetupOptions; onState: (s: AccountSetupState) => void }> = ({ hookProps, onState }) => {
@@ -61,7 +63,7 @@ function defaultHookProps(overrides?: Partial<UseAccountSetupOptions>): UseAccou
   return {
     address: 'manifest1abc',
     isWalletConnected: true,
-    getOfflineSignerRef: { current: mockGetOfflineSigner } as React.RefObject<() => any>,
+    clientManagerRef: { current: mockClientManager } as React.RefObject<any>,
     ...overrides,
   };
 }
@@ -116,7 +118,6 @@ function hadState(predicate: (s: AccountSetupState) => boolean): boolean {
 
 beforeEach(() => {
   vi.resetAllMocks(); // resetAllMocks (not clearAllMocks) to clear mockResolvedValueOnce queues between tests
-  mockGetOfflineSigner.mockReturnValue({ getAccounts: vi.fn() });
   vi.useFakeTimers({ shouldAdvanceTime: true });
   localStorage.clear();
   vi.mocked(isFaucetEnabled).mockReturnValue(true);
@@ -170,13 +171,22 @@ describe('useAccountSetup — happy path', () => {
     vi.mocked(faucetDripAndVerify).mockResolvedValue({ denom: 'factory/addr/upwr', success: true });
     // After faucet: fresh PWR=20
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
-    vi.mocked(fundCredit).mockResolvedValueOnce({ success: true, transactionHash: '0xabc', events: [] });
+    vi.mocked(fundCredits).mockResolvedValueOnce({ code: 0 } as any);
 
     renderHook(defaultHookProps());
     await flush();
 
     expect(faucetDripAndVerify).toHaveBeenCalledTimes(1); // PWR only
-    expect(fundCredit).toHaveBeenCalledTimes(1);
+    expect(fundCredits).toHaveBeenCalledTimes(1);
+
+    // ENG-312 round-2 units guard: fundCredits forwards `amount` verbatim into
+    // the billing fund-credit TX, whose parseAmount requires a <number><denom>
+    // coin string — a bare micro-digit string throws "Missing denomination".
+    // Pin the denom-suffixed shape here (the sole automated catch for that bug).
+    expect(fundCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ chain: mockClientManager }),
+      { amount: '10000000factory/addr/upwr' },
+    );
 
     // Went through complete phase and then dismissed
     expect(hadState((s) => s.isInitialSetup && s.phase === 'complete')).toBe(true);
@@ -200,7 +210,7 @@ describe('useAccountSetup — sufficient balances', () => {
     await flush();
 
     expect(faucetDripAndVerify).not.toHaveBeenCalled();
-    expect(fundCredit).not.toHaveBeenCalled();
+    expect(fundCredits).not.toHaveBeenCalled();
     expect(hadState((s) => s.phase === 'complete')).toBe(true);
 
     const stored = loadSetupData('manifest1abc');
@@ -221,7 +231,7 @@ describe('useAccountSetup — sufficient balances', () => {
     // Should never show the overlay
     expect(hadState((s) => s.isInitialSetup)).toBe(false);
     expect(faucetDripAndVerify).not.toHaveBeenCalled();
-    expect(fundCredit).not.toHaveBeenCalled();
+    expect(fundCredits).not.toHaveBeenCalled();
     // Should persist setupCompleted for future visits
     expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(true);
   });
@@ -233,14 +243,14 @@ describe('useAccountSetup — sufficient balances', () => {
       .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // funding phase
     vi.mocked(faucetDripAndVerify).mockResolvedValue({ denom: 'factory/addr/upwr', success: true });
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
-    vi.mocked(fundCredit).mockResolvedValueOnce({ success: true, transactionHash: '0xabc', events: [] });
+    vi.mocked(fundCredits).mockResolvedValueOnce({ code: 0 } as any);
 
     renderHook(defaultHookProps());
     await flush();
 
     // Full pipeline ran despite early credit check failure
     expect(faucetDripAndVerify).toHaveBeenCalledTimes(1); // PWR only
-    expect(fundCredit).toHaveBeenCalledTimes(1);
+    expect(fundCredits).toHaveBeenCalledTimes(1);
     expect(hadState((s) => s.isInitialSetup && s.phase === 'complete')).toBe(true);
     expect(capturedState.isInitialSetup).toBe(false);
     expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(true);
@@ -255,13 +265,13 @@ describe('useAccountSetup — sufficient balances', () => {
       .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // funding phase
     // Fresh PWR re-query
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
-    vi.mocked(fundCredit).mockResolvedValueOnce({ success: true, transactionHash: '0xabc', events: [] });
+    vi.mocked(fundCredits).mockResolvedValueOnce({ code: 0 } as any);
 
     renderHook(defaultHookProps());
     await flush();
 
     expect(faucetDripAndVerify).not.toHaveBeenCalled();
-    expect(fundCredit).toHaveBeenCalledTimes(1);
+    expect(fundCredits).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -281,7 +291,7 @@ describe('useAccountSetup — returning wallet', () => {
 
     expect(capturedState.isInitialSetup).toBe(false);
     expect(faucetDripAndVerify).not.toHaveBeenCalled();
-    expect(fundCredit).not.toHaveBeenCalled();
+    expect(fundCredits).not.toHaveBeenCalled();
   });
 });
 
@@ -303,7 +313,7 @@ describe('useAccountSetup — stale-key detection', () => {
     vi.mocked(faucetDripAndVerify).mockResolvedValue({ denom: 'factory/addr/upwr', success: true });
     // Fresh PWR=20
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
-    vi.mocked(fundCredit).mockResolvedValueOnce({ success: true, transactionHash: '0xabc', events: [] });
+    vi.mocked(fundCredits).mockResolvedValueOnce({ code: 0 } as any);
 
     renderHook(defaultHookProps());
     await flush();
@@ -327,14 +337,14 @@ describe('useAccountSetup — retry', () => {
       .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // funding phase
     // Fresh PWR
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
-    vi.mocked(fundCredit)
-      .mockResolvedValueOnce({ success: false, error: 'sequence mismatch' })
-      .mockResolvedValueOnce({ success: true, transactionHash: '0xabc', events: [] });
+    vi.mocked(fundCredits)
+      .mockResolvedValueOnce({ code: 1, rawLog: 'sequence mismatch' } as any)
+      .mockResolvedValueOnce({ code: 0 } as any);
 
     renderHook(defaultHookProps());
     await flush();
 
-    expect(fundCredit).toHaveBeenCalledTimes(2);
+    expect(fundCredits).toHaveBeenCalledTimes(2);
     expect(hadState((s) => s.phase === 'complete')).toBe(true);
   });
 
@@ -345,14 +355,14 @@ describe('useAccountSetup — retry', () => {
       .mockResolvedValueOnce({ balances: [] } as any)  // early credit check
       .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // funding phase
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
-    vi.mocked(fundCredit)
-      .mockResolvedValueOnce({ success: false, error: 'fail1' })
-      .mockResolvedValueOnce({ success: false, error: 'fail2' });
+    vi.mocked(fundCredits)
+      .mockResolvedValueOnce({ code: 1, rawLog: 'fail1' } as any)
+      .mockResolvedValueOnce({ code: 1, rawLog: 'fail2' } as any);
 
     renderHook(defaultHookProps());
     await flush();
 
-    expect(fundCredit).toHaveBeenCalledTimes(2);
+    expect(fundCredits).toHaveBeenCalledTimes(2);
     expect(hadState((s) => s.phase === 'funding' && !!s.error && s.error.includes('credits'))).toBe(true);
     const stored = loadSetupData('manifest1abc');
     expect(stored?.setupCompleted).toBe(false);
@@ -398,14 +408,14 @@ describe('useAccountSetup — retry', () => {
       .mockResolvedValueOnce({ balances: [] } as any)  // early credit check
       .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // funding phase
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
-    vi.mocked(fundCredit)
+    vi.mocked(fundCredits)
       .mockRejectedValueOnce(new Error('signer error'))
-      .mockResolvedValueOnce({ success: true, transactionHash: '0xabc', events: [] });
+      .mockResolvedValueOnce({ code: 0 } as any);
 
     renderHook(defaultHookProps());
     await flush();
 
-    expect(fundCredit).toHaveBeenCalledTimes(2);
+    expect(fundCredits).toHaveBeenCalledTimes(2);
     expect(hadState((s) => s.phase === 'complete')).toBe(true);
     expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(true);
   });
@@ -417,14 +427,14 @@ describe('useAccountSetup — retry', () => {
       .mockResolvedValueOnce({ balances: [] } as any)  // early credit check
       .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // funding phase
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
-    vi.mocked(fundCredit)
+    vi.mocked(fundCredits)
       .mockRejectedValueOnce(new Error('signer error'))
       .mockRejectedValueOnce(new Error('signer error again'));
 
     renderHook(defaultHookProps());
     await flush();
 
-    expect(fundCredit).toHaveBeenCalledTimes(2);
+    expect(fundCredits).toHaveBeenCalledTimes(2);
     expect(hadState((s) => s.phase === 'funding' && !!s.error && s.error.includes('credits'))).toBe(true);
     expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(false);
   });
@@ -442,7 +452,7 @@ describe('useAccountSetup — retry', () => {
     renderHook(defaultHookProps());
     await flush();
 
-    expect(fundCredit).not.toHaveBeenCalled();
+    expect(fundCredits).not.toHaveBeenCalled();
     expect(hadState((s) => !!s.error && s.error.includes('Not enough funds'))).toBe(true);
   });
 });
@@ -585,7 +595,7 @@ describe('useAccountSetup — error handling', () => {
       .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: 'NaN' }] } as any); // funding phase: invalid format
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
     // Credit balance defaults to 0, so funding will be attempted
-    vi.mocked(fundCredit).mockResolvedValueOnce({ success: true, transactionHash: '0xabc', events: [] });
+    vi.mocked(fundCredits).mockResolvedValueOnce({ code: 0 } as any);
 
     renderHook(defaultHookProps());
     await flush();
