@@ -182,10 +182,11 @@ describe('useAccountSetup — happy path', () => {
     // ENG-312 round-2 units guard: fundCredits forwards `amount` verbatim into
     // the billing fund-credit TX, whose parseAmount requires a <number><denom>
     // coin string — a bare micro-digit string throws "Missing denomination".
-    // Pin the denom-suffixed shape here (the sole automated catch for that bug).
+    // Pin the denom-suffixed shape + the ENG-565 credit amount (5 PWR, below the
+    // faucet drip so PWR remains for gas).
     expect(fundCredits).toHaveBeenCalledWith(
       expect.objectContaining({ chain: mockClientManager }),
-      { amount: '10000000factory/addr/upwr' },
+      { amount: '5000000factory/addr/upwr' },
     );
 
     // Went through complete phase and then dismissed
@@ -439,8 +440,10 @@ describe('useAccountSetup — retry', () => {
     expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(false);
   });
 
-  it('shows error when PWR insufficient for credits', async () => {
-    // PWR=5 (at faucet threshold but below credit amount of 10)
+  it('shows error when PWR insufficient for credits + gas reserve', async () => {
+    // ENG-565: PWR=5 equals the credit amount (5) but is below credit + gas
+    // reserve (6), so funding the full credit would overdraw once gas is deducted
+    // from the same PWR balance — the guard must fail cleanly without broadcasting.
     vi.mocked(getBalance)
       .mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '5000000' });
     vi.mocked(getCreditAccount)

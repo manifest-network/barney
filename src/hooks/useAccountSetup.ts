@@ -34,6 +34,7 @@ import {
   ACCOUNT_SETUP_PWR_THRESHOLD,
   ACCOUNT_SETUP_CREDIT_THRESHOLD,
   ACCOUNT_SETUP_CREDIT_AMOUNT,
+  ACCOUNT_SETUP_GAS_RESERVE,
   ACCOUNT_SETUP_COMPLETE_DELAY_MS,
   ACCOUNT_SETUP_RETRY_DELAY_MS,
   ACCOUNT_SETUP_ERROR_DELAY_MS,
@@ -279,7 +280,12 @@ export function useAccountSetup({
         const creditBalance = creditAmountValid ? fromBaseUnits(pwrCredit!.amount, DENOMS.PWR) : 0;
 
         if (creditBalance < ACCOUNT_SETUP_CREDIT_THRESHOLD) {
-          if (currentPwr < ACCOUNT_SETUP_CREDIT_AMOUNT) {
+          // ENG-565: post ENG-243 the gas fee shares this PWR balance and is
+          // deducted by the ante BEFORE the fund-credit message runs, so require
+          // enough for the credit amount PLUS a gas reserve — otherwise crediting
+          // the whole faucet drip overdraws by exactly the fee. Fail cleanly here
+          // instead of broadcasting a doomed tx.
+          if (currentPwr < ACCOUNT_SETUP_CREDIT_AMOUNT + ACCOUNT_SETUP_GAS_RESERVE) {
             setupError = 'Not enough funds to activate credits. Please try again later.';
             setSetupState({ isInitialSetup: true, phase: 'funding', error: setupError });
             finishWithError(targetAddress, signal);

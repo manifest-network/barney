@@ -292,7 +292,8 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `MAX_FILENAME_LENGTH` | 255 | Max filename length for uploads |
 | `ACCOUNT_SETUP_PWR_THRESHOLD` | 5 | PWR balance below which faucet is requested (display units) |
 | `ACCOUNT_SETUP_CREDIT_THRESHOLD` | 5 | Credit balance below which credits are funded (display units) |
-| `ACCOUNT_SETUP_CREDIT_AMOUNT` | 10 | PWR amount funded into credits per setup pass (display units) |
+| `ACCOUNT_SETUP_CREDIT_AMOUNT` | 5 | PWR amount funded into credits per setup pass (display units); kept below the faucet drip so PWR remains for gas (ENG-565) |
+| `ACCOUNT_SETUP_GAS_RESERVE` | 1 | PWR headroom reserved for gas — funding guard requires balance ≥ credit + this reserve so fund-credit never overdraws (post ENG-243 PWR gas) |
 | `ACCOUNT_SETUP_POLL_INTERVAL_MS` | 2s | Poll cadence for balance verification after faucet drip |
 | `ACCOUNT_SETUP_POLL_TIMEOUT_MS` | 10s | Timeout for balance verification poll loop |
 | `ACCOUNT_SETUP_COMPLETE_DELAY_MS` | 1.5s | Delay before dismissing account setup overlay after completion |

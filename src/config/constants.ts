@@ -137,8 +137,17 @@ export const ACCOUNT_SETUP_PWR_THRESHOLD = 5;
 /** Fund credits when credit account balance falls below this (display units) */
 export const ACCOUNT_SETUP_CREDIT_THRESHOLD = 5;
 
-/** PWR amount to fund into credits each time (display units) */
-export const ACCOUNT_SETUP_CREDIT_AMOUNT = 10;
+/** PWR amount to fund into credits each time (display units). Kept BELOW the
+ *  faucet drip so PWR stays in the wallet to pay gas: after the ENG-243 PWR
+ *  gas cutover the fund-credit gas fee is deducted from this same PWR balance
+ *  by the ante BEFORE the message executes, so crediting the entire faucet drip
+ *  overdraws by exactly the fee (ENG-565). */
+export const ACCOUNT_SETUP_CREDIT_AMOUNT = 5;
+
+/** PWR headroom (display units) reserved for gas. The funding guard requires
+ *  balance ≥ credit + this reserve so the fund-credit TX never overdraws
+ *  (worst-case prod fee ≈ 0.053 PWR, so 1 PWR is a comfortable floor). */
+export const ACCOUNT_SETUP_GAS_RESERVE = 1;
 
 /** Polling interval for balance verification after faucet drip (milliseconds) */
 export const ACCOUNT_SETUP_POLL_INTERVAL_MS = 2_000;
