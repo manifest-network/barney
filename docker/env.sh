@@ -46,8 +46,34 @@ export NGINX_RESOLVERS
 envsubst '$MORPHEUS_API_KEY $PUBLIC_MORPHEUS_URL $NGINX_RESOLVERS' \
   < /docker/nginx.conf.template > /etc/nginx/conf.d/default.conf
 
-# Generate runtime config.js for the browser (public vars only — no secrets)
-envsubst '$PUBLIC_REST_URL $PUBLIC_RPC_URL $PUBLIC_WEB3AUTH_CLIENT_ID $PUBLIC_WEB3AUTH_NETWORK $PUBLIC_MORPHEUS_MODEL $PUBLIC_PWR_DENOM $PUBLIC_GAS_PRICE $PUBLIC_CHAIN_ID $PUBLIC_FAUCET_URL $PUBLIC_AI_STREAM_TIMEOUT_MS $PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS $PUBLIC_AI_TOOL_API_TIMEOUT_MS $PUBLIC_AI_MAX_RETRIES $PUBLIC_AI_CONFIRMATION_TIMEOUT_MS $PUBLIC_AI_MAX_TOOL_ITERATIONS $PUBLIC_AI_MAX_MESSAGES $PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY $PUBLIC_SKU_SPECS' \
+# Generate runtime config.js for the browser (public vars only — no secrets).
+# Build the object with jq so every value is correctly JSON-escaped, then wrap it
+# as a JS string literal for JSON.parse() — no PUBLIC_* value (quote, backslash,
+# newline, etc.) can break out of the literal. Unset var → "" (matches the
+# DEFAULTS fallback in runtimeConfig.ts).
+CONFIG_JSON=$(jq -cn \
+  --arg PUBLIC_REST_URL "$PUBLIC_REST_URL" \
+  --arg PUBLIC_RPC_URL "$PUBLIC_RPC_URL" \
+  --arg PUBLIC_WEB3AUTH_CLIENT_ID "$PUBLIC_WEB3AUTH_CLIENT_ID" \
+  --arg PUBLIC_WEB3AUTH_NETWORK "$PUBLIC_WEB3AUTH_NETWORK" \
+  --arg PUBLIC_MORPHEUS_MODEL "$PUBLIC_MORPHEUS_MODEL" \
+  --arg PUBLIC_PWR_DENOM "$PUBLIC_PWR_DENOM" \
+  --arg PUBLIC_GAS_PRICE "$PUBLIC_GAS_PRICE" \
+  --arg PUBLIC_CHAIN_ID "$PUBLIC_CHAIN_ID" \
+  --arg PUBLIC_FAUCET_URL "$PUBLIC_FAUCET_URL" \
+  --arg PUBLIC_AI_STREAM_TIMEOUT_MS "$PUBLIC_AI_STREAM_TIMEOUT_MS" \
+  --arg PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS "$PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS" \
+  --arg PUBLIC_AI_TOOL_API_TIMEOUT_MS "$PUBLIC_AI_TOOL_API_TIMEOUT_MS" \
+  --arg PUBLIC_AI_MAX_RETRIES "$PUBLIC_AI_MAX_RETRIES" \
+  --arg PUBLIC_AI_CONFIRMATION_TIMEOUT_MS "$PUBLIC_AI_CONFIRMATION_TIMEOUT_MS" \
+  --arg PUBLIC_AI_MAX_TOOL_ITERATIONS "$PUBLIC_AI_MAX_TOOL_ITERATIONS" \
+  --arg PUBLIC_AI_MAX_MESSAGES "$PUBLIC_AI_MAX_MESSAGES" \
+  --arg PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY "$PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY" \
+  --arg PUBLIC_SKU_SPECS "$PUBLIC_SKU_SPECS" \
+  '$ARGS.named')
+RUNTIME_CONFIG_JS=$(printf '%s' "$CONFIG_JSON" | jq -Rs .)
+export RUNTIME_CONFIG_JS
+envsubst '$RUNTIME_CONFIG_JS' \
   < /docker/config.js.template > /usr/share/nginx/html/config.js
 
 # Validate the rendered nginx config before starting — surfaces module load

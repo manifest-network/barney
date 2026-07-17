@@ -36,7 +36,12 @@ export function createProviderFetch(): typeof globalThis.fetch {
       const proxyUrl = `/proxy-provider${parsed.pathname}${parsed.search}`;
       const headers = new Headers(init?.headers);
       headers.set('X-Proxy-Target', parsed.origin);
-      return globalThis.fetch(proxyUrl, { ...init, headers });
+      // `redirect` AFTER `...init` so a caller can't override it.
+      const response = await globalThis.fetch(proxyUrl, { ...init, headers, redirect: 'manual' });
+      if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+        throw new Error(`Provider URL blocked: unexpected redirect from ${proxyUrl}`);
+      }
+      return response;
     }
 
     // Production: validate SSRF safety and strip embedded credentials
@@ -49,7 +54,14 @@ export function createProviderFetch(): typeof globalThis.fetch {
     }
 
     const sanitizedUrl = `${parsed.origin}${parsed.pathname}${parsed.search}`;
-    return globalThis.fetch(sanitizedUrl, init);
+    const response = await globalThis.fetch(sanitizedUrl, { ...init, redirect: 'manual' });
+    // Browser opaque-redirect: Location is unreadable, so we cannot re-validate and
+    // follow. Provider API calls never legitimately redirect — reject rather than let
+    // the browser auto-follow past SSRF validation.
+    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+      throw new Error(`Provider URL blocked: unexpected redirect from ${sanitizedUrl}`);
+    }
+    return response;
   };
 }
 

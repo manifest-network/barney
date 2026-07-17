@@ -619,4 +619,33 @@ describe('sanitizeManifestForStorage', () => {
     expect(result.services.web).toBeNull();
     expect(result.services.db.env.MYSQL_ROOT_PASSWORD).toBe('');
   });
+
+  // --- Value-shaped-secret redaction (URI userinfo) ---
+
+  it('redacts a URI value with embedded credentials even when the key is not sensitive', () => {
+    const manifest = JSON.stringify({
+      image: 'app',
+      env: { DATABASE_URL: 'postgres://user:s3cr3t@host:5432/db' },
+    });
+    const result = JSON.parse(sanitizeManifestForStorage(manifest));
+    expect(result.env.DATABASE_URL).toBe('');
+  });
+
+  it('redacts a passwordless-userinfo URI value (redis://:pw@host)', () => {
+    const manifest = JSON.stringify({
+      image: 'app',
+      env: { REDIS_URL: 'redis://:pw@host' },
+    });
+    const result = JSON.parse(sanitizeManifestForStorage(manifest));
+    expect(result.env.REDIS_URL).toBe('');
+  });
+
+  it('preserves a plain URL value without userinfo (guards over-redaction)', () => {
+    const manifest = JSON.stringify({
+      image: 'app',
+      env: { PUBLIC_REST_URL: 'https://barney.manifest.network/api' },
+    });
+    const result = JSON.parse(sanitizeManifestForStorage(manifest));
+    expect(result.env.PUBLIC_REST_URL).toBe('https://barney.manifest.network/api');
+  });
 });
