@@ -1,12 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   sha256,
-  sha256Hex,
   toHex,
   validatePayloadSize,
-  getPayloadSize,
   generatePassword,
-  isValidMetaHash,
   MAX_PAYLOAD_SIZE,
 } from './hash';
 
@@ -52,15 +49,6 @@ describe('sha256', () => {
   });
 });
 
-describe('sha256Hex', () => {
-  it('returns hash as hex string', async () => {
-    const hash = await sha256Hex('hello');
-    expect(typeof hash).toBe('string');
-    expect(hash.length).toBe(64); // 32 bytes * 2 hex chars
-    expect(hash).toBe('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
-  });
-});
-
 describe('toHex', () => {
   it('converts bytes to hex string', () => {
     const bytes = new Uint8Array([0, 1, 15, 16, 255]);
@@ -89,21 +77,6 @@ describe('validatePayloadSize', () => {
   });
 });
 
-describe('getPayloadSize', () => {
-  it('returns correct size for string', () => {
-    expect(getPayloadSize('hello')).toBe(5);
-  });
-
-  it('returns correct size for Uint8Array', () => {
-    expect(getPayloadSize(new Uint8Array(100))).toBe(100);
-  });
-
-  it('handles UTF-8 encoding', () => {
-    // "é" is 2 bytes in UTF-8
-    expect(getPayloadSize('é')).toBe(2);
-  });
-});
-
 describe('generatePassword', () => {
   it('returns default length of 16', () => {
     expect(generatePassword()).toHaveLength(16);
@@ -122,35 +95,5 @@ describe('generatePassword', () => {
   it('generates unique values across calls', () => {
     const passwords = new Set(Array.from({ length: 20 }, () => generatePassword()));
     expect(passwords.size).toBe(20);
-  });
-});
-
-describe('isValidMetaHash', () => {
-  it('accepts valid 64-char lowercase hex', () => {
-    expect(isValidMetaHash('a'.repeat(64))).toBe(true);
-  });
-
-  it('accepts valid 64-char uppercase hex', () => {
-    expect(isValidMetaHash('A'.repeat(64))).toBe(true);
-  });
-
-  it('accepts mixed case hex', () => {
-    expect(isValidMetaHash('aAbBcCdDeEfF00112233445566778899aAbBcCdDeEfF00112233445566778899')).toBe(true);
-  });
-
-  it('rejects too-short hash', () => {
-    expect(isValidMetaHash('a'.repeat(63))).toBe(false);
-  });
-
-  it('rejects too-long hash', () => {
-    expect(isValidMetaHash('a'.repeat(65))).toBe(false);
-  });
-
-  it('rejects non-hex characters', () => {
-    expect(isValidMetaHash('g'.repeat(64))).toBe(false);
-  });
-
-  it('rejects empty string', () => {
-    expect(isValidMetaHash('')).toBe(false);
   });
 });

@@ -35,7 +35,6 @@ vi.mock('../../ai/systemPrompt', () => ({
 }));
 vi.mock('../../ai/validation', () => ({
   validateUserInput: vi.fn((input: string) => input?.trim() || null),
-  validateEndpointUrl: vi.fn((url: string) => url),
   validateSettings: vi.fn((data: unknown) => data),
   validateChatHistory: vi.fn(() => []),
   sanitizeToolArgs: vi.fn((args: unknown) => args),

@@ -5,7 +5,6 @@
 
 import { z } from 'zod';
 import * as ipaddr from 'ipaddr.js';
-import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
 import type { ChatMessage } from '../contexts/aiTypes';
 
 // ============================================================================
@@ -88,47 +87,6 @@ export function isPrivateHost(hostname: string): boolean {
 
   // Not an IP address, allow it (DNS names will be resolved by the browser)
   return false;
-}
-
-/**
- * Validate and sanitize an AI API endpoint URL
- * Returns null if the URL is invalid or potentially dangerous
- *
- * Security: Blocks SSRF attacks by rejecting private/internal IP addresses
- */
-export function validateEndpointUrl(url: string): string | null {
-  if (typeof url !== 'string' || url.length === 0) {
-    return null;
-  }
-
-  // Limit URL length to prevent abuse
-  if (url.length > 2048) {
-    return null;
-  }
-
-  const parsed = parseHttpUrl(url);
-  if (!parsed) {
-    return null;
-  }
-
-  // Disallow URLs with credentials
-  if (parsed.username || parsed.password) {
-    return null;
-  }
-
-  // Disallow data: or javascript: schemes that might be encoded
-  const normalized = parsed.href.toLowerCase();
-  if (normalized.includes('javascript:') || normalized.includes('data:')) {
-    return null;
-  }
-
-  if (!isUrlSsrfSafe(parsed)) {
-    return null;
-  }
-
-  // Return the normalized URL (preserves path, strips query/fragment/trailing slashes)
-  const pathname = parsed.pathname.replace(/\/+$/, '');
-  return parsed.origin + pathname;
 }
 
 export const AISettingsSchema = z.object({

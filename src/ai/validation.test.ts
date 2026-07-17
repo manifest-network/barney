@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  validateEndpointUrl,
   validateSettings,
   validateChatHistory,
   sanitizeToolArgs,
@@ -8,49 +7,6 @@ import {
   isPrivateHost,
   MAX_INPUT_LENGTH,
 } from './validation';
-
-describe('validateEndpointUrl', () => {
-  it('accepts valid public http URLs', () => {
-    expect(validateEndpointUrl('http://example.com')).toBe('http://example.com');
-    expect(validateEndpointUrl('http://ollama.example.com:11434')).toBe('http://ollama.example.com:11434');
-  });
-
-  it('accepts valid https URLs', () => {
-    expect(validateEndpointUrl('https://api.example.com')).toBe('https://api.example.com');
-  });
-
-  it('rejects non-http(s) protocols', () => {
-    expect(validateEndpointUrl('ftp://example.com')).toBeNull();
-    expect(validateEndpointUrl('file:///etc/passwd')).toBeNull();
-  });
-
-  it('rejects URLs with credentials', () => {
-    expect(validateEndpointUrl('http://user:pass@example.com')).toBeNull();
-  });
-
-  it('rejects empty/invalid URLs', () => {
-    expect(validateEndpointUrl('')).toBeNull();
-    expect(validateEndpointUrl('not a url')).toBeNull();
-  });
-
-  it('rejects URLs that are too long', () => {
-    const longUrl = 'http://example.com/' + 'a'.repeat(2100);
-    expect(validateEndpointUrl(longUrl)).toBeNull();
-  });
-
-  it('preserves URL path', () => {
-    expect(validateEndpointUrl('https://api.example.com/api/ollama')).toBe('https://api.example.com/api/ollama');
-    expect(validateEndpointUrl('https://api.example.com/api/ollama/')).toBe('https://api.example.com/api/ollama');
-  });
-
-  it('strips query string and fragment', () => {
-    expect(validateEndpointUrl('https://api.example.com/v1?key=val')).toBe('https://api.example.com/v1');
-    expect(validateEndpointUrl('https://api.example.com/v1#frag')).toBe('https://api.example.com/v1');
-  });
-
-  // Note: In development mode (import.meta.env.DEV === true), private hosts are allowed
-  // The isPrivateHost function is tested separately below
-});
 
 describe('isPrivateHost (SSRF protection via ipaddr.js)', () => {
   it('identifies localhost as private', () => {
