@@ -54,6 +54,15 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
   // (requestStopApp/requestBatchDeploy) gate on pendingConfirmation for the
   // same reason; the model-driven path is the remaining gap. Clearing it here
   // also lets the confirmation-timeout watcher release the prior timer.
+  //
+  // pendingPayload is intentionally NOT cleared here (unlike cancelActionFn):
+  // the superseded confirmation's payload was snapshotted into
+  // pendingConfirmation.action.payload (setSingleConfirmation) and is discarded
+  // with it, and the store's pendingPayload was already nulled by the finally of
+  // the turn that created the confirmation. If it is non-null now it is a FRESH
+  // user attachment for THIS message — the "(File attached)" note above was
+  // computed from it — so clearing it would drop the user's file and leave the
+  // note pointing at a payload that no longer exists.
   const staleConfirmation = get().pendingConfirmation;
   if (staleConfirmation) {
     set({
