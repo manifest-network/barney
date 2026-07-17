@@ -25,7 +25,7 @@ import {
   type BatchDeployEntry,
 } from './compositeTransactions';
 import type { ToolExecutorOptions, PayloadAttachment } from './types';
-import type { CosmosClientManager, DeployResult } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager, DeployResult } from '@manifest-network/manifest-sdk';
 import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
 import { LeaseState } from '../../api/billing';
@@ -61,17 +61,15 @@ vi.mock('../../api/provider-api', async (importOriginal) => {
 });
 
 vi.mock('../../api/fred', () => ({
-  waitForLeaseReady: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
   restartLease: vi.fn(),
   updateLease: vi.fn(),
 }));
 
-vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
-  ...(await importOriginal()),
+vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/chain')>()),
   cosmosTx: vi.fn(),
-  setItemCustomDomain: vi.fn(),
 }));
 
 // ENG-483: deployManifest + TerminalChainStateError are imported from the SDK
@@ -80,6 +78,10 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
 vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   ...(await importOriginal()),
   deployManifest: vi.fn(),
+  stopApp: vi.fn(),
+  setItemCustomDomain: vi.fn(),
+  waitForLeaseStatus: vi.fn(),
+  isLeaseFailureTerminal: vi.fn(),
   TerminalChainStateError: class TerminalChainStateError extends Error {
     constructor(m: string) { super(m); this.name = 'TerminalChainStateError'; }
   },
@@ -115,9 +117,11 @@ import { getCreditEstimate, getLease, getCreditAccount } from '../../api/billing
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
-import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
-import { cosmosTx, setItemCustomDomain, ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-mcp-core';
-import { TerminalChainStateError, deployManifest } from '@manifest-network/manifest-sdk/deploy';
+import { getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
+import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
+import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
+import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
+import { TerminalChainStateError, deployManifest, stopApp, waitForLeaseStatus, isLeaseFailureTerminal } from '@manifest-network/manifest-sdk/deploy';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
 const ADDRESS = 'manifest1abc';
@@ -141,7 +145,6 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
         getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
         getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),
       },
-      withSign: <T,>(fn: () => Promise<T>) => fn(),
     },
     tiers: SAMPLE_TIERS,
     ...overrides,
@@ -1737,7 +1740,7 @@ describe('executeConfirmedDeployApp', () => {
 
   // deployManifest stub: fire onLeaseCreated (registry addApp + uploading phase),
   // one provisioning progress tick, then resolve with the given DeployResult.
-  function mockDeploySuccess(result: Partial<import('@manifest-network/manifest-mcp-core').DeployResult>) {
+  function mockDeploySuccess(result: Partial<import('@manifest-network/manifest-sdk').DeployResult>) {
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
       await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
       opts?.pollOptions?.onProgress?.({ state: LeaseState.LEASE_STATE_ACTIVE, phase: 'provisioning' } as any);
@@ -1767,7 +1770,7 @@ describe('executeConfirmedDeployApp', () => {
     // does NOT consume DeployResult.url
     expect(deployManifest).toHaveBeenCalledTimes(1);
     expect(cosmosTx).not.toHaveBeenCalled();
-    expect(waitForLeaseReady).not.toHaveBeenCalled();
+    expect(waitForLeaseStatus).not.toHaveBeenCalled();
     expect(setItemCustomDomain).not.toHaveBeenCalled();
     // registry addApp(deploying) fired in onLeaseCreated, then updateApp(running)
     expect(registry.addApp).toHaveBeenCalledWith(ADDRESS, expect.objectContaining({ status: 'deploying', leaseUuid: 'new-lease-uuid' }));
@@ -1968,8 +1971,8 @@ describe('executeStopApp', () => {
 describe('executeConfirmedStopApp', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('closes lease and updates registry', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+  it('closes lease and updates registry (single, blocking)', async () => {
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as any);
 
     const app = makeApp();
     const registry = makeRegistry([app]);
@@ -1982,10 +1985,16 @@ describe('executeConfirmedStopApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('stopped');
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'stopped' });
+    // single path blocks on confirmation
+    expect(stopApp).toHaveBeenCalledWith(
+      expect.anything(),
+      { leaseUuid: app.leaseUuid },
+      { waitForConfirmation: true }
+    );
   });
 
-  it('stops multiple apps in bulk and returns summary', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+  it('stops multiple apps in bulk (async, non-blocking) and returns summary', async () => {
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as any);
 
     const apps = [
       makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
@@ -2003,13 +2012,16 @@ describe('executeConfirmedStopApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).stopped).toEqual(['redis', 'postgres']);
     expect((result.data as any).failed).toHaveLength(0);
-    expect(cosmosTx).toHaveBeenCalledTimes(2);
+    expect(stopApp).toHaveBeenCalledTimes(2);
+    // bulk path fires async (no block-inclusion wait)
+    expect(stopApp).toHaveBeenNthCalledWith(1, expect.anything(), { leaseUuid: 'uuid-1' }, { waitForConfirmation: false });
+    expect(stopApp).toHaveBeenNthCalledWith(2, expect.anything(), { leaseUuid: 'uuid-2' }, { waitForConfirmation: false });
   });
 
   it('handles partial failures in bulk stop', async () => {
-    vi.mocked(cosmosTx)
-      .mockResolvedValueOnce({ code: 0, transactionHash: 'hash', rawLog: '' } as any)
-      .mockResolvedValueOnce({ code: 1, rawLog: 'some error' } as any);
+    vi.mocked(stopApp)
+      .mockResolvedValueOnce({ outcome: 'stopped' } as any)
+      .mockRejectedValueOnce(new Error('some error'));
 
     const apps = [
       makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
@@ -2029,26 +2041,25 @@ describe('executeConfirmedStopApp', () => {
     expect((result.data as any).failed).toEqual(['postgres']);
   });
 
-  it('treats lease-not-active as success in bulk stop', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 1, rawLog: 'lease not active' } as any);
+  it('treats an already-inactive lease as success (single)', async () => {
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'already_inactive' } as any);
 
     const apps = [makeApp({ name: 'redis', leaseUuid: 'uuid-1' })];
     const registry = makeRegistry(apps);
-    const entries = [{ app_name: 'redis', leaseUuid: 'uuid-1' }];
 
     const result = await executeConfirmedStopApp(
-      { app_name: 'all', entries },
+      { app_name: 'redis', leaseUuid: 'uuid-1' },
       CLIENT_MANAGER,
       makeOptions({ appRegistry: registry })
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as any).stopped).toEqual(['redis']);
+    expect((result.data as any).message).toContain('already inactive');
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'uuid-1', { status: 'stopped' });
   });
 
   it('returns failure when all bulk stops fail', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 1, rawLog: 'error' } as any);
+    vi.mocked(stopApp).mockRejectedValue(new Error('error'));
 
     const apps = [
       makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
@@ -2371,8 +2382,6 @@ describe('executeConfirmedBatchDeploy', () => {
     ];
 
     const opts = makeOptions({ appRegistry: registry, onProgress });
-    // §3.11: deployManifest must NOT be wrapped in signing.withSign (deadlock).
-    const withSignSpy = vi.spyOn(opts.signing!, 'withSign');
 
     const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
 
@@ -2382,7 +2391,9 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(data.deployed.map((d: any) => d.name)).toEqual(expect.arrayContaining(['game1', 'game2']));
     expect(data.failed).toHaveLength(0);
     expect(deployManifest).toHaveBeenCalledTimes(2);
-    expect(withSignSpy).not.toHaveBeenCalled();
+    // ENG-312 Phase 8: signing.withSign no longer exists — deployManifest holds
+    // the broadcast lock internally, so the old "not wrapped in withSign"
+    // deadlock guard is structurally impossible now.
     // Batch delegates domain attach to deployManifest — never a direct set call.
     expect(setItemCustomDomain).not.toHaveBeenCalled();
     const lastProgress = onProgress.mock.calls.at(-1)![0];
@@ -2672,11 +2683,16 @@ describe('executeRestartApp', () => {
 });
 
 describe('executeConfirmedRestartApp', () => {
-  beforeEach(() => vi.clearAllMocks());
+  // clearAllMocks() keeps mockReturnValue across tests, so re-seed the default
+  // (success terminal) each time; the poll-failure test overrides to true.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(false);
+  });
 
   it('restarts app and polls to ready', async () => {
     vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -2724,10 +2740,11 @@ describe('executeConfirmedRestartApp', () => {
 
   it('handles poll failure (non-active state)', async () => {
     vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
       last_error: 'container crashed',
     });
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(true);
 
     const app = makeApp();
     const registry = makeRegistry([app]);
@@ -2742,9 +2759,46 @@ describe('executeConfirmedRestartApp', () => {
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
   });
 
+  it('marks the app failed when the readiness wait rejects (timeout/error, no abort)', async () => {
+    // ENG-312: waitForLeaseStatus REJECTS on timeout; restore the "mark failed"
+    // guarantee the deleted waitForLeaseReady provided by falling through.
+    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('deadline exceeded'));
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('may still be in progress');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+  });
+
+  it('does NOT mark the app failed when the wait is aborted (user interrupt)', async () => {
+    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const controller = new AbortController();
+    controller.abort();
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal })
+    );
+
+    expect(result.success).toBe(false);
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+  });
+
   it('restarts multiple apps in batch and returns summary', async () => {
     vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -2793,7 +2847,7 @@ describe('executeConfirmedRestartApp', () => {
     vi.mocked(restartLease)
       .mockResolvedValueOnce({ status: 'restarting' })
       .mockRejectedValueOnce(new ProviderApiError(409, 'not restartable'));
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -3298,11 +3352,16 @@ describe('executeUpdateApp', () => {
 });
 
 describe('executeConfirmedUpdateApp', () => {
-  beforeEach(() => vi.clearAllMocks());
+  // clearAllMocks() keeps mockReturnValue across tests, so re-seed the default
+  // (success terminal) each time; the poll-failure test overrides to true.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(false);
+  });
 
   it('updates app and polls to ready', async () => {
     vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -3357,10 +3416,11 @@ describe('executeConfirmedUpdateApp', () => {
 
   it('handles poll failure (non-active state)', async () => {
     vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
       last_error: 'container crashed',
     });
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(true);
 
     const app = makeApp();
     const registry = makeRegistry([app]);
@@ -3373,6 +3433,24 @@ describe('executeConfirmedUpdateApp', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('container crashed');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+  });
+
+  it('marks the app failed when the readiness wait rejects (timeout/error, no abort)', async () => {
+    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('deadline exceeded'));
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('may still be in progress');
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
   });
 
@@ -3390,7 +3468,7 @@ describe('executeConfirmedUpdateApp', () => {
 
   it('reconstructs payload from _generatedManifest when no payload provided', async () => {
     vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -3428,7 +3506,7 @@ describe('executeConfirmedUpdateApp', () => {
     // provision.last_error mid-sentence; without normalization an upstream
     // error ending in `.` would double-up.
     vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -3695,7 +3773,6 @@ describe('buildFredAuthCtx', () => {
     const signing = {
       providerAuth,
       authTokens: { getAuthToken: vi.fn(), getLeaseDataAuthToken: vi.fn() },
-      withSign: <T,>(fn: () => Promise<T>) => fn(),
     } as any;
     const ctx = await buildFredAuthCtx(CLIENT_MANAGER, signing);
     expect(ctx.query).toEqual({ __tag: 'read-query-client' });

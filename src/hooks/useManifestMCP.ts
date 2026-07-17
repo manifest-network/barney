@@ -1,5 +1,5 @@
 /**
- * Hook to integrate cosmos-kit with @manifest-network/manifest-mcp-core
+ * Hook to integrate cosmos-kit with @manifest-network/manifest-sdk
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -162,7 +162,6 @@ export function useManifestMCP(): UseManifestMCPResult {
               return {
                 providerAuth,
                 authTokens: createAuthTokensAdapter(providerAuth, address),
-                withSign: mutex.withSign,
               };
             })()
           : undefined;

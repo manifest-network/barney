@@ -7,36 +7,56 @@ import {
   LEASE_STATE_FILTERS,
   getLeasesByTenantPaginated,
   getBillingParams,
+  getLease,
+  getCreditAccount,
+  getCreditEstimate,
 } from './billing';
 
-vi.mock('./queryClient', () => {
-  const mockLeasesByTenant = vi.fn();
-  return {
-    getQueryClient: vi.fn().mockResolvedValue({
-      liftedinit: {
-        billing: {
-          v1: {
-            leasesByTenant: mockLeasesByTenant,
-          },
-        },
-      },
-    }),
-    lcdConvert: vi.fn((data) => data),
-    queryWithNotFound: vi.fn(),
-    fixEnumField: vi.fn((obj) => obj),
-  };
-});
-
-const { mockGetBillingParams } = vi.hoisted(() => ({ mockGetBillingParams: vi.fn() }));
+// ENG-536/537: billing reads go through the SDK read client. Typed methods
+// (getLease, getLeasesByTenant, getBillingParams) + the `client.query` LCD
+// drop-down for the credit family; not-found surfaces as a NOT_FOUND error
+// (grpc code:5) classified by the real isNotFoundError.
+const {
+  mockGetBillingParams,
+  mockGetLeasesByTenant,
+  mockGetLease,
+  mockCreditAccount,
+  mockCreditAddress,
+  mockCreditEstimate,
+} = vi.hoisted(() => ({
+  mockGetBillingParams: vi.fn(),
+  mockGetLeasesByTenant: vi.fn(),
+  mockGetLease: vi.fn(),
+  mockCreditAccount: vi.fn(),
+  mockCreditAddress: vi.fn(),
+  mockCreditEstimate: vi.fn(),
+}));
 
 vi.mock('./readClient', () => ({
   getReadClient: vi.fn().mockResolvedValue({
     getBillingParams: (...a: unknown[]) => mockGetBillingParams(...a),
+    getLeasesByTenant: (...a: unknown[]) => mockGetLeasesByTenant(...a),
+    getLease: (...a: unknown[]) => mockGetLease(...a),
+    query: {
+      liftedinit: {
+        billing: {
+          v1: {
+            creditAccount: (...a: unknown[]) => mockCreditAccount(...a),
+            creditAddress: (...a: unknown[]) => mockCreditAddress(...a),
+            creditEstimate: (...a: unknown[]) => mockCreditEstimate(...a),
+          },
+        },
+      },
+    },
   }),
 }));
 
-import { getQueryClient, lcdConvert } from './queryClient';
 import { getReadClient } from './readClient';
+
+/** A grpc-gateway NOT_FOUND envelope that the real isNotFoundError classifies (code:5). */
+const notFound = () => Object.assign(new Error('not found'), { response: { data: { code: 5 } } });
+/** A non-not-found failure (code:13 = INTERNAL). */
+const internal = () => Object.assign(new Error('boom'), { response: { data: { code: 13 } } });
 
 describe('leaseStateToString', () => {
   it('converts LEASE_STATE_ACTIVE to string', () => {
@@ -46,13 +66,11 @@ describe('leaseStateToString', () => {
   });
 
   it('converts LEASE_STATE_PENDING to string', () => {
-    const result = leaseStateToString(LeaseState.LEASE_STATE_PENDING);
-    expect(result).toContain('PENDING');
+    expect(leaseStateToString(LeaseState.LEASE_STATE_PENDING)).toContain('PENDING');
   });
 
   it('converts LEASE_STATE_CLOSED to string', () => {
-    const result = leaseStateToString(LeaseState.LEASE_STATE_CLOSED);
-    expect(result).toContain('CLOSED');
+    expect(leaseStateToString(LeaseState.LEASE_STATE_CLOSED)).toContain('CLOSED');
   });
 });
 
@@ -109,22 +127,11 @@ describe('LEASE_STATE_FILTERS', () => {
 describe('getLeasesByTenantPaginated', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('passes pagination params to LCD client', async () => {
-    const mockLease = {
-      uuid: 'lease-1',
-      state: LeaseState.LEASE_STATE_ACTIVE,
-      tenant: 'addr1',
-      items: [],
-      createdAt: '2024-01-01T00:00:00Z',
-    };
-    const mockResponse = {
-      leases: [mockLease],
-      pagination: { total: 1n, nextKey: new Uint8Array() },
-    };
-
-    const client = await vi.mocked(getQueryClient)();
-    vi.mocked(client.liftedinit.billing.v1.leasesByTenant).mockResolvedValue(mockResponse as any);
-    vi.mocked(lcdConvert).mockReturnValue(mockResponse as any);
+  it('passes pagination params (as bigints) to the typed read', async () => {
+    mockGetLeasesByTenant.mockResolvedValue({
+      leases: [{ uuid: 'lease-1', state: LeaseState.LEASE_STATE_ACTIVE, tenant: 'addr1', items: [] }],
+      total: 1n,
+    });
 
     const result = await getLeasesByTenantPaginated('addr1', {
       stateFilter: LeaseState.LEASE_STATE_ACTIVE,
@@ -133,40 +140,103 @@ describe('getLeasesByTenantPaginated', () => {
       reverse: true,
     });
 
-    expect(client.liftedinit.billing.v1.leasesByTenant).toHaveBeenCalledWith({
+    expect(mockGetLeasesByTenant).toHaveBeenCalledWith({
       tenant: 'addr1',
       stateFilter: LeaseState.LEASE_STATE_ACTIVE,
-      pagination: expect.objectContaining({
-        limit: 5n,
-        offset: 10n,
-        countTotal: true,
-        reverse: true,
-      }),
+      limit: 5n,
+      offset: 10n,
+      reverse: true,
     });
     expect(result.leases).toHaveLength(1);
-    expect(result.pagination).toBeDefined();
+    expect(result.pagination?.total).toBe(1n);
   });
 
   it('defaults to unspecified state filter', async () => {
-    const mockResponse = { leases: [], pagination: undefined };
-    const client = await vi.mocked(getQueryClient)();
-    vi.mocked(client.liftedinit.billing.v1.leasesByTenant).mockResolvedValue(mockResponse as any);
-    vi.mocked(lcdConvert).mockReturnValue(mockResponse as any);
-
+    mockGetLeasesByTenant.mockResolvedValue({ leases: [], total: 0n });
     await getLeasesByTenantPaginated('addr1');
-
-    expect(client.liftedinit.billing.v1.leasesByTenant).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stateFilter: LeaseState.LEASE_STATE_UNSPECIFIED,
-      })
+    expect(mockGetLeasesByTenant).toHaveBeenCalledWith(
+      expect.objectContaining({ stateFilter: LeaseState.LEASE_STATE_UNSPECIFIED }),
     );
+  });
+});
+
+describe('getLease (read-client passthrough)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns the lease from the read client', async () => {
+    const lease = { uuid: 'lu1' };
+    mockGetLease.mockResolvedValue(lease);
+    const uuid = '550e8400-e29b-41d4-a716-446655440000';
+    expect(await getLease(uuid)).toBe(lease);
+    expect(mockGetLease).toHaveBeenCalledWith(uuid);
+  });
+
+  it('returns null when the read client reports the lease absent', async () => {
+    mockGetLease.mockResolvedValue(null);
+    expect(await getLease('550e8400-e29b-41d4-a716-446655440000')).toBeNull();
+  });
+});
+
+describe('getCreditAccount (client.query + isNotFoundError)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns the account on hit', async () => {
+    mockCreditAddress.mockResolvedValue({ creditAddress: 'credit-addr' });
+    const acct = {
+      creditAccount: {
+        tenant: 'addr1',
+        creditAddress: 'credit-addr',
+        activeLeaseCount: 1n,
+        pendingLeaseCount: 0n,
+        reservedAmounts: [],
+      },
+      balances: [],
+      availableBalances: [],
+    };
+    mockCreditAccount.mockResolvedValue(acct);
+    expect(await getCreditAccount('addr1')).toBe(acct);
+  });
+
+  it('synthesizes a zero-account when the chain reports NOT_FOUND', async () => {
+    mockCreditAddress.mockResolvedValue({ creditAddress: 'credit-addr' });
+    mockCreditAccount.mockRejectedValue(notFound());
+    const result = await getCreditAccount('addr1');
+    expect(result.creditAccount.creditAddress).toBe('credit-addr');
+    expect(result.creditAccount.activeLeaseCount).toBe(0n);
+    expect(result.balances).toEqual([]);
+  });
+
+  it('rethrows a non-not-found failure', async () => {
+    mockCreditAddress.mockResolvedValue({ creditAddress: 'credit-addr' });
+    mockCreditAccount.mockRejectedValue(internal());
+    await expect(getCreditAccount('addr1')).rejects.toThrow('boom');
+  });
+});
+
+describe('getCreditEstimate (client.query + isNotFoundError)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns null on NOT_FOUND', async () => {
+    mockCreditEstimate.mockRejectedValue(notFound());
+    expect(await getCreditEstimate('addr1')).toBeNull();
+  });
+
+  it('returns the estimate on hit', async () => {
+    const est = { totalRatePerSecond: '1', estimatedDurationSeconds: 100n };
+    mockCreditEstimate.mockResolvedValue(est);
+    expect(await getCreditEstimate('addr1')).toBe(est);
+  });
+
+  it('rethrows a non-not-found failure', async () => {
+    mockCreditEstimate.mockRejectedValue(internal());
+    await expect(getCreditEstimate('addr1')).rejects.toThrow('boom');
   });
 });
 
 describe('getBillingParams (read-client delegation)', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('delegates to the read client and returns its Params (not the LCD path)', async () => {
+  it('delegates to the read client and returns its Params', async () => {
     const sentinel = { creditDenoms: ['upwr'] } as unknown as Awaited<
       ReturnType<typeof getBillingParams>
     >;
@@ -176,8 +246,6 @@ describe('getBillingParams (read-client delegation)', () => {
 
     expect(result).toBe(sentinel);
     expect(mockGetBillingParams).toHaveBeenCalledTimes(1);
-    // Runs over the SDK read client, never the LCD getQueryClient path.
     expect(getReadClient).toHaveBeenCalledTimes(1);
-    expect(getQueryClient).not.toHaveBeenCalled();
   });
 });

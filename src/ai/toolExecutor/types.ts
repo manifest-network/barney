@@ -29,15 +29,16 @@ export type AuthTokens = ReturnType<typeof createAuthTokens>;
 /**
  * Composition-root signing capability. `providerAuth` is the single ADR-036
  * minter (one AuthTimestampTracker); `authTokens` is a thin address-binding
- * adapter over the SAME providerAuth instance; `withSign` serializes chain-TX
- * broadcasts on the mutex the minter's signArbitrary also uses.
+ * adapter over the SAME providerAuth instance. ENG-312 Phase 8: chain-TX
+ * broadcast serialization is now entirely SDK-internal (CosmosClientManager's
+ * withBroadcastLock, held inside cosmosTx/stopApp/fundCredits/deployManifest),
+ * so the old `withSign` escape hatch was removed.
  */
 export interface SigningContext {
   /** The single ADR-036 token minter. ctx.providerAuth for deployManifest (C2). Address-PARAM. */
   providerAuth: ProviderAuthPort;
   /** Address-BOUND adapter over the SAME `providerAuth` instance (never a 2nd createProviderAuth). */
   authTokens: AuthTokens;
-  withSign: <T>(fn: () => Promise<T>) => Promise<T>;
 }
 
 export interface PayloadAttachment {

@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { executeTool, executeConfirmedTool } from '../ai/toolExecutor';
 import type { ToolExecutorOptions, PayloadAttachment } from '../ai/toolExecutor';
 import type { AppRegistryAccess } from '../ai/toolExecutor/types';
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import type { AppEntry } from '../registry/appRegistry';
 import type { DeployProgress } from '../ai/progress';
 import { LeaseState } from '../api/billing';
@@ -44,14 +44,12 @@ vi.mock('../api/provider-api', () => ({
 }));
 
 vi.mock('../api/fred', () => ({
-  getLeaseStatus: vi.fn(),
-  waitForLeaseReady: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
 }));
 
-vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
-  ...(await importOriginal()),
+vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/chain')>()),
   cosmosTx: vi.fn(),
   cosmosQuery: vi.fn(),
 }));
@@ -63,6 +61,8 @@ vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
 vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   ...(await importOriginal()),
   deployManifest: vi.fn(),
+  stopApp: vi.fn(),
+  appStatus: vi.fn(),
 }));
 
 vi.mock('../api/readClient', () => ({ getReadClient: vi.fn() }));
@@ -73,12 +73,11 @@ vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
-import { getLeasesByTenant, getCreditEstimate, getLease } from '../api/billing';
+import { getLeasesByTenant, getCreditEstimate } from '../api/billing';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
-import { waitForLeaseReady } from '../api/fred';
-import { cosmosTx } from '@manifest-network/manifest-mcp-core';
-import { deployManifest } from '@manifest-network/manifest-sdk/deploy';
+import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
+import { deployManifest, stopApp, appStatus } from '@manifest-network/manifest-sdk/deploy';
 import { getReadClient } from '../api/readClient';
 
 const ADDRESS = 'manifest1testaddr';
@@ -131,7 +130,6 @@ describe('Deploy Flow Integration', () => {
           getAuthToken: vi.fn().mockResolvedValue('auth-token'),
           getLeaseDataAuthToken: vi.fn().mockResolvedValue('lease-data-auth-token'),
         },
-        withSign: <T,>(fn: () => Promise<T>) => fn(),
       },
       tiers: [
         { skuName: 'docker-micro', skuUuid: 'sku-micro', providerUuid: PROVIDER_UUID, cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
@@ -207,9 +205,6 @@ describe('Deploy Flow Integration', () => {
       module: 'billing', subcommand: 'create-lease', height: '100',
       code: 0, transactionHash: 'tx-hash-1', rawLog: '', events: [],
     } as Awaited<ReturnType<typeof cosmosTx>>);
-    vi.mocked(waitForLeaseReady).mockResolvedValue({
-      state: LeaseState.LEASE_STATE_ACTIVE,
-    });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
       lease_uuid: LEASE_UUID,
       tenant: ADDRESS,
@@ -247,8 +242,14 @@ describe('Deploy Flow Integration', () => {
     expect(listData.apps[0].name).toBe('my-app');
     expect(listData.apps[0].status).toBe('running');
 
-    // Step 4: App status
-    vi.mocked(getLease).mockResolvedValue({ state: 2, items: [] } as unknown as Awaited<ReturnType<typeof getLease>>);
+    // Step 4: App status — signer present, so it routes through the SDK
+    // appStatus primitive (ENG-312 Phase 5). getReadClient is already mocked
+    // above so buildBarneyCtx resolves its ctx.query.
+    vi.mocked(appStatus).mockResolvedValue({
+      lease_uuid: LEASE_UUID,
+      chainState: { state: 2, providerUuid: PROVIDER_UUID, createdAt: '', closedAt: undefined, items: [] },
+      fredStatus: { state: 2 },
+    } as unknown as Awaited<ReturnType<typeof appStatus>>);
 
     const statusResult = await executeTool('app_status', { app_name: 'my-app' }, options);
     expect(statusResult.success).toBe(true);
@@ -262,12 +263,10 @@ describe('Deploy Flow Integration', () => {
     expect(stopResult.success).toBe(true);
     expect(stopResult.requiresConfirmation).toBe(true);
 
-    // Step 6: Confirm stop — use args from pendingAction (includes leaseUuid)
+    // Step 6: Confirm stop — use args from pendingAction (includes leaseUuid).
+    // stop_app now delegates to the SDK's stopApp primitive (ENG-312 Phase 4).
     const stopArgs = stopResult.pendingAction!.args;
-    vi.mocked(cosmosTx).mockResolvedValue({
-      module: 'billing', subcommand: 'close-lease', height: '101',
-      code: 0, transactionHash: 'tx-hash-2', rawLog: '', events: [],
-    } as Awaited<ReturnType<typeof cosmosTx>>);
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as Awaited<ReturnType<typeof stopApp>>);
 
     const confirmedStop = await executeConfirmedTool('stop_app', stopArgs, CLIENT_MANAGER, options);
     expect(confirmedStop.success).toBe(true);

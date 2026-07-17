@@ -1,9 +1,10 @@
 /**
- * Faucet client — thin wrapper around @manifest-network/manifest-mcp-chain
- * faucet functions, plus Barney-specific drip-and-verify logic for account setup.
+ * Faucet client — thin wrapper around the SDK faucet facade
+ * (@manifest-network/manifest-sdk/faucet), plus Barney-specific drip-and-verify
+ * logic for account setup.
  */
 
-import { requestFaucetCredit } from '@manifest-network/manifest-mcp-chain';
+import { requestFaucetCredit } from '@manifest-network/manifest-sdk/faucet';
 
 import { ACCOUNT_SETUP_POLL_INTERVAL_MS, ACCOUNT_SETUP_POLL_TIMEOUT_MS } from '../config/constants';
 import { runtimeConfig } from '../config/runtimeConfig';
@@ -29,7 +30,7 @@ export function isFaucetEnabled(): boolean {
  * Request a faucet drip and verify that the balance increased on chain.
  *
  * 1. Read pre-drip balance
- * 2. Fire requestFaucetCredit (from @manifest-network/manifest-mcp-chain)
+ * 2. Fire requestFaucetCredit (from @manifest-network/manifest-sdk/faucet)
  * 3. Poll getBalance at ACCOUNT_SETUP_POLL_INTERVAL_MS until balance > pre-drip, or timeout
  *
  * Uses BigInt comparison on raw amount strings to avoid float issues.

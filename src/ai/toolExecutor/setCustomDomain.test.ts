@@ -5,7 +5,7 @@ import {
 } from './compositeTransactions';
 import type { ToolExecutorOptions } from './types';
 import type { AppEntry } from '../../registry/appRegistry';
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import { makeRegistry } from './testHelpers';
 
 // External module mocks
@@ -15,16 +15,17 @@ vi.mock('../../api/billingParams', () => ({
   getReservedDomainSuffixes: vi.fn().mockResolvedValue([]),
   invalidateReservedDomainSuffixesCache: vi.fn(),
 }));
-vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
-  ...(await importOriginal()),
+vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/deploy')>()),
   setItemCustomDomain: vi.fn(),
 }));
 vi.mock('../../utils/errors', () => ({ logError: vi.fn() }));
 
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
-import { asFqdn, asLeaseUuid, setItemCustomDomain } from '@manifest-network/manifest-mcp-core';
-import type { SetItemCustomDomainResult } from '@manifest-network/manifest-mcp-core';
+import { asFqdn, asLeaseUuid } from '@manifest-network/manifest-sdk';
+import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
+import type { SetItemCustomDomainResult } from '@manifest-network/manifest-sdk/deploy';
 
 const ADDR = 'manifest1tenant';
 const LEASE_UUID = 'lease-uuid-1';
@@ -360,6 +361,7 @@ describe('executeConfirmedSetCustomDomain', () => {
       custom_domain: 'app.example.com',
       transactionHash: 'HASH123',
       code: 0,
+      confirmed: true, // 0.19.0: SetItemCustomDomainResult carries the broadcast-confirmation flag (ENG-494)
       ...overrides,
     };
     // core@0.15's SetItemCustomDomainResult brands lease_uuid/custom_domain

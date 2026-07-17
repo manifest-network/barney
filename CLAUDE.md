@@ -79,7 +79,7 @@ The AI assistant uses a 3-layer architecture:
    - **Types** (`types.ts`): `ToolResult`, `ToolExecutorOptions`, `PayloadAttachment`, etc.
    - **Query tools** (`compositeQueries.ts`): Execute immediately — `list_apps`, `app_status`, `get_logs`, `get_balance`, `browse_catalog`, `lease_history`, `app_diagnostics`, `app_releases`, `request_faucet`
    - **TX tools** (`compositeTransactions.ts`): Return `requiresConfirmation: true`, user approves via `ConfirmationCard`, then `executeConfirmedTool()` broadcasts — `deploy_app`, `stop_app`, `fund_credits`, `restart_app`, `update_app`, `set_custom_domain`. `deploy_app`/`batch_deploy` delegate the create-lease → (set-domain) → upload → provision-poll spine to the SDK's `deployManifest` primitive (ENG-279 deploy-path rewrite); barney keeps the plan phase, registry state machine, progress UI, and URL shaping around it. Deploy-path helpers live here: `buildFredAuthCtx` (assembles the `FredAuthCtx` deployManifest needs), `classifyLeaseChainState` + `handleDeployManifestError` (3-branch post-throw error handler)
-   - **Batch runner** (`batchRunner.ts`): Shared batch execution infrastructure — `createSigningMutex`, `runBatchWithConcurrency`, `computeOverallPhase`, `summarizeBatchResult`. Used by batch deploy and batch restart. Batch deploy calls `deployManifest` **directly** under `runBatchWithConcurrency` (NOT wrapped in `withSign` — that would deadlock; see Transaction Path)
+   - **Batch runner** (`batchRunner.ts`): Shared batch execution infrastructure — `createSigningMutex`, `runBatchWithConcurrency`, `computeOverallPhase`, `summarizeBatchResult`. Used by batch deploy and batch restart. Batch deploy calls `deployManifest` **directly** under `runBatchWithConcurrency` (never through a caller-side sign-lock — the SDK holds the broadcast lock internally; see Transaction Path)
    - **Helpers** (`helpers.ts`): Shared functions — `extractPrimaryServicePorts`, `formatConnectionUrl`, `deriveUrlFromConnection` (shapes the app URL from `DeployResult.connection` with no extra round-trip)
    - **ADR-036 auth**: consolidated to a single `createProviderAuth` minter built once at the `useManifestMCP` root (`src/hooks/useManifestMCP.ts`). `authTokens` is a thin address-binding adapter over that same instance (`src/hooks/authTokensAdapter.ts`), and `providerAuth` is a required field on `SigningContext`. `deployManifest` handles payload upload + SHA-256 hashing internally, so barney's old `toolExecutor/utils.ts` (`uploadPayloadToProvider` / `computePayloadHash`) was deleted
    - **Escape hatches**: `cosmos_query` and `cosmos_tx` are handled separately (not in the QUERY_TOOLS/TX_TOOLS sets)
@@ -111,7 +111,7 @@ Tool definitions: `src/ai/tools.ts` (static base `AI_TOOLS` + `buildAITools(tier
 
 ### Manifest Generation (`src/ai/manifest.ts`)
 
-Thin wrappers around `@manifest-network/manifest-mcp-fred` manifest builders, adding Barney-specific behavior: port string normalization, password generation for empty env values, tmpfs/expose string splitting, SHA-256 payload hashing, and `BuildManifestResult` wrapping.
+Thin wrappers around the SDK deploy facade's manifest builders (`@manifest-network/manifest-sdk/deploy`), adding Barney-specific behavior: port string normalization, password generation for empty env values, tmpfs/expose string splitting, SHA-256 payload hashing, and `BuildManifestResult` wrapping.
 
 - `buildManifest(opts)` — Build single-service manifest JSON, compute hash, return `BuildManifestResult`. Delegates to fred's `buildManifest()`
 - `buildStackManifest(opts)` — Build multi-service stack manifest with `{ services: {...} }` format, compute hash
@@ -156,31 +156,29 @@ Progress is reported via `onProgress` callback in `ToolExecutorOptions`, stored 
 
 ### Fred API Client
 
-`src/api/fred.ts` — Fred HTTP functions and WebSocket streaming for lease deployment status.
+`src/api/fred.ts` — thin HTTP-function wrappers for lease deployment status.
 
-HTTP functions are thin wrappers with Barney's CORS proxy/SSRF `fetchFn` adapter (`src/api/providerFetchAdapter.ts`) injected. Five (`getLeaseStatus`, `getLeaseProvision`, `restartLease`, `updateLease`, `getLeaseReleases`) delegate to `@manifest-network/manifest-mcp-fred`; `getLeaseLogs` is re-sourced from `@manifest-network/manifest-sdk/deploy`.
+The five wrappers (`getLeaseLogs`, `getLeaseProvision`, `getLeaseReleases`, `restartLease`, `updateLease`) delegate to the SDK deploy facade (`@manifest-network/manifest-sdk/deploy`) with Barney's CORS proxy/SSRF `fetchFn` adapter (`src/api/providerFetchAdapter.ts`) + the DEV `allowLoopback` flag injected. Use `getLeaseLogs`, never `getAppLogs` (the latter's 4000-char cap clips the full-logs LogCard).
 
-Barney-specific code that stays local:
-- `pollLeaseUntilReady()` — Polling loop with `checkChainState`, `getAuthToken`, count-based `maxAttempts`
-- `waitForLeaseReady()` — WebSocket-based wait with polling fallback
-- `connectLeaseEvents()` — Browser WebSocket connection to Fred's `/v1/leases/{uuid}/events`
+The live lease-status WebSocket path is no longer barney-local (ENG-312 Phase 6): restart/update wait via the SDK's `waitForLeaseStatus` with an injected browser `EventTransport` (`src/api/eventTransport.ts`) — the SDK owns reconnect/backoff/liveness/poll-fallback; `eventTransport.ts` only reshapes the URL for the dev `/proxy-provider` tunnel (prod connects direct, SSRF-validated) and adapts the native `WebSocket` to the SDK's `EventSocket`.
 
 ### Transaction Path
 
 The TX path splits by tool:
 
 - **`deploy_app` / `batch_deploy`** — delegate to the SDK's `deployManifest` primitive (imported from the `@manifest-network/manifest-sdk/deploy` facade), which runs create-lease (via `cosmosTx` internally) → optional set-domain → payload upload → provision-poll as one call. barney no longer hand-rolls this spine.
-- **`stop_app` / `fund_credits` / `cosmos_tx`** — `cosmosTx()` from `@manifest-network/manifest-mcp-core` (billing `close-lease` / `fund-credit`, or the raw escape hatch). Uses manifestjs internally.
+- **`stop_app`** — the SDK's `stopApp(ctx, { leaseUuid }, opts)` primitive from `@manifest-network/manifest-sdk/deploy` (ctx is a `TxCtx` = `{ chain: clientManager, logger: noopLogger }`). It pre-queries the authoritative on-chain state and dispatches ACTIVE→close-lease / PENDING→cancel-lease / terminal→no-op, so idempotency is internal (`outcome: 'already_inactive'`) — barney no longer string-matches a `rawLog`. Single stop uses `waitForConfirmation: true` (blocks for the authoritative outcome); bulk "stop all" uses `waitForConfirmation: false` (async SYNC/CheckTx broadcast, hash-only) so it doesn't serialize N block confirmations — the registry is marked `stopped` optimistically and `reconcileWithChain` corrects any DeliverTx-level failure later.
+- **`fund_credits` / `cosmos_tx`** — `cosmosTx()` from `@manifest-network/manifest-sdk/chain` (billing `fund-credit`, or the raw escape hatch). Uses manifestjs internally.
 - **`update_app` / `restart_app`** — provider HTTP via `updateLease` / `restartLease` (`src/api/fred.ts` → mono fred), authenticated with an ADR-036 token; no chain TX.
-- **`set_custom_domain`** — `setItemCustomDomain` from `@manifest-network/manifest-mcp-core` (standalone tool only; the deploy path attaches domains atomically *inside* `deployManifest`).
+- **`set_custom_domain`** — `setItemCustomDomain` from `@manifest-network/manifest-sdk/deploy` (standalone tool only; the deploy path attaches domains atomically *inside* `deployManifest`).
 
-⚠️ **Never wrap `deployManifest` in `signing.withSign`.** It mints its own ADR-036 lease-data token through the same non-reentrant signing mutex, so wrapping it deadlocks (deployManifest → `providerAuth.leaseDataToken` → same mutex → circular wait). Chain-TX serialization comes from `CosmosClientManager.withBroadcastLock` plus the mutex-wrapped `signArbitrary` instead — `withSign` is for the raw `cosmosTx` tools (`stop_app`, `fund_credits`, `cosmos_tx`).
+⚠️ **The SDK primitives serialize their own broadcasts — call them directly, never through a signing mutex.** `deployManifest` / `stopApp` / `fundCredits` / `waitForLeaseStatus` mint their own ADR-036 tokens through the same non-reentrant signing mutex, so wrapping any of them in a caller-side sign-lock deadlocks (e.g. deployManifest → `providerAuth.leaseDataToken` → same mutex → circular wait). Chain-TX serialization comes entirely from `CosmosClientManager.withBroadcastLock` (held internally by the SDK cosmos-tx path) plus the mutex-wrapped `signArbitrary` (the D2 replay guard). ENG-312 Phase 8 **removed** the old `SigningContext.withSign` escape hatch — there is no caller-side sign-lock to misuse anymore.
 
 ### Wallet Integration
 
 - cosmos-kit provides wallet abstraction (Web3Auth is the only enabled wallet provider in `src/main.tsx`; Leap, Cosmostation, Ledger packages are installed but not imported)
 - `CosmosClientManager` from `@manifest-network/manifest-sdk` wraps the signer for MCP operations
-- `signArbitrary` (wrapped in a signing mutex) backs the single `createProviderAuth` ADR-036 minter built once at the `useManifestMCP` root. `SigningContext` exposes it as `providerAuth` (address-param, consumed by `deployManifest`'s `FredAuthCtx`) plus `authTokens`, a thin address-binding adapter over the SAME instance (`authTokensAdapter.ts`) — one `AuthTimestampTracker`, never a second minter (D2 same-lease/same-second replay guard). ADR-036 tokens authenticate payload uploads, provider connection/status queries, and fred WebSocket events
+- `signArbitrary` (wrapped in a signing mutex) backs the single `createProviderAuth` ADR-036 minter built once at the `useManifestMCP` root. `SigningContext` exposes it as `providerAuth` (address-param, consumed by `deployManifest`'s `FredAuthCtx`) plus `authTokens`, a thin address-binding adapter over the SAME instance (`authTokensAdapter.ts`) — one `AuthTimestampTracker`, never a second minter (D2 same-lease/same-second replay guard). ADR-036 tokens authenticate payload uploads, provider connection/status queries, and the SDK's `waitForLeaseStatus` lease-status WebSocket (via the browser `EventTransport`)
 
 ### API Layer (`src/api/`)
 
@@ -190,17 +188,16 @@ The TX path splits by tool:
 | `sku.ts` | Provider catalog, SKU definitions |
 | `skuTiers.ts` | `resolveSkuTiers(specs)` joins the chain SKU catalog with the env spec map and normalizes `basePrice` + `Unit` (PER_HOUR / PER_DAY) into `pricePerHour` display units. `hourlyPriceFromSku(sku)` is the unit→hourly converter. `getCheapestTier(tiers)` returns the lowest-`pricePerHour` entry (ties resolved by first occurrence) and is what `deploy_app` / `batch_deploy` use as the size default when the caller omits it. Returns `ResolvedSkuTier[]` ordered by env spec insertion order — that order drives the AI tool's `size.enum` and the `/help` table; the default tier is price-driven, not order-driven. Chain SKUs missing a spec entry — and spec entries missing a chain SKU — are dropped with a `logError` warning and omitted from the resolved list (config-drift policy). |
 | `bank.ts` | Cosmos SDK bank queries |
-| `tx.ts` | Transaction signing client and message builders for all Manifest modules (billing, SKU, provider management) |
-| `provider-api.ts` | Auth helpers, health check, connection info — delegates to `@manifest-network/manifest-mcp-fred` with CORS proxy/SSRF adapter. Keeps `validateAuthTimestamp` and null-returning `getProviderHealth` locally |
-| `fred.ts` | Fred HTTP wrappers (delegate to mono fred) + WebSocket streaming + Barney-specific polling |
-| `providerFetchAdapter.ts` | `fetchFn` adapter that injects DEV CORS proxy routing and PROD SSRF validation for mono's HTTP functions |
+| `tx.ts` | Shared tx-domain types (`LeaseItemInput`) + `Unit` re-export. ENG-312 Phase 7 deleted the hand-rolled `SigningStargateClient` + `fundCredit` — credit funding goes through the SDK's `fundCredits(TxCtx)` |
+| `provider-api.ts` | Auth helpers, health check, connection info — delegates to `@manifest-network/manifest-sdk/deploy` with CORS proxy/SSRF adapter. Keeps `validateAuthTimestamp` and null-returning `getProviderHealth` locally |
+| `fred.ts` | Five thin Fred HTTP-function wrappers (delegate to the SDK deploy facade with `providerFetch` + `allowLoopback` injected). The WS/polling machinery moved to the SDK's `waitForLeaseStatus` + `eventTransport.ts` (ENG-312 Phase 6) |
+| `eventTransport.ts` | Browser `EventTransport` for the SDK's `waitForLeaseStatus` live-status path — dev `/proxy-provider` URL reshaping, prod SSRF-validated direct connect, native `WebSocket`→`EventSocket` adapter |
+| `providerFetchAdapter.ts` | `fetchFn` adapter that injects DEV CORS proxy routing and PROD SSRF validation for the SDK deploy facade's HTTP functions |
 | `morpheus.ts` | OpenAI-compatible SSE streaming client via `/api/morpheus/` proxy |
 | `config.ts` | API endpoints, denom metadata, price formatting |
 | `faucet.ts` | Faucet HTTP client — token requests, drip-and-verify with balance polling |
-| `providerFetch.ts` | Provider URL validation helpers (`validateProviderUrl`, `normalizeBaseUrl`), used by `fred.ts` for validating provider endpoints |
 | `utils.ts` | Retry logic (`withRetry`) with exponential backoff |
-| `queryClient.ts` | LCD query client factory (cached singleton) |
-| `readClient.ts` | Cached query-only Manifest read client (`getReadClient` / `disposeReadClient`) built from `@manifest-network/manifest-sdk`'s `createManifestReadClient`; backs `getSKUs`/`getProviders`/`getBillingParams` and composite `get_balance` |
+| `readClient.ts` | Cached query-only Manifest read client (`getReadClient` / `disposeReadClient`) built from `@manifest-network/manifest-sdk`'s `createManifestReadClient`; backs all chain reads (`billing.ts`/`sku.ts`/`bank.ts` wrappers, `app_status`/`list_apps`/`browse_catalog`/`lease_history`, composite `get_balance`) |
 | `index.ts` | Barrel re-exports for API modules |
 
 ### AI Store (`src/stores/aiStore.ts`)
@@ -228,7 +225,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 
 | Hook | Purpose |
 |------|---------|
-| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-sdk` (builds the `CosmosClientManager` + `SigningContext` = `{ providerAuth, authTokens, withSign }`) |
+| `useManifestMCP` | Bridges cosmos-kit with `@manifest-network/manifest-sdk` (builds the `CosmosClientManager` + `SigningContext` = `{ providerAuth, authTokens }`) |
 | `useAutoScroll` | MutationObserver-based auto-scroll that respects user scroll position |
 | `useInputHistory` | Arrow-key navigation through past chat inputs |
 | `useAI` | Zustand store consumer — selects all public state/actions via `useShallow` |
@@ -282,10 +279,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `AI_HEALTH_CHECK_MAX_BACKOFF` | 8 | Max backoff multiplier (×60s = 8min ceiling) when health checks repeatedly fail |
 | `AI_BATCH_DEPLOY_CONCURRENCY` | 4 | Max concurrent batch deploys (runtime-configurable) |
 | `MAX_PAYLOAD_SIZE` | 5KB | Maximum file upload size (in `hash.ts`) |
-| `FRED_POLL_INTERVAL_MS` | 3s | Default polling interval for Fred status checks |
-| `WS_RECONNECT_DELAY_MS` | 1s | Delay before WebSocket reconnect attempt |
-| `WS_MAX_RECONNECT_ATTEMPTS` | 2 | Max reconnects before falling back to polling |
-| `WS_LIVENESS_TIMEOUT_MS` | 45s | WebSocket data liveness timeout (Fred pings every 30s) |
+| `FRED_POLL_INTERVAL_MS` | 3s | Default polling interval for Fred status checks (passed as `waitForLeaseStatus`'s `intervalMs`) |
 | `DNS_POLL_INTERVAL_MS` | 30s | Polling interval for browser-side DNS / HTTPS probes (`useDnsStatusPolling`) |
 | `DNS_STUCK_THRESHOLD_MS` | 5min | Show "verify with dig locally" hint after sustained `pending_dns` (only when slice has no `detail`) |
 | `AUTO_REFRESH_INTERVAL_MS` | 15s | Auto-refresh interval for sidebar data polling |
@@ -298,7 +292,8 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `MAX_FILENAME_LENGTH` | 255 | Max filename length for uploads |
 | `ACCOUNT_SETUP_PWR_THRESHOLD` | 5 | PWR balance below which faucet is requested (display units) |
 | `ACCOUNT_SETUP_CREDIT_THRESHOLD` | 5 | Credit balance below which credits are funded (display units) |
-| `ACCOUNT_SETUP_CREDIT_AMOUNT` | 10 | PWR amount funded into credits per setup pass (display units) |
+| `ACCOUNT_SETUP_CREDIT_AMOUNT` | 5 | PWR amount funded into credits per setup pass (display units); kept below the faucet drip so PWR remains for gas (ENG-565) |
+| `ACCOUNT_SETUP_GAS_RESERVE` | 1 | PWR headroom reserved for gas — funding guard requires balance ≥ credit + this reserve so fund-credit never overdraws (post ENG-243 PWR gas) |
 | `ACCOUNT_SETUP_POLL_INTERVAL_MS` | 2s | Poll cadence for balance verification after faucet drip |
 | `ACCOUNT_SETUP_POLL_TIMEOUT_MS` | 10s | Timeout for balance verification poll loop |
 | `ACCOUNT_SETUP_COMPLETE_DELAY_MS` | 1.5s | Delay before dismissing account setup overlay after completion |
@@ -321,13 +316,13 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 - **Error utilities**: Use `logError()` from `src/utils/errors.ts` instead of raw `console.error`
 - **Retry logic**: Use `withRetry()` from `src/api/utils.ts` for transient network error recovery with exponential backoff
 - **Tool result caching**: Query tool results cached for 10s in the AI store to reduce redundant API calls (max 50 entries; when full, the 10% oldest by insert timestamp — minimum 1 — are evicted in one batch (10% of the current max 50 = 5)). Cache is scoped per wallet address and cleared on wallet change.
-- **LCD type conversion**: Use `lcdConvert()` from `src/api/queryClient.ts` to centralize the `as any` cast required by manifestjs `fromAmino()` converters
+- **Chain reads**: Use `getReadClient()` (`src/api/readClient.ts`) — the cached SDK read client. Typed methods (`getLease`, `getLeasesByTenant`, `getProviders`, `getSKUs`, `getBillingParams`) return branded, numeric-enum-decoded data; the not-found-sensitive / passthrough reads (credit family, single-denom bank balance) ride `client.query.<module>.<svc>()` and classify not-found via the SDK's `isNotFoundError`. The old `queryClient.ts` + `lcdConvert()` / `fixEnumField` (which patched `fromAmino`'s string enums) are gone — the read client decodes numeric enums natively.
 - **Hex encoding**: Use `toHex()` from `src/utils/hash.ts` to convert `Uint8Array` to hex strings (e.g., metaHash display). Do not inline `Array.from(...).map(b => b.toString(16)...)`.
 - **Dev CORS proxy** (`providerFetchAdapter.ts`):
   - **DEV**: routes every provider HTTP request through `/proxy-provider`, sets the `X-Proxy-Target` header to the real upstream, and the rsbuild dev proxy uses that header to route the request after passing it through `isValidProxyTarget` (cloud-metadata blocks, dangerous IP ranges, embedded credentials).
   - **PROD**: skips the dev proxy entirely; runs `parseHttpUrl` + `isUrlSsrfSafe` and fetches the URL directly (no `X-Proxy-Target`, no `/proxy-provider`).
-  - Every fred/provider HTTP function from `manifest-mcp-fred` accepts a `fetchFn` parameter; Barney always passes `providerFetch` (the singleton from `providerFetchAdapter.ts`). New functions that talk to providers must do the same or they will work in dev (CORS) but break in prod (SSRF), or vice versa.
-  - **WebSockets** can't set headers, so `fred.ts`'s `buildFredWsUrl` switches on `import.meta.env.DEV`: in dev it routes via `wss?://<host>/proxy-provider/...?target=<upstream>`; in prod it connects directly. The rsbuild proxy router accepts the `target` query string when `X-Proxy-Target` is absent.
+  - Every provider HTTP function from the SDK deploy facade accepts a `fetchFn` parameter; Barney always passes `providerFetch` (the singleton from `providerFetchAdapter.ts`). New functions that talk to providers must do the same or they will work in dev (CORS) but break in prod (SSRF), or vice versa.
+  - **WebSockets** can't set headers, so `eventTransport.ts`'s `browserEventTransport` switches on `import.meta.env.DEV`: in dev it reshapes the SDK-supplied `wss://…` URL to `wss?://<host>/proxy-provider/...?token=…&target=<upstream>`; in prod it connects directly (SSRF-validated). The rsbuild proxy router accepts the `target` query string when `X-Proxy-Target` is absent.
 - **Stream timeout**: `processStreamWithTimeout` in `src/ai/streamUtils.ts` wraps the AI stream async generator with per-chunk timeout protection (`AI_STREAM_TIMEOUT_MS`, default 30s). Prevents hung connections from blocking the UI indefinitely. The inner `withTimeout` generator ensures cleanup of the underlying generator via `finally` block.
 - **Tool-call leak stripping**: `stripToolCallLeaks()` in `src/ai/streamUtils.ts` filters raw `[TOOL_CALLS]` markers that some models emit as literal text instead of structured tool_calls. Legacy safeguard from the Ollama/Mistral era, kept as defensive code for the Morpheus API.
 - **Message debouncing**: The AI store debounces rapid message sends via `AI_MESSAGE_DEBOUNCE_MS` (300ms) and aborts in-flight streams when a new message is sent.

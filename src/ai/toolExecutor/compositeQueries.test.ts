@@ -12,7 +12,7 @@ import {
   executeRequestFaucet,
 } from './compositeQueries';
 import type { ToolExecutorOptions } from './types';
-import type { CosmosClientManager } from '@manifest-network/manifest-mcp-core';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
 
@@ -49,11 +49,9 @@ vi.mock('../../api/sku', async (importOriginal) => {
 
 vi.mock('../../api/provider-api', () => ({
   getProviderHealth: vi.fn(),
-  getLeaseConnectionInfo: vi.fn(),
 }));
 
 vi.mock('../../api/fred', () => ({
-  getLeaseStatus: vi.fn(),
   getLeaseLogs: vi.fn(),
   getLeaseProvision: vi.fn(),
   getLeaseReleases: vi.fn(),
@@ -65,13 +63,20 @@ vi.mock('../../api/faucet', () => ({
   FAUCET_COOLDOWN_HOURS: 24,
 }));
 
-vi.mock('@manifest-network/manifest-mcp-chain', () => ({
+vi.mock('@manifest-network/manifest-sdk/faucet', () => ({
   requestFaucet: vi.fn(),
 }));
 
-vi.mock('@manifest-network/manifest-mcp-core', async (importOriginal) => ({
-  ...(await importOriginal()),
+vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/chain')>()),
   cosmosQuery: vi.fn(),
+}));
+
+// ENG-312 Phase 5: app_status delegates to the SDK deploy facade's appStatus.
+// Spread the original facade (types/helpers stay real); mock only appStatus.
+vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
+  ...(await importOriginal()),
+  appStatus: vi.fn(),
 }));
 
 vi.mock('../../api/readClient', () => ({ getReadClient: vi.fn() }));
@@ -97,10 +102,11 @@ import { getLeasesByTenant, getLeasesByTenantPaginated, getLease } from '../../a
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import { cosmosQuery } from '@manifest-network/manifest-mcp-core';
+import { cosmosQuery } from '@manifest-network/manifest-sdk/chain';
+import { appStatus } from '@manifest-network/manifest-sdk/deploy';
 import { getReadClient } from '../../api/readClient';
 import { isFaucetEnabled } from '../../api/faucet';
-import { requestFaucet } from '@manifest-network/manifest-mcp-chain';
+import { requestFaucet } from '@manifest-network/manifest-sdk/faucet';
 import { logError } from '../../utils/errors';
 
 const ADDRESS = 'manifest1abc';
@@ -433,6 +439,80 @@ describe('executeAppStatus', () => {
       expect(result.displayCard).toBeUndefined();
     }
   });
+
+  // ── ENG-312 Phase 5: the signer path routes through the SDK appStatus
+  // primitive (chain lease + fred status + connection in one call). The chain-
+  // only fallback above (no signing → getLease) still covers the domain/reconcile
+  // matrix; these cover the appStatus branch specifically.
+  describe('signer path (appStatus)', () => {
+    beforeEach(() => {
+      // buildBarneyCtx awaits the read client for ctx.query.
+      vi.mocked(getReadClient).mockResolvedValue({ query: {} } as any);
+    });
+
+    it('reconciles to running and refreshes connection from appStatus', async () => {
+      const app = makeApp({ status: 'deploying' });
+      const registry = makeRegistry([app]);
+      vi.mocked(appStatus).mockResolvedValue({
+        lease_uuid: app.leaseUuid,
+        chainState: { state: 2, providerUuid: 'p1', createdAt: '', closedAt: undefined, items: [] },
+        fredStatus: { state: 2 },
+        connection: { host: 'fred.example.com', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 30080 } } },
+      } as any);
+
+      const result = await executeAppStatus(
+        { app_name: 'my-app' },
+        makeOptions({ appRegistry: registry, signing: mockSigning })
+      );
+
+      expect(result.success).toBe(true);
+      expect((result.data as any).status).toBe('running');
+      expect(appStatus).toHaveBeenCalledWith(expect.anything(), { address: ADDRESS, leaseUuid: app.leaseUuid });
+      expect(registry.updateApp).toHaveBeenCalledWith(
+        ADDRESS,
+        app.leaseUuid,
+        expect.objectContaining({ status: 'running', connection: expect.objectContaining({ host: 'fred.example.com' }) })
+      );
+    });
+
+    it('leaves chainState "unknown" and does not reconcile when appStatus throws', async () => {
+      const app = makeApp();
+      const registry = makeRegistry([app]);
+      vi.mocked(appStatus).mockRejectedValue(new Error('Lease "550e8400" not found on chain'));
+
+      const result = await executeAppStatus(
+        { app_name: 'my-app' },
+        makeOptions({ appRegistry: registry, signing: mockSigning })
+      );
+
+      expect(result.success).toBe(true);
+      expect((result.data as any).chainState).toBe('unknown');
+      expect((result.data as any).status).toBe('running'); // unchanged — no reconcile fired
+      expect(logError).toHaveBeenCalled();
+    });
+
+    it('surfaces customDomains from appStatus chainState.items', async () => {
+      const app = makeApp({ connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' } });
+      const registry = makeRegistry([app]);
+      vi.mocked(appStatus).mockResolvedValue({
+        lease_uuid: app.leaseUuid,
+        chainState: {
+          state: 2, providerUuid: 'p1', createdAt: '', closedAt: undefined,
+          items: [
+            { skuUuid: 's1', quantity: 1n, lockedPrice: { amount: '1', denom: 'upwr' }, serviceName: '', customDomain: 'app.example.com' },
+          ],
+        },
+      } as any);
+
+      const result = await executeAppStatus(
+        { app_name: 'my-app' },
+        makeOptions({ appRegistry: registry, signing: mockSigning })
+      );
+
+      expect(result.success).toBe(true);
+      expect((result.data as any).customDomains).toEqual([{ serviceName: '', customDomain: 'app.example.com' }]);
+    });
+  });
 });
 
 describe('executeGetBalance', () => {
@@ -707,7 +787,6 @@ const mockSigning = {
     getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
     getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),
   },
-  withSign: <T,>(fn: () => Promise<T>) => fn(),
 };
 
 describe('executeGetLogs', () => {

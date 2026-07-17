@@ -11,12 +11,12 @@ vi.mock('./bank', () => ({
   getBalance: vi.fn(),
 }));
 
-vi.mock('@manifest-network/manifest-mcp-chain', () => ({
+vi.mock('@manifest-network/manifest-sdk/faucet', () => ({
   requestFaucetCredit: vi.fn(),
 }));
 
 import { getBalance } from './bank';
-import { requestFaucetCredit } from '@manifest-network/manifest-mcp-chain';
+import { requestFaucetCredit } from '@manifest-network/manifest-sdk/faucet';
 
 describe('FAUCET_COOLDOWN_HOURS', () => {
   it('is 24', () => {

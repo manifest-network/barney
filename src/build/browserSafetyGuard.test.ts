@@ -42,12 +42,9 @@ describe('forbiddenNodeOnlyImport', () => {
       expect(forbiddenNodeOnlyImport('undici', iss)).toBeNull();
       expect(forbiddenNodeOnlyImport('node:async_hooks', iss)).toBeNull();
     });
-
-    it('allows undici / async_hooks reached via the manifest-mcp-chain barrel', () => {
-      const iss = '/app/node_modules/@manifest-network/manifest-mcp-chain/dist/faucet.js';
-      expect(forbiddenNodeOnlyImport('undici', iss)).toBeNull();
-      expect(forbiddenNodeOnlyImport('async_hooks', iss)).toBeNull();
-    });
+    // ENG-312 Phase 9: barney dropped the direct manifest-mcp-chain dep and it
+    // left the tree entirely (the SDK depends on core + fred, not chain), so the
+    // old mcp-chain benign-issuer branch is gone — nothing left to whitelist.
   });
 
   describe('no false positives (anchored fred-server regex + normal imports)', () => {

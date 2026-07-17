@@ -3,25 +3,22 @@
  * These return requiresConfirmation first, then execute after user approval.
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
+import type { CosmosClientManager, ManifestDeploySpec, DeployResult, TxCtx } from '@manifest-network/manifest-sdk';
 import {
   asFqdn,
   asLeaseUuid,
   asSkuUuid,
   asProviderUuid,
-  cosmosTx,
   noopLogger,
-  setItemCustomDomain as monoSetItemCustomDomain,
   ManifestMCPError,
   ManifestMCPErrorCode,
-  type ManifestDeploySpec,
-  type DeployResult,
-} from '@manifest-network/manifest-mcp-core';
+} from '@manifest-network/manifest-sdk';
+import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
 import { getLeaseConnectionInfo, ProviderApiError, type ConnectionDetails } from '../../api/provider-api';
-import { waitForLeaseReady, getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus, type TerminalChainState } from '../../api/fred';
+import { getLeaseLogs, getLeaseProvision, restartLease, updateLease, type FredLeaseStatus } from '../../api/fred';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
@@ -41,9 +38,9 @@ import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import type { SigningContext } from './types';
 import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
-import { getReadClient } from '../../api/readClient';
-import { providerFetch } from '../../api/providerFetchAdapter';
-import { TerminalChainStateError, deployManifest, type FredAuthCtx, type DeployCallOptions } from '@manifest-network/manifest-sdk/deploy';
+import { TerminalChainStateError, deployManifest, stopApp, setItemCustomDomain as monoSetItemCustomDomain, waitForLeaseStatus, isLeaseFailureTerminal, type FredAuthCtx, type DeployCallOptions, type StopAppResult, type TerminalChainState } from '@manifest-network/manifest-sdk/deploy';
+import { buildBarneyCtx } from './capabilityCtx';
+import { browserEventTransport } from '../../api/eventTransport';
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([
@@ -643,14 +640,10 @@ export async function buildFredAuthCtx(
   clientManager: CosmosClientManager,
   signing: SigningContext,
 ): Promise<FredAuthCtx> {
-  const readClient = await getReadClient();
-  return {
-    query: readClient.query,
-    chain: clientManager,
-    fetch: providerFetch,
-    logger: noopLogger,
-    providerAuth: signing.providerAuth,
-  };
+  // Delegates to the shared capability-ctx factory (Phase 3). Kept as a named
+  // export for the existing deploy-path call sites; buildBarneyCtx additionally
+  // sets allowLoopback and the optional `events` WS seam.
+  return buildBarneyCtx(clientManager, signing);
 }
 
 /**
@@ -1593,7 +1586,7 @@ export async function executeBatchDeploy(
  * CosmosClientManager.withBroadcastLock (create-lease broadcasts) and the
  * mutex-wrapped signArbitrary inside providerAuth (ADR-036 token mints) — so
  * deployManifest runs DIRECTLY under runBatchWithConcurrency, never inside
- * signing.withSign (that would deadlock, see §3.11 below).
+ * a caller-side signing mutex / sign-lock (that would deadlock, see §3.11 below).
  */
 export async function executeConfirmedBatchDeploy(
   args: Record<string, unknown>,
@@ -1700,8 +1693,8 @@ export async function executeConfirmedBatchDeploy(
 
       updateProgress('creating_lease', 'Creating lease on-chain...');
 
-      // §3.11: call deployManifest DIRECTLY — NEVER wrap it in signing.withSign.
-      // withSign holds the mutex until the wrapped fn resolves; deployManifest
+      // §3.11: call deployManifest DIRECTLY — NEVER wrap it in a caller-side sign-lock.
+      // Such a lock holds the mutex until the wrapped fn resolves; deployManifest
       // internally mints ADR-036 tokens via the SAME mutex-wrapped signArbitrary,
       // so a wrap would await a lock it already holds -> deadlock (non-reentrant).
       // Broadcasts are already serialized by CosmosClientManager.withBroadcastLock
@@ -1784,14 +1777,14 @@ export async function executeConfirmedBatchDeploy(
  * Pre-validation for stop_app. Returns confirmation result or error.
  * Supports app_name="all" to stop every running/deploying app at once.
  *
- * ENG-279 escape hatch (spec §7, D0): stop_app deliberately stays on
- * `cosmosTx(clientManager, 'billing', 'close-lease', …)` and is NOT migrated
- * to `@manifest-network/manifest-mcp-core`'s `stopApp`. This is a genuine
- * capability gap, not laziness: `core.stopApp` drops the TX `rawLog` (barney
- * surfaces it in the ConfirmationCard result) and forces a synchronous
- * broadcast, whereas the bulk path here fires close-lease async
- * (`cosmosTx(..., false)`) so "stop all" doesn't serialize N confirmations.
- * Keep on cosmosTx until core exposes rawLog + async broadcast.
+ * ENG-312 Phase 4: the confirmed execution (`executeConfirmedStopApp`)
+ * delegates to the SDK's `stopApp` primitive, which pre-queries the
+ * authoritative on-chain state and dispatches ACTIVE→close-lease /
+ * PENDING→cancel-lease / terminal→no-op. Idempotency is now internal to that
+ * pre-query (`outcome: 'already_inactive'`) — barney no longer string-matches
+ * a `rawLog`. The bulk path fires `stopApp` with `waitForConfirmation: false`
+ * so "stop all" doesn't serialize N block confirmations; the single path uses
+ * `waitForConfirmation: true`.
  */
 export async function executeStopApp(
   args: Record<string, unknown>,
@@ -1857,22 +1850,32 @@ export async function executeConfirmedStopApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
-  // Bulk stop — fire close-lease TXs without waiting for on-chain
-  // confirmation (waitForConfirmation=false). This sends all TXs in
-  // quick succession (~100ms each for signing + broadcast) instead of
-  // waiting ~6s per TX for block inclusion. Registry is updated
-  // optimistically; reconcileWithChain corrects any discrepancies later.
+  // stopApp only needs the tx-path capability slice: the signing
+  // CosmosClientManager (broadcast + withBroadcastLock) + a logger. Reuse the
+  // ONE store manager so async bulk broadcasts share its sequence cache.
+  const ctx: TxCtx = { chain: clientManager, logger: noopLogger };
+
+  // Bulk stop — fire stopApp with waitForConfirmation:false so each TX
+  // broadcasts at SYNC/CheckTx level and returns as soon as it hits the
+  // mempool (~100ms each) instead of waiting ~6s per TX for block inclusion.
+  // Registry is updated optimistically; reconcileWithChain corrects any
+  // discrepancies later. ENG-312 Phase 4 behaviour delta: the async path
+  // returns hash-only (no DeliverTx result), so a TX that broadcasts but
+  // later fails at execution still marks the registry 'stopped' — reconcile
+  // fixes it. stopApp's pre-query short-circuits leases already terminal at
+  // call time to outcome:'already_inactive' (no doomed broadcast).
   const entries = args.entries as Array<{ app_name: string; leaseUuid: string }> | undefined;
   if (entries && entries.length > 0) {
     const stopped: string[] = [];
     const failed: string[] = [];
 
     for (const entry of entries) {
-      const result = await cosmosTx(clientManager, 'billing', 'close-lease', [entry.leaseUuid], false);
-      if (result.code === 0 || result.rawLog?.includes('lease not active')) {
+      try {
+        await stopApp(ctx, { leaseUuid: asLeaseUuid(entry.leaseUuid) }, { waitForConfirmation: false });
         appRegistry.updateApp(address, entry.leaseUuid, { status: 'stopped' });
         stopped.push(entry.app_name);
-      } else {
+      } catch (err) {
+        logError('compositeTransactions.executeConfirmedStopApp.bulk', err);
         failed.push(entry.app_name);
       }
     }
@@ -1896,38 +1899,30 @@ export async function executeConfirmedStopApp(
     };
   }
 
-  // Single stop
+  // Single stop — block on confirmation so the chat reply reflects the
+  // authoritative outcome. All non-throwing outcomes (stopped / cancelled /
+  // already_inactive) map the registry to 'stopped'; a throw is a real
+  // failure.
   const name = args.app_name as string;
   const leaseUuid = args.leaseUuid as string;
 
-  const result = await cosmosTx(clientManager, 'billing', 'close-lease', [leaseUuid], true);
-
-  if (result.code !== 0) {
-    // If the lease is already not active on-chain, treat as successfully stopped
-    if (result.rawLog?.includes('lease not active')) {
-      appRegistry.updateApp(address, leaseUuid, { status: 'stopped' });
-      return {
-        success: true,
-        data: {
-          message: `App "${name}" has been stopped (lease was already inactive).`,
-          app_name: name,
-          status: 'stopped',
-        },
-      };
-    }
-    return { success: false, error: result.rawLog ?? 'Failed to stop app' };
+  try {
+    const result: StopAppResult = await stopApp(ctx, { leaseUuid: asLeaseUuid(leaseUuid) }, { waitForConfirmation: true });
+    appRegistry.updateApp(address, leaseUuid, { status: 'stopped' });
+    const message = result.outcome === 'already_inactive'
+      ? `App "${name}" has been stopped (lease was already inactive).`
+      : `App "${name}" has been stopped.`;
+    return {
+      success: true,
+      data: {
+        message,
+        app_name: name,
+        status: 'stopped',
+      },
+    };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to stop app' };
   }
-
-  appRegistry.updateApp(address, leaseUuid, { status: 'stopped' });
-
-  return {
-    success: true,
-    data: {
-      message: `App "${name}" has been stopped.`,
-      app_name: name,
-      status: 'stopped',
-    },
-  };
 }
 
 // ============================================================================
@@ -1937,12 +1932,13 @@ export async function executeConfirmedStopApp(
 /**
  * Pre-validation for fund_credits. Returns confirmation result or error.
  *
- * ENG-279 escape hatch (spec §7, D0): fund_credits deliberately stays on
+ * The fund_credits TOOL deliberately stays on
  * `cosmosTx(clientManager, 'billing', 'fund-credit', [address, denomString], true)`
- * and is NOT migrated to `core.fundCredits`. Pure YAGNI: it's a working
- * one-line chain TX with no provider/upload/poll orchestration to delete —
- * the ENG-279 goal ("delete the hand-rolled deploy spine") simply doesn't
- * apply. Migrating would add a dependency edge for zero behavior change.
+ * and is NOT routed through the SDK's `fundCredits` primitive (which account
+ * setup DOES use — see `useAccountSetup`). Pure YAGNI: it's a working one-line
+ * chain TX with no provider/upload/poll orchestration to delete, so the
+ * migration goal ("delete the hand-rolled deploy spine") doesn't apply here;
+ * routing it through `fundCredits` would add indirection for zero behavior change.
  */
 export function executeFundCredits(
   args: Record<string, unknown>,
@@ -2152,21 +2148,21 @@ export async function executeRestartApp(
  * Execute restart_app after user confirmation.
  * Supports batch restart when args.entries is present (from app_name="all" or comma-separated).
  *
- * ENG-279 no-migration note (spec §3.13, §7): restart_app and update_app got
- * NO deploy-path rewrite. They already call mono's low-level fred http ops
- * (`restartLease` / `updateLease` from `../../api/fred`, which source them from the
- * `@manifest-network/manifest-sdk/deploy` facade), so the ENG-279 "route through
- * fred/core ops" goal was already satisfied for them at the http-function
- * level. Their ONLY change from ENG-279 is transparent and came via C1:
- * `signing.authTokens.getAuthToken` is now the address-binding adapter over
- * the single `providerAuth` minter — no per-tool edit here. They keep
- * `waitForLeaseReady` (fred http tools are fire-and-return with no internal
- * poll); do not "finish migrating" them to deployManifest — that primitive
- * is create-lease + deploy, not update/restart.
+ * restart_app and update_app got NO deploy-path rewrite: they call mono's
+ * low-level fred http ops (`restartLease` / `updateLease` from `../../api/fred`,
+ * which source them from the `@manifest-network/manifest-sdk/deploy` facade) to
+ * issue the action, then (ENG-312 Phase 6) wait for readiness via the SDK's
+ * `waitForLeaseStatus` with a browser `EventTransport` (WS live-status, poll
+ * fallback). Do not "finish migrating" them to `deployManifest` — that
+ * primitive is create-lease + deploy, not update/restart.
+ *
+ * ⚠️ The readiness wait mints its own per-poll ADR-036 status token through
+ * `ctx.providerAuth` (the same non-reentrant signing mutex), so it must NEVER
+ * be wrapped in a caller-side signing mutex / sign-lock — that would deadlock.
  */
 export async function executeConfirmedRestartApp(
   args: Record<string, unknown>,
-  _clientManager: CosmosClientManager,
+  clientManager: CosmosClientManager,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
   const { address, appRegistry, signing, onProgress, signal } = options;
@@ -2177,8 +2173,15 @@ export async function executeConfirmedRestartApp(
   // Batch restart
   const entries = args.entries as Array<{ app_name: string; leaseUuid: string; providerUrl: string }> | undefined;
   if (entries && entries.length > 0) {
-    return executeConfirmedBatchRestart(entries, address, appRegistry, signing, onProgress, signal);
+    return executeConfirmedBatchRestart(entries, address, appRegistry, signing, onProgress, signal, clientManager);
   }
+
+  // ENG-312 Phase 6: the readiness wait now runs through the SDK's
+  // waitForLeaseStatus with a browser EventTransport (WS live-status, poll
+  // fallback). It mints its own per-poll ADR-036 status token via
+  // ctx.providerAuth — NEVER wrap it in a caller-side sign-lock (reentrant mutex
+  // deadlock).
+  const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
 
   // Single restart
   const name = args.app_name as string;
@@ -2211,12 +2214,11 @@ export async function executeConfirmedRestartApp(
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for app to come back up...', operation: 'restart' });
 
   try {
-    const authToken = await refreshAuthToken();
-    const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
-      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+    const fredStatus = await waitForLeaseStatus(ctx, asLeaseUuid(leaseUuid), {
+      timeout: AI_DEPLOY_PROVISION_TIMEOUT_MS,
       intervalMs: FRED_POLL_INTERVAL_MS,
-      abortSignal: signal,
-      onProgress: (status) => {
+      signal,
+      onStatus: (status) => {
         onProgress?.({
           phase: 'provisioning',
           detail: status.phase || 'Waiting for restart...',
@@ -2224,10 +2226,9 @@ export async function executeConfirmedRestartApp(
           operation: 'restart',
         });
       },
-      getAuthToken: refreshAuthToken,
     });
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
+    if (!isLeaseFailureTerminal(fredStatus)) {
       const { url: connectionUrl, connection } = await resolveAppUrl(
         providerUrl, leaseUuid, fredStatus, address, signing,
         'compositeTransactions.executeConfirmedRestartApp'
@@ -2258,6 +2259,15 @@ export async function executeConfirmedRestartApp(
   } catch (error) {
     logError('compositeTransactions.executeConfirmedRestartApp.polling', error);
     onProgress?.({ phase: 'failed', detail: 'Restart polling failed', operation: 'restart' });
+    // ENG-312: waitForLeaseStatus REJECTS on timeout/abort (the deleted
+    // waitForLeaseReady resolved a status instead, so this fell through to the
+    // "non-active terminal" branch that marked the app failed). Restore that on a
+    // genuine timeout/error so registry-driven surfaces don't keep showing a
+    // possibly-broken app as 'running' (app_status/reconcile corrects it, and it
+    // mirrors the batch path). On a USER abort (a new chat message aborted the
+    // shared signal), leave status untouched — the restart likely still proceeds
+    // provider-side.
+    if (!signal?.aborted) appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     return { success: false, error: `Restart may still be in progress. Use app_status("${name}") to check.` };
   }
 }
@@ -2272,9 +2282,14 @@ async function executeConfirmedBatchRestart(
   appRegistry: ToolExecutorOptions['appRegistry'] & object,
   signing: SigningContext,
   onProgress: ToolExecutorOptions['onProgress'],
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  clientManager: CosmosClientManager
 ): Promise<ToolResult> {
   const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
+
+  // One shared ctx for all concurrent waits (WS live-status via the browser
+  // EventTransport; poll fallback). Never wrapped in a caller-side sign-lock.
+  const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
 
   const { succeeded, failed, batchProgress } = await runBatchWithConcurrency({
     entries: batchEntries,
@@ -2310,18 +2325,16 @@ async function executeConfirmedBatchRestart(
       updateProgress('provisioning', 'Waiting for app to come back up...');
 
       try {
-        const authToken = await refreshAuthToken();
-        const fredStatus = await waitForLeaseReady(entry.providerUrl, entry.leaseUuid, authToken, {
-          maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+        const fredStatus = await waitForLeaseStatus(ctx, asLeaseUuid(entry.leaseUuid), {
+          timeout: AI_DEPLOY_PROVISION_TIMEOUT_MS,
           intervalMs: FRED_POLL_INTERVAL_MS,
-          abortSignal: signal,
-          onProgress: (status) => {
+          signal,
+          onStatus: (status) => {
             updateProgress('provisioning', status.phase || 'Restarting...');
           },
-          getAuthToken: refreshAuthToken,
         });
 
-        if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
+        if (!isLeaseFailureTerminal(fredStatus)) {
           const { url: connectionUrl, connection } = await resolveAppUrl(
             entry.providerUrl, entry.leaseUuid, fredStatus, address, signing,
             'executeConfirmedBatchRestart'
@@ -2341,7 +2354,9 @@ async function executeConfirmedBatchRestart(
         return null;
       } catch (error) {
         logError('executeConfirmedBatchRestart.poll', error);
-        appRegistry.updateApp(address, entry.leaseUuid, { status: 'failed' });
+        // Mark failed on a genuine timeout/error, but not on a user abort (the
+        // restart likely still proceeds provider-side) — matches the single path.
+        if (!signal?.aborted) appRegistry.updateApp(address, entry.leaseUuid, { status: 'failed' });
         updateProgress('failed', `Restart polling failed for "${name}". Use app_status("${name}") to check.`);
         return null;
       }
@@ -2645,7 +2660,7 @@ export async function executeUpdateApp(
  */
 export async function executeConfirmedUpdateApp(
   args: Record<string, unknown>,
-  _clientManager: CosmosClientManager,
+  clientManager: CosmosClientManager,
   options: ToolExecutorOptions,
   payload?: PayloadAttachment
 ): Promise<ToolResult> {
@@ -2696,16 +2711,19 @@ export async function executeConfirmedUpdateApp(
   const manifestJson = new TextDecoder().decode(payload.bytes);
   appRegistry.updateApp(address, leaseUuid, { manifest: sanitizeManifestForStorage(manifestJson) });
 
-  // Poll for readiness
+  // Poll for readiness. ENG-312 Phase 6: SDK waitForLeaseStatus with a browser
+  // EventTransport (WS live-status, poll fallback). It mints its own per-poll
+  // ADR-036 status token via ctx.providerAuth — never wrap in a caller-side sign-lock.
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for app to come back up...', operation: 'update' });
 
+  const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
+
   try {
-    const authToken = await refreshAuthToken();
-    const fredStatus = await waitForLeaseReady(providerUrl, leaseUuid, authToken, {
-      maxAttempts: Math.ceil(AI_DEPLOY_PROVISION_TIMEOUT_MS / FRED_POLL_INTERVAL_MS),
+    const fredStatus = await waitForLeaseStatus(ctx, asLeaseUuid(leaseUuid), {
+      timeout: AI_DEPLOY_PROVISION_TIMEOUT_MS,
       intervalMs: FRED_POLL_INTERVAL_MS,
-      abortSignal: signal,
-      onProgress: (status) => {
+      signal,
+      onStatus: (status) => {
         onProgress?.({
           phase: 'provisioning',
           detail: status.phase || 'Waiting for update...',
@@ -2713,10 +2731,9 @@ export async function executeConfirmedUpdateApp(
           operation: 'update',
         });
       },
-      getAuthToken: refreshAuthToken,
     });
 
-    if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE && fredStatus.provision_status !== 'failed') {
+    if (!isLeaseFailureTerminal(fredStatus)) {
       // Rollback detection: check /provision for last_error.
       // Fred settles the rollback before emitting the terminal WS event or
       // transitioning provision out of a transient state, so by the time we
@@ -2786,6 +2803,10 @@ export async function executeConfirmedUpdateApp(
   } catch (error) {
     logError('compositeTransactions.executeConfirmedUpdateApp.polling', error);
     onProgress?.({ phase: 'failed', detail: 'Update polling failed', operation: 'update' });
+    // ENG-312: waitForLeaseStatus REJECTS on timeout/abort. Mark failed on a
+    // genuine timeout/error (not a user abort) so registry surfaces don't keep
+    // showing it 'running'; app_status/reconcile corrects it. (See restart.)
+    if (!signal?.aborted) appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     return { success: false, error: `Update may still be in progress. Use app_status("${name}") to check.` };
   }
 }
@@ -2976,8 +2997,9 @@ export async function executeSetCustomDomain(
 /**
  * Execute set_custom_domain after user confirmation.
  *
- * Delegates the broadcast to mono's `core.setItemCustomDomain` helper (which
- * routes through `cosmosTx` + `set-item-custom-domain` CLI form) so validation,
+ * Delegates the broadcast to the SDK's `setItemCustomDomain` helper (from
+ * `@manifest-network/manifest-sdk/deploy`, imported as `monoSetItemCustomDomain`,
+ * which routes through `cosmosTx` + `set-item-custom-domain` CLI form) so validation,
  * canonicalization, and the result shape stay consistent with the MCP surface
  * and direct-CLI users.
  */
