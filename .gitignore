@@ -11,6 +11,13 @@ node_modules
 dist
 dist-ssr
 *.local
+# Env files: keep .env.example tracked; ignore every local/backup variant.
+# `*.local` above only covers files ending in `.local` (misses e.g.
+# `.env.local.spike-bak`), so match the `.env.local` prefix explicitly.
+.env
+.env.local*
+.env.*.local
+*.spike-bak
 coverage
 
 # Editor directories and files
