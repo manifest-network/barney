@@ -1,3 +1,30 @@
+# --- Morpheus proxy abuse controls (ENG-571) -------------------------------
+# The /api/morpheus/ location injects the operator's paid API key server-side,
+# and this is a static SPA with no login, so the endpoint is reachable by
+# anyone who can load the frontend. These http-context directives (this file is
+# included inside `http {}`) cap abuse. envsubst in env.sh is given an explicit
+# variable list, so the nginx runtime vars below ($binary_remote_addr, etc.)
+# are left untouched.
+#
+# Rate + concurrency cap per client IP — the real mitigation for billing-DoS.
+limit_req_zone  $binary_remote_addr zone=morpheus_req:10m  rate=10r/s;
+limit_conn_zone $binary_remote_addr zone=morpheus_conn:10m;
+#
+# Origin allow-check: resolve the request's effective origin host. No Origin
+# header (native clients / same-origin GET) maps to $http_host so it passes;
+# a present same-origin Origin maps to its own host (== $http_host) and passes;
+# a cross-site or malformed Origin yields a value that won't match $http_host
+# and is rejected in the location below. This is a speed bump against browser
+# cross-site relay, not authentication (a plain curl sends no Origin and is
+# only rate-limited). NOTE: if a front proxy/LB rewrites the Host header, set
+# this comparison against the externally-visible host instead.
+map $http_origin $morpheus_origin_host {
+    default                    "cross-site";
+    ""                         $http_host;
+    "~^https?://(?<oh>[^/]+)$" $oh;
+}
+# ---------------------------------------------------------------------------
+
 server {
     listen 80;
     server_name _;
@@ -63,6 +90,17 @@ server {
         if ($morpheus_key = '') {
             return 503;
         }
+
+        # Abuse controls (ENG-571). `if` with `return` is a safe use of if.
+        # Reject browser requests carrying a cross-site/malformed Origin.
+        if ($morpheus_origin_host != $http_host) {
+            return 403;
+        }
+        # Per-IP rate + concurrency limits; 429 on trip.
+        limit_req    zone=morpheus_req burst=20 nodelay;
+        limit_conn   morpheus_conn 8;
+        limit_req_status  429;
+        limit_conn_status 429;
 
         resolver ${NGINX_RESOLVERS} valid=30s ipv6=off;
         resolver_timeout 5s;
