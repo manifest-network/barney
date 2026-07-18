@@ -71,3 +71,64 @@ describe('createProviderFetch — PROD redirect hardening', () => {
     expect(calledInit.redirect).toBe('manual');
   });
 });
+
+// The DEV branch routes through the same-origin /proxy-provider CORS proxy and
+// carries the real upstream in X-Proxy-Target. It got the same redirect
+// hardening as PROD (forced redirect:"manual" + reject 3xx/opaque), so lock in
+// that behavior here.
+describe('createProviderFetch — DEV proxy + redirect hardening', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.stubEnv('DEV', true); // force DEV branch
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('routes through /proxy-provider with X-Proxy-Target and redirect:"manual"', async () => {
+    fetchSpy.mockResolvedValue({ type: 'basic', status: 200 } as Response);
+    const providerFetch = createProviderFetch();
+
+    const res = await providerFetch('https://fred.example.com/v1/leases?x=1');
+
+    expect((res as unknown as { status: number }).status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [calledUrl, calledInit] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(calledUrl).toBe('/proxy-provider/v1/leases?x=1');
+    expect((calledInit.headers as Headers).get('X-Proxy-Target')).toBe('https://fred.example.com');
+    expect(calledInit.redirect).toBe('manual');
+  });
+
+  it('throws on an opaqueredirect response', async () => {
+    fetchSpy.mockResolvedValue({ type: 'opaqueredirect', status: 0 } as Response);
+    const providerFetch = createProviderFetch();
+
+    await expect(providerFetch('https://fred.example.com/v1/x')).rejects.toThrow(
+      'unexpected redirect'
+    );
+  });
+
+  it('throws on a 3xx status response', async () => {
+    fetchSpy.mockResolvedValue({ type: 'basic', status: 301 } as Response);
+    const providerFetch = createProviderFetch();
+
+    await expect(providerFetch('https://fred.example.com/v1/x')).rejects.toThrow(
+      'unexpected redirect'
+    );
+  });
+
+  it('does not let a caller-supplied redirect:"follow" override the forced redirect:"manual"', async () => {
+    fetchSpy.mockResolvedValue({ type: 'basic', status: 200 } as Response);
+    const providerFetch = createProviderFetch();
+
+    await providerFetch('https://fred.example.com/v1/x', { redirect: 'follow' });
+
+    const [, calledInit] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(calledInit.redirect).toBe('manual');
+  });
+});

@@ -2542,13 +2542,16 @@ export async function executeUpdateApp(
     return { success: false, error: 'No file attached and no image specified. Attach a manifest file or specify a Docker image (e.g. update_app(app_name="my-app", image="redis:8")).' };
   }
 
-  // Make file-attached JSON manifests editable in the confirmation card
-  if (!args._generatedManifest && payload.filename?.endsWith('.json')) {
+  // Make file-attached JSON manifests editable in the confirmation card, and run
+  // the blocked-env-name guard on the uploaded env at parse time (before merge).
+  // NOT gated on the .json extension: .txt uploads must contain JSON too (see
+  // fileValidation), and the merge/deploy path below JSON.parses payload.bytes
+  // regardless of extension — so gating the guard on .json would let a
+  // manifest.txt bypass the env-name blocklist (S3). Mirrors executeDeployApp.
+  if (!args._generatedManifest) {
     try {
       const json = new TextDecoder().decode(payload.bytes);
       const parsedManifest: unknown = JSON.parse(json); // validate it's valid JSON
-      // Blocked-env-name guard on the uploaded env at parse time (before merge) —
-      // file-attached manifests otherwise skip the blocklist (S3).
       const envError = validateManifestEnvNames(parsedManifest);
       if (envError) return { success: false, error: envError };
       args._generatedManifest = json;

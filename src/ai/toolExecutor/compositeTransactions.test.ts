@@ -3054,6 +3054,27 @@ describe('executeUpdateApp', () => {
     expect(result.error).toContain('Blocked env variable(s): LD_PRELOAD');
   });
 
+  it('S3: rejects a file-attached .txt manifest with a blocked env name (no .json gate)', async () => {
+    // .txt uploads must contain JSON and are JSON.parsed + deployed just like
+    // .json — the env-name guard must not be gated on the extension, or a
+    // manifest.txt bypasses the blocklist.
+    const app = makeApp({ status: 'running' });
+    const json = JSON.stringify({ image: 'redis:8', env: { KUBECONFIG: '/x' } });
+    const payload: PayloadAttachment = {
+      bytes: new TextEncoder().encode(json),
+      filename: 'manifest.txt',
+      size: json.length,
+      hash: 'd'.repeat(64),
+    };
+    const result = await executeUpdateApp(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]) }),
+      payload
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Blocked env variable(s): KUBECONFIG');
+  });
+
   it('merges old env vars into image-based update manifest', async () => {
     const oldManifest = JSON.stringify({
       image: 'postgres:18',
