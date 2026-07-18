@@ -41,14 +41,24 @@ describe('toChatApiMessages', () => {
   });
 
   it('converts tool role messages with tool_call_id', () => {
+    // Tool preceded by its assistant (with tool_calls) so it is not a leading
+    // orphan — the strip only removes a tool run at the very front of the window.
     const msgs: ChatMessage[] = [
+      {
+        id: '0',
+        role: 'assistant',
+        content: 'Calling tools.',
+        timestamp: 0,
+        toolCalls: [{ id: 'tc_42', type: 'function', function: { name: 'get_balance', arguments: {} } }],
+      },
       { id: '1', role: 'tool', content: '{"result": "ok"}', timestamp: 1, toolCallId: 'tc_42' },
     ];
 
     const result = toChatApiMessages(msgs, undefined);
 
-    expect(result).toHaveLength(2); // system + tool
-    expect(result[1]).toEqual({
+    expect(result).toHaveLength(3); // system + assistant + tool
+    const toolMsg = result.find((m) => m.role === 'tool');
+    expect(toolMsg).toEqual({
       role: 'tool',
       content: '{"result": "ok"}',
       tool_call_id: 'tc_42',
@@ -328,6 +338,43 @@ describe('toChatApiMessages', () => {
     expect(result.map(m => m.role)).toEqual([
       'system', 'user', 'assistant', 'tool', 'assistant', 'user', 'assistant', 'tool',
     ]);
+  });
+
+  it('strips leading orphan tool messages (window sliced mid tool-call group)', () => {
+    // A tail slice can start the window mid tool-call group — leaving leading
+    // tool messages whose assistant (with tool_calls) was dropped. OpenAI-
+    // compatible backends 400 on that, so the leading tool run must be stripped.
+    const msgs: ChatMessage[] = [
+      { id: '1', role: 'tool', content: '{"credits":100}', timestamp: 1, toolCallId: 'tc_1' },
+      { id: '2', role: 'tool', content: '[]', timestamp: 2, toolCallId: 'tc_2' },
+      { id: '3', role: 'user', content: 'hi', timestamp: 3 },
+      { id: '4', role: 'assistant', content: 'hello', timestamp: 4 },
+    ];
+
+    const result = toChatApiMessages(msgs, undefined);
+
+    expect(result.map(m => m.role)).toEqual(['system', 'user', 'assistant']);
+    expect(result.some(m => m.role === 'tool')).toBe(false);
+  });
+
+  it('strips only the leading orphan tool run, keeping a later valid tool group', () => {
+    const msgs: ChatMessage[] = [
+      // Orphaned leading tool (its assistant fell off the front of the window)
+      { id: '1', role: 'tool', content: 'orphan', timestamp: 1, toolCallId: 'tc_0' },
+      { id: '2', role: 'user', content: 'check', timestamp: 2 },
+      {
+        id: '3',
+        role: 'assistant',
+        content: 'Calling tools.',
+        timestamp: 3,
+        toolCalls: [{ id: 'tc_1', type: 'function', function: { name: 'get_balance', arguments: {} } }],
+      },
+      { id: '4', role: 'tool', content: '{"credits":100}', timestamp: 4, toolCallId: 'tc_1' },
+    ];
+
+    const result = toChatApiMessages(msgs, undefined);
+
+    expect(result.map(m => m.role)).toEqual(['system', 'user', 'assistant', 'tool']);
   });
 });
 

@@ -335,7 +335,8 @@ describe('useAccountSetup — retry', () => {
       .mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
     vi.mocked(getCreditAccount)
       .mockResolvedValueOnce({ balances: [] } as any)  // early credit check
-      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // funding phase
+      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any) // funding phase
+      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // recheck before retry: unchanged → proceed to 2nd fund
     // Fresh PWR
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
     vi.mocked(fundCredits)
@@ -349,12 +350,35 @@ describe('useAccountSetup — retry', () => {
     expect(hadState((s) => s.phase === 'complete')).toBe(true);
   });
 
+  it('does not double-fund when the first fund landed despite a lost response', async () => {
+    // PWR above faucet threshold
+    vi.mocked(getBalance)
+      .mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
+    vi.mocked(getCreditAccount)
+      .mockResolvedValueOnce({ balances: [] } as any)  // early credit check
+      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any) // funding phase: 0 credits
+      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '5000000' }] } as any); // recheck: first fund actually landed
+    vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
+    // First fund's response was lost/threw, but the TX committed on-chain.
+    vi.mocked(fundCredits)
+      .mockRejectedValueOnce(new Error('lost response'));
+
+    renderHook(defaultHookProps());
+    await flush();
+
+    // The recheck saw the raised balance → the second broadcast is skipped.
+    expect(fundCredits).toHaveBeenCalledTimes(1);
+    expect(hadState((s) => s.phase === 'complete')).toBe(true);
+    expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(true);
+  });
+
   it('shows error when funding fails both attempts', async () => {
     vi.mocked(getBalance)
       .mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
     vi.mocked(getCreditAccount)
       .mockResolvedValueOnce({ balances: [] } as any)  // early credit check
-      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // funding phase
+      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any) // funding phase
+      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // recheck before retry: unchanged → proceed to 2nd fund
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
     vi.mocked(fundCredits)
       .mockResolvedValueOnce({ code: 1, rawLog: 'fail1' } as any)
@@ -407,7 +431,8 @@ describe('useAccountSetup — retry', () => {
       .mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
     vi.mocked(getCreditAccount)
       .mockResolvedValueOnce({ balances: [] } as any)  // early credit check
-      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // funding phase
+      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any) // funding phase
+      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // recheck before retry: unchanged → proceed to 2nd fund
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
     vi.mocked(fundCredits)
       .mockRejectedValueOnce(new Error('signer error'))
@@ -426,7 +451,8 @@ describe('useAccountSetup — retry', () => {
       .mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
     vi.mocked(getCreditAccount)
       .mockResolvedValueOnce({ balances: [] } as any)  // early credit check
-      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // funding phase
+      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any) // funding phase
+      .mockResolvedValueOnce({ balances: [{ denom: 'factory/addr/upwr', amount: '0' }] } as any); // recheck before retry: unchanged → proceed to 2nd fund
     vi.mocked(getBalance).mockResolvedValueOnce({ denom: 'factory/addr/upwr', amount: '20000000' });
     vi.mocked(fundCredits)
       .mockRejectedValueOnce(new Error('signer error'))

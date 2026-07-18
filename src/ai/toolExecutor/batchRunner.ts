@@ -124,6 +124,8 @@ export interface BatchRunnerOptions<E extends BatchEntry> {
 export interface BatchRunResult {
   succeeded: BatchSuccessItem[];
   failed: string[];
+  /** Entries never queued because the signal aborted before their turn. */
+  cancelled: string[];
   batchProgress: Array<{ name: string; phase: DeployProgress['phase']; detail?: string }>;
 }
 
@@ -163,9 +165,14 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
 
   // Run with bounded concurrency — check abort before queuing, not inside executeOne.
   // Already-queued tasks run to completion (they may have broadcast a TX).
+  // `queuedCount` tracks how many entries actually got queued; anything at a
+  // higher index was never started (abort short-circuited the loop) and must be
+  // reported as cancelled rather than left stuck at its 'Waiting...' initial row.
   const active = new Set<Promise<void>>();
+  let queuedCount = 0;
   for (let i = 0; i < entries.length; i++) {
     if (signal?.aborted) break;
+    queuedCount = i + 1;
 
     const updateProgress = (phase: DeployProgress['phase'], detail?: string) => {
       batchProgress[i] = { name: entries[i].name, phase, detail };
@@ -200,7 +207,18 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
   }
   await Promise.all(active);
 
-  return { succeeded, failed, batchProgress };
+  // Entries beyond queuedCount were never queued (abort short-circuited the
+  // loop). Bucket them as cancelled so the summary counts every entry instead
+  // of silently dropping the un-queued tail (and reporting a misleading empty
+  // SUCCESS on an abort-before-any-queue).
+  const cancelled: string[] = [];
+  for (let j = queuedCount; j < entries.length; j++) {
+    cancelled.push(entries[j].name);
+    batchProgress[j] = { name: entries[j].name, phase: 'failed', detail: 'Cancelled (batch aborted)' };
+  }
+  if (cancelled.length > 0) emitProgress();
+
+  return { succeeded, failed, cancelled, batchProgress };
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +228,8 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
 export interface BatchSummaryOptions {
   succeeded: BatchSuccessItem[];
   failed: string[];
+  /** Entries never queued because the batch aborted before their turn. */
+  cancelled?: string[];
   /** Key name for the succeeded array in the result data (e.g. 'deployed', 'restarted'). */
   dataKey: string;
   /** Past-tense verb for messages (e.g. 'Deployed', 'Restarted'). */
@@ -225,22 +245,33 @@ export interface BatchSummaryOptions {
 }
 
 export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
-  const { succeeded, failed, dataKey, verb, failedNoun, batchProgress, operation, onProgress } = opts;
+  const { succeeded, failed, cancelled = [], dataKey, verb, failedNoun, batchProgress, operation, onProgress } = opts;
 
   // Emit final progress
   if (onProgress) {
     onProgress({
-      phase: failed.length === 0 ? 'ready' : succeeded.length > 0 ? 'ready' : 'failed',
+      phase: succeeded.length > 0 ? 'ready' : 'failed',
       ...(operation ? { operation } : {}),
-      detail: failed.length === 0
+      detail: failed.length === 0 && cancelled.length === 0
         ? `All ${succeeded.length} ${succeeded.length === 1 ? 'app' : 'apps'} ${verb.toLowerCase()}!`
-        : `${succeeded.length} ${verb.toLowerCase()}, ${failed.length} failed`,
+        : `${succeeded.length} ${verb.toLowerCase()}, ${failed.length} failed${cancelled.length > 0 ? `, ${cancelled.length} cancelled` : ''}`,
       ...(batchProgress ? { batch: batchProgress.map((b) => ({ ...b })) } : {}),
     });
   }
 
-  if (failed.length > 0 && succeeded.length === 0) {
-    return { success: false, error: `All ${failedNoun} failed: ${failed.join(', ')}` };
+  if (succeeded.length === 0) {
+    // Nothing landed. When there were no cancellations this is a pure all-failed
+    // batch — keep the original message (test/UX contract). Otherwise name both
+    // buckets so the abort isn't hidden behind a bare "all failed".
+    if (cancelled.length === 0) {
+      return { success: false, error: `All ${failedNoun} failed: ${failed.join(', ')}` };
+    }
+    const failedPart = failed.length > 0 ? `Failed: ${failed.join(', ')}.` : '';
+    const cancelledPart = `Cancelled: ${cancelled.join(', ')}.`;
+    return {
+      success: false,
+      error: `No ${failedNoun} completed — ${[failedPart, cancelledPart].filter(Boolean).join(' ')}`,
+    };
   }
 
   const parts: string[] = [];
@@ -249,12 +280,14 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     parts.push(`${verb}:\n${lines.map((l) => `- ${l}`).join('\n')}`);
   }
   if (failed.length > 0) parts.push(`Failed: ${failed.join(', ')}.`);
+  if (cancelled.length > 0) parts.push(`Cancelled: ${cancelled.join(', ')}.`);
 
   return {
     success: true,
     data: {
       [dataKey]: succeeded,
       failed,
+      cancelled,
       message: parts.join('\n'),
     },
   };

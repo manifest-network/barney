@@ -335,6 +335,12 @@ describe('C0 characterization — fallbackToChainState core (delta D-B frozen ha
       throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll network flake');
     });
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as never);
+    // C1: the running-on-throw branch now resolves the URL/connection from the
+    // provider (resolveAppUrl → getLeaseConnectionInfo) so the app shows a link.
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '5.6.7.8', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    } as never);
 
     const onProgress = vi.fn();
     const registry = makeRegistry();
@@ -343,10 +349,23 @@ describe('C0 characterization — fallbackToChainState core (delta D-B frozen ha
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as { status: string }).status).toBe('running');
+    expect((result.data as { status: string; url?: string }).status).toBe('running');
+    expect((result.data as { url?: string }).url).toBe('5.6.7.8:32456');
+    // C1: updateApp now carries url + connection, not just status.
     expect(registry.updateApp).toHaveBeenCalledWith(
-      ADDRESS, 'new-lease-uuid', expect.objectContaining({ status: 'running' }),
+      ADDRESS, 'new-lease-uuid',
+      expect.objectContaining({
+        status: 'running',
+        url: '5.6.7.8:32456',
+        connection: expect.objectContaining({ host: '5.6.7.8' }),
+      }),
     );
+    // C1: an app displayCard with the resolved URL, so the UI renders a link.
+    expect(result.success && !result.requiresConfirmation && result.displayCard?.type).toBe('app');
+    if (result.success && !result.requiresConfirmation && result.displayCard?.type === 'app') {
+      expect(result.displayCard.data.url).toBe('5.6.7.8:32456');
+      expect(result.displayCard.data.status).toBe('running');
+    }
     expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'ready' }));
   });
 
@@ -428,5 +447,29 @@ describe('C0 characterization — executeConfirmedBatchDeploy', () => {
     const data = result.data as { deployed: unknown[]; failed: unknown[] };
     expect(data.deployed).toHaveLength(1);
     expect(data.failed).toHaveLength(1);
+  });
+
+  it('running-on-throw entry carries { name, url } in the summarized deployed list (C1)', async () => {
+    // deployManifest throws AFTER onLeaseCreated; chain reports ACTIVE, so
+    // handleDeployManifestError resolves the URL and the batch entry propagates it.
+    vi.mocked(deployManifest).mockImplementation(async (_c, _s, opts) => {
+      await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll network flake');
+    });
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as never);
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '5.6.7.8', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    } as never);
+
+    const result = await executeConfirmedBatchDeploy(
+      { entries: [batchEntry('game1')] },
+      CLIENT_MANAGER,
+      makeOptions(),
+    );
+
+    expect(result.success).toBe(true);
+    const data = result.data as { deployed: { name: string; url?: string }[] };
+    expect(data.deployed).toEqual([{ name: 'game1', url: '5.6.7.8:32456' }]);
   });
 });

@@ -131,4 +131,30 @@ describe('AccountSetupOverlay', () => {
     const el = renderToContainer({ isInitialSetup: true, phase: 'faucet' });
     expect(el.querySelector('.account-setup__error')).toBeNull();
   });
+
+  it('traps focus — focus cannot escape to an element outside the overlay', async () => {
+    // A focusable element standing in for the background app.
+    const outside = document.createElement('button');
+    outside.textContent = 'background';
+    document.body.appendChild(outside);
+    try {
+      const el = renderToContainer({ isInitialSetup: true, phase: 'checking' });
+      const dialog = el.querySelector('[role="alertdialog"]') as HTMLElement | null;
+      expect(dialog).not.toBeNull();
+      // focus-trap defers initial focus (delayInitialFocus) — let it settle.
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Try to move focus OUT to the background. An active trap pulls it back;
+      // the removed manual-focus effect would let it escape — this is what makes
+      // the test a real guard rather than a bare initial-focus assertion (which
+      // the pre-fix code satisfied too).
+      outside.focus();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(document.activeElement).not.toBe(outside);
+      expect(dialog!.contains(document.activeElement)).toBe(true);
+    } finally {
+      outside.remove();
+    }
+  });
 });

@@ -183,6 +183,35 @@ describe('runBatchWithConcurrency', () => {
     expect(result.succeeded.length).toBeLessThanOrEqual(2);
   });
 
+  it('buckets un-queued entries as cancelled when aborted mid-batch', async () => {
+    const controller = new AbortController();
+    let started = 0;
+
+    const result = await runBatchWithConcurrency({
+      entries: [makeEntry('a'), makeEntry('b'), makeEntry('c')],
+      intermediatePhases: ['provisioning'],
+      initialPhase: 'restarting',
+      concurrency: 1,
+      signal: controller.signal,
+      executeOne: async (entry) => {
+        started++;
+        // Abort inside executeOne after the first entry so b/c are never queued.
+        if (started === 1) controller.abort();
+        return { name: entry.name };
+      },
+    });
+
+    // Every entry is accounted for across the three buckets.
+    expect(result.succeeded.length + result.failed.length + result.cancelled.length).toBe(3);
+    expect(result.cancelled.length).toBeGreaterThan(0);
+    // Cancelled entries' progress rows reflect the aborted status.
+    for (const name of result.cancelled) {
+      const row = result.batchProgress.find((b) => b.name === name);
+      expect(row?.phase).toBe('failed');
+      expect(row?.detail).toBe('Cancelled (batch aborted)');
+    }
+  });
+
   it('emits progress with operation field when set', async () => {
     const onProgress = vi.fn();
 
@@ -288,6 +317,36 @@ describe('summarizeBatchResult', () => {
         ]),
       })
     );
+  });
+
+  it('reports cancelled entries alongside a success', () => {
+    const result = summarizeBatchResult({
+      succeeded: [{ name: 'a' }],
+      failed: [],
+      cancelled: ['b', 'c'],
+      dataKey: 'deployed',
+      verb: 'Deployed',
+      failedNoun: 'deploys',
+    });
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).cancelled).toEqual(['b', 'c']);
+    expect((result.data as any).message).toContain('Cancelled: b, c');
+  });
+
+  it('returns failure naming cancelled when everything was cancelled', () => {
+    const result = summarizeBatchResult({
+      succeeded: [],
+      failed: [],
+      cancelled: ['a', 'b'],
+      dataKey: 'deployed',
+      verb: 'Deployed',
+      failedNoun: 'deploys',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cancelled: a, b');
+    expect(result.error).not.toContain('All deploys failed');
   });
 
   it('formats URLs in succeeded entries', () => {

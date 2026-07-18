@@ -74,7 +74,7 @@ ${tiersSection(slice)}
 |-----|--------|
 | **Enter** | Send message |
 | **Shift + Enter** | New line |
-| **\\u2191 \\u2193** | Browse input history |
+| **↑ ↓** | Browse input history |
 | **/** | Focus chat input |
 `;
 }

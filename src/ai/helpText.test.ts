@@ -32,6 +32,13 @@ describe('buildHelpText', () => {
     expect(text).toContain('Resource tiers');
   });
 
+  it('renders the input-history keyboard shortcut with literal arrow glyphs (not escaped)', () => {
+    const text = buildHelpText(READY_SLICE);
+    expect(text).toContain('↑ ↓');
+    // Regression catcher: the old row emitted the escaped sequence literally.
+    expect(text).not.toContain('\\u2191');
+  });
+
   it('documents what the assistant can do', () => {
     const text = buildHelpText(READY_SLICE);
     expect(text).toContain('Deploy');

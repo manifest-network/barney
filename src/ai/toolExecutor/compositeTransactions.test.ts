@@ -1902,11 +1902,21 @@ describe('executeConfirmedDeployApp', () => {
       throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true });
     });
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
+    // C1: the running-on-throw branch resolves url/connection from the provider
+    // so the app shows a link instead of a bare running status.
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '5.6.7.8', ports: { '80/tcp': { host_port: 32456 } } },
+    } as any);
     const registry = makeRegistry();
     const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry }), makePayload());
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'new-lease-uuid', { status: 'running' });
+    expect((result.data as any).url).toBe('5.6.7.8:32456');
+    expect(registry.updateApp).toHaveBeenCalledWith(
+      ADDRESS, 'new-lease-uuid',
+      expect.objectContaining({ status: 'running', url: '5.6.7.8:32456', connection: expect.objectContaining({ host: '5.6.7.8' }) }),
+    );
   });
 
   it('surfaces a create-lease raw error (case 1, no lease)', async () => {
@@ -3945,12 +3955,24 @@ describe('handleDeployManifestError', () => {
 
   it('case 2 running: chain ACTIVE → running + ready progress (not failed)', async () => {
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
+    // C1: the running branch resolves url/connection from the provider.
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-1', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '5.6.7.8', ports: { '80/tcp': { host_port: 32456 } } },
+    } as any);
     const c = ctx();
     const result = await handleDeployManifestError(
       new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true }), c);
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'running' });
+    expect((result.data as any).url).toBe('5.6.7.8:32456');
+    // C1: updateApp carries url + connection now, not just status.
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(
+      ADDRESS, 'lease-1',
+      expect.objectContaining({ status: 'running', url: '5.6.7.8:32456', connection: expect.objectContaining({ host: '5.6.7.8' }) }),
+    );
+    // C1: an app displayCard with the resolved URL.
+    expect(result.success && !result.requiresConfirmation && result.displayCard?.type).toBe('app');
     expect(c.onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
   });
 
@@ -4017,10 +4039,19 @@ describe('handleDeployManifestError', () => {
 
   it('case 2 (defensive): plain Error WITH leaseUuid, chain ACTIVE → running', async () => {
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
+    // C1: the running branch resolves url/connection from the provider.
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-1', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '5.6.7.8', ports: { '80/tcp': { host_port: 32456 } } },
+    } as any);
     const c = ctx();
     const result = await handleDeployManifestError(new Error('unexpected throw shape'), c);
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'running' });
+    expect((result.data as any).url).toBe('5.6.7.8:32456');
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(
+      ADDRESS, 'lease-1',
+      expect.objectContaining({ status: 'running', url: '5.6.7.8:32456' }),
+    );
   });
 });
