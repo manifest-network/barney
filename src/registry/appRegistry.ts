@@ -49,6 +49,18 @@ const APP_NAME_REGEX = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
 const SENSITIVE_ENV_PATTERN = /password|secret|token|key|credential|api[_-]?key/i;
 
 /**
+ * Value shaped like a URI with embedded credentials: scheme://[user]:pass@host.
+ * The username is optional (`*`, not `+`) so the passwordless-userinfo form
+ * `scheme://:pass@host` (e.g. `redis://:pw@host`) is also caught.
+ */
+const URL_USERINFO_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]*:[^/\s@]+@/i;
+
+/** True when the VALUE itself looks like a secret even if the key does not match. */
+function valueLooksSensitive(value: string): boolean {
+  return URL_USERINFO_PATTERN.test(value);
+}
+
+/**
  * Sanitize a manifest JSON string for localStorage storage.
  * Replaces sensitive env var values with empty strings to avoid persisting secrets.
  * Empty values trigger auto-generation (via generatePassword) on re-deploy.
@@ -93,7 +105,8 @@ export function sanitizeManifestForStorage(manifestJson: string): string {
 function sanitizeEnvObject(env: Record<string, string>): Record<string, string> {
   const sanitized: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    sanitized[key] = SENSITIVE_ENV_PATTERN.test(key) ? '' : String(value);
+    const str = String(value);
+    sanitized[key] = SENSITIVE_ENV_PATTERN.test(key) || valueLooksSensitive(str) ? '' : str;
   }
   return sanitized;
 }

@@ -35,8 +35,14 @@ function isValidProxyTarget(target: string): boolean {
       return false;
     }
 
-    // Check IP literals for dangerous ranges (no DNS resolution — hostname bypass
-    // is mitigated by the nip.io/xip.io/sslip.io blocks above).
+    // NOTE (dev-only limitation): this checks IP *literals* only — it does NOT
+    // resolve DNS, so a hostname whose A/AAAA record points at a blocked range
+    // (e.g. 169.254.169.254 cloud metadata) is NOT caught here. The nip.io/
+    // xip.io/sslip.io blocks above stop only the well-known convenience resolvers,
+    // not arbitrary attacker-controlled DNS. Acceptable because this proxy runs
+    // ONLY in the rsbuild dev server (never in prod — nginx + isUrlSsrfSafe guard
+    // provider traffic there) and the target comes from the developer's own session
+    // (X-Proxy-Target header / WS `target` param), not an untrusted remote.
     // Strip brackets for IPv6 literals (new URL() returns [::1] for IPv6).
     const cleanHostname = hostname.replace(/^\[|\]$/g, '');
     if (ipaddr.isValid(cleanHostname)) {

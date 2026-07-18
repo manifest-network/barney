@@ -32,7 +32,7 @@ RUN apk add --no-cache git gcc g++ make pcre2-dev zlib-dev brotli-dev linux-head
 
 # Stage 3 — Runtime
 FROM nginx:1.27-alpine AS runtime
-RUN apk add --no-cache brotli-libs
+RUN apk add --no-cache brotli-libs jq
 COPY --from=brotli-build /out/ngx_http_brotli_filter_module.so /usr/lib/nginx/modules/
 COPY --from=brotli-build /out/ngx_http_brotli_static_module.so /usr/lib/nginx/modules/
 RUN sed -i '1i load_module /usr/lib/nginx/modules/ngx_http_brotli_filter_module.so;' /etc/nginx/nginx.conf \

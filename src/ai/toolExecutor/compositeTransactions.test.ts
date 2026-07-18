@@ -1090,6 +1090,51 @@ describe('executeDeployApp', () => {
     expect(result.confirmationMessage).toContain('docker-compose');
   });
 
+  // --- S3: env-name blocklist on file-uploaded manifests ---
+
+  function makeManifestFile(obj: unknown, filename = 'manifest.json'): PayloadAttachment {
+    const json = JSON.stringify(obj);
+    const bytes = new TextEncoder().encode(json);
+    return { bytes, filename, size: bytes.length, hash: 'c'.repeat(64) };
+  }
+
+  it('S3: rejects a file-attached single-service manifest with a blocked env name', async () => {
+    const payload = makeManifestFile({ image: 'redis:8', env: { DOCKER_HOST: 'tcp://evil:2375' } });
+    const result = await executeDeployApp({}, makeOptions(), payload);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Blocked env variable(s): DOCKER_HOST');
+  });
+
+  it('S3: rejects a file-attached stack manifest with a blocked env name, naming the service', async () => {
+    const payload = makeManifestFile({
+      services: { web: { image: 'nginx', env: { KUBECONFIG: '/x' } } },
+    });
+    const result = await executeDeployApp({}, makeOptions(), payload);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Service "web"');
+    expect(result.error).toContain('KUBECONFIG');
+  });
+
+  it('S3 regression: a clean file-attached manifest with allowed env still returns confirmation', async () => {
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
+    ]);
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', name: 'Provider', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditEstimate).mockResolvedValue({
+      estimatedDurationSeconds: 86400n,
+      currentBalance: [],
+      totalRatePerSecond: [],
+      activeLeaseCount: 0n,
+    } as any);
+
+    const payload = makeManifestFile({ image: 'redis:8', env: { MY_APP_VAR: 'ok' } });
+    const result = await executeDeployApp({}, makeOptions(), payload);
+    expect(result.success).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
+  });
+
   // Pass-16 regression catchers. Pre-pass-11, `pricePerHour === 0` was
   // ambiguous (free tier OR missing basePrice), so the executor's
   // `skuHourlyCost > 0` guard suppressed the display. Pass 11's basePrice
@@ -2989,6 +3034,45 @@ describe('executeUpdateApp', () => {
     );
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
+  });
+
+  it('S3: rejects a file-attached .json manifest with a blocked env name', async () => {
+    const app = makeApp({ status: 'running' });
+    const json = JSON.stringify({ image: 'redis:8', env: { LD_PRELOAD: '/evil.so' } });
+    const payload: PayloadAttachment = {
+      bytes: new TextEncoder().encode(json),
+      filename: 'manifest.json',
+      size: json.length,
+      hash: 'c'.repeat(64),
+    };
+    const result = await executeUpdateApp(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]) }),
+      payload
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Blocked env variable(s): LD_PRELOAD');
+  });
+
+  it('S3: rejects a file-attached .txt manifest with a blocked env name (no .json gate)', async () => {
+    // .txt uploads must contain JSON and are JSON.parsed + deployed just like
+    // .json — the env-name guard must not be gated on the extension, or a
+    // manifest.txt bypasses the blocklist.
+    const app = makeApp({ status: 'running' });
+    const json = JSON.stringify({ image: 'redis:8', env: { KUBECONFIG: '/x' } });
+    const payload: PayloadAttachment = {
+      bytes: new TextEncoder().encode(json),
+      filename: 'manifest.txt',
+      size: json.length,
+      hash: 'd'.repeat(64),
+    };
+    const result = await executeUpdateApp(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]) }),
+      payload
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Blocked env variable(s): KUBECONFIG');
   });
 
   it('merges old env vars into image-based update manifest', async () => {

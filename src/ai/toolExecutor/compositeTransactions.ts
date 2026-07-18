@@ -84,6 +84,38 @@ function validateEnvNames(env: Record<string, string>): string | null {
 }
 
 /**
+ * Shape-aware env-name blocklist check for a parsed manifest object.
+ * Handles both the single-service shape (top-level `env`) and the stack shape
+ * (`{ services: { name: { env } } }`), the latter prefixing any error with the
+ * offending service name. Returns null when nothing is blocked (or the input
+ * isn't a manifest object). Applied to file-uploaded manifests, whose env is
+ * otherwise never run through the image-arg / stack-string blocklist paths.
+ */
+function validateManifestEnvNames(manifest: unknown): string | null {
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) return null;
+  const serviceNames = getServiceNames(manifest); // non-empty only for { services: {...} }
+  if (serviceNames.length > 0) {
+    const services = (manifest as { services: Record<string, unknown> }).services;
+    for (const svcName of serviceNames) {
+      const svc = services[svcName];
+      if (svc && typeof svc === 'object' && !Array.isArray(svc)) {
+        const env = (svc as Record<string, unknown>).env;
+        if (env && typeof env === 'object' && !Array.isArray(env)) {
+          const err = validateEnvNames(env as Record<string, string>);
+          if (err) return `Service "${svcName}": ${err}`;
+        }
+      }
+    }
+    return null;
+  }
+  const env = (manifest as Record<string, unknown>).env;
+  if (env && typeof env === 'object' && !Array.isArray(env)) {
+    return validateEnvNames(env as Record<string, string>);
+  }
+  return null;
+}
+
+/**
  * Parse a multi-app app_name value into resolved AppEntry[].
  * Supports "all" (all matching apps), comma-separated names, or a single name.
  * `filter` selects which apps are eligible (e.g. running-only for restart).
@@ -914,11 +946,17 @@ export async function executeDeployApp(
   // here so the user gets a clear signal before any TX.
   if (!args._generatedManifest) {
     const json = new TextDecoder().decode(payload.bytes);
+    let parsedManifest: unknown;
     try {
-      JSON.parse(json);
+      parsedManifest = JSON.parse(json);
     } catch {
       return { success: false, error: 'Manifest must be valid JSON — convert YAML/other formats to JSON first.' };
     }
+    // Run the blocked-env-name guard on the uploaded env at parse time (before
+    // any merge/hash) — the image-arg/stack-string paths validate elsewhere, so
+    // a file-attached manifest would otherwise skip the blocklist (S3).
+    const envError = validateManifestEnvNames(parsedManifest);
+    if (envError) return { success: false, error: envError };
     args._generatedManifest = json;
   }
 
@@ -2504,11 +2542,18 @@ export async function executeUpdateApp(
     return { success: false, error: 'No file attached and no image specified. Attach a manifest file or specify a Docker image (e.g. update_app(app_name="my-app", image="redis:8")).' };
   }
 
-  // Make file-attached JSON manifests editable in the confirmation card
-  if (!args._generatedManifest && payload.filename?.endsWith('.json')) {
+  // Make file-attached JSON manifests editable in the confirmation card, and run
+  // the blocked-env-name guard on the uploaded env at parse time (before merge).
+  // NOT gated on the .json extension: .txt uploads must contain JSON too (see
+  // fileValidation), and the merge/deploy path below JSON.parses payload.bytes
+  // regardless of extension — so gating the guard on .json would let a
+  // manifest.txt bypass the env-name blocklist (S3). Mirrors executeDeployApp.
+  if (!args._generatedManifest) {
     try {
       const json = new TextDecoder().decode(payload.bytes);
-      JSON.parse(json); // validate it's valid JSON
+      const parsedManifest: unknown = JSON.parse(json); // validate it's valid JSON
+      const envError = validateManifestEnvNames(parsedManifest);
+      if (envError) return { success: false, error: envError };
       args._generatedManifest = json;
     } catch {
       // Not valid JSON — fall through to read-only display
