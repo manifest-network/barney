@@ -1458,9 +1458,28 @@ export async function handleDeployManifestError(
     const errMessage = error instanceof Error ? error.message : String(error);
     const verdict = await classifyLeaseChainState(leaseUuid);
     if (verdict === 'running') {
-      appRegistry.updateApp(address, leaseUuid, { status: 'running' });
+      // The lease is active on-chain even though deployManifest threw AFTER
+      // creating it (e.g. a provision-poll error on an app that came up anyway).
+      // Resolve the URL/connection from the provider so the app shows a
+      // clickable link and batch counts it as a real success — not a bare name.
+      // resolveAppUrl try/catches internally (url:undefined on failure).
+      const { url: connectionUrl, connection } = providerUrl
+        ? await resolveAppUrl(providerUrl, leaseUuid, {} as FredLeaseStatus, address, signing, 'compositeTransactions.handleDeployManifestError')
+        : { url: undefined, connection: undefined };
+      appRegistry.updateApp(address, leaseUuid, {
+        status: 'running',
+        url: connectionUrl,
+        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+      });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
-      return { success: true, data: { message: `App "${name}" is live!`, name, status: 'running' } };
+      return {
+        success: true,
+        data: { message: `App "${name}" is live!`, name, url: connectionUrl, status: 'running' },
+        displayCard: {
+          type: 'app' as const,
+          data: { name, url: connectionUrl, status: 'running', connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined },
+        },
+      };
     }
     if (verdict === 'deploying') {
       appRegistry.updateApp(address, leaseUuid, { status: 'deploying' });
@@ -1706,7 +1725,7 @@ export async function executeConfirmedBatchDeploy(
   // and shared across every entry (correctness-neutral, avoids redundant awaits).
   const ctx = await buildFredAuthCtx(clientManager, signing);
 
-  const { succeeded, failed, batchProgress } = await runBatchWithConcurrency({
+  const { succeeded, failed, cancelled, batchProgress } = await runBatchWithConcurrency({
     entries: batchEntries,
     intermediatePhases: ['provisioning', 'uploading', 'creating_lease'],
     initialPhase: 'creating_lease',
@@ -1809,7 +1828,13 @@ export async function executeConfirmedBatchDeploy(
           appRegistry,
           onProgress: (p) => updateProgress(p.phase, p.detail),
         });
-        if (errResult.success) return { name };
+        if (errResult.success) {
+          // running-on-throw verdict: propagate the URL resolved in
+          // handleDeployManifestError so the batch entry carries a link
+          // instead of a bare name. (deploying verdict has no url — omitted.)
+          const url = (errResult.data as { url?: string } | undefined)?.url;
+          return { name, url };
+        }
         updateProgress('failed', errResult.error ?? 'Deployment failed');
         return null;
       }
@@ -1858,6 +1883,7 @@ export async function executeConfirmedBatchDeploy(
   return summarizeBatchResult({
     succeeded,
     failed,
+    cancelled,
     dataKey: 'deployed',
     verb: 'Deployed',
     failedNoun: 'deploys',
@@ -2388,7 +2414,7 @@ async function executeConfirmedBatchRestart(
   // EventTransport; poll fallback). Never wrapped in a caller-side sign-lock.
   const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
 
-  const { succeeded, failed, batchProgress } = await runBatchWithConcurrency({
+  const { succeeded, failed, cancelled, batchProgress } = await runBatchWithConcurrency({
     entries: batchEntries,
     intermediatePhases: ['provisioning', 'restarting'],
     initialPhase: 'restarting',
@@ -2463,6 +2489,7 @@ async function executeConfirmedBatchRestart(
   return summarizeBatchResult({
     succeeded,
     failed,
+    cancelled,
     dataKey: 'restarted',
     verb: 'Restarted',
     failedNoun: 'restarts',

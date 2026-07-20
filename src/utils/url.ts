@@ -35,7 +35,10 @@ const DEV_ALLOWED_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 export function isUrlSsrfSafe(parsed: URL): boolean {
   if (isPrivateHost(parsed.hostname)) {
     const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
-    return isDev && DEV_ALLOWED_HOSTS.has(parsed.hostname.toLowerCase());
+    // WHATWG URL brackets IPv6 hostnames (`[::1]`); strip the brackets so the
+    // loopback lookup matches the stored bare form (`::1`).
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    return isDev && DEV_ALLOWED_HOSTS.has(host);
   }
   return true;
 }

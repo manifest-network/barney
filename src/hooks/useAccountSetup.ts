@@ -152,7 +152,7 @@ export function useAccountSetup({
 
     if (!isFaucetEnabled() || !isWalletConnected || !address) {
       lastEffectAddressRef.current = undefined;
-      setSetupState(INITIAL_SETUP_STATE); // eslint-disable-line react-hooks/set-state-in-effect -- guard reset on disconnect
+      setSetupState(INITIAL_SETUP_STATE);
       return;
     }
 
@@ -278,6 +278,10 @@ export function useAccountSetup({
           logError('useAccountSetup.creditBalance', new Error(`Invalid credit balance: ${pwrCredit.amount}`));
         }
         const creditBalance = creditAmountValid ? fromBaseUnits(pwrCredit!.amount, DENOMS.PWR) : 0;
+        // Raw (micro-unit) pre-fund credit balance — the recheck below compares
+        // against this to detect a first fund that landed despite a lost/thrown
+        // response, so the retry doesn't double-fund.
+        const preFundCreditRaw = creditAmountValid ? BigInt(pwrCredit!.amount) : 0n;
 
         if (creditBalance < ACCOUNT_SETUP_CREDIT_THRESHOLD) {
           // ENG-565: post ENG-243 the gas fee shares this PWR balance and is
@@ -321,27 +325,48 @@ export function useAccountSetup({
             setSetupState({ isInitialSetup: true, phase: 'funding', error: 'Could not activate credits. Retrying...' });
             await new Promise((r) => setTimeout(r, ACCOUNT_SETUP_RETRY_DELAY_MS));
             if (signal.aborted || addressRef.current !== targetAddress) return;
-            setSetupState({ isInitialSetup: true, phase: 'funding' });
 
+            // Idempotency guard: the first fund may have committed on-chain even
+            // though its response was lost or threw. Re-query the credit balance
+            // before re-broadcasting — if it already rose above the pre-fund
+            // snapshot, the first fund landed, so skip the second broadcast (which
+            // would move ACCOUNT_SETUP_CREDIT_AMOUNT twice). Mirrors the faucet's
+            // drip-and-verify.
             try {
-              const clientManager = clientManagerRef.current;
-              if (!clientManager) throw new Error('Signing client not ready');
-              const ctx: TxCtx = { chain: clientManager, logger: noopLogger };
-              const retryResult = await fundCredits(ctx, { amount: creditCoin });
+              const recheck = await getCreditAccount(targetAddress);
               if (signal.aborted || addressRef.current !== targetAddress) return;
-              if (retryResult.code !== 0) {
-                logError('useAccountSetup.fundCredits', new Error(`fund-credit failed (code ${retryResult.code})${retryResult.rawLog ? `: ${retryResult.rawLog}` : ''}`));
+              const recheckCredit = recheck.balances.find((c) => c.denom === DENOMS.PWR);
+              if (recheckCredit && /^\d+$/.test(recheckCredit.amount) && BigInt(recheckCredit.amount) > preFundCreditRaw) {
+                fundSucceeded = true;
+              }
+            } catch (recheckError) {
+              logError('useAccountSetup.fundCredits.recheck', recheckError);
+              // recheck failed — fall through to retry (at worst behaves as today)
+            }
+
+            if (!fundSucceeded) {
+              setSetupState({ isInitialSetup: true, phase: 'funding' });
+
+              try {
+                const clientManager = clientManagerRef.current;
+                if (!clientManager) throw new Error('Signing client not ready');
+                const ctx: TxCtx = { chain: clientManager, logger: noopLogger };
+                const retryResult = await fundCredits(ctx, { amount: creditCoin });
+                if (signal.aborted || addressRef.current !== targetAddress) return;
+                if (retryResult.code !== 0) {
+                  logError('useAccountSetup.fundCredits', new Error(`fund-credit failed (code ${retryResult.code})${retryResult.rawLog ? `: ${retryResult.rawLog}` : ''}`));
+                  setupError = 'Could not activate credits. Please try again later.';
+                  setSetupState({ isInitialSetup: true, phase: 'funding', error: setupError });
+                  finishWithError(targetAddress, signal);
+                  return;
+                }
+              } catch (retryError) {
+                logError('useAccountSetup.fundCredits', retryError);
                 setupError = 'Could not activate credits. Please try again later.';
                 setSetupState({ isInitialSetup: true, phase: 'funding', error: setupError });
                 finishWithError(targetAddress, signal);
                 return;
               }
-            } catch (retryError) {
-              logError('useAccountSetup.fundCredits', retryError);
-              setupError = 'Could not activate credits. Please try again later.';
-              setSetupState({ isInitialSetup: true, phase: 'funding', error: setupError });
-              finishWithError(targetAddress, signal);
-              return;
             }
           }
         }

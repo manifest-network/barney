@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { FocusTrap } from 'focus-trap-react';
 import { Loader, CheckCircle, Circle, XCircle } from 'lucide-react';
 import type { AccountSetupState, SetupPhase } from '../../hooks/useAccountSetup';
 
@@ -38,13 +39,6 @@ function StepIcon({ status }: { status: 'done' | 'active' | 'pending' | 'error' 
 export function AccountSetupOverlay({ state }: AccountSetupOverlayProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  // Focus the dialog on mount so screen readers announce it
-  useEffect(() => {
-    if (state.isInitialSetup) {
-      dialogRef.current?.focus();
-    }
-  }, [state.isInitialSetup]);
-
   // Prevent body scrolling while overlay is visible
   useEffect(() => {
     if (!state.isInitialSetup) return;
@@ -62,26 +56,40 @@ export function AccountSetupOverlay({ state }: AccountSetupOverlayProps) {
   const hasError = !!state.error;
 
   return (
-    <div ref={dialogRef} className="modal-backdrop" role="alertdialog" aria-modal="true" aria-label="Setting up your account" tabIndex={-1}>
-      <div className="account-setup">
-        <h2 className="account-setup__title">Setting up your account</h2>
-        <div className="account-setup__steps">
-          {STEPS.map(({ phase, label }) => {
-            const status = stepStatus(phase, state.phase, hasError);
-            return (
-              <div key={phase} className="account-setup__step">
-                <StepIcon status={status} />
-                <span className={status === 'pending' ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-primary)]'}>
-                  {label}
-                </span>
-              </div>
-            );
-          })}
+    // Non-dismissible overlay with zero focusable children — trap focus so Tab
+    // can't escape to the background app during blocking provisioning. Both
+    // initialFocus and fallbackFocus target the dialog container (fallbackFocus
+    // is REQUIRED, or FocusTrap throws when there's nothing focusable inside).
+    <FocusTrap
+      focusTrapOptions={{
+        escapeDeactivates: false,
+        clickOutsideDeactivates: false,
+        initialFocus: () => dialogRef.current!,
+        fallbackFocus: () => dialogRef.current!,
+        returnFocusOnDeactivate: true,
+      }}
+    >
+      <div ref={dialogRef} className="modal-backdrop" role="alertdialog" aria-modal="true" aria-label="Setting up your account" tabIndex={-1}>
+        <div className="account-setup">
+          <h2 className="account-setup__title">Setting up your account</h2>
+          <div className="account-setup__steps">
+            {STEPS.map(({ phase, label }) => {
+              const status = stepStatus(phase, state.phase, hasError);
+              return (
+                <div key={phase} className="account-setup__step">
+                  <StepIcon status={status} />
+                  <span className={status === 'pending' ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-primary)]'}>
+                    {label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {state.error && (
+            <p className="account-setup__error">{state.error}</p>
+          )}
         </div>
-        {state.error && (
-          <p className="account-setup__error">{state.error}</p>
-        )}
       </div>
-    </div>
+    </FocusTrap>
   );
 }

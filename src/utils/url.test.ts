@@ -67,4 +67,14 @@ describe('isUrlSsrfSafe', () => {
     // 127.0.0.2 is NOT in DEV_ALLOWED_HOSTS
     expect(isUrlSsrfSafe(new URL('http://127.0.0.2'))).toBe(false);
   });
+
+  it('allows the IPv6 loopback [::1] in DEV (bracket-stripped lookup)', () => {
+    // WHATWG URL hands back IPv6 hostnames bracketed (`[::1]`), which never
+    // matched the stored `'::1'` before the bracket strip.
+    expect(isUrlSsrfSafe(new URL('http://[::1]:8080'))).toBe(true);
+  });
+
+  it('blocks a non-loopback IPv6 address', () => {
+    expect(isUrlSsrfSafe(new URL('http://[fc00::1]'))).toBe(false);
+  });
 });

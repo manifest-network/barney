@@ -383,6 +383,9 @@ export function removeApp(address: string, leaseUuid: string): boolean {
  * Marks apps as "stopped" if their lease is closed/expired/rejected on-chain.
  * Restores stopped/failed apps to 'running' or 'deploying' based on the
  * on-chain lease state (active → running, pending → deploying).
+ * Promotes a 'deploying' app to 'running' when its lease is already active
+ * on-chain (a deploy that finished after this tab lost track of it — otherwise
+ * it spins as 'deploying' forever).
  *
  * @param address - wallet address
  * @param leaseStates - map of lease UUID → 'active' | 'pending' for leases still on-chain
@@ -411,6 +414,11 @@ export function reconcileWithChain(
       // Covers false failures from transient issues (e.g. WebSocket/polling
       // errors during restart/update) and stale stopped status.
       app.status = chainState === 'active' ? 'running' : 'deploying';
+      changed = true;
+    } else if (app.status === 'deploying' && chainState === 'active') {
+      // Deploy finished on-chain after this tab lost track of it — promote so it
+      // stops spinning forever and reflects the true running state.
+      app.status = 'running';
       changed = true;
     }
   }

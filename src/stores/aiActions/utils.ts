@@ -62,15 +62,29 @@ export function toChatApiMessages(
       };
     });
 
+  // trimMessages' tail slice (`slice(-AI_MAX_MESSAGES)`) can start the window
+  // mid tool-call group, leaving leading `role:'tool'` messages whose assistant
+  // (carrying the matching tool_calls) was sliced off — a tail slice can only
+  // orphan the LEADING edge. (The streaming/local filter above never orphans:
+  // it can't drop an assistant-with-tool_calls, which is never streaming/local.)
+  // OpenAI-compatible backends 400 on a tool message with no preceding assistant
+  // tool_calls, so strip that leading run. No-op when the window already starts
+  // on a non-tool message.
+  let firstNonOrphan = 0;
+  while (firstNonOrphan < conversationMessages.length && conversationMessages[firstNonOrphan].role === 'tool') {
+    firstNonOrphan++;
+  }
+  const deorphaned = firstNonOrphan > 0 ? conversationMessages.slice(firstNonOrphan) : conversationMessages;
+
   // Some models (e.g. Mistral) reject tool→user transitions without an
   // intermediate assistant message. Insert a synthetic one when needed.
   const fixed: ChatApiMessage[] = [];
-  for (let i = 0; i < conversationMessages.length; i++) {
-    fixed.push(conversationMessages[i]);
+  for (let i = 0; i < deorphaned.length; i++) {
+    fixed.push(deorphaned[i]);
     if (
-      conversationMessages[i].role === 'tool' &&
-      i + 1 < conversationMessages.length &&
-      conversationMessages[i + 1].role === 'user'
+      deorphaned[i].role === 'tool' &&
+      i + 1 < deorphaned.length &&
+      deorphaned[i + 1].role === 'user'
     ) {
       fixed.push({ role: 'assistant', content: 'Tool execution complete.' });
     }

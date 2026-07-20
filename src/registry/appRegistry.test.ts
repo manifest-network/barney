@@ -381,6 +381,24 @@ describe('appRegistry', () => {
 
       expect(getApp(ADDR_A, app.name)?.status).toBe('deploying');
     });
+
+    it('promotes deploying apps to running when lease is active on-chain', () => {
+      const app = makeApp({ status: 'deploying' });
+      addApp(ADDR_A, app);
+
+      reconcileWithChain(ADDR_A, new Map([[app.leaseUuid, 'active']]));
+
+      expect(getApp(ADDR_A, app.name)?.status).toBe('running');
+    });
+
+    it('keeps deploying apps as deploying when lease is still pending on-chain', () => {
+      const app = makeApp({ status: 'deploying' });
+      addApp(ADDR_A, app);
+
+      reconcileWithChain(ADDR_A, new Map([[app.leaseUuid, 'pending']]));
+
+      expect(getApp(ADDR_A, app.name)?.status).toBe('deploying');
+    });
   });
 
   // --- Corruption recovery ---
