@@ -9,8 +9,12 @@ const sendMessage = vi.fn();
 // so a bare `vi.fn()` (returning undefined) would throw on `.catch`.
 const retrySkuTiers = vi.fn(() => Promise.resolve());
 
-vi.mock('../../hooks/useAI', () => ({
-  useAI: () => ({ sendMessage, retrySkuTiers }),
+// MessageBubble now reads the two stable action refs via narrow `useAIStore`
+// selectors (not the broad `useAI()`), so mock the selector hook to run the
+// selector against a minimal state object.
+vi.mock('../../contexts/aiStoreContext', () => ({
+  useAIStore: (selector: (s: { sendMessage: unknown; retrySkuTiers: unknown }) => unknown) =>
+    selector({ sendMessage, retrySkuTiers }),
 }));
 
 import { MessageBubble } from './MessageBubble';

@@ -181,7 +181,6 @@ describe('getCreditAccount (client.query + isNotFoundError)', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('returns the account on hit', async () => {
-    mockCreditAddress.mockResolvedValue({ creditAddress: 'credit-addr' });
     const acct = {
       creditAccount: {
         tenant: 'addr1',
@@ -195,6 +194,9 @@ describe('getCreditAccount (client.query + isNotFoundError)', () => {
     };
     mockCreditAccount.mockResolvedValue(acct);
     expect(await getCreditAccount('addr1')).toBe(acct);
+    // Happy path issues a single query — the creditAddress lookup only runs on
+    // the NOT_FOUND cold-start branch.
+    expect(mockCreditAddress).not.toHaveBeenCalled();
   });
 
   it('synthesizes a zero-account when the chain reports NOT_FOUND', async () => {
@@ -204,6 +206,7 @@ describe('getCreditAccount (client.query + isNotFoundError)', () => {
     expect(result.creditAccount.creditAddress).toBe('credit-addr');
     expect(result.creditAccount.activeLeaseCount).toBe(0n);
     expect(result.balances).toEqual([]);
+    expect(mockCreditAddress).toHaveBeenCalledTimes(1);
   });
 
   it('rethrows a non-not-found failure', async () => {

@@ -219,6 +219,7 @@ describe('persistence actions', () => {
       return createStore(() => ({
         settings: { ...defaultSettings },
         messages: [] as ChatMessage[],
+        isStreaming: false,
       })) as unknown as StoreApi<AIStore>;
     }
 
@@ -243,6 +244,46 @@ describe('persistence actions', () => {
 
       const stored = localStorage.getItem(STORAGE_KEY_HISTORY);
       expect(stored).not.toBeNull();
+
+      unsub();
+    });
+
+    it('skips history writes while isStreaming is true', () => {
+      const miniStore = createMiniStore();
+      const unsub = setupPersistenceSubscriptions(miniStore);
+
+      miniStore.setState({ isStreaming: true });
+      localStorage.clear();
+
+      // Several message updates during streaming (~60x/s) must not write.
+      miniStore.setState({ messages: [makeMessage({ id: 's1' })] });
+      miniStore.setState({ messages: [makeMessage({ id: 's1' }), makeMessage({ id: 's2' })] });
+      miniStore.setState({
+        messages: [makeMessage({ id: 's1' }), makeMessage({ id: 's2' }), makeMessage({ id: 's3' })],
+      });
+
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+
+      unsub();
+    });
+
+    it('flushes final history once when streaming ends', () => {
+      const miniStore = createMiniStore();
+      const unsub = setupPersistenceSubscriptions(miniStore);
+
+      // Streaming in progress with a completed messages array already set.
+      const finalMessages = [makeMessage({ id: 'a1', role: 'assistant', content: 'done' })];
+      miniStore.setState({ isStreaming: true, messages: finalMessages });
+      localStorage.clear();
+
+      // The finally flips isStreaming false WITHOUT touching messages (same
+      // reference). The true->false branch is what flushes the completed turn.
+      miniStore.setState({ isStreaming: false });
+
+      const stored = localStorage.getItem(STORAGE_KEY_HISTORY);
+      expect(stored).not.toBeNull();
+      expect(JSON.parse(stored!)).toHaveLength(1);
+      expect(JSON.parse(stored!)[0].id).toBe('a1');
 
       unsub();
     });

@@ -156,7 +156,20 @@ export function setupPersistenceSubscriptions(store: StoreApi<AIStore>): () => v
 
   const unsubHistory = store.subscribe(
     (state, prev) => {
-      if (state.messages !== prev.messages || state.settings.saveHistory !== prev.settings.saveHistory) {
+      // saveHistory toggle: honor immediately (writes or clears storage).
+      if (state.settings.saveHistory !== prev.settings.saveHistory) {
+        saveHistory(state.messages, state.settings.saveHistory);
+        return;
+      }
+      // Streaming just ended (true -> false): flush the completed turn once.
+      // During streaming, `messages` updates ~60x/s but the streaming message is
+      // excluded from persistence, so every frame would write identical bytes.
+      if (prev.isStreaming && !state.isStreaming) {
+        saveHistory(state.messages, state.settings.saveHistory);
+        return;
+      }
+      // Normal (non-streaming) message change — persist immediately.
+      if (state.messages !== prev.messages && !state.isStreaming) {
         saveHistory(state.messages, state.settings.saveHistory);
       }
     }

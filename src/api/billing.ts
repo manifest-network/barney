@@ -55,7 +55,6 @@ const LEASES_LIST_LIMIT = 1000n;
 // fixEnumField / queryWithNotFound / parallel LCD client.
 
 export async function getCreditAccount(tenant: string): Promise<QueryCreditAccountResponse> {
-  const creditAddress = await getCreditAddress(tenant);
   const client = await getReadClient();
   try {
     return await client.query.liftedinit.billing.v1.creditAccount({ tenant });
@@ -64,6 +63,9 @@ export async function getCreditAccount(tenant: string): Promise<QueryCreditAccou
       // No credit account yet (every new user) — synthesize a zero-account.
       // Product policy that stays in barney (the SDK's composite getBalance
       // returns credits:null; barney prefers a zero-shaped account here).
+      // The creditAddress query only runs on this cold-start branch — the
+      // happy path issues a single query, not two.
+      const creditAddress = await getCreditAddress(tenant);
       return {
         creditAccount: {
           tenant,
