@@ -439,7 +439,7 @@ export async function buildImageManifestFromArgs(
         return { error: 'env must be a JSON object (e.g. \'{"KEY":"value"}\').' };
       }
     } catch (error) {
-      logError(`compositeTransactions.${opts.errorContext}.parseEnv`, error);
+      logError(`deployArgs.${opts.errorContext}.parseEnv`, error);
       return { error: 'Invalid env JSON string. Expected format: \'{"KEY":"value"}\'.' };
     }
   }
@@ -569,7 +569,7 @@ export async function buildImageManifestFromArgs(
       labels,
     });
   } catch (error) {
-    logError(`compositeTransactions.${opts.errorContext}.buildManifest`, error);
+    logError(`deployArgs.${opts.errorContext}.buildManifest`, error);
     return { error: error instanceof Error ? error.message : 'Failed to build manifest' };
   }
 

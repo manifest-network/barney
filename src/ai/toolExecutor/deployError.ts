@@ -39,7 +39,7 @@ async function fetchFailureLogs(
         parts.push(`Provision error (fail_count=${provision.fail_count}): ${provision.last_error}`);
       }
     } catch (error) {
-      logError('compositeTransactions.fetchFailureLogs.provision', error);
+      logError('deployError.fetchFailureLogs.provision', error);
     }
 
     // Fetch container logs
@@ -53,7 +53,7 @@ async function fetchFailureLogs(
         parts.push(`Container logs:\n${logText}`);
       }
     } catch (error) {
-      logError('compositeTransactions.fetchFailureLogs.logs', error);
+      logError('deployError.fetchFailureLogs.logs', error);
     }
 
     if (parts.length === 0) return null;
@@ -65,7 +65,7 @@ async function fetchFailureLogs(
     }
     return combined;
   } catch (error) {
-    logError('compositeTransactions.fetchFailureLogs', error);
+    logError('deployError.fetchFailureLogs', error);
     return null;
   }
 }
@@ -92,7 +92,7 @@ export async function classifyLeaseChainState(leaseUuid: string): Promise<ChainD
     }
     return 'deploying';
   } catch (error) {
-    logError('compositeTransactions.classifyLeaseChainState', error);
+    logError('deployError.classifyLeaseChainState', error);
     return 'failed';
   }
 }
@@ -145,7 +145,7 @@ export async function handleDeployManifestError(
       // clickable link and batch counts it as a real success — not a bare name.
       // resolveAppUrl try/catches internally (url:undefined on failure).
       const { url: connectionUrl, connection } = providerUrl
-        ? await resolveAppUrl(providerUrl, leaseUuid, {} as FredLeaseStatus, address, signing, 'compositeTransactions.handleDeployManifestError')
+        ? await resolveAppUrl(providerUrl, leaseUuid, {} as FredLeaseStatus, address, signing, 'deployError.handleDeployManifestError')
         : { url: undefined, connection: undefined };
       appRegistry.updateApp(address, leaseUuid, {
         status: 'running',

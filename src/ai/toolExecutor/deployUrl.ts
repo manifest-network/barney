@@ -86,7 +86,7 @@ export function extractUrlFromFredStatus(
 
 /**
  * Resolve the app URL after successful deployment.
- * Priority: info endpoint (has port mappings) > fred status > connection endpoint.
+ * Priority: connection-info endpoint (host + port mappings) > fred status fallback.
  */
 export async function resolveAppUrl(
   providerUrl: string,
