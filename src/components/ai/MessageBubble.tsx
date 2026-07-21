@@ -7,7 +7,7 @@ import { HelpCard } from './HelpCard';
 import { CustomDomainCard } from './CustomDomainCard';
 import { AppCard } from './AppCard';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { useAI } from '../../hooks/useAI';
+import { useAIStore } from '../../contexts/aiStoreContext';
 import { logError } from '../../utils/errors';
 
 /**
@@ -88,7 +88,13 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
   const [isThinkingExpanded, setIsThinkingExpanded] = useState(false);
   const [isToolExpanded, setIsToolExpanded] = useState(false);
   const { copied, copyToClipboard } = useCopyToClipboard();
-  const { sendMessage, retrySkuTiers } = useAI();
+  // Narrow selectors instead of the broad `useAI()` (which subscribes to ~30
+  // store fields via useShallow). `sendMessage` / `retrySkuTiers` are stable
+  // action refs created once in the store, so the default Object.is comparison
+  // never re-renders this memo'd bubble on unrelated high-churn store changes
+  // (streaming tokens, dnsStatuses, deployProgress).
+  const sendMessage = useAIStore((s) => s.sendMessage);
+  const retrySkuTiers = useAIStore((s) => s.retrySkuTiers);
   const suggestions = error ? getErrorSuggestions(error) : [];
 
   const isUser = role === 'user';

@@ -26,6 +26,13 @@ export interface StreamResult {
  *  - Bare marker with no content
  */
 export function stripToolCallLeaks(text: string): string {
+  // Fast path: the `[TOOL_CALLS]` marker almost never appears, so avoid the four
+  // backtracking regex passes over the whole accumulated buffer on every stream
+  // chunk. With no marker present, the four no-op `.replace()`s followed by
+  // `.trim()` produce exactly `text.trim()` — so this is behavior-identical.
+  if (text.indexOf('[TOOL_CALLS]') === -1) {
+    return text.trim();
+  }
   return text
     .replace(/\[TOOL_CALLS\][\s\S]*?\[TOOL_CALLS\]/g, '')
     .replace(/\[TOOL_CALLS\]\s*\[[\s\S]*?\]\s*/g, '')

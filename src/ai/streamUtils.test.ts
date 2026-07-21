@@ -37,6 +37,10 @@ describe('stripToolCallLeaks', () => {
     expect(stripToolCallLeaks('Hello world')).toBe('Hello world');
   });
 
+  it('trims surrounding whitespace on the no-marker fast path', () => {
+    expect(stripToolCallLeaks('  Hello  ')).toBe('Hello');
+  });
+
   it('handles empty string', () => {
     expect(stripToolCallLeaks('')).toBe('');
   });

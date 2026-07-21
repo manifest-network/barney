@@ -219,6 +219,7 @@ describe('persistence actions', () => {
       return createStore(() => ({
         settings: { ...defaultSettings },
         messages: [] as ChatMessage[],
+        isStreaming: false,
       })) as unknown as StoreApi<AIStore>;
     }
 
@@ -243,6 +244,68 @@ describe('persistence actions', () => {
 
       const stored = localStorage.getItem(STORAGE_KEY_HISTORY);
       expect(stored).not.toBeNull();
+
+      unsub();
+    });
+
+    it('skips per-frame updates to the streaming assistant (persisted subset unchanged)', () => {
+      const miniStore = createMiniStore();
+      const unsub = setupPersistenceSubscriptions(miniStore);
+
+      miniStore.setState({ isStreaming: true });
+      localStorage.clear();
+
+      // ~60x/s content updates to the STREAMING assistant message (isStreaming:
+      // true, excluded from persistence) don't change the persisted subset, so
+      // none of these should write.
+      miniStore.setState({ messages: [makeMessage({ id: 'a1', role: 'assistant', content: 'H', isStreaming: true })] });
+      localStorage.clear();
+      miniStore.setState({ messages: [makeMessage({ id: 'a1', role: 'assistant', content: 'Hel', isStreaming: true })] });
+      miniStore.setState({ messages: [makeMessage({ id: 'a1', role: 'assistant', content: 'Hello', isStreaming: true })] });
+
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+
+      unsub();
+    });
+
+    it('persists a non-streaming message appended mid-stream (no lost turn on crash)', () => {
+      const miniStore = createMiniStore();
+      const unsub = setupPersistenceSubscriptions(miniStore);
+
+      // sendMessage sets isStreaming:true BEFORE appending the user message.
+      miniStore.setState({ isStreaming: true });
+      localStorage.clear();
+
+      // The user's message is appended while streaming — it grows the persisted
+      // subset and must be written now, not deferred to stream-end (else a
+      // mid-stream reload/crash loses it).
+      miniStore.setState({ messages: [makeMessage({ id: 'u1', role: 'user', content: 'hi' })] });
+
+      const stored = localStorage.getItem(STORAGE_KEY_HISTORY);
+      expect(stored).not.toBeNull();
+      expect(JSON.parse(stored!)).toHaveLength(1);
+      expect(JSON.parse(stored!)[0].id).toBe('u1');
+
+      unsub();
+    });
+
+    it('flushes final history once when streaming ends', () => {
+      const miniStore = createMiniStore();
+      const unsub = setupPersistenceSubscriptions(miniStore);
+
+      // Streaming in progress with a completed messages array already set.
+      const finalMessages = [makeMessage({ id: 'a1', role: 'assistant', content: 'done' })];
+      miniStore.setState({ isStreaming: true, messages: finalMessages });
+      localStorage.clear();
+
+      // The finally flips isStreaming false WITHOUT touching messages (same
+      // reference). The true->false branch is what flushes the completed turn.
+      miniStore.setState({ isStreaming: false });
+
+      const stored = localStorage.getItem(STORAGE_KEY_HISTORY);
+      expect(stored).not.toBeNull();
+      expect(JSON.parse(stored!)).toHaveLength(1);
+      expect(JSON.parse(stored!)[0].id).toBe('a1');
 
       unsub();
     });
