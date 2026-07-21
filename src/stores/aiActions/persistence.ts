@@ -141,6 +141,13 @@ export function clearHistoryStorage(): void {
   localStorage.removeItem(STORAGE_KEY_HISTORY);
 }
 
+/** Count the messages saveHistory would persist (streaming ones are excluded). */
+function countPersistable(messages: ChatMessage[]): number {
+  let n = 0;
+  for (const m of messages) if (!m.isStreaming) n++;
+  return n;
+}
+
 /**
  * Set up Zustand subscriptions that persist settings and history to localStorage.
  * Returns an unsubscribe function.
@@ -161,15 +168,27 @@ export function setupPersistenceSubscriptions(store: StoreApi<AIStore>): () => v
         saveHistory(state.messages, state.settings.saveHistory);
         return;
       }
-      // Streaming just ended (true -> false): flush the completed turn once.
-      // During streaming, `messages` updates ~60x/s but the streaming message is
-      // excluded from persistence, so every frame would write identical bytes.
+      // Stream-end safety flush: persist the completed turn once on the
+      // isStreaming true -> false transition (the finally flips the flag without
+      // touching messages, so the diff branch below wouldn't fire for it).
       if (prev.isStreaming && !state.isStreaming) {
         saveHistory(state.messages, state.settings.saveHistory);
         return;
       }
-      // Normal (non-streaming) message change — persist immediately.
-      if (state.messages !== prev.messages && !state.isStreaming) {
+      if (state.messages === prev.messages) return;
+      // Not streaming — any message change is a persisted-history change.
+      if (!state.isStreaming) {
+        saveHistory(state.messages, state.settings.saveHistory);
+        return;
+      }
+      // Streaming: the ~60/s per-frame updates only mutate the streaming
+      // assistant message, which saveHistory excludes — they don't change the
+      // persisted subset, so skip them. But a NON-streaming message appended or
+      // finalized mid-turn (the user's message, a tool result, the final
+      // assistant) grows the persisted subset and must be written immediately,
+      // else a reload/crash mid-turn loses it. Gate on the persisted count, not
+      // on isStreaming.
+      if (countPersistable(state.messages) !== countPersistable(prev.messages)) {
         saveHistory(state.messages, state.settings.saveHistory);
       }
     }
