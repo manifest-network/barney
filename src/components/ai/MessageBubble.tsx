@@ -238,7 +238,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
                 type="button"
                 onClick={() => {
                   if ('message' in s) {
-                    sendMessage(s.message);
+                    void sendMessage(s.message);
                   } else if (s.action === 'retrySkuTiers') {
                     retrySkuTiers().catch((err) => logError('MessageBubble.retrySkuTiers', err));
                   }

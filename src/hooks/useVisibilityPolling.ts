@@ -87,7 +87,9 @@ export function useVisibilityPolling(
 
     function scheduleNext(): void {
       if (!isMounted) return;
-      timeoutId = setTimeout(tick, getDelay());
+      timeoutId = setTimeout(() => {
+        void tick();
+      }, getDelay());
     }
 
     async function tick(): Promise<void> {
@@ -126,7 +128,7 @@ export function useVisibilityPolling(
         // When in-flight, the running tick will schedule the next one on completion.
         consecutiveFailures = 0;
         if (!inFlight) {
-          tick();
+          void tick();
         }
       }
     }
@@ -137,7 +139,7 @@ export function useVisibilityPolling(
     if (!document.hidden) {
       const immediate = optionsRef.current?.immediate ?? true;
       if (immediate) {
-        tick();
+        void tick();
       } else {
         scheduleNext();
       }
