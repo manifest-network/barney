@@ -399,7 +399,7 @@ export function useAccountSetup({
       }, ACCOUNT_SETUP_ERROR_DELAY_MS);
     }
 
-    runSetup();
+    void runSetup();
 
     return () => {
       if (dismissTimerRef.current !== null) clearTimeout(dismissTimerRef.current);

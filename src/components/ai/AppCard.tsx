@@ -55,7 +55,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
 
   const copied = copyTarget ? isCopied(copyTarget) : false;
   const handleCopy = () => {
-    if (copyTarget) copyToClipboard(copyTarget);
+    if (copyTarget) void copyToClipboard(copyTarget);
   };
 
   const handleStop = () => {

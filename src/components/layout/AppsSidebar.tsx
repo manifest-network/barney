@@ -125,7 +125,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   // the timer, but doesn't re-fetch — this effect handles that.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    refresh();
+    void refresh();
   }, [refresh]);
 
   // Subscribe to in-tab registry mutations so mid-tool-execution writes
@@ -286,7 +286,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                   key={app.leaseUuid}
                   type="button"
                   onClick={() => {
-                    sendMessage(`What's the status of ${app.name}?`);
+                    void sendMessage(`What's the status of ${app.name}?`);
                     onClose?.();
                   }}
                   className="apps-sidebar__app-item"
@@ -361,7 +361,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                     }
                     // Re-deploy with the registry size hint (resolves, or falls
                     // back to cheapest in the executor); never blocked here.
-                    sendMessage(`Deploy ${app.name}${app.size ? ` using ${app.size} tier` : ''}`);
+                    void sendMessage(`Deploy ${app.name}${app.size ? ` using ${app.size} tier` : ''}`);
                     onClose?.();
                   }}
                   className="apps-sidebar__recent-redeploy"

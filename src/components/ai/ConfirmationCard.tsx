@@ -215,18 +215,20 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     if (!isDeployApp || !editedDomainHasContent || editedDomainFormatError) return;
     if (lastValidated.domain === editedDomainTrimmed) return; // already validated
     let cancelled = false;
-    const timer = setTimeout(async () => {
-      try {
-        const result = await validateAll(editedDomainTrimmed);
-        if (cancelled) return;
-        setLastValidated({ domain: editedDomainTrimmed, error: result.error, warning: result.warning });
-      } catch (err) {
-        if (cancelled) return;
-        logError('ConfirmationCard.asyncValidate', err);
-        // Chain unreachable: store as "validated, no error/warning" so the chain
-        // will reject authoritatively if it's actually a reserved zone.
-        setLastValidated({ domain: editedDomainTrimmed });
-      }
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await validateAll(editedDomainTrimmed);
+          if (cancelled) return;
+          setLastValidated({ domain: editedDomainTrimmed, error: result.error, warning: result.warning });
+        } catch (err) {
+          if (cancelled) return;
+          logError('ConfirmationCard.asyncValidate', err);
+          // Chain unreachable: store as "validated, no error/warning" so the chain
+          // will reject authoritatively if it's actually a reserved zone.
+          setLastValidated({ domain: editedDomainTrimmed });
+        }
+      })();
     }, 300);
     return () => {
       cancelled = true;

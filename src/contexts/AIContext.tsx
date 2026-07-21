@@ -42,7 +42,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
   // Kick off SKU tier load once per provider lifetime. Idempotent — the action
   // short-circuits if already loading/ready.
   useEffect(() => {
-    store.getState().loadSkuTiers();
+    void store.getState().loadSkuTiers();
   }, [store]);
 
   // Persistence subscriptions + confirmation timeout

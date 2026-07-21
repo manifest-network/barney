@@ -181,7 +181,7 @@ export function useManifestMCP(): UseManifestMCPResult {
       }
     };
 
-    initClientManager();
+    void initClientManager();
 
     return () => {
       isMounted = false;
