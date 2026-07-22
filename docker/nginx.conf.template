@@ -84,7 +84,13 @@ server {
     # which broke prod whenever api.mor.org rotated its IP. The capture
     # group + $is_args$args lets us forward both the path and query string
     # without splitting PUBLIC_MORPHEUS_URL apart in env.sh.
-    location ~ ^/api/morpheus/(.*)$ {
+    #
+    # NAMED capture ($mpath), not positional $1: the $morpheus_origin_host map
+    # below runs a regex on $http_origin whose capture would overwrite the
+    # shared positional $1 from this location, corrupting the upstream path for
+    # every request that carries an Origin header — i.e. every browser request
+    # (ENG-587). Named captures occupy their own slot and survive.
+    location ~ ^/api/morpheus/(?<mpath>.*)$ {
         # Fast-fail when no API key is configured (envsubst replaces this at startup)
         set $morpheus_key "${MORPHEUS_API_KEY}";
         if ($morpheus_key = '') {
@@ -105,7 +111,7 @@ server {
         resolver ${NGINX_RESOLVERS} valid=30s ipv6=off;
         resolver_timeout 5s;
 
-        set $morpheus_upstream "${PUBLIC_MORPHEUS_URL}/$1$is_args$args";
+        set $morpheus_upstream "${PUBLIC_MORPHEUS_URL}/$mpath$is_args$args";
         proxy_pass $morpheus_upstream;
         proxy_ssl_server_name on;
         proxy_set_header Authorization "Bearer ${MORPHEUS_API_KEY}";
