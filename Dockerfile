@@ -10,10 +10,20 @@ COPY . .
 RUN RELEASE_VERSION=${RELEASE_VERSION} GIT_COMMIT=${GIT_COMMIT} npm run build-release
 
 # Stage 2 — Compile Brotli dynamic modules against the exact nginx version.
-# Alpine's prebuilt nginx-mod-http-brotli targets Alpine's own nginx (1.26.x),
-# which is ABI-incompatible with the official Docker image's nginx (1.27.x),
-# so we compile from source and copy only the .so files into the runtime image.
-FROM nginx:1.27-alpine AS brotli-build
+# Alpine's prebuilt nginx-mod-http-brotli targets Alpine's own nginx, which is
+# ABI-incompatible with the official Docker image's nginx (1.30.x), so we compile
+# from source and copy only the .so files into the runtime image.
+#
+# Tracks the nginx 1.30 stable line via the floating `1.30-alpine` minor tag,
+# which resolves to the latest 1.30.x — currently 1.30.4, the CVE-2026-42533 fix
+# (a map-regex capture-clobber heap overflow, fixed in 1.30.4 stable / 1.31.3
+# mainline; see ENG-596). Floating (not a fixed `1.30.4-alpine`) is intentional
+# so rebuilds pick up future 1.30.x security patches; patches only increase, so
+# the resolved version is always ≥1.30.4. This FROM and the runtime FROM below
+# MUST use the identical tag: the module is built against $(nginx -v) here and
+# loaded there, and the runtime `nginx -t` (below) fails the build on any ABI
+# mismatch.
+FROM nginx:1.30-alpine AS brotli-build
 RUN apk add --no-cache git gcc g++ make pcre2-dev zlib-dev brotli-dev linux-headers wget \
     && git init /tmp/ngx_brotli \
     && cd /tmp/ngx_brotli \
@@ -31,7 +41,8 @@ RUN apk add --no-cache git gcc g++ make pcre2-dev zlib-dev brotli-dev linux-head
     && cp objs/ngx_http_brotli_filter_module.so objs/ngx_http_brotli_static_module.so /out/
 
 # Stage 3 — Runtime
-FROM nginx:1.27-alpine AS runtime
+# Tag MUST match the brotli-build stage above (see note there).
+FROM nginx:1.30-alpine AS runtime
 RUN apk add --no-cache brotli-libs jq
 COPY --from=brotli-build /out/ngx_http_brotli_filter_module.so /usr/lib/nginx/modules/
 COPY --from=brotli-build /out/ngx_http_brotli_static_module.so /usr/lib/nginx/modules/
