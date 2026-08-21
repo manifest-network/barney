@@ -3,9 +3,10 @@
  * Extracted from compositeTransactions to avoid peer-dependency from compositeQueries.
  */
 
-import type { ConnectionDetails } from '@manifest-network/manifest-sdk/deploy';
+import { failureDetail, type ConnectionDetails, type FredFailureSource } from '@manifest-network/manifest-sdk/deploy';
 
 import { isValidFqdn } from '../../utils/connection';
+import { sanitizeForDisplay } from '../../utils/sanitizeText';
 
 /** Service names that indicate a primary (user-facing) service in a stack. */
 const PRIMARY_SERVICE_NAMES = new Set(['web', 'app', 'frontend', 'ui']);
@@ -199,3 +200,22 @@ export function deriveUrlFromConnection(
 
 // Re-export from shared module so existing tool-executor consumers don't break.
 export { collectInstanceUrls } from '../../utils/connection';
+
+/** Cap on a rendered failure tail. Matches mono's own `MESSAGE_MAX`
+ *  (packages/fred/src/failure-reason.ts): the sanitizer's 64-code-point default
+ *  bisects fred's composed rollback suffixes and image references. */
+export const FAILURE_DETAIL_CHARS = 256;
+
+/**
+ * One-line, display-safe failure tail for a fred `/status` or `/provision`
+ * document, or `fallback` when the document carries no failure signal.
+ *
+ * `failureDetail` prefers fred v0.13.0's curated `reason`/`message` pair and
+ * falls back to the deprecated `last_error`, so both provider eras work — never
+ * read either field directly at a display site. Only the human-facing copy is
+ * sanitized; callers keep the RAW value for logic (see the update rollback gate).
+ */
+export function failureText(source: FredFailureSource, fallback: string): string {
+  const detail = failureDetail(source);
+  return detail === undefined ? fallback : sanitizeForDisplay(detail, FAILURE_DETAIL_CHARS);
+}

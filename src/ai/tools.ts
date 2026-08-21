@@ -320,7 +320,8 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'browse_catalog',
-      description: 'Browse providers and resource tiers.',
+      description:
+        'Browse providers and resource tiers. Each provider row carries health_status, the provider\'s own three-tier verdict: "healthy" (fully serving), "degraded" (still serving, but a shared dependency such as the chain or a backend is impaired, so deploys and other lease operations there may fail), or "unhealthy" (a provider-local store is broken). Rows may also read "unreachable" or "no_api_url" when no verdict came back, and a newer provider may report a value not listed here — report whatever it says verbatim. Only "healthy" sets healthy=true. When present, healthError names the specific checks that failed.',
       parameters: {
         type: 'object',
         properties: {},

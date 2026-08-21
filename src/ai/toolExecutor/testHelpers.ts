@@ -1,11 +1,18 @@
 import { vi } from 'vitest';
 import type { AppRegistryAccess } from './types';
-import type { AppEntry } from '../../registry/appRegistry';
+import { deriveAppStatus, type AppEntry } from '../../registry/appRegistry';
 
 /**
  * Creates a mock AppRegistryAccess that mirrors production findApp precedence/ambiguity logic.
  * Shared across test files to prevent mock drift from production behavior.
  * addApp and updateApp are wrapped with vi.fn() so tests can assert on calls.
+ *
+ * `addApp`/`updateApp` re-derive `status` through the REAL `deriveAppStatus`,
+ * exactly as the production registry does. That is not decoration: writers now
+ * record observations (`chainState` / `provisionState`) and never assert a
+ * `status`, so a mock that merely merged the update object would report
+ * `undefined` for `status` and would let a test "pass" against a derivation the
+ * production code never performs.
  */
 export function makeRegistry(apps: AppEntry[] = []): AppRegistryAccess {
   const store = [...apps];
@@ -32,11 +39,16 @@ export function makeRegistry(apps: AppEntry[] = []): AppRegistryAccess {
       return null;
     },
     getAppByLease: (_addr: string, uuid: string) => store.find((a) => a.leaseUuid === uuid) ?? null,
-    addApp: vi.fn((_addr: string, entry: AppEntry) => { store.push(entry); return entry; }),
+    addApp: vi.fn((_addr: string, entry: AppEntry) => {
+      const stored: AppEntry = { ...entry, status: deriveAppStatus(entry) };
+      store.push(stored);
+      return stored;
+    }),
     updateApp: vi.fn((_addr: string, uuid: string, updates: Partial<Omit<AppEntry, 'leaseUuid'>>) => {
       const idx = store.findIndex((a) => a.leaseUuid === uuid);
       if (idx === -1) return null;
-      store[idx] = { ...store[idx], ...updates };
+      const merged = { ...store[idx], ...updates };
+      store[idx] = { ...merged, status: deriveAppStatus(merged) };
       return store[idx];
     }),
   };

@@ -103,7 +103,7 @@ import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { cosmosQuery } from '@manifest-network/manifest-sdk/chain';
-import { appStatus } from '@manifest-network/manifest-sdk/deploy';
+import { appStatus, FRED_REASON_GUIDANCE } from '@manifest-network/manifest-sdk/deploy';
 import { getReadClient } from '../../api/readClient';
 import { isFaucetEnabled } from '../../api/faucet';
 import { requestFaucet } from '@manifest-network/manifest-sdk/faucet';
@@ -346,7 +346,7 @@ describe('executeAppStatus', () => {
     // Pre-ENG-56 stacks: chain LeaseItems lack service names. The stored
     // manifest still claims named services, but `executeSetCustomDomain`
     // rejects these with "predates per-service domains and has multiple
-    // items without service names" (compositeTransactions.ts:2871-2876).
+    // items without service names" (compositeTransactions.ts).
     // Gate must read from chain truth, not the manifest — otherwise the
     // user fills a doomed form and only sees the error at TX time.
     // See PR #93 Copilot 3236552275.
@@ -468,11 +468,16 @@ describe('executeAppStatus', () => {
       expect(result.success).toBe(true);
       expect((result.data as any).status).toBe('running');
       expect(appStatus).toHaveBeenCalledWith(expect.anything(), { address: ADDRESS, leaseUuid: app.leaseUuid });
+      // Two independent observations, recorded separately: the chain says
+      // ACTIVE, and fred's `provision_status` is absent here — a degraded
+      // provider drops it via omitempty — so NO provisionState is invented.
+      // `status` is derived (rule 5: chain-active, no provider evidence).
       expect(registry.updateApp).toHaveBeenCalledWith(
         ADDRESS,
         app.leaseUuid,
-        expect.objectContaining({ status: 'running', connection: expect.objectContaining({ host: 'fred.example.com' }) })
+        expect.objectContaining({ chainState: 'active', connection: expect.objectContaining({ host: 'fred.example.com' }) })
       );
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBeUndefined();
     });
 
     it('leaves chainState "unknown" and does not reconcile when appStatus throws', async () => {
@@ -634,6 +639,161 @@ describe('executeBrowseCatalog', () => {
     expect(data.providers).toHaveLength(1);
     expect(data.providers[0].healthy).toBe(true);
     expect(data.tiers['docker-small']).toHaveLength(1);
+  });
+
+  // ENG-711 / fred v0.13.0: /health answers 200 for every tier and the verdict
+  // lives in the body. `healthy` stays an exact match on 'healthy' (a
+  // chain-impaired `degraded` fails every lease-resolving endpoint), but the
+  // diagnosis must no longer be discarded. Fred's check keys and messages below
+  // are the real ones — v0.13.0 internal/api/handlers.go records "chain" with
+  // "chain connectivity failed", "payload_store" with "payload store
+  // unavailable", and "backend:<name>" with "backend health check failed".
+  describe('provider health (three-state)', () => {
+    /** One provider with an apiUrl, one SKU on it — the minimum for a catalog row. */
+    function mockCatalog(apiUrl = 'https://p1.example.com'): void {
+      vi.mocked(getProviders).mockResolvedValue([
+        { uuid: 'p1', name: 'Provider 1', apiUrl, active: true, admin: 'addr' } as any,
+      ]);
+      vi.mocked(getSKUs).mockResolvedValue([]);
+    }
+
+    async function providerRow(): Promise<any> {
+      const result = await executeBrowseCatalog();
+      expect(result.success).toBe(true);
+      return (result.data as any).providers[0];
+    }
+
+    it('reports a degraded provider with the failing check named', async () => {
+      mockCatalog();
+      vi.mocked(getProviderHealth).mockResolvedValue({
+        status: 'degraded',
+        provider_uuid: 'p1',
+        checks: {
+          chain: { status: 'unhealthy', message: 'chain connectivity failed' },
+          'backend:docker-1': { status: 'healthy' },
+        },
+        stats: { in_flight_provisions: 2 },
+      });
+
+      const row = await providerRow();
+      expect(row.healthy).toBe(false);
+      expect(row.health_status).toBe('degraded');
+      expect(row.healthError).toMatch(/chain \(chain connectivity failed\)/);
+      // A passing check is noise, and listing it would bury the one that matters.
+      expect(row.healthError).not.toContain('backend:docker-1');
+    });
+
+    it('reports an unhealthy provider distinguishably from a degraded one', async () => {
+      mockCatalog();
+      vi.mocked(getProviderHealth).mockResolvedValue({
+        status: 'unhealthy',
+        provider_uuid: 'p1',
+        checks: { payload_store: { status: 'unhealthy', message: 'payload store unavailable' } },
+      });
+      const unhealthy = await providerRow();
+
+      vi.mocked(getProviderHealth).mockResolvedValue({
+        status: 'degraded',
+        provider_uuid: 'p1',
+        checks: { chain: { status: 'unhealthy', message: 'chain connectivity failed' } },
+      });
+      const degraded = await providerRow();
+
+      expect(unhealthy.healthy).toBe(false);
+      expect(unhealthy.health_status).toBe('unhealthy');
+      expect(unhealthy.healthError).toContain('payload_store');
+      // The regression guard for the whole ENG-711 class: before this change both
+      // tiers serialized to exactly `{ healthy: false }`.
+      expect(JSON.stringify(unhealthy)).not.toBe(JSON.stringify(degraded));
+    });
+
+    it('marks a provider that returned no verdict as unreachable, not as a failed check', async () => {
+      mockCatalog();
+      vi.mocked(getProviderHealth).mockResolvedValue(null);
+
+      const row = await providerRow();
+      expect(row.healthy).toBe(false);
+      expect(row.health_status).toBe('unreachable');
+      // We never got a body, so we must not claim a named check failed.
+      expect(row.healthError).toBeUndefined();
+    });
+
+    it('re-throws an AbortError from the health check', async () => {
+      mockCatalog();
+      vi.mocked(getProviderHealth).mockRejectedValue(new DOMException('aborted', 'AbortError'));
+      await expect(executeBrowseCatalog()).rejects.toThrow('aborted');
+    });
+
+    it('passes an unrecognized tier through verbatim', async () => {
+      mockCatalog();
+      vi.mocked(getProviderHealth).mockResolvedValue({ status: 'quarantined', provider_uuid: 'p1' });
+
+      const row = await providerRow();
+      expect(row.healthy).toBe(false);
+      // The tier set is open — a switch-based implementation fails right here.
+      expect(row.health_status).toBe('quarantined');
+    });
+
+    it('skips the health call entirely when the provider has no apiUrl', async () => {
+      mockCatalog('');
+
+      const row = await providerRow();
+      expect(row.healthy).toBe(false);
+      expect(row.health_status).toBe('no_api_url');
+      expect(getProviderHealth).not.toHaveBeenCalled();
+    });
+
+    it('strips and caps provider-controlled health text', async () => {
+      const RLO = '\u202E';
+      mockCatalog();
+      vi.mocked(getProviderHealth).mockResolvedValue({
+        status: `deg${RLO}raded`,
+        provider_uuid: 'p1',
+        checks: { chain: { status: 'unhealthy', message: 'x'.repeat(5000) } },
+      });
+
+      const row = await providerRow();
+      expect(row.health_status).not.toContain(RLO);
+      expect(Array.from(row.health_status as string)).toHaveLength(9);
+      // maxLength + 1: sanitizeForDisplay appends a single-code-point ellipsis.
+      expect(row.healthError.length).toBeLessThanOrEqual(1025);
+    });
+
+    it('keeps the singleton checks ahead of the backend fleet when capping', async () => {
+      mockCatalog();
+      const checks: Record<string, { status: string; message?: string }> = {
+        payload_store: { status: 'unhealthy', message: 'payload store unavailable' },
+      };
+      for (let i = 1; i <= 9; i++) {
+        checks[`backend:docker-${i}`] = { status: 'unhealthy', message: 'backend health check failed' };
+      }
+      vi.mocked(getProviderHealth).mockResolvedValue({ status: 'unhealthy', provider_uuid: 'p1', checks });
+
+      const row = await providerRow();
+      // Go sorts the map keys, so `backend:*` arrives first on the wire — a
+      // head-of-list cap would drop payload_store, the check that matters most.
+      expect(row.healthError).toContain('payload_store');
+      expect(row.healthError).toMatch(/, and 5 more$/);
+    });
+
+    it('reports the bare verdict when a non-healthy body names no failing check', async () => {
+      mockCatalog();
+      vi.mocked(getProviderHealth).mockResolvedValue({ status: 'degraded', provider_uuid: 'p1' });
+
+      const row = await providerRow();
+      expect(row.healthy).toBe(false);
+      expect(row.healthError).toBe('Provider reports status "degraded"');
+    });
+
+    it('emits no healthError for a healthy provider', async () => {
+      mockCatalog();
+      vi.mocked(getProviderHealth).mockResolvedValue({ status: 'healthy', provider_uuid: 'p1', checks: {} });
+
+      const row = await providerRow();
+      expect(row.healthy).toBe(true);
+      expect(row.health_status).toBe('healthy');
+      expect('healthError' in row).toBe(false);
+    });
   });
 });
 
@@ -1082,6 +1242,126 @@ describe('executeAppDiagnostics', () => {
     expect(data.last_error).toBe('OOMKilled');
   });
 
+  // ENG-774 twin of the fixture above: fred v0.13.0 stopped sending `last_error`
+  // and sends a curated `reason` + `message` instead. Both eras stay live because
+  // providers upgrade independently of barney.
+  it('projects the post-ENG-508 reason/message pair and its guidance', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseProvision).mockResolvedValue({
+      status: 'failed',
+      fail_count: 3,
+      reason: 'ContainerExited',
+      message: 'container exited',
+    });
+
+    const result = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    expect(data.reason).toBe('ContainerExited');
+    expect(data.message).toBe('container exited');
+    expect('last_error' in data).toBe(false);
+    // NOT the SDK's sentence: it spells the call `get_logs({ lease_uuid, tail:
+    // 200 })`, and barney's get_logs takes `app_name` — a model that followed it
+    // would emit `get_logs({ lease_uuid })` and burn an iteration on
+    // `No unique app found matching "undefined"`. The tool-free `explanation`
+    // half of the taxonomy IS kept. See failureGuidance.ts.
+    expect(data.next_step).toContain(FRED_REASON_GUIDANCE.ContainerExited.explanation);
+    expect(data.next_step).toContain('get_logs("my-app", 200)');
+    expect(data.next_step).not.toContain('lease_uuid');
+    expect(data.next_step).not.toContain(FRED_REASON_GUIDANCE.ContainerExited.nextStep);
+  });
+
+  // fred's provisionReason() stamps `Unknown` on ANY failed provision with no
+  // authored reason, so this remap covers the generic path, not an edge case.
+  it('remaps the Unknown next step onto get_logs(app_name)', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1, reason: 'Unknown' });
+
+    const result = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+    const data = result.data as any;
+    expect(data.next_step).toContain(FRED_REASON_GUIDANCE.Unknown.explanation);
+    expect(data.next_step).toContain('get_logs("my-app", 200)');
+    expect(data.next_step).not.toContain('lease_uuid');
+  });
+
+  // `restore_app` is a tool barney does not have at all — grep src/ai/tools.ts.
+  it('remaps the RestoreFailed next step away from the restore_app tool', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1, reason: 'RestoreFailed' });
+
+    const result = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+    const data = result.data as any;
+    expect(data.next_step).toContain(FRED_REASON_GUIDANCE.RestoreFailed.explanation);
+    expect(data.next_step).toContain('app_status("my-app")');
+    expect(data.next_step).not.toContain('restore_app');
+  });
+
+  // The other six curated sentences name only tools barney has, so they are
+  // relayed unchanged — the remap is a targeted substitution, not a rewrite.
+  it('relays a barney-compatible next step verbatim', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1, reason: 'ImagePullFailed' });
+
+    const result = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+    const data = result.data as any;
+    expect(data.next_step).toBe(FRED_REASON_GUIDANCE.ImagePullFailed.nextStep);
+  });
+
+  it('passes an unrecognized reason through without guidance', async () => {
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseProvision).mockResolvedValue({
+      status: 'failed',
+      fail_count: 1,
+      reason: 'SomeFutureReason',
+    });
+
+    const result = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+    expect(result.success).toBe(true);
+    const data = result.data as any;
+    // Fred's reason set is open and add-only: a value this client does not know
+    // is relayed verbatim, and the absence of guidance is the normal case.
+    expect(data.reason).toBe('SomeFutureReason');
+    expect('next_step' in data).toBe(false);
+  });
+
+  it('serves diagnostics for a failed app', async () => {
+    const app = makeApp({ status: 'failed' });
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseProvision).mockResolvedValue({
+      status: 'failed',
+      fail_count: 2,
+      reason: 'ImagePullFailed',
+    });
+
+    const result = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+    // A failed app is precisely when diagnostics are wanted; only 'stopped' refuses.
+    expect(result.success).toBe(true);
+    expect((result.data as any).reason).toBe('ImagePullFailed');
+  });
+
   it('handles getLeaseProvision failure gracefully', async () => {
     const app = makeApp();
     const registry = makeRegistry([app]);
@@ -1168,6 +1448,27 @@ describe('executeAppReleases', () => {
     expect(data.app_name).toBe('my-app');
     expect(data.releases).toHaveLength(2);
     expect(data.count).toBe(2);
+  });
+
+  it('serves releases for a failed app', async () => {
+    const app = makeApp({ status: 'failed' });
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseReleases).mockResolvedValue({
+      lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
+      releases: [{ version: 1, image: 'nginx:1.0', status: 'active', created_at: '2024-01-01T00:00:00Z' }],
+    });
+
+    const result = await executeAppReleases(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+    // The release history is what tells the user which version the provider is
+    // actually running — most valuable exactly when barney marked the app failed.
+    expect(result.success).toBe(true);
+    expect(getLeaseReleases).toHaveBeenCalled();
+    expect((result.data as any).count).toBe(1);
   });
 
   it('handles getLeaseReleases failure gracefully', async () => {
@@ -1266,5 +1567,547 @@ describe('executeRequestFaucet', () => {
       'compositeQueries.executeRequestFaucet',
       expect.any(Error)
     );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F4 — the query executors are WRITERS too, and they now record the
+// observation each of them actually made.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('F4 — list_apps records only the chain observation', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('records chainState absent for a lease that left the tenant’s live set', async () => {
+    vi.mocked(getLeasesByTenant).mockResolvedValue([]);
+
+    const app = makeApp({ status: 'running' });
+    const registry = makeRegistry([app]);
+    const result = await executeListApps({ state: 'all' }, makeOptions({ appRegistry: registry }));
+
+    expect(result.success).toBe(true);
+    // The OBSERVATION, not the summary: "we looked and it was gone".
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'absent' });
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.chainState).toBe('absent');
+    expect(stored?.status).toBe('stopped');
+    // Absence says nothing about WHY, so it must not manufacture a provider verdict.
+    expect(stored?.provisionState).toBeUndefined();
+  });
+
+  it('reports the DERIVED status, not a hard-coded "stopped"', async () => {
+    // A provider `failed` verdict outranks chain-absence, so the row this
+    // response renders must come from the registry's derivation rather than
+    // from a local assignment that would silently disagree with the sidebar.
+    vi.mocked(getLeasesByTenant).mockResolvedValue([]);
+
+    const app = makeApp({ status: 'running', provisionState: 'failed' });
+    const registry = makeRegistry([app]);
+    const result = await executeListApps({ state: 'all' }, makeOptions({ appRegistry: registry }));
+
+    expect((result.data as any).apps[0].status).toBe('failed');
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('failed');
+  });
+});
+
+describe('F4 — app_status records fred’s provision verdict', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getReadClient).mockResolvedValue({ query: {} } as any);
+  });
+
+  function mockAppStatus(leaseUuid: string, fredStatus: unknown, chainStateValue = 2) {
+    vi.mocked(appStatus).mockResolvedValue({
+      lease_uuid: leaseUuid,
+      chainState: { state: chainStateValue, providerUuid: 'p1', createdAt: '', closedAt: undefined, items: [] },
+      fredStatus,
+      connection: undefined,
+    } as any);
+  }
+
+  const run = (registry: ReturnType<typeof makeRegistry>) =>
+    executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry, signing: mockSigning }));
+
+  it('records `ready` as a confirmed provisioning observation', async () => {
+    const app = makeApp({ status: 'deploying' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, { state: 2, provision_status: 'ready' });
+
+    const result = await run(registry);
+
+    expect(result.success).toBe(true);
+    expect(registry.updateApp).toHaveBeenCalledWith(
+      ADDRESS, app.leaseUuid,
+      expect.objectContaining({ chainState: 'active', provisionState: 'confirmed' }),
+    );
+    expect((result.data as any).status).toBe('running');
+  });
+
+  it('records `failed` as a provisioning failure even though the chain lease is ACTIVE', async () => {
+    // fred v0.13.0 models exactly this: an ACTIVE chain lease whose provision
+    // has failed. fred only closes such a lease once FailCount passes
+    // maxReprovisionAttempts, so the chain is no evidence the workload is up —
+    // and before this change app_status classified from chain state alone and
+    // never read provision_status at all.
+    const app = makeApp({ status: 'running' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, { state: 2, provision_status: 'failed' });
+
+    const result = await run(registry);
+
+    expect(registry.updateApp).toHaveBeenCalledWith(
+      ADDRESS, app.leaseUuid,
+      expect.objectContaining({ chainState: 'active', provisionState: 'failed' }),
+    );
+    expect((result.data as any).status).toBe('failed');
+  });
+
+  it('records `deprovisioning` as a failure too — the SDK’s PROVISION_FAILED set', async () => {
+    const app = makeApp({ status: 'running' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, { state: 2, provision_status: 'deprovisioning' });
+
+    await run(registry);
+
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('failed');
+  });
+
+  it('reports a mid-flight provision_status as deploying, never as running', async () => {
+    // `provisioning` / `restarting` / `updating` / `unknown` all mean fred has
+    // NOT confirmed the workload is up. Recording no observation left the
+    // chain-only rule answering 'running' for an app fred says is still coming
+    // up. (`failing`, the SDK's fifth PROVISION_IN_PROGRESS member, is a verdict
+    // and classifies 'failed' — see the `failing` case below.)
+    const app = makeApp({ status: 'deploying' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, { state: 2, provision_status: 'provisioning' });
+
+    const result = await run(registry);
+
+    // Exact object, not objectContaining: this test's predecessor pinned that
+    // ONLY the chain observation was written, and that exactness is the half
+    // that catches a writer quietly adding a field it did not observe.
+    expect(registry.updateApp).toHaveBeenCalledWith(
+      ADDRESS, app.leaseUuid,
+      { chainState: 'active', provisionState: 'unconfirmed' },
+    );
+    expect((result.data as any).status).toBe('deploying');
+  });
+
+  it('reports `retained` as deploying — fred tore the workload down and kept the volumes', async () => {
+    // fred v0.13.0 publishes `retained` for a soft-deleted lease whose volumes
+    // are held for the grace window; recovery is an explicit restore onto a
+    // FRESH lease, so the workload behind this one is gone. 'unconfirmed' — not
+    // 'failed' — because the chain observation must still be able to overrule
+    // it: the close that normally follows records 'absent' → 'stopped', and a
+    // sticky 'failed' would relabel an ordinary stop as a failure.
+    const app = makeApp({ status: 'running', chainState: 'active', provisionState: 'confirmed' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, { state: 2, provision_status: 'retained' });
+
+    const result = await run(registry);
+
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.provisionState).toBe('unconfirmed');
+    expect((result.data as any).status).toBe('deploying');
+  });
+
+  it('claims nothing from a provision_status in none of the SDK sets', async () => {
+    // The open-set rule: a value a newer fred adds is not evidence in either
+    // direction, so nothing is written and the chain observation stands alone.
+    const app = makeApp({ status: 'deploying' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, { state: 2, provision_status: 'quiescing' });
+
+    const result = await run(registry);
+
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active' });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBeUndefined();
+    expect((result.data as any).status).toBe('running');
+  });
+
+  it('records a PENDING chain lease so a stale `running` cannot survive it', async () => {
+    // `executeListApps` and `reconcileWithChain` both record 'pending';
+    // app_status used to fall through both the ACTIVE and terminal branches and
+    // leave the entry untouched.
+    const app = makeApp({ status: 'running', chainState: 'active' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, null, 1); // chain PENDING
+
+    const result = await run(registry);
+
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'pending' });
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.chainState).toBe('pending');
+    expect(stored?.provisionState).toBeUndefined();
+    expect((result.data as any).status).toBe('deploying');
+  });
+
+  it('records a PENDING chain lease on the chain-only path too', async () => {
+    // The reconcile block is shared: both the signer read (appStatus) and the
+    // no-signer read (getLease) resolve `leaseState`, so the single branch
+    // covers both. Without a signer there is no fred evidence at all.
+    const app = makeApp({ status: 'running', chainState: 'active' });
+    const registry = makeRegistry([app]);
+    vi.mocked(getLease).mockResolvedValue({ state: 1, items: [] } as any);
+
+    const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
+
+    expect(appStatus).not.toHaveBeenCalled();
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'pending' });
+    expect((result.data as any).status).toBe('deploying');
+  });
+
+  it('records a provider-side terminal lease as a provisioning failure', async () => {
+    const app = makeApp({ status: 'running' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, { state: 3 }); // fred says CLOSED, chain says ACTIVE
+
+    const result = await run(registry);
+
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'failed' });
+    expect((result.data as any).status).toBe('failed');
+  });
+
+  it('does NOT erase a provider failure when fred is unreachable', async () => {
+    // The "trust the chain" branch has no provider evidence at all. It used to
+    // write a flat `status: 'running'`, silently reverting a provider verdict
+    // every time fred happened to be unreachable.
+    const app = makeApp({ status: 'failed', provisionState: 'failed' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, null);
+
+    const result = await run(registry);
+
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active' });
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.chainState).toBe('active');
+    expect(stored?.provisionState).toBe('failed');
+    expect(stored?.status).toBe('failed');
+    expect((result.data as any).status).toBe('failed');
+  });
+
+  it('still reports a chain-active app as running when there is no provider evidence at all', async () => {
+    // The ordinary case must be unchanged: an entry with no provider
+    // observation derives 'running' from chain-active.
+    const app = makeApp({ status: 'deploying' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, null);
+
+    const result = await run(registry);
+
+    expect((result.data as any).status).toBe('running');
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBeUndefined();
+  });
+
+  it('records a chain-terminal lease as a chain observation only', async () => {
+    const app = makeApp({ status: 'running' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, null, 3); // chain CLOSED
+
+    const result = await run(registry);
+
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'absent' });
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.provisionState).toBeUndefined();
+    expect((result.data as any).status).toBe('stopped');
+  });
+});
+
+describe('N2/N3 — observations must be REFRESHABLE, not one-way latches', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getReadClient).mockResolvedValue({ query: {} } as any);
+  });
+
+  function mockAppStatus(leaseUuid: string, fredStatus: unknown, chainStateValue = 2) {
+    vi.mocked(appStatus).mockResolvedValue({
+      lease_uuid: leaseUuid,
+      chainState: { state: chainStateValue, providerUuid: 'p1', createdAt: '', closedAt: undefined, items: [] },
+      fredStatus,
+      connection: undefined,
+    } as any);
+  }
+
+  const run = (registry: ReturnType<typeof makeRegistry>) =>
+    executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry, signing: mockSigning }));
+
+  it('clears a stale provisionState "failed" when fred reports ready again', async () => {
+    // N3, the whole point of this round. fred's reconciler marks
+    // provision_status 'failed' with FailCount 1 and re-provisions ~10s later
+    // without closing the lease (v0.13.0 internal/provisioner/reconciler.go).
+    // A status check landing inside that window records 'failed'; if nothing
+    // ever recorded the POSITIVE observation, that write would be permanent —
+    // the app would stay out of list_apps(running), out of restart_app and out
+    // of custom-domain DNS polling forever.
+    const app = makeApp({ status: 'failed', chainState: 'active', provisionState: 'failed' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, { state: 2, provision_status: 'ready' });
+
+    const result = await run(registry);
+
+    expect(registry.updateApp).toHaveBeenCalledWith(
+      ADDRESS, app.leaseUuid,
+      expect.objectContaining({ chainState: 'active', provisionState: 'confirmed' }),
+    );
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.provisionState).toBe('confirmed');
+    expect(stored?.status).toBe('running');
+    expect((result.data as any).status).toBe('running');
+  });
+
+  it('clears a stale provisionState "unconfirmed" when fred reports ready', async () => {
+    // N2: a deploy (or, after N4, a restart/update wait) that ended without a
+    // verdict records 'unconfirmed' → derived 'deploying'. Every recovery tool
+    // refuses a 'deploying' app, so without a re-observation point stop_app was
+    // the only exit. app_status is that point.
+    const app = makeApp({ status: 'deploying', provisionState: 'unconfirmed' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, { state: 2, provision_status: 'ready' });
+
+    const result = await run(registry);
+
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.provisionState).toBe('confirmed');
+    expect(stored?.status).toBe('running');
+    expect((result.data as any).status).toBe('running');
+  });
+
+  it('does not re-open a healed app on a mid-flight snapshot', async () => {
+    // The other half of the in-flight rule: such a reading fills a gap, but it
+    // must not RETRACT a confirmation (the `inFlight` guard in
+    // `executeAppStatus`). Writing 'unconfirmed' from 'restarting' would reproduce the
+    // exact drop-out (no list_apps, no restart_app, no DNS polling) that N3
+    // complains about — transiently rather than permanently, but for a workload
+    // that is demonstrably fine.
+    const app = makeApp({ status: 'running', chainState: 'active', provisionState: 'confirmed' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, { state: 2, provision_status: 'restarting' });
+
+    const result = await run(registry);
+
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.provisionState).toBe('confirmed');
+    expect(stored?.status).toBe('running');
+    expect((result.data as any).status).toBe('running');
+  });
+
+  it('but a confirmed app whose container died is NOT protected by that guard', async () => {
+    // The other half of the pair above, and what C1 caught: the guard keyed on
+    // the SDK's PROVISION_IN_PROGRESS, which contains `failing` — so a CONFIRMED
+    // app whose container exited kept its confirmation and derived 'running'.
+    // fred enters Failing only from Ready, on evContainerDied, writing
+    // Reason: ContainerExited (internal/backend/shared/leasesm/lease_sm.go): a
+    // verdict, and the same one compositeTransactions.ts already trusted. Both
+    // files now read it through `isUnsettledProvisionStatus`.
+    const app = makeApp({ status: 'running', chainState: 'active', provisionState: 'confirmed' });
+    const registry = makeRegistry([app]);
+    mockAppStatus(app.leaseUuid, { state: 2, provision_status: 'failing', reason: 'ContainerExited' });
+
+    const result = await run(registry);
+
+    expect(registry.updateApp).toHaveBeenCalledWith(
+      ADDRESS, app.leaseUuid,
+      expect.objectContaining({ provisionState: 'failed' }),
+    );
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.provisionState).toBe('failed');
+    expect(stored?.status).toBe('failed');
+    expect((result.data as any).status).toBe('failed');
+  });
+});
+
+describe('N3 — list_apps re-observes the chain in BOTH directions', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /** Split active/pending lease sets, as the chain returns them. */
+  function mockLeases(active: string[], pending: string[] = []) {
+    vi.mocked(getLeasesByTenant).mockImplementation(async (_addr, state) =>
+      (state === 2 ? active : pending).map((uuid) => ({ uuid }) as any),
+    );
+  }
+
+  it('records the POSITIVE chain observation, not only the negative one', async () => {
+    // Before: the write was guarded on `(running|deploying) && !live`, so
+    // 'active' was unreachable — list_apps could only ever report bad news.
+    const app = makeApp({ status: 'running' });
+    const registry = makeRegistry([app]);
+    mockLeases([app.leaseUuid]);
+
+    const result = await executeListApps({ state: 'all' }, makeOptions({ appRegistry: registry }));
+
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active' });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.chainState).toBe('active');
+    expect((result.data as any).apps[0].status).toBe('running');
+  });
+
+  it('records PENDING as its own observation instead of collapsing it into active', async () => {
+    // The old code unioned both lease sets into one `activeUuids` Set, which
+    // made 'pending' literally unrecordable. Derivation maps pending →
+    // 'deploying', which is not the same claim as 'running'.
+    const app = makeApp({ status: 'running' });
+    const registry = makeRegistry([app]);
+    mockLeases([], [app.leaseUuid]);
+
+    const result = await executeListApps({ state: 'all' }, makeOptions({ appRegistry: registry }));
+
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'pending' });
+    expect((result.data as any).apps[0].status).toBe('deploying');
+  });
+
+  it('re-observes an app the summary had already written off as stopped', async () => {
+    // The guard skipped every app not summarised running/deploying, so a
+    // 'stopped' entry whose lease is in fact live could never be corrected here.
+    // (`reconcileWithChain` on the sidebar's 15s timer already did exactly this,
+    // so the two chain readers now agree rather than disagreeing by design.)
+    const app = makeApp({ status: 'stopped' });
+    const registry = makeRegistry([app]);
+    mockLeases([app.leaseUuid]);
+
+    const result = await executeListApps({ state: 'all' }, makeOptions({ appRegistry: registry }));
+
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active' });
+    expect((result.data as any).apps[0].status).toBe('running');
+  });
+
+  it('the positive observation cannot promote an app the PROVIDER failed', async () => {
+    // Derivation rule 1 (provisionState 'failed') outranks rule 5's chain-only
+    // inference, so re-observing the chain as ACTIVE records the chain fact
+    // without touching the verdict — the F4 clobber cannot come back in through
+    // this new write.
+    const app = makeApp({ status: 'failed', provisionState: 'failed' });
+    const registry = makeRegistry([app]);
+    mockLeases([app.leaseUuid]);
+
+    const result = await executeListApps({ state: 'all' }, makeOptions({ appRegistry: registry }));
+
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active' });
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.chainState).toBe('active');
+    expect(stored?.status).toBe('failed');
+    expect((result.data as any).apps[0].status).toBe('failed');
+  });
+
+  it('still records absence — for every app, not just the running ones', async () => {
+    const app = makeApp({ status: 'stopped', chainState: 'active' });
+    const registry = makeRegistry([app]);
+    mockLeases([]);
+
+    await executeListApps({ state: 'all' }, makeOptions({ appRegistry: registry }));
+
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'absent' });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.chainState).toBe('absent');
+  });
+});
+
+describe('N3 — the three provider-read tools agree on one refusal rule', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('get_logs serves a FAILED app', async () => {
+    // A failed app is when logs matter most, and barney already reads them in
+    // that state internally — deployError.ts's fetchFailureLogs calls
+    // getLeaseLogs on a failed deploy and puts the output in chat. The refusal
+    // only meant the model could see logs barney volunteered and not logs the
+    // user asked for. Now it matches app_diagnostics / app_releases: only
+    // 'stopped' refuses.
+    const app = makeApp({ status: 'failed', provisionState: 'failed' });
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseLogs).mockResolvedValue({
+      lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
+      logs: { web: 'panic: cannot bind port' },
+    });
+
+    const result = await executeGetLogs(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).logs.web).toContain('panic');
+  });
+
+  it('get_logs serves a DEPLOYING app stuck at provisionState "unconfirmed"', async () => {
+    const app = makeApp({ status: 'deploying', provisionState: 'unconfirmed' });
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseLogs).mockResolvedValue({
+      lease_uuid: app.leaseUuid,
+      tenant: ADDRESS,
+      provider_uuid: app.providerUuid,
+      logs: { web: 'pulling image...' },
+    });
+
+    const result = await executeGetLogs(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+
+    expect(result.success).toBe(true);
+  });
+
+  it('get_logs still refuses a STOPPED app, and says only that', async () => {
+    // The lease is gone, so the lease-scoped ADR-036 token authenticates
+    // against nothing and the provider has deprovisioned.
+    const app = makeApp({ status: 'stopped' });
+    const result = await executeGetLogs(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: makeRegistry([app]), signing: mockSigning })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('stopped');
+    expect(result.error).not.toContain('failed');
+    expect(getLeaseLogs).not.toHaveBeenCalled();
+  });
+
+  it('app_diagnostics and app_releases admit the entry a chain-terminal deploy leaves behind', async () => {
+    // N1's payoff, exercised through the real derivation. The registry write is
+    // byte-for-byte what handleDeployManifestError's TerminalChainStateError arm
+    // now performs.
+    const app = makeApp({ status: 'deploying' });
+    const registry = makeRegistry([app]);
+    registry.updateApp(ADDRESS, app.leaseUuid, { chainState: 'absent', provisionState: 'failed' });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('failed');
+
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1, reason: 'Unknown' });
+    vi.mocked(getLeaseReleases).mockResolvedValue({ lease_uuid: app.leaseUuid, releases: [] } as any);
+
+    const diagnostics = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+    const releases = await executeAppReleases(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+
+    expect(diagnostics.success).toBe(true);
+    expect(releases.success).toBe(true);
+  });
+
+  it('and would REFUSE the same entry if only the chain half were recorded', async () => {
+    // The regression N1 fixes, pinned as its own case so the reason the second
+    // observation exists cannot be optimised away later: with `chainState:
+    // 'absent'` alone, derivation rule 2 yields 'stopped' — the one status both
+    // tools refuse — on the exact failure the user most needs explained.
+    const app = makeApp({ status: 'deploying' });
+    const registry = makeRegistry([app]);
+    registry.updateApp(ADDRESS, app.leaseUuid, { chainState: 'absent' });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('stopped');
+
+    const diagnostics = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+    const releases = await executeAppReleases(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+
+    expect(diagnostics.success).toBe(false);
+    expect(diagnostics.error).toContain('stopped');
+    expect(releases.success).toBe(false);
+    expect(releases.error).toContain('stopped');
   });
 });
