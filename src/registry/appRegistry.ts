@@ -11,6 +11,17 @@ import { logError } from '../utils/errors';
 export const APP_STATUSES = ['deploying', 'running', 'stopped', 'failed'] as const;
 export type AppStatus = (typeof APP_STATUSES)[number];
 
+/** Chain observation. `'absent'` = we looked and it was gone; an OBSERVATION, not an intent. */
+export const CHAIN_STATES = ['active', 'pending', 'absent'] as const;
+export type ChainState = (typeof CHAIN_STATES)[number];
+
+/**
+ * Provider provisioning observation. `'unconfirmed'` is the honest middle value:
+ * accepted, but no readiness verdict ever arrived. NOT "failed", NOT "running".
+ */
+export const PROVISION_STATES = ['confirmed', 'unconfirmed', 'failed'] as const;
+export type ProvisionState = (typeof PROVISION_STATES)[number];
+
 export const AppEntrySchema = z.object({
   name: z.string(),
   leaseUuid: z.string(),
@@ -27,7 +38,13 @@ export const AppEntrySchema = z.object({
     metadata: z.record(z.string(), z.string()).optional(),
     services: z.record(z.string(), z.unknown()).optional(),
   }).optional(),
+  /** DERIVED from the two observations below; a passed-in `status` is only rule 5's fallback. */
   status: z.enum(APP_STATUSES),
+  /** Chain observation. ABSENT (undefined) = never observed, which is what every pre-existing entry is. */
+  chainState: z.enum(CHAIN_STATES).optional(),
+  /** ABSENT (undefined) = never observed; a writer without one (abort/cancel,
+   *  UPDATE_INDETERMINATE) MUST leave it alone rather than invent a value. */
+  provisionState: z.enum(PROVISION_STATES).optional(),
   manifest: z.string().optional(),
   /** Cached chain state for the lease's `LeaseItem.custom_domain` fields.
    *  Written by `executeConfirmedDeployApp` on successful attach and refreshed by
@@ -41,6 +58,46 @@ export const AppEntrySchema = z.object({
 });
 
 export type AppEntry = z.infer<typeof AppEntrySchema>;
+
+/** The observation fields plus the legacy `status` that rule 5 falls back to. */
+export type AppStatusInputs = Pick<AppEntry, 'chainState' | 'provisionState' | 'status'>;
+
+/**
+ * Derive the `status` summary from the two independent observations. Writers
+ * record only what they saw, so a chain tick can no longer revert the provider's
+ * `failed` verdict to `running`. Precedence is by AUTHORITY, not recency:
+ *  1. `provisionState 'failed'` → `'failed'` (outranks chain-absent: both are
+ *     terminal, and `failed` is the more informative).
+ *  2. `chainState 'absent'` → `'stopped'`, unless there is no provider
+ *     observation and the legacy `status` is `'failed'`, which is kept.
+ *  3. `provisionState 'unconfirmed'` → `'deploying'`.
+ *  4. `provisionState 'confirmed'` → `'deploying'` while chain-`pending`, else `'running'`.
+ *  5. Otherwise chain-only: `active` → `'running'`, `pending` → `'deploying'`,
+ *     nothing observed → the stored legacy `status`.
+ *
+ * Rule 2 MUST stay ahead of rule 3: `'deploying'` is the only NON-terminal label
+ * (it spins, and blocks name reuse), so a stopped app whose deploy ended
+ * `unconfirmed` would spin forever with its name taken.
+ */
+export function deriveAppStatus(e: AppStatusInputs): AppStatus {
+  if (e.provisionState === 'failed') return 'failed';
+
+  if (e.chainState === 'absent') {
+    // Legacy carve-out: with no provider observation, `status` is the only
+    // surviving record of a failure, and chain-absence says nothing about why.
+    return e.provisionState === undefined && e.status === 'failed' ? 'failed' : 'stopped';
+  }
+
+  if (e.provisionState === 'unconfirmed') return 'deploying';
+
+  if (e.provisionState === 'confirmed') {
+    return e.chainState === 'pending' ? 'deploying' : 'running';
+  }
+
+  if (e.chainState === 'active') return 'running';
+  if (e.chainState === 'pending') return 'deploying';
+  return e.status;
+}
 
 /** Name validation: lowercase alphanumeric + hyphens, 1-32 chars, no leading/trailing hyphen */
 const APP_NAME_REGEX = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
@@ -329,21 +386,81 @@ export function getAppByLease(address: string, leaseUuid: string): AppEntry | nu
  */
 export function addApp(address: string, entry: AppEntry): AppEntry {
   let apps = loadApps(address);
+  // Derived, never taken on trust: with no observations it is rule 5's verbatim fallback.
+  const stored: AppEntry = { ...entry, status: deriveAppStatus(entry) };
   // Remove old stopped/failed entries with the same name
   apps = apps.filter(
     (a) =>
-      a.name !== entry.name ||
+      a.name !== stored.name ||
       (a.status !== 'stopped' && a.status !== 'failed')
   );
-  apps.push(entry);
+  apps.push(stored);
   if (!saveApps(address, apps)) {
     throw new Error('Failed to save app to local registry (localStorage may be full). The lease was created on-chain but may not appear in the sidebar.');
   }
   notify(address);
-  return entry;
+  return stored;
 }
 
-/** Update fields on an existing app (matched by leaseUuid). Returns updated entry or null. */
+/**
+ * Fields whose only repeatable writer (`executeAppStatus`) rebuilds the value
+ * from scratch each call, so reference equality can never report "unchanged".
+ * The notify, not the write, is the expensive half: `useDnsStatusPolling` keys
+ * off the registry array's identity and aborts every in-flight DoH/HTTPS probe
+ * when it changes — cancelling the probe the user re-ran `app_status` to check.
+ */
+const STRUCTURAL_FIELDS = new Set<string>(['customDomains', 'connection']);
+
+/**
+ * Structural equality for a `STRUCTURAL_FIELDS` value.
+ *
+ * TRAP: do NOT simplify to a raw `JSON.stringify(a) === JSON.stringify(b)`.
+ * `prev` came back through `AppEntrySchema`, `next` is raw from the provider,
+ * and zod both REORDERS keys into schema order and STRIPS ones it does not
+ * model, so the two never match:
+ *   fred wire : host, fqdn, ports, instances, services, protocol, metadata
+ *   stored    : host, fqdn, ports, instances, metadata, services
+ * A raw compare is false FOREVER, which made this dead code and had `app_status`
+ * notify on every call. Parsing both sides through the same schema field
+ * normalizes them identically; re-parsing the parsed `prev` is idempotent. JSON
+ * rather than a hand-written walk because `connection` carries open bags this
+ * module does not model; any uncertainty resolves to "changed".
+ */
+function sameStructurally(field: keyof AppEntry, a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  const shape = (AppEntrySchema.shape as Record<string, z.ZodTypeAny | undefined>)[field];
+  if (!shape) return false;
+  try {
+    const na = shape.safeParse(a);
+    const nb = shape.safeParse(b);
+    if (!na.success || !nb.success) return false;
+    return JSON.stringify(na.data) === JSON.stringify(nb.data);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fields no subscriber renders — they reach the UI only via the derived `status`,
+ * so a write touching just these persists without notifying. A DENY-list on
+ * purpose: a field added later defaults to NOTIFYING, so silence must be opted
+ * into by someone who has checked the subscribers.
+ */
+const OBSERVATION_ONLY_FIELDS = new Set<string>(['chainState', 'provisionState']);
+
+/**
+ * Update fields on an existing app (matched by leaseUuid). Returns updated entry or null.
+ *
+ * `status` is re-derived from the MERGED entry, so an observation outranks an
+ * asserted `status`. Fields absent from `updates` stay untouched — a writer with
+ * no provisioning observation omits `provisionState` rather than invent one.
+ *
+ * Persist-vs-notify (`reconcileWithChain` uses the same split): `dirty` decides
+ * whether to SAVE, `visible` whether to NOTIFY. Without it a writer on the 15s
+ * refresh tick could only latch `chainState: 'absent'` and never refresh it back,
+ * since re-asserting `'active'` would re-render the whole sidebar. "Changed"
+ * means VALUE-changed, not reference-changed; see `STRUCTURAL_FIELDS`.
+ */
 export function updateApp(
   address: string,
   leaseUuid: string,
@@ -353,15 +470,35 @@ export function updateApp(
   const idx = apps.findIndex((a) => a.leaseUuid === leaseUuid);
   if (idx === -1) return null;
 
-  apps[idx] = { ...apps[idx], ...updates };
+  const prev = apps[idx];
+  const merged = { ...prev, ...updates };
+  const next: AppEntry = { ...merged, status: deriveAppStatus(merged) };
+  apps[idx] = next;
+
+  // A moved summary is always both persist- and notify-worthy, asked for or not.
+  let visible = prev.status !== next.status;
+  let dirty = visible;
+  // Compare VALUES, not key presence: re-asserting a stored value is a no-op.
+  for (const key of Object.keys(updates) as (keyof AppEntry)[]) {
+    const unchanged = STRUCTURAL_FIELDS.has(key)
+      ? sameStructurally(key, prev[key], next[key])
+      : Object.is(prev[key], next[key]);
+    if (unchanged) continue;
+    dirty = true;
+    if (!OBSERVATION_ONLY_FIELDS.has(key)) visible = true;
+  }
+
+  // Nothing moved — no write, no notify: re-observing is free in steady state.
+  if (!dirty) return next;
+
   if (!saveApps(address, apps)) {
     logError('appRegistry.updateApp', new Error('localStorage write failed — update may not persist across page reload'));
     // Don't notify on save failure: subscribers re-read from localStorage and
     // would see stale state, masking the failure with a no-op refresh.
-    return apps[idx];
+    return next;
   }
-  notify(address);
-  return apps[idx];
+  if (visible) notify(address);
+  return next;
 }
 
 /** Remove an app by lease UUID. Returns true if found and removed. */
@@ -380,12 +517,11 @@ export function removeApp(address: string, leaseUuid: string): boolean {
 
 /**
  * Reconcile registry with on-chain state.
- * Marks apps as "stopped" if their lease is closed/expired/rejected on-chain.
- * Restores stopped/failed apps to 'running' or 'deploying' based on the
- * on-chain lease state (active → running, pending → deploying).
- * Promotes a 'deploying' app to 'running' when its lease is already active
- * on-chain (a deploy that finished after this tab lost track of it — otherwise
- * it spins as 'deploying' forever).
+ *
+ * Observes exactly ONE thing — the chain — so it writes exactly one field:
+ * `chainState`. Deliberately NO status-promotion branch: chain-ACTIVE alone used
+ * to promote `failed`/`deploying` → `running`, reverting the provider's verdict
+ * on the next tick. `deriveAppStatus` owns the summary now.
  *
  * @param address - wallet address
  * @param leaseStates - map of lease UUID → 'active' | 'pending' for leases still on-chain
@@ -395,40 +531,33 @@ export function reconcileWithChain(
   leaseStates: Map<string, 'active' | 'pending'>
 ): void {
   const apps = loadApps(address);
-  let changed = false;
+  // `dirty` persists a fresh observation even when the summary is unchanged;
+  // `statusChanged` gates the notify (see updateApp's persist-vs-notify note).
+  let dirty = false;
+  let statusChanged = false;
 
   for (const app of apps) {
-    const chainState = leaseStates.get(app.leaseUuid);
-    if (
-      (app.status === 'running' || app.status === 'deploying') &&
-      !chainState
-    ) {
-      app.status = 'stopped';
-      changed = true;
-    } else if (
-      (app.status === 'failed' || app.status === 'stopped') &&
-      chainState
-    ) {
-      // Lease is still on-chain — restore based on chain state.
-      // Active leases → running, pending leases → deploying.
-      // Covers false failures from transient issues (e.g. WebSocket/polling
-      // errors during restart/update) and stale stopped status.
-      app.status = chainState === 'active' ? 'running' : 'deploying';
-      changed = true;
-    } else if (app.status === 'deploying' && chainState === 'active') {
-      // Deploy finished on-chain after this tab lost track of it — promote so it
-      // stops spinning forever and reflects the true running state.
-      app.status = 'running';
-      changed = true;
+    // A lease missing from the tenant's live set was OBSERVED to be gone.
+    const chainState: ChainState = leaseStates.get(app.leaseUuid) ?? 'absent';
+    const status = deriveAppStatus({ ...app, chainState });
+
+    if (app.chainState !== chainState) {
+      app.chainState = chainState;
+      dirty = true;
+    }
+    if (app.status !== status) {
+      app.status = status;
+      dirty = true;
+      statusChanged = true;
     }
   }
 
-  if (changed) {
+  if (dirty) {
     if (!saveApps(address, apps)) {
       logError('appRegistry.reconcileWithChain', new Error('localStorage write failed — reconciliation may not persist across page reload'));
       // See updateApp note: skip notify on save failure to avoid stale-read masking.
       return;
     }
-    notify(address);
+    if (statusChanged) notify(address);
   }
 }
