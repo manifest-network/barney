@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  ProviderApiError,
+  isTransientProviderError,
+  getProviderHealth as sdkGetProviderHealth,
+} from '@manifest-network/manifest-sdk/deploy';
 import { createProviderFetch } from './providerFetchAdapter';
 
 // These exercise the PROD branch by stubbing import.meta.env.DEV = false.
@@ -130,5 +135,101 @@ describe('createProviderFetch — DEV proxy + redirect hardening', () => {
 
     const [, calledInit] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(calledInit.redirect).toBe('manual');
+  });
+});
+
+// Barney's own guard rejections are hard security blocks, not blips. They are
+// thrown as `ProviderApiError` tagged `invalid_url` — the kind the SDK's
+// `isTransientProviderError` classifies as NOT worth retrying — so a caller that
+// unwraps them cannot mistake a block for a network hiccup.
+describe('createProviderFetch — guard rejections are non-transient ProviderApiErrors', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  const expectBlocked = (err: unknown) => {
+    expect(ProviderApiError.isProviderApiError(err)).toBe(true);
+    const e = err as ProviderApiError;
+    expect(e.kind).toBe('invalid_url');
+    expect(e.status).toBe(0);
+    expect(isTransientProviderError(e)).toBe(false);
+  };
+
+  it('tags the PROD SSRF rejection invalid_url', async () => {
+    vi.stubEnv('DEV', false);
+    const providerFetch = createProviderFetch();
+
+    await providerFetch('http://169.254.169.254/latest/meta-data').then(
+      () => expect.unreachable('should have been blocked'),
+      expectBlocked
+    );
+  });
+
+  it('tags the PROD redirect rejection invalid_url', async () => {
+    vi.stubEnv('DEV', false);
+    fetchSpy.mockResolvedValue({ type: 'basic', status: 302 } as Response);
+    const providerFetch = createProviderFetch();
+
+    await providerFetch('https://fred.example.com/v1/x').then(
+      () => expect.unreachable('should have been blocked'),
+      expectBlocked
+    );
+  });
+
+  it('tags the DEV redirect rejection invalid_url', async () => {
+    vi.stubEnv('DEV', true);
+    fetchSpy.mockResolvedValue({ type: 'opaqueredirect', status: 0 } as Response);
+    const providerFetch = createProviderFetch();
+
+    await providerFetch('https://fred.example.com/v1/x').then(
+      () => expect.unreachable('should have been blocked'),
+      expectBlocked
+    );
+  });
+});
+
+// DRIFT DETECTOR, not a desired behaviour. manifest-mcp-fred 0.21.0's
+// `classifyTransportError` re-wraps EVERY rejection from an injected `fetchFn`
+// as `kind: 'network'` without checking whether it is already classified, so the
+// `invalid_url` tag above survives only on `.cause` and the error a caller sees
+// is still "transient". If this test starts failing, the SDK has learned to
+// honour a pre-classified error — drop the KNOWN LIMITATION note in
+// providerFetchAdapter.ts and this block with it.
+describe('SDK re-wrap of a Barney guard rejection (upstream limitation)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('reaches the caller as kind:"network" with the block preserved on .cause', async () => {
+    vi.stubEnv('DEV', false);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ type: 'basic', status: 302 } as Response)
+    );
+
+    const err = await sdkGetProviderHealth(
+      'https://fred.example.com',
+      5000,
+      createProviderFetch(),
+      false
+    ).then(
+      () => expect.unreachable('should have been blocked'),
+      (e: unknown) => e as ProviderApiError
+    );
+
+    expect(err.kind).toBe('network');
+    expect(isTransientProviderError(err)).toBe(true);
+    // Barney's classification is not lost — it is one level down.
+    expect((err.cause as ProviderApiError | undefined)?.kind).toBe('invalid_url');
+    expect((err.cause as Error | undefined)?.message).toContain('unexpected redirect');
   });
 });

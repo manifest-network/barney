@@ -5,7 +5,27 @@
  * facade's provider HTTP functions (`@manifest-network/manifest-sdk/deploy`).
  */
 
+import { ProviderApiError } from '@manifest-network/manifest-sdk/deploy';
 import { parseHttpUrl, isUrlSsrfSafe } from '../utils/url';
+
+/**
+ * Barney's own rejections are hard security blocks, not blips, so they are thrown
+ * as `ProviderApiError` tagged `invalid_url` — the SDK's non-transient kind — rather
+ * than as a bare `Error`.
+ *
+ * KNOWN LIMITATION (verified against manifest-mcp-fred 0.21.0
+ * `http/provider.js` `classifyTransportError`): the SDK re-wraps ANY rejection from
+ * an injected `fetchFn` as `ProviderApiError(0, …, { kind: 'network' })` without
+ * inspecting it first, so `isTransientProviderError` still answers `true` for what
+ * reaches a caller and the readiness poll still burns its failure budget. The tag
+ * survives only on `.cause`. Kept anyway: it is the correct type for a transport
+ * adapter to throw, it costs nothing, and it becomes effective the moment the SDK
+ * honours an already-classified error. `provider-api.test.ts` pins both halves so
+ * an upstream fix surfaces as a failing test rather than going unnoticed.
+ */
+function blocked(message: string): ProviderApiError {
+  return new ProviderApiError(0, message, { kind: 'invalid_url' });
+}
 
 /**
  * Creates a fetch function that:
@@ -39,7 +59,7 @@ export function createProviderFetch(): typeof globalThis.fetch {
       // `redirect` AFTER `...init` so a caller can't override it.
       const response = await globalThis.fetch(proxyUrl, { ...init, headers, redirect: 'manual' });
       if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
-        throw new Error(`Provider URL blocked: unexpected redirect from ${proxyUrl}`);
+        throw blocked(`Provider URL blocked: unexpected redirect from ${proxyUrl}`);
       }
       return response;
     }
@@ -50,7 +70,7 @@ export function createProviderFetch(): typeof globalThis.fetch {
       ? `${parsed.origin}${parsed.pathname}${parsed.search}`
       : '[invalid or unsupported URL]';
     if (!parsed || !isUrlSsrfSafe(parsed)) {
-      throw new Error(`Provider URL blocked by SSRF validation: ${safeUrlForError}`);
+      throw blocked(`Provider URL blocked by SSRF validation: ${safeUrlForError}`);
     }
 
     const sanitizedUrl = `${parsed.origin}${parsed.pathname}${parsed.search}`;
@@ -59,7 +79,7 @@ export function createProviderFetch(): typeof globalThis.fetch {
     // follow. Provider API calls never legitimately redirect — reject rather than let
     // the browser auto-follow past SSRF validation.
     if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
-      throw new Error(`Provider URL blocked: unexpected redirect from ${sanitizedUrl}`);
+      throw blocked(`Provider URL blocked: unexpected redirect from ${sanitizedUrl}`);
     }
     return response;
   };

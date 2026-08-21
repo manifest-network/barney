@@ -26,6 +26,13 @@ export {
 // Barney-specific functions
 // ============================================================================
 
+// 0.18+ (ENG-490): every fred HTTP fn gained a trailing `allowLoopback=false` arg.
+// In DEV the provider URL is localhost; without allowLoopback the SDK's internal
+// validateProviderUrl throws (non-HTTPS/loopback) before providerFetch or the dev
+// CORS proxy is ever reached. The dev /proxy-provider tunnel still routes the real
+// request — this only relaxes the SDK's own URL guard. Same value fred.ts injects.
+const ALLOW_LOOPBACK = import.meta.env.DEV;
+
 /**
  * Checks the health status of a provider's API.
  * Returns null if the provider is unreachable (Barney convention).
@@ -38,7 +45,7 @@ export async function getProviderHealth(
   if (!providerApiUrl) return null;
 
   try {
-    return await fredGetProviderHealth(providerApiUrl, timeoutMs, providerFetch);
+    return await fredGetProviderHealth(providerApiUrl, timeoutMs, providerFetch, ALLOW_LOOPBACK);
   } catch (error) {
     logError('provider-api.getProviderHealth', error);
     return null;
@@ -54,5 +61,11 @@ export function getLeaseConnectionInfo(
   leaseUuid: string,
   authToken: string
 ): Promise<LeaseConnectionResponse> {
-  return fredGetLeaseConnectionInfo(providerApiUrl, leaseUuid, authToken, providerFetch);
+  return fredGetLeaseConnectionInfo(
+    providerApiUrl,
+    leaseUuid,
+    authToken,
+    providerFetch,
+    ALLOW_LOOPBACK
+  );
 }
