@@ -212,6 +212,29 @@ describe('runBatchWithConcurrency', () => {
     }
   });
 
+  it('buckets an executeOne outcome verdict away from succeeded', async () => {
+    // `null` = failed and a bare item = succeeded are not enough: an operation
+    // the provider never gave a verdict on, and one aborted before the provider
+    // was asked, are neither — and rounding them into `succeeded` is what let
+    // the summary claim "All N apps deployed!" for an unconfirmed deploy.
+    const result = await runBatchWithConcurrency({
+      entries: [makeEntry('a'), makeEntry('b'), makeEntry('c'), makeEntry('d')],
+      intermediatePhases: ['provisioning'],
+      initialPhase: 'creating_lease',
+      executeOne: async (entry) => {
+        if (entry.name === 'b') return { name: entry.name, outcome: 'unconfirmed' as const, detail: 'may still be starting' };
+        if (entry.name === 'c') return { name: entry.name, outcome: 'cancelled' as const };
+        if (entry.name === 'd') return null;
+        return { name: entry.name };
+      },
+    });
+
+    expect(result.succeeded).toEqual([{ name: 'a' }]);
+    expect(result.unconfirmed).toEqual([{ name: 'b', outcome: 'unconfirmed', detail: 'may still be starting' }]);
+    expect(result.cancelled).toEqual(['c']);
+    expect(result.failed).toEqual(['d']);
+  });
+
   it('emits progress with operation field when set', async () => {
     const onProgress = vi.fn();
 
@@ -347,6 +370,135 @@ describe('summarizeBatchResult', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('Cancelled: a, b');
     expect(result.error).not.toContain('All deploys failed');
+  });
+
+  it('reports unconfirmed entries under their own label, never as deployed', () => {
+    const onProgress = vi.fn();
+    const result = summarizeBatchResult({
+      succeeded: [{ name: 'a' }],
+      failed: [],
+      unconfirmed: [{ name: 'postgres', outcome: 'unconfirmed', detail: 'may still be starting' }],
+      unconfirmedLabel: 'Still deploying',
+      dataKey: 'deployed',
+      verb: 'Deployed',
+      failedNoun: 'deploys',
+      onProgress,
+    });
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).deployed).toEqual([{ name: 'a' }]);
+    expect((result.data as any).unconfirmed).toHaveLength(1);
+    expect((result.data as any).message).toContain('Still deploying:');
+    expect((result.data as any).message).toContain('postgres: may still be starting');
+    // The headline claim must not swallow the unconfirmed entry.
+    expect(onProgress.mock.calls[0][0].detail).not.toContain('All 1 app deployed!');
+    expect(onProgress.mock.calls[0][0].detail).toContain('1 still deploying');
+  });
+
+  it('does not report an all-unconfirmed batch as an all-failed one', () => {
+    const result = summarizeBatchResult({
+      succeeded: [],
+      failed: [],
+      unconfirmed: [{ name: 'postgres', outcome: 'unconfirmed', detail: 'may still be starting' }],
+      unconfirmedLabel: 'Still deploying',
+      dataKey: 'deployed',
+      verb: 'Deployed',
+      failedNoun: 'deploys',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect((result.data as any).message).toContain('Still deploying:');
+  });
+
+  it('never prints a zero count in the progress detail', () => {
+    const onProgress = vi.fn();
+    summarizeBatchResult({
+      succeeded: [],
+      failed: [],
+      unconfirmed: [{ name: 'postgres', outcome: 'unconfirmed' }],
+      unconfirmedLabel: 'Still deploying',
+      cancelled: [],
+      dataKey: 'deployed',
+      verb: 'Deployed',
+      failedNoun: 'deploys',
+      onProgress,
+    });
+
+    expect(onProgress.mock.calls[0][0].detail).toBe('1 still deploying');
+  });
+
+  it('keeps the progress phase and the ToolResult verdict in agreement', () => {
+    // All-unconfirmed: nothing failed, so the card must not read 'failed' while
+    // the ToolResult reports success.
+    const unconfirmedProgress = vi.fn();
+    const unconfirmedResult = summarizeBatchResult({
+      succeeded: [],
+      failed: [],
+      unconfirmed: [{ name: 'postgres', outcome: 'unconfirmed' }, { name: 'redis', outcome: 'unconfirmed' }],
+      unconfirmedLabel: 'Still deploying',
+      dataKey: 'deployed',
+      verb: 'Deployed',
+      failedNoun: 'deploys',
+      onProgress: unconfirmedProgress,
+    });
+    expect(unconfirmedResult.success).toBe(true);
+    expect(unconfirmedProgress.mock.calls[0][0].phase).toBe('ready');
+    expect(unconfirmedProgress.mock.calls[0][0].detail).toBe('2 still deploying');
+
+    // Nothing landed: both surfaces say failed.
+    const failedProgress = vi.fn();
+    const failedResult = summarizeBatchResult({
+      succeeded: [],
+      failed: ['a'],
+      cancelled: ['b'],
+      dataKey: 'deployed',
+      verb: 'Deployed',
+      failedNoun: 'deploys',
+      onProgress: failedProgress,
+    });
+    expect(failedResult.success).toBe(false);
+    expect(failedProgress.mock.calls[0][0].phase).toBe('failed');
+    expect(failedProgress.mock.calls[0][0].detail).toBe('1 failed, 1 cancelled');
+  });
+
+  it('keeps the all-succeeded headline and drops it as soon as anything else lands', () => {
+    const allOk = vi.fn();
+    summarizeBatchResult({
+      succeeded: [{ name: 'a' }, { name: 'b' }],
+      failed: [],
+      dataKey: 'deployed',
+      verb: 'Deployed',
+      failedNoun: 'deploys',
+      onProgress: allOk,
+    });
+    expect(allOk.mock.calls[0][0].detail).toBe('All 2 apps deployed!');
+
+    const mixed = vi.fn();
+    summarizeBatchResult({
+      succeeded: [{ name: 'a' }],
+      failed: [],
+      cancelled: ['b'],
+      dataKey: 'deployed',
+      verb: 'Deployed',
+      failedNoun: 'deploys',
+      onProgress: mixed,
+    });
+    expect(mixed.mock.calls[0][0].detail).toBe('1 deployed, 1 cancelled');
+  });
+
+  it('emits a sensible detail for an empty batch instead of "All 0 apps"', () => {
+    const onProgress = vi.fn();
+    summarizeBatchResult({
+      succeeded: [],
+      failed: [],
+      dataKey: 'deployed',
+      verb: 'Deployed',
+      failedNoun: 'deploys',
+      onProgress,
+    });
+
+    expect(onProgress.mock.calls[0][0].detail).toBe('No apps deployed');
   });
 
   it('formats URLs in succeeded entries', () => {

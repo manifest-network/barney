@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getConfigValue, getNumericConfig, parsePositiveInt, runtimeConfig } from './runtimeConfig';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { getConfigValue, getNumericConfig, parsePositiveInt, runtimeConfig, type NumericConfigKey } from './runtimeConfig';
 
 describe('getConfigValue', () => {
   let originalConfig: typeof window.__RUNTIME_CONFIG__;
@@ -152,4 +152,57 @@ describe('getNumericConfig', () => {
 
   // Non-numeric keys like PUBLIC_REST_URL are now rejected at compile time
   // via the NumericConfigKey type constraint.
+});
+
+describe('NUMERIC_LIMITS headroom', () => {
+  let originalConfig: typeof window.__RUNTIME_CONFIG__;
+
+  beforeEach(() => {
+    originalConfig = window.__RUNTIME_CONFIG__;
+  });
+
+  afterEach(() => {
+    window.__RUNTIME_CONFIG__ = originalConfig;
+    vi.resetModules();
+  });
+
+  /** runtimeConfig is frozen at import time, so an override needs a fresh module. */
+  async function resolveWith(
+    overrides: Partial<Record<NumericConfigKey, string>>,
+    key: NumericConfigKey,
+    fallback: number
+  ): Promise<number> {
+    window.__RUNTIME_CONFIG__ = overrides;
+    vi.resetModules();
+    const mod = await import('./runtimeConfig');
+    return mod.getNumericConfig(key, fallback);
+  }
+
+  const NUMERIC_KEYS: NumericConfigKey[] = [
+    'PUBLIC_AI_STREAM_TIMEOUT_MS',
+    'PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS',
+    'PUBLIC_AI_TOOL_API_TIMEOUT_MS',
+    'PUBLIC_AI_MAX_RETRIES',
+    'PUBLIC_AI_CONFIRMATION_TIMEOUT_MS',
+    'PUBLIC_AI_MAX_TOOL_ITERATIONS',
+    'PUBLIC_AI_MAX_MESSAGES',
+    'PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY',
+  ];
+
+  // A ceiling equal to its own default makes the knob one-directional: the
+  // operator can only ever turn it down.
+  it.each(NUMERIC_KEYS)('%s can be raised above its default', async (key) => {
+    const base = await resolveWith({}, key, 1);
+    expect(base).toBeGreaterThan(0);
+    const raised = await resolveWith({ [key]: String(base * 2) }, key, 1);
+    expect(raised).toBeGreaterThan(base);
+  });
+
+  it('lets an operator raise the deploy timeout to fred\'s reconcile+provision envelope', async () => {
+    expect(await resolveWith(
+      { PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: '900000' },
+      'PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS',
+      600000
+    )).toBe(900000);
+  });
 });

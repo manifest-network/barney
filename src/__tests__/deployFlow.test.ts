@@ -13,7 +13,7 @@ import { executeTool, executeConfirmedTool } from '../ai/toolExecutor';
 import type { ToolExecutorOptions, PayloadAttachment } from '../ai/toolExecutor';
 import type { AppRegistryAccess } from '../ai/toolExecutor/types';
 import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
-import type { AppEntry } from '../registry/appRegistry';
+import { deriveAppStatus, type AppEntry } from '../registry/appRegistry';
 import type { DeployProgress } from '../ai/progress';
 import { LeaseState } from '../api/billing';
 
@@ -100,11 +100,20 @@ function makeInMemoryRegistry(): AppRegistryAccess & { _store: AppEntry[] } {
       return _store.find((a) => a.name.endsWith(`-${lower}`)) ?? _store.find((a) => a.name.includes(lower)) ?? null;
     },
     getAppByLease: (_addr: string, uuid: string) => _store.find((a) => a.leaseUuid === uuid) ?? null,
-    addApp: (_addr: string, entry: AppEntry) => { _store.push(entry); return entry; },
+    // Mirrors production: `status` is DERIVED on every mutation, never taken on
+    // trust. Writers record observations (`chainState` / `provisionState`), so a
+    // mock that merely merged the update object would not exercise the real
+    // rules this integration test asserts against.
+    addApp: (_addr: string, entry: AppEntry) => {
+      const stored: AppEntry = { ...entry, status: deriveAppStatus(entry) };
+      _store.push(stored);
+      return stored;
+    },
     updateApp: (_addr: string, uuid: string, updates: Partial<Omit<AppEntry, 'leaseUuid'>>) => {
       const idx = _store.findIndex((a) => a.leaseUuid === uuid);
       if (idx === -1) return null;
-      _store[idx] = { ..._store[idx], ...updates };
+      const merged = { ..._store[idx], ...updates };
+      _store[idx] = { ...merged, status: deriveAppStatus(merged) };
       return _store[idx];
     },
   };

@@ -91,6 +91,21 @@ export interface BatchSuccessItem {
   url?: string;
 }
 
+/**
+ * What `executeOne` returns for an entry that neither plainly succeeded nor
+ * plainly failed. `null` still means failed, a bare `{ name, url? }` still means
+ * succeeded, and `outcome` names the two verdicts that are neither — and that
+ * must never be rounded into `succeeded`:
+ *   - `'unconfirmed'` — issued, but the provider never gave a verdict.
+ *   - `'cancelled'` — the user aborted, either before the provider was asked or
+ *     while awaiting the result of a call that had already landed.
+ */
+export interface BatchResultItem extends BatchSuccessItem {
+  outcome?: 'unconfirmed' | 'cancelled';
+  /** Extra copy rendered next to the name in the summary (e.g. the SDK's "may still be starting" note). */
+  detail?: string;
+}
+
 export interface BatchRunnerOptions<E extends BatchEntry> {
   entries: E[];
   /** Ordered intermediate phases, highest priority first (e.g. ['provisioning', 'uploading', 'creating_lease']). */
@@ -113,18 +128,22 @@ export interface BatchRunnerOptions<E extends BatchEntry> {
    * On failure, call `updateProgress('failed', detail)` BEFORE returning `null`.
    * The runner records failed entries by name — the failure detail comes from
    * the updateProgress call, not from the return value.
+   * For the two in-between verdicts, return `{ name, outcome, detail? }` — see
+   * `BatchResultItem`.
    */
   executeOne: (
     entry: E,
     index: number,
     updateProgress: (phase: DeployProgress['phase'], detail?: string) => void,
-  ) => Promise<BatchSuccessItem | null>;
+  ) => Promise<BatchResultItem | null>;
 }
 
 export interface BatchRunResult {
   succeeded: BatchSuccessItem[];
   failed: string[];
-  /** Entries never queued because the signal aborted before their turn. */
+  /** Issued, but the provider never confirmed the outcome — neither succeeded nor failed. */
+  unconfirmed: BatchResultItem[];
+  /** Aborted by the user rather than failed: never queued (the signal aborted before its turn), or `executeOne` said so. */
   cancelled: string[];
   batchProgress: Array<{ name: string; phase: DeployProgress['phase']; detail?: string }>;
 }
@@ -162,6 +181,9 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
 
   const succeeded: BatchSuccessItem[] = [];
   const failed: string[] = [];
+  const unconfirmed: BatchResultItem[] = [];
+  // Seeded by `executeOne` verdicts; the un-queued tail is appended after the loop.
+  const cancelled: string[] = [];
 
   // Run with bounded concurrency — check abort before queuing, not inside executeOne.
   // Already-queued tasks run to completion (they may have broadcast a TX).
@@ -182,10 +204,14 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
     const p = (async () => {
       try {
         const result = await executeOne(entries[i], i, updateProgress);
-        if (result) {
-          succeeded.push(result);
-        } else {
+        if (!result) {
           failed.push(entries[i].name);
+        } else if (result.outcome === 'unconfirmed') {
+          unconfirmed.push(result);
+        } else if (result.outcome === 'cancelled') {
+          cancelled.push(result.name);
+        } else {
+          succeeded.push(result);
         }
       } catch (error) {
         // Safety net — executeOne should handle its own errors, but if it
@@ -211,14 +237,13 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
   // loop). Bucket them as cancelled so the summary counts every entry instead
   // of silently dropping the un-queued tail (and reporting a misleading empty
   // SUCCESS on an abort-before-any-queue).
-  const cancelled: string[] = [];
   for (let j = queuedCount; j < entries.length; j++) {
     cancelled.push(entries[j].name);
     batchProgress[j] = { name: entries[j].name, phase: 'failed', detail: 'Cancelled (batch aborted)' };
   }
-  if (cancelled.length > 0) emitProgress();
+  if (queuedCount < entries.length) emitProgress();
 
-  return { succeeded, failed, cancelled, batchProgress };
+  return { succeeded, failed, unconfirmed, cancelled, batchProgress };
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +253,11 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
 export interface BatchSummaryOptions {
   succeeded: BatchSuccessItem[];
   failed: string[];
-  /** Entries never queued because the batch aborted before their turn. */
+  /** Entries the provider never gave a verdict on — reported separately, never as succeeded. */
+  unconfirmed?: BatchResultItem[];
+  /** Heading for the unconfirmed block, e.g. 'Still deploying'. */
+  unconfirmedLabel?: string;
+  /** Entries the user aborted (never queued, cancelled before the call, or cancelled while awaiting its result). */
   cancelled?: string[];
   /** Key name for the succeeded array in the result data (e.g. 'deployed', 'restarted'). */
   dataKey: string;
@@ -245,21 +274,43 @@ export interface BatchSummaryOptions {
 }
 
 export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
-  const { succeeded, failed, cancelled = [], dataKey, verb, failedNoun, batchProgress, operation, onProgress } = opts;
+  const {
+    succeeded, failed, cancelled = [], unconfirmed = [], unconfirmedLabel = 'Still pending',
+    dataKey, verb, failedNoun, batchProgress, operation, onProgress,
+  } = opts;
 
-  // Emit final progress
+  // Single predicate behind BOTH the overall progress phase and the failure
+  // branch below, so the ProgressCard and the chat text can never disagree.
+  // An unconfirmed batch has not landed, but it is not a failed batch either.
+  const nothingLanded = succeeded.length === 0 && unconfirmed.length === 0;
+
+  // Emit final progress. An unconfirmed entry's ROW reads 'failed' because
+  // 'ready'/'failed' are the ProgressCard's only terminal phases — same
+  // trade-off as the single-deploy path (deployError.ts, arm 2a). That is a
+  // per-row concession; the OVERALL phase follows `nothingLanded`.
   if (onProgress) {
+    // Every segment is conditional, so zero counts are never printed.
+    const segments = [
+      succeeded.length > 0 ? `${succeeded.length} ${verb.toLowerCase()}` : '',
+      failed.length > 0 ? `${failed.length} failed` : '',
+      unconfirmed.length > 0 ? `${unconfirmed.length} ${unconfirmedLabel.toLowerCase()}` : '',
+      cancelled.length > 0 ? `${cancelled.length} cancelled` : '',
+    ].filter(Boolean);
+    const allSucceeded = segments.length === 1 && succeeded.length > 0;
     onProgress({
-      phase: succeeded.length > 0 ? 'ready' : 'failed',
+      phase: nothingLanded ? 'failed' : 'ready',
       ...(operation ? { operation } : {}),
-      detail: failed.length === 0 && cancelled.length === 0
-        ? `All ${succeeded.length} ${succeeded.length === 1 ? 'app' : 'apps'} ${verb.toLowerCase()}!`
-        : `${succeeded.length} ${verb.toLowerCase()}, ${failed.length} failed${cancelled.length > 0 ? `, ${cancelled.length} cancelled` : ''}`,
+      // No segments at all means an empty batch — never emit '' or 'All 0 apps'.
+      detail: segments.length === 0
+        ? `No apps ${verb.toLowerCase()}`
+        : allSucceeded
+          ? `All ${succeeded.length} ${succeeded.length === 1 ? 'app' : 'apps'} ${verb.toLowerCase()}!`
+          : segments.join(', '),
       ...(batchProgress ? { batch: batchProgress.map((b) => ({ ...b })) } : {}),
     });
   }
 
-  if (succeeded.length === 0) {
+  if (nothingLanded) {
     // Nothing landed. When there were no cancellations this is a pure all-failed
     // batch — keep the original message (test/UX contract). Otherwise name both
     // buckets so the abort isn't hidden behind a bare "all failed".
@@ -279,6 +330,10 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     const lines = succeeded.map((d) => d.url ? `${d.name}: ${d.url}` : d.name);
     parts.push(`${verb}:\n${lines.map((l) => `- ${l}`).join('\n')}`);
   }
+  if (unconfirmed.length > 0) {
+    const lines = unconfirmed.map((u) => u.detail ? `${u.name}: ${u.detail}` : u.name);
+    parts.push(`${unconfirmedLabel}:\n${lines.map((l) => `- ${l}`).join('\n')}`);
+  }
   if (failed.length > 0) parts.push(`Failed: ${failed.join(', ')}.`);
   if (cancelled.length > 0) parts.push(`Cancelled: ${cancelled.join(', ')}.`);
 
@@ -287,6 +342,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     data: {
       [dataKey]: succeeded,
       failed,
+      unconfirmed,
       cancelled,
       message: parts.join('\n'),
     },

@@ -100,8 +100,34 @@ export const AI_TOOL_CACHE_MAX_SIZE = 50;
 /** Timeout for blockchain API calls during tool execution (milliseconds) (runtime-configurable) */
 export const AI_TOOL_API_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_TOOL_API_TIMEOUT_MS', 15000);
 
-/** Timeout for deploy provisioning polling before giving up (milliseconds) - 5 minutes (runtime-configurable) */
-export const AI_DEPLOY_PROVISION_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS', 300000);
+/** Timeout for deploy provisioning polling before giving up (milliseconds) - 10 minutes (runtime-configurable).
+ *
+ * Sized to fred's OWN provisioning budget, not to a UI patience figure: fred
+ * `internal/backend/docker/config.go` (v0.13.0) defaults `ImagePullTimeout: 5m`
+ * and `ProvisionTimeout: 10m`. A shorter deadline gives up while the provider is
+ * still legitimately working. Re-check those values on the next provider bump.
+ *
+ * NOTE: `runtimeConfig.DEFAULTS` carries the effective default (this literal is
+ * never reached while that entry is non-empty), so keep the two in step.
+ * `NUMERIC_LIMITS` caps operator overrides at 900000 — the AI_LEASE_WAIT_TIMEOUT_MS
+ * envelope, so the knob can be raised as well as lowered.
+ */
+export const AI_DEPLOY_PROVISION_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS', 600000);
+
+/** Deadline for the restart/update readiness wait (milliseconds) - 15 minutes.
+ *
+ * Longer than the deploy timeout because the worst case is different: SDK 0.21
+ * narrowed `classifyTerminal`'s ACTIVE arm to a `PROVISION_SUCCESS = {'ready'}`
+ * allowlist, so an ACTIVE lease whose provision is `retained` no longer resolves
+ * immediately — it stays `pending` until fred's reconciler re-provisions it.
+ * Reaching the deadline REJECTS, and barney's catch marks the registry entry
+ * 'failed', mislabelling an app that is on its way back up. So the budget is
+ * fred's worst case: up to one `ReconcileInterval` (5m) before the reconciler
+ * picks the lease up, plus a full `ProvisionTimeout` (10m) to re-provision it —
+ * both from fred `internal/backend/docker/config.go` (v0.13.0).
+ * Not runtime-configurable: it tracks provider config, not operator taste.
+ */
+export const AI_LEASE_WAIT_TIMEOUT_MS = 900_000;
 
 /** Maximum concurrent app deploys in a batch (runtime-configurable).
  * Limited by provider rate limiting (Fred defaults to 5 req/s per tenant, burst 10). */

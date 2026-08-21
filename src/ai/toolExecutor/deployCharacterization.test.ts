@@ -214,11 +214,15 @@ describe('C0 characterization — registry writes', () => {
       }),
     );
 
+    // F4 re-point: the success write records the two OBSERVATIONS
+    // deployManifest's resolution establishes (chain ACTIVE + provision 'ready')
+    // instead of asserting a summary; `status` is derived from them.
     expect(registry.updateApp).toHaveBeenCalledWith(
       ADDRESS,
       'new-lease-uuid',
-      expect.objectContaining({ status: 'running', url: '127.0.0.1:32456' }),
+      expect.objectContaining({ chainState: 'active', provisionState: 'confirmed', url: '127.0.0.1:32456' }),
     );
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.status).toBe('running');
   });
 });
 
@@ -355,7 +359,7 @@ describe('C0 characterization — fallbackToChainState core (delta D-B frozen ha
     expect(registry.updateApp).toHaveBeenCalledWith(
       ADDRESS, 'new-lease-uuid',
       expect.objectContaining({
-        status: 'running',
+        chainState: 'active',
         url: '5.6.7.8:32456',
         connection: expect.objectContaining({ host: '5.6.7.8' }),
       }),
@@ -416,7 +420,7 @@ describe('C0 characterization — executeConfirmedBatchDeploy', () => {
     // Per-entry registry writes: two addApp(deploying), two updateApp(running)
     expect(registry.addApp).toHaveBeenCalledTimes(2);
     expect(registry.updateApp).toHaveBeenCalledWith(
-      ADDRESS, 'new-lease-uuid', expect.objectContaining({ status: 'running' }),
+      ADDRESS, 'new-lease-uuid', expect.objectContaining({ chainState: 'active', provisionState: 'confirmed' }),
     );
 
     // Batch progress carries a per-app `batch` array on the final emit
