@@ -94,6 +94,24 @@ export interface ToolDataMap {
     hours_remaining: number | null;
     running_apps: number;
   };
+  browse_catalog: {
+    providers: Array<{
+      uuid: string;
+      apiUrl: string;
+      /** Exact match on fred's `healthy` verdict — `degraded` is NOT usable for a deploy. */
+      healthy: boolean;
+      /**
+       * The provider's raw /health verdict, echoed opaquely: `healthy` |
+       * `degraded` | `unhealthy` today, plus barney's own `unreachable` /
+       * `no_api_url` sentinels, plus whatever tier a future fred adds. OPEN set
+       * — typed `string`, never narrowed to a union, never switched on.
+       */
+      health_status: string;
+      /** Which checks failed, present only when `healthy` is false. */
+      healthError?: string;
+    }>;
+    tiers: Record<string, Array<{ provider: string; price: string; unit: string }>>;
+  };
 }
 
 /** Lookup helper — `ToolData<'app_status'>` resolves to that tool's data shape. */

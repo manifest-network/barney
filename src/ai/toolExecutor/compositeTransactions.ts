@@ -11,30 +11,33 @@ import {
   asProviderUuid,
   noopLogger,
 } from '@manifest-network/manifest-sdk';
+import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
 import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
 import { ProviderApiError } from '../../api/provider-api';
-import { getLeaseProvision, restartLease, updateLease, type FredLeaseStatus } from '../../api/fred';
+import { getLeaseProvision, type FredLeaseStatus } from '../../api/fred';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
-import { AI_DEPLOY_PROVISION_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
-import { deriveUrlFromConnection } from './helpers';
+import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
+import { deriveUrlFromConnection, failureText } from './helpers';
 import { normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 import { getDomainForService } from '../../api/leaseDomains';
 import { validateAll, apexRecordKindLabel } from '../../utils/customDomainValidation';
-import { validateAppName, sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
+import { validateAppName, sanitizeManifestForStorage, type AppEntry, type ProvisionState } from '../../registry/appRegistry';
 import { buildStackManifest, mergeManifest, resolveGeneratedPassword } from '../manifest';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import type { SigningContext } from './types';
 import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
-import { deployManifest, stopApp, setItemCustomDomain as monoSetItemCustomDomain, waitForLeaseStatus, isLeaseFailureTerminal, type FredAuthCtx, type DeployCallOptions, type StopAppResult, type TerminalChainState } from '@manifest-network/manifest-sdk/deploy';
+import { deployManifest, stopApp, setItemCustomDomain as monoSetItemCustomDomain, waitForLeaseStatus, isLeaseFailureTerminal, restartApp, updateApp, describeFredFailure, isKnownFailureReason, type FredAuthCtx, type DeployCallOptions, type StopAppResult, type TerminalChainState } from '@manifest-network/manifest-sdk/deploy';
+import { nextStepFor } from './failureGuidance';
+import { isUnsettledProvisionStatus } from './provisionStatus';
 import { buildBarneyCtx } from './capabilityCtx';
 import { browserEventTransport } from '../../api/eventTransport';
 import {
@@ -54,6 +57,40 @@ import { handleDeployManifestError } from './deployError';
 export { buildPayloadFromManifest, deriveAppName, extractServiceNamesFromPayload, parseAndValidateStackServices } from './deployArgs';
 export { extractUrlFromFredStatus } from './deployUrl';
 export { classifyLeaseChainState, handleDeployManifestError } from './deployError';
+
+/**
+ * Was the thrown thing ITSELF an abort?
+ *
+ * Deliberately NOT `signal?.aborted`: any new user message aborts the shared
+ * chat controller, so a genuine `ProviderApiError(500)` landing while the user
+ * types would otherwise be reported as "cancelled before the provider was
+ * asked" and never recorded. Two arms because `throwIfAborted()` raises a
+ * `DOMException`, but some polyfills raise a plain `Error` with that name.
+ */
+function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === 'AbortError') return true;
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+/**
+ * The provisioning OBSERVATION carried by a `waitForLeaseStatus` REJECTION.
+ *
+ * A poll timeout is SILENCE, not a verdict — the same `'poll'` vs
+ * `'poll_verdict'` split `deployError.ts` draws. A provider VERDICT never
+ * reaches here: `waitForLeaseStatus` RESOLVES at any terminal state (the caller
+ * classifies that with `isLeaseFailureTerminal`), so every rejection is a
+ * non-verdict — deadline, setup failure, status-read error, abort. Keep the
+ * `'poll_verdict'` arm on `'failed'` in case a future build routes a real
+ * verdict out through the rejection. Contract source: manifest-mcp-fred
+ * `dist/tools/waitForLeaseStatus.js`.
+ *
+ * `isTransientProviderError` is deliberately not consulted — "worth retrying"
+ * is orthogonal to "did the workload come up".
+ */
+function provisionObservationFromWaitError(error: unknown): ProvisionState {
+  if (ProviderApiError.isProviderApiError(error) && error.kind === 'poll_verdict') return 'failed';
+  return 'unconfirmed';
+}
 
 /**
  * Parse a multi-app app_name value into resolved AppEntry[].
@@ -357,12 +394,12 @@ export async function executeDeployApp(
     if (validation.error) return { success: false, error: validation.error };
     customDomainWarning = validation.warning;
 
-    // Uniqueness pre-check. The set_custom_domain path does this at line ~2997;
-    // without it, a deploy can confirm and pay for a lease before the post-
-    // broadcast MsgSetItemCustomDomain is chain-rejected as duplicate, leaving
-    // the user charged for a non-functional deploy. Wrap in withTimeout to
-    // bound the latency cost — consistent with other LCD calls in this
-    // executor (compositeQueries.ts:52,54 and billingParams.ts).
+    // Uniqueness pre-check, mirroring `executeSetCustomDomain`; without it, a
+    // deploy can confirm and pay for a lease before the post-broadcast
+    // MsgSetItemCustomDomain is chain-rejected as duplicate, leaving the user
+    // charged for a non-functional deploy. Wrap in withTimeout to bound the
+    // latency cost — consistent with the other LCD calls in this executor
+    // (`compositeQueries.ts`, `billingParams.ts`).
     // On error/timeout: fall through, chain remains authoritative.
     // See PR #93 Copilot 3248436488.
     try {
@@ -502,6 +539,9 @@ export async function executeConfirmedDeployApp(
       onProgress?.({ phase: 'uploading', detail: 'Uploading manifest to provider...' });
       try {
         appRegistry.addApp(address, {
+          // No observation yet — the create-lease TX landed, but nothing has
+          // been read from chain or provider. `status: 'deploying'` is the seed
+          // for an observation-free entry; later writers outrank it.
           name,
           leaseUuid,
           size,
@@ -589,8 +629,12 @@ export async function executeConfirmedDeployApp(
     };
   }
 
+  // Record the two observations, not a summary: `deployManifest` only RESOLVES
+  // once its readiness poll saw the lease ACTIVE on chain AND `provision_status`
+  // in `PROVISION_SUCCESS` (exactly `ready`). `status` is derived from them.
   appRegistry.updateApp(address, leaseUuid, {
-    status: 'running',
+    chainState: 'active',
+    provisionState: 'confirmed',
     url: connectionUrl,
     connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
     ...customDomainsUpdate,
@@ -663,7 +707,7 @@ export interface SingleDeployEntry {
   payload: PayloadAttachment;
   serviceNames?: string[];
   // Per-LeaseItem custom domain attached between create-lease and payload
-  // upload, mirroring the single-deploy contract (see :1154-1180). Missing
+  // upload, mirroring the `spec` built in `executeConfirmedDeployApp`. Missing
   // or empty `customDomain` = no attach. `customDomainServiceName` selects
   // the target LeaseItem in a multi-service stack; empty string = the
   // single-item-lease default. `customDomainWarning` is the apex warning
@@ -861,7 +905,7 @@ export async function executeConfirmedBatchDeploy(
   // and shared across every entry (correctness-neutral, avoids redundant awaits).
   const ctx = await buildFredAuthCtx(clientManager, signing);
 
-  const { succeeded, failed, cancelled, batchProgress } = await runBatchWithConcurrency({
+  const { succeeded, failed, unconfirmed, cancelled, batchProgress } = await runBatchWithConcurrency({
     entries: batchEntries,
     intermediatePhases: ['provisioning', 'uploading', 'creating_lease'],
     initialPhase: 'creating_lease',
@@ -897,13 +941,14 @@ export async function executeConfirmedBatchDeploy(
       let capturedProviderUrl: string | undefined;
       const callOptions: DeployCallOptions = {
         // Use the providerUrl deployManifest resolved (its 2nd arg), mirroring
-        // the single-deploy path (:1155) — NOT entry.providerUrl — so the
+        // `executeConfirmedDeployApp`'s own `onLeaseCreated` — NOT entry.providerUrl — so the
         // registry records the exact provider the SDK used for upload/poll.
         onLeaseCreated: (leaseUuid, providerUrl) => {
           capturedLeaseUuid = leaseUuid;
           capturedProviderUrl = providerUrl;
           updateProgress('uploading', 'Uploading manifest...');
           try {
+            // Observation-free seed entry — see the single-deploy addApp above.
             appRegistry.addApp(address, {
               name,
               leaseUuid,
@@ -965,11 +1010,21 @@ export async function executeConfirmedBatchDeploy(
           onProgress: (p) => updateProgress(p.phase, p.detail),
         });
         if (errResult.success) {
+          // Branch on the VERDICT, not the boolean: handleDeployManifestError
+          // answers success:true both for 'running' (came up despite the throw)
+          // and 'deploying' (readiness never confirmed). Counting the latter in
+          // `succeeded` claims apps deployed that the provider never confirmed.
+          const data = errResult.data as { url?: string; status?: string; message?: string } | undefined;
+          if (data?.status === 'deploying') {
+            // Carry handleDeployManifestError's copy through — it is the only
+            // place that knows WHY we never found out, and it is what tells the
+            // model to check app_status rather than tear the lease down.
+            return { name, outcome: 'unconfirmed' as const, detail: data.message };
+          }
           // running-on-throw verdict: propagate the URL resolved in
           // handleDeployManifestError so the batch entry carries a link
-          // instead of a bare name. (deploying verdict has no url — omitted.)
-          const url = (errResult.data as { url?: string } | undefined)?.url;
-          return { name, url };
+          // instead of a bare name.
+          return { name, url: data?.url };
         }
         updateProgress('failed', errResult.error ?? 'Deployment failed');
         return null;
@@ -986,8 +1041,10 @@ export async function executeConfirmedBatchDeploy(
           'executeConfirmedBatchDeploy',
         );
 
+      // Same two observations as the single-deploy success path.
       appRegistry.updateApp(address, result.lease_uuid, {
-        status: 'running',
+        chainState: 'active',
+        provisionState: 'confirmed',
         url: connectionUrl,
         connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
       });
@@ -1019,6 +1076,8 @@ export async function executeConfirmedBatchDeploy(
   return summarizeBatchResult({
     succeeded,
     failed,
+    unconfirmed,
+    unconfirmedLabel: 'Still deploying',
     cancelled,
     dataKey: 'deployed',
     verb: 'Deployed',
@@ -1131,7 +1190,12 @@ export async function executeConfirmedStopApp(
     for (const entry of entries) {
       try {
         await stopApp(ctx, { leaseUuid: asLeaseUuid(entry.leaseUuid) }, { waitForConfirmation: false });
-        appRegistry.updateApp(address, entry.leaseUuid, { status: 'stopped' });
+        // CHAIN observation only, and optimistic: waitForConfirmation is false,
+        // so all we know is the TX reached the mempool; `reconcileWithChain`
+        // corrects a DeliverTx rejection later. Nothing is written about
+        // provisioning — clearing an undisproven diagnosis is the clobber the
+        // observation model exists to prevent.
+        appRegistry.updateApp(address, entry.leaseUuid, { chainState: 'absent' });
         stopped.push(entry.app_name);
       } catch (err) {
         logError('compositeTransactions.executeConfirmedStopApp.bulk', err);
@@ -1167,7 +1231,9 @@ export async function executeConfirmedStopApp(
 
   try {
     const result: StopAppResult = await stopApp(ctx, { leaseUuid: asLeaseUuid(leaseUuid) }, { waitForConfirmation: true });
-    appRegistry.updateApp(address, leaseUuid, { status: 'stopped' });
+    // CHAIN observation only — authoritative here, since waitForConfirmation
+    // blocks for the DeliverTx outcome. No provisioning observation touched.
+    appRegistry.updateApp(address, leaseUuid, { chainState: 'absent' });
     const message = result.outcome === 'already_inactive'
       ? `App "${name}" has been stopped (lease was already inactive).`
       : `App "${name}" has been stopped.`;
@@ -1380,8 +1446,11 @@ export async function executeRestartApp(
   const app = appRegistry.findApp(address, singleName);
   if (!app) return { success: false, error: `No unique app found matching "${singleName}"` };
 
+  // The `app_status` pointer is load-bearing: a timed-out readiness wait records
+  // `provisionState: 'unconfirmed'` → derives 'deploying', and `app_status` is
+  // the re-observation point that clears it once fred reports `ready`.
   if (app.status !== 'running') {
-    return { success: false, error: `App "${app.name}" is not running (status: ${app.status}). Only running apps can be restarted.` };
+    return { success: false, error: `App "${app.name}" is not running (status: ${app.status}). Only running apps can be restarted. Run app_status("${app.name}") to refresh its status first.` };
   }
 
   if (!app.providerUrl) {
@@ -1407,13 +1476,21 @@ export async function executeRestartApp(
  * Execute restart_app after user confirmation.
  * Supports batch restart when args.entries is present (from app_name="all" or comma-separated).
  *
- * restart_app and update_app got NO deploy-path rewrite: they call mono's
- * low-level fred http ops (`restartLease` / `updateLease` from `../../api/fred`,
- * which source them from the `@manifest-network/manifest-sdk/deploy` facade) to
- * issue the action, then (ENG-312 Phase 6) wait for readiness via the SDK's
+ * restart_app and update_app issue the action through the SDK's own lifecycle
+ * primitives (`restartApp` / `updateApp` from `@manifest-network/manifest-sdk/deploy`,
+ * ENG-774), then (ENG-312 Phase 6) wait for readiness via the SDK's
  * `waitForLeaseStatus` with a browser `EventTransport` (WS live-status, poll
  * fallback). Do not "finish migrating" them to `deployManifest` — that
  * primitive is create-lease + deploy, not update/restart.
+ *
+ * Both call options are MANDATORY:
+ *   - `pollOptions: false` — return straight after the provider POST, leaving
+ *     barney's readiness wait, progress reporting and (update) rollback gate in
+ *     charge. What barney takes from the primitives is the `throwIfAborted`
+ *     guard before the non-idempotent POST, plus (update only) the ENG-619 5xx
+ *     `UPDATE_INDETERMINATE` classification.
+ *   - `providerUrl` — selects the fast path; omitting it silently adds two
+ *     chain reads per call.
  *
  * ⚠️ The readiness wait mints its own per-poll ADR-036 status token through
  * `ctx.providerAuth` (the same non-reentrant signing mutex), so it must NEVER
@@ -1449,12 +1526,10 @@ export async function executeConfirmedRestartApp(
 
   onProgress?.({ phase: 'restarting', detail: 'Restarting app...', operation: 'restart' });
 
-  // Mint auth token and call restart
-  const refreshAuthToken = () => signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
-
   try {
-    const authToken = await refreshAuthToken();
-    await restartLease(providerUrl, leaseUuid, authToken);
+    // The primitive mints its OWN ADR-036 token through ctx.providerAuth, so
+    // never wrap it in a caller-side sign-lock (reentrant mutex deadlock).
+    await restartApp(ctx, { address, leaseUuid }, { pollOptions: false, providerUrl, signal });
   } catch (error) {
     logError('compositeTransactions.executeConfirmedRestartApp', error);
     // 409 = lease is not in the right state for restart; don't mark as failed
@@ -1463,9 +1538,27 @@ export async function executeConfirmedRestartApp(
       onProgress?.({ phase: 'failed', detail: 'App is not in a restartable state', operation: 'restart' });
       return { success: false, error: `Cannot restart "${name}": app is not in a restartable state.` };
     }
+    // `restartApp` calls `signal?.throwIfAborted()` after the token mint and
+    // before the non-idempotent POST, so an abort here means the provider was
+    // never asked and the app is untouched — marking it 'failed' would drop a
+    // healthy app out of list_apps(). Any new chat message aborts the shared
+    // controller, so this is the ordinary path, not an edge case.
+    if (isAbortError(error)) {
+      onProgress?.({ phase: 'failed', detail: 'Restart cancelled', operation: 'restart' });
+      // No observation written — the entry keeps what it last legitimately had.
+      return {
+        success: false,
+        error: `Restart of "${name}" was cancelled before the provider was asked; the app is unchanged.`,
+      };
+    }
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     onProgress?.({ phase: 'failed', detail: `Restart failed: ${errorMsg}`, operation: 'restart' });
-    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    // No observation, like the abort arm: a throw here is about INITIATING the
+    // restart, never about the workload — token mint before the POST, transport
+    // error, 4xx refusal, or a fred 500, which returns from `routeReplaceRestart`'s
+    // prelude before the actor handoff (fred internal/backend/docker/restart_update.go).
+    // No container was touched, and 'failed' would drop a healthy app out of
+    // list_apps(running), restart_app and DNS polling.
     return { success: false, error: `Restart failed: ${errorMsg}` };
   }
 
@@ -1474,7 +1567,7 @@ export async function executeConfirmedRestartApp(
 
   try {
     const fredStatus = await waitForLeaseStatus(ctx, asLeaseUuid(leaseUuid), {
-      timeout: AI_DEPLOY_PROVISION_TIMEOUT_MS,
+      timeout: AI_LEASE_WAIT_TIMEOUT_MS,
       intervalMs: FRED_POLL_INTERVAL_MS,
       signal,
       onStatus: (status) => {
@@ -1487,14 +1580,22 @@ export async function executeConfirmedRestartApp(
       },
     });
 
+    // Deliberately NO post-wait /provision gate here — do NOT mirror the update
+    // one onto restart. When a restart fails and the rollback restores the old
+    // containers, fred CLEARS reason/message/last_error and reports a clean
+    // 'ready' (`onEnterReadyFromReplaceRecovered`, guarded on
+    // `OldStopped && Operation == "restart"`, fred
+    // internal/backend/shared/leasesm/lease_sm.go); only fail_count moves. The
+    // gate would never fire. The update gate works because an update KEEPS them.
     if (!isLeaseFailureTerminal(fredStatus)) {
       const { url: connectionUrl, connection } = await resolveAppUrl(
         providerUrl, leaseUuid, fredStatus, address, signing,
         'compositeTransactions.executeConfirmedRestartApp'
       );
 
+      // Provider observation: the wait resolved non-terminal — the workload is up.
       appRegistry.updateApp(address, leaseUuid, {
-        status: 'running',
+        provisionState: 'confirmed',
         url: connectionUrl,
         connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
       });
@@ -1511,22 +1612,27 @@ export async function executeConfirmedRestartApp(
       };
     }
 
-    // Non-active terminal state or failed provision
-    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-    onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Restart failed', operation: 'restart' });
-    return { success: false, error: `Restart failed: ${fredStatus.last_error || 'App did not come back up'}` };
+    // Non-active terminal state or failed provision — the provider gave a verdict.
+    appRegistry.updateApp(address, leaseUuid, { provisionState: 'failed' });
+    onProgress?.({ phase: 'failed', detail: failureText(fredStatus, 'Restart failed'), operation: 'restart' });
+    return { success: false, error: `Restart failed: ${failureText(fredStatus, 'App did not come back up')}` };
   } catch (error) {
     logError('compositeTransactions.executeConfirmedRestartApp.polling', error);
-    onProgress?.({ phase: 'failed', detail: 'Restart polling failed', operation: 'restart' });
-    // ENG-312: waitForLeaseStatus REJECTS on timeout/abort (the deleted
-    // waitForLeaseReady resolved a status instead, so this fell through to the
-    // "non-active terminal" branch that marked the app failed). Restore that on a
-    // genuine timeout/error so registry-driven surfaces don't keep showing a
-    // possibly-broken app as 'running' (app_status/reconcile corrects it, and it
-    // mirrors the batch path). On a USER abort (a new chat message aborted the
-    // shared signal), leave status untouched — the restart likely still proceeds
-    // provider-side.
-    if (!signal?.aborted) appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    // waitForLeaseStatus REJECTS on timeout/setup/transport error and on abort.
+    // Record on a genuine wait failure so registry surfaces don't keep showing a
+    // possibly-broken app as 'running'; on a USER abort record nothing — the
+    // restart likely still proceeds provider-side. The copy tracks the same
+    // observation, so no surface asserts a failure fred never issued.
+    const observation = provisionObservationFromWaitError(error);
+    if (!isAbortError(error)) {
+      appRegistry.updateApp(address, leaseUuid, { provisionState: observation });
+    }
+    if (observation === 'failed') {
+      const detail = error instanceof Error ? error.message : 'App did not come back up';
+      onProgress?.({ phase: 'failed', detail, operation: 'restart' });
+      return { success: false, error: `Restart failed: ${detail}` };
+    }
+    onProgress?.({ phase: 'failed', detail: 'Restart not confirmed', operation: 'restart' });
     return { success: false, error: `Restart may still be in progress. Use app_status("${name}") to check.` };
   }
 }
@@ -1550,7 +1656,7 @@ async function executeConfirmedBatchRestart(
   // EventTransport; poll fallback). Never wrapped in a caller-side sign-lock.
   const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
 
-  const { succeeded, failed, cancelled, batchProgress } = await runBatchWithConcurrency({
+  const { succeeded, failed, unconfirmed, cancelled, batchProgress } = await runBatchWithConcurrency({
     entries: batchEntries,
     intermediatePhases: ['provisioning', 'restarting'],
     initialPhase: 'restarting',
@@ -1562,21 +1668,33 @@ async function executeConfirmedBatchRestart(
 
       updateProgress('restarting', 'Restarting...');
 
-      const refreshAuthToken = () => signing.authTokens.getAuthToken(asLeaseUuid(entry.leaseUuid));
-
-      // Issue restart command
+      // Called DIRECTLY under runBatchWithConcurrency: the primitive mints its
+      // own ADR-036 token through the non-reentrant signing mutex, exactly as
+      // batch deploy calls deployManifest directly.
       try {
-        const authToken = await refreshAuthToken();
-        await restartLease(entry.providerUrl, entry.leaseUuid, authToken);
+        await restartApp(
+          ctx,
+          { address, leaseUuid: entry.leaseUuid },
+          { pollOptions: false, providerUrl: entry.providerUrl, signal }
+        );
       } catch (error) {
         logError('executeConfirmedBatchRestart.restart', error);
         if (ProviderApiError.isProviderApiError(error) && error.status === 409) {
           updateProgress('failed', 'Not in a restartable state');
           return null;
         }
+        // Same abort guard as the single path, and it bites hardest here: a
+        // "restart all" queues most entries behind the signing mutex, so one new
+        // chat message aborts several at once. Never restarted, still healthy.
+        if (isAbortError(error)) {
+          updateProgress('failed', 'Cancelled before the provider was asked');
+          return { name, outcome: 'cancelled' as const };
+        }
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         updateProgress('failed', `Restart failed: ${errorMsg}`);
-        appRegistry.updateApp(address, entry.leaseUuid, { status: 'failed' });
+        // No observation, exactly as on the single-restart POST site — the
+        // restart was never initiated, so nothing saw the workload fail. The
+        // entry still reports under `Failed:`: the OPERATION failed.
         return null;
       }
 
@@ -1585,7 +1703,7 @@ async function executeConfirmedBatchRestart(
 
       try {
         const fredStatus = await waitForLeaseStatus(ctx, asLeaseUuid(entry.leaseUuid), {
-          timeout: AI_DEPLOY_PROVISION_TIMEOUT_MS,
+          timeout: AI_LEASE_WAIT_TIMEOUT_MS,
           intervalMs: FRED_POLL_INTERVAL_MS,
           signal,
           onStatus: (status) => {
@@ -1600,7 +1718,7 @@ async function executeConfirmedBatchRestart(
           );
 
           appRegistry.updateApp(address, entry.leaseUuid, {
-            status: 'running',
+            provisionState: 'confirmed',
             url: connectionUrl,
             connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
           });
@@ -1608,15 +1726,29 @@ async function executeConfirmedBatchRestart(
           return { name, url: connectionUrl };
         }
 
-        appRegistry.updateApp(address, entry.leaseUuid, { status: 'failed' });
-        updateProgress('failed', fredStatus.last_error || 'Restart failed');
+        appRegistry.updateApp(address, entry.leaseUuid, { provisionState: 'failed' });
+        updateProgress('failed', failureText(fredStatus, 'Restart failed'));
         return null;
       } catch (error) {
         logError('executeConfirmedBatchRestart.poll', error);
-        // Mark failed on a genuine timeout/error, but not on a user abort (the
-        // restart likely still proceeds provider-side) — matches the single path.
-        if (!signal?.aborted) appRegistry.updateApp(address, entry.leaseUuid, { status: 'failed' });
-        updateProgress('failed', `Restart polling failed for "${name}". Use app_status("${name}") to check.`);
+        // An abort at the WAIT site is the same event as one at the POST site,
+        // so it takes the same `cancelled` outcome rather than bucketing every
+        // in-flight entry of a "restart all" under `Failed:`.
+        if (isAbortError(error)) {
+          updateProgress('failed', 'Cancelled while waiting for the app to come back up');
+          return { name, outcome: 'cancelled' as const };
+        }
+        // Same silence-is-not-a-verdict rule as the single-restart wait catch,
+        // and it bites harder here: N waits share one budget. The BUCKET has to
+        // follow the observation too — bucketing silence under `Failed:` printed
+        // "All restarts failed" for a batch fred never ruled on.
+        const observation = provisionObservationFromWaitError(error);
+        appRegistry.updateApp(address, entry.leaseUuid, { provisionState: observation });
+        if (observation === 'unconfirmed') {
+          updateProgress('failed', `Restart not confirmed for "${name}". Use app_status("${name}") to check.`);
+          return { name, outcome: 'unconfirmed' as const, detail: `no verdict from the provider — check app_status("${name}")` };
+        }
+        updateProgress('failed', `Restart failed for "${name}": ${error instanceof Error ? error.message : 'Unknown error'}`);
         return null;
       }
     },
@@ -1625,6 +1757,8 @@ async function executeConfirmedBatchRestart(
   return summarizeBatchResult({
     succeeded,
     failed,
+    unconfirmed,
+    unconfirmedLabel: 'Still restarting',
     cancelled,
     dataKey: 'restarted',
     verb: 'Restarted',
@@ -1729,8 +1863,10 @@ export async function executeUpdateApp(
   const app = appRegistry.findApp(address, name);
   if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
+  // 'deploying' is deliberately NOT in the allowed set — pushing a new manifest
+  // at a lease that may still be provisioning races the provisioner.
   if (app.status !== 'running' && app.status !== 'failed') {
-    return { success: false, error: `App "${app.name}" cannot be updated (status: ${app.status}). Only running or failed apps can be updated.` };
+    return { success: false, error: `App "${app.name}" cannot be updated (status: ${app.status}). Only running or failed apps can be updated. Run app_status("${app.name}") to refresh its status first.` };
   }
 
   if (!app.providerUrl) {
@@ -1794,6 +1930,40 @@ export async function executeUpdateApp(
 }
 
 /**
+ * Fred failure reasons a freshly-attempted update can legitimately be blamed
+ * for. Used ONLY as a negative filter in the rollback gate: a reason we
+ * recognize that is NOT in here means the update applied and the app failed
+ * afterwards for an unrelated cause (`ContainerExited` lands on the very same
+ * provision record).
+ *
+ * The direction is load-bearing: a reason from a newer fred is in neither this
+ * set nor `isKnownFailureReason`, so it falls THROUGH to the conservative
+ * rollback branch. `ImagePullFailed` must stay in — `doUpdate`'s preflight
+ * authors it, so a gate written as `reason === 'UpdateFailed'` would misread a
+ * preflight failure as a post-update crash.
+ */
+const UPDATE_ATTRIBUTABLE_REASONS: ReadonlySet<string> = new Set([
+  'UpdateFailed',
+  'ImagePullFailed',
+  'Internal',
+  'Unknown',
+]);
+
+/**
+ * True when a throw from `POST /update` leaves the outcome genuinely unknown
+ * (ENG-619).
+ *
+ * The SDK's `updateApp` maps `ProviderApiError` with `status >= 500` to
+ * `UPDATE_INDETERMINATE`; the raw `status >= 500` arm catches a 5xx that arrives
+ * unwrapped (DEV /proxy-provider and PROD nginx both mint their own 502).
+ * Deliberately NOT extended to status 0 — also in doubt, different story.
+ */
+function isIndeterminateUpdateError(error: unknown): boolean {
+  if (error instanceof ManifestMCPError && error.code === ManifestMCPErrorCode.UPDATE_INDETERMINATE) return true;
+  return ProviderApiError.isProviderApiError(error) && error.status >= 500;
+}
+
+/**
  * Execute update_app after user confirmation.
  */
 export async function executeConfirmedUpdateApp(
@@ -1820,23 +1990,76 @@ export async function executeConfirmedUpdateApp(
 
   onProgress?.({ phase: 'updating', detail: 'Updating app with new manifest...', operation: 'update' });
 
-  // Mint auth token and call update
+  // Still needed for the post-wait /provision read below; the update POST and
+  // the readiness wait mint their own through ctx.providerAuth.
   const refreshAuthToken = () => signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
 
+  const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
+
+  // `payload.bytes` is already the FINAL upload body — executeUpdateApp merged
+  // the stored manifest in at plan time. `existingManifest` is therefore
+  // deliberately NOT passed on: a second merge would re-inject deleted fields.
+  const manifestJson = new TextDecoder().decode(payload.bytes);
+
   try {
-    const authToken = await refreshAuthToken();
-    await updateLease(providerUrl, leaseUuid, payload.bytes, authToken);
+    // `pollOptions: false` + `providerUrl` are both mandatory — see the JSDoc
+    // on executeRestartApp. Never wrapped in a caller-side sign-lock.
+    await updateApp(
+      ctx,
+      { address, leaseUuid, manifest: manifestJson },
+      { pollOptions: false, providerUrl, signal }
+    );
   } catch (error) {
     logError('compositeTransactions.executeConfirmedUpdateApp', error);
     // 409 = lease is not in the right state for update; don't mark as failed
     // because the app may still be running — only the update was rejected.
+    // (The primitive rethrows 4xx untouched; only >= 500 is reclassified.)
     if (ProviderApiError.isProviderApiError(error) && error.status === 409) {
       onProgress?.({ phase: 'failed', detail: 'App is not in an updatable state', operation: 'update' });
       return { success: false, error: `Cannot update "${name}": app is not in an updatable state.` };
     }
+    // ENG-619: a 5xx from POST /update does NOT establish that the update was
+    // rejected. Fred answers 500 both when it refuses before the backend AND
+    // when the backend applied it but persisting the payload failed — identical
+    // bodies. A flat failure here pushes a model toward close-and-redeploy.
+    if (isIndeterminateUpdateError(error)) {
+      // NO registry write, deliberately: writing `provisionState` would invent a
+      // verdict out of an ambiguous 500. The entry keeps its last real
+      // observation and the PREVIOUS manifest — the durable truth either way,
+      // since fred reverts an unrecorded update on its next reprovision.
+      //
+      // The copy says "version", not "manifest": MessageBubble's ERROR_PATTERNS
+      // matches /manifest/ and would attach a "Deploy an app" button — the one
+      // action this branch exists to talk the user out of.
+      onProgress?.({ phase: 'failed', detail: 'Update outcome unknown', operation: 'update' });
+      return {
+        success: false,
+        error:
+          `The provider could not durably record the update to "${name}", so it may or may not have been applied ` +
+          `— and an update that WAS applied but not recorded is reverted by the provider's next reprovision. ` +
+          `Check app_status("${name}") and app_releases("${name}") to see which version is actually live; the copy ` +
+          `stored here is still the previous one. Re-running update_app("${name}") is safe and re-applies AND ` +
+          `re-records it. Do NOT stop the app and redeploy — it may be running.`,
+      };
+    }
+    // Twin of the restart POST-site guard. ORDER matters as much as the gate:
+    // `isIndeterminateUpdateError` above runs first, so a 5xx that coincides
+    // with an abort still gets the ENG-619 story, not "the app is unchanged".
+    if (isAbortError(error)) {
+      onProgress?.({ phase: 'failed', detail: 'Update cancelled', operation: 'update' });
+      // No observation: the provider was never asked.
+      return {
+        success: false,
+        error: `Update of "${name}" was cancelled before the provider was asked; the app is unchanged.`,
+      };
+    }
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     onProgress?.({ phase: 'failed', detail: `Update failed: ${errorMsg}`, operation: 'update' });
-    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    // No observation, and stronger than the restart twin: 5xx left via the
+    // indeterminate arm above, so what remains is a 4xx refusal, a transport
+    // error, or INVALID_CONFIG — which `updateApp` raises while MERGING the
+    // manifest, before any POST. The replacement never started; the previous
+    // version is still live, and its manifest is still the stored one.
     return { success: false, error: `Update failed: ${errorMsg}` };
   }
 
@@ -1846,7 +2069,6 @@ export async function executeConfirmedUpdateApp(
   const previousManifest = existingApp?.manifest;
 
   // Update registry with new manifest content (secrets stripped)
-  const manifestJson = new TextDecoder().decode(payload.bytes);
   appRegistry.updateApp(address, leaseUuid, { manifest: sanitizeManifestForStorage(manifestJson) });
 
   // Poll for readiness. ENG-312 Phase 6: SDK waitForLeaseStatus with a browser
@@ -1854,11 +2076,9 @@ export async function executeConfirmedUpdateApp(
   // ADR-036 status token via ctx.providerAuth — never wrap in a caller-side sign-lock.
   onProgress?.({ phase: 'provisioning', detail: 'Waiting for app to come back up...', operation: 'update' });
 
-  const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
-
   try {
     const fredStatus = await waitForLeaseStatus(ctx, asLeaseUuid(leaseUuid), {
-      timeout: AI_DEPLOY_PROVISION_TIMEOUT_MS,
+      timeout: AI_LEASE_WAIT_TIMEOUT_MS,
       intervalMs: FRED_POLL_INTERVAL_MS,
       signal,
       onStatus: (status) => {
@@ -1872,34 +2092,111 @@ export async function executeConfirmedUpdateApp(
     });
 
     if (!isLeaseFailureTerminal(fredStatus)) {
-      // Rollback detection: check /provision for last_error.
-      // Fred settles the rollback before emitting the terminal WS event or
-      // transitioning provision out of a transient state, so by the time we
-      // reach here the provision endpoint is authoritative:
-      //   - Rollback OK:     provision.status="ready",  provision.last_error="<why>"
-      //   - Rollback failed: provision.status="failed",  provision.last_error="<why>"
-      //   - Update OK:       provision.status="ready",  provision.last_error=""
+      // Rollback detection: a non-failure terminal wait is NOT proof the update
+      // took. Fred settles the rollback before emitting the terminal WS event,
+      // so /provision is authoritative here once SETTLED. Wire shapes, off fred
+      // v0.13.0 (`internal/backend/shared/leasesm/lease_sm.go` entry actions +
+      // `internal/api/handlers.go` LeaseProvisionResponse):
+      //   - Update OK:       {status:'ready',  fail_count:N}                    reason+message CLEARED
+      //   - Rollback OK:     {status:'ready',  fail_count:N+1, reason:'UpdateFailed',
+      //                       message:'update failed; rolled back to previous version'}
+      //   - Rollback failed: {status:'failed', reason:'UpdateFailed', message:'update failed; rollback failed'}
+      //   - Image-pull preflight: {status:'failed', reason:'ImagePullFailed', message:'image pull failed'}
+      // `last_error` is in NONE of them — the field was deleted from the
+      // response struct, so a `if (provision.last_error)` gate is permanently
+      // false. `describeFredFailure` reads either era.
       try {
         const provisionToken = await refreshAuthToken();
         const provision = await getLeaseProvision(providerUrl, leaseUuid, provisionToken);
-        if (provision.last_error) {
+        // PRECONDITION: only a SETTLED provision carries a verdict about THIS
+        // update. `applyReplaceEntry` (lease_sm.go) writes Status when entering
+        // Updating without clearing a retained prior Reason/Message, so a
+        // mid-update read answers {status:'updating', reason:'UpdateFailed'} —
+        // the PREVIOUS update's verdict. Reachable: on a degraded provider
+        // `omitempty` drops provision_status and the SDK's classifyTerminal
+        // skips its provision checks when it is undefined, so the wait resolves
+        // "success" mid-update. Provider JSON is type-asserted rather than
+        // validated, so `isUnsettledProvisionStatus` re-checks absent/empty at
+        // runtime. It is the SAME predicate `executeAppStatus`'s no-retract guard
+        // uses (provisionStatus.ts), so the two files cannot disagree on `failing`.
+        const settled = !isUnsettledProvisionStatus(provision.status);
+        if (settled && describeFredFailure(provision)) {
+          // A failure signal is a sound update-verdict ONLY here, and only on
+          // three fred facts: a successful replace clears reason/message
+          // atomically with the Ready flip; fred writes Status=Updating BEFORE
+          // acking POST /update, so this cannot be a stale pre-update 'ready';
+          // and the `settled` gate rules out the mid-replace window. Do NOT copy
+          // this gate onto a surface inspecting an arbitrary lease at an
+          // arbitrary time — fred RETAINS reason on a healthy rolled-back lease.
+          //
+          // Residual false positive: the container dies right after a SUCCESSFUL
+          // update, stamping an unrelated reason. Filtered negatively — see
+          // UPDATE_ATTRIBUTABLE_REASONS.
+          const reason = provision.reason;
+          const appliedThenFailed =
+            reason !== undefined &&
+            isKnownFailureReason(reason) &&
+            !UPDATE_ATTRIBUTABLE_REASONS.has(reason);
+
+          if (appliedThenFailed) {
+            // Provider verdict: the workload it is running has failed.
+            appRegistry.updateApp(address, leaseUuid, { provisionState: 'failed' });
+            onProgress?.({ phase: 'failed', detail: 'Update applied, app has since failed.', operation: 'update' });
+            return {
+              success: false,
+              error:
+                `The update applied but "${name}" has since failed: ` +
+                `${normalizeErrorPunctuation(failureText(provision, 'no detail reported'))}. ` +
+                `Use app_status("${name}") to check.`,
+            };
+          }
+
+          // ImagePullFailed is authored by doUpdate's PREFLIGHT (fred
+          // internal/backend/docker/restart_update.go): PullImage fails before
+          // doReplaceContainers, so no container was touched and there was no
+          // rollback to succeed or fail. Saying "rollback failed" would assert a
+          // mechanism that never ran, on the commonest update failure there is.
+          const preflight = reason === 'ImagePullFailed';
           const rollbackOk = provision.status === 'ready';
           appRegistry.updateApp(address, leaseUuid, {
-            status: rollbackOk ? 'running' : 'failed',
+            // Relay fred's own `provision.status`: `ready` (rollback landed) is
+            // a confirmation, anything else is fred's failure verdict —
+            // including a preflight ImagePullFailed, where the old containers
+            // are still up but the desired state was never achieved. The
+            // registry mirrors fred; the chat COPY is what bends to match.
+            provisionState: rollbackOk ? 'confirmed' : 'failed',
             ...(previousManifest ? { manifest: previousManifest } : {}),
           });
           onProgress?.({
             phase: 'failed',
-            detail: rollbackOk
-              ? 'Update failed, previous version restored.'
-              : 'Update failed and rollback failed.',
+            detail: preflight
+              ? 'Update failed: the image could not be pulled — nothing was changed.'
+              : rollbackOk
+                ? 'Update failed, previous version restored.'
+                : 'Update failed and rollback failed.',
             operation: 'update',
           });
+          const detail = failureText(provision, 'no detail reported');
+          // Curated per-reason guidance through barney's remapper — never the
+          // SDK's `guidanceFor` directly: `Unknown`'s SDK sentence says
+          // `get_logs({ lease_uuid })`, a call shape barney's
+          // `get_logs(app_name)` rejects (see failureGuidance.ts). Appended on
+          // EVERY arm because ImagePullFailed's line is the only actionable one
+          // for the preflight branch; absent for an unknown reason.
+          const nextStep = nextStepFor(reason, name);
+          const suffix = nextStep ? ` ${nextStep}` : '';
           return {
             success: false,
-            error: rollbackOk
-              ? `Update failed, previous version restored. Last error: ${provision.last_error}`
-              : `Update failed and rollback failed. Last error: ${normalizeErrorPunctuation(provision.last_error)}. Use app_status("${name}") to check.`,
+            // The preflight copy must not claim what is serving — the registry
+            // records fred's `failed` verdict — so it leads with the failure and
+            // keeps "nothing was changed" as blast-radius reassurance only.
+            error: preflight
+              ? `Update failed: the image could not be pulled, so the new version was never applied and ` +
+                `nothing was changed on the provider. ${normalizeErrorPunctuation(detail)}.${suffix}`
+              : rollbackOk
+                ? `Update failed, previous version restored. ${normalizeErrorPunctuation(detail)}.${suffix}`
+                : `Update failed and rollback failed. ${normalizeErrorPunctuation(detail)}. ` +
+                  `Use app_status("${name}") to check.${suffix}`,
           };
         }
       } catch (error) {
@@ -1916,8 +2213,10 @@ export async function executeConfirmedUpdateApp(
       const hasPort = connectionUrl != null && /:\d+/.test(connectionUrl.replace(/^https?:\/\//, ''));
       const finalUrl = (hasPort ? connectionUrl : previousUrl) ?? connectionUrl;
 
+      // Provider observation: the wait resolved non-terminal and the settled
+      // /provision read above carried no failure signal.
       appRegistry.updateApp(address, leaseUuid, {
-        status: 'running',
+        provisionState: 'confirmed',
         url: finalUrl,
         connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
       });
@@ -1934,17 +2233,26 @@ export async function executeConfirmedUpdateApp(
       };
     }
 
-    // Non-active terminal state or failed provision
-    appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
-    onProgress?.({ phase: 'failed', detail: fredStatus.last_error || 'Update failed', operation: 'update' });
-    return { success: false, error: `Update failed: ${fredStatus.last_error || 'App did not come back up'}` };
+    // Non-active terminal state or failed provision — the provider gave a verdict.
+    appRegistry.updateApp(address, leaseUuid, { provisionState: 'failed' });
+    onProgress?.({ phase: 'failed', detail: failureText(fredStatus, 'Update failed'), operation: 'update' });
+    return { success: false, error: `Update failed: ${failureText(fredStatus, 'App did not come back up')}` };
   } catch (error) {
     logError('compositeTransactions.executeConfirmedUpdateApp.polling', error);
-    onProgress?.({ phase: 'failed', detail: 'Update polling failed', operation: 'update' });
-    // ENG-312: waitForLeaseStatus REJECTS on timeout/abort. Mark failed on a
-    // genuine timeout/error (not a user abort) so registry surfaces don't keep
-    // showing it 'running'; app_status/reconcile corrects it. (See restart.)
-    if (!signal?.aborted) appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
+    // Same rule as the restart wait catch. Note the asymmetry with the branches
+    // ABOVE, which do write `'failed'`: those ran on a resolved status or a
+    // settled /provision read — fred actually answered. Only this catch is the
+    // no-answer case, and the copy tracks the observation.
+    const observation = provisionObservationFromWaitError(error);
+    if (!isAbortError(error)) {
+      appRegistry.updateApp(address, leaseUuid, { provisionState: observation });
+    }
+    if (observation === 'failed') {
+      const detail = error instanceof Error ? error.message : 'App did not come back up';
+      onProgress?.({ phase: 'failed', detail, operation: 'update' });
+      return { success: false, error: `Update failed: ${detail}` };
+    }
+    onProgress?.({ phase: 'failed', detail: 'Update not confirmed', operation: 'update' });
     return { success: false, error: `Update may still be in progress. Use app_status("${name}") to check.` };
   }
 }

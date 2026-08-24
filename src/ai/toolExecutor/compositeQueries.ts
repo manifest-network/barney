@@ -18,8 +18,16 @@ import {
 import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import { appStatus, type FredLeaseStatus, type ConnectionDetails } from '@manifest-network/manifest-sdk/deploy';
+import {
+  appStatus,
+  describeFredFailure,
+  type FredLeaseStatus,
+  type ConnectionDetails,
+  type ProviderHealthResponse,
+} from '@manifest-network/manifest-sdk/deploy';
+import { classifyProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
 import { buildBarneyCtx } from './capabilityCtx';
+import { nextStepFor } from './failureGuidance';
 import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import { getDomainAssignments } from '../../api/leaseDomains';
@@ -29,10 +37,19 @@ import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
 import { LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
+import {
+  sanitizeForDisplay,
+  CHECK_NAME_CHARS,
+  CHECK_MESSAGE_CHARS,
+  MAX_HEALTH_ERROR_CHARS,
+  HEALTH_STATUS_CHARS,
+  MAX_REPORTED_CHECKS,
+} from '../../utils/sanitizeText';
 import { withRetry, withTimeout, throwIfAborted } from '../../api/utils';
 import { asLeaseUuid } from '@manifest-network/manifest-sdk';
 import type { ToolResult, ToolExecutorOptions, ToolData } from './types';
 import type { MessageCard } from '../../contexts/aiTypes';
+import type { AppEntry } from '../../registry/appRegistry';
 
 /**
  * Execute list_apps: Get apps from registry, reconcile with chain.
@@ -51,24 +68,33 @@ export async function executeListApps(
   // Get apps from registry
   let apps = appRegistry.getApps(address);
 
-  // Reconcile with chain: mark apps as stopped if lease is gone
+  // Re-observe the chain for EVERY app, in both directions. Writing only the
+  // NEGATIVE observation ('absent') makes this a latch — state that can go down
+  // and never back up. The old asymmetry existed because `updateApp` notified
+  // unconditionally, so re-asserting 'active' on a 15s cadence re-rendered the
+  // sidebar every tick; it now no-ops when nothing moved, so the re-assert is free.
+  //
+  // The two lease sets stay SEPARATE rather than unioned: collapsing them makes
+  // 'pending' unrecordable, and a PENDING lease derives to 'deploying', not
+  // 'running'. 'active' is written last so it wins a uuid in both sets — the same
+  // precedence `AppsSidebar.refresh` uses for `reconcileWithChain`.
   try {
     const activeLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE), undefined, 'Fetch active leases', signal);
     throwIfAborted(signal, 'list_apps');
     const pendingLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING), undefined, 'Fetch pending leases', signal);
-    const activeUuids = new Set([
-      ...activeLeases.map((l) => l.uuid),
-      ...pendingLeases.map((l) => l.uuid),
-    ]);
+    const leaseStates = new Map<string, 'active' | 'pending'>();
+    for (const l of pendingLeases) leaseStates.set(l.uuid, 'pending');
+    for (const l of activeLeases) leaseStates.set(l.uuid, 'active');
 
     for (const app of apps) {
-      if (
-        (app.status === 'running' || app.status === 'deploying') &&
-        !activeUuids.has(app.leaseUuid)
-      ) {
-        appRegistry.updateApp(address, app.leaseUuid, { status: 'stopped' });
-        app.status = 'stopped';
-      }
+      // A lease in neither live set was observed GONE — 'absent' is a real
+      // reading, not a missing one. Read the derived status back rather than
+      // asserting one here, so the in-memory copy this response is built from
+      // matches what was persisted — including when a provider `failed` verdict
+      // outranks the chain observation.
+      const chainState = leaseStates.get(app.leaseUuid) ?? 'absent';
+      const updated = appRegistry.updateApp(address, app.leaseUuid, { chainState });
+      if (updated) app.status = updated.status;
     }
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
@@ -182,25 +208,33 @@ export async function executeAppStatus(
     }
   }
 
-  // Reconcile registry status with chain/fred state
+  // Reconcile registry status with chain/fred state.
+  //
+  // Every branch below records the OBSERVATION it actually made — the chain
+  // reading as `chainState`, fred's as `provisionState` — and adopts the summary
+  // the registry DERIVES from it rather than asserting one locally. That is what
+  // lets the two sources disagree without either clobbering the other.
   let currentStatus = app.status;
   let appUrl = app.url;
   let appConnection = app.connection;
 
-  // If chain says closed/rejected/expired, mark as stopped
+  /** Write an observation and adopt the status the registry derives from it. */
+  const recordObservation = (updates: Partial<Omit<AppEntry, 'leaseUuid'>>): void => {
+    const updated = appRegistry.updateApp(address, app.leaseUuid, updates);
+    if (updated) currentStatus = updated.status;
+  };
+
+  // Chain says closed/rejected/expired: the lease is gone. A pure CHAIN
+  // observation — it says nothing about why, so it leaves `provisionState` alone.
   if (leaseState === LeaseState.LEASE_STATE_CLOSED || leaseState === LeaseState.LEASE_STATE_REJECTED || leaseState === LeaseState.LEASE_STATE_EXPIRED) {
-    if (app.status !== 'stopped' && app.status !== 'failed') {
-      currentStatus = 'stopped';
-      appRegistry.updateApp(address, app.leaseUuid, { status: 'stopped' });
+    if (app.chainState !== 'absent') {
+      recordObservation({ chainState: 'absent' });
     }
   }
   // If chain says active, reconcile with fred (or trust chain if fred unavailable)
   else if (leaseState === LeaseState.LEASE_STATE_ACTIVE) {
     if (fredStatus) {
       if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
-        if (app.status !== 'running') {
-          currentStatus = 'running';
-        }
         // Connection details were fetched by appStatus alongside the status
         // read (its own errors already swallowed → refreshedConnection undefined).
         let connectionRefreshed = false;
@@ -228,22 +262,53 @@ export async function executeAppStatus(
           }
           connectionRefreshed = true;
         }
-        if (app.status !== 'running' || connectionRefreshed) {
-          appRegistry.updateApp(address, app.leaseUuid, {
-            status: 'running',
+        // TWO independent observations: the chain says the lease is ACTIVE, fred's
+        // `provision_status` says whatever it says. Recording both is what makes
+        // "the lease exists" and "the workload is up" separately expressible.
+        const observed = classifyProvisionStatus(fredStatus.provision_status);
+        // A reading with NO verdict fills a gap but must not RETRACT a
+        // confirmation: 'restarting' on a healthy app would drop it out of every
+        // tool that refuses a 'deploying' entry. A failure verdict is never
+        // suppressed — the predicate excludes them, which is why `failing`
+        // (container died) lands on a confirmed app.
+        const unsettled = isUnsettledProvisionStatus(fredStatus.provision_status);
+        const provisionState = unsettled && app.provisionState === 'confirmed' ? undefined : observed;
+        const observationChanged =
+          app.chainState !== 'active' ||
+          (provisionState !== undefined && app.provisionState !== provisionState);
+        if (observationChanged || connectionRefreshed) {
+          recordObservation({
+            chainState: 'active',
+            ...(provisionState !== undefined ? { provisionState } : {}),
             ...(connectionRefreshed ? { url: appUrl, connection: appConnection } : {}),
           });
         }
       } else if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
-        if (app.status !== 'failed') {
-          currentStatus = 'failed';
-          appRegistry.updateApp(address, app.leaseUuid, { status: 'failed' });
+        // The chain says ACTIVE but the PROVIDER says this lease is terminal —
+        // fred v0.13.0's explicitly-modelled anomaly (an ACTIVE lease whose
+        // workload is gone). A provider statement about a provider-side lease is
+        // a provisioning verdict, so it lands in `provisionState`, where it
+        // survives the next reconcile pass.
+        if (app.provisionState !== 'failed') {
+          recordObservation({ provisionState: 'failed' });
         }
       }
-    } else if (app.status !== 'running') {
-      // Fred unavailable but chain says active — trust the chain
-      currentStatus = 'running';
-      appRegistry.updateApp(address, app.leaseUuid, { status: 'running' });
+    } else if (app.chainState !== 'active') {
+      // Fred unavailable but chain says active — trust the chain, and ONLY the
+      // chain: no provider evidence here, so `provisionState` is untouched. A
+      // flat `status: 'running'` would silently erase a provider `failed` verdict
+      // every time fred happened to be unreachable.
+      recordObservation({ chainState: 'active' });
+    }
+  }
+  // Chain says PENDING: the lease exists but carries no workload yet. Recorded
+  // here as `executeListApps` and `reconcileWithChain` already do, so a
+  // previously-'running' entry does not survive a lease that went back to
+  // PENDING. Both the signer and chain-only reads land on `leaseState`, so this
+  // one branch covers both.
+  else if (leaseState === LeaseState.LEASE_STATE_PENDING) {
+    if (app.chainState !== 'pending') {
+      recordObservation({ chainState: 'pending' });
     }
   }
 
@@ -327,8 +392,8 @@ export async function executeAppStatus(
     // (all-unnamed chain items but a stored manifest claiming named services)
     // reach the no-domain form — the user would happily fill it in, then
     // `executeSetCustomDomain` rejects at TX time with "predates per-service
-    // domains". This gate mirrors the chain truth table at
-    // `compositeTransactions.ts:2858-2901`:
+    // domains". This gate mirrors the chain truth table in
+    // `executeSetCustomDomain` (compositeTransactions.ts):
     //   - single-item (any name shape): attach allowed, auto-pick the lone item
     //   - multi-item with ≥1 named: attach allowed, picker shows named only
     //   - multi-item, all unnamed: chain rejects → don't show form
@@ -434,6 +499,61 @@ export async function executeGetBalance(
 }
 
 /**
+ * Order failing health checks so the `MAX_REPORTED_CHECKS` cap can never drop a
+ * distinct one. Ported from mono `packages/fred/src/tools/browseCatalog.ts`.
+ *
+ * Fred marshals `checks` with Go's `encoding/json`, which SORTS map keys, and
+ * `JSON.parse` preserves that order — so `backend:docker-N` leads and the
+ * singletons (`chain`, `payload_store`, `placement_store`, `token_tracker`)
+ * trail. A head-of-list cap would keep only the `backend:*` prefix and silently
+ * drop every singleton probe, including `payload_store` — the pre-flight tell
+ * that `update_app` will 5xx on this provider. So the singletons, bounded at four
+ * and each meaning something different, go FIRST; `backend:*` is the unbounded,
+ * repetitive family, and the residual count after the cap covers the rest.
+ */
+function byDiagnosticValue([a]: [string, unknown], [b]: [string, unknown]): number {
+  const backendA = a.startsWith('backend:') ? 1 : 0;
+  const backendB = b.startsWith('backend:') ? 1 : 0;
+  if (backendA !== backendB) return backendA - backendB;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Render a non-`healthy` verdict into an actionable one-liner (ENG-711).
+ *
+ * fred v0.13.0 made `/health` a liveness contract: every tier answers 200 and the
+ * verdict lives in the body, so projecting it away leaves a bare `healthy: false`
+ * with no attribution. Only FAILING checks are named — a passing probe is noise.
+ * Keys and messages still go through `sanitizeForDisplay`: they are
+ * provider-controlled and land in model-facing prose on a SUCCESS response, which
+ * no error-path cap would ever see.
+ */
+function summarizeFailedChecks(health: ProviderHealthResponse): string {
+  const failed = Object.entries(health.checks ?? {})
+    .filter(([, c]) => c?.status !== 'healthy')
+    .sort(byDiagnosticValue);
+  const verdict = sanitizeForDisplay(health.status, HEALTH_STATUS_CHARS);
+  if (failed.length === 0) {
+    // The provider says something is wrong without saying what. Report the
+    // verdict rather than invent a cause.
+    return `Provider reports status "${verdict}"`;
+  }
+  const shown = failed
+    .slice(0, MAX_REPORTED_CHECKS)
+    .map(([name, c]) => {
+      const label = sanitizeForDisplay(name, CHECK_NAME_CHARS);
+      return c?.message ? `${label} (${sanitizeForDisplay(c.message, CHECK_MESSAGE_CHARS)})` : label;
+    })
+    .join(', ');
+  const omitted = failed.length - Math.min(failed.length, MAX_REPORTED_CHECKS);
+  // Capped again as a whole: the per-field caps bound each piece, this bounds the sum.
+  return sanitizeForDisplay(
+    `Provider reports status "${verdict}"; failing checks: ${shown}${omitted > 0 ? `, and ${omitted} more` : ''}`,
+    MAX_HEALTH_ERROR_CHARS
+  );
+}
+
+/**
  * Execute browse_catalog: Providers + SKUs grouped by tier.
  */
 export async function executeBrowseCatalog(
@@ -447,14 +567,32 @@ export async function executeBrowseCatalog(
   ]);
   throwIfAborted(signal, 'browse_catalog');
 
-  // Check provider health in parallel
+  // Check provider health in parallel.
+  //
+  // ENG-711: fred v0.13.0 serves /health as a three-tier verdict in the BODY
+  // (200 for every tier). `healthy` deliberately stays an exact match on the one
+  // verdict that means "fully serving" — a chain-impaired `degraded` fails every
+  // lease-resolving endpoint — but the diagnosis is no longer discarded: the raw
+  // verdict rides along as `health_status`, the failing checks as `healthError`.
+  //
+  // The tier set is OPEN. Echo it; never switch on it or branch on a specific
+  // value — a tier fred adds tomorrow must pass through verbatim.
   const providersWithHealth = await Promise.all(
     providers.map(async (p) => {
       let healthy = false;
+      // Distinguishable from every provider-reported tier, so "we never got an
+      // answer" cannot serialize identically to "the provider said no".
+      let healthStatus = 'no_api_url';
+      let healthError: string | undefined;
       if (p.apiUrl) {
+        healthStatus = 'unreachable';
         try {
           const health = await withTimeout(getProviderHealth(p.apiUrl), undefined, `Provider health (${p.uuid})`, signal);
-          healthy = health?.status === 'healthy';
+          if (health) {
+            healthStatus = sanitizeForDisplay(health.status, HEALTH_STATUS_CHARS);
+            healthy = health.status === 'healthy';
+            if (!healthy) healthError = summarizeFailedChecks(health);
+          }
         } catch (error) {
           if (error instanceof DOMException && error.name === 'AbortError') throw error;
           logError(`compositeQueries.executeBrowseCatalog.healthCheck[${p.uuid}]`, error);
@@ -464,6 +602,8 @@ export async function executeBrowseCatalog(
         uuid: p.uuid,
         apiUrl: p.apiUrl,
         healthy,
+        health_status: healthStatus,
+        ...(healthError !== undefined && { healthError }),
       };
     })
   );
@@ -489,13 +629,11 @@ export async function executeBrowseCatalog(
     });
   }
 
-  return {
-    success: true,
-    data: {
-      providers: providersWithHealth,
-      tiers,
-    },
+  const data: ToolData<'browse_catalog'> = {
+    providers: providersWithHealth,
+    tiers,
   };
+  return { success: true, data };
 }
 
 /** Allowed module+subcommand pairs for the cosmos_query escape hatch. */
@@ -568,8 +706,14 @@ export async function executeGetLogs(
   const app = appRegistry.findApp(address, name);
   if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
-  if (app.status === 'stopped' || app.status === 'failed') {
-    return { success: false, error: `App "${app.name}" is ${app.status}. Logs are not available for stopped or failed apps.` };
+  // Only 'stopped' refuses, matching `app_diagnostics` and `app_releases`. A
+  // 'failed' app is exactly when its logs are wanted, and barney already reads
+  // them in that state (`deployError.ts`'s `fetchFailureLogs`) because fred keeps
+  // the lease and its containers through a failed provision. 'stopped' still
+  // refuses: the lease is gone, so the lease-scoped ADR-036 token has nothing to
+  // authenticate against.
+  if (app.status === 'stopped') {
+    return { success: false, error: `App "${app.name}" is stopped. Logs are not available for stopped apps.` };
   }
 
   if (!app.providerUrl) {
@@ -698,6 +842,14 @@ export async function executeLeaseHistory(
 }
 
 /**
+ * Caps on the provider-controlled failure fields echoed by app_diagnostics,
+ * matching mono's own `sanitizeFailureFields`. `message` gets the longer cap
+ * because the 64-code-point default bisects fred's composed rollback suffixes.
+ */
+const DIAGNOSTIC_REASON_CHARS = 64;
+const DIAGNOSTIC_MESSAGE_CHARS = 256;
+
+/**
  * Execute app_diagnostics: Fetch provision status for an app.
  */
 export async function executeAppDiagnostics(
@@ -715,8 +867,11 @@ export async function executeAppDiagnostics(
   const app = appRegistry.findApp(address, name);
   if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
-  if (app.status === 'stopped' || app.status === 'failed') {
-    return { success: false, error: `App "${app.name}" is ${app.status}. Diagnostics are not available for stopped or failed apps.` };
+  // Only 'stopped' refuses: a failed app is precisely when diagnostics are wanted,
+  // and an update that came back indeterminate points the model here on an entry
+  // barney may have marked failed.
+  if (app.status === 'stopped') {
+    return { success: false, error: `App "${app.name}" is stopped. Diagnostics are not available for stopped apps.` };
   }
 
   if (!app.providerUrl) {
@@ -739,13 +894,25 @@ export async function executeAppDiagnostics(
 
   try {
     const provision = await getLeaseProvision(app.providerUrl, app.leaseUuid, authToken);
+    // fred v0.13.0 replaced `last_error` with a curated `reason` + `message`
+    // pair. Providers upgrade independently of barney, so BOTH eras are live at
+    // once — `describeFredFailure` prefers reason/message and falls back to
+    // last_error, which is still echoed when the provider sent it. `nextStepFor`
+    // is barney's remapper, not the SDK's `guidanceFor` (see failureGuidance.ts);
+    // its `undefined` is the NORMAL case for a reason from a newer fred, and the
+    // set is open, so nothing here gates on the value.
+    const failure = describeFredFailure(provision);
+    const nextStep = nextStepFor(provision.reason, app.name);
     return {
       success: true,
       data: {
         app_name: app.name,
         status: provision.status,
         fail_count: provision.fail_count,
-        last_error: provision.last_error,
+        ...(failure?.reason !== undefined && { reason: sanitizeForDisplay(failure.reason, DIAGNOSTIC_REASON_CHARS) }),
+        ...(failure?.message !== undefined && { message: sanitizeForDisplay(failure.message, DIAGNOSTIC_MESSAGE_CHARS) }),
+        ...(provision.last_error !== undefined && { last_error: sanitizeForDisplay(provision.last_error, DIAGNOSTIC_MESSAGE_CHARS) }),
+        ...(nextStep !== undefined && { next_step: nextStep }),
       },
     };
   } catch (error) {
@@ -775,8 +942,10 @@ export async function executeAppReleases(
   const app = appRegistry.findApp(address, name);
   if (!app) return { success: false, error: `No unique app found matching "${name}"` };
 
-  if (app.status === 'stopped' || app.status === 'failed') {
-    return { success: false, error: `App "${app.name}" is ${app.status}. Releases are not available for stopped or failed apps.` };
+  // See executeAppDiagnostics: a failed app still has a release history, and that
+  // history is what tells the user which version the provider is actually running.
+  if (app.status === 'stopped') {
+    return { success: false, error: `App "${app.name}" is stopped. Releases are not available for stopped apps.` };
   }
 
   if (!app.providerUrl) {

@@ -76,7 +76,7 @@ const DEFAULTS: RuntimeConfig = {
   PUBLIC_CHAIN_ID: 'manifest-ledger-beta',
   PUBLIC_FAUCET_URL: '',
   PUBLIC_AI_STREAM_TIMEOUT_MS: '30000',
-  PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: '300000',
+  PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: '600000',
   PUBLIC_AI_TOOL_API_TIMEOUT_MS: '15000',
   PUBLIC_AI_MAX_RETRIES: '3',
   PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: '300000',
@@ -98,10 +98,15 @@ export type NumericConfigKey =
   | 'PUBLIC_AI_MAX_MESSAGES'
   | 'PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY';
 
-/** Upper bounds for numeric config keys to prevent misconfiguration. */
+/** Upper bounds for numeric config keys to prevent misconfiguration.
+ *  Every bound must sit STRICTLY ABOVE its `DEFAULTS` entry, or the knob only
+ *  turns one way. */
 const NUMERIC_LIMITS: Record<NumericConfigKey, number> = {
   PUBLIC_AI_STREAM_TIMEOUT_MS: 120_000,
-  PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: 600_000,
+  // fred's worst case for one lease: ReconcileInterval (5m) before the reconciler
+  // picks it up + a full ProvisionTimeout (10m) to provision it — the same envelope
+  // AI_LEASE_WAIT_TIMEOUT_MS is sized to. Default is 600_000 (ProvisionTimeout).
+  PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS: 900_000,
   PUBLIC_AI_TOOL_API_TIMEOUT_MS: 60_000,
   PUBLIC_AI_MAX_RETRIES: 10,
   PUBLIC_AI_CONFIRMATION_TIMEOUT_MS: 600_000,

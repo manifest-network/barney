@@ -29,6 +29,7 @@ import type { CosmosClientManager, DeployResult } from '@manifest-network/manife
 import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
 import { LeaseState } from '../../api/billing';
+import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS } from '../../config/constants';
 import { ProviderApiError } from '../../api/provider-api';
 import { logError } from '../../utils/errors';
 
@@ -82,6 +83,8 @@ vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   setItemCustomDomain: vi.fn(),
   waitForLeaseStatus: vi.fn(),
   isLeaseFailureTerminal: vi.fn(),
+  restartApp: vi.fn(),
+  updateApp: vi.fn(),
   TerminalChainStateError: class TerminalChainStateError extends Error {
     constructor(m: string) { super(m); this.name = 'TerminalChainStateError'; }
   },
@@ -121,7 +124,7 @@ import { getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../.
 import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
 import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
 import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
-import { TerminalChainStateError, deployManifest, stopApp, waitForLeaseStatus, isLeaseFailureTerminal } from '@manifest-network/manifest-sdk/deploy';
+import { TerminalChainStateError, deployManifest, stopApp, waitForLeaseStatus, isLeaseFailureTerminal, restartApp, updateApp, FRED_REASON_GUIDANCE } from '@manifest-network/manifest-sdk/deploy';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 
 const ADDRESS = 'manifest1abc';
@@ -1827,7 +1830,10 @@ describe('executeConfirmedDeployApp', () => {
     expect(setItemCustomDomain).not.toHaveBeenCalled();
     // registry addApp(deploying) fired in onLeaseCreated, then updateApp(running)
     expect(registry.addApp).toHaveBeenCalledWith(ADDRESS, expect.objectContaining({ status: 'deploying', leaseUuid: 'new-lease-uuid' }));
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'new-lease-uuid', expect.objectContaining({ status: 'running', url: '127.0.0.1:32456' }));
+    // deployManifest only RESOLVES on chain-ACTIVE + provision_status 'ready',
+    // so BOTH observations are first-hand; `status` is derived from them.
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'new-lease-uuid', expect.objectContaining({ chainState: 'active', provisionState: 'confirmed', url: '127.0.0.1:32456' }));
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.status).toBe('running');
     // progress sequence
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'creating_lease' }));
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'uploading' }));
@@ -1852,6 +1858,22 @@ describe('executeConfirmedDeployApp', () => {
     expect(JSON.parse(spec.manifest)).toEqual({ image: 'nginx', port: '80' });
     expect(spec.customDomain).toBeUndefined();
     expect(spec.serviceName).toBeUndefined();
+  });
+
+  it('gives the readiness poll fred\'s own provisioning budget, not a shorter one (W6)', async () => {
+    // fred v0.13.0 internal/backend/docker/config.go: ImagePullTimeout 5m,
+    // ProvisionTimeout 10m. A deadline under 10m gives up while the provider is
+    // still legitimately working, and the SDK then reports readiness as never
+    // confirmed — the highest-frequency producer of a "deploying, we never found
+    // out" outcome. The SDK's own DEFAULT_POLL_TIMEOUT_MS is 600000 for this reason.
+    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_port: 1 } } } });
+    await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions(), makePayload());
+
+    const [, , callOptions] = vi.mocked(deployManifest).mock.calls[0];
+    expect(callOptions?.pollOptions).not.toBe(false);
+    const timeoutMs = (callOptions?.pollOptions as { timeoutMs?: number } | undefined)?.timeoutMs;
+    expect(timeoutMs === undefined || timeoutMs >= 600_000).toBe(true);
+    expect(AI_DEPLOY_PROVISION_TIMEOUT_MS).toBe(600_000);
   });
 
   it('passes customDomain into the spec and omits empty serviceName', async () => {
@@ -1913,10 +1935,50 @@ describe('executeConfirmedDeployApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
     expect((result.data as any).url).toBe('5.6.7.8:32456');
+    // The 2d chain-truth arm observed the CHAIN only — no provider readiness
+    // verdict was ever given — so it records `chainState` and nothing else.
     expect(registry.updateApp).toHaveBeenCalledWith(
       ADDRESS, 'new-lease-uuid',
-      expect.objectContaining({ status: 'running', url: '5.6.7.8:32456', connection: expect.objectContaining({ host: '5.6.7.8' }) }),
+      expect.objectContaining({ chainState: 'active', url: '5.6.7.8:32456', connection: expect.objectContaining({ host: '5.6.7.8' }) }),
     );
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.provisionState).toBeUndefined();
+  });
+
+  // W5 end-to-end: the readiness-unconfirmed arm of handleDeployManifestError
+  // reached through the real deploy path. The branch itself is unit-tested in
+  // deployError.test.ts; this pins that a real deployManifest throw routes into
+  // it and that nothing downstream re-dresses it as a live app.
+  it('reports a deploy whose readiness was never confirmed as still deploying, not as live', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
+      await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      throw new ManifestMCPError(
+        ManifestMCPErrorCode.DEPLOY_READINESS_UNCONFIRMED,
+        'Deploy partially succeeded: lease new-lease-uuid was created but its readiness could not be confirmed. ' +
+          'Re-check with app_status({ lease_uuid: "new-lease-uuid" }), or keep waiting with wait_for_app_ready(…). ' +
+          'Close this lease with close_lease ONLY if the provider reports a failed provision_status.',
+        { partial: true, readiness_unconfirmed: true, poll_reason: 'deadline', failedStep: 'poll', lease_uuid: 'new-lease-uuid' },
+      );
+    });
+    // ACTIVE is what the chain says for the whole provisioning window — the
+    // reason the chain verdict cannot be the discriminant here.
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
+    const registry = makeRegistry();
+
+    const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry }), makePayload());
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('deploying');
+    expect((result.data as any).url).toBeUndefined();
+    expect(result.success && !result.requiresConfirmation && result.displayCard).toBeUndefined();
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'new-lease-uuid', { provisionState: 'unconfirmed' });
+    // and the OBSERVATION is what survives: the derived summary is 'deploying',
+    // and a later chain-only reconcile can no longer promote it to 'running'.
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.status).toBe('deploying');
+    const message = (result.data as any).message as string;
+    expect(message).not.toContain('is live');
+    expect(message).toContain('we never found out');
+    expect(message).not.toContain('close_lease');
+    expect(message).not.toContain('wait_for_app_ready');
   });
 
   it('surfaces a create-lease raw error (case 1, no lease)', async () => {
@@ -2047,7 +2109,9 @@ describe('executeConfirmedStopApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('stopped');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'stopped' });
+    // CHAIN observation only — stopping says nothing about provisioning.
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'absent' });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('stopped');
     // single path blocks on confirmation
     expect(stopApp).toHaveBeenCalledWith(
       expect.anything(),
@@ -2118,7 +2182,7 @@ describe('executeConfirmedStopApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).message).toContain('already inactive');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'uuid-1', { status: 'stopped' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'uuid-1', { chainState: 'absent' });
   });
 
   it('returns failure when all bulk stops fail', async () => {
@@ -2516,6 +2580,85 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(getLeaseProvision).not.toHaveBeenCalledWith('https://stale.example.com', 'lease-x', expect.anything());
   });
 
+  // W5 twin of the fixture above, on the post-ENG-508 wire shape. Fred v0.13.0
+  // deleted `last_error` from /provision, so the old `if (provision.last_error)`
+  // is permanently false against a current provider — and when the container
+  // never started there are no logs either, leaving a batch entry that reports
+  // the failure with no cause at all.
+  it('surfaces the post-ENG-508 provision reason/message in a failed batch entry', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('lease-x', 'https://resolved.example.com');
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true });
+    });
+    vi.mocked(getLease).mockResolvedValueOnce(null as any);
+    vi.mocked(getLeaseProvision).mockResolvedValueOnce({
+      status: 'failed', fail_count: 2, reason: 'ImagePullFailed', message: 'pull access denied for ngnix',
+    } as any);
+    vi.mocked(getLeaseLogs).mockResolvedValueOnce({ lease_uuid: 'lease-x', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
+
+    const onProgress = vi.fn();
+    const entries = [
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+    ];
+
+    await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ onProgress }));
+
+    // Batch per-app detail lands in onProgress's `batch` array, not the top-level detail.
+    const details = onProgress.mock.calls
+      .flatMap((c) => (c[0] as { batch?: Array<{ detail?: string }> }).batch ?? [])
+      .map((b) => b.detail ?? '');
+    expect(details.some((d) => d.includes('ImagePullFailed: pull access denied for ngnix'))).toBe(true);
+    // The curated next step rides along — asserted against the real constant.
+    expect(details.some((d) => d.includes(FRED_REASON_GUIDANCE.ImagePullFailed.nextStep))).toBe(true);
+  });
+
+  it('does not count a readiness-unconfirmed entry as deployed', async () => {
+    // Batch seam of the bug W5 fixed for the single path. handleDeployManifestError
+    // answers success:true for the readiness-unconfirmed arm — correctly, it is
+    // NOT a failure — but a boolean success/failure split put it in `succeeded`,
+    // so the summary said "All 2 apps deployed!" about an app the provider never
+    // confirmed, while that row's progress phase read 'failed'.
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      const spec = _spec as any;
+      if (String(spec.manifest).includes('unconfirmed')) {
+        throw new ManifestMCPError(
+          ManifestMCPErrorCode.DEPLOY_READINESS_UNCONFIRMED,
+          'readiness could not be confirmed',
+          { partial: true, readiness_unconfirmed: true, poll_reason: 'deadline', failedStep: 'poll' },
+        );
+      }
+      return makeDeployResult();
+    });
+    // ACTIVE for the whole provisioning window — the reason the chain verdict
+    // cannot be the discriminant here.
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
+
+    const okPayload = makePayload();
+    const unconfirmedBytes = new TextEncoder().encode('{"image":"unconfirmed"}');
+    const onProgress = vi.fn();
+    const entries = [
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: okPayload },
+      { app_name: 'postgres', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com',
+        payload: { ...okPayload, bytes: unconfirmedBytes, size: unconfirmedBytes.length } },
+    ];
+
+    const result = await executeConfirmedBatchDeploy(
+      { entries }, CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry(), onProgress })
+    );
+
+    const data = result.data as any;
+    expect(data.deployed.map((d: any) => d.name)).toEqual(['game1']);
+    expect(data.unconfirmed.map((u: any) => u.name)).toEqual(['postgres']);
+    expect(data.failed).toHaveLength(0);
+    expect(data.message).toContain('Still deploying');
+    expect(data.message).toContain('postgres');
+    // The exact claim the bug made.
+    const lastProgress = onProgress.mock.calls.at(-1)![0];
+    expect(lastProgress.detail).not.toContain('All 2 apps deployed!');
+    expect(lastProgress.detail).toContain('1 still deploying');
+  });
+
   it('records a raw create-lease rejection in failed[] and keeps the rest', async () => {
     vi.mocked(deployManifest)
       .mockImplementationOnce(async (_ctx, _spec, callOptions) => {
@@ -2754,7 +2897,7 @@ describe('executeConfirmedRestartApp', () => {
   });
 
   it('restarts app and polls to ready', async () => {
-    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
     vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
@@ -2779,13 +2922,15 @@ describe('executeConfirmedRestartApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect(restartLease).toHaveBeenCalled();
+    expect(restartApp).toHaveBeenCalled();
+    // The raw HTTP wrapper is no longer on this path (ENG-774): the primitive is.
+    expect(restartLease).not.toHaveBeenCalled();
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'restarting' }));
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
   });
 
   it('handles 409 error from restart endpoint', async () => {
-    vi.mocked(restartLease).mockRejectedValue(new ProviderApiError(409, 'lease is not running'));
+    vi.mocked(restartApp).mockRejectedValue(new ProviderApiError(409, '{"error":"invalid state for restart","code":409}'));
 
     const onProgress = vi.fn();
     const app = makeApp();
@@ -2802,7 +2947,7 @@ describe('executeConfirmedRestartApp', () => {
   });
 
   it('handles poll failure (non-active state)', async () => {
-    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
     vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
       last_error: 'container crashed',
@@ -2819,13 +2964,17 @@ describe('executeConfirmedRestartApp', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('container crashed');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'failed' });
   });
 
-  it('marks the app failed when the readiness wait rejects (timeout/error, no abort)', async () => {
-    // ENG-312: waitForLeaseStatus REJECTS on timeout; restore the "mark failed"
-    // guarantee the deleted waitForLeaseReady provided by falling through.
-    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+  it('records unconfirmed — not failed — when the readiness wait rejects (timeout/error, no abort)', async () => {
+    // ENG-312: waitForLeaseStatus REJECTS on timeout, so an observation still
+    // has to be recorded here (the deleted waitForLeaseReady resolved instead
+    // and fell through to the terminal branch). N4 changes WHICH observation:
+    // a timeout is silence, not a verdict, so it is 'unconfirmed'. Verified
+    // against the 0.21.0 pin — waitForLeaseStatus RESOLVES at every terminal
+    // state, so a provider verdict never arrives as a rejection at all.
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
     vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('deadline exceeded'));
 
     const app = makeApp();
@@ -2838,11 +2987,55 @@ describe('executeConfirmedRestartApp', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('may still be in progress');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
+    // The observation is still recorded (the anti-"stays running" guarantee the
+    // original test existed for), it just derives 'deploying' rather than
+    // asserting a failure verdict nobody gave.
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('deploying');
+  });
+
+  it('records failed when the wait rejection DOES carry a provider verdict (kind: poll_verdict)', async () => {
+    // Defence-in-depth arm of provisionObservationFromWaitError: today only
+    // pollLeaseReadiness stamps kind 'poll_verdict', but if a real verdict ever
+    // surfaces as a rejection it must NOT be softened to 'unconfirmed'.
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(
+      new ProviderApiError(0, 'Lease is ACTIVE but provisioning failed: container exited', { kind: 'poll_verdict' })
+    );
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(false);
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'failed' });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('failed');
+  });
+
+  it('records unconfirmed for a NON-transient provider error too (retryability is the wrong axis)', async () => {
+    // isTransientProviderError would answer false for a 401, but "worth
+    // retrying" is orthogonal to "did the workload come up". Neither says the
+    // provider gave a provisioning verdict, so both are 'unconfirmed'.
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new ProviderApiError(401, 'unauthorized', { kind: 'http' }));
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
   });
 
   it('does NOT mark the app failed when the wait is aborted (user interrupt)', async () => {
-    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
     vi.mocked(waitForLeaseStatus).mockRejectedValue(new DOMException('Aborted', 'AbortError'));
 
     const app = makeApp();
@@ -2856,11 +3049,44 @@ describe('executeConfirmedRestartApp', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'failed' });
+    // stronger than "no failed write": an abort observed NOTHING, so no
+    // provisioning observation exists on the entry at all.
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBeUndefined();
+  });
+
+  it('does NOT mark the app failed when the RESTART POST itself is aborted', async () => {
+    // ENG-774 regression. Threading `signal` into restartApp added a throw site
+    // barney never had: the primitive throwIfAborted()s after the token mint
+    // (queued on the signing mutex) and BEFORE the non-idempotent POST. The app
+    // was never restarted and is healthy — marking it 'failed' drops it out of
+    // list_apps() and shows it failed in the sidebar. Twin of the wait-site
+    // guard above, at the POST site.
+    vi.mocked(restartApp).mockRejectedValue(new DOMException('This operation was aborted', 'AbortError'));
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const controller = new AbortController();
+    controller.abort();
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal })
+    );
+
+    expect(result.success).toBe(false);
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'failed' });
+    // stronger than "no failed write": an abort observed NOTHING, so no
+    // provisioning observation exists on the entry at all.
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBeUndefined();
+    expect(result.error).toContain('cancelled before the provider was asked');
+    // Never the raw AbortError text dressed up as a restart failure.
+    expect(result.error).not.toContain('This operation was aborted');
+    expect(result.error).not.toContain('Restart failed');
   });
 
   it('restarts multiple apps in batch and returns summary', async () => {
-    vi.mocked(restartLease).mockResolvedValue({ status: 'restarting' });
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
     vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
@@ -2895,7 +3121,7 @@ describe('executeConfirmedRestartApp', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).restarted).toHaveLength(2);
     expect((result.data as any).failed).toHaveLength(0);
-    expect(restartLease).toHaveBeenCalledTimes(2);
+    expect(restartApp).toHaveBeenCalledTimes(2);
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({
       operation: 'restart',
       batch: expect.arrayContaining([
@@ -2907,9 +3133,9 @@ describe('executeConfirmedRestartApp', () => {
 
   it('handles partial failures in batch restart', async () => {
     // First app succeeds, second fails with 409
-    vi.mocked(restartLease)
-      .mockResolvedValueOnce({ status: 'restarting' })
-      .mockRejectedValueOnce(new ProviderApiError(409, 'not restartable'));
+    vi.mocked(restartApp)
+      .mockResolvedValueOnce({ lease_uuid: 'uuid-1', status: 'restarting' })
+      .mockRejectedValueOnce(new ProviderApiError(409, '{"error":"invalid state for restart","code":409}'));
     vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
@@ -2946,8 +3172,233 @@ describe('executeConfirmedRestartApp', () => {
     expect((result.data as any).failed[0]).toBe('postgres');
   });
 
+  it('calls the restartApp primitive on the fast path, with the abort signal', async () => {
+    // ENG-774 / D6. `providerUrl` selects the primitive's fast path: without it
+    // restartApp would run fetchActiveLease + resolveProviderUrl and add two
+    // chain round-trips per restart. `pollOptions: false` keeps barney's own
+    // waitForLeaseStatus + ProgressCard in charge. `signal` is what gives the
+    // POST its throwIfAborted guard.
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+
+    const app = makeApp();
+    const controller = new AbortController();
+    await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry([app]), signal: controller.signal })
+    );
+
+    expect(restartApp).toHaveBeenCalledWith(
+      expect.anything(),
+      { address: ADDRESS, leaseUuid: app.leaseUuid },
+      { pollOptions: false, providerUrl: app.providerUrl, signal: controller.signal }
+    );
+  });
+
+  it('calls the restartApp primitive per entry on the bulk path, with the abort signal', async () => {
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    });
+
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' }),
+    ];
+    const entries = apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! }));
+    const controller = new AbortController();
+
+    await executeConfirmedRestartApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps), signal: controller.signal })
+    );
+
+    // The registry providerUrl, per entry — not a resolved-from-chain one.
+    expect(restartApp).toHaveBeenCalledWith(
+      expect.anything(),
+      { address: ADDRESS, leaseUuid: 'uuid-1' },
+      { pollOptions: false, providerUrl: 'https://fred1.example.com', signal: controller.signal }
+    );
+    expect(restartApp).toHaveBeenCalledWith(
+      expect.anything(),
+      { address: ADDRESS, leaseUuid: 'uuid-2' },
+      { pollOptions: false, providerUrl: 'https://fred2.example.com', signal: controller.signal }
+    );
+    expect(restartLease).not.toHaveBeenCalled();
+  });
+
+  it('never fires the restart POST for entries the batch never queued (aborted)', async () => {
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' }),
+    ];
+    const entries = apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! }));
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps), signal: controller.signal })
+    );
+
+    expect(restartApp).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+  });
+
+  it('buckets an entry aborted AT the POST as cancelled, not failed (already queued)', async () => {
+    // Distinct from the pre-queue short-circuit below: here the entry WAS
+    // queued, executeOne ran, and the primitive's own throwIfAborted fired
+    // before the POST. The app was never restarted, so it must not be marked
+    // 'failed' nor counted in the batch's Failed list.
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    });
+
+    const controller = new AbortController();
+    let call = 0;
+    vi.mocked(restartApp).mockImplementation(async () => {
+      call += 1;
+      if (call === 1) return { lease_uuid: 'uuid-1', status: 'restarting' };
+      // Second entry: the user's new chat message aborts the shared controller
+      // while this entry is queued behind the signing mutex.
+      controller.abort();
+      throw new DOMException('This operation was aborted', 'AbortError');
+    });
+
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' }),
+    ];
+    const registry = makeRegistry(apps);
+    const entries = apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! }));
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal })
+    );
+
+    expect(restartApp).toHaveBeenCalledTimes(2);
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, 'uuid-2', { provisionState: 'failed' });
+    const data = result.data as any;
+    expect(data.failed).not.toContain('postgres');
+    expect(data.cancelled).toContain('postgres');
+    expect(data.message).toContain('Cancelled: postgres');
+    expect(data.message).not.toContain('Failed: postgres');
+  });
+
+  it('surfaces the post-ENG-508 reason/message when the restart wait ends in failure', async () => {
+    // fred v0.13.0 deleted last_error from /status; the failure signal is now
+    // the curated reason/message pair. Same fixture as the legacy twin above.
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_CLOSED,
+      reason: 'ContainerExited',
+      message: 'container exited unexpectedly',
+    });
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(true);
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('ContainerExited');
+    expect(result.error).toContain('container exited unexpectedly');
+    expect(result.error).not.toContain('App did not come back up');
+  });
+
+  it('surfaces the post-ENG-508 reason/message on a failed batch restart', async () => {
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_CLOSED,
+      reason: 'RestartFailed',
+      message: 'restart failed; rollback failed',
+    });
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(true);
+
+    const onProgress = vi.fn();
+    const apps = [makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' })];
+    const entries = apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! }));
+
+    await executeConfirmedRestartApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps), onProgress })
+    );
+
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({
+      batch: expect.arrayContaining([
+        expect.objectContaining({ name: 'redis', phase: 'failed', detail: expect.stringContaining('RestartFailed') }),
+      ]),
+    }));
+  });
+
+  it('does NOT read /provision on the restart path (fred erases the restart-rollback signal)', async () => {
+    // lease_sm.go onEnterReadyFromReplaceRecovered CLEARS Reason/Message when
+    // `info.OldStopped && info.Operation == "restart"` — a restart that rolled
+    // back is, by fred's own definition, back to the exact prior state. So there
+    // is nothing for a restart-side rollback gate to read, and mirroring
+    // update's gate onto restart would only add a round-trip and invent a
+    // failure out of a stale record. This locks that decision.
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      provision_status: 'ready',
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    });
+
+    const app = makeApp();
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(result.success).toBe(true);
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+  });
+
+  it('waits on the lease-wait deadline, not the deploy one (W6)', async () => {
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+
+    const app = makeApp();
+    await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry([app]) })
+    );
+
+    expect(waitForLeaseStatus).toHaveBeenCalledWith(
+      expect.anything(),
+      app.leaseUuid,
+      expect.objectContaining({ timeout: AI_LEASE_WAIT_TIMEOUT_MS })
+    );
+    // The split is the point: an ACTIVE lease sitting at provision_status
+    // 'retained' now polls instead of resolving (SDK 0.21 classifyTerminal), so
+    // this budget has to cover fred's ReconcileInterval + ProvisionTimeout.
+    expect(AI_LEASE_WAIT_TIMEOUT_MS).toBeGreaterThan(AI_DEPLOY_PROVISION_TIMEOUT_MS);
+  });
+
   it('returns failure when all batch restarts fail', async () => {
-    vi.mocked(restartLease).mockRejectedValue(new ProviderApiError(409, 'not restartable'));
+    vi.mocked(restartApp).mockRejectedValue(new ProviderApiError(409, '{"error":"invalid state for restart","code":409}'));
 
     const apps = [
       makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
@@ -3462,7 +3913,7 @@ describe('executeConfirmedUpdateApp', () => {
   });
 
   it('updates app and polls to ready', async () => {
-    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
     vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
@@ -3488,7 +3939,9 @@ describe('executeConfirmedUpdateApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect(updateLease).toHaveBeenCalled();
+    expect(updateApp).toHaveBeenCalled();
+    // The raw HTTP wrapper is no longer on this path (ENG-774): the primitive is.
+    expect(updateLease).not.toHaveBeenCalled();
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'updating' }));
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
     // Registry should have updated manifest
@@ -3500,7 +3953,7 @@ describe('executeConfirmedUpdateApp', () => {
   });
 
   it('handles 409 error from update endpoint', async () => {
-    vi.mocked(updateLease).mockRejectedValue(new ProviderApiError(409, 'lease is not running'));
+    vi.mocked(updateApp).mockRejectedValue(new ProviderApiError(409, '{"error":"invalid state for update","code":409}'));
 
     const onProgress = vi.fn();
     const app = makeApp();
@@ -3517,7 +3970,7 @@ describe('executeConfirmedUpdateApp', () => {
   });
 
   it('handles poll failure (non-active state)', async () => {
-    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
     vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_CLOSED,
       last_error: 'container crashed',
@@ -3535,11 +3988,15 @@ describe('executeConfirmedUpdateApp', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('container crashed');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'failed' });
   });
 
-  it('marks the app failed when the readiness wait rejects (timeout/error, no abort)', async () => {
-    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+  it('records unconfirmed — not failed — when the readiness wait rejects (timeout/error, no abort)', async () => {
+    // N4, update twin of the restart case: a wait that ended without an answer
+    // is silence. Contrast the branches ABOVE, which keep writing 'failed' —
+    // they run on a RESOLVED status or a settled /provision read, i.e. fred
+    // actually answered.
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
     vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('deadline exceeded'));
 
     const app = makeApp();
@@ -3553,7 +4010,34 @@ describe('executeConfirmedUpdateApp', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('may still be in progress');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { status: 'failed' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('deploying');
+  });
+
+  it('does NOT mark the app failed when the UPDATE POST itself is aborted', async () => {
+    // Twin of the restart POST-site guard: updateApp throwIfAborted()s after the
+    // token mint and before the non-idempotent POST, so an abort here means the
+    // provider was never asked and the app still runs its current version.
+    vi.mocked(updateApp).mockRejectedValue(new DOMException('This operation was aborted', 'AbortError'));
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const controller = new AbortController();
+    controller.abort();
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'failed' });
+    // stronger than "no failed write": an abort observed NOTHING, so no
+    // provisioning observation exists on the entry at all.
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBeUndefined();
+    expect(result.error).toContain('cancelled before the provider was asked');
+    expect(result.error).not.toContain('This operation was aborted');
   });
 
   it('returns error without payload', async () => {
@@ -3569,7 +4053,7 @@ describe('executeConfirmedUpdateApp', () => {
   });
 
   it('reconstructs payload from _generatedManifest when no payload provided', async () => {
-    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
     vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
@@ -3599,7 +4083,360 @@ describe('executeConfirmedUpdateApp', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect(updateLease).toHaveBeenCalled();
+    expect(updateApp).toHaveBeenCalled();
+  });
+
+  // ── rollback gate (ENG-774) ───────────────────────────────────────────────
+  // Post-ENG-508 /provision shapes, verified against fred v0.13.0
+  // (internal/backend/shared/leasesm/lease_sm.go entry actions +
+  //  internal/api/handlers.go LeaseProvisionResponse, which has NO last_error):
+  //   Update OK       {status:'ready',  fail_count:N}                       reason+message cleared
+  //   Rollback OK     {status:'ready',  fail_count:N+1, reason:'UpdateFailed',
+  //                    message:'update failed; rolled back to previous version'}
+  //   Rollback failed {status:'failed', reason:'UpdateFailed', message:'update failed; rollback failed'}
+  //   Image pull      {status:'failed', reason:'ImagePullFailed', message:'image pull failed'}
+  const PREVIOUS_MANIFEST = '{"image":"redis:7"}';
+
+  function mockUpdateReachingProvision(provision: Record<string, unknown>) {
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    });
+    vi.mocked(getLeaseProvision).mockResolvedValue(provision as never);
+  }
+
+  async function runUpdate(registry: ReturnType<typeof makeRegistry>, app: AppEntry) {
+    return executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+  }
+
+  it('reports a rolled-back update as a failure and restores the previous manifest', async () => {
+    mockUpdateReachingProvision({
+      status: 'ready',
+      fail_count: 1,
+      reason: 'UpdateFailed',
+      message: 'update failed; rolled back to previous version',
+    });
+
+    const app = makeApp({ manifest: PREVIOUS_MANIFEST });
+    const registry = makeRegistry([app]);
+    const result = await runUpdate(registry, app);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('previous version restored');
+    expect(result.error).toContain('UpdateFailed');
+    expect(result.error).toContain('rolled back to previous version');
+    // UpdateFailed's curated guidance is exactly the anti-redeploy warning.
+    expect(result.error).toContain(FRED_REASON_GUIDANCE.UpdateFailed.nextStep);
+    expect(result.error).toContain('app_releases');
+    // The observation is fred's own provision.status: 'ready' means the
+    // rollback landed and the lease is healthy again.
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, {
+      provisionState: 'confirmed',
+      manifest: PREVIOUS_MANIFEST,
+    });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('running');
+  });
+
+  it('reports a clean update as a success and does not revert the manifest', async () => {
+    // The twin of the rollback fixture: reason/message CLEARED by
+    // onEnterReadyFromReplaceCompleted. fail_count is non-zero on purpose — a
+    // lease that failed at some point in the past must not poison this update.
+    mockUpdateReachingProvision({ status: 'ready', fail_count: 3 });
+
+    const app = makeApp({ manifest: PREVIOUS_MANIFEST });
+    const registry = makeRegistry([app]);
+    const result = await runUpdate(registry, app);
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).status).toBe('running');
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, expect.objectContaining({
+      manifest: PREVIOUS_MANIFEST,
+    }));
+  });
+
+  it('reports a failed rollback with the post-ENG-508 reason/message', async () => {
+    mockUpdateReachingProvision({
+      status: 'failed',
+      fail_count: 1,
+      reason: 'UpdateFailed',
+      message: 'update failed; rollback failed',
+    });
+
+    const app = makeApp({ manifest: PREVIOUS_MANIFEST });
+    const registry = makeRegistry([app]);
+    const result = await runUpdate(registry, app);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Update failed and rollback failed.');
+    expect(result.error).toContain('update failed; rollback failed');
+    expect(result.error).toContain(`app_status("${app.name}")`);
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, {
+      provisionState: 'failed',
+      manifest: PREVIOUS_MANIFEST,
+    });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('failed');
+  });
+
+  it('treats an image-pull preflight failure as update-attributable', async () => {
+    // doUpdate's preflight returns Restored:false, so the lease ends Failed with
+    // ReasonImagePullFailed. A gate written as `reason === "UpdateFailed"` would
+    // misfile this as a post-update crash.
+    mockUpdateReachingProvision({
+      status: 'failed',
+      fail_count: 1,
+      reason: 'ImagePullFailed',
+      message: 'image pull failed',
+    });
+
+    const app = makeApp({ manifest: PREVIOUS_MANIFEST });
+    const registry = makeRegistry([app]);
+    const result = await runUpdate(registry, app);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('ImagePullFailed');
+    expect(result.error).not.toContain('has since failed');
+    // doUpdate's preflight returns BEFORE doReplaceContainers, so no container
+    // was touched: there was no rollback to fail, and the old version is still
+    // serving. Claiming "rollback failed" asserts a mechanism that never ran.
+    expect(result.error).not.toContain('rollback failed');
+    // G3: the copy used to assert `"<name>" is still running the previous
+    // version` while the write below records fred's `failed` verdict — chat and
+    // the sidebar badge contradicting each other on one event. fred is
+    // authoritative (the lease never reached its desired state), so the badge
+    // stays 'failed' and the COPY changed: it leads with the failure and its
+    // cause, and keeps the previous version only as blast-radius reassurance.
+    expect(result.error).toContain('the new version was never applied');
+    expect(result.error).toContain('nothing was changed on the provider');
+    expect(result.error).not.toContain('is still running');
+    // The one actionable line for the most common update failure — previously
+    // computed and then dropped, because nextStep was interpolated only on the
+    // rollback-succeeded arm.
+    expect(result.error).toContain(FRED_REASON_GUIDANCE.ImagePullFailed.nextStep);
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, {
+      provisionState: 'failed',
+      manifest: PREVIOUS_MANIFEST,
+    });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('failed');
+  });
+
+  it('claims no verdict from a NON-TERMINAL provision carrying a stale prior reason', async () => {
+    // fred's applyReplaceEntry (lease_sm.go) writes only Status + CallbackURL on
+    // entering Updating — it does NOT clear a retained prior Reason/Message. And
+    // the readiness wait can resolve early: on a degraded provider GET /status
+    // omits provision_status (handlers.go best-effort lookup + omitempty), and
+    // the SDK's classifyTerminal returns "success" for an ACTIVE lease when it
+    // is absent. So this read is reachable mid-update, and the pair it carries
+    // is the PREVIOUS update's verdict. Trusting it claimed a rollback failure,
+    // marked the registry failed and reverted the manifest — on an update that
+    // was still in flight.
+    mockUpdateReachingProvision({
+      status: 'updating',
+      fail_count: 1,
+      reason: 'UpdateFailed',
+      message: 'update failed; rolled back to previous version',
+    });
+
+    const app = makeApp({ manifest: PREVIOUS_MANIFEST });
+    const registry = makeRegistry([app]);
+    const result = await runUpdate(registry, app);
+
+    // No verdict ⇒ no failure claimed; fall through to the best-effort path.
+    expect(result.success).toBe(true);
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, expect.objectContaining({
+      manifest: PREVIOUS_MANIFEST,
+    }));
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, expect.objectContaining({
+      provisionState: 'failed',
+    }));
+  });
+
+  it('does not blame a rollback when the container died AFTER a successful update', async () => {
+    // The residual, era-independent false positive: the update applied, the
+    // container then exited, and fred stamped ContainerExited on the same
+    // provision record. A describeFredFailure-only gate would report "previous
+    // version restored" and revert the stored manifest — both wrong.
+    mockUpdateReachingProvision({
+      status: 'ready',
+      fail_count: 1,
+      reason: 'ContainerExited',
+      message: 'container exited unexpectedly',
+    });
+
+    const app = makeApp({ manifest: PREVIOUS_MANIFEST });
+    const registry = makeRegistry([app]);
+    const result = await runUpdate(registry, app);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('update applied');
+    expect(result.error).toContain('has since failed');
+    expect(result.error).not.toContain('previous version restored');
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, expect.objectContaining({
+      manifest: PREVIOUS_MANIFEST,
+    }));
+  });
+
+  it('falls through to the rollback branch for a reason this build does not know', async () => {
+    // fred's reason set is OPEN and add-only. An unrecognized value must take the
+    // conservative branch (restore + no invented guidance), never be filtered out
+    // as "someone else's failure".
+    mockUpdateReachingProvision({
+      status: 'ready',
+      fail_count: 1,
+      reason: 'SomeFutureReason',
+      message: 'something new happened',
+    });
+
+    const app = makeApp({ manifest: PREVIOUS_MANIFEST });
+    const registry = makeRegistry([app]);
+    const result = await runUpdate(registry, app);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('previous version restored');
+    expect(result.error).toContain('SomeFutureReason');
+    expect(result.error).not.toContain(FRED_REASON_GUIDANCE.UpdateFailed.nextStep);
+    // The observation is fred's own provision.status: 'ready' means the
+    // rollback landed and the lease is healthy again.
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, {
+      provisionState: 'confirmed',
+      manifest: PREVIOUS_MANIFEST,
+    });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('running');
+  });
+
+  it('treats fred’s Unknown reason as unclassified, not as a post-update crash', async () => {
+    // provisionReason() defaults a FAILED provision with no authored reason to
+    // "Unknown" at fred's read boundary. It is recognized by
+    // isKnownFailureReason, so a bare negative filter would read it as "the
+    // update applied and something else broke" — a positive claim from zero
+    // evidence. It must take the same conservative branch as an unrecognized one.
+    mockUpdateReachingProvision({ status: 'failed', fail_count: 1, reason: 'Unknown' });
+
+    const app = makeApp({ manifest: PREVIOUS_MANIFEST });
+    const registry = makeRegistry([app]);
+    const result = await runUpdate(registry, app);
+
+    expect(result.success).toBe(false);
+    expect(result.error).not.toContain('has since failed');
+    expect(result.error).toContain('Update failed and rollback failed.');
+    // The next step is now appended on EVERY arm, so the SDK's Unknown sentence
+    // — `get_logs({ lease_uuid, tail: 200 })`, a call shape barney's
+    // `get_logs(app_name)` rejects — would reach chat verbatim if this site
+    // read the SDK's `guidanceFor` instead of barney's remapper.
+    expect(result.error).not.toContain('lease_uuid');
+    expect(result.error).toContain(`get_logs("${app.name}", 200)`);
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, {
+      provisionState: 'failed',
+      manifest: PREVIOUS_MANIFEST,
+    });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('failed');
+  });
+
+  // ── ENG-619: a 5xx from POST /update is INDETERMINATE ──────────────────────
+  it.each([
+    ['the SDK’s UPDATE_INDETERMINATE wrapper', new ManifestMCPError(
+      ManifestMCPErrorCode.UPDATE_INDETERMINATE,
+      'The provider could not durably record the update to lease l1 (HTTP 500), so it may or may not have been applied.',
+      { lease_uuid: 'l1', status: 500 },
+    )],
+    // The SDK wraps any ProviderApiError >= 500, but a raw one reaching this
+    // catch (an unwrapped throw, or a reverse proxy in front of fred minting its
+    // own 502) means the same thing and must not read as a flat failure.
+    ['a raw 500 from the provider', new ProviderApiError(500, '{"error":"internal server error","code":500}')],
+    ['a 502 from a proxy in front of fred', new ProviderApiError(502, '{"error":"the provider backend returned an unusable error; the request was not applied","code":502}')],
+  ])('reports an update whose outcome is unknown as unknown (%s)', async (_label, error) => {
+    vi.mocked(updateApp).mockRejectedValue(error);
+
+    const app = makeApp({ manifest: PREVIOUS_MANIFEST });
+    const registry = makeRegistry([app]);
+    const result = await runUpdate(registry, app);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('may or may not have been applied');
+    expect(result.error).toContain(`app_status("${app.name}")`);
+    expect(result.error).toContain(`app_releases("${app.name}")`);
+    expect(result.error).toContain('Do NOT stop the app and redeploy');
+    expect(result.error).not.toContain('Update failed:');
+    // The lease is very possibly live — never mark it failed, and never claim
+    // barney's stored manifest is the one running.
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, expect.objectContaining({
+      provisionState: 'failed',
+    }));
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, expect.objectContaining({
+      manifest: expect.any(String),
+    }));
+    // The SDK's own prose names close_lease / wait_for_app_ready — tools barney
+    // does not have, one of them destructive. Barney authors its own copy.
+    expect(result.error).not.toContain('close_lease');
+    expect(result.error).not.toContain('wait_for_app_ready');
+  });
+
+  it('calls the updateApp primitive on the fast path with the already-merged manifest', async () => {
+    // `existingManifest` is deliberately NOT passed: executeUpdateApp already
+    // merged the stored manifest in at plan time, so the ConfirmationCard showed
+    // (and let the user edit) exactly these bytes. A second merge inside the
+    // primitive would re-inject fields the user just deleted.
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+
+    const app = makeApp({ manifest: PREVIOUS_MANIFEST });
+    const manifestJson = JSON.stringify({ image: 'redis:8' });
+    const bytes = new TextEncoder().encode(manifestJson);
+    const controller = new AbortController();
+
+    await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry([app]), signal: controller.signal }),
+      { bytes, filename: 'manifest.json', size: bytes.length, hash: 'c'.repeat(64) },
+    );
+
+    expect(updateApp).toHaveBeenCalledWith(
+      expect.anything(),
+      { address: ADDRESS, leaseUuid: app.leaseUuid, manifest: manifestJson },
+      { pollOptions: false, providerUrl: app.providerUrl, signal: controller.signal },
+    );
+    const [, input] = vi.mocked(updateApp).mock.calls[0];
+    expect('existingManifest' in input).toBe(false);
+  });
+
+  it('surfaces the post-ENG-508 reason/message when the update wait ends in failure', async () => {
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_CLOSED,
+      reason: 'ContainerExited',
+      message: 'container exited unexpectedly',
+    });
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(true);
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const result = await runUpdate(registry, app);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('ContainerExited');
+    expect(result.error).toContain('container exited unexpectedly');
+    expect(result.error).not.toContain('App did not come back up');
+  });
+
+  it('waits on the lease-wait deadline, not the deploy one (W6)', async () => {
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+
+    const app = makeApp();
+    await runUpdate(makeRegistry([app]), app);
+
+    expect(waitForLeaseStatus).toHaveBeenCalledWith(
+      expect.anything(),
+      app.leaseUuid,
+      expect.objectContaining({ timeout: AI_LEASE_WAIT_TIMEOUT_MS })
+    );
   });
 
   it('normalizes trailing-period on provision.last_error in rollback-failed branch', async () => {
@@ -3607,7 +4444,7 @@ describe('executeConfirmedUpdateApp', () => {
     // Last error: …. Use app_status(…) to check." template embeds the
     // provision.last_error mid-sentence; without normalization an upstream
     // error ending in `.` would double-up.
-    vi.mocked(updateLease).mockResolvedValue({ status: 'updating' });
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
     vi.mocked(waitForLeaseStatus).mockResolvedValue({
       state: LeaseState.LEASE_STATE_ACTIVE,
     });
@@ -3942,14 +4779,21 @@ describe('handleDeployManifestError', () => {
     expect(c.onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'failed' }));
   });
 
-  it('case 3: TerminalChainStateError → updateApp(failed), no chain-check', async () => {
+  it('case 3: TerminalChainStateError → both observations, derived status failed, no chain-check', async () => {
     const c = ctx();
     // Real TerminalChainStateError ctor is (leaseUuid, chainState, ctx?); the mock's
     // 1-arg ctor uses only the first arg as the message. Second arg satisfies the type.
     const result = await handleDeployManifestError(new TerminalChainStateError('lease rejected', 'rejected'), c);
     expect(result.success).toBe(false);
     expect(result.error).toContain('lease rejected');
-    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'failed' });
+    // N1: BOTH observations. The chain reading is 'absent' (the poll's
+    // checkChainState saw the lease leave the live set) AND provisioning is
+    // definitively over — a closed lease can never be provisioned against, so
+    // 'failed' is the pessimistic terminal truth, not an invented verdict.
+    // Recording only the chain half derived 'stopped' (rule 2), which
+    // contradicted the "Deployment failed" copy and locked the entry out of
+    // app_diagnostics/app_releases.
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { chainState: 'absent', provisionState: 'failed' });
     expect(getLease).not.toHaveBeenCalled();
   });
 
@@ -3966,10 +4810,10 @@ describe('handleDeployManifestError', () => {
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
     expect((result.data as any).url).toBe('5.6.7.8:32456');
-    // C1: updateApp carries url + connection now, not just status.
+    // C1: updateApp carries url + connection now, not just the observation.
     expect(c.appRegistry.updateApp).toHaveBeenCalledWith(
       ADDRESS, 'lease-1',
-      expect.objectContaining({ status: 'running', url: '5.6.7.8:32456', connection: expect.objectContaining({ host: '5.6.7.8' }) }),
+      expect.objectContaining({ chainState: 'active', url: '5.6.7.8:32456', connection: expect.objectContaining({ host: '5.6.7.8' }) }),
     );
     // C1: an app displayCard with the resolved URL.
     expect(result.success && !result.requiresConfirmation && result.displayCard?.type).toBe('app');
@@ -4051,7 +4895,941 @@ describe('handleDeployManifestError', () => {
     expect((result.data as any).url).toBe('5.6.7.8:32456');
     expect(c.appRegistry.updateApp).toHaveBeenCalledWith(
       ADDRESS, 'lease-1',
-      expect.objectContaining({ status: 'running', url: '5.6.7.8:32456' }),
+      expect.objectContaining({ chainState: 'active', url: '5.6.7.8:32456' }),
     );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F4 / G1 / G2 / G3 / G4 — writers record OBSERVATIONS, and the abort guards
+// key on the error rather than on the world.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('G1 — the abort guards key on the ERROR, not on the ambient signal', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // The scenario the old `signal?.aborted` guards got wrong: the shared chat
+  // controller is aborted by ANY new user message (aiActions/sendMessage), so a
+  // real provider failure that happens to land while the user is typing was
+  // reported as "cancelled before the provider was asked; the app is unchanged"
+  // — a confident false statement about a genuine provider failure.
+  //
+  // What the guard decides is the OPERATION's story. C2/C3 separates that from
+  // the workload OBSERVATION: a POST-site throw is about initiating the restart,
+  // so it reports a failed operation and records nothing.
+  it('restart POST: a provider 5xx landing under an aborted signal is a failure, not a cancellation', async () => {
+    vi.mocked(restartApp).mockRejectedValue(new ProviderApiError(503, '{"error":"backend unavailable","code":503}'));
+
+    const app = makeApp({ chainState: 'active', provisionState: 'confirmed' });
+    const registry = makeRegistry([app]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Restart failed');
+    expect(result.error).not.toContain('cancelled');
+    expect(result.error).not.toContain('the app is unchanged');
+    // …and no provisioning verdict is invented from it. fred's 500 comes from
+    // `routeReplaceRestart`'s prelude, before the actor handoff — the containers
+    // were never touched, so the app is still running.
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, expect.objectContaining({ provisionState: expect.anything() }));
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.provisionState).toBe('confirmed');
+    expect(stored?.status).toBe('running');
+  });
+
+  it('restart WAIT: a genuine wait failure under an aborted signal is still recorded', async () => {
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('deadline exceeded'));
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const controller = new AbortController();
+    controller.abort();
+
+    await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal })
+    );
+
+    // G1's point is unchanged and is what this test exists for: a real wait
+    // failure that merely COINCIDES with an aborted signal is still recorded,
+    // because the gate is the error's identity and not the ambient state. N4
+    // only changes WHICH observation gets recorded — 'unconfirmed', because a
+    // rejected wait never carries a provider verdict.
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('unconfirmed');
+  });
+
+  it('update POST: a 4xx landing under an aborted signal is a failure, not a cancellation', async () => {
+    // Deliberately NOT a 5xx: those are ENG-619 INDETERMINATE and take their own
+    // branch ABOVE the abort guard, which is itself part of the ordering this
+    // pins — an ambiguous 500 must never be re-told as "the app is unchanged".
+    vi.mocked(updateApp).mockRejectedValue(new ProviderApiError(400, '{"error":"bad manifest","code":400}'));
+
+    const app = makeApp({ chainState: 'active', provisionState: 'confirmed' });
+    const registry = makeRegistry([app]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Update failed');
+    expect(result.error).not.toContain('cancelled');
+    // C3: a rejected manifest means the replacement never started, so the
+    // PREVIOUS workload is untouched — the operation failed, the app did not.
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, expect.objectContaining({ provisionState: expect.anything() }));
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.provisionState).toBe('confirmed');
+    expect(stored?.status).toBe('running');
+  });
+
+  it('batch restart: one entry’s real failure is not relabelled cancelled by an abort', async () => {
+    // Where the ambient read bit hardest: N apps queue behind the signing mutex,
+    // so ONE abort used to relabel every concurrent genuine provider failure.
+    const controller = new AbortController();
+    vi.mocked(restartApp).mockImplementation(async () => {
+      controller.abort();
+      throw new ProviderApiError(503, '{"error":"backend unavailable","code":503}');
+    });
+
+    const apps = [makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com', chainState: 'active', provisionState: 'confirmed' })];
+    const registry = makeRegistry(apps);
+    const entries = apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! }));
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal })
+    );
+
+    const data = result.data as any;
+    expect(data?.cancelled ?? []).not.toContain('redis');
+    // Bucketed as a failed OPERATION (below), with no workload observation.
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, 'uuid-1', expect.objectContaining({ provisionState: expect.anything() }));
+  });
+});
+
+describe('G2 — fred’s transient `failing` is a verdict, not silence', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('reports a container that died right after a successful update, even mid-`failing`', async () => {
+    // fred v0.13.0 onEnterFailing (internal/backend/shared/leasesm/lease_sm.go)
+    // writes {Status: failing, FailCount++, Reason: ContainerExited, Message:
+    // 'container exited'} SYNCHRONOUSLY and only flips to `failed` when the async
+    // diagnostics gather fires. `Failing` is entered ONLY from `Ready`, so this
+    // read means "the update landed and then the container died". The old
+    // positive gate (`status === 'ready' || status === 'failed'`) treated the
+    // whole window as unsettled and fell straight through to the SUCCESS path.
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    });
+    vi.mocked(getLeaseProvision).mockResolvedValue({
+      status: 'failing', fail_count: 1, reason: 'ContainerExited', message: 'container exited',
+    } as never);
+
+    const app = makeApp({ manifest: '{"image":"redis:7"}' });
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('has since failed');
+    expect(result.error).toContain('container exited');
+    // ContainerExited is NOT update-attributable, so this is the applied-then-died
+    // arm: the manifest is NOT reverted and the provider verdict is recorded.
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'failed' });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('failed');
+  });
+
+  it('still claims no verdict from a genuinely mid-flight provision read', async () => {
+    // The inversion must not swallow the case the gate originally existed for:
+    // `updating` is fred's in-flight status and its retained reason/message pair
+    // belongs to the PREVIOUS update. (Twin of the existing 'updating' test —
+    // kept here for `restarting`, the other mid-flight value.)
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    });
+    vi.mocked(getLeaseProvision).mockResolvedValue({
+      status: 'restarting', fail_count: 1, reason: 'UpdateFailed', message: 'update failed; rolled back',
+    } as never);
+
+    const app = makeApp({ manifest: '{"image":"redis:7"}' });
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+  });
+
+  it('treats an ABSENT provision_status as unsettled, not as a verdict', async () => {
+    // fred's `omitempty` drops the field when its best-effort provision lookup
+    // fails on a degraded provider. Inverting the gate must not turn that
+    // silence into "trust the retained pair".
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    });
+    vi.mocked(getLeaseProvision).mockResolvedValue({
+      fail_count: 1, reason: 'UpdateFailed', message: 'update failed; rolled back',
+    } as never);
+
+    const app = makeApp({ manifest: '{"image":"redis:7"}' });
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('G4 — a batch-restart abort at the WAIT site is a cancellation', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('buckets every in-flight entry under Cancelled, never Failed', async () => {
+    // The POST-site fix already returned `cancelled`; the readiness-WAIT catch
+    // still called updateProgress('failed', …) and returned null, so clicking
+    // Stop during `restart all` landed every in-flight app under `Failed:` —
+    // inconsistent with the single-restart path's copy for the identical event.
+    const controller = new AbortController();
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockImplementation(async () => {
+      controller.abort();
+      throw new DOMException('This operation was aborted', 'AbortError');
+    });
+
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' }),
+      makeApp({ name: 'mongo', leaseUuid: 'uuid-3', providerUrl: 'https://fred3.example.com' }),
+    ];
+    const registry = makeRegistry(apps);
+    const entries = apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! }));
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal })
+    );
+
+    // All three POSTs landed, so all three reached the wait.
+    expect(restartApp).toHaveBeenCalledTimes(3);
+    // Nothing landed and nothing failed: summarizeBatchResult's all-cancelled
+    // shape. Before the fix this read `All restarts failed: redis, postgres,
+    // mongo` — the same event the single-restart path calls a cancellation.
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cancelled:');
+    for (const name of ['redis', 'postgres', 'mongo']) {
+      expect(result.error).toContain(name);
+    }
+    expect(result.error).not.toContain('Failed:');
+    expect(result.error).not.toContain('All restarts failed');
+    // …and nothing was recorded about provisioning: the wait observed nothing.
+    for (const a of apps) {
+      expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, a.leaseUuid, { provisionState: 'failed' });
+      expect(registry.getAppByLease(ADDRESS, a.leaseUuid)?.provisionState).toBeUndefined();
+    }
+  });
+});
+
+describe('F4 — a writer with no observation invents none', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('UPDATE_INDETERMINATE leaves provisionState exactly as it was', async () => {
+    // "Indeterminate" IS the state. The 500 is ambiguous by construction (fred
+    // answers it both when it refuses before the backend and when the backend
+    // applied the update but persisting the payload failed), so writing any
+    // provisioning verdict here would manufacture one.
+    vi.mocked(updateApp).mockRejectedValue(new ManifestMCPError(
+      ManifestMCPErrorCode.UPDATE_INDETERMINATE,
+      'The provider could not durably record the update to lease l1 (HTTP 500).',
+      { lease_uuid: 'l1', status: 500 },
+    ));
+
+    const app = makeApp({ provisionState: 'confirmed', chainState: 'active' });
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('may or may not have been applied');
+    expect(registry.updateApp).not.toHaveBeenCalled();
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.provisionState).toBe('confirmed');
+    expect(stored?.status).toBe('running');
+  });
+
+  it('an aborted restart POST leaves the entry’s observations untouched', async () => {
+    vi.mocked(restartApp).mockRejectedValue(new DOMException('This operation was aborted', 'AbortError'));
+
+    const app = makeApp({ provisionState: 'confirmed', chainState: 'active' });
+    const registry = makeRegistry([app]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal })
+    );
+
+    expect(result.error).toContain('cancelled before the provider was asked');
+    expect(registry.updateApp).not.toHaveBeenCalled();
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('confirmed');
+  });
+
+  it('stopping a failed deploy records the chain fact without erasing the diagnosis', async () => {
+    // Documented interaction, not an accident: derivation puts a provider
+    // `failed` verdict above chain-absence, so an app that failed to deploy and
+    // was then stopped still reads 'failed'. Both labels are terminal and both
+    // free the name for reuse, and 'failed' is the more informative of the two.
+    // Making it read 'stopped' would mean the stop path CLEARING an observation
+    // it never disproved.
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as any);
+
+    const app = makeApp({ provisionState: 'failed', status: 'failed' });
+    const registry = makeRegistry([app]);
+    await executeConfirmedStopApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+    );
+
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'absent' });
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.chainState).toBe('absent');
+    expect(stored?.provisionState).toBe('failed');
+    expect(stored?.status).toBe('failed');
+  });
+
+  // C2/C3. The POST-site catches used to write 'failed' under the claim "the
+  // provider was asked and answered with a failure — a genuine verdict". Several
+  // paths reach them where nothing observed the workload at all, and 'failed'
+  // drops a healthy app out of list_apps(running), restart_app and DNS polling.
+  it('a token mint that fails before the restart POST leaves the app running', async () => {
+    // restartApp mints its ADR-036 token BEFORE the POST, so a wallet/signing
+    // failure here means the provider was never asked. Not an AbortError, so it
+    // falls past the cancellation arm into the general catch.
+    vi.mocked(restartApp).mockRejectedValue(new Error('Request rejected by the wallet'));
+
+    const app = makeApp({ provisionState: 'confirmed', chainState: 'active' });
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+    );
+
+    // The OPERATION is still reported as failed — only the observation is gone.
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Restart failed: Request rejected by the wallet');
+    expect(registry.updateApp).not.toHaveBeenCalled();
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.provisionState).toBe('confirmed');
+    expect(stored?.status).toBe('running');
+  });
+
+  it('a 400 bad-manifest update leaves the previous workload untouched', async () => {
+    // The strongest case: fred rejected the manifest, so the replacement never
+    // started and the PREVIOUS version is still serving. (5xx never reaches this
+    // arm — `isIndeterminateUpdateError` takes it first.)
+    vi.mocked(updateApp).mockRejectedValue(new ProviderApiError(400, '{"error":"bad manifest","code":400}'));
+
+    const app = makeApp({ provisionState: 'confirmed', chainState: 'active', manifest: '{"image":"redis:7"}' });
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Update failed');
+    expect(registry.updateApp).not.toHaveBeenCalled();
+    const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+    expect(stored?.provisionState).toBe('confirmed');
+    expect(stored?.status).toBe('running');
+    // The stored manifest is still the live one: the new one is written only
+    // AFTER the primitive resolves.
+    expect(stored?.manifest).toBe('{"image":"redis:7"}');
+  });
+
+  it('a client-side INVALID_CONFIG from the manifest merge records nothing', async () => {
+    // `updateApp` merges the manifest and raises INVALID_CONFIG on bad JSON or an
+    // unknown service name — entirely before the POST. Nothing left the browser.
+    vi.mocked(updateApp).mockRejectedValue(new ManifestMCPError(
+      ManifestMCPErrorCode.INVALID_CONFIG,
+      'existing_manifest is not a stack manifest',
+    ));
+
+    const app = makeApp({ provisionState: 'confirmed', chainState: 'active' });
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(registry.updateApp).not.toHaveBeenCalled();
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('running');
+  });
+
+  it('a refused batch restart records nothing either', async () => {
+    // The bulk path must not disagree with the single path about what a refusal
+    // means — that split is how the two sets drifted in the first place.
+    vi.mocked(restartApp).mockRejectedValue(new ProviderApiError(500, '{"error":"internal error","code":500}'));
+
+    const apps = [makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com', provisionState: 'confirmed', chainState: 'active' })];
+    const registry = makeRegistry(apps);
+    const entries = apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! }));
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('All restarts failed: redis');
+    expect(registry.updateApp).not.toHaveBeenCalled();
+    expect(registry.getAppByLease(ADDRESS, 'uuid-1')?.status).toBe('running');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// G1 / G2 / G3 / G4 — second pass.
+//
+// The first pass proved each fix on its own. These close the gaps it left: the
+// CROSSING cases, where an abort and a genuine failure arrive together and the
+// two must be told apart per-entry, and the two G2 arms the inversion was
+// actually chosen FOR — a status this client does not model, and a teardown
+// verdict. Those two are the only place the direction of the gate is
+// observable; without them "inverted" and "widened to {ready, failed, failing}"
+// are indistinguishable.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('G1 (cont.) — error identity at the sites the first pass left uncovered', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('update WAIT: a genuine wait failure under an aborted signal is still recorded', async () => {
+    // Twin of the restart-WAIT case, on the path that did not have one. The old
+    // `if (!signal?.aborted)` gate skipped the write here too, so an app whose
+    // readiness wait died of a real transport fault kept rendering 'running'
+    // for as long as nobody ran app_status on it.
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('provider connection reset'));
+
+    const app = makeApp({ manifest: '{"image":"redis:7"}' });
+    const registry = makeRegistry([app]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    // As above: G1 pins that the write HAPPENS despite the ambient abort; N4
+    // pins that a connection reset is silence about provisioning, not a verdict.
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('deploying');
+  });
+
+  it('batch restart POST: a real provider failure under an aborted signal lands in Failed, never Cancelled', async () => {
+    // The existing G1 batch test asserts on `result.data.cancelled`, but an
+    // all-nothing-landed batch returns `{success:false, error}` with NO `data`
+    // at all — so that assertion cannot fail. Assert the string the user
+    // actually reads instead. Before the fix this said "No restarts completed —
+    // Cancelled: redis.", which is a 503 from fred re-told as the user's own
+    // cancellation.
+    const controller = new AbortController();
+    vi.mocked(restartApp).mockImplementation(async () => {
+      controller.abort();
+      throw new ProviderApiError(503, '{"error":"backend unavailable","code":503}');
+    });
+
+    const apps = [makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com', chainState: 'active', provisionState: 'confirmed' })];
+    const registry = makeRegistry(apps);
+    const entries = apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! }));
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('All restarts failed: redis');
+    expect(result.error).not.toContain('Cancelled');
+    // The OPERATION is reported failed; the app it never touched stays running.
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, 'uuid-1', expect.objectContaining({ provisionState: expect.anything() }));
+    expect(registry.getAppByLease(ADDRESS, 'uuid-1')?.status).toBe('running');
+  });
+});
+
+describe('G2 (cont.) — the inversion, on the values it was chosen for', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const ROLLED_BACK_MANIFEST = '{"image":"redis:7"}';
+
+  function mockUpdateReachingProvisionStatus(provision: Record<string, unknown>) {
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    });
+    vi.mocked(getLeaseProvision).mockResolvedValue(provision as never);
+  }
+
+  it('trusts a failure verdict carried by a provision status this client does not model', async () => {
+    // THE point of inverting the gate rather than widening it. fred v0.13.0's
+    // ProvisionStatus set (internal/backend/client.go) is nine values today and
+    // the constant block is add-only; the previous positive gate
+    // (`status === 'ready' || status === 'failed'`) meant every value fred adds
+    // LATER defaults to silence — reason + message present, failure ignored,
+    // update reported as a success. Inverted, an unmodelled status defaults to
+    // "trust the verdict", which is the safe direction: the worst case is a
+    // conservative failure report on an app that is fine, not a success report
+    // on an app whose update was rolled back.
+    //
+    // The copy takes the rollback-failed arm because an unmodelled status is not
+    // `ready` — deliberately the arm that never claims the update took, and it
+    // points at app_status rather than asserting what is serving.
+    mockUpdateReachingProvisionStatus({
+      status: 'quarantined',
+      fail_count: 1,
+      reason: 'UpdateFailed',
+      message: 'update failed; rolled back to previous version',
+    });
+
+    const app = makeApp({ manifest: ROLLED_BACK_MANIFEST });
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('update failed; rolled back to previous version');
+    expect(result.error).toContain(`app_status("${app.name}")`);
+    // The manifest the provider never ran is not left in the registry.
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, {
+      provisionState: 'failed',
+      manifest: ROLLED_BACK_MANIFEST,
+    });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('failed');
+  });
+
+  it('trusts a teardown verdict — `deprovisioning` is settled, not mid-flight', async () => {
+    // `deprovisioning` and `retained` are deliberately OUT of the unsettled set,
+    // and nothing pinned that. fred enters Deprovisioning from Failing on
+    // evDeprovisionRequested (lease_sm.go), so a /provision read here means the
+    // lease is being torn down: the update is not going to land, and the
+    // retained reason/message pair is the closest thing to a verdict there will
+    // ever be. Reporting success would be the worst possible answer.
+    mockUpdateReachingProvisionStatus({
+      status: 'deprovisioning',
+      fail_count: 1,
+      reason: 'UpdateFailed',
+      message: 'update failed; rolled back to previous version',
+    });
+
+    const app = makeApp({ manifest: ROLLED_BACK_MANIFEST });
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('failed');
+  });
+
+  it('still stays silent on fred’s own `unknown`', async () => {
+    // The judgement call inside the inversion, pinned so it cannot be quietly
+    // dropped: `unknown` is fred's name for "I cannot tell", so the pair beside
+    // it is not a verdict about anything. FORWARD GUARD — this also passed
+    // under the old positive gate, which called every non-{ready,failed} status
+    // unsettled. It proves the inversion did not overshoot, not that it fixed
+    // something.
+    mockUpdateReachingProvisionStatus({
+      status: 'unknown',
+      fail_count: 1,
+      reason: 'UpdateFailed',
+      message: 'update failed; rolled back to previous version',
+    });
+
+    const app = makeApp({ manifest: ROLLED_BACK_MANIFEST });
+    const registry = makeRegistry([app]);
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, expect.objectContaining({
+      manifest: ROLLED_BACK_MANIFEST,
+    }));
+  });
+});
+
+describe('G3 (cont.) — the ProgressCard detail must not re-assert what the copy dropped', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('reports the preflight failure on the progress row without a status claim', async () => {
+    // G3 fixed the chat copy; the ProgressCard row is the OTHER surface that
+    // sits next to the badge, and it renders `detail` verbatim. Pin that it
+    // carries the same story — failure first, "nothing was changed" as blast
+    // radius — so the contradiction cannot come back through the progress path.
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: 'lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    });
+    vi.mocked(getLeaseProvision).mockResolvedValue({
+      status: 'failed', fail_count: 1, reason: 'ImagePullFailed', message: 'image pull failed',
+    } as never);
+
+    const app = makeApp({ manifest: '{"image":"redis:7"}' });
+    const registry = makeRegistry([app]);
+    const onProgress = vi.fn();
+    await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, onProgress }),
+      makePayload(),
+    );
+
+    const details = onProgress.mock.calls.map((c) => (c[0] as { detail?: string }).detail ?? '');
+    expect(details.some((d) => d.includes('nothing was changed'))).toBe(true);
+    // The badge derived from this write is 'failed'; no surface may say the app
+    // is running, and none may claim a rollback that by construction never ran.
+    expect(details.some((d) => d.includes('is still running'))).toBe(false);
+    expect(details.some((d) => d.includes('rollback failed'))).toBe(false);
+  });
+});
+
+describe('G4 (cont.) — a mixed batch keeps the two outcomes apart per entry', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('routes the aborted waits to Cancelled and the one unanswered wait to Still restarting', async () => {
+    // Where G1 and G4 meet, and the only shape that distinguishes the fix from
+    // "bucket everything as cancelled once the signal is aborted". All three
+    // POSTs land; the user presses Stop; two waits reject with the signal's own
+    // reason and one rejects with a real transport fault. The abort is ambient
+    // for ALL THREE, so ambient state cannot separate them — only the error can.
+    const controller = new AbortController();
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockImplementation(async (_ctx: unknown, uuid: unknown) => {
+      controller.abort();
+      if (uuid === 'uuid-3') throw new Error('provider connection reset');
+      throw new DOMException('This operation was aborted', 'AbortError');
+    });
+
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' }),
+      makeApp({ name: 'mongo', leaseUuid: 'uuid-3', providerUrl: 'https://fred3.example.com' }),
+    ];
+    const registry = makeRegistry(apps);
+    const entries = apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! }));
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, signal: controller.signal })
+    );
+
+    expect(restartApp).toHaveBeenCalledTimes(3);
+    // Both buckets are named, and neither is `Failed:` — mongo's wait ended
+    // without an answer, so CP2 buckets it with its observation instead of
+    // under `Failed:`. (Originally this asserted `Failed: mongo.`; the abort /
+    // non-abort separation it exists to pin is unchanged, only mongo's bucket.)
+    const message = (result.data as { message: string }).message;
+    expect(result.success).toBe(true);
+    expect(message).toContain('Still restarting:');
+    expect(message).toContain('mongo');
+    expect(message).toContain('Cancelled:');
+    expect(message).toContain('redis');
+    expect(message).toContain('postgres');
+    expect(message).not.toContain('Failed:');
+    expect(message).not.toContain('All restarts failed');
+    expect((result.data as { failed: string[] }).failed).toEqual([]);
+
+    // Only the entry whose wait failed for a NON-abort reason is recorded, and
+    // what it records is 'unconfirmed' (N4): a connection reset says the wait
+    // ended without an answer, not that the provider failed the restart. The
+    // aborted two record nothing at all — that is still the G1/G4 separation
+    // this test exists to pin, and it survives the value change.
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'uuid-3', { provisionState: 'unconfirmed' });
+    expect(registry.getAppByLease(ADDRESS, 'uuid-3')?.status).toBe('deploying');
+    for (const uuid of ['uuid-1', 'uuid-2']) {
+      expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, uuid, expect.objectContaining({ provisionState: expect.anything() }));
+      expect(registry.getAppByLease(ADDRESS, uuid)?.provisionState).toBeUndefined();
+      expect(registry.getAppByLease(ADDRESS, uuid)?.status).toBe('running');
+    }
+  });
+});
+
+describe('CP2 — a wait that never got an answer is not a failure', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const RESTART_OK = { lease_uuid: 'lease-uuid', status: 'restarting' };
+
+  function batchEntries(apps: AppEntry[]) {
+    return apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! }));
+  }
+
+  it('batch restart: an unanswered readiness wait lands in Still restarting, not Failed', async () => {
+    // The catch already recorded 'unconfirmed' but returned null, so the
+    // registry said 'deploying' while the summary said "All restarts failed" —
+    // a failure verdict fred never issued.
+    vi.mocked(restartApp).mockResolvedValue(RESTART_OK);
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('waitForLeaseStatus timed out after 900000ms'));
+
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' }),
+    ];
+    const registry = makeRegistry(apps);
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries: batchEntries(apps) },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(true);
+    const data = result.data as { unconfirmed: Array<{ name: string; detail?: string }>; failed: string[]; message: string };
+    expect(data.unconfirmed.map((u) => u.name)).toEqual(['redis', 'postgres']);
+    expect(data.failed).toEqual([]);
+    expect(data.message).toContain('Still restarting:');
+    expect(data.message).toContain('app_status("redis")');
+    expect(data.message).not.toContain('All restarts failed');
+    // The bucket and the registry now agree.
+    for (const a of apps) {
+      expect(registry.getAppByLease(ADDRESS, a.leaseUuid)?.provisionState).toBe('unconfirmed');
+      expect(registry.getAppByLease(ADDRESS, a.leaseUuid)?.status).toBe('deploying');
+    }
+  });
+
+  it('batch restart: a poll_verdict rejection still lands in Failed', async () => {
+    // Guard, not a repro: waitForLeaseStatus RESOLVES at every terminal today,
+    // so this arm is unreachable from the SDK — it exists so a future build
+    // that routes a verdict out through the rejection keeps the Failed bucket.
+    vi.mocked(restartApp).mockResolvedValue(RESTART_OK);
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(
+      new ProviderApiError(0, 'Lease uuid-1 is ACTIVE but provisioning failed', { kind: 'poll_verdict' })
+    );
+
+    const apps = [makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' })];
+    const registry = makeRegistry(apps);
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries: batchEntries(apps) },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('All restarts failed: redis');
+    expect(registry.getAppByLease(ADDRESS, 'uuid-1')?.provisionState).toBe('failed');
+  });
+
+  it('single restart: the progress row stops calling an unanswered wait a polling failure', async () => {
+    vi.mocked(restartApp).mockResolvedValue(RESTART_OK);
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('provider connection reset'));
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+    const onProgress = vi.fn();
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, onProgress })
+    );
+
+    const details = onProgress.mock.calls.map((c) => (c[0] as { detail?: string }).detail ?? '');
+    expect(details).toContain('Restart not confirmed');
+    expect(details).not.toContain('Restart polling failed');
+    expect(result.error).toContain('Restart may still be in progress');
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('unconfirmed');
+  });
+
+  it('single restart: a poll_verdict rejection reports the failure it records', async () => {
+    // Same defensive arm as the batch guard above — but here the message was
+    // actively wrong: it recorded 'failed' and told the user the restart "may
+    // still be in progress".
+    vi.mocked(restartApp).mockResolvedValue(RESTART_OK);
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(
+      new ProviderApiError(0, 'Lease is ACTIVE but provisioning failed: ImagePullFailed', { kind: 'poll_verdict' })
+    );
+
+    const app = makeApp();
+    const registry = makeRegistry([app]);
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Restart failed: ');
+    expect(result.error).toContain('ImagePullFailed');
+    expect(result.error).not.toContain('may still be in progress');
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('failed');
+  });
+
+  it('update: the progress row stops calling an unanswered wait a polling failure', async () => {
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('provider connection reset'));
+
+    const app = makeApp({ manifest: '{"image":"redis:7"}' });
+    const registry = makeRegistry([app]);
+    const onProgress = vi.fn();
+
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry, onProgress }),
+      makePayload(),
+    );
+
+    const details = onProgress.mock.calls.map((c) => (c[0] as { detail?: string }).detail ?? '');
+    expect(details).toContain('Update not confirmed');
+    expect(details).not.toContain('Update polling failed');
+    expect(result.error).toContain('Update may still be in progress');
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('unconfirmed');
+  });
+
+  it('update: a poll_verdict rejection reports the failure it records', async () => {
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(
+      new ProviderApiError(0, 'Lease entered terminal state LEASE_STATE_CLOSED', { kind: 'poll_verdict' })
+    );
+
+    const app = makeApp({ manifest: '{"image":"redis:7"}' });
+    const registry = makeRegistry([app]);
+
+    const result = await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+      makePayload(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Update failed: ');
+    expect(result.error).toContain('LEASE_STATE_CLOSED');
+    expect(result.error).not.toContain('may still be in progress');
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('failed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration seam: the restart wait catch (this file) and the batch summary
+// (batchRunner.ts) were changed independently, so nothing pinned them together.
+// ---------------------------------------------------------------------------
+
+describe('batch summary and progress agree on an unconfirmed batch', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('batch restart: an all-unanswered batch is unconfirmed in the message AND the progress phase', async () => {
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('waitForLeaseStatus timed out after 900000ms'));
+
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1', providerUrl: 'https://fred1.example.com' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2', providerUrl: 'https://fred2.example.com' }),
+    ];
+    const onProgress = vi.fn();
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: 'all', entries: apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! })) },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps), onProgress })
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as { message: string }).message).toContain('Still restarting:');
+
+    const last = onProgress.mock.calls.at(-1)![0] as { phase: string; detail?: string };
+    expect(last.phase).toBe('ready');
+    expect(last.detail).toBe('2 still restarting');
+  });
+
+  it('batch deploy: an all-succeeded batch still gets the unchanged headline and phase', async () => {
+    // Regression guard on the path R1/R2 did NOT change — it passes both ways.
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult();
+    });
+    const onProgress = vi.fn();
+    const entries = [
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+      { app_name: 'game2', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+    ];
+
+    const result = await executeConfirmedBatchDeploy(
+      { entries }, CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry(), onProgress })
+    );
+
+    expect(result.success).toBe(true);
+    const last = onProgress.mock.calls.at(-1)![0] as { phase: string; detail?: string };
+    expect(last.phase).toBe('ready');
+    expect(last.detail).toBe('All 2 apps deployed!');
   });
 });
