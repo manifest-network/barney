@@ -163,6 +163,39 @@ describe('compactMessagesForRelay', () => {
     expect(compactMessagesForRelay(messages)).toEqual([messages[0], messages[3]]);
   });
 
+  it('retains a terminal assistant/tool exchange as one protocol-valid suffix', () => {
+    const messages: ChatApiMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      { role: 'user', content: 'x'.repeat(200_000) },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'tc-latest',
+          type: 'function',
+          function: { name: 'latest_tool', arguments: {} },
+        }],
+      },
+      { role: 'tool', tool_call_id: 'tc-latest', content: 'y'.repeat(350_000) },
+    ];
+
+    expect(compactMessagesForRelay(messages)).toEqual([
+      messages[0],
+      messages[2],
+      messages[3],
+    ]);
+  });
+
+  it('never leaves an unmatched terminal tool result at the retained leading edge', () => {
+    const messages: ChatApiMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      { role: 'user', content: 'x'.repeat(200_000) },
+      { role: 'tool', tool_call_id: 'missing', content: 'y'.repeat(350_000) },
+    ];
+
+    expect(compactMessagesForRelay(messages)).toEqual([messages[0]]);
+  });
+
   it('encodes large histories with linear total work while selecting the retained suffix', () => {
     const messages: ChatApiMessage[] = [
       { role: 'system', content: 'System prompt' },
@@ -208,6 +241,23 @@ describe('streamChat', () => {
     expect(contentChunks[0].content).toBe('Hello');
     expect(contentChunks[1].content).toBe(' world');
     expect(chunks[chunks.length - 1].type).toBe('done');
+  });
+
+  it('rejects compacted orphan-only history before contacting the paid relay', async () => {
+    const chunks = await collectChunks({
+      ...BASE_OPTIONS,
+      messages: [
+        { role: 'system', content: 'System prompt' },
+        { role: 'user', content: 'x'.repeat(200_000) },
+        { role: 'tool', tool_call_id: 'missing', content: 'y'.repeat(350_000) },
+      ],
+    });
+
+    expect(chunks).toEqual([{
+      type: 'error',
+      error: expect.stringContaining('missing the tool context'),
+    }]);
+    expect(fetchWithMorpheusSession).not.toHaveBeenCalled();
   });
 
   it('sends requests to /api/morpheus/chat/completions without Authorization header', async () => {

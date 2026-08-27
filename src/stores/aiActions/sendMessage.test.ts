@@ -80,6 +80,7 @@ vi.mock('../../registry/appRegistry', () => ({
 }));
 
 import { logError } from '../../utils/errors';
+import { AI_STREAM_TIMEOUT_MS, AI_STREAM_TOTAL_TIMEOUT_MS } from '../../config/constants';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -488,6 +489,23 @@ describe('sendMessage', () => {
   // Catch: timeout vs generic
   // -----------------------------------------------------------------------
   describe('catch block', () => {
+    it('does not let the overall stream guard consume the wallet-auth allowance', async () => {
+      const store = setupStore();
+      let resolveStream: ((result: StreamResult) => void) | undefined;
+      mockProcessStream.mockReturnValueOnce(new Promise((resolve) => {
+        resolveStream = resolve;
+      }));
+
+      const send = store.getState().sendMessage('hello');
+      await vi.advanceTimersByTimeAsync(AI_STREAM_TIMEOUT_MS * 2);
+
+      expect(AI_STREAM_TOTAL_TIMEOUT_MS).toBeGreaterThan(AI_STREAM_TIMEOUT_MS * 2);
+      expect(store.getState().isStreaming).toBe(true);
+      resolveStream?.(makeStreamResult());
+      await send;
+      expect(store.getState().isStreaming).toBe(false);
+    });
+
     it('shows timeout message when stream throws timeout error', async () => {
       const store = setupStore();
       mockProcessStream.mockRejectedValueOnce(new Error('Stream timeout: no response received'));

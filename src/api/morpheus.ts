@@ -96,8 +96,9 @@ export function serializeMessagesForApi(messages: ChatApiMessage[]): unknown[] {
 /**
  * Keep local history for the UI while sending only a bounded recent suffix to
  * the paid relay. This prevents an oversized tool/log result from wedging every
- * later turn. The system prompt and newest turn are retained; orphaned leading
- * tool responses are removed with the assistant call they depended on.
+ * later turn. The system prompt and newest turn are retained; a terminal
+ * assistant/tool exchange is kept as one protocol-valid unit, and orphaned
+ * leading tool responses are removed.
  */
 export function compactMessagesForRelay(
   messages: ChatApiMessage[],
@@ -119,23 +120,48 @@ export function compactMessagesForRelay(
   const firstConversationIndex = messages[0]?.role === 'system' ? 1 : 0;
   const newestIndex = messages.length - 1;
   let firstRetainedIndex = firstConversationIndex;
+  let protectedSuffixIndex = newestIndex;
+
+  if (messages[newestIndex]?.role === 'tool') {
+    let terminalToolIndex = newestIndex;
+    while (terminalToolIndex > firstConversationIndex
+      && messages[terminalToolIndex - 1]?.role === 'tool') {
+      terminalToolIndex -= 1;
+    }
+    const assistantIndex = terminalToolIndex - 1;
+    const assistant = messages[assistantIndex];
+    const toolCallIds = new Set(assistant?.tool_calls?.map((toolCall) => toolCall.id));
+    const terminalToolsMatch = assistant?.role === 'assistant'
+      && toolCallIds.size > 0
+      && messages.slice(terminalToolIndex).every(
+        (message) => message.role === 'tool'
+          && typeof message.tool_call_id === 'string'
+          && toolCallIds.has(message.tool_call_id),
+      );
+    if (terminalToolsMatch) protectedSuffixIndex = assistantIndex;
+  }
 
   const overBudget = () => retainedPromptChars > RELAY_PROMPT_CHAR_BUDGET
     || retainedContextBytes > RELAY_CONTEXT_BYTE_BUDGET;
   const removeNext = () => {
     retainedPromptChars -= promptChars[firstRetainedIndex];
-    // The newest message is always retained, so removing any earlier array
+    // A non-empty suffix is always protected, so removing any earlier array
     // element also removes exactly one comma from the serialized JSON array.
     retainedContextBytes -= encodedMessageBytes[firstRetainedIndex] + 1;
     firstRetainedIndex += 1;
   };
 
-  while (overBudget() && firstRetainedIndex < newestIndex) {
+  while (overBudget() && firstRetainedIndex < protectedSuffixIndex) {
     removeNext();
-    while (firstRetainedIndex < newestIndex && messages[firstRetainedIndex]?.role === 'tool') {
+    while (firstRetainedIndex < protectedSuffixIndex
+      && messages[firstRetainedIndex]?.role === 'tool') {
       removeNext();
     }
   }
+
+  // Malformed/local history can still end in a tool result without its matching
+  // assistant call. Never send that orphan as the first conversation message.
+  while (messages[firstRetainedIndex]?.role === 'tool') firstRetainedIndex += 1;
 
   return firstConversationIndex === 1
     ? [messages[0], ...messages.slice(firstRetainedIndex)]
@@ -224,6 +250,13 @@ export async function* streamChat(
   }
 
   const requestMessages = compactMessagesForRelay(messages, tools);
+  if (!requestMessages.some((message) => message.role !== 'system')) {
+    yield {
+      type: 'error',
+      error: 'The current conversation is missing the tool context required for inference. Start a new chat or resend your request.',
+    };
+    return;
+  }
   const body: Record<string, unknown> = {
     model,
     messages: serializeMessagesForApi(requestMessages),

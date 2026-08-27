@@ -117,7 +117,19 @@ Run `lease_history` to see whether the lease state changed (most likely `closed`
 
 ### "Stream timed out"
 
-The authenticated inference request did not receive response headers within `AI_STREAM_TIMEOUT_MS` (default 30 s), or the server relay reached its configured total-stream deadline. Wallet handshake time is excluded from the browser request timer. The chat surface does not auto-retry a paid request—resend the message. (`AI_MAX_RETRIES` applies to blockchain tool calls, not Morpheus inference.)
+The authenticated inference request did not receive response headers or a later
+chunk within `AI_STREAM_TIMEOUT_MS` (default 30 s), or the server relay reached
+its configured total-stream deadline. Wallet signing/MFA gets a separate 120 s
+allowance before that response budget, and the overall browser guard includes
+both allowances. The chat surface does not auto-retry a paid request—resend the
+message. (`AI_MAX_RETRIES` applies to blockchain tool calls, not Morpheus
+inference.)
+
+### "Session timeout"
+
+Wallet authentication or the initial AI response exceeded its combined setup
+allowance. Finish the wallet signature/MFA prompt and resend the message. A
+challenge left open past the relay's expiry must be signed again.
 
 If timeouts persist:
 

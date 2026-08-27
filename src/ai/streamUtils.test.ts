@@ -1,6 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { stripToolCallLeaks, processStreamWithTimeout } from './streamUtils';
 import type { StreamChunk } from '../api/morpheus';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 // Helper: create an async generator from an array of chunks
 async function* chunksFrom(items: StreamChunk[]): AsyncGenerator<StreamChunk> {
@@ -139,6 +143,43 @@ describe('processStreamWithTimeout', () => {
     await expect(
       processStreamWithTimeout(slowStream(), onChunk, 50)
     ).rejects.toThrow('Stream timeout');
+  });
+
+  it('uses a separate longer timeout for wallet authentication and the initial response', async () => {
+    vi.useFakeTimers();
+    async function* delayedInitialStream(): AsyncGenerator<StreamChunk> {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      yield { type: 'content', content: 'authenticated' };
+    }
+
+    const resultPromise = processStreamWithTimeout(
+      delayedInitialStream(),
+      vi.fn(),
+      50,
+      200,
+    );
+    await vi.advanceTimersByTimeAsync(100);
+
+    await expect(resultPromise).resolves.toMatchObject({ content: 'authenticated' });
+  });
+
+  it('surfaces an initial-session timeout without waiting for the pending generator step', async () => {
+    vi.useFakeTimers();
+    async function* stalledInitialStream(): AsyncGenerator<StreamChunk> {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      yield { type: 'content', content: 'too late' };
+    }
+
+    const resultPromise = processStreamWithTimeout(
+      stalledInitialStream(),
+      vi.fn(),
+      50,
+      200,
+    );
+    const rejection = expect(resultPromise).rejects.toThrow('Session timeout');
+    await vi.advanceTimersByTimeAsync(200);
+
+    await rejection;
   });
 
   it('handles empty stream', async () => {

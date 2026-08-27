@@ -9,7 +9,7 @@ import { validateUserInput } from '../../ai/validation';
 import { logError } from '../../utils/errors';
 import {
   AI_MAX_TOOL_ITERATIONS,
-  AI_STREAM_TIMEOUT_MS,
+  AI_STREAM_TOTAL_TIMEOUT_MS,
   AI_MESSAGE_DEBOUNCE_MS,
 } from '../../config/constants';
 import type { AIStore } from '../aiStore';
@@ -133,8 +133,8 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
         ).finally(() => { if (totalTimeoutId) clearTimeout(totalTimeoutId); }),
         new Promise<never>((_, reject) => {
           totalTimeoutId = setTimeout(
-            () => reject(new Error('Stream timeout: no response received')),
-            AI_STREAM_TIMEOUT_MS * 2
+            () => reject(new Error('Session or stream timeout: no response received')),
+            AI_STREAM_TOTAL_TIMEOUT_MS,
           );
         }),
       ]);

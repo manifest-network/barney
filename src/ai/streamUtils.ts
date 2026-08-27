@@ -4,7 +4,7 @@
  */
 
 import type { StreamChunk, ToolCall } from '../api/morpheus';
-import { AI_STREAM_TIMEOUT_MS } from '../config/constants';
+import { AI_STREAM_INITIAL_TIMEOUT_MS, AI_STREAM_TIMEOUT_MS } from '../config/constants';
 
 export interface StreamResult {
   content: string;
@@ -42,12 +42,17 @@ export function stripToolCallLeaks(text: string): string {
 }
 
 /**
- * Wrap an async generator with timeout protection per iteration
+ * Wrap an async generator with timeout protection per iteration. The first
+ * iteration gets a separate wallet-authentication allowance because invoking
+ * streamChat does not start its async body until the first next() call.
  */
 async function* withTimeout<T>(
   generator: AsyncGenerator<T>,
-  timeoutMs: number
+  timeoutMs: number,
+  initialTimeoutMs: number,
 ): AsyncGenerator<T> {
+  let firstIteration = true;
+  let timedOut = false;
   try {
     while (true) {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -57,13 +62,19 @@ async function* withTimeout<T>(
           generator.next(),
           new Promise<never>((_, reject) => {
             timeoutId = setTimeout(
-              () => reject(new Error('Stream timeout: no response received')),
-              timeoutMs
+              () => {
+                timedOut = true;
+                reject(new Error(firstIteration
+                  ? 'Session timeout: wallet authentication or the initial AI response took too long'
+                  : 'Stream timeout: no response received'));
+              },
+              firstIteration ? initialTimeoutMs : timeoutMs,
             );
           }),
         ]);
 
         if (result.done) break;
+        firstIteration = false;
         yield result.value;
       } finally {
         // Clear the timeout to avoid accumulating orphan timers
@@ -73,27 +84,32 @@ async function* withTimeout<T>(
       }
     }
   } finally {
-    // Ensure the underlying generator is cleaned up on early exit (timeout, break, return)
-    // Without this, a timeout rejection exits withTimeout but leaves the inner generator open,
-    // potentially leaking HTTP connections.
-    await generator.return(undefined as T);
+    // Normal early exits await cleanup. On timeout, return() can itself wait for
+    // the pending next() (notably a wallet signing promise), which would prevent
+    // the timeout from reaching the caller and its AbortController. Let the
+    // caller abort first; the queued return still closes the generator when that
+    // pending step observes the signal.
+    const cleanup = generator.return(undefined as T);
+    if (timedOut) void cleanup.catch(() => {});
+    else await cleanup;
   }
 }
 
 /**
- * Process stream chunks with timeout protection.
- * Throws TimeoutError if no chunk received within timeout period.
+ * Process stream chunks with timeout protection. The initial iteration includes
+ * wallet authentication and uses initialTimeoutMs; later chunks use timeoutMs.
  */
 export async function processStreamWithTimeout(
   stream: AsyncGenerator<StreamChunk>,
   onChunk: (content: string, thinking: string) => void,
-  timeoutMs: number = AI_STREAM_TIMEOUT_MS
+  timeoutMs: number = AI_STREAM_TIMEOUT_MS,
+  initialTimeoutMs: number = AI_STREAM_INITIAL_TIMEOUT_MS,
 ): Promise<StreamResult> {
   let accumulatedContent = '';
   let accumulatedThinking = '';
   const toolCalls: ToolCall[] = [];
 
-  for await (const chunk of withTimeout(stream, timeoutMs)) {
+  for await (const chunk of withTimeout(stream, timeoutMs, initialTimeoutMs)) {
     if (chunk.type === 'thinking' && chunk.content) {
       accumulatedThinking += chunk.content;
       onChunk(stripToolCallLeaks(accumulatedContent), accumulatedThinking);
