@@ -7,7 +7,14 @@
 import { logError } from '../utils/errors';
 import { HEALTH_CHECK_TIMEOUT_MS, AI_STREAM_TIMEOUT_MS } from '../config/constants';
 import { runtimeConfig } from '../config/runtimeConfig';
-import { fetchWithMorpheusSession, type MorpheusAuthContext } from './morpheusSession';
+import {
+  fetchWithMorpheusSession,
+  MorpheusRequestTimeoutError,
+  type MorpheusAuthContext,
+} from './morpheusSession';
+
+const RELAY_PROMPT_CHAR_BUDGET = 100_000;
+const RELAY_CONTEXT_BYTE_BUDGET = 320 * 1024;
 
 export interface ChatApiMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -84,6 +91,39 @@ export function serializeMessagesForApi(messages: ChatApiMessage[]): unknown[] {
       })),
     };
   });
+}
+
+/**
+ * Keep local history for the UI while sending only a bounded recent suffix to
+ * the paid relay. This prevents an oversized tool/log result from wedging every
+ * later turn. The system prompt and newest turn are retained; orphaned leading
+ * tool responses are removed with the assistant call they depended on.
+ */
+export function compactMessagesForRelay(
+  messages: ChatApiMessage[],
+  tools: ToolDefinition[] = [],
+): ChatApiMessage[] {
+  const compacted = [...messages];
+  const firstConversationIndex = compacted[0]?.role === 'system' ? 1 : 0;
+  const overBudget = () => {
+    const promptChars = compacted.reduce(
+      (total, message) => total + (typeof message.content === 'string' ? message.content.length : 0),
+      0,
+    );
+    const contextBytes = new TextEncoder().encode(JSON.stringify({
+      messages: serializeMessagesForApi(compacted),
+      tools,
+    })).byteLength;
+    return promptChars > RELAY_PROMPT_CHAR_BUDGET || contextBytes > RELAY_CONTEXT_BYTE_BUDGET;
+  };
+
+  while (overBudget() && compacted.length > firstConversationIndex + 1) {
+    compacted.splice(firstConversationIndex, 1);
+    while (compacted[firstConversationIndex]?.role === 'tool') {
+      compacted.splice(firstConversationIndex, 1);
+    }
+  }
+  return compacted;
 }
 
 /** Accumulated state for a single tool call being streamed incrementally. */
@@ -167,23 +207,16 @@ export async function* streamChat(
     return;
   }
 
+  const requestMessages = compactMessagesForRelay(messages, tools);
   const body: Record<string, unknown> = {
     model,
-    messages: serializeMessagesForApi(messages),
+    messages: serializeMessagesForApi(requestMessages),
     stream: true,
   };
 
   if (tools && tools.length > 0) {
     body.tools = tools;
   }
-
-  // Create a combined signal: user-cancellation + connection timeout.
-  let fetchTimeoutId: ReturnType<typeof setTimeout> | undefined;
-  const fetchAbort = new AbortController();
-  const onExternalAbort = () => fetchAbort.abort();
-  signal?.addEventListener('abort', onExternalAbort, { once: true });
-
-  fetchTimeoutId = setTimeout(() => fetchAbort.abort(), AI_STREAM_TIMEOUT_MS);
 
   // Accumulate tool calls streamed incrementally by index
   const partialToolCalls: Map<number, PartialToolCall> = new Map();
@@ -193,16 +226,18 @@ export async function* streamChat(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: fetchAbort.signal,
-    });
-
-    // Got headers — clear the connection timeout
-    clearTimeout(fetchTimeoutId);
-    fetchTimeoutId = undefined;
+      signal,
+    }, AI_STREAM_TIMEOUT_MS);
 
     if (!response.ok) {
-      const errorText = await response.text();
-      yield { type: 'error', error: `AI API error: ${response.status} ${errorText}` };
+      yield {
+        type: 'error',
+        error: response.status === 413
+          ? 'The current request is too large for inference. Start a new chat or shorten the latest message.'
+          : response.status === 429
+            ? 'The inference quota or concurrency limit has been reached. Try again later.'
+            : 'The inference service is temporarily unavailable.',
+      };
       return;
     }
 
@@ -289,6 +324,10 @@ export async function* streamChat(
 
     yield { type: 'done' };
   } catch (error) {
+    if (error instanceof MorpheusRequestTimeoutError) {
+      yield { type: 'error', error: 'Connection to AI API timed out.' };
+      return;
+    }
     if (error instanceof Error && error.name === 'AbortError') {
       if (signal?.aborted) {
         yield { type: 'done' };
@@ -301,10 +340,6 @@ export async function* streamChat(
       type: 'error',
       error: error instanceof Error ? error.message : 'Unknown error',
     };
-  } finally {
-    if (fetchTimeoutId !== undefined) clearTimeout(fetchTimeoutId);
-    signal?.removeEventListener('abort', onExternalAbort);
-    fetchAbort.abort();
   }
 }
 
@@ -344,12 +379,12 @@ function* emitToolCalls(
 
 /**
  * Check if the AI API is available.
- * GET the relay's public liveness endpoint. This does not contact the paid
- * provider; authorization is established lazily before the first chat call.
+ * GET the relay readiness endpoint. The relay caches a bounded provider-model
+ * probe and also reports ledger health and hard-budget availability.
  */
 export async function checkApiHealth(): Promise<boolean> {
   try {
-    const response = await fetch('/api/morpheus/healthz', {
+    const response = await fetch('/api/morpheus/readyz', {
       method: 'GET',
       signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
     });

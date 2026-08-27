@@ -107,6 +107,7 @@ function validateMessages(messages, config) {
   if (promptChars > config.maxPromptChars) {
     throw new RequestError(413, 'prompt_too_large', 'Prompt is too large');
   }
+  return promptChars;
 }
 
 function copyOptional(source, target, key) {
@@ -137,6 +138,33 @@ export function validateChatRequest(body, config) {
   if (Array.isArray(body.tools) && body.tools.length > 128) {
     throw new RequestError(413, 'tools_too_large', 'Too many tools were supplied');
   }
+  if (Array.isArray(body.tools) && body.tools.some((tool) => !isObject(tool))) {
+    throw new RequestError(400, 'tools_invalid', 'Each tool must be an object');
+  }
+  if (body.temperature !== undefined
+    && (typeof body.temperature !== 'number' || !Number.isFinite(body.temperature) || body.temperature < 0 || body.temperature > 2)) {
+    throw new RequestError(400, 'temperature_invalid', 'temperature must be between 0 and 2');
+  }
+  if (body.top_p !== undefined
+    && (typeof body.top_p !== 'number' || !Number.isFinite(body.top_p) || body.top_p < 0 || body.top_p > 1)) {
+    throw new RequestError(400, 'top_p_invalid', 'top_p must be between 0 and 1');
+  }
+  if (body.parallel_tool_calls !== undefined && typeof body.parallel_tool_calls !== 'boolean') {
+    throw new RequestError(400, 'parallel_tool_calls_invalid', 'parallel_tool_calls must be a boolean');
+  }
+  if (body.response_format !== undefined && !isObject(body.response_format)) {
+    throw new RequestError(400, 'response_format_invalid', 'response_format must be an object');
+  }
+  if (body.tool_choice !== undefined && typeof body.tool_choice !== 'string' && !isObject(body.tool_choice)) {
+    throw new RequestError(400, 'tool_choice_invalid', 'tool_choice must be a string or object');
+  }
+  if (body.stop !== undefined) {
+    const stops = typeof body.stop === 'string' ? [body.stop] : body.stop;
+    if (!Array.isArray(stops) || stops.length > 4
+      || stops.some((stop) => typeof stop !== 'string' || stop.length > 1_024)) {
+      throw new RequestError(400, 'stop_invalid', 'stop must contain at most four bounded strings');
+    }
+  }
   if (body.max_tokens !== undefined && body.max_completion_tokens !== undefined) {
     throw new RequestError(400, 'output_limit_invalid', 'Specify only one output-token limit');
   }
@@ -145,16 +173,6 @@ export function validateChatRequest(body, config) {
     throw new RequestError(400, 'output_limit_invalid', 'Output-token limit must be a positive integer');
   }
   const outputTokens = Math.min(requestedOutput, config.maxOutputTokens);
-
-  const contextJson = JSON.stringify({ messages: body.messages, tools: body.tools ?? [] });
-  // UTF-8 bytes are a conservative tokenizer-independent upper bound for BPE
-  // tokens. Add per-record overhead for provider-injected chat delimiters.
-  const inputTokens = Buffer.byteLength(contextJson, 'utf8')
-    + body.messages.length * 16
-    + (body.tools?.length ?? 0) * 32;
-  if (inputTokens > config.maxContextTokens) {
-    throw new RequestError(413, 'context_too_large', 'Prompt and tool context exceed the configured token limit');
-  }
 
   const upstream = {
     model: body.model,
@@ -171,5 +189,20 @@ export function validateChatRequest(body, config) {
   copyOptional(body, upstream, 'response_format');
   copyOptional(body, upstream, 'parallel_tool_calls');
 
-  return { upstream, inputTokens, outputTokens };
+  // Measure the exact rebuilt request rather than a subset of its fields. This
+  // includes response_format, stop, tool_choice, and every other value that is
+  // actually forwarded. The byte ceiling is unambiguous and tokenizer-free.
+  const contextBytes = Buffer.byteLength(JSON.stringify(upstream), 'utf8');
+  if (contextBytes > config.maxContextBytes) {
+    throw new RequestError(413, 'context_too_large', 'Prompt and tool context exceed the configured byte limit');
+  }
+  const recordOverhead = body.messages.length * 4 + (body.tools?.length ?? 0) * 8;
+  const inputTokens = Math.ceil(contextBytes / config.estimatedBytesPerToken) + recordOverhead;
+  // A byte-level tokenizer cannot emit more tokens than input bytes; retain a
+  // small per-record allowance for provider-injected chat delimiters.
+  const worstCaseInputTokens = contextBytes
+    + body.messages.length * 16
+    + (body.tools?.length ?? 0) * 32;
+
+  return { upstream, inputTokens, worstCaseInputTokens, outputTokens, contextBytes };
 }

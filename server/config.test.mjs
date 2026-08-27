@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { RelayConfigError, loadRelayConfig, upstreamChatUrl } from './config.mjs';
+import { RelayConfigError, loadRelayConfig, upstreamChatUrl, upstreamModelsUrl } from './config.mjs';
 
 function environment(overrides = {}) {
   return {
@@ -25,7 +25,11 @@ describe('relay configuration', () => {
   it('builds the sole allowlisted upstream path', () => {
     const config = loadRelayConfig(environment());
     expect(upstreamChatUrl(config).toString()).toBe('https://api.example.test/api/v1/chat/completions');
+    expect(upstreamModelsUrl(config).toString()).toBe('https://api.example.test/api/v1/models');
     expect(config.allowedModels).toEqual(new Set(['model-a']));
+    expect(config.listenHost).toBe('127.0.0.1');
+    expect(config.maxContextBytes).toBe(384 * 1024);
+    expect(config.maxDailyIdentities).toBe(1_000);
   });
 
   it.each([

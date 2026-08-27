@@ -98,13 +98,13 @@ npm run dev
 
 ### Production
 
-Set environment variables on the container. The `docker/env.sh` entrypoint renders secret-free nginx and browser runtime configuration, validates nginx, then starts the Node relay as PID 1; the relay starts nginx only after its complete policy and durable ledger load successfully. Paid inference therefore fails closed when the provider URL/key, wallet origin/chain, state path, or any financial limit/rate is missing.
+Set environment variables on the container. The `docker/env.sh` entrypoint validates its trusted-proxy input, renders secret-free nginx and browser runtime configuration, validates nginx, then starts the Node supervisor as PID 1. The supervisor keeps the SPA available while starting the paid relay; if the provider URL/key, wallet origin/chain, state path, or any financial limit/rate is missing, inference and readiness fail closed without taking down the static application.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PUBLIC_REST_URL` | `http://localhost:1317` | Blockchain LCD/REST endpoint |
 | `PUBLIC_RPC_URL` | `http://localhost:26657` | Blockchain RPC endpoint |
-| `PUBLIC_MORPHEUS_URL` | _required_ | Morpheus API endpoint (server-side proxy target — `env.sh` fails fast if empty) |
+| `PUBLIC_MORPHEUS_URL` | _required for AI_ | Morpheus API endpoint validated by the server-side relay |
 | `PUBLIC_MORPHEUS_MODEL` | _required_ | Morpheus model identifier |
 | `MORPHEUS_API_KEY` | _required_ | Morpheus API key — read only by the authenticated Node relay |
 | `MORPHEUS_RELAY_ALLOWED_ORIGINS` | _required_ | Comma-separated exact browser origins allowed to authenticate/use the relay |
@@ -121,7 +121,7 @@ Set environment variables on the container. The `docker/env.sh` entrypoint rende
 | `PUBLIC_GAS_PRICE` | `0.0025factory/manifest1afk…/upwr` | Gas price for transaction fees |
 | `PUBLIC_CHAIN_ID` | _required_ | Chain ID for cosmos-kit and relay signing |
 | `PUBLIC_FAUCET_URL` | _(empty)_ | Faucet endpoint URL — enables account auto-provisioning when set |
-| `PUBLIC_AI_STREAM_TIMEOUT_MS` | `30000` | Per-chunk stream timeout, ms (max `120000`) |
+| `PUBLIC_AI_STREAM_TIMEOUT_MS` | `30000` | Chat response-header timeout after wallet auth, ms (max `120000`) |
 | `PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS` | `300000` | Deploy provisioning timeout, ms (max `600000`) |
 | `PUBLIC_AI_TOOL_API_TIMEOUT_MS` | `15000` | Blockchain API call timeout, ms (max `60000`) |
 | `PUBLIC_AI_MAX_RETRIES` | `3` | Stream retry attempts (max `10`) |

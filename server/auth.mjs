@@ -168,7 +168,16 @@ function randomToken(bytes = 32) {
 }
 
 function validateAddressShape(address, prefix) {
-  if (typeof address !== 'string' || address.length < prefix.length + 20 || address.length > 128 || !address.startsWith(`${prefix}1`)) {
+  if (typeof address !== 'string'
+    || address !== address.toLowerCase()
+    || address.length !== prefix.length + 39
+    || !address.startsWith(`${prefix}1`)) {
+    throw new AuthError(400, 'invalid_address', 'Invalid wallet address');
+  }
+  const words = [...address.slice(prefix.length + 1)].map((char) => BECH32_CHARSET.indexOf(char));
+  if (words.some((word) => word < 0)
+    || words.length !== 38
+    || bech32Polymod([...bech32HrpExpand(prefix), ...words]) !== 1) {
     throw new AuthError(400, 'invalid_address', 'Invalid wallet address');
   }
 }
@@ -192,12 +201,24 @@ export class ChallengeStore {
     this.config = config;
     this.now = now;
     this.challenges = new Map();
+    this.byAddress = new Map();
+  }
+
+  delete(id) {
+    const challenge = this.challenges.get(id);
+    this.challenges.delete(id);
+    if (challenge && this.byAddress.get(challenge.address) === id) {
+      this.byAddress.delete(challenge.address);
+    }
   }
 
   prune() {
     const now = this.now();
     for (const [id, challenge] of this.challenges) {
-      if (challenge.expiresAt <= now) this.challenges.delete(id);
+      // Fixed TTLs preserve insertion/expiry order, so pruning stops at the
+      // first live entry instead of walking an attacker-sized map every time.
+      if (challenge.expiresAt > now) break;
+      this.delete(id);
     }
   }
 
@@ -207,8 +228,12 @@ export class ChallengeStore {
       throw new AuthError(403, 'chain_mismatch', 'Wallet is connected to the wrong chain');
     }
     this.prune();
-    if (this.challenges.size >= this.config.maxChallenges) {
-      throw new AuthError(503, 'auth_capacity', 'Authentication is temporarily unavailable');
+    const priorId = this.byAddress.get(address);
+    if (priorId) this.delete(priorId);
+    while (this.challenges.size >= this.config.maxChallenges) {
+      const oldestId = this.challenges.keys().next().value;
+      if (!oldestId) break;
+      this.delete(oldestId);
     }
 
     const issuedAt = this.now();
@@ -226,6 +251,7 @@ export class ChallengeStore {
       ...challenge,
     });
     this.challenges.set(challengeId, challenge);
+    this.byAddress.set(address, challengeId);
     return { ...challenge };
   }
 
@@ -236,7 +262,7 @@ export class ChallengeStore {
     const challenge = this.challenges.get(challengeId);
     // Delete before signature verification so concurrent/replayed submissions
     // cannot race through the same one-time credential.
-    this.challenges.delete(challengeId);
+    this.delete(challengeId);
     if (!challenge || challenge.expiresAt <= this.now()) {
       throw new AuthError(401, 'invalid_challenge', 'Invalid or expired authentication challenge');
     }
@@ -249,23 +275,41 @@ export class SessionStore {
     this.config = config;
     this.now = now;
     this.sessions = new Map();
+    this.byAddress = new Map();
   }
 
   identityKey(address) {
     return createHmac('sha256', this.config.identityHmacKey).update(address, 'utf8').digest('hex');
   }
 
-  prune() {
-    const now = this.now();
-    for (const [id, session] of this.sessions) {
-      if (session.expiresAt <= now) this.sessions.delete(id);
+  delete(id) {
+    const session = this.sessions.get(id);
+    this.sessions.delete(id);
+    if (session && this.byAddress.get(session.address) === id) {
+      this.byAddress.delete(session.address);
     }
   }
 
-  create(address, chainId) {
+  prune() {
+    const now = this.now();
+    for (const [id, session] of this.sessions) {
+      if (session.expiresAt > now) break;
+      this.delete(id);
+    }
+  }
+
+  create(address, chainId, onEvict = () => {}) {
     this.prune();
-    if (this.sessions.size >= this.config.maxSessions) {
-      throw new AuthError(503, 'auth_capacity', 'Authentication is temporarily unavailable');
+    const priorId = this.byAddress.get(address);
+    if (priorId) {
+      onEvict(priorId, 'session_replaced');
+      this.delete(priorId);
+    }
+    while (this.sessions.size >= this.config.maxSessions) {
+      const oldestId = this.sessions.keys().next().value;
+      if (!oldestId) break;
+      onEvict(oldestId, 'session_capacity_replaced');
+      this.delete(oldestId);
     }
     const id = randomToken();
     const issuedAt = this.now();
@@ -278,14 +322,25 @@ export class SessionStore {
       expiresAt: issuedAt + this.config.sessionTtlMs,
     };
     this.sessions.set(id, session);
+    this.byAddress.set(address, id);
     return { ...session };
+  }
+
+  peek(id) {
+    if (!id) return undefined;
+    const session = this.sessions.get(id);
+    if (!session || session.expiresAt <= this.now()) {
+      this.delete(id);
+      return undefined;
+    }
+    return session;
   }
 
   get(id) {
     if (!id) throw new AuthError(401, 'missing_session', 'Wallet authentication is required');
     const session = this.sessions.get(id);
     if (!session || session.expiresAt <= this.now()) {
-      this.sessions.delete(id);
+      this.delete(id);
       throw new AuthError(401, 'expired_session', 'Wallet authentication has expired');
     }
     return session;
@@ -300,7 +355,7 @@ export class SessionStore {
   }
 
   revoke(id) {
-    if (id) this.sessions.delete(id);
+    if (id) this.delete(id);
   }
 }
 

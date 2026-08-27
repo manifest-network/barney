@@ -10,7 +10,7 @@ import {
   setSessionCookie,
   verifyAdr36,
 } from './auth.mjs';
-import { loadRelayConfig, upstreamChatUrl } from './config.mjs';
+import { loadRelayConfig, upstreamChatUrl, upstreamModelsUrl } from './config.mjs';
 import { estimateSpendMicroUsd, QuotaError, QuotaLedger } from './ledger.mjs';
 import { RelayMetrics } from './metrics.mjs';
 import {
@@ -215,7 +215,46 @@ export async function createRelay(options = {}) {
   const metrics = new RelayMetrics();
   const concurrency = new ConcurrencyGate(config);
   const activeBySession = new Map();
+  let accountingHealthy = true;
+  let readinessCheckedAt = Number.NEGATIVE_INFINITY;
+  let readinessResult = false;
+  let readinessInFlight;
+  const minimumDefaultSpendMicroUsd = estimateSpendMicroUsd(config, 1, config.maxOutputTokens);
   await ledger.init();
+
+  async function probeUpstream() {
+    if (now() - readinessCheckedAt < config.readinessCacheMs) return readinessResult;
+    if (readinessInFlight) return readinessInFlight;
+    readinessInFlight = (async () => {
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(), config.upstreamConnectTimeoutMs);
+      try {
+        const response = await fetchImpl(upstreamModelsUrl(config), {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${config.apiKey}`,
+          },
+          redirect: 'error',
+          signal: abort.signal,
+        });
+        await response.body?.cancel().catch(() => {});
+        readinessResult = response.ok;
+      } catch {
+        readinessResult = false;
+      } finally {
+        clearTimeout(timer);
+        readinessCheckedAt = now();
+        readinessInFlight = undefined;
+      }
+      return readinessResult;
+    })();
+    return readinessInFlight;
+  }
+
+  function expiresInSeconds(expiresAt) {
+    return Math.max(0, Math.ceil((expiresAt - now()) / 1000));
+  }
 
   function metricRequest(route, outcome) {
     metrics.increment('barney_morpheus_relay_requests_total', { route, outcome });
@@ -264,6 +303,7 @@ export async function createRelay(options = {}) {
       address: challenge.address,
       chainId: challenge.chainId,
       expiresAt: new Date(challenge.expiresAt).toISOString(),
+      expiresInSeconds: expiresInSeconds(challenge.expiresAt),
     });
   }
 
@@ -282,8 +322,17 @@ export async function createRelay(options = {}) {
     });
 
     const priorSessionId = readSessionCookie(request, config);
-    if (priorSessionId) revokeSession(priorSessionId, 'session_replaced');
-    const session = sessions.create(challenge.address, challenge.chainId);
+    const priorSession = sessions.peek(priorSessionId);
+    if (priorSession
+      && priorSession.address === challenge.address
+      && priorSession.chainId === challenge.chainId) {
+      revokeSession(priorSessionId, 'session_replaced');
+    }
+    const session = sessions.create(
+      challenge.address,
+      challenge.chainId,
+      (sessionId, reason) => revokeSession(sessionId, reason),
+    );
     setSessionCookie(response, config, session);
     metricRequest('auth_session', 'success');
     json(response, 200, {
@@ -291,6 +340,7 @@ export async function createRelay(options = {}) {
       address: session.address,
       chainId: session.chainId,
       expiresAt: new Date(session.expiresAt).toISOString(),
+      expiresInSeconds: expiresInSeconds(session.expiresAt),
     });
   }
 
@@ -304,6 +354,7 @@ export async function createRelay(options = {}) {
       address: session.address,
       chainId: session.chainId,
       expiresAt: new Date(session.expiresAt).toISOString(),
+      expiresInSeconds: expiresInSeconds(session.expiresAt),
     });
   }
 
@@ -345,7 +396,19 @@ export async function createRelay(options = {}) {
     try {
       releaseConcurrency = concurrency.acquire(session.identityKey);
       metrics.requestStarted();
-      reservation = await ledger.reserve(session.identityKey, chat.inputTokens, chat.outputTokens);
+      try {
+        reservation = await ledger.reserve(
+          session.identityKey,
+          chat.inputTokens,
+          chat.outputTokens,
+          chat.worstCaseInputTokens,
+        );
+        accountingHealthy = true;
+      } catch (error) {
+        if (error instanceof QuotaError) throw error;
+        accountingHealthy = false;
+        throw new RequestError(503, 'accounting_unavailable', 'Inference accounting is temporarily unavailable');
+      }
       metrics.increment('barney_morpheus_relay_reserved_tokens_total', {}, reservation.reservedTokens);
       metrics.increment('barney_morpheus_relay_reserved_spend_micro_usd_total', {}, reservation.reservedSpendMicroUsd);
       unregisterActive = registerActive(sessionId, (reason) => {
@@ -470,6 +533,7 @@ export async function createRelay(options = {}) {
           // The durable reservation remains charged on disk if settlement
           // persistence fails. That is deliberately fail-closed for budget safety.
           logger({ level: 'error', event: 'accounting_settlement_failed', requestId });
+          accountingHealthy = false;
         }
       }
     }
@@ -492,6 +556,19 @@ export async function createRelay(options = {}) {
         return;
       case `${API_PREFIX}/readyz`:
         methodAllowed(request, 'GET');
+        try {
+          await ledger.rotateIfNeeded();
+        } catch {
+          accountingHealthy = false;
+        }
+        if (!accountingHealthy
+          || ledger.snapshot().provider.spendMicroUsd + minimumDefaultSpendMicroUsd > config.providerDailyBudgetMicroUsd
+          || !(await probeUpstream())) {
+          metricRequest('ready', 'unavailable');
+          json(response, 503, { status: 'unavailable' });
+          return;
+        }
+        metricRequest('ready', 'success');
         json(response, 200, { status: 'ready' });
         return;
       case '/metrics':

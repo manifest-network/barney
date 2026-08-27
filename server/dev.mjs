@@ -7,10 +7,13 @@ async function main() {
   const relay = await createRelay({ config });
   await relay.listen();
 
+  const rsbuildEnv = { ...process.env };
+  delete rsbuildEnv.MORPHEUS_API_KEY;
+  delete rsbuildEnv.MORPHEUS_RELAY_IDENTITY_HMAC_KEY;
   const rsbuild = spawn(
     process.execPath,
     ['node_modules/@rsbuild/core/bin/rsbuild.js', 'dev'],
-    { stdio: 'inherit', env: process.env },
+    { stdio: 'inherit', env: rsbuildEnv },
   );
   let shuttingDown = false;
 

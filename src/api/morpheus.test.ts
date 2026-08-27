@@ -10,11 +10,13 @@ vi.mock('../config/runtimeConfig', async (importOriginal) => {
 });
 
 vi.mock('./morpheusSession', () => ({
+  MorpheusRequestTimeoutError: class MorpheusRequestTimeoutError extends Error {},
   fetchWithMorpheusSession: vi.fn((_auth, input, init) => fetch(input, init)),
 }));
 
 // Must import after mocks
-import { serializeMessagesForApi, streamChat } from './morpheus';
+import { compactMessagesForRelay, serializeMessagesForApi, streamChat } from './morpheus';
+import { fetchWithMorpheusSession } from './morpheusSession';
 import type { ChatApiMessage, ToolCall, StreamChunk } from './morpheus';
 
 /** Encode a string as a Uint8Array for ReadableStream chunks. */
@@ -125,6 +127,43 @@ describe('serializeMessagesForApi', () => {
   });
 });
 
+describe('compactMessagesForRelay', () => {
+  it('drops oversized old history while preserving the system prompt and newest turn', () => {
+    const messages: ChatApiMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      { role: 'user', content: 'x'.repeat(200_000) },
+      { role: 'assistant', content: 'Old answer' },
+      { role: 'user', content: 'Newest question' },
+    ];
+
+    const result = compactMessagesForRelay(messages);
+
+    expect(result[0]).toEqual(messages[0]);
+    expect(result.at(-1)).toEqual(messages.at(-1));
+    expect(result.some((message) => message.content?.includes('x'.repeat(1_000)))).toBe(false);
+    expect(messages).toHaveLength(4);
+  });
+
+  it('removes leading tool results when their assistant tool call is compacted', () => {
+    const messages: ChatApiMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'tc-old',
+          type: 'function',
+          function: { name: 'old_tool', arguments: {} },
+        }],
+      },
+      { role: 'tool', tool_call_id: 'tc-old', content: 'x'.repeat(200_000) },
+      { role: 'user', content: 'Newest question' },
+    ];
+
+    expect(compactMessagesForRelay(messages)).toEqual([messages[0], messages[3]]);
+  });
+});
+
 describe('streamChat', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -160,6 +199,12 @@ describe('streamChat', () => {
     const headers = fetchCall[1]?.headers as Record<string, string>;
     expect(headers['Authorization']).toBeUndefined();
     expect(headers['Content-Type']).toBe('application/json');
+    expect(fetchWithMorpheusSession).toHaveBeenCalledWith(
+      BASE_OPTIONS.auth,
+      '/api/morpheus/chat/completions',
+      expect.any(Object),
+      expect.any(Number),
+    );
   });
 
   it('uses model from runtimeConfig in request body', async () => {
@@ -252,7 +297,9 @@ describe('streamChat', () => {
 
     expect(chunks).toHaveLength(1);
     expect(chunks[0].type).toBe('error');
-    expect((chunks[0] as { type: 'error'; error: string }).error).toContain('429');
+    expect((chunks[0] as { type: 'error'; error: string }).error).toBe(
+      'The inference quota or concurrency limit has been reached. Try again later.',
+    );
   });
 
   it('handles [DONE] sentinel in SSE stream', async () => {
@@ -406,7 +453,7 @@ describe('checkApiHealth', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns true when relay health endpoint responds ok', async () => {
+  it('returns true when the provider-aware relay readiness endpoint responds ok', async () => {
     const { checkApiHealth } = await import('./morpheus');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
 
@@ -414,7 +461,7 @@ describe('checkApiHealth', () => {
     expect(result).toBe(true);
 
     const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toBe('/api/morpheus/healthz');
+    expect(fetchCall[0]).toBe('/api/morpheus/readyz');
     // No Authorization header — proxy adds it server-side
     expect((fetchCall[1]?.headers as Record<string, string> | undefined)).toBeUndefined();
   });

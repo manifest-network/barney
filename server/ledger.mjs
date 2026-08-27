@@ -37,12 +37,15 @@ function isCounter(value) {
     && Number.isSafeInteger(value.spendMicroUsd) && value.spendMicroUsd >= 0;
 }
 
-function validateState(value) {
+function validateState(value, maxDailyIdentities) {
   if (!value || value.version !== LEDGER_VERSION || !/^\d{4}-\d{2}-\d{2}$/.test(value.window) || !isCounter(value.provider)) {
     throw new Error('Morpheus relay ledger is invalid; refusing to reset financial accounting');
   }
   if (!value.identities || typeof value.identities !== 'object' || Array.isArray(value.identities)) {
     throw new Error('Morpheus relay ledger identities are invalid; refusing to reset financial accounting');
+  }
+  if (Object.keys(value.identities).length > maxDailyIdentities) {
+    throw new Error('Morpheus relay ledger exceeds the configured identity capacity');
   }
   for (const [identity, usage] of Object.entries(value.identities)) {
     if (!/^[a-f0-9]{64}$/.test(identity) || !isCounter(usage)) {
@@ -116,7 +119,7 @@ export class QuotaLedger {
   async init() {
     try {
       const raw = await readFile(this.config.stateFile, 'utf8');
-      this.state = validateState(JSON.parse(raw));
+      this.state = validateState(JSON.parse(raw), this.config.maxDailyIdentities);
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
       const initialState = emptyState(this.now());
@@ -144,16 +147,24 @@ export class QuotaLedger {
     });
   }
 
-  async reserve(identityKey, inputTokens, outputTokens) {
+  async reserve(identityKey, inputTokens, outputTokens, worstCaseInputTokens = inputTokens) {
     return this.withLock(async () => {
       if (!this.state) throw new Error('Morpheus relay ledger is not initialized');
       const window = utcWindow(this.now());
-      const nextState = this.state.window === window
-        ? structuredClone(this.state)
-        : emptyState(this.now());
+      const sourceState = this.state.window === window ? this.state : emptyState(this.now());
+      if (!sourceState.identities[identityKey]
+        && Object.keys(sourceState.identities).length >= this.config.maxDailyIdentities) {
+        throw new QuotaError(503, 'identity_capacity', 'Inference identity capacity is temporarily exhausted');
+      }
+      const nextState = structuredClone(sourceState);
 
       const reservedTokens = safeAdd(inputTokens, outputTokens);
-      const reservedSpendMicroUsd = estimateSpendMicroUsd(this.config, inputTokens, outputTokens);
+      // Token quotas use a realistic tokenizer-independent estimate. Spend
+      // quotas use that same estimate. The provider hard budget separately
+      // reserves the UTF-8 byte upper bound so it remains safe even for
+      // token-dense/non-ASCII input.
+      const reservedIdentitySpendMicroUsd = estimateSpendMicroUsd(this.config, inputTokens, outputTokens);
+      const reservedSpendMicroUsd = estimateSpendMicroUsd(this.config, worstCaseInputTokens, outputTokens);
       const identity = nextState.identities[identityKey] ?? counters();
 
       if (identity.requests + 1 > this.config.identityDailyRequests) {
@@ -162,7 +173,7 @@ export class QuotaLedger {
       if (identity.tokens + reservedTokens > this.config.identityDailyTokens) {
         throw new QuotaError(429, 'identity_token_quota', 'Daily inference token quota exhausted');
       }
-      if (identity.spendMicroUsd + reservedSpendMicroUsd > this.config.identityDailySpendMicroUsd) {
+      if (identity.spendMicroUsd + reservedIdentitySpendMicroUsd > this.config.identityDailySpendMicroUsd) {
         throw new QuotaError(429, 'identity_spend_quota', 'Daily inference spend quota exhausted');
       }
       if (nextState.provider.spendMicroUsd + reservedSpendMicroUsd > this.config.providerDailyBudgetMicroUsd) {
@@ -171,7 +182,7 @@ export class QuotaLedger {
 
       identity.requests = safeAdd(identity.requests, 1);
       identity.tokens = safeAdd(identity.tokens, reservedTokens);
-      identity.spendMicroUsd = safeAdd(identity.spendMicroUsd, reservedSpendMicroUsd);
+      identity.spendMicroUsd = safeAdd(identity.spendMicroUsd, reservedIdentitySpendMicroUsd);
       nextState.identities[identityKey] = identity;
       nextState.provider.requests = safeAdd(nextState.provider.requests, 1);
       nextState.provider.tokens = safeAdd(nextState.provider.tokens, reservedTokens);
@@ -183,8 +194,10 @@ export class QuotaLedger {
         window,
         identityKey,
         inputTokens,
+        worstCaseInputTokens,
         outputTokens,
         reservedTokens,
+        reservedIdentitySpendMicroUsd,
         reservedSpendMicroUsd,
       });
     });
@@ -205,16 +218,16 @@ export class QuotaLedger {
         usage.outputTokens,
       );
 
-      const adjust = (entry) => {
+      const adjust = (entry, reservedSpendMicroUsd) => {
         entry.tokens = actualTokens >= reservation.reservedTokens
           ? safeAdd(entry.tokens, actualTokens - reservation.reservedTokens)
           : safeSubtract(entry.tokens, reservation.reservedTokens - actualTokens);
-        entry.spendMicroUsd = actualSpendMicroUsd >= reservation.reservedSpendMicroUsd
-          ? safeAdd(entry.spendMicroUsd, actualSpendMicroUsd - reservation.reservedSpendMicroUsd)
-          : safeSubtract(entry.spendMicroUsd, reservation.reservedSpendMicroUsd - actualSpendMicroUsd);
+        entry.spendMicroUsd = actualSpendMicroUsd >= reservedSpendMicroUsd
+          ? safeAdd(entry.spendMicroUsd, actualSpendMicroUsd - reservedSpendMicroUsd)
+          : safeSubtract(entry.spendMicroUsd, reservedSpendMicroUsd - actualSpendMicroUsd);
       };
-      adjust(identity);
-      adjust(nextState.provider);
+      adjust(identity, reservation.reservedIdentitySpendMicroUsd);
+      adjust(nextState.provider, reservation.reservedSpendMicroUsd);
       await this.writeState(this.config.stateFile, nextState);
       this.state = nextState;
     });

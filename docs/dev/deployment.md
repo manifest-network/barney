@@ -21,8 +21,9 @@ Pin an exact tag in production. Pre-release tags do not update `:latest`.
 
 ## Required configuration
 
-The relay deliberately has no unlimited financial defaults. Startup fails if
-any required policy value is absent or malformed.
+The relay deliberately has no unlimited financial defaults. Paid inference and
+readiness fail closed if any required policy value is absent or malformed; the
+supervisor still serves the SPA so non-AI functionality remains available.
 
 | Variable | Purpose |
 |----------|---------|
@@ -50,10 +51,17 @@ provider key while the provider-wide ledger remains intact.
 Request controls have bounded defaults and optional overrides:
 
 - exact model allowlist;
-- body, prompt, conservative context, output, message-count, and response limits;
+- body, prompt, exact forwarded-context byte, output, message-count, and response limits;
 - per-identity and provider concurrency;
 - upstream-connect and total-stream deadlines;
-- challenge/session lifetimes and in-memory capacity.
+- challenge/session lifetimes and in-memory capacity;
+- maximum pseudonymous identities retained in each daily ledger window.
+
+Identity token and spend quotas use a configurable byte-per-token estimate. The
+provider-wide financial reservation separately charges a byte-level upper bound
+before provider access, then both settle down to authenticated provider usage.
+This avoids treating every byte as a normal identity token while preserving the
+hard provider budget.
 
 See `server/config.mjs` for names and hard validation maxima.
 
@@ -89,8 +97,9 @@ authenticated chat asks the wallet to sign a short-lived challenge.
 ## Production compose shape
 
 The image exposes only port 80. Put a TLS-terminating reverse proxy in front of
-it and persist `/var/lib/barney-relay`. Do not publish relay port 8081; it exists
-for private monitoring and nginx-to-relay traffic.
+it and persist `/var/lib/barney-relay`. Do not publish relay port 8081. The relay
+binds loopback by default for nginx; set `MORPHEUS_RELAY_HOST=0.0.0.0` only when
+a private container-network Prometheus scrape requires the direct metrics port.
 
 ```yaml
 services:
@@ -134,24 +143,25 @@ Replace both `REVIEW_CURRENT_RATE` placeholders with positive integer micro-USD
 rates before deployment; leaving either string causes startup to fail.
 
 If a trusted reverse proxy supplies `X-Forwarded-For`, set
-`BARNEY_TRUSTED_PROXY_CIDR` to that proxy's exact IP/CIDR. This affects only
-nginx's coarse IP controls. Wallet identity always owns financial accounting.
+`BARNEY_TRUSTED_PROXY_CIDR` to that proxy's exact IPv4 `/32`. The entrypoint
+rejects broad, malformed, or injectable values. This affects only nginx's coarse
+IP controls; wallet identity always owns financial accounting.
 
 ## Startup sequence and secret boundary
 
 `/docker/env.sh`:
 
-1. normalizes and validates the upstream base URL without echoing it on error;
-2. renders nginx config from only the trusted-proxy CIDR and local relay port;
+1. validates the trusted-proxy IPv4 `/32` and relay port;
+2. renders nginx config from only that trusted-proxy address and local relay port;
 3. renders browser `config.js` from public variables only;
 4. validates the secret-free nginx configuration;
-5. executes the Node supervisor.
+5. executes the requested command, defaulting to the Node supervisor.
 
-The supervisor validates the complete relay policy, loads/creates the durable
-ledger, and binds the relay before starting nginx. It removes the provider and
-identity-HMAC keys from nginx's child environment. The key reaches only the
-relay's outbound `Authorization` header. Nginx never receives upstream URL/key
-substitutions and Rsbuild never receives them in development.
+The supervisor starts nginx so the SPA can degrade gracefully, then validates
+the complete relay policy and loads/creates the durable ledger. It removes the
+provider and identity-HMAC keys from nginx's child environment. The development
+supervisor removes the same secrets from Rsbuild. The key reaches only the
+relay's outbound `Authorization` header.
 
 Static hosting alone is no longer a valid deployment shape. A worker/function
 replacement must implement the same wallet proof, session binding, durable
@@ -161,9 +171,9 @@ reservation, quotas, hard budget, and request limits—not merely inject a key.
 
 | Endpoint | Exposure | Meaning |
 |----------|----------|---------|
-| `/api/morpheus/healthz` | public through nginx | relay process is serving after successful ledger/config initialization |
-| `/api/morpheus/readyz` | public/internal through nginx | readiness target for Docker/Traefik |
-| `/metrics` on relay port 8081 | private Docker network only | aggregate request, rejection, usage, spend, budget, concurrency, and max identity-quota utilization |
+| `/api/morpheus/healthz` | public through nginx | relay-process liveness only |
+| `/api/morpheus/readyz` | public/internal through nginx | ledger, default-request budget, and cached authenticated-provider readiness |
+| `/metrics` on relay port 8081 | loopback by default; private network only when explicitly bound | aggregate request, rejection, usage, spend, budget, concurrency, and max identity-quota utilization |
 
 Metrics never contain wallet addresses, identity hashes, prompts, cookies, or
 keys. Logs likewise use only request IDs, bounded event names, and numeric
@@ -196,13 +206,13 @@ ledger throughout. Deleting it can permit spend beyond the day's hard budget.
 
 | Symptom | Likely cause |
 |---------|--------------|
-| Container exits before nginx starts | Missing/invalid relay policy, unreadable/corrupt ledger, or invalid nginx render |
+| SPA loads but AI is unavailable | Missing/invalid relay policy, unreadable/corrupt ledger, provider readiness failure, or exhausted budget |
 | 401 | Missing/expired/restarted/logged-out wallet session; re-authentication is expected |
 | 403 | Wallet/chain/session binding, origin, or model mismatch |
 | 429 | Identity quota or concurrency ceiling |
 | 503 from paid POST | Provider hard budget/concurrency ceiling or relay unavailable |
 | 502/504 | Sanitized upstream failure, response limit, connection deadline, or total-stream deadline |
-| Health succeeds but chat is rejected | Health is intentionally free; inspect relay quota/rejection metrics |
+| Liveness succeeds but readiness fails | Provider/key, durable accounting, or default-request budget is unavailable |
 | Provider URL blocked in dev | Rsbuild's separate provider URL safety guard rejected it; see [security.md](security.md) |
 
 Never paste `docker inspect`, provider headers, or environment output into logs,

@@ -59,3 +59,4 @@ COPY docker/nginx.conf.template /docker/nginx.conf.template
 COPY server/ /opt/barney-relay/
 EXPOSE 80
 ENTRYPOINT ["/docker/env.sh"]
+CMD ["node", "/opt/barney-relay/main.mjs"]

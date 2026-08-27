@@ -20,6 +20,7 @@ describe('QuotaLedger', () => {
       identityDailyTokens: 100,
       identityDailySpendMicroUsd: 100,
       providerDailyBudgetMicroUsd: 1000,
+      maxDailyIdentities: 100,
       inputMicroUsdPerMillionTokens: 1_000_000,
       outputMicroUsdPerMillionTokens: 2_000_000,
     };
@@ -70,6 +71,43 @@ describe('QuotaLedger', () => {
       status: 503,
       reason: 'provider_budget_exhausted',
     });
+  });
+
+  it('bounds durable daily identity state and preserves access for known identities', async () => {
+    const ledger = new QuotaLedger({ ...config, maxDailyIdentities: 1 });
+    await ledger.init();
+    await ledger.reserve(IDENTITY, 1, 1);
+
+    await expect(ledger.reserve('b'.repeat(64), 1, 1)).rejects.toMatchObject({
+      status: 503,
+      reason: 'identity_capacity',
+    });
+    await ledger.reserve(IDENTITY, 1, 1);
+    expect(Object.keys(ledger.snapshot().identities)).toEqual([IDENTITY]);
+  });
+
+  it('uses estimated tokens for identity quota and a separate worst-case spend reservation', async () => {
+    const ledger = new QuotaLedger({
+      ...config,
+      identityDailyTokens: 20,
+      identityDailySpendMicroUsd: 1_000,
+      providerDailyBudgetMicroUsd: 1_000,
+    });
+    await ledger.init();
+    const reservation = await ledger.reserve(IDENTITY, 5, 5, 100);
+
+    expect(reservation.reservedTokens).toBe(10);
+    expect(reservation.reservedIdentitySpendMicroUsd).toBe(15);
+    expect(reservation.reservedSpendMicroUsd).toBe(110);
+    expect(ledger.snapshot().identities[IDENTITY]).toMatchObject({
+      tokens: 10,
+      spendMicroUsd: 15,
+    });
+    expect(ledger.snapshot().provider.spendMicroUsd).toBe(110);
+
+    await ledger.settle(reservation, { inputTokens: 1, outputTokens: 1 });
+    expect(ledger.snapshot().identities[IDENTITY].spendMicroUsd).toBe(3);
+    expect(ledger.snapshot().provider.spendMicroUsd).toBe(3);
   });
 
   it('fails closed on a corrupt accounting file instead of resetting spend', async () => {

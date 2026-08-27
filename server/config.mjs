@@ -106,7 +106,9 @@ export function loadRelayConfig(env = process.env) {
     allowedOrigins: parseOrigins(csv(env, 'MORPHEUS_RELAY_ALLOWED_ORIGINS')),
     identityHmacKey,
     stateFile,
-    listenHost: env.MORPHEUS_RELAY_HOST?.trim() || '0.0.0.0',
+    // Loopback is the safe standalone/dev default. Production must opt in to a
+    // private container-network bind when Prometheus needs the direct socket.
+    listenHost: env.MORPHEUS_RELAY_HOST?.trim() || '127.0.0.1',
     listenPort: positiveInteger(env, 'MORPHEUS_RELAY_PORT', 8081, { max: 65_535 }),
     cookieSecure: booleanValue(env, 'MORPHEUS_RELAY_COOKIE_SECURE', true),
     challengeTtlMs: positiveInteger(env, 'MORPHEUS_RELAY_CHALLENGE_TTL_SECONDS', 120, { max: 600 }) * 1000,
@@ -115,15 +117,18 @@ export function loadRelayConfig(env = process.env) {
     maxSessions: positiveInteger(env, 'MORPHEUS_RELAY_MAX_SESSIONS', 10_000, { max: 100_000 }),
     maxAuthBodyBytes: positiveInteger(env, 'MORPHEUS_RELAY_MAX_AUTH_BODY_BYTES', 16 * 1024, { max: 64 * 1024 }),
     maxRequestBodyBytes: positiveInteger(env, 'MORPHEUS_RELAY_MAX_BODY_BYTES', 512 * 1024, { max: 4 * 1024 * 1024 }),
-    maxPromptChars: positiveInteger(env, 'MORPHEUS_RELAY_MAX_PROMPT_CHARS', 32_000, { max: 1_000_000 }),
-    maxContextTokens: positiveInteger(env, 'MORPHEUS_RELAY_MAX_CONTEXT_TOKENS', 64_000, { max: 2_000_000 }),
+    maxPromptChars: positiveInteger(env, 'MORPHEUS_RELAY_MAX_PROMPT_CHARS', 120_000, { max: 1_000_000 }),
+    maxContextBytes: positiveInteger(env, 'MORPHEUS_RELAY_MAX_CONTEXT_BYTES', 384 * 1024, { max: 4 * 1024 * 1024 }),
+    estimatedBytesPerToken: positiveInteger(env, 'MORPHEUS_RELAY_ESTIMATED_BYTES_PER_TOKEN', 3, { max: 8 }),
     maxOutputTokens: positiveInteger(env, 'MORPHEUS_RELAY_MAX_OUTPUT_TOKENS', 4096, { max: 65_536 }),
     maxMessages: positiveInteger(env, 'MORPHEUS_RELAY_MAX_MESSAGES', 200, { max: 2_000 }),
     maxUpstreamResponseBytes: positiveInteger(env, 'MORPHEUS_RELAY_MAX_RESPONSE_BYTES', 8 * 1024 * 1024, { max: 64 * 1024 * 1024 }),
     maxIdentityConcurrent: positiveInteger(env, 'MORPHEUS_RELAY_MAX_IDENTITY_CONCURRENT', 2, { max: 100 }),
     maxProviderConcurrent: positiveInteger(env, 'MORPHEUS_RELAY_MAX_PROVIDER_CONCURRENT', 16, { max: 1_000 }),
+    maxDailyIdentities: positiveInteger(env, 'MORPHEUS_RELAY_MAX_DAILY_IDENTITIES', 1_000, { max: 100_000 }),
     streamTimeoutMs: positiveInteger(env, 'MORPHEUS_RELAY_MAX_STREAM_SECONDS', 120, { max: 900 }) * 1000,
     upstreamConnectTimeoutMs: positiveInteger(env, 'MORPHEUS_RELAY_UPSTREAM_CONNECT_TIMEOUT_SECONDS', 15, { max: 120 }) * 1000,
+    readinessCacheMs: positiveInteger(env, 'MORPHEUS_RELAY_READINESS_CACHE_SECONDS', 30, { max: 300 }) * 1000,
     identityDailyRequests: positiveInteger(env, 'MORPHEUS_RELAY_IDENTITY_DAILY_REQUESTS'),
     identityDailyTokens: positiveInteger(env, 'MORPHEUS_RELAY_IDENTITY_DAILY_TOKENS'),
     identityDailySpendMicroUsd: positiveInteger(env, 'MORPHEUS_RELAY_IDENTITY_DAILY_SPEND_MICRO_USD'),
@@ -135,4 +140,8 @@ export function loadRelayConfig(env = process.env) {
 
 export function upstreamChatUrl(config) {
   return new URL('chat/completions', config.upstreamBaseUrl);
+}
+
+export function upstreamModelsUrl(config) {
+  return new URL('models', config.upstreamBaseUrl);
 }

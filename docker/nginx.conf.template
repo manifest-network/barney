@@ -95,7 +95,10 @@ server {
         }
         # Per-IP rate + concurrency limits; 429 on trip.
         limit_req    zone=morpheus_req burst=20 nodelay;
-        limit_conn   morpheus_conn 8;
+        # Keep this above the relay's provider-wide concurrency ceiling so a
+        # misconfigured real-IP trust boundary cannot become an 8-user global
+        # bottleneck. Wallet/provider gates remain authoritative downstream.
+        limit_conn   morpheus_conn 32;
         limit_req_status  429;
         limit_conn_status 429;
         client_max_body_size 4m;

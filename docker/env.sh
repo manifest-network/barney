@@ -1,10 +1,6 @@
 #!/bin/sh
 set -e
 
-# Normalize: strip trailing slash from Morpheus URL to avoid double-slash in proxy_pass
-PUBLIC_MORPHEUS_URL="${PUBLIC_MORPHEUS_URL%/}"
-export PUBLIC_MORPHEUS_URL
-
 BARNEY_TRUSTED_PROXY_CIDR="${BARNEY_TRUSTED_PROXY_CIDR:-127.0.0.1/32}"
 MORPHEUS_RELAY_PORT="${MORPHEUS_RELAY_PORT:-8081}"
 export BARNEY_TRUSTED_PROXY_CIDR MORPHEUS_RELAY_PORT
@@ -15,22 +11,35 @@ case "$MORPHEUS_RELAY_PORT" in
     exit 1
     ;;
 esac
-
-# Fail fast if PUBLIC_MORPHEUS_URL is not provided
-if [ -z "$PUBLIC_MORPHEUS_URL" ]; then
-  echo "ERROR: PUBLIC_MORPHEUS_URL is required but not set or empty." >&2
+if [ "$MORPHEUS_RELAY_PORT" -gt 65535 ] || [ "$MORPHEUS_RELAY_PORT" -lt 1 ]; then
+  echo "ERROR: MORPHEUS_RELAY_PORT must be between 1 and 65535." >&2
   exit 1
 fi
 
-# The relay builds one exact upstream path. A query or fragment in the base URL
-# is never valid and might contain sensitive configuration, so reject it without
-# echoing the value into logs.
-case "$PUBLIC_MORPHEUS_URL" in
-  *[?\#]*)
-    echo "ERROR: PUBLIC_MORPHEUS_URL must not contain '?' or '#'." >&2
-    exit 1
-    ;;
-esac
+validate_proxy_cidr() (
+  set -f
+  value=$1
+  case "$value" in
+    ''|*[!0-9./]*|*/*/*) exit 1 ;;
+  esac
+  address=${value%/32}
+  [ "$address/32" = "$value" ] || exit 1
+  [ "$address" != "0.0.0.0" ] || exit 1
+  IFS=.
+  set -- $address
+  [ "$#" -eq 4 ] || exit 1
+  for octet do
+    case "$octet" in
+      ''|*[!0-9]*) exit 1 ;;
+    esac
+    [ "$octet" -le 255 ] || exit 1
+  done
+)
+
+if ! validate_proxy_cidr "$BARNEY_TRUSTED_PROXY_CIDR"; then
+  echo "ERROR: BARNEY_TRUSTED_PROXY_CIDR must be one explicit nonzero IPv4 /32 address." >&2
+  exit 1
+fi
 
 # Generate nginx config without secrets. The paid key remains only in the relay
 # process environment and never appears in generated nginx configuration.
@@ -72,4 +81,7 @@ envsubst '$RUNTIME_CONFIG_JS' \
 # instead of a cryptic crash loop.
 nginx -t || { echo "ERROR: nginx config validation failed after envsubst." >&2; exit 1; }
 
-exec node /opt/barney-relay/main.mjs
+if [ "$#" -eq 0 ]; then
+  set -- node /opt/barney-relay/main.mjs
+fi
+exec "$@"

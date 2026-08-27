@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../config/chain', () => ({ CHAIN_ID: 'manifest-test' }));
 
 import {
   MorpheusSessionError,
   ensureMorpheusSession,
+  fetchWithMorpheusSession,
   invalidateMorpheusSession,
   logoutMorpheusSession,
 } from './morpheusSession';
@@ -32,6 +33,11 @@ describe('Morpheus wallet session client', () => {
     invalidateMorpheusSession();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it('turns a one-time server challenge into an HttpOnly wallet session', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(jsonResponse(401, { error: 'missing' }))
@@ -41,12 +47,14 @@ describe('Morpheus wallet session client', () => {
         address: ADDRESS,
         chainId: 'manifest-test',
         expiresAt: EXPIRES_AT,
+        expiresInSeconds: 120,
       }))
       .mockResolvedValueOnce(jsonResponse(200, {
         authenticated: true,
         address: ADDRESS,
         chainId: 'manifest-test',
         expiresAt: EXPIRES_AT,
+        expiresInSeconds: 60,
       })));
 
     await ensureMorpheusSession(AUTH);
@@ -78,6 +86,7 @@ describe('Morpheus wallet session client', () => {
       address: ADDRESS,
       chainId: 'manifest-test',
       expiresAt: EXPIRES_AT,
+      expiresInSeconds: 60,
     })));
 
     await ensureMorpheusSession(AUTH);
@@ -96,9 +105,95 @@ describe('Morpheus wallet session client', () => {
       address: 'manifest1other',
       chainId: 'manifest-test',
       expiresAt: EXPIRES_AT,
+      expiresInSeconds: 60,
     })));
 
     await expect(ensureMorpheusSession(AUTH)).rejects.toBeInstanceOf(MorpheusSessionError);
+  });
+
+  it('deduplicates concurrent challenge and signature work for the same wallet', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.endsWith('/status')) return jsonResponse(401, { error: 'missing' });
+      if (url.endsWith('/challenge')) {
+        return jsonResponse(200, {
+          challengeId: 'challenge-id',
+          message: 'chain-bound challenge',
+          address: ADDRESS,
+          chainId: 'manifest-test',
+          expiresAt: EXPIRES_AT,
+          expiresInSeconds: 120,
+        });
+      }
+      return jsonResponse(200, {
+        authenticated: true,
+        address: ADDRESS,
+        chainId: 'manifest-test',
+        expiresAt: EXPIRES_AT,
+        expiresInSeconds: 60,
+      });
+    }));
+
+    await Promise.all([
+      ensureMorpheusSession(AUTH),
+      ensureMorpheusSession(AUTH),
+    ]);
+
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(AUTH.signChallenge).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the relay relative TTL instead of comparing expiry to a skewed browser clock', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2100-01-01T00:00:00Z'));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, {
+      authenticated: true,
+      address: ADDRESS,
+      chainId: 'manifest-test',
+      expiresAt: '2000-01-01T00:00:00.000Z',
+      expiresInSeconds: 60,
+    })));
+
+    await ensureMorpheusSession(AUTH);
+    await ensureMorpheusSession(AUTH);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    now.mockRestore();
+  });
+
+  it('starts the request timeout only after session establishment completes', async () => {
+    vi.useFakeTimers();
+    let resolveStatus: (() => void) | undefined;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (input.toString().endsWith('/status')) {
+        return new Promise<Response>((resolve) => {
+          resolveStatus = () => resolve(jsonResponse(200, {
+            authenticated: true,
+            address: ADDRESS,
+            chainId: 'manifest-test',
+            expiresAt: EXPIRES_AT,
+            expiresInSeconds: 60,
+          }));
+        });
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted', 'AbortError'));
+        }, { once: true });
+      });
+    }));
+
+    const request = fetchWithMorpheusSession(AUTH, '/api/morpheus/chat/completions', {
+      method: 'POST',
+    }, 50);
+    const rejection = expect(request).rejects.toMatchObject({ name: 'MorpheusRequestTimeoutError' });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    resolveStatus?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(50);
+    await rejection;
   });
 
   it('clears the local session cache and asks the server to revoke its cookie on logout', async () => {

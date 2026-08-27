@@ -14,6 +14,7 @@ interface SessionResponse {
   address: string;
   chainId: string;
   expiresAt: string;
+  expiresInSeconds: number;
 }
 
 interface ChallengeResponse {
@@ -22,6 +23,7 @@ interface ChallengeResponse {
   address: string;
   chainId: string;
   expiresAt: string;
+  expiresInSeconds: number;
 }
 
 interface CachedSession {
@@ -31,11 +33,20 @@ interface CachedSession {
 }
 
 let cachedSession: CachedSession | undefined;
+let sessionEpoch = 0;
+let inFlightSession: { address: string; epoch: number; promise: Promise<void> } | undefined;
 
 export class MorpheusSessionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'MorpheusSessionError';
+  }
+}
+
+export class MorpheusRequestTimeoutError extends Error {
+  constructor() {
+    super('The inference request timed out.');
+    this.name = 'MorpheusRequestTimeoutError';
   }
 }
 
@@ -55,15 +66,24 @@ async function parseJson<T>(response: Response): Promise<T> {
 }
 
 function validateSession(value: SessionResponse, address: string): CachedSession {
-  const expiresAtMs = Date.parse(value.expiresAt);
   if (value.authenticated !== true
     || value.address !== address
-    || value.chainId !== CHAIN_ID
-    || !Number.isFinite(expiresAtMs)
-    || expiresAtMs <= Date.now()) {
+    || value.chainId !== CHAIN_ID) {
     throw new MorpheusSessionError('The inference session was not bound to the active wallet and chain.');
   }
-  return { address, chainId: CHAIN_ID, expiresAtMs };
+  if (!Number.isFinite(Date.parse(value.expiresAt))
+    || !Number.isSafeInteger(value.expiresInSeconds)
+    || value.expiresInSeconds <= 0
+    || value.expiresInSeconds > 86_400) {
+    throw new MorpheusSessionError('The inference authentication service returned an invalid session expiry.');
+  }
+  // The relay is authoritative for expiry. Cache its relative TTL against the
+  // browser clock so client clock skew cannot force an endless re-sign loop.
+  return {
+    address,
+    chainId: CHAIN_ID,
+    expiresAtMs: Date.now() + value.expiresInSeconds * 1000,
+  };
 }
 
 function isFresh(address: string): boolean {
@@ -74,14 +94,14 @@ function isFresh(address: string): boolean {
 
 export function invalidateMorpheusSession(): void {
   cachedSession = undefined;
+  sessionEpoch += 1;
+  inFlightSession = undefined;
 }
 
-export async function ensureMorpheusSession(
+async function establishMorpheusSession(
   auth: MorpheusAuthContext,
   signal?: AbortSignal,
-): Promise<void> {
-  if (isFresh(auth.walletAddress)) return;
-
+): Promise<CachedSession> {
   const statusResponse = await fetch(`${API_BASE}/auth/status`, {
     method: 'GET',
     credentials: 'same-origin',
@@ -89,11 +109,10 @@ export async function ensureMorpheusSession(
     signal,
   });
   if (statusResponse.ok) {
-    cachedSession = validateSession(
+    return validateSession(
       await parseJson<SessionResponse>(statusResponse),
       auth.walletAddress,
     );
-    return;
   }
   if (statusResponse.status !== 401 && statusResponse.status !== 403) {
     throw new MorpheusSessionError('Inference authentication is temporarily unavailable.');
@@ -114,7 +133,10 @@ export async function ensureMorpheusSession(
     || challenge.chainId !== CHAIN_ID
     || typeof challenge.challengeId !== 'string'
     || typeof challenge.message !== 'string'
-    || Date.parse(challenge.expiresAt) <= Date.now()) {
+    || !Number.isFinite(Date.parse(challenge.expiresAt))
+    || !Number.isSafeInteger(challenge.expiresInSeconds)
+    || challenge.expiresInSeconds <= 0
+    || challenge.expiresInSeconds > 600) {
     throw new MorpheusSessionError('The inference authentication challenge was invalid.');
   }
 
@@ -135,16 +157,68 @@ export async function ensureMorpheusSession(
   if (!sessionResponse.ok) {
     throw new MorpheusSessionError('Wallet authentication failed. Please reconnect your wallet and try again.');
   }
-  cachedSession = validateSession(
+  return validateSession(
     await parseJson<SessionResponse>(sessionResponse),
     auth.walletAddress,
   );
+}
+
+export async function ensureMorpheusSession(
+  auth: MorpheusAuthContext,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (isFresh(auth.walletAddress)) return;
+  const epoch = sessionEpoch;
+  if (inFlightSession?.address === auth.walletAddress && inFlightSession.epoch === epoch) {
+    return inFlightSession.promise;
+  }
+
+  const promise = establishMorpheusSession(auth, signal).then((session) => {
+    if (sessionEpoch !== epoch) {
+      throw new MorpheusSessionError('The active wallet changed during inference authentication.');
+    }
+    cachedSession = session;
+  });
+  const current = { address: auth.walletAddress, epoch, promise };
+  inFlightSession = current;
+  try {
+    await promise;
+  } finally {
+    if (inFlightSession === current) inFlightSession = undefined;
+  }
+}
+
+async function timedFetch(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number | undefined,
+): Promise<Response> {
+  if (!timeoutMs) return fetch(input, init);
+  const abort = new AbortController();
+  let timedOut = false;
+  const onExternalAbort = () => abort.abort(init.signal?.reason);
+  if (init.signal?.aborted) onExternalAbort();
+  else init.signal?.addEventListener('abort', onExternalAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    abort.abort();
+  }, timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: abort.signal });
+  } catch (error) {
+    if (timedOut) throw new MorpheusRequestTimeoutError();
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    init.signal?.removeEventListener('abort', onExternalAbort);
+  }
 }
 
 export async function fetchWithMorpheusSession(
   auth: MorpheusAuthContext,
   input: RequestInfo | URL,
   init: RequestInit,
+  requestTimeoutMs?: number,
 ): Promise<Response> {
   await ensureMorpheusSession(auth, init.signal ?? undefined);
   const requestHeaders = new Headers(init.headers);
@@ -152,19 +226,19 @@ export async function fetchWithMorpheusSession(
     requestHeaders.set(name, value);
   }
 
-  let response = await fetch(input, {
+  let response = await timedFetch(input, {
     ...init,
     credentials: 'same-origin',
     headers: requestHeaders,
-  });
+  }, requestTimeoutMs);
   if (response.status === 401 || response.headers.get('X-Barney-Auth-Required') === '1') {
     invalidateMorpheusSession();
     await ensureMorpheusSession(auth, init.signal ?? undefined);
-    response = await fetch(input, {
+    response = await timedFetch(input, {
       ...init,
       credentials: 'same-origin',
       headers: requestHeaders,
-    });
+    }, requestTimeoutMs);
   }
   return response;
 }

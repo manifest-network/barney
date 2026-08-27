@@ -68,6 +68,7 @@ async function authenticate(harness, wallet) {
   });
   expect(challengeResponse.status).toBe(200);
   const challenge = await challengeResponse.json();
+  expect(challenge.expiresInSeconds).toBeGreaterThan(0);
   const signed = await signMessage(wallet, address, challenge.message);
   const sessionResponse = await fetch(`${harness.relayUrl}/api/morpheus/auth/session`, {
     method: 'POST',
@@ -75,10 +76,12 @@ async function authenticate(harness, wallet) {
     body: JSON.stringify({ challengeId: challenge.challengeId, ...signed }),
   });
   expect(sessionResponse.status).toBe(200);
+  const session = await sessionResponse.json();
+  expect(session.expiresInSeconds).toBeGreaterThan(0);
   return {
     address,
     cookie: sessionResponse.headers.get('set-cookie').split(';', 1)[0],
-    session: await sessionResponse.json(),
+    session,
     challenge,
     signed,
   };
@@ -120,7 +123,7 @@ async function makeHarness({ config: configOverrides = {}, now, upstreamHandler 
       MORPHEUS_RELAY_STATE_FILE: join(stateDirectory, 'ledger.json'),
       MORPHEUS_RELAY_COOKIE_SECURE: 'false',
       MORPHEUS_RELAY_MAX_OUTPUT_TOKENS: '10',
-      MORPHEUS_RELAY_MAX_CONTEXT_TOKENS: '1000000',
+      MORPHEUS_RELAY_MAX_CONTEXT_BYTES: '1000000',
       MORPHEUS_RELAY_IDENTITY_DAILY_REQUESTS: '100',
       MORPHEUS_RELAY_IDENTITY_DAILY_TOKENS: '10000000',
       MORPHEUS_RELAY_IDENTITY_DAILY_SPEND_MICRO_USD: '10000000',
@@ -221,6 +224,31 @@ describe('authenticated Morpheus relay', () => {
     expect(replayResponse.status).toBe(401);
   });
 
+  it('does not let an attacker-supplied victim cookie revoke the victim session', async () => {
+    const app = await harness();
+    const victim = await authenticate(app, await Secp256k1HdWallet.generate(12, { prefix: 'manifest' }));
+    const attackerWallet = await Secp256k1HdWallet.generate(12, { prefix: 'manifest' });
+    const [{ address: attackerAddress }] = await attackerWallet.getAccounts();
+    const challengeResponse = await fetch(`${app.relayUrl}/api/morpheus/auth/challenge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: ORIGIN },
+      body: JSON.stringify({ address: attackerAddress, chainId: CHAIN_ID }),
+    });
+    const challenge = await challengeResponse.json();
+    const signed = await signMessage(attackerWallet, attackerAddress, challenge.message);
+    const attackerSession = await fetch(`${app.relayUrl}/api/morpheus/auth/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: victim.cookie, Origin: ORIGIN },
+      body: JSON.stringify({ challengeId: challenge.challengeId, ...signed }),
+    });
+
+    expect(attackerSession.status).toBe(200);
+    const victimStatus = await fetch(`${app.relayUrl}/api/morpheus/auth/status`, {
+      headers: authenticatedHeaders(victim),
+    });
+    expect(victimStatus.status).toBe(200);
+  });
+
   it('fails closed on wallet switch, logout, and session expiry', async () => {
     let clock = Date.parse('2026-08-27T12:00:00Z');
     const app = await harness({ now: () => clock, config: { sessionTtlMs: 1000 } });
@@ -293,7 +321,7 @@ describe('authenticated Morpheus relay', () => {
     expect(app.upstreamRequests).toHaveLength(0);
 
     const contextApp = await harness({
-      config: { maxRequestBodyBytes: 4096, maxPromptChars: 1000, maxContextTokens: 32 },
+      config: { maxRequestBodyBytes: 4096, maxPromptChars: 1000, maxContextBytes: 32 },
     });
     const contextAuth = await authenticate(
       contextApp,
@@ -306,6 +334,24 @@ describe('authenticated Morpheus relay', () => {
     });
     expect(context.status).toBe(413);
     expect(contextApp.upstreamRequests).toHaveLength(0);
+  });
+
+  it('counts optional forwarded fields in the context byte limit', async () => {
+    const app = await harness({
+      config: { maxRequestBodyBytes: 4096, maxPromptChars: 1000, maxContextBytes: 256 },
+    });
+    const auth = await authenticate(app, await Secp256k1HdWallet.generate(12, { prefix: 'manifest' }));
+    const response = await fetch(`${app.relayUrl}/api/morpheus/chat/completions`, {
+      method: 'POST',
+      headers: authenticatedHeaders(auth),
+      body: JSON.stringify({
+        ...CHAT_BODY,
+        response_format: { type: 'json_schema', json_schema: { description: 'x'.repeat(400) } },
+      }),
+    });
+
+    expect(response.status).toBe(413);
+    expect(app.upstreamRequests).toHaveLength(0);
   });
 
   it('caps output tokens and settles durable reservations from provider usage', async () => {
@@ -359,6 +405,39 @@ describe('authenticated Morpheus relay', () => {
     });
     expect(budget.status).toBe(503);
     expect(budgetApp.upstreamRequests).toHaveLength(0);
+  });
+
+  it('reports liveness separately from provider and budget readiness', async () => {
+    const providerDown = await harness({
+      upstreamHandler: async (request, response) => {
+        if (request.url?.endsWith('/models')) {
+          response.writeHead(401, { 'Content-Type': 'application/json' });
+          response.end('{}');
+          return;
+        }
+        sendCompletion(response);
+      },
+    });
+    expect((await fetch(`${providerDown.relayUrl}/api/morpheus/healthz`)).status).toBe(200);
+    expect((await fetch(`${providerDown.relayUrl}/api/morpheus/readyz`)).status).toBe(503);
+
+    const budgetDown = await harness({ config: { providerDailyBudgetMicroUsd: 1 } });
+    expect((await fetch(`${budgetDown.relayUrl}/api/morpheus/healthz`)).status).toBe(200);
+    expect((await fetch(`${budgetDown.relayUrl}/api/morpheus/readyz`)).status).toBe(503);
+    expect(budgetDown.upstreamRequests).toHaveLength(0);
+  });
+
+  it('caches an authenticated upstream models probe for successful readiness', async () => {
+    const app = await harness();
+
+    expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(200);
+    expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(200);
+    expect(app.upstreamRequests).toHaveLength(1);
+    expect(app.upstreamRequests[0]).toMatchObject({
+      method: 'GET',
+      url: '/api/v1/models',
+      authorization: `Bearer ${API_KEY}`,
+    });
   });
 
   it('enforces per-identity concurrency', async () => {
