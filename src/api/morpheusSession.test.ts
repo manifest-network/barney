@@ -143,6 +143,40 @@ describe('Morpheus wallet session client', () => {
     expect(AUTH.signChallenge).toHaveBeenCalledTimes(1);
   });
 
+  it('isolates each caller abort signal while sharing session establishment', async () => {
+    let resolveStatus: ((response: Response) => void) | undefined;
+    let handshakeSignal: AbortSignal | null | undefined;
+    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      handshakeSignal = init?.signal;
+      return new Promise<Response>((resolve, reject) => {
+        resolveStatus = resolve;
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted', 'AbortError'));
+        }, { once: true });
+      });
+    }));
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+
+    const first = ensureMorpheusSession(AUTH, firstController.signal);
+    const firstRejection = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    const second = ensureMorpheusSession(AUTH, secondController.signal);
+    firstController.abort();
+
+    await firstRejection;
+    expect(handshakeSignal).not.toBe(firstController.signal);
+    expect(handshakeSignal?.aborted).toBe(false);
+    resolveStatus?.(jsonResponse(200, {
+      authenticated: true,
+      address: ADDRESS,
+      chainId: 'manifest-test',
+      expiresAt: EXPIRES_AT,
+      expiresInSeconds: 60,
+    }));
+    await expect(second).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('uses the relay relative TTL instead of comparing expiry to a skewed browser clock', async () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2100-01-01T00:00:00Z'));
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, {

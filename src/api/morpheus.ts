@@ -103,27 +103,43 @@ export function compactMessagesForRelay(
   messages: ChatApiMessage[],
   tools: ToolDefinition[] = [],
 ): ChatApiMessage[] {
-  const compacted = [...messages];
-  const firstConversationIndex = compacted[0]?.role === 'system' ? 1 : 0;
-  const overBudget = () => {
-    const promptChars = compacted.reduce(
-      (total, message) => total + (typeof message.content === 'string' ? message.content.length : 0),
-      0,
-    );
-    const contextBytes = new TextEncoder().encode(JSON.stringify({
-      messages: serializeMessagesForApi(compacted),
-      tools,
-    })).byteLength;
-    return promptChars > RELAY_PROMPT_CHAR_BUDGET || contextBytes > RELAY_CONTEXT_BYTE_BUDGET;
+  const serializedMessages = serializeMessagesForApi(messages);
+  const encoder = new TextEncoder();
+  const promptChars = messages.map(
+    (message) => (typeof message.content === 'string' ? message.content.length : 0),
+  );
+  const encodedMessageBytes = serializedMessages.map(
+    (message) => encoder.encode(JSON.stringify(message)).byteLength,
+  );
+  let retainedPromptChars = promptChars.reduce((total, size) => total + size, 0);
+  let retainedContextBytes = encoder.encode(JSON.stringify({
+    messages: serializedMessages,
+    tools,
+  })).byteLength;
+  const firstConversationIndex = messages[0]?.role === 'system' ? 1 : 0;
+  const newestIndex = messages.length - 1;
+  let firstRetainedIndex = firstConversationIndex;
+
+  const overBudget = () => retainedPromptChars > RELAY_PROMPT_CHAR_BUDGET
+    || retainedContextBytes > RELAY_CONTEXT_BYTE_BUDGET;
+  const removeNext = () => {
+    retainedPromptChars -= promptChars[firstRetainedIndex];
+    // The newest message is always retained, so removing any earlier array
+    // element also removes exactly one comma from the serialized JSON array.
+    retainedContextBytes -= encodedMessageBytes[firstRetainedIndex] + 1;
+    firstRetainedIndex += 1;
   };
 
-  while (overBudget() && compacted.length > firstConversationIndex + 1) {
-    compacted.splice(firstConversationIndex, 1);
-    while (compacted[firstConversationIndex]?.role === 'tool') {
-      compacted.splice(firstConversationIndex, 1);
+  while (overBudget() && firstRetainedIndex < newestIndex) {
+    removeNext();
+    while (firstRetainedIndex < newestIndex && messages[firstRetainedIndex]?.role === 'tool') {
+      removeNext();
     }
   }
-  return compacted;
+
+  return firstConversationIndex === 1
+    ? [messages[0], ...messages.slice(firstRetainedIndex)]
+    : messages.slice(firstRetainedIndex);
 }
 
 /** Accumulated state for a single tool call being streamed incrementally. */

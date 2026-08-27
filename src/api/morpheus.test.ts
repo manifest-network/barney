@@ -162,6 +162,29 @@ describe('compactMessagesForRelay', () => {
 
     expect(compactMessagesForRelay(messages)).toEqual([messages[0], messages[3]]);
   });
+
+  it('encodes large histories with linear total work while selecting the retained suffix', () => {
+    const messages: ChatApiMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      ...Array.from({ length: 200 }, (_, index): ChatApiMessage => ({
+        role: 'user',
+        content: `${index}:${'x'.repeat(4_000)}`,
+      })),
+    ];
+    const encodeSpy = vi.spyOn(TextEncoder.prototype, 'encode');
+
+    const result = compactMessagesForRelay(messages);
+    const encodedCharacters = encodeSpy.mock.calls.reduce(
+      (total, [input]) => total + (input?.length ?? 0),
+      0,
+    );
+    encodeSpy.mockRestore();
+
+    expect(encodedCharacters).toBeLessThan(2_500_000);
+    expect(result[0]).toBe(messages[0]);
+    expect(result.at(-1)).toBe(messages.at(-1));
+    expect(result.length).toBeLessThan(messages.length);
+  });
 });
 
 describe('streamChat', () => {

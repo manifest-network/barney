@@ -37,15 +37,12 @@ function isCounter(value) {
     && Number.isSafeInteger(value.spendMicroUsd) && value.spendMicroUsd >= 0;
 }
 
-function validateState(value, maxDailyIdentities) {
+function validateState(value) {
   if (!value || value.version !== LEDGER_VERSION || !/^\d{4}-\d{2}-\d{2}$/.test(value.window) || !isCounter(value.provider)) {
     throw new Error('Morpheus relay ledger is invalid; refusing to reset financial accounting');
   }
   if (!value.identities || typeof value.identities !== 'object' || Array.isArray(value.identities)) {
     throw new Error('Morpheus relay ledger identities are invalid; refusing to reset financial accounting');
-  }
-  if (Object.keys(value.identities).length > maxDailyIdentities) {
-    throw new Error('Morpheus relay ledger exceeds the configured identity capacity');
   }
   for (const [identity, usage] of Object.entries(value.identities)) {
     if (!/^[a-f0-9]{64}$/.test(identity) || !isCounter(usage)) {
@@ -53,6 +50,31 @@ function validateState(value, maxDailyIdentities) {
     }
   }
   return value;
+}
+
+function compareUsage(left, right) {
+  for (const field of ['spendMicroUsd', 'tokens', 'requests']) {
+    if (left[field] < right[field]) return -1;
+    if (left[field] > right[field]) return 1;
+  }
+  return 0;
+}
+
+function leastUsedIdentity(identities) {
+  let candidate;
+  for (const entry of Object.entries(identities)) {
+    if (!candidate || compareUsage(entry[1], candidate[1]) < 0) candidate = entry;
+  }
+  return candidate?.[0];
+}
+
+function trimLeastUsedIdentities(identities, capacity) {
+  const entries = Object.entries(identities);
+  const excess = entries.length - capacity;
+  if (excess <= 0) return;
+  // Array#sort is stable, so equally used entries are evicted oldest first.
+  entries.sort((left, right) => compareUsage(left[1], right[1]));
+  for (let index = 0; index < excess; index += 1) delete identities[entries[index][0]];
 }
 
 function safeAdd(left, right) {
@@ -114,25 +136,50 @@ export class QuotaLedger {
     this.writeState = writeState;
     this.state = undefined;
     this.queue = Promise.resolve();
+    // Admissions exist only for the lifetime of this process, just like active
+    // reservations. They prevent a late settlement from modifying a wallet
+    // entry that was evicted and subsequently admitted again.
+    this.identityAdmissions = new Map();
   }
 
   async init() {
     try {
       const raw = await readFile(this.config.stateFile, 'utf8');
-      this.state = validateState(JSON.parse(raw), this.config.maxDailyIdentities);
+      this.state = validateState(JSON.parse(raw));
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
       const initialState = emptyState(this.now());
       await this.writeState(this.config.stateFile, initialState);
       this.state = initialState;
     }
-    await this.rotateIfNeeded();
+    await this.normalizeLoadedState();
+    this.identityAdmissions = new Map(
+      Object.keys(this.state.identities).map((identity) => [identity, Symbol(identity)]),
+    );
   }
 
   withLock(operation) {
     const result = this.queue.then(operation);
     this.queue = result.catch(() => {});
     return result;
+  }
+
+  async normalizeLoadedState() {
+    return this.withLock(async () => {
+      if (!this.state) throw new Error('Morpheus relay ledger is not initialized');
+      const window = utcWindow(this.now());
+      let nextState = this.state;
+      if (nextState.window !== window) {
+        nextState = emptyState(this.now());
+      } else if (Object.keys(nextState.identities).length > this.config.maxDailyIdentities) {
+        nextState = structuredClone(nextState);
+        trimLeastUsedIdentities(nextState.identities, this.config.maxDailyIdentities);
+      }
+      if (nextState !== this.state) {
+        await this.writeState(this.config.stateFile, nextState);
+        this.state = nextState;
+      }
+    });
   }
 
   async rotateIfNeeded() {
@@ -143,6 +190,7 @@ export class QuotaLedger {
         const nextState = emptyState(this.now());
         await this.writeState(this.config.stateFile, nextState);
         this.state = nextState;
+        this.identityAdmissions.clear();
       }
     });
   }
@@ -151,11 +199,8 @@ export class QuotaLedger {
     return this.withLock(async () => {
       if (!this.state) throw new Error('Morpheus relay ledger is not initialized');
       const window = utcWindow(this.now());
-      const sourceState = this.state.window === window ? this.state : emptyState(this.now());
-      if (!sourceState.identities[identityKey]
-        && Object.keys(sourceState.identities).length >= this.config.maxDailyIdentities) {
-        throw new QuotaError(503, 'identity_capacity', 'Inference identity capacity is temporarily exhausted');
-      }
+      const rotated = this.state.window !== window;
+      const sourceState = rotated ? emptyState(this.now()) : this.state;
       const nextState = structuredClone(sourceState);
 
       const reservedTokens = safeAdd(inputTokens, outputTokens);
@@ -180,6 +225,17 @@ export class QuotaLedger {
         throw new QuotaError(503, 'provider_budget_exhausted', 'Inference is temporarily unavailable');
       }
 
+      const wasTracked = Object.hasOwn(nextState.identities, identityKey);
+      const identityAdmission = wasTracked
+        ? this.identityAdmissions.get(identityKey) ?? Symbol(identityKey)
+        : Symbol(identityKey);
+      let evictedIdentity;
+      if (!wasTracked
+        && Object.keys(nextState.identities).length >= this.config.maxDailyIdentities) {
+        evictedIdentity = leastUsedIdentity(nextState.identities);
+        if (evictedIdentity) delete nextState.identities[evictedIdentity];
+      }
+
       identity.requests = safeAdd(identity.requests, 1);
       identity.tokens = safeAdd(identity.tokens, reservedTokens);
       identity.spendMicroUsd = safeAdd(identity.spendMicroUsd, reservedIdentitySpendMicroUsd);
@@ -189,6 +245,9 @@ export class QuotaLedger {
       nextState.provider.spendMicroUsd = safeAdd(nextState.provider.spendMicroUsd, reservedSpendMicroUsd);
       await this.writeState(this.config.stateFile, nextState);
       this.state = nextState;
+      if (rotated) this.identityAdmissions.clear();
+      if (evictedIdentity) this.identityAdmissions.delete(evictedIdentity);
+      this.identityAdmissions.set(identityKey, identityAdmission);
 
       return Object.freeze({
         window,
@@ -199,6 +258,7 @@ export class QuotaLedger {
         reservedTokens,
         reservedIdentitySpendMicroUsd,
         reservedSpendMicroUsd,
+        identityAdmission,
       });
     });
   }
@@ -209,7 +269,6 @@ export class QuotaLedger {
       if (!this.state || this.state.window !== reservation.window) return;
       const nextState = structuredClone(this.state);
       const identity = nextState.identities[reservation.identityKey];
-      if (!identity) throw new Error('Morpheus relay reservation identity is missing');
 
       const actualTokens = safeAdd(usage.inputTokens, usage.outputTokens);
       const actualSpendMicroUsd = usage.spendMicroUsd ?? estimateSpendMicroUsd(
@@ -226,7 +285,10 @@ export class QuotaLedger {
           ? safeAdd(entry.spendMicroUsd, actualSpendMicroUsd - reservedSpendMicroUsd)
           : safeSubtract(entry.spendMicroUsd, reservedSpendMicroUsd - actualSpendMicroUsd);
       };
-      adjust(identity, reservation.reservedIdentitySpendMicroUsd);
+      if (identity
+        && this.identityAdmissions.get(reservation.identityKey) === reservation.identityAdmission) {
+        adjust(identity, reservation.reservedIdentitySpendMicroUsd);
+      }
       adjust(nextState.provider, reservation.reservedSpendMicroUsd);
       await this.writeState(this.config.stateFile, nextState);
       this.state = nextState;

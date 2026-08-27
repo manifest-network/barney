@@ -73,17 +73,96 @@ describe('QuotaLedger', () => {
     });
   });
 
-  it('bounds durable daily identity state and preserves access for known identities', async () => {
-    const ledger = new QuotaLedger({ ...config, maxDailyIdentities: 1 });
+  it('bounds durable identity state by evicting the least-used wallet instead of blocking admission', async () => {
+    const secondIdentity = 'b'.repeat(64);
+    const thirdIdentity = 'c'.repeat(64);
+    const ledger = new QuotaLedger({ ...config, maxDailyIdentities: 2 });
     await ledger.init();
     await ledger.reserve(IDENTITY, 1, 1);
-
-    await expect(ledger.reserve('b'.repeat(64), 1, 1)).rejects.toMatchObject({
-      status: 503,
-      reason: 'identity_capacity',
-    });
     await ledger.reserve(IDENTITY, 1, 1);
+    await ledger.reserve(secondIdentity, 1, 1);
+    await ledger.reserve(thirdIdentity, 1, 1);
+
+    expect(Object.keys(ledger.snapshot().identities)).toEqual([IDENTITY, thirdIdentity]);
+    expect(ledger.snapshot().provider).toEqual({
+      requests: 4,
+      tokens: 8,
+      spendMicroUsd: 12,
+    });
+    await expect(ledger.reserve(IDENTITY, 1, 1)).rejects.toMatchObject({
+      status: 429,
+      reason: 'identity_request_quota',
+    });
+  });
+
+  it('settles provider accounting safely after a reserved identity is evicted and readmitted', async () => {
+    const secondIdentity = 'b'.repeat(64);
+    const ledger = new QuotaLedger({ ...config, maxDailyIdentities: 1 });
+    await ledger.init();
+    const firstReservation = await ledger.reserve(IDENTITY, 1, 1);
+    await ledger.reserve(secondIdentity, 1, 1);
+    await ledger.reserve(IDENTITY, 1, 1);
+
+    await ledger.settle(firstReservation, { inputTokens: 0, outputTokens: 0 });
+
     expect(Object.keys(ledger.snapshot().identities)).toEqual([IDENTITY]);
+    expect(ledger.snapshot().identities[IDENTITY]).toEqual({
+      requests: 1,
+      tokens: 2,
+      spendMicroUsd: 3,
+    });
+    expect(ledger.snapshot().provider).toEqual({
+      requests: 3,
+      tokens: 4,
+      spendMicroUsd: 6,
+    });
+  });
+
+  it('compacts a current ledger when the configured tracking capacity is lowered', async () => {
+    const secondIdentity = 'b'.repeat(64);
+    await writeFile(stateFile, `${JSON.stringify({
+      version: 1,
+      window: '2026-08-27',
+      provider: { requests: 3, tokens: 6, spendMicroUsd: 9 },
+      identities: {
+        [IDENTITY]: { requests: 2, tokens: 4, spendMicroUsd: 6 },
+        [secondIdentity]: { requests: 1, tokens: 2, spendMicroUsd: 3 },
+      },
+    })}\n`, 'utf8');
+    const ledger = new QuotaLedger(
+      { ...config, maxDailyIdentities: 1 },
+      () => Date.parse('2026-08-27T12:00:00Z'),
+    );
+
+    await ledger.init();
+
+    expect(Object.keys(ledger.snapshot().identities)).toEqual([IDENTITY]);
+    expect(ledger.snapshot().provider).toEqual({ requests: 3, tokens: 6, spendMicroUsd: 9 });
+  });
+
+  it('rotates an over-capacity prior window after the tracking capacity is lowered', async () => {
+    await writeFile(stateFile, `${JSON.stringify({
+      version: 1,
+      window: '2026-08-26',
+      provider: { requests: 2, tokens: 4, spendMicroUsd: 6 },
+      identities: {
+        [IDENTITY]: { requests: 1, tokens: 2, spendMicroUsd: 3 },
+        ['b'.repeat(64)]: { requests: 1, tokens: 2, spendMicroUsd: 3 },
+      },
+    })}\n`, 'utf8');
+    const ledger = new QuotaLedger(
+      { ...config, maxDailyIdentities: 1 },
+      () => Date.parse('2026-08-27T12:00:00Z'),
+    );
+
+    await ledger.init();
+
+    expect(ledger.snapshot()).toEqual({
+      version: 1,
+      window: '2026-08-27',
+      provider: { requests: 0, tokens: 0, spendMicroUsd: 0 },
+      identities: {},
+    });
   });
 
   it('uses estimated tokens for identity quota and a separate worst-case spend reservation', async () => {

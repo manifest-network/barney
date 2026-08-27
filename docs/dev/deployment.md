@@ -38,6 +38,7 @@ supervisor still serves the SPA so non-AI functionality remains available.
 | `MORPHEUS_RELAY_IDENTITY_DAILY_TOKENS` | Per-wallet accounted tokens per UTC day |
 | `MORPHEUS_RELAY_IDENTITY_DAILY_SPEND_MICRO_USD` | Per-wallet spend cap in integer micro-USD |
 | `MORPHEUS_RELAY_PROVIDER_DAILY_BUDGET_MICRO_USD` | Provider-wide hard UTC-day cap in integer micro-USD |
+| `MORPHEUS_RELAY_MAX_DAILY_IDENTITIES` | Daily wallet-usage entries retained in the bounded least-used cache |
 | `MORPHEUS_RELAY_INPUT_MICRO_USD_PER_MILLION_TOKENS` | Conservative selected-model input rate |
 | `MORPHEUS_RELAY_OUTPUT_MICRO_USD_PER_MILLION_TOKENS` | Conservative selected-model output rate |
 | `PUBLIC_WEB3AUTH_CLIENT_ID` | Web3Auth client ID |
@@ -55,13 +56,19 @@ Request controls have bounded defaults and optional overrides:
 - per-identity and provider concurrency;
 - upstream-connect and total-stream deadlines;
 - challenge/session lifetimes and in-memory capacity;
-- maximum pseudonymous identities retained in each daily ledger window.
+- maximum pseudonymous identity-usage entries retained in each daily ledger window.
 
 Identity token and spend quotas use a configurable byte-per-token estimate. The
 provider-wide financial reservation separately charges a byte-level upper bound
 before provider access, then both settle down to authenticated provider usage.
 This avoids treating every byte as a normal identity token while preserving the
 hard provider budget.
+
+Per-wallet quotas are enforced while an identity remains in that bounded cache.
+When it is full, admitting a new wallet evicts the least-spending entry (oldest
+first on a tie) instead of letting disposable wallets lock out every unseen
+wallet until midnight. Provider counters are never evicted, so the provider-wide
+daily budget remains the authoritative financial ceiling under wallet churn.
 
 See `server/config.mjs` for names and hard validation maxima.
 

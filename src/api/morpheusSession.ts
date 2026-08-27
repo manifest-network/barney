@@ -34,7 +34,12 @@ interface CachedSession {
 
 let cachedSession: CachedSession | undefined;
 let sessionEpoch = 0;
-let inFlightSession: { address: string; epoch: number; promise: Promise<void> } | undefined;
+let inFlightSession: {
+  address: string;
+  epoch: number;
+  controller: AbortController;
+  promise: Promise<void>;
+} | undefined;
 
 export class MorpheusSessionError extends Error {
   constructor(message: string) {
@@ -95,7 +100,34 @@ function isFresh(address: string): boolean {
 export function invalidateMorpheusSession(): void {
   cachedSession = undefined;
   sessionEpoch += 1;
+  inFlightSession?.controller.abort();
   inFlightSession = undefined;
+}
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException('The operation was aborted', 'AbortError');
+}
+
+function waitForSession(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortError(signal));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(abortError(signal));
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      () => {
+        cleanup();
+        resolve();
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
 }
 
 async function establishMorpheusSession(
@@ -167,25 +199,35 @@ export async function ensureMorpheusSession(
   auth: MorpheusAuthContext,
   signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) throw abortError(signal);
   if (isFresh(auth.walletAddress)) return;
   const epoch = sessionEpoch;
   if (inFlightSession?.address === auth.walletAddress && inFlightSession.epoch === epoch) {
-    return inFlightSession.promise;
+    return waitForSession(inFlightSession.promise, signal);
   }
 
-  const promise = establishMorpheusSession(auth, signal).then((session) => {
+  // The deduplicated handshake has its own lifecycle. Each caller races it
+  // against that caller's signal below; wallet/session invalidation is the only
+  // event that cancels the shared network work for every waiter.
+  const controller = new AbortController();
+  const promise = establishMorpheusSession(auth, controller.signal).then((session) => {
     if (sessionEpoch !== epoch) {
       throw new MorpheusSessionError('The active wallet changed during inference authentication.');
     }
     cachedSession = session;
   });
-  const current = { address: auth.walletAddress, epoch, promise };
+  const current = {
+    address: auth.walletAddress,
+    epoch,
+    controller,
+    promise,
+  };
   inFlightSession = current;
-  try {
-    await promise;
-  } finally {
+  const clearInFlight = () => {
     if (inFlightSession === current) inFlightSession = undefined;
-  }
+  };
+  void promise.then(clearInFlight, clearInFlight);
+  return waitForSession(promise, signal);
 }
 
 async function timedFetch(
