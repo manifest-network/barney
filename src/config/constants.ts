@@ -76,7 +76,9 @@ export const AI_STREAM_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_STREAM_TIMEOUT_M
 /** Separate allowance for interactive wallet authentication before inference.
  * The relay's default challenge lifetime is 120 seconds; keeping this outside
  * AI_STREAM_TIMEOUT_MS prevents signing/MFA time from consuming the provider
- * response budget while still bounding a stalled initial generator step. */
+ * response budget while still bounding a stalled initial generator step. The
+ * session client separately stops signing before the relay-reported challenge
+ * expiry, with a submission safety margin. */
 export const AI_WALLET_AUTH_TIMEOUT_MS = 120_000;
 
 /** First stream iteration includes wallet authentication plus response headers. */

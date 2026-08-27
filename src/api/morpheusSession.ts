@@ -2,7 +2,7 @@ import { CHAIN_ID } from '../config/chain';
 import type { SignResult } from '../ai/toolExecutor/types';
 
 const API_BASE = '/api/morpheus';
-const EXPIRY_SKEW_MS = 5_000;
+const EXPIRY_SAFETY_MARGIN_MS = 5_000;
 
 export interface MorpheusAuthContext {
   walletAddress: string;
@@ -94,7 +94,7 @@ function validateSession(value: SessionResponse, address: string): CachedSession
 function isFresh(address: string): boolean {
   return cachedSession?.address === address
     && cachedSession.chainId === CHAIN_ID
-    && cachedSession.expiresAtMs > Date.now() + EXPIRY_SKEW_MS;
+    && cachedSession.expiresAtMs > Date.now() + EXPIRY_SAFETY_MARGIN_MS;
 }
 
 export function invalidateMorpheusSession(): void {
@@ -108,6 +108,36 @@ function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
     : new DOMException('The operation was aborted', 'AbortError');
+}
+
+async function signChallengeBeforeExpiry(
+  auth: MorpheusAuthContext,
+  challenge: ChallengeResponse,
+): Promise<SignResult> {
+  const challengeTtlMs = challenge.expiresInSeconds * 1000;
+  const safetyMarginMs = Math.min(EXPIRY_SAFETY_MARGIN_MS, challengeTtlMs / 2);
+  const timeoutMs = challengeTtlMs - safetyMarginMs;
+  const timeoutError = () => new MorpheusSessionError(
+    'Session timeout: the wallet signature did not complete before the challenge deadline. Please try again.',
+  );
+  if (timeoutMs <= 0) throw timeoutError();
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      auth.signChallenge(challenge.message),
+      new Promise<never>((_, reject) => {
+        // The relay's relative TTL avoids browser/server clock skew. End the
+        // signing wait early so the session request has time to reach it.
+        timeoutId = setTimeout(
+          () => reject(timeoutError()),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
 }
 
 function waitForSession(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
@@ -172,7 +202,7 @@ async function establishMorpheusSession(
     throw new MorpheusSessionError('The inference authentication challenge was invalid.');
   }
 
-  const signed = await auth.signChallenge(challenge.message);
+  const signed = await signChallengeBeforeExpiry(auth, challenge);
   if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
 
   const sessionResponse = await fetch(`${API_BASE}/auth/session`, {

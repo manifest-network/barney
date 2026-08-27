@@ -128,8 +128,10 @@ inference.)
 ### "Session timeout"
 
 Wallet authentication or the initial AI response exceeded its combined setup
-allowance. Finish the wallet signature/MFA prompt and resend the message. A
-challenge left open past the relay's expiry must be signed again.
+allowance. Finish the wallet signature/MFA prompt and resend the message. Barney
+also stops waiting up to five seconds before the relay-reported challenge expiry
+so there is time to submit the signature; dismiss an old signing prompt before
+retrying.
 
 If timeouts persist:
 

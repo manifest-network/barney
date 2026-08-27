@@ -12,12 +12,13 @@ import {
 
 const ADDRESS = 'manifest1wallet';
 const EXPIRES_AT = new Date(Date.now() + 60_000).toISOString();
+const SIGNED_CHALLENGE = {
+  pub_key: { type: 'tendermint/PubKeySecp256k1', value: 'pub-key' },
+  signature: 'signature',
+};
 const AUTH = {
   walletAddress: ADDRESS,
-  signChallenge: vi.fn().mockResolvedValue({
-    pub_key: { type: 'tendermint/PubKeySecp256k1', value: 'pub-key' },
-    signature: 'signature',
-  }),
+  signChallenge: vi.fn().mockResolvedValue(SIGNED_CHALLENGE),
 };
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -78,6 +79,42 @@ describe('Morpheus wallet session client', () => {
 
     await ensureMorpheusSession(AUTH);
     expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops wallet signing before the relay challenge expires', async () => {
+    vi.useFakeTimers();
+    let resolveSignature: ((signature: typeof SIGNED_CHALLENGE) => void) | undefined;
+    const signChallenge = vi.fn(() => new Promise<typeof SIGNED_CHALLENGE>((resolve) => {
+      resolveSignature = resolve;
+    }));
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse(401, { error: 'missing' }))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        challengeId: 'challenge-id',
+        message: 'chain-bound challenge',
+        address: ADDRESS,
+        chainId: 'manifest-test',
+        expiresAt: EXPIRES_AT,
+        expiresInSeconds: 10,
+      })));
+
+    const session = ensureMorpheusSession({ walletAddress: ADDRESS, signChallenge });
+    let rejected = false;
+    void session.catch(() => { rejected = true; });
+    const rejection = expect(session).rejects.toThrow(
+      'Session timeout: the wallet signature did not complete before the challenge deadline.',
+    );
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(rejected).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await rejection;
+    expect(rejected).toBe(true);
+    resolveSignature?.(SIGNED_CHALLENGE);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it('reuses an unexpired server session after a page-local cache miss', async () => {
