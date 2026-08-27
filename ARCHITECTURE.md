@@ -8,7 +8,7 @@ Barney is a single-page React application that:
 
 1. Lets users deploy and manage containerized apps on Manifest Network through a conversational interface.
 2. Hides blockchain mechanics behind familiar concepts (apps, credits, providers).
-3. Runs entirely in the browser — there is no Barney backend. The only server-side component is an nginx reverse proxy that injects the Morpheus API key.
+3. Keeps application/tool execution in the browser while a minimal server-side relay authenticates and accounts operator-funded Morpheus inference.
 
 ## High-level shape
 
@@ -29,15 +29,19 @@ Barney is a single-page React application that:
 │                                   │                                         │
 │   ┌──────────────┐   ┌────────────┴─────────────┐    ┌──────────────────┐   │
 │   │ /api/morpheus│   │   manifest-mcp-core /    │    │  Provider Fetch  │   │
-│   │   (proxy)    │   │   manifestjs / cosmjs    │    │     adapter      │   │
+│   │   (client)   │   │   manifestjs / cosmjs    │    │     adapter      │   │
 │   └──────┬───────┘   └────────────┬─────────────┘    └─────────┬────────┘   │
 └──────────┼────────────────────────┼─────────────────────────────┼───────────┘
            │                        │                             │
-   ┌───────▼───────┐        ┌───────▼─────────┐         ┌─────────▼────────┐
-   │  Morpheus API │        │   Manifest      │         │  Provider (Fred) │
-   │  (LLM)        │        │   chain (RPC +  │         │   HTTP + WS      │
-   │               │        │   REST/LCD)     │         │                  │
-   └───────────────┘        └─────────────────┘         └──────────────────┘
+   ┌───────▼──────────┐      ┌───────▼─────────┐         ┌─────────▼────────┐
+   │ Auth + quota     │      │   Manifest      │         │  Provider (Fred) │
+   │ Morpheus relay   │      │   chain (RPC +  │         │   HTTP + WS      │
+   └───────┬──────────┘      │   REST/LCD)     │         │                  │
+           │                 └─────────────────┘         └──────────────────┘
+   ┌───────▼──────────┐
+   │  Morpheus API    │
+   │  (LLM)           │
+   └──────────────────┘
 ```
 
 The **Morpheus API** never returns a manifest or a signed transaction. It returns *tool calls*. Barney executes those tool calls locally — building manifests, signing on-chain messages, uploading payloads, and polling providers — and feeds the results back to the model.
@@ -138,14 +142,19 @@ Thin wrappers over external libraries with Barney-specific behaviour kept local.
 | `providerFetchAdapter.ts` | `fetch` | Dev CORS proxy injection (`X-Proxy-Target`) and prod SSRF validation |
 | `providerFetch.ts` | — | `validateProviderUrl`, `normalizeBaseUrl` |
 | `morpheus.ts` | — | OpenAI-compatible SSE client; talks to `/api/morpheus/...` proxy only |
+| `morpheusSession.ts` | wallet ADR-036 signer | Challenge exchange, HttpOnly-session reuse, wallet/chain headers, one safe 401 retry |
 | `faucet.ts` | `@manifest-network/manifest-mcp-chain` | `faucetDripAndVerify` (drip + balance polling) |
 | `queryClient.ts` | manifestjs LCD query client | Cached singleton, `lcdConvert`, `fixEnumField` |
 | `config.ts` | — | `REST_URL`, `RPC_ENDPOINT`, `DENOMS`, `getDenomMetadata` |
 | `utils.ts` | — | `withRetry` (exponential backoff for transient errors) |
 
-The browser never speaks directly to the Morpheus API. All requests go through `/api/morpheus/...` — proxied by nginx in production and by the Rsbuild dev server in development. Both inject `Authorization: Bearer ${MORPHEUS_API_KEY}` server-side.
+The browser never speaks directly to the Morpheus API. In both environments it calls the same Node relay: nginx proxies to it in production and Rsbuild proxies to it in development. Only the relay verifies the wallet/chain session, reserves quota, and injects the provider credential upstream.
 
-### 5. App registry (`src/registry/appRegistry.ts`)
+### 5. Paid inference relay (`server/`)
+
+The dependency-free Node relay owns the only paid route. `auth.mjs` verifies one-time ADR-036 challenges and server-side sessions; `validation.mjs` rebuilds a bounded request; `ledger.mjs` durably reserves/settles identity and provider spend; `relay.mjs` enforces concurrency/deadlines and streams sanitized SSE; `metrics.mjs` exposes only aggregate telemetry. Nginx is a same-container front proxy and never owns the key.
+
+### 6. App registry (`src/registry/appRegistry.ts`)
 
 A localStorage-backed mapping of `name → lease` scoped per wallet address (`barney-apps-{address}`). Provides a friendly identifier layer on top of raw lease UUIDs. Manifests stored in the registry are sanitized — secret-shaped env var values are scrubbed before write, and empty values trigger auto-generation on re-deploy. Per-wallet keys are isolated by address but persist forever in localStorage; only in-memory state (the tool cache and `deployProgress`) is cleared when the connected wallet changes.
 
@@ -163,18 +172,20 @@ ChatPanel → store.sendMessage(content)
 sendMessage (aiActions/sendMessage.ts):
   1. Append user message to messages
   2. Build assistant placeholder (isStreaming: true)
-  3. POST /api/morpheus/chat/completions  (SSE)
-       └─→ nginx adds Authorization: Bearer …
-  4. Iterate stream chunks via processStreamWithTimeout
+  3. Ensure wallet/chain relay session
+       └─→ one-time ADR-036 challenge when no fresh HttpOnly session exists
+  4. POST /api/morpheus/chat/completions  (SSE)
+       └─→ relay authenticates, reserves quota, then adds provider Authorization
+  5. Iterate stream chunks via processStreamWithTimeout
        ├─ content   → scheduleStreamingUpdate (RAF-coalesced)
        ├─ tool_call → push to pendingToolCalls
        └─ done      → break
-  5. processToolCalls(pendingToolCalls)
+  6. processToolCalls(pendingToolCalls)
        └─ for each call:
             executeTool(name, args, options, payload?)
             ↳ returns ToolResult (data | requiresConfirmation | error)
-  6. Append tool results as tool-role messages
-  7. If iterations < AI_MAX_TOOL_ITERATIONS, continue the loop
+  7. Append tool results as tool-role messages
+  8. If iterations < AI_MAX_TOOL_ITERATIONS, continue the loop
    │
    ▼
 UI updates incrementally via Zustand subscriptions
@@ -305,17 +316,17 @@ The release artifact is a Docker image (`ghcr.io/manifest-network/barney`; singl
 
 1. **Stage 1** — `node:22-alpine3.21` builds the SPA (`npm ci --legacy-peer-deps && npm run build-release`). Version is stamped from `RELEASE_VERSION` (set by CI from a git tag) or, when unset, the script strips any prerelease suffix from `package.json`'s `version` and appends the short git commit hash (e.g. `0.1.0` → `0.1.0-a1b2c3d`).
 2. **Stage 2** — `nginx:1.30-alpine` source-builds the Brotli dynamic modules against the matching nginx version (Alpine's prebuilt `nginx-mod-http-brotli` targets a different ABI).
-3. **Stage 3** — `nginx:1.30-alpine` runtime: copies `dist/`, the Brotli modules, and `docker/{env.sh,nginx.conf.template,config.js.template}`. `env.sh` is the entrypoint.
+3. **Stage 3** — `nginx:1.30-alpine` runtime: installs Node, copies `dist/`, `server/`, the Brotli modules, and `docker/{env.sh,nginx.conf.template,config.js.template}`. `env.sh` is the entrypoint.
 
 At container startup, `env.sh`:
 
 1. Validates `PUBLIC_MORPHEUS_URL` (required, no `?` or `#`).
-2. Extracts IPv4 DNS resolvers from `/etc/resolv.conf` for nginx's `resolver` directive (with `1.1.1.1 8.8.8.8` fallback).
-3. Renders `nginx.conf.template` with `MORPHEUS_API_KEY`, `PUBLIC_MORPHEUS_URL`, and `NGINX_RESOLVERS` substituted.
-4. Renders `config.js.template` with all `PUBLIC_*` variables substituted.
-5. Validates the rendered nginx config (`nginx -t`) before exec'ing nginx.
+2. Renders secret-free nginx configuration from only the trusted-proxy CIDR and local relay port.
+3. Renders `config.js.template` with public browser variables only.
+4. Validates nginx, then executes the Node supervisor.
+5. The supervisor validates the complete relay policy, loads the persistent ledger, binds the relay, strips relay secrets from nginx's child environment, and starts nginx.
 
-The `/api/morpheus/...` location uses a `proxy_pass` *variable* with `resolver … valid=30s` so nginx re-resolves the upstream IP every 30 s. Plain literal hostnames cache forever at config-load time.
+The image exposes nginx port 80. Relay port 8081 stays on the container/private Docker network for nginx and Prometheus; the quota ledger directory must be mounted persistently.
 
 See [docs/dev/deployment.md](docs/dev/deployment.md) for production guidance.
 

@@ -9,6 +9,10 @@ vi.mock('../config/runtimeConfig', async (importOriginal) => {
   return { ...actual, runtimeConfig: { ...actual.runtimeConfig, PUBLIC_MORPHEUS_MODEL: 'test-model' } };
 });
 
+vi.mock('./morpheusSession', () => ({
+  fetchWithMorpheusSession: vi.fn((_auth, input, init) => fetch(input, init)),
+}));
+
 // Must import after mocks
 import { serializeMessagesForApi, streamChat } from './morpheus';
 import type { ChatApiMessage, ToolCall, StreamChunk } from './morpheus';
@@ -57,6 +61,10 @@ async function collectChunks(options: Parameters<typeof streamChat>[0]): Promise
 
 const BASE_OPTIONS = {
   messages: [{ role: 'user' as const, content: 'hello' }],
+  auth: {
+    walletAddress: 'manifest1test',
+    signChallenge: vi.fn(),
+  },
 };
 
 describe('serializeMessagesForApi', () => {
@@ -398,7 +406,7 @@ describe('checkApiHealth', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns true when models endpoint responds ok', async () => {
+  it('returns true when relay health endpoint responds ok', async () => {
     const { checkApiHealth } = await import('./morpheus');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
 
@@ -406,7 +414,7 @@ describe('checkApiHealth', () => {
     expect(result).toBe(true);
 
     const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toBe('/api/morpheus/models');
+    expect(fetchCall[0]).toBe('/api/morpheus/healthz');
     // No Authorization header — proxy adds it server-side
     expect((fetchCall[1]?.headers as Record<string, string> | undefined)).toBeUndefined();
   });

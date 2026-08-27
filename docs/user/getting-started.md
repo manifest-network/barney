@@ -42,7 +42,7 @@ Barney stores a small set of values in `localStorage`. Some are global to the br
 - Your registered apps and their manifests, with secret-shaped env values scrubbed (`barney-apps-{address}`)
 - One-shot account-setup flag (`barney-refill-{address}`)
 
-Nothing else leaves the browser unencrypted. The only outbound calls are to the configured Manifest RPC/REST node, the providers your apps run on, and the Morpheus inference API (proxied through the Barney server so your wallet never sees the API key).
+Nothing else leaves the browser unencrypted. The only outbound calls are to the configured Manifest RPC/REST node, the providers your apps run on, and Barney's authenticated Morpheus relay. On the first chat (and after session expiry/restart), your wallet signs a short-lived chain/address-bound challenge. The resulting session is an HttpOnly cookie; the browser never sees the operator API key.
 
 ## First-time account setup
 

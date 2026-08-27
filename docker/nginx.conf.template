@@ -1,12 +1,18 @@
-# --- Morpheus proxy abuse controls (ENG-571) -------------------------------
-# The /api/morpheus/ location injects the operator's paid API key server-side,
-# and this is a static SPA with no login, so the endpoint is reachable by
-# anyone who can load the frontend. These http-context directives (this file is
-# included inside `http {}`) cap abuse. envsubst in env.sh is given an explicit
-# variable list, so the nginx runtime vars below ($binary_remote_addr, etc.)
-# are left untouched.
+# --- Morpheus relay defense in depth (ENG-571 + ENG-831) -------------------
+# The paid key is owned exclusively by the localhost Node relay. Nginx keeps
+# origin, IP-rate, connection, and body-size controls in front of that relay,
+# but wallet authentication and financial accounting are enforced downstream.
+# This file is included inside `http {}`. envsubst receives an explicit list so
+# nginx runtime variables ($binary_remote_addr, etc.) remain untouched.
 #
-# Rate + concurrency cap per client IP — the real mitigation for billing-DoS.
+# Restore the external client address only when the immediate peer belongs to
+# the explicitly configured Traefik/Docker proxy CIDR. Identity quotas never
+# trust this address; it is only a coarse abuse-control key.
+set_real_ip_from ${BARNEY_TRUSTED_PROXY_CIDR};
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;
+
+# Coarse rate + concurrency cap per validated client IP.
 limit_req_zone  $binary_remote_addr zone=morpheus_req:10m  rate=10r/s;
 limit_conn_zone $binary_remote_addr zone=morpheus_conn:10m;
 #
@@ -74,30 +80,15 @@ server {
         add_header X-Content-Type-Options "nosniff" always;
     }
 
-    # Morpheus API reverse proxy — injects auth header server-side.
-    #
-    # Uses a regex location so we can capture the path tail and put the full
-    # upstream URL in a `proxy_pass` variable. The variable form enables
-    # runtime DNS re-resolution via nginx's resolver; with `valid=30s`, nginx
-    # caches the answer for up to 30s before refreshing it. With a literal
-    # hostname, nginx caches the upstream IP forever at config-load time,
-    # which broke prod whenever api.mor.org rotated its IP. The capture
-    # group + $is_args$args lets us forward both the path and query string
-    # without splitting PUBLIC_MORPHEUS_URL apart in env.sh.
-    #
-    # NAMED capture ($mpath), not positional $1: the $morpheus_origin_host map
-    # below runs a regex on $http_origin whose capture would overwrite the
-    # shared positional $1 from this location, corrupting the upstream path for
-    # every request that carries an Origin header — i.e. every browser request
-    # (ENG-587). Named captures occupy their own slot and survive.
-    location ~ ^/api/morpheus/(?<mpath>.*)$ {
-        # Fast-fail when no API key is configured (envsubst replaces this at startup)
-        set $morpheus_key "${MORPHEUS_API_KEY}";
-        if ($morpheus_key = '') {
-            return 503;
-        }
+    # Keep the namespace root out of the SPA fallback; it is not an API route.
+    location = /api/morpheus {
+        return 404;
+    }
 
-        # Abuse controls (ENG-571). `if` with `return` is a safe use of if.
+    # Authenticated/accounted Morpheus relay. The original path is preserved;
+    # the relay has an exact route/method allowlist and is the only process that
+    # can read the provider credential. `if` with `return` is a safe nginx use of if.
+    location ^~ /api/morpheus/ {
         # Reject browser requests carrying a cross-site/malformed Origin.
         if ($morpheus_origin_host != $http_host) {
             return 403;
@@ -107,23 +98,19 @@ server {
         limit_conn   morpheus_conn 8;
         limit_req_status  429;
         limit_conn_status 429;
+        client_max_body_size 4m;
 
-        resolver ${NGINX_RESOLVERS} valid=30s ipv6=off;
-        resolver_timeout 5s;
-
-        set $morpheus_upstream "${PUBLIC_MORPHEUS_URL}/$mpath$is_args$args";
-        proxy_pass $morpheus_upstream;
-        proxy_ssl_server_name on;
-        proxy_set_header Authorization "Bearer ${MORPHEUS_API_KEY}";
-        proxy_set_header Host $proxy_host;
+        proxy_pass http://127.0.0.1:${MORPHEUS_RELAY_PORT};
+        proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
 
         # SSE streaming support
         proxy_buffering off;
         proxy_cache off;
-        proxy_read_timeout 300s;
+        proxy_read_timeout 910s;
+        proxy_send_timeout 30s;
         proxy_http_version 1.1;
         proxy_set_header Connection '';
     }

@@ -81,6 +81,7 @@ function ctx(overrides: Record<string, unknown> = {}) {
         getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
         getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),
       },
+      relayAuth: { signChallenge: vi.fn() },
     },
     appRegistry: makeRegistry([
       { name: 'test-app', leaseUuid: LEASE, size: 'small', providerUuid: 'p1', providerUrl: PROVIDER_URL, createdAt: 0, status: 'deploying' } as AppEntry,

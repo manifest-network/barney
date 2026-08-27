@@ -155,9 +155,15 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
 
     const updatedMessages = get().messages.filter((m) => m.id !== newAssistantMessageId);
 
+    const activeAddress = get().address;
+    const activeSigning = get().signing;
     const stream = streamChat({
       messages: toChatApiMessages(updatedMessages, get().address, get().skuTiers.tiers),
       signal: get().abortController?.signal,
+      auth: activeAddress && activeSigning ? {
+        walletAddress: activeAddress,
+        signChallenge: activeSigning.relayAuth.signChallenge,
+      } : undefined,
     });
 
     const streamResult = await processStreamWithTimeout(
@@ -219,4 +225,3 @@ export function cancelActionFn(get: Get, set: Set): void {
   );
   set({ messages: updated });
 }
-

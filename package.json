@@ -7,7 +7,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "dev": "rsbuild dev",
+    "dev": "node --env-file-if-exists=.env.local server/dev.mjs",
     "build": "tsc -b && rsbuild build",
     "build-release": "node scripts/update-version.cjs && tsc -b && rsbuild build && node scripts/check-bundle.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",

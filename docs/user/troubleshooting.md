@@ -117,21 +117,35 @@ Run `lease_history` to see whether the lease state changed (most likely `closed`
 
 ### "Stream timed out"
 
-The Morpheus API stream stalled for longer than `AI_STREAM_TIMEOUT_MS` (default 30 s). The chat surface does not auto-retry — resend the message. (The `AI_MAX_RETRIES` / `withRetry` pair applies to blockchain API calls during tool execution, not to the Morpheus chat stream itself.)
+The browser did not receive response headers within `AI_STREAM_TIMEOUT_MS` (default 30 s), or the server relay reached its configured total-stream deadline. The chat surface does not auto-retry a paid request—resend the message. (`AI_MAX_RETRIES` applies to blockchain tool calls, not Morpheus inference.)
 
 If timeouts persist:
 
 - Check the Morpheus API status.
-- For self-hosted instances, increase `PUBLIC_AI_STREAM_TIMEOUT_MS` (max 120 s) on the container.
+- For self-hosted instances, inspect both `PUBLIC_AI_STREAM_TIMEOUT_MS` and `MORPHEUS_RELAY_MAX_STREAM_SECONDS`; do not raise either without reviewing the provider budget risk.
 
 ### "Connection lost" / "Disconnected"
 
-Barney runs a periodic health check against the Morpheus proxy (`AI_HEALTH_CHECK_INTERVAL_MS`, 60 s). When checks fail, the badge in the chat header turns red and the interval backs off (capped at `AI_HEALTH_CHECK_MAX_BACKOFF` × the base interval).
+Barney runs a periodic liveness check against its server relay (`AI_HEALTH_CHECK_INTERVAL_MS`, 60 s). When checks fail, the badge in the chat header turns red and the interval backs off (capped at `AI_HEALTH_CHECK_MAX_BACKOFF` × the base interval). This free health check deliberately does not spend tokens or test the provider account.
 
 If you see persistent disconnection on a self-hosted instance, the most common causes are:
 
-- `MORPHEUS_API_KEY` was rotated and the container wasn't restarted.
-- nginx cached a stale upstream IP. The `nginx.conf.template` uses `resolver … valid=30s` to refresh DNS every 30 s. Older configs without the resolver directive cache the IP forever — restart the container until the rendered config has the directive.
+- The container failed closed on missing quota/pricing configuration or an unreadable/corrupt durable ledger.
+- `MORPHEUS_API_KEY` was rotated without recreating the container.
+- The relay cannot resolve/reach the upstream, or its health-checked nginx route is unavailable.
+
+### Wallet authentication or quota error
+
+The first chat requires a wallet signature. A restart, one-hour session expiry, logout, disconnect, or wallet switch requires another one. Reject the signing prompt if the JSON challenge does not show the expected Barney audience, chain ID, and active address.
+
+Self-hosted relay HTTP codes are intentionally coarse:
+
+- `401` — no current wallet session; authenticate again.
+- `403` — wallet, chain, origin, or model does not match server policy.
+- `429` — the wallet reached a daily request/token/spend or concurrency limit.
+- `503` — the operator-wide daily budget/concurrency limit is reached, or the relay is unavailable.
+
+The operator must inspect aggregate metrics. Clearing site data cannot reset a server quota, and deleting the server ledger is unsafe because it can permit additional same-day spend.
 
 ### "Tool call iteration limit reached"
 

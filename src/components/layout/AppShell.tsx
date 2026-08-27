@@ -14,6 +14,7 @@ import { AccountSetupOverlay } from './AccountSetupOverlay';
 import { logError } from '../../utils/errors';
 import { CHAIN_NAME } from '../../config/chain';
 import { invalidateReservedDomainSuffixesCache } from '../../api/billingParams';
+import { invalidateMorpheusSession, logoutMorpheusSession } from '../../api/morpheusSession';
 
 const LandingPage = lazy(() =>
   import('../landing/LandingPage').then(m => ({ default: m.LandingPage }))
@@ -50,6 +51,22 @@ export function AppShell() {
   // wallet, possibly different chain → different governance Params).
   useEffect(() => {
     invalidateReservedDomainSuffixesCache();
+  }, [address]);
+
+  // A relay session is wallet-bound. Explicit disconnects and wallet switches
+  // revoke the old HttpOnly session before the next inference request can mint
+  // one for the new address.
+  const previousRelayAddressRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const previousAddress = previousRelayAddressRef.current;
+    previousRelayAddressRef.current = address;
+    if (previousAddress === address) return;
+    invalidateMorpheusSession();
+    if (previousAddress) {
+      void logoutMorpheusSession().catch((error) => {
+        logError('AppShell.morpheusLogout', error);
+      });
+    }
   }, [address]);
 
   // Sync wallet state with AI context.

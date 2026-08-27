@@ -109,7 +109,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
       iteration++;
 
       const currentMessages = get().messages.filter((m) => m.id !== currentAssistantMessageId);
-      const { address, skuTiers } = get();
+      const { address, signing, skuTiers } = get();
       const apiMessages = toChatApiMessages(currentMessages, address, skuTiers.tiers);
       const tools = buildAITools(skuTiers.tiers);
 
@@ -117,6 +117,10 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
         messages: apiMessages,
         tools,
         signal: get().abortController?.signal,
+        auth: address && signing ? {
+          walletAddress: address,
+          signChallenge: signing.relayAuth.signChallenge,
+        } : undefined,
       });
 
       let totalTimeoutId: ReturnType<typeof setTimeout> | undefined;

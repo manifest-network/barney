@@ -165,26 +165,17 @@ export default defineConfig({
   server: {
     proxy: {
       '/api/morpheus': (() => {
-        const morpheusUrl = process.env.PUBLIC_MORPHEUS_URL || 'https://api.mor.org/api/v1';
-        const morpheusApiKey = process.env.MORPHEUS_API_KEY || '';
-        const parsed = new URL(morpheusUrl);
-        // pathRewrite: strip /api/morpheus, replace with upstream pathname
-        const upstreamPath = parsed.pathname.replace(/\/+$/, '');
+        // server/dev.mjs starts the same authenticated/accounted relay used in
+        // production. Rsbuild only forwards same-origin browser requests to it;
+        // it never receives or injects the paid provider key itself.
+        const relayPort = process.env.MORPHEUS_RELAY_PORT || '8081';
+        if (!/^\d+$/.test(relayPort)) {
+          throw new Error('MORPHEUS_RELAY_PORT must be a numeric TCP port');
+        }
         return {
-          target: parsed.origin,
-          changeOrigin: true,
-          secure: true,
-          pathRewrite: { '^/api/morpheus': upstreamPath },
-          // Fast-fail when no API key is configured (mirrors nginx 503 guard)
-          bypass: (_req: unknown, res: { writeHead: (s: number, h?: Record<string, string>) => void; end: (b?: string) => void }): undefined => {
-            if (!morpheusApiKey) {
-              res.writeHead(503, { 'Content-Type': 'text/plain' });
-              res.end('Morpheus API key (MORPHEUS_API_KEY) not configured');
-            }
-          },
-          onProxyReq: (proxyReq: { setHeader: (name: string, value: string) => void }) => {
-            proxyReq.setHeader('Authorization', `Bearer ${morpheusApiKey}`);
-          },
+          target: `http://127.0.0.1:${relayPort}`,
+          changeOrigin: false,
+          secure: false,
         };
       })(),
       '/proxy-provider': {

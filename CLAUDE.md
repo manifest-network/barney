@@ -444,12 +444,14 @@ Client-side variables: `PUBLIC_REST_URL`, `PUBLIC_RPC_URL`, `PUBLIC_MORPHEUS_MOD
 `PUBLIC_SKU_SPECS` is special: it's a JSON-string env (e.g. `'{"docker-micro":{"cores":0.5,"ramMB":512,"diskGB":1}, ...}'`) parsed by `src/config/skuSpecs.ts`'s `parseSkuSpecs()` into a `Record<string, {cores, ramMB, diskGB}>`. The chain owns SKU names + prices; this env owns resource specs. The resolved tier list is the chain ∩ env intersection (see `src/api/skuTiers.ts`). Two distinct error diagnostics by source: empty / unparseable / all-entries-invalid `PUBLIC_SKU_SPECS` short-circuits synchronously to `error` with `"PUBLIC_SKU_SPECS is empty or invalid — no SKU specs configured."` (no chain call); a non-empty spec map with no chain SKU intersection lands in `error` after the chain fetch with `"No tiers available — check PUBLIC_SKU_SPECS and chain SKU catalog."` Both leave the slice with empty `tiers`; deploy buttons stay enabled, and a deploy attempt surfaces the executor's inline `Tier catalog unavailable` chat error with a `Retry` control (the `/help` table also shows the error). Tier order in the resolved list follows env spec **insertion order** and drives the AI tool's `size.enum`, the `/help` table, and the system-prompt tier block — but the **default** deploy size is the cheapest available tier (lowest `pricePerHour`, picked via `getCheapestTier(tiers)`), not `tiers[0]`. Insertion order is for presentation; price wins for defaults.
 
 Server-side variables (never shipped to browser):
-- `MORPHEUS_API_KEY` — injected by nginx (prod) or rsbuild dev proxy into upstream Morpheus API requests via `Authorization: Bearer` header
-- `PUBLIC_MORPHEUS_URL` — upstream Morpheus API URL used as proxy target by nginx/rsbuild dev proxy
+- `MORPHEUS_API_KEY` — read only by the authenticated Node relay and injected into its one allowlisted upstream request
+- `PUBLIC_MORPHEUS_URL` — upstream Morpheus API base URL read by the relay
+- `MORPHEUS_RELAY_*` — origin/session/request/concurrency/deadline policy plus required identity/provider quotas, pricing, and durable state path
 
-### Morpheus API Proxy
+### Morpheus API Relay
 
 The client never calls the Morpheus API directly. All AI requests go through `/api/morpheus/...` (relative to origin):
 
-- **Production**: nginx reverse-proxies `/api/morpheus/` to `$PUBLIC_MORPHEUS_URL`, injecting `Authorization: Bearer $MORPHEUS_API_KEY` server-side. Configured via `docker/nginx.conf.template` (envsubst'd at container startup by `docker/env.sh`).
-- **Development**: rsbuild dev proxy does the same via `onProxyReq` callback in `rsbuild.config.ts`, reading `PUBLIC_MORPHEUS_URL` and `MORPHEUS_API_KEY` from `.env.local`.
+- **Relay**: `server/` verifies a one-time ADR-036 wallet/chain challenge, issues an HttpOnly session, validates the sole paid route/model/body, durably reserves identity/provider quota, injects the key, and bounds concurrency/streaming. Missing usage or uncertain failures keep their reservation.
+- **Production**: nginx applies coarse IP/origin/body controls and proxies `/api/morpheus/` to the same-container relay on localhost. Its generated config and child environment contain no relay secret.
+- **Development**: Rsbuild proxies `/api/morpheus` to that same relay on localhost. It never reads or injects the provider key.

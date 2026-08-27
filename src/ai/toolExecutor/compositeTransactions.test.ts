@@ -148,6 +148,7 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
         getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
         getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),
       },
+      relayAuth: { signChallenge: vi.fn() },
     },
     tiers: SAMPLE_TIERS,
     ...overrides,

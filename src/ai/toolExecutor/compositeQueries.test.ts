@@ -947,6 +947,7 @@ const mockSigning = {
     getAuthToken: vi.fn().mockResolvedValue('mock-auth-token'),
     getLeaseDataAuthToken: vi.fn().mockResolvedValue('mock-lease-data-token'),
   },
+  relayAuth: { signChallenge: vi.fn() },
 };
 
 describe('executeGetLogs', () => {

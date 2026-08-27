@@ -39,6 +39,10 @@ export interface SigningContext {
   providerAuth: ProviderAuthPort;
   /** Address-BOUND adapter over the SAME `providerAuth` instance (never a 2nd createProviderAuth). */
   authTokens: AuthTokens;
+  /** Wallet-bound signer for the Barney Morpheus relay's chain-scoped session challenge. */
+  relayAuth: {
+    signChallenge: (message: string) => Promise<SignResult>;
+  };
 }
 
 export interface PayloadAttachment {

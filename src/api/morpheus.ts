@@ -7,6 +7,7 @@
 import { logError } from '../utils/errors';
 import { HEALTH_CHECK_TIMEOUT_MS, AI_STREAM_TIMEOUT_MS } from '../config/constants';
 import { runtimeConfig } from '../config/runtimeConfig';
+import { fetchWithMorpheusSession, type MorpheusAuthContext } from './morpheusSession';
 
 export interface ChatApiMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -46,6 +47,7 @@ export interface StreamChatOptions {
   messages: ChatApiMessage[];
   tools?: ToolDefinition[];
   signal?: AbortSignal;
+  auth?: MorpheusAuthContext;
 }
 
 /**
@@ -157,8 +159,13 @@ async function* parseSSE(
 export async function* streamChat(
   options: StreamChatOptions
 ): AsyncGenerator<StreamChunk> {
-  const { messages, tools, signal } = options;
+  const { messages, tools, signal, auth } = options;
   const model = runtimeConfig.PUBLIC_MORPHEUS_MODEL;
+
+  if (!auth) {
+    yield { type: 'error', error: 'Connect a wallet that supports message signing before using AI chat.' };
+    return;
+  }
 
   const body: Record<string, unknown> = {
     model,
@@ -182,7 +189,7 @@ export async function* streamChat(
   const partialToolCalls: Map<number, PartialToolCall> = new Map();
 
   try {
-    const response = await fetch('/api/morpheus/chat/completions', {
+    const response = await fetchWithMorpheusSession(auth, '/api/morpheus/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -337,11 +344,12 @@ function* emitToolCalls(
 
 /**
  * Check if the AI API is available.
- * GET /api/morpheus/models via the proxy (auth injected server-side).
+ * GET the relay's public liveness endpoint. This does not contact the paid
+ * provider; authorization is established lazily before the first chat call.
  */
 export async function checkApiHealth(): Promise<boolean> {
   try {
-    const response = await fetch('/api/morpheus/models', {
+    const response = await fetch('/api/morpheus/healthz', {
       method: 'GET',
       signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
     });
