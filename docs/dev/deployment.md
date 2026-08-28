@@ -1,71 +1,112 @@
 # Deployment
 
-This guide describes how to deploy Barney in production. The canonical artifact is the Docker image published on every release tag to `ghcr.io/manifest-network/barney`. The build does not pin a target platform, so the published image's architecture matches the CI runner — currently `linux/amd64` on `ubuntu-latest`. ARM64 hosts (Apple Silicon, Graviton) need to build the image themselves.
+Barney ships as one Docker image containing the SPA, nginx, and the
+wallet-authenticated Morpheus relay. The canonical image is published on every
+release tag to `ghcr.io/manifest-network/barney`. Published architecture follows
+the CI runner (currently `linux/amd64`); ARM64 hosts must build the image.
 
-For build-system details (the multi-stage Dockerfile, the Brotli compile step, version stamping) see [ARCHITECTURE.md → Build and deployment](../../ARCHITECTURE.md#build-and-deployment).
+For build details, see [Architecture → Build and deployment](../../ARCHITECTURE.md#build-and-deployment).
+For the relay threat model, see [Security model](security.md#1-paid-relay-trust-boundary).
 
 ## Image tags
 
-| Tag | What it points to |
-|-----|-------------------|
-| `:latest` | Latest stable (non-prerelease) version |
-| `:1` | Latest in the 1.x line |
-| `:1.2` | Latest in the 1.2.x line |
-| `:1.2.3` | Exact pinned version |
+| Tag | Meaning |
+|-----|---------|
+| `:latest` | Latest stable release |
+| `:1` | Latest 1.x release |
+| `:1.2` | Latest 1.2.x release |
+| `:1.2.3` | Exact release |
 
-Pre-release tags (`v1.0.0-rc.1` and similar) are pushed as pre-releases and do *not* update `:latest`.
+Pin an exact tag in production. Pre-release tags do not update `:latest`.
 
-For production, pin to a specific version (`:1.2.3`) and update deliberately. Use `:1` or `:1.2` only in non-production environments where automatic minor bumps are acceptable.
+## Required configuration
 
-## Required and recommended configuration
-
-The container expects a small number of environment variables. The full reference lives in [the README env-var table](../../README.md#environment-variables); this section calls out what's actually required.
-
-### Required
+The relay deliberately has no unlimited financial defaults. Paid inference and
+readiness fail closed if any required policy value is absent or malformed; the
+supervisor still serves the SPA so non-AI functionality remains available.
 
 | Variable | Purpose |
 |----------|---------|
-| `PUBLIC_REST_URL` | Manifest LCD/REST endpoint |
-| `PUBLIC_RPC_URL` | Manifest RPC endpoint |
-| `PUBLIC_CHAIN_ID` | Chain ID for cosmos-kit and signing (`manifest-ledger-mainnet` for production, `manifest-ledger-testnet` for testnet, `manifest-ledger-beta` for the staging chain) |
-| `PUBLIC_MORPHEUS_URL` | Morpheus API endpoint — `env.sh` fails fast if empty or contains `?`/`#` |
-| `MORPHEUS_API_KEY` | Server-side only. Injected by nginx as `Authorization: Bearer …`. Never reaches the browser. |
-| `PUBLIC_WEB3AUTH_CLIENT_ID` | Web3Auth client ID. The default `YOUR_WEB3AUTH_CLIENT_ID` placeholder will fail social login. |
+| `PUBLIC_REST_URL`, `PUBLIC_RPC_URL` | Manifest chain endpoints |
+| `PUBLIC_CHAIN_ID` | Exact chain bound into every relay challenge/session |
+| `PUBLIC_MORPHEUS_URL` | Absolute upstream HTTP(S) base URL; credentials, query, and fragment are rejected |
+| `PUBLIC_MORPHEUS_MODEL` | Browser-selected model; must also be server-allowlisted |
+| `MORPHEUS_API_KEY` | Provider key read only by the Node relay |
+| `MORPHEUS_RELAY_ALLOWED_ORIGINS` | Comma-separated exact browser origins |
+| `MORPHEUS_RELAY_STATE_FILE` | Atomic JSON quota-ledger path on persistent storage |
+| `MORPHEUS_RELAY_IDENTITY_DAILY_REQUESTS` | Per-wallet requests per UTC day |
+| `MORPHEUS_RELAY_IDENTITY_DAILY_TOKENS` | Per-wallet accounted tokens per UTC day |
+| `MORPHEUS_RELAY_IDENTITY_DAILY_SPEND_MICRO_USD` | Per-wallet spend cap in integer micro-USD |
+| `MORPHEUS_RELAY_PROVIDER_DAILY_BUDGET_MICRO_USD` | Provider-wide hard UTC-day cap in integer micro-USD |
+| `MORPHEUS_RELAY_MAX_DAILY_IDENTITIES` | Daily wallet-usage entries retained in the bounded least-used cache |
+| `MORPHEUS_RELAY_INPUT_MICRO_USD_PER_MILLION_TOKENS` | Conservative selected-model input rate |
+| `MORPHEUS_RELAY_OUTPUT_MICRO_USD_PER_MILLION_TOKENS` | Conservative selected-model output rate |
+| `PUBLIC_WEB3AUTH_CLIENT_ID` | Web3Auth client ID |
 
-### Strongly recommended
+`.env.example` contains a complete local policy. Production operators must
+review current model pricing instead of copying the example estimates blindly.
+The optional `MORPHEUS_RELAY_IDENTITY_HMAC_KEY` keeps identity pseudonyms stable
+when the provider key rotates; otherwise the relay safely derives them from the
+provider key while the provider-wide ledger remains intact.
 
-| Variable | Purpose |
-|----------|---------|
-| `PUBLIC_GAS_PRICE` | Match the chain's recommended fee. Default `0.0025factory/manifest1afk…/upwr` (PWR factory denom) is fine for most operators. |
-| `PUBLIC_PWR_DENOM` | The factory denom for PWR on this chain. Use the chain's canonical value. |
-| `PUBLIC_FAUCET_URL` | Enables first-connect account auto-provisioning. Leave empty on mainnet. |
-| `PUBLIC_WEB3AUTH_NETWORK` | `sapphire_mainnet` for production, `sapphire_devnet` for testnet. |
+Request controls have bounded defaults and optional overrides:
 
-### Tunables
+- exact model allowlist;
+- body, prompt, exact forwarded-context byte, output, message-count, and response limits;
+- per-identity and provider concurrency;
+- upstream-connect and total-stream deadlines;
+- challenge/session lifetimes and in-memory capacity;
+- maximum pseudonymous identity-usage entries retained in each daily ledger window.
 
-The `PUBLIC_AI_*` knobs adjust timeouts and concurrency. The defaults are safe; only change them if you have a specific reason. Each is clamped to a hard ceiling — see `src/config/runtimeConfig.ts` (`NUMERIC_LIMITS`).
+Identity token and spend quotas use a configurable byte-per-token estimate. The
+provider-wide financial reservation separately charges a byte-level upper bound
+before provider access, then both settle down to authenticated provider usage.
+This avoids treating every byte as a normal identity token while preserving the
+hard provider budget.
 
-## Running locally
+Per-wallet quotas are enforced while an identity remains in that bounded cache.
+When it is full, admitting a new wallet evicts the least-spending entry (oldest
+first on a tie) instead of letting disposable wallets lock out every unseen
+wallet until midnight. Provider counters are never evicted, so the provider-wide
+daily budget remains the authoritative financial ceiling under wallet churn.
+
+See `server/config.mjs` for names and hard validation maxima.
+
+## Local development
 
 ```bash
-docker run --rm -p 8080:80 \
-  -e PUBLIC_REST_URL=https://nodes.liftedinit.tech/manifest/testnet/api \
-  -e PUBLIC_RPC_URL=https://nodes.liftedinit.tech/manifest/testnet/rpc \
-  -e PUBLIC_CHAIN_ID=manifest-ledger-testnet \
-  -e PUBLIC_WEB3AUTH_CLIENT_ID=your_client_id \
-  -e PUBLIC_WEB3AUTH_NETWORK=sapphire_devnet \
-  -e PUBLIC_MORPHEUS_URL=https://api.mor.org/api/v1 \
-  -e MORPHEUS_API_KEY=your_api_key \
+cp .env.example .env.local
+# Set MORPHEUS_API_KEY and review the example financial policy.
+npm run dev
+```
+
+`npm run dev` starts the same relay used in production, then Rsbuild. Rsbuild
+proxies `/api/morpheus` to localhost and never reads or injects the key. Local
+HTTP requires `MORPHEUS_RELAY_COOKIE_SECURE=false`; production should keep the
+default `true`.
+
+## Local Docker smoke test
+
+```bash
+docker volume create barney-relay-state
+docker run --rm -p 8080:80 --env-file .env.local \
+  -e MORPHEUS_RELAY_ALLOWED_ORIGINS=http://localhost:8080 \
+  -e MORPHEUS_RELAY_AUDIENCE=http://localhost:8080/api/morpheus \
+  -e MORPHEUS_RELAY_COOKIE_SECURE=false \
+  -e MORPHEUS_RELAY_STATE_FILE=/var/lib/barney-relay/ledger.json \
+  -v barney-relay-state:/var/lib/barney-relay \
   ghcr.io/manifest-network/barney:latest
 ```
 
-Visit <http://localhost:8080>. Sign in with Google, complete account setup, deploy something.
+Visit <http://localhost:8080>. An anonymous paid POST must return 401; the first
+authenticated chat asks the wallet to sign a short-lived challenge.
 
-## Running in production
+## Production compose shape
 
-The container exposes port 80 (HTTP). Put a TLS-terminating load balancer or reverse proxy in front of it. The nginx config inside the container enables HTTP/2 cleartext (`http2 on`) so the upstream connection from a TLS-terminating proxy can use h2c if the proxy supports it.
-
-A minimal compose file:
+The image exposes only port 80. Put a TLS-terminating reverse proxy in front of
+it and persist `/var/lib/barney-relay`. Do not publish relay port 8081. The relay
+binds loopback by default for nginx; set `MORPHEUS_RELAY_HOST=0.0.0.0` only when
+a private container-network Prometheus scrape requires the direct metrics port.
 
 ```yaml
 services:
@@ -74,131 +115,112 @@ services:
     restart: always
     ports:
       - "8080:80"
+    volumes:
+      - barney-relay-state:/var/lib/barney-relay
     environment:
       PUBLIC_REST_URL: https://nodes.manifest.network/manifest/api
       PUBLIC_RPC_URL: https://nodes.manifest.network/manifest/rpc
       PUBLIC_CHAIN_ID: manifest-ledger-mainnet
-      PUBLIC_PWR_DENOM: factory/manifest1.../upwr
+      PUBLIC_MORPHEUS_URL: https://api.mor.org/api/v1
+      PUBLIC_MORPHEUS_MODEL: your-reviewed-model
+      MORPHEUS_API_KEY: ${MORPHEUS_API_KEY}
+      MORPHEUS_RELAY_ALLOWED_MODELS: your-reviewed-model
+      MORPHEUS_RELAY_ALLOWED_ORIGINS: https://barney.example.com
+      MORPHEUS_RELAY_AUDIENCE: https://barney.example.com/api/morpheus
+      MORPHEUS_RELAY_STATE_FILE: /var/lib/barney-relay/ledger.json
+      MORPHEUS_RELAY_IDENTITY_DAILY_REQUESTS: "100"
+      MORPHEUS_RELAY_IDENTITY_DAILY_TOKENS: "1000000"
+      MORPHEUS_RELAY_IDENTITY_DAILY_SPEND_MICRO_USD: "2000000"
+      MORPHEUS_RELAY_PROVIDER_DAILY_BUDGET_MICRO_USD: "25000000"
+      MORPHEUS_RELAY_INPUT_MICRO_USD_PER_MILLION_TOKENS: "REVIEW_CURRENT_RATE"
+      MORPHEUS_RELAY_OUTPUT_MICRO_USD_PER_MILLION_TOKENS: "REVIEW_CURRENT_RATE"
       PUBLIC_WEB3AUTH_CLIENT_ID: ${WEB3AUTH_CLIENT_ID}
       PUBLIC_WEB3AUTH_NETWORK: sapphire_mainnet
-      PUBLIC_MORPHEUS_URL: https://api.mor.org/api/v1
-      MORPHEUS_API_KEY: ${MORPHEUS_API_KEY}
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/index.html"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/api/morpheus/readyz"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+volumes:
+  barney-relay-state:
 ```
 
-Pin the image tag. Do not use `:latest` in production.
+Replace both `REVIEW_CURRENT_RATE` placeholders with positive integer micro-USD
+rates before deployment; leaving either string causes startup to fail.
 
-## How startup works
+If a trusted reverse proxy supplies `X-Forwarded-For`, set
+`BARNEY_TRUSTED_PROXY_CIDR` to that proxy's exact IPv4 `/32`. The entrypoint
+rejects broad, malformed, or injectable values. This affects only nginx's coarse
+IP controls; wallet identity always owns financial accounting.
 
-The image entrypoint is `/docker/env.sh`. On every container start, it:
+## Startup sequence and secret boundary
 
-1. **Strips trailing slashes** from `PUBLIC_MORPHEUS_URL` to avoid double-slash in the upstream `proxy_pass`.
-2. **Validates `PUBLIC_MORPHEUS_URL`.** Empty or containing `?`/`#` is a hard failure.
-3. **Extracts IPv4 DNS resolvers** from `/etc/resolv.conf` (with `1.1.1.1 8.8.8.8` as a fallback) for nginx's `resolver` directive.
-4. **Renders `/etc/nginx/conf.d/default.conf`** from `nginx.conf.template` with `MORPHEUS_API_KEY`, `PUBLIC_MORPHEUS_URL`, and `NGINX_RESOLVERS` substituted via `envsubst`.
-5. **Renders `/usr/share/nginx/html/config.js`** from `config.js.template` with all `PUBLIC_*` browser-side variables substituted.
-6. **Validates the rendered config** (`nginx -t`) before starting nginx.
+`/docker/env.sh`:
 
-If validation fails, the container exits with a clear error message rather than crash-looping.
+1. validates the trusted-proxy IPv4 `/32` and relay port;
+2. renders nginx config from only that trusted-proxy address and local relay port;
+3. renders browser `config.js` from public variables only;
+4. validates the secret-free nginx configuration;
+5. executes the requested command, defaulting to the Node supervisor.
 
-## Why nginx instead of static hosting
+The supervisor starts nginx so the SPA can degrade gracefully, then validates
+the complete relay policy and loads/creates the durable ledger. It removes the
+provider and identity-HMAC keys from nginx's child environment. The development
+supervisor removes the same secrets from Rsbuild. The key reaches only the
+relay's outbound `Authorization` header.
 
-The `Authorization: Bearer ${MORPHEUS_API_KEY}` injection has to happen server-side — it's the whole reason the API key never reaches the browser. A static host (S3 + CloudFront, GitHub Pages, …) cannot do this. The nginx reverse proxy is the simplest mechanism that works.
+Static hosting alone is no longer a valid deployment shape. A worker/function
+replacement must implement the same wallet proof, session binding, durable
+reservation, quotas, hard budget, and request limits—not merely inject a key.
 
-If you cannot run a container, the next-best alternative is a worker / function tier (Cloudflare Workers, Lambda + API Gateway, …) that proxies `/api/morpheus/...` and injects the auth header. The browser bundle then targets `/api/morpheus/...` on its own origin, same as in the container build.
+## Health and monitoring
 
-## DNS resolver caching
+| Endpoint | Exposure | Meaning |
+|----------|----------|---------|
+| `/api/morpheus/healthz` | public through nginx | relay-process liveness only |
+| `/api/morpheus/readyz` | public/internal through nginx | ledger, default-request budget, and cached authenticated-provider readiness |
+| `/metrics` on relay port 8081 | loopback by default; private network only when explicitly bound | aggregate request, rejection, usage, spend, budget, concurrency, and max identity-quota utilization |
 
-The `/api/morpheus/...` location uses a `proxy_pass` *variable* with `resolver … valid=30s` so nginx re-resolves the upstream IP every 30 s. Plain literal hostnames in `proxy_pass` cause nginx to cache the upstream IP forever at config-load time. If your Morpheus upstream rotates IPs (or any DNS-fronted service does), the literal-hostname form breaks until the next container restart.
-
-If you are diagnosing prod chat failures with `checkApiHealth TimeoutError` errors that started suddenly, the first thing to check is whether the container has been running long enough for the upstream IP to have rotated. The variable + resolver form mitigates this; the literal form does not.
-
-## Health checks
-
-A simple HTTP check against `/index.html` is sufficient. The container does not expose a dedicated health endpoint — nginx returning 200 for the SPA shell means `env.sh` succeeded and nginx is serving traffic.
-
-For deeper monitoring, hit `/api/morpheus/...` with a no-op completion request and assert a non-503 response. A 503 from `/api/morpheus/...` specifically means `MORPHEUS_API_KEY` is unset; nginx fast-fails in that case rather than forwarding.
-
-## Logging
-
-nginx logs to stdout/stderr. Aggregate them in your usual log pipeline. The interesting access-log entries are:
-
-- `GET /index.html` — initial page load.
-- `GET /config.js` — runtime config; one per page load (cached `no-cache, no-store, must-revalidate`).
-- `POST /api/morpheus/chat/completions` — every AI chat turn; long-running due to SSE streaming (`proxy_buffering off`).
-- `GET /static/...` — hashed static assets, cached `public, immutable`.
-
-There are no Barney-specific logs from inside the SPA — every error in the browser is logged to the console via `logError`. To collect those, instrument the browser separately.
+Metrics never contain wallet addresses, identity hashes, prompts, cookies, or
+keys. Logs likewise use only request IDs, bounded event names, and numeric
+upstream statuses.
 
 ## Updating
 
+Preserve the relay-state volume across image replacement:
+
 ```bash
 docker pull ghcr.io/manifest-network/barney:1.2.4
-docker stop barney && docker rm barney
-docker run -d --name barney --restart always -p 8080:80 \
-  -e ... \
-  ghcr.io/manifest-network/barney:1.2.4
-```
-
-Or with compose:
-
-```bash
 yq -i '.services.barney.image = "ghcr.io/manifest-network/barney:1.2.4"' compose.yaml
 docker compose up -d barney
 ```
 
-Existing user sessions survive the upgrade — chat history and connected wallets live in the user's localStorage. New page loads pick up the new bundle (the `index.html` and `config.js` responses include `no-cache` headers for exactly this reason).
+SPA history remains in browser localStorage. Relay sessions are intentionally
+in-memory and do not survive a restart; the next chat asks for a new wallet
+signature. The durable daily ledger does survive and must never be reset as an
+upgrade shortcut.
 
-## Self-building
+## Safe rollback
 
-If you need a custom build:
+Do not roll back to a release that exposes an anonymous key-injecting proxy
+while the paid key and public route remain active. First remove/block the public
+`/api/morpheus` route (or stop Barney entirely), then roll back to another
+authenticated/accounted release with the same state volume mounted. Preserve the
+ledger throughout. Deleting it can permit spend beyond the day's hard budget.
 
-```bash
-docker build -t my-barney \
-  --build-arg RELEASE_VERSION=1.2.3 \
-  --build-arg GIT_COMMIT=$(git rev-parse HEAD) \
-  .
-```
-
-The build is deterministic given the same lockfile. `RELEASE_VERSION` is stamped into `package.json` before the SPA build (`npm run build-release`); without it the script strips any prerelease suffix from `package.json`'s `version` and appends the short git commit hash (e.g. `0.1.0` → `0.1.0-a1b2c3d`).
-
-The Dockerfile compiles nginx Brotli modules from source against the matching nginx version. This adds about 30 s to the build but produces ABI-compatible modules — Alpine's prebuilt `nginx-mod-http-brotli` targets a different nginx version and is incompatible with the official `nginx:alpine` image.
-
-## CI/CD
-
-The [release workflow](../../.github/workflows/release.yml) runs on tag pushes matching `v[0-9]*.[0-9]*.[0-9]*`:
-
-1. Validates the tag against semver.
-2. Builds and pushes a single-platform image (whichever architecture the runner provides — `linux/amd64` on `ubuntu-latest`) to GHCR with semver-derived tags.
-3. Publishes provenance and SBOM attestations.
-4. Creates a GitHub Release with auto-generated notes and the image digest.
-
-Pre-release tags (`v1.0.0-rc.1`) are flagged as prereleases and skip the `:latest` tag update.
-
-To cut a release, bump the version, tag, and push:
-
-```bash
-npm version patch    # or minor / major
-git push --follow-tags
-```
-
-The workflow does the rest. Only maintainers should push tags.
-
-## Troubleshooting production
+## Troubleshooting
 
 | Symptom | Likely cause |
 |---------|--------------|
-| Container exits at startup with "PUBLIC_MORPHEUS_URL is required" | Variable is unset or empty in the environment |
-| Container exits at startup with "must not contain '?' or '#'" | Query string or fragment leaked into `PUBLIC_MORPHEUS_URL` |
-| 503 from `/api/morpheus/...` | `MORPHEUS_API_KEY` unset (env.sh's nginx fast-fail) |
-| 502 / 504 from `/api/morpheus/...` after running fine | Upstream IP rotated; restart the container if your `nginx.conf.template` predates the `resolver … valid=30s` directive |
-| Chat connects but immediately disconnects | Wrong `MORPHEUS_API_KEY` (rotated key, restart needed) |
-| Web3Auth network mismatch error | `PUBLIC_WEB3AUTH_NETWORK` doesn't match the client ID's configuration |
-| Faucet step always times out on testnet | `PUBLIC_FAUCET_URL` unreachable, or 24-hour cooldown active for the address |
-| Provider URLs blocked in dev | Rsbuild dev proxy's `isValidProxyTarget` rejected the URL — see [security.md](security.md) |
+| SPA loads but AI is unavailable | Missing/invalid relay policy, unreadable/corrupt ledger, provider readiness failure, or exhausted budget |
+| 401 | Missing/expired/restarted/logged-out wallet session; re-authentication is expected |
+| 403 | Wallet/chain/session binding, origin, or model mismatch |
+| 429 | Identity quota or concurrency ceiling |
+| 503 from paid POST | Provider hard budget/concurrency ceiling or relay unavailable |
+| 502/504 | Sanitized upstream failure, response limit, connection deadline, or total-stream deadline |
+| Liveness succeeds but readiness fails | Provider/key, durable accounting, or default-request budget is unavailable |
+| Provider URL blocked in dev | Rsbuild's separate provider URL safety guard rejected it; see [security.md](security.md) |
 
-For user-facing issues (deploy failures, AI errors), point users at [docs/user/troubleshooting.md](../user/troubleshooting.md).
+Never paste `docker inspect`, provider headers, or environment output into logs,
+tickets, or chat: root-visible container metadata contains the provider key.

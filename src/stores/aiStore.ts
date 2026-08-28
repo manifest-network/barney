@@ -210,6 +210,9 @@ export const createAIStore = () =>
 
     setAddress: (address) => {
       if (address !== get().address) {
+        // Wallet identity is part of both the transaction and paid-relay trust
+        // boundaries. Do not let work begun for the prior wallet keep streaming.
+        get().abortController?.abort();
         get()._toolCache.clear();
         // Drop dnsStatuses too — entries belong to the prior wallet's running
         // apps and would otherwise leak across wallets and grow the map on

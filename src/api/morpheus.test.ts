@@ -9,8 +9,14 @@ vi.mock('../config/runtimeConfig', async (importOriginal) => {
   return { ...actual, runtimeConfig: { ...actual.runtimeConfig, PUBLIC_MORPHEUS_MODEL: 'test-model' } };
 });
 
+vi.mock('./morpheusSession', () => ({
+  MorpheusRequestTimeoutError: class MorpheusRequestTimeoutError extends Error {},
+  fetchWithMorpheusSession: vi.fn((_auth, input, init) => fetch(input, init)),
+}));
+
 // Must import after mocks
-import { serializeMessagesForApi, streamChat } from './morpheus';
+import { compactMessagesForRelay, serializeMessagesForApi, streamChat } from './morpheus';
+import { fetchWithMorpheusSession } from './morpheusSession';
 import type { ChatApiMessage, ToolCall, StreamChunk } from './morpheus';
 
 /** Encode a string as a Uint8Array for ReadableStream chunks. */
@@ -57,6 +63,10 @@ async function collectChunks(options: Parameters<typeof streamChat>[0]): Promise
 
 const BASE_OPTIONS = {
   messages: [{ role: 'user' as const, content: 'hello' }],
+  auth: {
+    walletAddress: 'manifest1test',
+    signChallenge: vi.fn(),
+  },
 };
 
 describe('serializeMessagesForApi', () => {
@@ -117,6 +127,99 @@ describe('serializeMessagesForApi', () => {
   });
 });
 
+describe('compactMessagesForRelay', () => {
+  it('drops oversized old history while preserving the system prompt and newest turn', () => {
+    const messages: ChatApiMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      { role: 'user', content: 'x'.repeat(200_000) },
+      { role: 'assistant', content: 'Old answer' },
+      { role: 'user', content: 'Newest question' },
+    ];
+
+    const result = compactMessagesForRelay(messages);
+
+    expect(result[0]).toEqual(messages[0]);
+    expect(result.at(-1)).toEqual(messages.at(-1));
+    expect(result.some((message) => message.content?.includes('x'.repeat(1_000)))).toBe(false);
+    expect(messages).toHaveLength(4);
+  });
+
+  it('removes leading tool results when their assistant tool call is compacted', () => {
+    const messages: ChatApiMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'tc-old',
+          type: 'function',
+          function: { name: 'old_tool', arguments: {} },
+        }],
+      },
+      { role: 'tool', tool_call_id: 'tc-old', content: 'x'.repeat(200_000) },
+      { role: 'user', content: 'Newest question' },
+    ];
+
+    expect(compactMessagesForRelay(messages)).toEqual([messages[0], messages[3]]);
+  });
+
+  it('retains a terminal assistant/tool exchange as one protocol-valid suffix', () => {
+    const messages: ChatApiMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      { role: 'user', content: 'x'.repeat(200_000) },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'tc-latest',
+          type: 'function',
+          function: { name: 'latest_tool', arguments: {} },
+        }],
+      },
+      { role: 'tool', tool_call_id: 'tc-latest', content: 'y'.repeat(350_000) },
+    ];
+
+    expect(compactMessagesForRelay(messages)).toEqual([
+      messages[0],
+      messages[2],
+      messages[3],
+    ]);
+  });
+
+  it('never leaves an unmatched terminal tool result at the retained leading edge', () => {
+    const messages: ChatApiMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      { role: 'user', content: 'x'.repeat(200_000) },
+      { role: 'tool', tool_call_id: 'missing', content: 'y'.repeat(350_000) },
+    ];
+
+    expect(compactMessagesForRelay(messages)).toEqual([messages[0]]);
+  });
+
+  it('encodes large histories with linear total work while selecting the retained suffix', () => {
+    const messages: ChatApiMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      ...Array.from({ length: 200 }, (_, index): ChatApiMessage => ({
+        role: 'user',
+        content: `${index}:${'x'.repeat(4_000)}`,
+      })),
+    ];
+    const encodeSpy = vi.spyOn(TextEncoder.prototype, 'encode');
+
+    const result = compactMessagesForRelay(messages);
+    const encodedCharacters = encodeSpy.mock.calls.reduce(
+      (total, [input]) => total + (input?.length ?? 0),
+      0,
+    );
+    encodeSpy.mockRestore();
+
+    expect(encodedCharacters).toBeLessThan(2_500_000);
+    expect(result[0]).toBe(messages[0]);
+    expect(result.at(-1)).toBe(messages.at(-1));
+    expect(result.length).toBeLessThan(messages.length);
+  });
+});
+
 describe('streamChat', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -140,6 +243,23 @@ describe('streamChat', () => {
     expect(chunks[chunks.length - 1].type).toBe('done');
   });
 
+  it('rejects compacted orphan-only history before contacting the paid relay', async () => {
+    const chunks = await collectChunks({
+      ...BASE_OPTIONS,
+      messages: [
+        { role: 'system', content: 'System prompt' },
+        { role: 'user', content: 'x'.repeat(200_000) },
+        { role: 'tool', tool_call_id: 'missing', content: 'y'.repeat(350_000) },
+      ],
+    });
+
+    expect(chunks).toEqual([{
+      type: 'error',
+      error: expect.stringContaining('missing the tool context'),
+    }]);
+    expect(fetchWithMorpheusSession).not.toHaveBeenCalled();
+  });
+
   it('sends requests to /api/morpheus/chat/completions without Authorization header', async () => {
     vi.stubGlobal('fetch', mockFetchWithSSE([
       encode(sseEvent(JSON.stringify({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }))),
@@ -152,6 +272,12 @@ describe('streamChat', () => {
     const headers = fetchCall[1]?.headers as Record<string, string>;
     expect(headers['Authorization']).toBeUndefined();
     expect(headers['Content-Type']).toBe('application/json');
+    expect(fetchWithMorpheusSession).toHaveBeenCalledWith(
+      BASE_OPTIONS.auth,
+      '/api/morpheus/chat/completions',
+      expect.any(Object),
+      expect.any(Number),
+    );
   });
 
   it('uses model from runtimeConfig in request body', async () => {
@@ -244,7 +370,9 @@ describe('streamChat', () => {
 
     expect(chunks).toHaveLength(1);
     expect(chunks[0].type).toBe('error');
-    expect((chunks[0] as { type: 'error'; error: string }).error).toContain('429');
+    expect((chunks[0] as { type: 'error'; error: string }).error).toBe(
+      'The inference quota or concurrency limit has been reached. Try again later.',
+    );
   });
 
   it('handles [DONE] sentinel in SSE stream', async () => {
@@ -398,7 +526,7 @@ describe('checkApiHealth', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns true when models endpoint responds ok', async () => {
+  it('returns true when the provider-aware relay readiness endpoint responds ok', async () => {
     const { checkApiHealth } = await import('./morpheus');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
 
@@ -406,7 +534,7 @@ describe('checkApiHealth', () => {
     expect(result).toBe(true);
 
     const fetchCall = vi.mocked(fetch).mock.calls[0];
-    expect(fetchCall[0]).toBe('/api/morpheus/models');
+    expect(fetchCall[0]).toBe('/api/morpheus/readyz');
     // No Authorization header — proxy adds it server-side
     expect((fetchCall[1]?.headers as Record<string, string> | undefined)).toBeUndefined();
   });

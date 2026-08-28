@@ -15,7 +15,7 @@ This directory holds long-form documentation. The top-level [README.md](../READM
 - **[Adding a tool](dev/adding-a-tool.md)** — end-to-end walkthrough for new AI tools
 - **[Adding an example app](dev/adding-an-example-app.md)** — one-click deploys in `EXAMPLE_APPS`
 - **[Testing](dev/testing.md)** — Vitest, mock patterns, coverage
-- **[Deployment](dev/deployment.md)** — Docker image, nginx proxy, env vars, prod operations
+- **[Deployment](dev/deployment.md)** — Docker image, authenticated relay, env vars, quotas, prod operations
 - **[Security](dev/security.md)** — threat model, SSRF, CSP, secret handling
 
 ## For maintainers

@@ -141,7 +141,7 @@ The Barney repo carries Barney-specific behaviour locally (UI progress callbacks
 
 ### The Morpheus API
 
-Morpheus is an OpenAI-compatible LLM inference service. Barney talks to it via `/api/morpheus/...` — a server-side reverse proxy (nginx in production, the Rsbuild dev proxy in development) that injects `Authorization: Bearer ${MORPHEUS_API_KEY}`. The browser never sees the API key, and the model never speaks directly to the chain — Barney executes every tool call locally and feeds results back as `tool`-role messages.
+Morpheus is an OpenAI-compatible LLM inference service. Barney talks to it via `/api/morpheus/...` through a built-in server relay. The relay verifies a one-time ADR-036 wallet/chain challenge, keeps the session in an HttpOnly cookie, durably reserves identity/provider spend, and only then injects the operator key into the allowlisted upstream chat-completions request. Nginx (production) and Rsbuild (development) proxy to this same relay and never own the key. The model never speaks directly to the chain—Barney executes every tool call locally and feeds results back as `tool`-role messages.
 
 The default model is `minimax-m2.5`, configurable via `PUBLIC_MORPHEUS_MODEL`.
 

@@ -162,6 +162,9 @@ export function useManifestMCP(): UseManifestMCPResult {
               return {
                 providerAuth,
                 authTokens: createAuthTokensAdapter(providerAuth, address),
+                relayAuth: {
+                  signChallenge: (message) => mutex.signArbitraryWithMutex(address, message),
+                },
               };
             })()
           : undefined;

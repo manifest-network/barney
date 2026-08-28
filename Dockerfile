@@ -43,7 +43,9 @@ RUN apk add --no-cache git gcc g++ make pcre2-dev zlib-dev brotli-dev linux-head
 # Stage 3 — Runtime
 # Tag MUST match the brotli-build stage above (see note there).
 FROM nginx:1.30-alpine AS runtime
-RUN apk add --no-cache brotli-libs jq
+RUN apk add --no-cache brotli-libs jq nodejs \
+    && mkdir -p /opt/barney-relay /var/lib/barney-relay \
+    && chmod 0700 /var/lib/barney-relay
 COPY --from=brotli-build /out/ngx_http_brotli_filter_module.so /usr/lib/nginx/modules/
 COPY --from=brotli-build /out/ngx_http_brotli_static_module.so /usr/lib/nginx/modules/
 RUN sed -i '1i load_module /usr/lib/nginx/modules/ngx_http_brotli_filter_module.so;' /etc/nginx/nginx.conf \
@@ -54,6 +56,7 @@ COPY docker/config.js.template /docker/config.js.template
 COPY docker/env.sh /docker/env.sh
 RUN chmod +x /docker/env.sh
 COPY docker/nginx.conf.template /docker/nginx.conf.template
+COPY server/ /opt/barney-relay/
 EXPOSE 80
 ENTRYPOINT ["/docker/env.sh"]
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["node", "/opt/barney-relay/main.mjs"]

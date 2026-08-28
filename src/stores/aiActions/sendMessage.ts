@@ -9,7 +9,7 @@ import { validateUserInput } from '../../ai/validation';
 import { logError } from '../../utils/errors';
 import {
   AI_MAX_TOOL_ITERATIONS,
-  AI_STREAM_TIMEOUT_MS,
+  AI_STREAM_TOTAL_TIMEOUT_MS,
   AI_MESSAGE_DEBOUNCE_MS,
 } from '../../config/constants';
 import type { AIStore } from '../aiStore';
@@ -109,7 +109,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
       iteration++;
 
       const currentMessages = get().messages.filter((m) => m.id !== currentAssistantMessageId);
-      const { address, skuTiers } = get();
+      const { address, signing, skuTiers } = get();
       const apiMessages = toChatApiMessages(currentMessages, address, skuTiers.tiers);
       const tools = buildAITools(skuTiers.tiers);
 
@@ -117,6 +117,10 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
         messages: apiMessages,
         tools,
         signal: get().abortController?.signal,
+        auth: address && signing ? {
+          walletAddress: address,
+          signChallenge: signing.relayAuth.signChallenge,
+        } : undefined,
       });
 
       let totalTimeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -129,8 +133,8 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
         ).finally(() => { if (totalTimeoutId) clearTimeout(totalTimeoutId); }),
         new Promise<never>((_, reject) => {
           totalTimeoutId = setTimeout(
-            () => reject(new Error('Stream timeout: no response received')),
-            AI_STREAM_TIMEOUT_MS * 2
+            () => reject(new Error('Session or stream timeout: no response received')),
+            AI_STREAM_TOTAL_TIMEOUT_MS,
           );
         }),
       ]);

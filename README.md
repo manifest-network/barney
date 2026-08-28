@@ -34,7 +34,7 @@ git clone https://github.com/manifest-network/barney.git
 cd barney
 npm install --legacy-peer-deps
 cp .env.example .env.local
-# edit .env.local to set MORPHEUS_API_KEY (and optional overrides)
+# edit .env.local to set MORPHEUS_API_KEY and review the relay quota/pricing policy
 npm run dev
 ```
 
@@ -47,13 +47,13 @@ The dev server starts at <http://localhost:3000>.
 An image is published on every release tag to GHCR. This is the canonical deployment artifact. The build does not pin a target platform, so the architecture matches the CI runner — currently `linux/amd64` on `ubuntu-latest`.
 
 ```bash
-docker run --rm -p 8080:80 \
-  -e PUBLIC_REST_URL=https://nodes.liftedinit.tech/manifest/testnet/api \
-  -e PUBLIC_RPC_URL=https://nodes.liftedinit.tech/manifest/testnet/rpc \
-  -e PUBLIC_CHAIN_ID=manifest-ledger-testnet \
-  -e PUBLIC_WEB3AUTH_CLIENT_ID=your_client_id \
-  -e PUBLIC_MORPHEUS_URL=https://api.mor.org/api/v1 \
-  -e MORPHEUS_API_KEY=your_api_key \
+docker volume create barney-relay-state
+docker run --rm -p 8080:80 --env-file .env.local \
+  -e MORPHEUS_RELAY_ALLOWED_ORIGINS=http://localhost:8080 \
+  -e MORPHEUS_RELAY_AUDIENCE=http://localhost:8080/api/morpheus \
+  -e MORPHEUS_RELAY_COOKIE_SECURE=false \
+  -e MORPHEUS_RELAY_STATE_FILE=/var/lib/barney-relay/ledger.json \
+  -v barney-relay-state:/var/lib/barney-relay \
   ghcr.io/manifest-network/barney:latest
 ```
 
@@ -88,47 +88,40 @@ A single production build artifact can be reconfigured per environment without r
 
 ### Development
 
-Create a `.env.local` file in the project root:
+Start from the complete fail-closed example and review every relay budget/rate:
 
-```env
-# Blockchain endpoints (defaults shown)
-PUBLIC_REST_URL=http://localhost:1317
-PUBLIC_RPC_URL=http://localhost:26657
-
-# Morpheus AI settings
-PUBLIC_MORPHEUS_URL=https://api.mor.org/api/v1
-PUBLIC_MORPHEUS_MODEL=minimax-m2.5
-MORPHEUS_API_KEY=your_api_key  # Server-side only — never sent to browser
-
-# Web3Auth social login (https://dashboard.web3auth.io)
-PUBLIC_WEB3AUTH_CLIENT_ID=your_client_id
-PUBLIC_WEB3AUTH_NETWORK=sapphire_devnet
-
-# Optional: PWR token denom (defaults to local factory address)
-# PUBLIC_PWR_DENOM=factory/manifest1.../upwr
-
-# Optional: faucet endpoint (enables auto-provisioning when set)
-# PUBLIC_FAUCET_URL=http://localhost:8000
+```bash
+cp .env.example .env.local
+# Set MORPHEUS_API_KEY and PUBLIC_WEB3AUTH_CLIENT_ID, then review the policy.
+npm run dev
 ```
 
 ### Production
 
-Set environment variables on the container. The `docker/env.sh` entrypoint uses `envsubst` to render `/etc/nginx/conf.d/default.conf` (from `docker/nginx.conf.template`) and `/usr/share/nginx/html/config.js` (from `docker/config.js.template`) before starting nginx. Most `PUBLIC_*` values fall back to the hardcoded defaults in `runtimeConfig.ts` when unset, but two settings are required for the container to function: `PUBLIC_MORPHEUS_URL` (`env.sh` exits at startup if empty) and `MORPHEUS_API_KEY` (nginx returns 503 from `/api/morpheus/...` if empty).
+Set environment variables on the container. The `docker/env.sh` entrypoint validates its trusted-proxy input, renders secret-free nginx and browser runtime configuration, validates nginx, then starts the Node supervisor as PID 1. The supervisor keeps the SPA available while starting the paid relay; if the provider URL/key, wallet origin/chain, state path, or any financial limit/rate is missing, inference and readiness fail closed without taking down the static application.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PUBLIC_REST_URL` | `http://localhost:1317` | Blockchain LCD/REST endpoint |
 | `PUBLIC_RPC_URL` | `http://localhost:26657` | Blockchain RPC endpoint |
-| `PUBLIC_MORPHEUS_URL` | _required_ | Morpheus API endpoint (server-side proxy target — `env.sh` fails fast if empty) |
-| `PUBLIC_MORPHEUS_MODEL` | `minimax-m2.5` | Morpheus model identifier |
-| `MORPHEUS_API_KEY` | _required_ | Morpheus API key — server-side only, injected by nginx as `Authorization: Bearer …` |
+| `PUBLIC_MORPHEUS_URL` | _required for AI_ | Morpheus API endpoint validated by the server-side relay |
+| `PUBLIC_MORPHEUS_MODEL` | _required_ | Morpheus model identifier |
+| `MORPHEUS_API_KEY` | _required_ | Morpheus API key — read only by the authenticated Node relay |
+| `MORPHEUS_RELAY_ALLOWED_ORIGINS` | _required_ | Comma-separated exact browser origins allowed to authenticate/use the relay |
+| `MORPHEUS_RELAY_STATE_FILE` | _required_ | Durable atomic quota-ledger path; mount its parent persistently |
+| `MORPHEUS_RELAY_IDENTITY_DAILY_REQUESTS` | _required_ | Per-wallet requests per UTC day |
+| `MORPHEUS_RELAY_IDENTITY_DAILY_TOKENS` | _required_ | Per-wallet accounted tokens per UTC day |
+| `MORPHEUS_RELAY_IDENTITY_DAILY_SPEND_MICRO_USD` | _required_ | Per-wallet spend ceiling in integer micro-USD |
+| `MORPHEUS_RELAY_PROVIDER_DAILY_BUDGET_MICRO_USD` | _required_ | Hard provider-wide UTC-day budget in integer micro-USD |
+| `MORPHEUS_RELAY_INPUT_MICRO_USD_PER_MILLION_TOKENS` | _required_ | Conservative input rate for the selected model |
+| `MORPHEUS_RELAY_OUTPUT_MICRO_USD_PER_MILLION_TOKENS` | _required_ | Conservative output rate for the selected model |
 | `PUBLIC_WEB3AUTH_CLIENT_ID` | `YOUR_WEB3AUTH_CLIENT_ID` | Web3Auth client ID ([dashboard](https://dashboard.web3auth.io)) |
 | `PUBLIC_WEB3AUTH_NETWORK` | `sapphire_devnet` | One of `sapphire_devnet`, `sapphire_mainnet`, `testnet`, `mainnet` |
 | `PUBLIC_PWR_DENOM` | local factory denom | PWR token denom |
 | `PUBLIC_GAS_PRICE` | `0.0025factory/manifest1afk…/upwr` | Gas price for transaction fees |
-| `PUBLIC_CHAIN_ID` | `manifest-ledger-beta` | Chain ID for cosmos-kit and signing |
+| `PUBLIC_CHAIN_ID` | _required_ | Chain ID for cosmos-kit and relay signing |
 | `PUBLIC_FAUCET_URL` | _(empty)_ | Faucet endpoint URL — enables account auto-provisioning when set |
-| `PUBLIC_AI_STREAM_TIMEOUT_MS` | `30000` | Per-chunk stream timeout, ms (max `120000`) |
+| `PUBLIC_AI_STREAM_TIMEOUT_MS` | `30000` | Chat response-header/chunk timeout after a separate 120 s wallet-auth allowance, ms (max `120000`) |
 | `PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS` | `300000` | Deploy provisioning timeout, ms (max `600000`) |
 | `PUBLIC_AI_TOOL_API_TIMEOUT_MS` | `15000` | Blockchain API call timeout, ms (max `60000`) |
 | `PUBLIC_AI_MAX_RETRIES` | `3` | Stream retry attempts (max `10`) |
@@ -138,6 +131,8 @@ Set environment variables on the container. The `docker/env.sh` entrypoint uses 
 | `PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY` | `4` | Max concurrent batch deploys (max `10`) |
 
 Built-in flags `import.meta.env.DEV` / `import.meta.env.PROD` remain build-time only and are not affected by runtime config.
+
+See [Deployment](docs/dev/deployment.md#required-configuration) for all relay safety controls and production persistence requirements.
 
 ## Scripts
 
@@ -181,6 +176,7 @@ src/
   __tests__/       # Cross-cutting integration tests (e.g., deployFlow)
   index.css        # Tailwind v4 inline @theme + global styles (single file, no styles/ dir)
   main.tsx         # Entry: ChainProvider + providers + AppShell
+server/             # Wallet-authenticated, quota-accounted Morpheus relay
 docker/            # Production runtime: env.sh, nginx.conf.template, config.js.template
 patches/           # patch-package patches (applied via postinstall)
 public/            # Static assets including config.js placeholder
@@ -193,10 +189,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for layered architecture and request flow
 
 1. **Connect** a wallet via Web3Auth social login.
 2. **Account setup** — on first connect (and only when `PUBLIC_FAUCET_URL` is configured), the `useAccountSetup` hook runs a one-shot pipeline: requests PWR from the faucet (PWR covers both gas and credits after ENG-243) and funds credits. MFX is no longer part of the blocking flow — users who need MFX request it via the `request_faucet` chat tool.
-3. **Chat** with the AI to deploy, manage, and monitor apps.
-4. The AI calls 17 composite tools that map to on-chain transactions and queries.
-5. Transaction tools require explicit user confirmation; the manifest can be edited inline before broadcast.
-6. Deploy progress is tracked in real time through provider WebSocket events with polling fallback.
+3. **Authorize AI** by signing a short-lived, chain/wallet-bound relay challenge; the opaque session stays in an HttpOnly cookie.
+4. **Chat** with the AI to deploy, manage, and monitor apps within identity and provider spend limits.
+5. The AI calls 17 composite tools that map to on-chain transactions and queries.
+6. Transaction tools require explicit user confirmation; the manifest can be edited inline before broadcast.
+7. Deploy progress is tracked in real time through provider WebSocket events with polling fallback.
 
 ## Tech stack
 
@@ -214,7 +211,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for layered architecture and request flow
 ## Security highlights
 
 - **SSRF protection** — runtime URL validation via `ipaddr.js`; rsbuild dev proxy enforces a separate validator (`isValidProxyTarget`) blocking cloud metadata, DNS-rebinding services, and dangerous IP ranges.
-- **Server-side secret injection** — `MORPHEUS_API_KEY` is never shipped to the browser; nginx (prod) and the rsbuild dev proxy inject `Authorization: Bearer …` server-side.
+- **Authenticated paid relay** — the provider key is owned only by a server-side Node relay; one-time ADR-036 wallet proof, HttpOnly sessions, durable identity quotas, and a provider hard budget gate every upstream request.
 - **Transaction confirmation** — every AI-initiated transaction requires explicit user approval. Pending confirmations auto-cancel after `AI_CONFIRMATION_TIMEOUT_MS` (default 5 min).
 - **Manifest sanitization** — secret-shaped env var values (`*password*`, `*token*`, `*key*`, …) are scrubbed before persisting manifests to localStorage; empty values trigger auto-generation on re-deploy.
 - **CSP** — restrictive content-security policy in `index.html`. `unsafe-inline` / `unsafe-eval` are required by Web3Auth and cosmos-kit and are scoped accordingly.

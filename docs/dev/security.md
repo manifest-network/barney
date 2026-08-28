@@ -4,7 +4,7 @@ This document describes Barney's threat model, the defensive layers it implement
 
 ## Scope and assumptions
 
-**In scope.** This document covers the SPA itself and the production proxy (`docker/nginx.conf.template`). The Manifest chain, providers (Fred), the Morpheus inference service, and Web3Auth are external systems with their own threat models — Barney trusts them at the protocol boundary.
+**In scope.** This document covers the SPA, the authenticated Morpheus relay (`server/`), and the production proxy (`docker/nginx.conf.template`). The Manifest chain, providers (Fred), the Morpheus inference service, and Web3Auth are external systems with their own threat models — Barney trusts them at the protocol boundary.
 
 **Trust assumptions.**
 
@@ -18,7 +18,10 @@ This document describes Barney's threat model, the defensive layers it implement
 
 | Threat | Mitigation | Where |
 |--------|-----------|-------|
-| Stolen Morpheus API key | Server-side injection only; never shipped to browser | `docker/nginx.conf.template`, `rsbuild.config.ts` |
+| Stolen Morpheus API key | Owned only by the Node relay; absent from browser/nginx config, output, logs, and metrics | `server/relay.mjs`, `server/main.mjs` |
+| Anonymous use of operator-funded inference | One-time chain/wallet ADR-036 proof followed by a bound HttpOnly session; 401/403 before upstream | `server/auth.mjs`, `src/api/morpheusSession.ts` |
+| Signature/session replay | Challenge consumed before verification; short expiry; random server-side session; logout/replacement aborts active calls | `server/auth.mjs`, `server/relay.mjs` |
+| Unbounded inference spend | Worst-case durable reservation, per-identity quotas/concurrency, provider hard budget, method/path/model/body/context/output/time ceilings | `server/ledger.mjs`, `server/validation.mjs` |
 | Malicious provider URL targeting cloud metadata or private hosts (SSRF) | Multi-layer URL validation (rsbuild dev proxy, runtime `parseHttpUrl` / `isUrlSsrfSafe`, `ai/validation.ts`) | `src/utils/url.ts`, `src/ai/validation.ts`, `rsbuild.config.ts` |
 | Malicious chat input attempting prompt injection | Static system-prompt rules; restricted tool set; manifest validation before broadcast | `src/ai/systemPrompt.ts`, `src/ai/toolExecutor/compositeTransactions.ts` |
 | Persistent secrets in localStorage | Sensitive env values scrubbed before persistence | `src/registry/appRegistry.ts` (`sanitizeManifestForStorage`) |
@@ -29,21 +32,21 @@ This document describes Barney's threat model, the defensive layers it implement
 
 ## Defensive layers
 
-### 1. Server-side secret injection
+### 1. Paid-relay trust boundary
 
-The browser bundle never contains `MORPHEUS_API_KEY`. Both the production nginx config and the Rsbuild dev proxy inject `Authorization: Bearer ${MORPHEUS_API_KEY}` server-side.
+The browser bundle never contains `MORPHEUS_API_KEY`. The built-in Node relay is the only process that reads it and the only component that creates the upstream `Authorization` header. Production nginx proxies `/api/morpheus/` only to localhost; `server/main.mjs` explicitly removes both relay secrets from nginx's child environment. The development Rsbuild server likewise proxies to the same local relay and never sees the key.
 
-**Production (nginx).** `docker/nginx.conf.template` location block `/api/morpheus/`:
+The browser can call only same-origin `/api/morpheus/...` routes. To establish access, it requests a short-lived challenge binding the configured audience, `PUBLIC_CHAIN_ID`, checksummed Manifest wallet address, random nonce, issue time, and expiry. The wallet signs that exact payload with ADR-036. The server verifies the secp256k1 signature and derived Manifest address, consumes the challenge once, and returns a random opaque session only as an `HttpOnly`, `SameSite=Strict` cookie (`Secure` outside local HTTP development). Challenge and session stores keep one entry per wallet and evict oldest entries at their bounded capacities, so an anonymous capacity flood cannot create a global authentication lockout.
 
-```nginx
-proxy_set_header Authorization "Bearer ${MORPHEUS_API_KEY}";
-```
+Each paid request must also repeat the wallet and chain in headers. The server compares them with the session using constant-time text comparisons and returns 401/403 before parsing or contacting the paid upstream on failure. Sessions live only in server memory: restart, expiry, logout, replacement, disconnect, and wallet switch all require fresh authorization; active streams are aborted on logout/replacement and in the client on wallet change.
 
-If `MORPHEUS_API_KEY` is unset at container startup, the location returns 503 immediately (`set $morpheus_key "${MORPHEUS_API_KEY}"; if ($morpheus_key = '') { return 503; }`). This is intentional — it surfaces misconfiguration loudly instead of silently sending unauthenticated requests upstream.
+Only `POST /api/morpheus/chat/completions` is paid. The relay rejects other methods, paths, query strings, models, and unknown top-level parameters. It reconstructs the upstream body, forces streaming usage reporting, and measures every forwarded field against an exact UTF-8 context-byte ceiling before enforcing output, response, concurrency, connection, total-stream, identity, and provider ceilings. The browser drops oversized old history while retaining its local transcript, preventing one large tool result from wedging future turns.
 
-**Development (rsbuild).** `rsbuild.config.ts` adds the same header in `onProxyReq` and 503s if the key is missing.
+Before upstream access, an atomic JSON ledger applies realistic estimated-token identity token/spend quotas and reserves a separate byte-level worst-case provider spend amount. Valid provider usage settles both; ambiguous cost units are ignored and configured pricing is used. Missing usage or any uncertain outcome keeps the full reservations. Corrupt state prevents relay initialization. Identity usage is a bounded least-used cache: a newly authenticated wallet evicts the least-spending tracked entry instead of allowing disposable-wallet churn to create a global admission lockout. Late usage for an evicted entry still settles provider accounting, and provider counters are never evicted, so the hard provider budget remains authoritative even though per-wallet counters are best-effort under sustained wallet churn. The ledger contains only HMAC-pseudonymous identities, and metrics aggregate maximum tracked-identity pressure without identity labels.
 
-The browser-side code in `src/api/morpheus.ts` only ever talks to `/api/morpheus/...` — the relative path on the same origin. There is no fallback URL, no client-side header, nothing that could be tampered with to bypass the proxy.
+The direct relay socket and `/metrics` bind only to loopback by default. A deployment may opt into a private container-network bind for Prometheus, but it must not publish that port. Nginx accepts a trusted proxy only as a validated, explicit IPv4 `/32`; wallet identity, not client IP, owns financial controls.
+
+Public errors are fixed messages. Relay logs contain bounded event names, request IDs, and numeric upstream status only—never prompts, wallet addresses, provider bodies, signatures, cookies, or credentials. Metrics use bounded route/outcome/reason labels and likewise expose no identity.
 
 ### 2. SSRF protection (multi-layer)
 
@@ -145,7 +148,7 @@ We do *not* trust:
 
 ## ADR-036 provider auth
 
-When Barney calls a provider HTTP endpoint, it mints an ADR-036 token via the SDK's `createAuthTokens` factory (from `@manifest-network/manifest-sdk/deploy`), which is built per wallet address in `src/hooks/useManifestMCP.ts` and threaded through the store as the `authTokens` field of a `SigningContext` (`src/ai/toolExecutor/types.ts`). Provider auth tokens are minted on demand via `authTokens.getAuthToken(leaseUuid)`; lease-data uploads use `authTokens.getLeaseDataAuthToken(leaseUuid, metaHash)` inside `uploadPayloadToProvider` (`src/ai/toolExecutor/utils.ts`). The token includes a timestamp. Replay prevention is the **provider's** responsibility — it must reject stale or reused timestamps; a client-side check can't prevent replay. Barney ships a client-side freshness helper, `validateAuthTimestamp` (`src/api/provider-api.ts`), but it only avoids *sending* obviously stale/future tokens and currently has no production callers.
+Barney uses ADR-036 for two distinct trust boundaries. The paid Morpheus relay uses the server-issued one-time challenge/session protocol described above. Separately, when Barney calls a tenant provider HTTP endpoint, it mints an ADR-036 token via the SDK's `createAuthTokens` factory (from `@manifest-network/manifest-sdk/deploy`), which is built per wallet address in `src/hooks/useManifestMCP.ts` and threaded through the store as the `authTokens` field of a `SigningContext` (`src/ai/toolExecutor/types.ts`). Provider auth tokens are minted on demand via `authTokens.getAuthToken(leaseUuid)`; lease-data uploads use `authTokens.getLeaseDataAuthToken(leaseUuid, metaHash)` inside `uploadPayloadToProvider` (`src/ai/toolExecutor/utils.ts`). The token includes a timestamp. Replay prevention for those provider tokens is the **provider's** responsibility — it must reject stale or reused timestamps; a client-side check can't prevent replay. Barney ships a client-side freshness helper, `validateAuthTimestamp` (`src/api/provider-api.ts`), but it only avoids *sending* obviously stale/future tokens and currently has no production callers.
 
 The signature is over a deterministic payload — the provider can verify the user's wallet ownership without involving the chain.
 
@@ -165,5 +168,6 @@ When you add code that:
 - **Renders user-controlled HTML or URLs** — go through `isValidImageUrl` or equivalent. Never inject raw HTML from untrusted sources; rely on React's default text-escaping behaviour.
 - **Calls a chain transaction** — make sure the user confirms via `ConfirmationCard`. Never broadcast in `executeXxx`; broadcast only in `executeConfirmedXxx`.
 - **Adds a third-party script or origin** — widen the CSP in `index.html` minimally and document.
+- **Changes paid inference** — preserve server-side wallet/chain binding, reserve before fetch, keep uncertain reservations charged, and add no prompt/identity/secret labels or logs.
 
 The cost of a missing check is much higher than the cost of redundancy. Lean on existing helpers; do not roll your own validation.
