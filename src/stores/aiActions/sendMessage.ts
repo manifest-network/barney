@@ -43,6 +43,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
   const now = Date.now();
   if (now - lastMessageTime < AI_MESSAGE_DEBOUNCE_MS) return;
 
+  const authorizationEpoch = get().authorizationEpoch;
   set({ lastMessageTime: now, isStreaming: true });
 
   // Supersede any ConfirmationCard still open from a previous turn. A pending
@@ -116,7 +117,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
       const stream = streamChat({
         messages: apiMessages,
         tools,
-        signal: get().abortController?.signal,
+        signal: abort.signal,
         auth: address && signing ? {
           walletAddress: address,
           signChallenge: signing.relayAuth.signChallenge,
@@ -128,7 +129,10 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
         processStreamWithTimeout(
           stream,
           (streamContent, thinking) => {
-            get().scheduleStreamingUpdate(currentAssistantMessageId, streamContent, thinking);
+            if (get().authorizationEpoch === authorizationEpoch
+                && get().abortController === abort) {
+              get().scheduleStreamingUpdate(currentAssistantMessageId, streamContent, thinking);
+            }
           }
         ).finally(() => { if (totalTimeoutId) clearTimeout(totalTimeoutId); }),
         new Promise<never>((_, reject) => {
@@ -138,6 +142,9 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
           );
         }),
       ]);
+
+      if (get().authorizationEpoch !== authorizationEpoch
+          || get().abortController !== abort) return;
 
       get().flushPendingUpdate();
 
@@ -174,8 +181,12 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
         set,
         streamResult.toolCalls,
         currentAssistantMessageId,
-        streamResult
+        streamResult,
+        authorizationEpoch,
       );
+
+      if (get().authorizationEpoch !== authorizationEpoch
+          || get().abortController !== abort) return;
 
       if (!toolResult.shouldContinue) return;
       currentAssistantMessageId = toolResult.nextAssistantMessageId;
@@ -195,6 +206,8 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
       set({ messages: updated });
     }
   } catch (error) {
+    if (get().authorizationEpoch !== authorizationEpoch
+        || get().abortController !== abort) return;
     logError('AIContext.sendMessage', error);
     const updated = get().messages.map((m) =>
       m.id === currentAssistantMessageId
@@ -210,8 +223,11 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
     );
     set({ messages: updated });
   } finally {
-    set({ isStreaming: false, pendingPayload: null });
-    get().abortController?.abort();
-    set({ abortController: null });
+    if (get().authorizationEpoch === authorizationEpoch
+        && get().abortController === abort) {
+      set({ isStreaming: false, pendingPayload: null });
+      abort.abort();
+      set({ abortController: null });
+    }
   }
 }

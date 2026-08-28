@@ -43,6 +43,10 @@ function makeAction(overrides?: Partial<PendingAction>): PendingAction {
     args: { amount: 10 },
     description: 'Add 10 credits?',
     ...overrides,
+    originAddress: overrides?.originAddress ?? 'manifest1test',
+    chainId: overrides?.chainId ?? 'manifest-test',
+    clientGeneration: overrides?.clientGeneration ?? 1,
+    signerGeneration: overrides?.signerGeneration ?? 1,
   };
 }
 
@@ -860,6 +864,10 @@ describe('ConfirmationCard with stack manifest', () => {
 
     function makeDeployAction(args: Record<string, unknown> = {}): PendingAction {
       return {
+        originAddress: 'manifest1test',
+        chainId: 'manifest-test',
+        clientGeneration: 1,
+        signerGeneration: 1,
         id: 'deploy-1',
         toolName: 'deploy_app',
         args: { app_name: 'redis', size: 'micro', ...args },

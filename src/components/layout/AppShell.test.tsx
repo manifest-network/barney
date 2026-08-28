@@ -8,26 +8,33 @@ import { AppShell } from './AppShell';
 
 const mockSetClientManager = vi.fn();
 const mockSetAddress = vi.fn();
+const mockSetWalletContext = vi.fn();
 
 vi.mock('../../hooks/useAI', () => ({
   useAI: () => ({
     setClientManager: mockSetClientManager,
     setAddress: mockSetAddress,
     setSigning: vi.fn(),
+    setWalletContext: mockSetWalletContext,
   }),
 }));
 
 let mockIsWalletConnected = false;
 let mockAddress: string | undefined;
+let mockClientAddress: string | undefined;
+let mockClientManager: unknown = null;
+let mockManifestConnected = false;
 let mockStatus = 'Disconnected';
 let mockMessage: string | undefined;
 const mockDisconnect = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('../../hooks/useManifestMCP', () => ({
   useManifestMCP: () => ({
-    clientManager: null,
+    clientManager: mockClientManager,
+    clientAddress: mockClientAddress,
     address: mockAddress,
     signing: undefined,
+    isConnected: mockManifestConnected,
   }),
 }));
 
@@ -53,6 +60,7 @@ vi.mock('../../hooks/useAccountSetup', () => ({
 }));
 
 vi.mock('../../config/chain', () => ({
+  CHAIN_ID: 'manifest-test',
   CHAIN_NAME: 'manifestlocal',
 }));
 
@@ -116,6 +124,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockIsWalletConnected = false;
   mockAddress = undefined;
+  mockClientAddress = undefined;
+  mockClientManager = null;
+  mockManifestConnected = false;
   mockStatus = 'Disconnected';
   mockMessage = undefined;
 });
@@ -143,8 +154,33 @@ describe('AppShell', () => {
   it('syncs wallet state to AI context', () => {
     mockIsWalletConnected = true;
     mockAddress = 'manifest1test';
+    mockClientAddress = 'manifest1test';
+    mockManifestConnected = true;
     render();
-    expect(mockSetAddress).toHaveBeenCalledWith('manifest1test');
+    expect(mockSetWalletContext).toHaveBeenCalledWith({
+      clientManager: null,
+      address: 'manifest1test',
+      signing: undefined,
+      chainId: 'manifest-test',
+    });
+  });
+
+  it('does not publish an old client while the wallet address is switching', () => {
+    const oldClient = { wallet: 'a' };
+    mockIsWalletConnected = true;
+    mockAddress = 'manifest1walletb';
+    mockClientAddress = 'manifest1walleta';
+    mockClientManager = oldClient;
+    mockManifestConnected = true;
+
+    render();
+
+    expect(mockSetWalletContext).toHaveBeenCalledWith({
+      clientManager: null,
+      address: 'manifest1walletb',
+      signing: undefined,
+      chainId: 'manifest-test',
+    });
   });
 
   it('shows warning toast when popup is blocked', () => {

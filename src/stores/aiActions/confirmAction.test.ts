@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { StreamResult } from '../../ai/streamUtils';
-import type { ToolResult } from '../../ai/toolExecutor';
+import type { PendingAction, ToolResult } from '../../ai/toolExecutor';
 import type { PendingConfirmation, ChatMessage } from '../../contexts/aiTypes';
 import { createAIStore, type AIStore } from '../aiStore';
 
@@ -100,17 +100,26 @@ function makeStreamResult(overrides: Partial<StreamResult> = {}): StreamResult {
   };
 }
 
-function makePendingConfirmation(overrides: Partial<PendingConfirmation> = {}): PendingConfirmation {
+function makePendingConfirmation(
+  overrides: Omit<Partial<PendingConfirmation>, 'action'> & { action?: Partial<PendingAction> } = {},
+): PendingConfirmation {
+  const { action: actionOverrides, ...confirmationOverrides } = overrides;
+  const action = {
+    originAddress: 'manifest1test',
+    chainId: 'manifest-test',
+    clientGeneration: 0,
+    signerGeneration: 0,
+    id: 'action_1',
+    toolName: 'deploy_app',
+    args: { image: 'nginx' },
+    description: 'Deploy nginx?',
+    ...actionOverrides,
+  };
   return {
     id: 'confirm_1',
-    action: {
-      id: 'action_1',
-      toolName: 'deploy_app',
-      args: { image: 'nginx' },
-      description: 'Deploy nginx?',
-    },
     messageId: 'tool_msg_1',
-    ...overrides,
+    ...confirmationOverrides,
+    action,
   };
 }
 
@@ -136,6 +145,7 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
     lastMessageTime: 0,
     clientManager: fakeClientManager,
     address: 'manifest1test',
+    chainId: 'manifest-test',
     settings: {
       saveHistory: false,
     },
@@ -185,6 +195,25 @@ describe('confirmAction', () => {
       expect(mockExecuteConfirmedTool).not.toHaveBeenCalled();
       // pendingConfirmation should remain unchanged
       expect(store.getState().pendingConfirmation).not.toBeNull();
+    });
+
+    it.each([
+      ['originAddress', 'manifest1other'],
+      ['chainId', 'other-chain'],
+      ['clientGeneration', 1],
+      ['signerGeneration', 1],
+    ] as const)('fails closed when bound %s no longer matches', async (field, value) => {
+      const pending = makePendingConfirmation({ action: { [field]: value } });
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+
+      await store.getState().confirmAction();
+
+      expect(mockExecuteConfirmedTool).not.toHaveBeenCalled();
+      expect(store.getState().pendingConfirmation).toBeNull();
+      expect(store.getState().messages[0].content).toContain('cancelled and was not submitted');
     });
   });
 

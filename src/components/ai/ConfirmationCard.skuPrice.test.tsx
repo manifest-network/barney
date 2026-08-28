@@ -31,6 +31,10 @@ const SAMPLE_TIER: ResolvedSkuTier = {
 };
 
 const ACTION: PendingAction = {
+  originAddress: 'manifest1test',
+  chainId: 'manifest-test',
+  clientGeneration: 1,
+  signerGeneration: 1,
   id: '1',
   toolName: 'deploy_app',
   description: 'Deploy redis on docker-micro',

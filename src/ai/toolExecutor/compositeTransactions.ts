@@ -581,20 +581,28 @@ export async function executeConfirmedDeployApp(
     },
   };
 
+  const deployErrorContext = () => ({
+    name,
+    leaseUuid: capturedLeaseUuid,
+    providerUrl: capturedProviderUrl ?? providerUrl,
+    address,
+    signing,
+    appRegistry,
+    onProgress,
+  });
+  let ctx: Awaited<ReturnType<typeof buildFredAuthCtx>>;
+  try {
+    ctx = await buildFredAuthCtx(clientManager, signing);
+  } catch (error) {
+    return await handleDeployManifestError(error, deployErrorContext());
+  }
+
+  options.assertAuthorization?.();
   let result: DeployResult;
   try {
-    const ctx = await buildFredAuthCtx(clientManager, signing);
     result = await deployManifest(ctx, spec, callOptions);
   } catch (error) {
-    return await handleDeployManifestError(error, {
-      name,
-      leaseUuid: capturedLeaseUuid,
-      providerUrl: capturedProviderUrl ?? providerUrl,
-      address,
-      signing,
-      appRegistry,
-      onProgress,
-    });
+    return await handleDeployManifestError(error, deployErrorContext());
   }
 
   const leaseUuid = result.lease_uuid;
@@ -997,6 +1005,7 @@ export async function executeConfirmedBatchDeploy(
       // Broadcasts are already serialized by CosmosClientManager.withBroadcastLock
       // and each token mint by the signing mutex inside providerAuth.
       let result: DeployResult;
+      options.assertAuthorization?.();
       try {
         result = await deployManifest(ctx, spec, callOptions);
       } catch (error) {
@@ -1164,7 +1173,7 @@ export async function executeConfirmedStopApp(
   clientManager: CosmosClientManager,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry } = options;
+  const { address, appRegistry, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -1188,8 +1197,13 @@ export async function executeConfirmedStopApp(
     const failed: string[] = [];
 
     for (const entry of entries) {
+      options.assertAuthorization?.();
       try {
-        await stopApp(ctx, { leaseUuid: asLeaseUuid(entry.leaseUuid) }, { waitForConfirmation: false });
+        await stopApp(
+          ctx,
+          { leaseUuid: asLeaseUuid(entry.leaseUuid) },
+          { waitForConfirmation: false, signal },
+        );
         // CHAIN observation only, and optimistic: waitForConfirmation is false,
         // so all we know is the TX reached the mempool; `reconcileWithChain`
         // corrects a DeliverTx rejection later. Nothing is written about
@@ -1229,8 +1243,13 @@ export async function executeConfirmedStopApp(
   const name = args.app_name as string;
   const leaseUuid = args.leaseUuid as string;
 
+  options.assertAuthorization?.();
   try {
-    const result: StopAppResult = await stopApp(ctx, { leaseUuid: asLeaseUuid(leaseUuid) }, { waitForConfirmation: true });
+    const result: StopAppResult = await stopApp(
+      ctx,
+      { leaseUuid: asLeaseUuid(leaseUuid) },
+      { waitForConfirmation: true, signal: options.signal },
+    );
     // CHAIN observation only — authoritative here, since waitForConfirmation
     // blocks for the DeliverTx outcome. No provisioning observation touched.
     appRegistry.updateApp(address, leaseUuid, { chainState: 'absent' });
@@ -1296,12 +1315,18 @@ export function executeFundCredits(
  */
 export async function executeConfirmedFundCredits(
   args: Record<string, unknown>,
-  clientManager: CosmosClientManager
+  clientManager: CosmosClientManager,
+  options: ToolExecutorOptions,
 ): Promise<ToolResult> {
   const address = args.address as string;
   const denomString = args.denomString as string;
   const amount = args.amount as number;
 
+  if (!address || address !== options.address) {
+    return { success: false, error: 'Transaction cancelled: credit target does not match the authorized wallet.' };
+  }
+
+  options.assertAuthorization?.();
   const result = await cosmosTx(clientManager, 'billing', 'fund-credit', [address, denomString], true);
 
   if (result.code !== 0) {
@@ -1368,7 +1393,7 @@ export function executeCosmosTransaction(
     confirmationMessage: `Execute ${module} ${subcommand}${argsSummary}?`,
     pendingAction: {
       toolName: 'cosmos_tx',
-      args: { module, subcommand, parsedArgs },
+      args: { module, subcommand, parsedArgs, address },
     },
   };
 }
@@ -1378,12 +1403,18 @@ export function executeCosmosTransaction(
  */
 export async function executeConfirmedCosmosTx(
   args: Record<string, unknown>,
-  clientManager: CosmosClientManager
+  clientManager: CosmosClientManager,
+  options: ToolExecutorOptions,
 ): Promise<ToolResult> {
   const module = args.module as string;
   const subcommand = args.subcommand as string;
   const parsedArgs = (args.parsedArgs as string[]) ?? [];
 
+  if (typeof args.address === 'string' && args.address !== options.address) {
+    return { success: false, error: 'Transaction cancelled: action address does not match the authorized wallet.' };
+  }
+
+  options.assertAuthorization?.();
   const result = await cosmosTx(clientManager, module, subcommand, parsedArgs, true);
 
   if (result.code !== 0) {
@@ -1509,7 +1540,16 @@ export async function executeConfirmedRestartApp(
   // Batch restart
   const entries = args.entries as Array<{ app_name: string; leaseUuid: string; providerUrl: string }> | undefined;
   if (entries && entries.length > 0) {
-    return executeConfirmedBatchRestart(entries, address, appRegistry, signing, onProgress, signal, clientManager);
+    return executeConfirmedBatchRestart(
+      entries,
+      address,
+      appRegistry,
+      signing,
+      onProgress,
+      signal,
+      clientManager,
+      options.assertAuthorization,
+    );
   }
 
   // ENG-312 Phase 6: the readiness wait now runs through the SDK's
@@ -1526,6 +1566,7 @@ export async function executeConfirmedRestartApp(
 
   onProgress?.({ phase: 'restarting', detail: 'Restarting app...', operation: 'restart' });
 
+  options.assertAuthorization?.();
   try {
     // The primitive mints its OWN ADR-036 token through ctx.providerAuth, so
     // never wrap it in a caller-side sign-lock (reentrant mutex deadlock).
@@ -1648,7 +1689,8 @@ async function executeConfirmedBatchRestart(
   signing: SigningContext,
   onProgress: ToolExecutorOptions['onProgress'],
   signal: AbortSignal | undefined,
-  clientManager: CosmosClientManager
+  clientManager: CosmosClientManager,
+  assertAuthorization: ToolExecutorOptions['assertAuthorization'],
 ): Promise<ToolResult> {
   const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
 
@@ -1671,6 +1713,7 @@ async function executeConfirmedBatchRestart(
       // Called DIRECTLY under runBatchWithConcurrency: the primitive mints its
       // own ADR-036 token through the non-reentrant signing mutex, exactly as
       // batch deploy calls deployManifest directly.
+      assertAuthorization?.();
       try {
         await restartApp(
           ctx,
@@ -2001,6 +2044,7 @@ export async function executeConfirmedUpdateApp(
   // deliberately NOT passed on: a second merge would re-inject deleted fields.
   const manifestJson = new TextDecoder().decode(payload.bytes);
 
+  options.assertAuthorization?.();
   try {
     // `pollOptions: false` + `providerUrl` are both mandatory — see the JSDoc
     // on executeRestartApp. Never wrapped in a caller-side sign-lock.
@@ -2468,7 +2512,12 @@ export async function executeConfirmedSetCustomDomain(
   const isApexWarning = typeof args.warning === 'string' && args.warning.length > 0;
   const clearing = customDomain === '';
 
+  if (typeof args.address === 'string' && args.address !== address) {
+    return { success: false, error: 'Transaction cancelled: domain action address does not match the authorized wallet.' };
+  }
+
   let result: Awaited<ReturnType<typeof monoSetItemCustomDomain>>;
+  options.assertAuthorization?.();
   try {
     result = await monoSetItemCustomDomain(
       { chain: clientManager, logger: noopLogger },
@@ -2483,6 +2532,7 @@ export async function executeConfirmedSetCustomDomain(
             customDomain: asFqdn(customDomain),
             ...(serviceName !== '' ? { serviceName } : {}),
           },
+      { signal: options.signal },
     );
   } catch (err) {
     logError('compositeTransactions.executeConfirmedSetCustomDomain', err);

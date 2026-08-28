@@ -25,6 +25,8 @@ export function useAI() {
     setClientManager: s.setClientManager,
     setAddress: s.setAddress,
     setSigning: s.setSigning,
+    setChainId: s.setChainId,
+    setWalletContext: s.setWalletContext,
     attachPayload: s.attachPayload,
     clearPayload: s.clearPayload,
     requestBatchDeploy: s.requestBatchDeploy,

@@ -67,6 +67,13 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
     clientManager: CLIENT_MANAGER,
     address: ADDRESS,
     tiers: [],
+    authorization: {
+      originAddress: ADDRESS,
+      chainId: 'manifest-test',
+      clientGeneration: 1,
+      signerGeneration: 1,
+    },
+    assertAuthorization: vi.fn(),
     ...overrides,
   };
 }
@@ -259,6 +266,57 @@ describe('executeTool', () => {
 describe('executeConfirmedTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('fails closed when the immutable authorization context is missing', async () => {
+    const result = await executeConfirmedTool(
+      'deploy_app',
+      {},
+      CLIENT_MANAGER,
+      makeOptions({ authorization: undefined, assertAuthorization: undefined }),
+    );
+    expect(result).toEqual({ success: false, error: 'Transaction authorization context is missing.' });
+    expect(executeConfirmedDeployApp).not.toHaveBeenCalled();
+  });
+
+  it('rejects an address-bearing action that targets a different wallet', async () => {
+    const result = await executeConfirmedTool(
+      'fund_credits',
+      { address: 'manifest1walleta', amount: 5 },
+      CLIENT_MANAGER,
+      makeOptions({
+        address: 'manifest1walletb',
+        authorization: {
+          originAddress: 'manifest1walletb', chainId: 'manifest-test',
+          clientGeneration: 1, signerGeneration: 1,
+        },
+      }),
+    );
+    expect(result.success).toBe(false);
+    expect(executeConfirmedFundCredits).not.toHaveBeenCalled();
+  });
+
+  it('rejects a signing client outside the bound executor context', async () => {
+    const otherManager = {} as CosmosClientManager;
+    const result = await executeConfirmedTool(
+      'stop_app',
+      {},
+      otherManager,
+      makeOptions(),
+    );
+    expect(result.success).toBe(false);
+    expect(executeConfirmedStopApp).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the live generation immediately before executor dispatch', async () => {
+    const result = await executeConfirmedTool(
+      'stop_app',
+      {},
+      CLIENT_MANAGER,
+      makeOptions({ assertAuthorization: () => { throw new Error('identity changed'); } }),
+    );
+    expect(result).toEqual({ success: false, error: 'identity changed' });
+    expect(executeConfirmedStopApp).not.toHaveBeenCalled();
   });
 
   it('routes deploy_app to confirmed executor', async () => {

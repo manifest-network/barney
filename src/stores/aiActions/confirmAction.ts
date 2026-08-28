@@ -10,6 +10,12 @@ import { bigIntReplacer } from '../../utils/json';
 import { isApex, APEX_WARNING } from '../../utils/customDomainValidation';
 import { normalizeFqdn } from '../../utils/connection';
 import type { AIStore } from '../aiStore';
+import {
+  AUTHORIZATION_CANCELLED_MESSAGE,
+  AUTHORIZATION_CHANGED_ERROR,
+  assertTransactionAuthorizationCurrent,
+  isTransactionAuthorizationCurrent,
+} from '../authorization';
 import { generateMessageId, toChatApiMessages, getAppRegistryAccess } from './utils';
 
 const DEPLOY_DOMAIN_KEYS = ['customDomain', 'customDomainServiceName', 'customDomainWarning'] as const;
@@ -60,7 +66,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
 
   if (!clientManager) {
     const { messageId } = pendingConfirmation;
-    set({ pendingConfirmation: null });
+    set({ pendingConfirmation: null, pendingPayload: null, deployProgress: null });
     const updated = get().messages.map((m) =>
       m.id === messageId
         ? { ...m, content: 'Wallet disconnected. Please reconnect your wallet and try again.', error: 'wallet_disconnected', isStreaming: false, awaitingConfirmation: false }
@@ -70,8 +76,31 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     return;
   }
 
+  if (!isTransactionAuthorizationCurrent(get(), pendingConfirmation.action)) {
+    const { messageId } = pendingConfirmation;
+    set({
+      pendingConfirmation: null,
+      pendingPayload: null,
+      deployProgress: null,
+      messages: get().messages.map((m) =>
+        m.id === messageId
+          ? {
+              ...m,
+              content: AUTHORIZATION_CANCELLED_MESSAGE,
+              error: AUTHORIZATION_CHANGED_ERROR,
+              isStreaming: false,
+              awaitingConfirmation: false,
+            }
+          : m
+      ),
+    });
+    return;
+  }
+
   const { address, signing } = get();
   const { messageId } = pendingConfirmation;
+  const authorization = pendingConfirmation.action;
+  const authorizationEpoch = get().authorizationEpoch;
 
   // Clone action to avoid mutating React state; apply user edits if present.
   let confirmedArgs = pendingConfirmation.action.args;
@@ -100,9 +129,20 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
   const abort = new AbortController();
   set({ abortController: abort });
 
+  const assertAuthorization = () => {
+    if (abort.signal.aborted || get().abortController !== abort) {
+      throw new Error(AUTHORIZATION_CANCELLED_MESSAGE);
+    }
+    assertTransactionAuthorizationCurrent(get(), authorization);
+  };
+
   try {
     set({ deployProgress: null });
 
+    // Last synchronous gate before dispatch. `executeConfirmedTool` repeats it,
+    // and each concrete executor invokes the same live guard immediately before
+    // its non-idempotent SDK/chain call.
+    assertAuthorization();
     const result = await executeConfirmedTool(
       action.toolName,
       action.args,
@@ -111,13 +151,24 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
         clientManager,
         address,
         signing,
-        onProgress: (progress) => set({ deployProgress: { ...progress } }),
+        onProgress: (progress) => {
+          if (get().authorizationEpoch === authorizationEpoch
+              && get().abortController === abort) {
+            set({ deployProgress: { ...progress } });
+          }
+        },
         appRegistry: getAppRegistryAccess(),
-        signal: get().abortController?.signal,
+        signal: abort.signal,
         tiers: get().skuTiers.tiers,
+        authorization,
+        assertAuthorization,
       },
       action.payload
     );
+
+    if (get().authorizationEpoch !== authorizationEpoch
+        || get().abortController !== abort
+        || !isTransactionAuthorizationCurrent(get(), authorization)) return;
 
     // For simple operations (restart/update), clear progress on failure
     if (!result.success) {
@@ -159,7 +210,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     const activeSigning = get().signing;
     const stream = streamChat({
       messages: toChatApiMessages(updatedMessages, get().address, get().skuTiers.tiers),
-      signal: get().abortController?.signal,
+      signal: abort.signal,
       auth: activeAddress && activeSigning ? {
         walletAddress: activeAddress,
         signChallenge: activeSigning.relayAuth.signChallenge,
@@ -169,9 +220,15 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     const streamResult = await processStreamWithTimeout(
       stream,
       (content, thinking) => {
-        get().scheduleStreamingUpdate(newAssistantMessageId, content, thinking);
+        if (get().authorizationEpoch === authorizationEpoch
+            && get().abortController === abort) {
+          get().scheduleStreamingUpdate(newAssistantMessageId, content, thinking);
+        }
       }
     );
+
+    if (get().authorizationEpoch !== authorizationEpoch
+        || get().abortController !== abort) return;
 
     get().flushPendingUpdate();
 
@@ -188,6 +245,8 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     );
     set({ messages: updated2 });
   } catch (error) {
+    if (get().authorizationEpoch !== authorizationEpoch
+        || get().abortController !== abort) return;
     logError('AIContext.confirmAction', error);
     set({ deployProgress: null });
     const errorMessage = error instanceof Error && error.message.includes('timeout')
@@ -201,9 +260,12 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     );
     set({ messages: updated });
   } finally {
-    set({ isStreaming: false, pendingPayload: null });
-    get().abortController?.abort();
-    set({ abortController: null });
+    if (get().authorizationEpoch === authorizationEpoch
+        && get().abortController === abort) {
+      set({ isStreaming: false, pendingPayload: null });
+      abort.abort();
+      set({ abortController: null });
+    }
   }
 }
 

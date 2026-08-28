@@ -45,7 +45,7 @@ export interface UseAccountSetupOptions {
   isWalletConnected: boolean;
   /**
    * Stable ref to the signing `CosmosClientManager` (the aiStore singleton
-   * `AppShell.setClientManager` also wires in — never a fresh manager, which
+   * `AppShell.setWalletContext` also wires in — never a fresh manager, which
    * would break sync-broadcast sequencing). Read lazily at funding time so effect deps stay
    * stable. ENG-312 Phase 7: replaced the raw OfflineSigner ref now that credit
    * funding goes through the SDK's `fundCredits(TxCtx)`.

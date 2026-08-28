@@ -126,6 +126,7 @@ import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
 import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
 import { TerminalChainStateError, deployManifest, stopApp, waitForLeaseStatus, isLeaseFailureTerminal, restartApp, updateApp, FRED_REASON_GUIDANCE } from '@manifest-network/manifest-sdk/deploy';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
+import { getReadClient } from '../../api/readClient';
 
 const ADDRESS = 'manifest1abc';
 const CLIENT_MANAGER = {} as CosmosClientManager;
@@ -1813,6 +1814,33 @@ describe('executeConfirmedDeployApp', () => {
 
   const ARGS = { app_name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' };
 
+  it('blocks an A to B switch after async setup and immediately before deploy', async () => {
+    let resolveReadClient!: (client: Awaited<ReturnType<typeof getReadClient>>) => void;
+    vi.mocked(getReadClient).mockImplementationOnce(
+      () => new Promise((resolve) => { resolveReadClient = resolve; }),
+    );
+    let activeAddress = ADDRESS;
+    const deploying = executeConfirmedDeployApp(
+      ARGS,
+      CLIENT_MANAGER,
+      makeOptions({
+        assertAuthorization: () => {
+          if (activeAddress !== ADDRESS) throw new Error('wallet changed');
+        },
+      }),
+      makePayload(),
+    );
+    await vi.waitFor(() => expect(getReadClient).toHaveBeenCalledOnce());
+
+    activeAddress = 'manifest1walletb';
+    resolveReadClient(
+      { query: { __tag: 'read-query-client' } } as unknown as Awaited<ReturnType<typeof getReadClient>>,
+    );
+
+    await expect(deploying).rejects.toThrow('wallet changed');
+    expect(deployManifest).not.toHaveBeenCalled();
+  });
+
   it('deploys via deployManifest and shapes URL from connection (top-level ports)', async () => {
     mockDeploySuccess({
       connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
@@ -2230,11 +2258,33 @@ describe('executeConfirmedFundCredits', () => {
 
     const result = await executeConfirmedFundCredits(
       { amount: 50, denomString: '50000000upwr', address: ADDRESS },
-      CLIENT_MANAGER
+      CLIENT_MANAGER,
+      makeOptions(),
     );
 
     expect(result.success).toBe(true);
     expect((result.data as any).amount).toBe(50);
+  });
+
+  it('does not broadcast when the pending target belongs to another wallet', async () => {
+    const result = await executeConfirmedFundCredits(
+      { amount: 50, denomString: '50000000upwr', address: 'manifest1walleta' },
+      CLIENT_MANAGER,
+      makeOptions({ address: 'manifest1walletb' }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(cosmosTx).not.toHaveBeenCalled();
+  });
+
+  it('runs the live authorization guard immediately before broadcast', async () => {
+    await expect(executeConfirmedFundCredits(
+      { amount: 50, denomString: '50000000upwr', address: ADDRESS },
+      CLIENT_MANAGER,
+      makeOptions({ assertAuthorization: () => { throw new Error('identity changed'); } }),
+    )).rejects.toThrow('identity changed');
+
+    expect(cosmosTx).not.toHaveBeenCalled();
   });
 });
 
@@ -2251,6 +2301,7 @@ describe('executeCosmosTransaction', () => {
     );
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args.address).toBe(ADDRESS);
   });
 });
 
@@ -2262,7 +2313,8 @@ describe('executeConfirmedCosmosTx', () => {
 
     const result = await executeConfirmedCosmosTx(
       { module: 'bank', subcommand: 'send', parsedArgs: ['addr', '100umfx'] },
-      CLIENT_MANAGER
+      CLIENT_MANAGER,
+      makeOptions(),
     );
 
     expect(result.success).toBe(true);

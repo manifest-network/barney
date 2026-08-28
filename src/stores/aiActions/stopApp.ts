@@ -13,6 +13,7 @@
  */
 
 import type { AIStore } from '../aiStore';
+import { captureTransactionAuthorization } from '../authorization';
 import { generateMessageId, trimMessages, getAppRegistryAccess } from './utils';
 
 type Get = () => AIStore;
@@ -29,6 +30,8 @@ export function requestStopAppFn(get: Get, set: Set, appName: string): void {
   if (isStreaming || !isConnected || !address || pendingConfirmation !== null) return;
 
   const registry = getAppRegistryAccess();
+  const authorization = captureTransactionAuthorization(get());
+  if (!authorization) return;
   const app = registry.findApp(address, appName);
   if (!app) return;                          // unknown app — silent no-op
   if (app.status === 'stopped') return;      // already stopped — silent no-op
@@ -76,12 +79,13 @@ export function requestStopAppFn(get: Get, set: Set, appName: string): void {
     ]),
     pendingConfirmation: {
       id: generateMessageId(),
-      action: {
+      action: Object.freeze({
+        ...authorization,
         id: syntheticToolCallId,
         toolName: 'stop_app',
         args: { app_name: app.name, leaseUuid: app.leaseUuid },
         description: confirmationMessage,
-      },
+      }),
       messageId: toolMsgId,
     },
   });

@@ -100,7 +100,7 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
   // covers all three transitions.
   //
   // Without this, a 5s DoH fetch kicked off for the previous candidate set
-  // could resolve after `setAddress` reset `dnsStatuses` and repopulate it
+  // could resolve after a wallet-context reset cleared `dnsStatuses` and repopulate it
   // with stale lease/domain entries — especially when the new wallet has
   // zero targets so the next poll() tick never fires to call `abort()` itself.
   useEffect(() => () => abortRef.current?.abort(), [allTargets]);

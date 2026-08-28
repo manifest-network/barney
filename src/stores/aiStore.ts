@@ -19,6 +19,12 @@ import {
 } from '../config/constants';
 import type { ChatMessage, PendingConfirmation, MessageCard } from '../contexts/aiTypes';
 import type { CustomDomainStatusKind } from '../utils/customDomainStatus';
+import { CHAIN_ID } from '../config/chain';
+import {
+  ACTIVE_WORK_CANCELLED_MESSAGE,
+  AUTHORIZATION_CANCELLED_MESSAGE,
+  AUTHORIZATION_CHANGED_ERROR,
+} from './authorization';
 
 /** Per-domain status report stored in the dnsStatuses map. The map key is
  *  `${leaseUuid}::${customDomain}` so multi-domain stacks don't collide. */
@@ -86,6 +92,13 @@ export interface AIStore {
   clientManager: CosmosClientManager | null;
   address: string | undefined;
   signing: SigningContext | undefined;
+  chainId: string;
+  /** Monotonic identities for concrete SDK client/signer instances. */
+  clientGeneration: number;
+  signerGeneration: number;
+  /** Changes whenever any authorization-relevant wallet context changes. Async
+   * actions capture this epoch so late results cannot repopulate cleared state. */
+  authorizationEpoch: number;
   abortController: AbortController | null;
   lastMessageTime: number;
   _toolCache: Map<string, { result: ToolResult; timestamp: number }>;
@@ -106,6 +119,13 @@ export interface AIStore {
   setClientManager: (manager: CosmosClientManager | null) => void;
   setAddress: (address: string | undefined) => void;
   setSigning: (ctx: SigningContext | undefined) => void;
+  setChainId: (chainId: string) => void;
+  setWalletContext: (context: {
+    clientManager: CosmosClientManager | null;
+    address: string | undefined;
+    signing: SigningContext | undefined;
+    chainId: string;
+  }) => void;
   setDnsStatuses: (statuses: ReadonlyMap<string, DnsStatusEntry>) => void;
   updateSettings: (settings: Partial<AISettings>) => void;
   clearHistory: () => void;
@@ -129,6 +149,57 @@ export interface AIStore {
   destroy: () => void;
 }
 
+function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
+  const messages = state.messages.map((message) => {
+    if (state.pendingConfirmation?.messageId === message.id) {
+      return {
+        ...message,
+        content: AUTHORIZATION_CANCELLED_MESSAGE,
+        error: AUTHORIZATION_CHANGED_ERROR,
+        isStreaming: false,
+        awaitingConfirmation: false,
+      };
+    }
+
+    if (message.isStreaming) {
+      if (message.role === 'tool') {
+        return {
+          ...message,
+          content: ACTIVE_WORK_CANCELLED_MESSAGE,
+          error: AUTHORIZATION_CHANGED_ERROR,
+          isStreaming: false,
+          awaitingConfirmation: false,
+        };
+      }
+      return { ...message, isStreaming: false };
+    }
+
+    return message;
+  });
+
+  const hadActiveWork = state.isStreaming
+    || state.abortController !== null
+    || state.pendingConfirmation !== null
+    || state.pendingPayload !== null
+    || (state.deployProgress !== null
+      && state.deployProgress.phase !== 'ready'
+      && state.deployProgress.phase !== 'failed');
+
+  if (hadActiveWork) {
+    messages.push({
+      id: generateMessageId(),
+      role: 'assistant',
+      content: state.pendingConfirmation
+        ? AUTHORIZATION_CANCELLED_MESSAGE
+        : ACTIVE_WORK_CANCELLED_MESSAGE,
+      timestamp: Date.now(),
+      local: true,
+    });
+  }
+
+  return trimMessages(messages);
+}
+
 export const createAIStore = () =>
   createStore<AIStore>((set, get) => ({
     // --- Initial state ---
@@ -146,6 +217,10 @@ export const createAIStore = () =>
     clientManager: null,
     address: undefined,
     signing: undefined,
+    chainId: CHAIN_ID,
+    clientGeneration: 0,
+    signerGeneration: 0,
+    authorizationEpoch: 0,
     abortController: null,
     lastMessageTime: 0,
     _toolCache: new Map(),
@@ -204,28 +279,76 @@ export const createAIStore = () =>
     },
 
     // --- Wallet setters ---
+    setWalletContext: (context) => {
+      const current = get();
+      const clientChanged = context.clientManager !== current.clientManager;
+      const addressChanged = context.address !== current.address;
+      const signerChanged = context.signing !== current.signing;
+      const chainChanged = context.chainId !== current.chainId;
+      if (!clientChanged && !addressChanged && !signerChanged && !chainChanged) return;
+
+      // Abort first, then publish the new identity and the complete cleared
+      // authorization state in one Zustand update. The epoch/generation checks
+      // in async actions make any callbacks already queued by the old work inert.
+      current.abortController?.abort();
+      if (current._rafId !== null) cancelAnimationFrame(current._rafId);
+      current._toolCache.clear();
+
+      set({
+        ...context,
+        clientGeneration: current.clientGeneration + (clientChanged ? 1 : 0),
+        signerGeneration: current.signerGeneration + (signerChanged ? 1 : 0),
+        authorizationEpoch: current.authorizationEpoch + 1,
+        pendingConfirmation: null,
+        pendingPayload: null,
+        deployProgress: null,
+        dnsStatuses: new Map(),
+        abortController: null,
+        isStreaming: false,
+        _pendingStreamUpdate: null,
+        _rafId: null,
+        messages: messagesAfterAuthorizationChange(current),
+      });
+    },
+
     setClientManager: (manager) => {
-      set({ clientManager: manager });
+      const current = get();
+      current.setWalletContext({
+        clientManager: manager,
+        address: current.address,
+        signing: current.signing,
+        chainId: current.chainId,
+      });
     },
 
     setAddress: (address) => {
-      if (address !== get().address) {
-        // Wallet identity is part of both the transaction and paid-relay trust
-        // boundaries. Do not let work begun for the prior wallet keep streaming.
-        get().abortController?.abort();
-        get()._toolCache.clear();
-        // Drop dnsStatuses too — entries belong to the prior wallet's running
-        // apps and would otherwise leak across wallets and grow the map on
-        // every switch. Also bounds (does not fully eliminate) the race where
-        // an in-flight DoH probe from the prior wallet resolves after this
-        // call; any post-reset resolution is overwritten on the next 30s tick.
-        set({ deployProgress: null, dnsStatuses: new Map() });
-      }
-      set({ address });
+      const current = get();
+      current.setWalletContext({
+        clientManager: current.clientManager,
+        address,
+        signing: current.signing,
+        chainId: current.chainId,
+      });
     },
 
-    setSigning: (ctx) => {
-      set({ signing: ctx });
+    setSigning: (signing) => {
+      const current = get();
+      current.setWalletContext({
+        clientManager: current.clientManager,
+        address: current.address,
+        signing,
+        chainId: current.chainId,
+      });
+    },
+
+    setChainId: (chainId) => {
+      const current = get();
+      current.setWalletContext({
+        clientManager: current.clientManager,
+        address: current.address,
+        signing: current.signing,
+        chainId,
+      });
     },
 
     setDnsStatuses: (statuses) => {
@@ -234,6 +357,7 @@ export const createAIStore = () =>
 
     // --- Payload attachment ---
     attachPayload: async (file) => {
+      const authorizationEpoch = get().authorizationEpoch;
       const validation = validateFile(file);
       if (!validation.valid) {
         return { error: validation.error };
@@ -250,6 +374,10 @@ export const createAIStore = () =>
 
         const hashBytes = await sha256(bytes);
         const hash = toHex(hashBytes);
+
+        if (get().authorizationEpoch !== authorizationEpoch) {
+          return { error: ACTIVE_WORK_CANCELLED_MESSAGE };
+        }
 
         const attachment: PayloadAttachment = {
           bytes,

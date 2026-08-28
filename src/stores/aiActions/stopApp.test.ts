@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createAIStore } from '../aiStore';
+import { createAIStore, type AIStore } from '../aiStore';
 import type { AppEntry } from '../../registry/appRegistry';
 
 // ---------------------------------------------------------------------------
@@ -50,6 +50,7 @@ vi.mock('../../utils/errors', () => ({
 }));
 
 type Store = ReturnType<typeof createAIStore>;
+const fakeClientManager = { fake: true } as unknown as NonNullable<AIStore['clientManager']>;
 
 function makeApp(overrides: Partial<AppEntry> = {}): AppEntry {
   return {
@@ -70,6 +71,7 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
     isConnected: true,
     isStreaming: false,
     address: 'manifest1test',
+    clientManager: fakeClientManager,
     ...overrides,
   });
   return store;
@@ -180,8 +182,12 @@ describe('requestStopApp', () => {
     const store = setupStore();
     const priorConfirmation = {
       id: 'prior-1',
-      action: {
-        id: 'prior-action',
+        action: {
+          originAddress: 'manifest1test',
+          chainId: store.getState().chainId,
+          clientGeneration: store.getState().clientGeneration,
+          signerGeneration: store.getState().signerGeneration,
+          id: 'prior-action',
         toolName: 'deploy_app',
         args: { app_name: 'web' },
         description: 'Deploy web?',

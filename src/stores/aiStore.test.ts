@@ -248,6 +248,103 @@ describe('aiStore', () => {
     });
   });
 
+  describe('authorization context invalidation', () => {
+    it.each(['address', 'chain', 'client', 'signing'] as const)(
+      'atomically cancels authorization state when %s changes',
+      (changedField) => {
+        const managerA = { id: 'client-a' } as unknown as NonNullable<AIStore['clientManager']>;
+        const managerB = { id: 'client-b' } as unknown as NonNullable<AIStore['clientManager']>;
+        const signingA = { id: 'signer-a' } as unknown as NonNullable<AIStore['signing']>;
+        const signingB = { id: 'signer-b' } as unknown as NonNullable<AIStore['signing']>;
+
+        store.getState().setWalletContext({
+          clientManager: managerA,
+          address: 'manifest1a',
+          signing: signingA,
+          chainId: 'chain-a',
+        });
+        const bound = store.getState();
+        const controller = new AbortController();
+        const abortSpy = vi.spyOn(controller, 'abort');
+        const cancelRafSpy = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+        store.setState({
+          isStreaming: true,
+          abortController: controller,
+          _rafId: 17,
+          _pendingStreamUpdate: { messageId: 'tool-1', content: 'late update' },
+          pendingPayload: { bytes: new Uint8Array([1]), size: 1, hash: 'a' },
+          deployProgress: { phase: 'creating_lease', operation: 'deploy' },
+          messages: [{
+            id: 'tool-1', role: 'tool', content: 'Confirm?', timestamp: 1,
+            isStreaming: false, awaitingConfirmation: true,
+          }],
+          pendingConfirmation: {
+            id: 'pending-1',
+            messageId: 'tool-1',
+            action: {
+              originAddress: bound.address!,
+              chainId: bound.chainId,
+              clientGeneration: bound.clientGeneration,
+              signerGeneration: bound.signerGeneration,
+              id: 'action-1',
+              toolName: 'fund_credits',
+              args: { address: bound.address, amount: 1 },
+              description: 'Fund?',
+            },
+          },
+        });
+
+        const beforeEpoch = store.getState().authorizationEpoch;
+        store.getState().setWalletContext({
+          clientManager: changedField === 'client' ? managerB : managerA,
+          address: changedField === 'address' ? 'manifest1b' : 'manifest1a',
+          signing: changedField === 'signing' ? signingB : signingA,
+          chainId: changedField === 'chain' ? 'chain-b' : 'chain-a',
+        });
+
+        const state = store.getState();
+        expect(abortSpy).toHaveBeenCalledOnce();
+        expect(cancelRafSpy).toHaveBeenCalledWith(17);
+        expect(state.authorizationEpoch).toBe(beforeEpoch + 1);
+        expect(state.pendingConfirmation).toBeNull();
+        expect(state.pendingPayload).toBeNull();
+        expect(state.deployProgress).toBeNull();
+        expect(state.abortController).toBeNull();
+        expect(state._pendingStreamUpdate).toBeNull();
+        expect(state._rafId).toBeNull();
+        expect(state.isStreaming).toBe(false);
+        expect(state.messages[0].content).toContain('cancelled and was not submitted');
+        expect(state.messages[0].awaitingConfirmation).toBe(false);
+        expect(state.messages.at(-1)).toMatchObject({
+          role: 'assistant',
+          local: true,
+          content: expect.stringContaining('cancelled and was not submitted'),
+        });
+
+        cancelRafSpy.mockRestore();
+      },
+    );
+
+    it('does not let a file read from the old identity restore pendingPayload', async () => {
+      store.getState().setAddress('manifest1a');
+      let resolveRead!: (value: ArrayBuffer) => void;
+      const file = {
+        name: 'manifest.json',
+        size: 18,
+        type: 'application/json',
+        arrayBuffer: () => new Promise<ArrayBuffer>((resolve) => { resolveRead = resolve; }),
+      } as unknown as File;
+
+      const attaching = store.getState().attachPayload(file);
+      store.getState().setAddress('manifest1b');
+      resolveRead(new TextEncoder().encode('{"image":"nginx"}').buffer as ArrayBuffer);
+
+      const result = await attaching;
+      expect(result.error).toContain('cancelled');
+      expect(store.getState().pendingPayload).toBeNull();
+    });
+  });
+
   // ---- Settings ----
 
   describe('updateSettings', () => {

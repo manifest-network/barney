@@ -36,7 +36,7 @@ import {
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 
 // Re-export types
-export type { ToolResult, ToolExecutorOptions, PendingAction, SignResult, PayloadAttachment, AuthTokens, SigningContext } from './types';
+export type { ToolResult, ToolExecutorOptions, PendingAction, SignResult, PayloadAttachment, AuthTokens, SigningContext, TransactionAuthorization } from './types';
 export type { AppRegistryAccess } from './types';
 
 /** Query tools that execute immediately */
@@ -163,7 +163,34 @@ export async function executeConfirmedTool(
   options: ToolExecutorOptions,
   payload?: PayloadAttachment
 ): Promise<ToolResult> {
+  const knownConfirmedTool = toolName === 'deploy_app'
+    || toolName === 'batch_deploy'
+    || toolName === 'stop_app'
+    || toolName === 'fund_credits'
+    || toolName === 'cosmos_tx'
+    || toolName === 'restart_app'
+    || toolName === 'update_app'
+    || toolName === 'set_custom_domain';
+  if (!knownConfirmedTool) {
+    return { success: false, error: `Unknown confirmed tool: ${toolName}` };
+  }
+
   try {
+    const { authorization, assertAuthorization } = options;
+    if (!authorization || !assertAuthorization) {
+      return { success: false, error: 'Transaction authorization context is missing.' };
+    }
+    if (!options.clientManager || options.clientManager !== clientManager) {
+      return { success: false, error: 'Transaction cancelled: signing client does not match the authorized context.' };
+    }
+    if (options.address !== authorization.originAddress) {
+      return { success: false, error: 'Transaction cancelled: authorized wallet address mismatch.' };
+    }
+    if ('address' in args && args.address !== authorization.originAddress) {
+      return { success: false, error: 'Transaction cancelled: action target address does not match the authorized wallet.' };
+    }
+    assertAuthorization();
+
     switch (toolName) {
       case 'deploy_app':
         return await executeConfirmedDeployApp(args, clientManager, options, payload);
@@ -172,9 +199,9 @@ export async function executeConfirmedTool(
       case 'stop_app':
         return await executeConfirmedStopApp(args, clientManager, options);
       case 'fund_credits':
-        return await executeConfirmedFundCredits(args, clientManager);
+        return await executeConfirmedFundCredits(args, clientManager, options);
       case 'cosmos_tx':
-        return await executeConfirmedCosmosTx(args, clientManager);
+        return await executeConfirmedCosmosTx(args, clientManager, options);
       case 'restart_app':
         return await executeConfirmedRestartApp(args, clientManager, options);
       case 'update_app':

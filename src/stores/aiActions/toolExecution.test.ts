@@ -81,6 +81,10 @@ describe('processToolCallsFn', () => {
     deployProgress: AIStore['deployProgress'];
     clientManager: AIStore['clientManager'];
     address: AIStore['address'];
+    chainId: AIStore['chainId'];
+    clientGeneration: AIStore['clientGeneration'];
+    signerGeneration: AIStore['signerGeneration'];
+    authorizationEpoch: AIStore['authorizationEpoch'];
     abortController: AIStore['abortController'];
     _toolCache: Map<string, { result: ToolResult; timestamp: number }>;
   };
@@ -95,8 +99,12 @@ describe('processToolCallsFn', () => {
       pendingConfirmation: null,
       pendingPayload: null,
       deployProgress: null,
-      clientManager: null,
+      clientManager: {} as AIStore['clientManager'],
       address: 'manifest1test',
+      chainId: 'manifest-test',
+      clientGeneration: 1,
+      signerGeneration: 1,
+      authorizationEpoch: 1,
       abortController: null,
       _toolCache: new Map(),
     };
@@ -188,6 +196,42 @@ describe('processToolCallsFn', () => {
     expect(result.shouldContinue).toBe(false);
     expect(state.pendingConfirmation).not.toBeNull();
     expect(state.pendingConfirmation!.action.toolName).toBe('deploy_app');
+    expect(state.pendingConfirmation!.action).toMatchObject({
+      originAddress: 'manifest1test',
+      chainId: 'manifest-test',
+      clientGeneration: 1,
+      signerGeneration: 1,
+    });
+    expect(Object.isFrozen(state.pendingConfirmation!.action)).toBe(true);
+  });
+
+  it('drops a late confirmation produced after an A to B identity switch', async () => {
+    let resolveExecution!: (result: ToolResult) => void;
+    vi.mocked(executeTool).mockImplementationOnce(
+      () => new Promise<ToolResult>((resolve) => { resolveExecution = resolve; }),
+    );
+
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const toolCall = makeToolCall({ function: { name: 'fund_credits', arguments: { amount: 5 } } });
+    const processing = processToolCallsFn(get, set, [toolCall], 'asst_1', {
+      content: '', thinking: '', toolCalls: [toolCall],
+    });
+    await vi.waitFor(() => expect(executeTool).toHaveBeenCalledOnce());
+
+    state.address = 'manifest1walletb';
+    state.clientManager = { wallet: 'b' } as unknown as AIStore['clientManager'];
+    state.clientGeneration += 1;
+    state.authorizationEpoch += 1;
+    resolveExecution({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Fund?',
+      pendingAction: { toolName: 'fund_credits', args: { address: 'manifest1test', amount: 5 } },
+    });
+
+    const result = await processing;
+    expect(result.shouldContinue).toBe(false);
+    expect(state.pendingConfirmation).toBeNull();
   });
 
   it('sets card on message and stops for displayCard result', async () => {

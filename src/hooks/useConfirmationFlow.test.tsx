@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createAIStore } from '../stores/aiStore';
+import { createElement } from 'react';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { createAIStore, type AIStore } from '../stores/aiStore';
 import type { PendingConfirmation } from '../contexts/aiTypes';
+import { AIStoreContext } from '../contexts/aiStoreContext';
+import { useAI } from './useAI';
+import { ConfirmationCard } from '../components/ai/ConfirmationCard';
 
 vi.mock('../api/morpheus', () => ({
   streamChat: vi.fn(),
@@ -19,16 +25,39 @@ vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
+import { executeConfirmedTool } from '../ai/toolExecutor';
+
+function RenderedConfirmationFlow() {
+  const { pendingConfirmation, confirmAction, cancelAction, isStreaming, messages } = useAI();
+  if (!pendingConfirmation) {
+    return createElement('div', { 'data-testid': 'cancelled' }, messages.at(-1)?.content ?? 'No confirmation');
+  }
+  return createElement(ConfirmationCard, {
+    action: pendingConfirmation.action,
+    onConfirm: (overrides) => { void confirmAction(overrides); },
+    onCancel: cancelAction,
+    isExecuting: isStreaming,
+  });
+}
+
 describe('confirmation flow (Zustand store)', () => {
   let store: ReturnType<typeof createAIStore>;
+  let container: HTMLDivElement | undefined;
+  let root: Root | undefined;
 
   beforeEach(() => {
     vi.useFakeTimers();
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     store = createAIStore();
   });
 
   afterEach(() => {
+    if (root) act(() => root?.unmount());
+    container?.remove();
+    root = undefined;
+    container = undefined;
     store.getState().destroy();
+    delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
     vi.useRealTimers();
   });
 
@@ -37,6 +66,10 @@ describe('confirmation flow (Zustand store)', () => {
       id: 'pending-1',
       messageId: 'msg-1',
       action: {
+        originAddress: 'manifest1test',
+        chainId: store.getState().chainId,
+        clientGeneration: 0,
+        signerGeneration: 0,
         id: 'action-1',
         toolName: 'deploy_app',
         args: { app_name: 'test' },
@@ -76,4 +109,82 @@ describe('confirmation flow (Zustand store)', () => {
     // deployProgress should NOT be cleared since there's no pending confirmation
     expect(store.getState().deployProgress).not.toBeNull();
   });
+
+  it.each(['fund_credits', 'deploy_app', 'stop_app', 'update_app'])(
+    'rendered %s consent from wallet A disappears and cannot be approved by wallet B',
+    async (toolName) => {
+      const managerA = { wallet: 'a' } as unknown as NonNullable<AIStore['clientManager']>;
+      const managerB = { wallet: 'b' } as unknown as NonNullable<AIStore['clientManager']>;
+      const signerA = { wallet: 'a' } as unknown as NonNullable<AIStore['signing']>;
+      const signerB = { wallet: 'b' } as unknown as NonNullable<AIStore['signing']>;
+      store.getState().setWalletContext({
+        clientManager: managerA,
+        address: 'manifest1walleta',
+        signing: signerA,
+        chainId: 'manifest-test',
+      });
+      const identity = store.getState();
+      const argsByTool: Record<string, Record<string, unknown>> = {
+        fund_credits: { address: 'manifest1walleta', amount: 5, denomString: '5000000upwr' },
+        deploy_app: { app_name: 'web', size: 'micro', _generatedManifest: '{"image":"nginx"}' },
+        stop_app: { app_name: 'web', leaseUuid: 'lease-1' },
+        update_app: { app_name: 'web', leaseUuid: 'lease-1', _generatedManifest: '{"image":"nginx:2"}' },
+      };
+      store.setState({
+        messages: [{
+          id: 'tool-consent', role: 'tool', content: 'Confirm transaction?', timestamp: 1,
+          toolName, isStreaming: false, awaitingConfirmation: true,
+        }],
+        pendingConfirmation: {
+          id: 'pending-a',
+          messageId: 'tool-consent',
+          action: Object.freeze({
+            originAddress: 'manifest1walleta',
+            chainId: identity.chainId,
+            clientGeneration: identity.clientGeneration,
+            signerGeneration: identity.signerGeneration,
+            id: 'action-a',
+            toolName,
+            args: argsByTool[toolName],
+            description: `Confirm ${toolName}?`,
+          }),
+        },
+      });
+
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+      await act(async () => {
+        root?.render(createElement(
+          AIStoreContext.Provider,
+          { value: store },
+          createElement(RenderedConfirmationFlow),
+        ));
+      });
+      expect(Array.from(container.querySelectorAll('button')).some(
+        (button) => button.textContent?.includes('Confirm'),
+      )).toBe(true);
+
+      await act(async () => {
+        store.getState().setWalletContext({
+          clientManager: managerB,
+          address: 'manifest1walletb',
+          signing: signerB,
+          chainId: 'manifest-test',
+        });
+      });
+
+      expect(store.getState().pendingConfirmation).toBeNull();
+      expect(container.querySelector('[data-testid="cancelled"]')?.textContent)
+        .toContain('cancelled and was not submitted');
+      expect(Array.from(container.querySelectorAll('button')).some(
+        (button) => button.textContent?.includes('Confirm'),
+      )).toBe(false);
+
+      // A stale UI callback is harmless after the context switch: there is no
+      // pending authorization left for wallet B to execute.
+      await store.getState().confirmAction();
+      expect(executeConfirmedTool).not.toHaveBeenCalled();
+    },
+  );
 });
