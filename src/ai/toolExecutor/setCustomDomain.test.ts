@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   executeSetCustomDomain,
   executeConfirmedSetCustomDomain,
@@ -23,7 +23,12 @@ vi.mock('../../utils/errors', () => ({ logError: vi.fn() }));
 
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
-import { asFqdn, asLeaseUuid } from '@manifest-network/manifest-sdk';
+import {
+  asFqdn,
+  asLeaseUuid,
+  ManifestMCPError,
+  ManifestMCPErrorCode,
+} from '@manifest-network/manifest-sdk';
 import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
 import type { SetItemCustomDomainResult } from '@manifest-network/manifest-sdk/deploy';
 
@@ -343,6 +348,7 @@ describe('executeSetCustomDomain', () => {
 
 describe('executeConfirmedSetCustomDomain', () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.useRealTimers());
 
   const fakeClientManager = {} as CosmosClientManager;
 
@@ -506,6 +512,82 @@ describe('executeConfirmedSetCustomDomain', () => {
     );
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error).toBe('reserved suffix');
+  });
+
+  it('reconciles the registry when cancellation wins after domain broadcast', async () => {
+    vi.useFakeTimers();
+    const app = makeApp({ customDomains: [] });
+    const registry = makeRegistry([app]);
+    vi.mocked(setItemCustomDomain).mockRejectedValue(new ManifestMCPError(
+      ManifestMCPErrorCode.OPERATION_CANCELLED,
+      'the broadcast may still commit',
+      { sent: true },
+    ));
+    vi.mocked(getLeaseItemsForLease).mockResolvedValue([
+      {
+        skuUuid: 'sku-1',
+        quantity: 1n,
+        lockedPrice: { amount: '1', denom: 'upwr' },
+        serviceName: 'web',
+        customDomain: 'app.example.com',
+      } as any,
+    ]);
+
+    const r = await executeConfirmedSetCustomDomain(
+      {
+        app_name: app.name,
+        leaseUuid: app.leaseUuid,
+        serviceName: 'web',
+        customDomain: 'app.example.com',
+      },
+      fakeClientManager,
+      { ...options(), appRegistry: registry },
+    );
+
+    expect(r.success).toBe(false);
+    expect(registry.updateApp).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(getLeaseItemsForLease).toHaveBeenCalledWith(app.leaseUuid);
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDR, app.leaseUuid, {
+      customDomains: [{ serviceName: 'web', customDomain: 'app.example.com' }],
+    });
+  });
+
+  it('retries domain reconciliation until the broadcast is visible on-chain', async () => {
+    vi.useFakeTimers();
+    const app = makeApp({ customDomains: [] });
+    const registry = makeRegistry([app]);
+    vi.mocked(setItemCustomDomain).mockRejectedValue(new ManifestMCPError(
+      ManifestMCPErrorCode.OPERATION_CANCELLED,
+      'the broadcast may still commit',
+      { sent: true },
+    ));
+    vi.mocked(getLeaseItemsForLease)
+      .mockResolvedValueOnce([
+        { serviceName: 'web', customDomain: '' } as any,
+      ])
+      .mockResolvedValueOnce([
+        { serviceName: 'web', customDomain: 'app.example.com' } as any,
+      ]);
+
+    await executeConfirmedSetCustomDomain(
+      {
+        app_name: app.name,
+        leaseUuid: app.leaseUuid,
+        serviceName: 'web',
+        customDomain: 'app.example.com',
+      },
+      fakeClientManager,
+      { ...options(), appRegistry: registry },
+    );
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(getLeaseItemsForLease).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(getLeaseItemsForLease).toHaveBeenCalledTimes(2);
+    expect(registry.getAppByLease(ADDR, app.leaseUuid)?.customDomains).toEqual([
+      { serviceName: 'web', customDomain: 'app.example.com' },
+    ]);
   });
 
   it('returns error when mono helper resolves with non-zero code (chain rejection)', async () => {

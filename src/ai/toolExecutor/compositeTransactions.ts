@@ -27,7 +27,7 @@ import { deriveUrlFromConnection, failureText } from './helpers';
 import { normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
-import { getDomainForService } from '../../api/leaseDomains';
+import { getDomainAssignments, getDomainForService } from '../../api/leaseDomains';
 import { validateAll, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { validateAppName, sanitizeManifestForStorage, type AppEntry, type ProvisionState } from '../../registry/appRegistry';
 import { buildStackManifest, mergeManifest, resolveGeneratedPassword } from '../manifest';
@@ -70,6 +70,66 @@ export { classifyLeaseChainState, handleDeployManifestError } from './deployErro
 function isAbortError(error: unknown): boolean {
   if (error instanceof DOMException && error.name === 'AbortError') return true;
   return error instanceof Error && error.name === 'AbortError';
+}
+
+/**
+ * Read the SDK's structured transaction-cancellation verdict without relying
+ * solely on `instanceof` (duplicate package copies can break it). `true` means
+ * broadcast was started and the chain outcome is unknown; `false` proves that
+ * nothing was submitted.
+ */
+function cancelledTransactionWasSent(error: unknown): boolean | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const candidate = error as { code?: unknown; details?: { sent?: unknown } };
+  if (candidate.code !== ManifestMCPErrorCode.OPERATION_CANCELLED) return undefined;
+  return typeof candidate.details?.sent === 'boolean' ? candidate.details.sent : undefined;
+}
+
+function isTransactionCancellation(error: unknown): boolean {
+  return !!error
+    && typeof error === 'object'
+    && (error as { code?: unknown }).code === ManifestMCPErrorCode.OPERATION_CANCELLED;
+}
+
+const DOMAIN_RECONCILIATION_DELAYS_MS = [15_000, 15_000, 30_000] as const;
+
+/**
+ * A cancellation can win the await after set-item-custom-domain was already
+ * broadcast. Re-read the lease items independently of the aborted chat signal
+ * so a transaction that later commits is not orphaned from the local registry
+ * (and therefore from DNS polling/UI state).
+ */
+function scheduleDomainReconciliation(
+  address: string,
+  leaseUuid: string,
+  serviceName: string,
+  expectedDomain: string,
+  appRegistry: ToolExecutorOptions['appRegistry'] & object,
+): void {
+  const scheduleAttempt = (attempt: number): void => {
+    const delay = DOMAIN_RECONCILIATION_DELAYS_MS[attempt];
+    setTimeout(() => {
+      void getLeaseItemsForLease(leaseUuid)
+        .then((items) => {
+          const observedDomain = getDomainForService(items, serviceName);
+          appRegistry.updateApp(address, leaseUuid, {
+            customDomains: getDomainAssignments(items),
+          });
+          return observedDomain === expectedDomain;
+        })
+        .catch((error) => {
+          logError('compositeTransactions.scheduleDomainReconciliation', error);
+          return false;
+        })
+        .then((converged) => {
+          if (!converged && attempt + 1 < DOMAIN_RECONCILIATION_DELAYS_MS.length) {
+            scheduleAttempt(attempt + 1);
+          }
+        });
+    }, delay);
+  };
+
+  scheduleAttempt(0);
 }
 
 /**
@@ -1195,9 +1255,20 @@ export async function executeConfirmedStopApp(
   if (entries && entries.length > 0) {
     const stopped: string[] = [];
     const failed: string[] = [];
+    const unconfirmed: string[] = [];
+    const cancelled: string[] = [];
 
-    for (const entry of entries) {
-      options.assertAuthorization?.();
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      try {
+        options.assertAuthorization?.();
+        signal?.throwIfAborted();
+      } catch (error) {
+        logError('compositeTransactions.executeConfirmedStopApp.bulk.guard', error);
+        cancelled.push(...entries.slice(index).map((remaining) => remaining.app_name));
+        break;
+      }
+
       try {
         await stopApp(
           ctx,
@@ -1213,17 +1284,34 @@ export async function executeConfirmedStopApp(
         stopped.push(entry.app_name);
       } catch (err) {
         logError('compositeTransactions.executeConfirmedStopApp.bulk', err);
+        const sent = cancelledTransactionWasSent(err);
+        if (isTransactionCancellation(err) && sent !== false) {
+          unconfirmed.push(entry.app_name);
+          cancelled.push(...entries.slice(index + 1).map((remaining) => remaining.app_name));
+          break;
+        }
+        if (sent === false || isAbortError(err)) {
+          cancelled.push(...entries.slice(index).map((remaining) => remaining.app_name));
+          break;
+        }
         failed.push(entry.app_name);
       }
     }
 
-    if (failed.length > 0 && stopped.length === 0) {
-      return { success: false, error: `Failed to stop: ${failed.join(', ')}` };
+    if (stopped.length === 0 && unconfirmed.length === 0) {
+      const parts: string[] = [];
+      if (failed.length > 0) parts.push(`Failed to stop: ${failed.join(', ')}.`);
+      if (cancelled.length > 0) parts.push(`Not submitted: ${cancelled.join(', ')}.`);
+      return { success: false, error: parts.join(' ') || 'No apps were stopped.' };
     }
 
     const parts: string[] = [];
     if (stopped.length > 0) parts.push(`Stopped: ${stopped.join(', ')}.`);
+    if (unconfirmed.length > 0) {
+      parts.push(`Submission uncertain: ${unconfirmed.join(', ')}; check on-chain status before retrying.`);
+    }
     if (failed.length > 0) parts.push(`Failed to stop: ${failed.join(', ')}.`);
+    if (cancelled.length > 0) parts.push(`Not submitted: ${cancelled.join(', ')}.`);
 
     return {
       success: true,
@@ -1231,7 +1319,9 @@ export async function executeConfirmedStopApp(
         message: parts.join(' '),
         stopped,
         failed,
-        status: 'stopped',
+        unconfirmed,
+        cancelled,
+        status: unconfirmed.length > 0 ? 'unconfirmed' : 'stopped',
       },
     };
   }
@@ -2536,6 +2626,11 @@ export async function executeConfirmedSetCustomDomain(
     );
   } catch (err) {
     logError('compositeTransactions.executeConfirmedSetCustomDomain', err);
+    if (isTransactionCancellation(err)
+        && cancelledTransactionWasSent(err) !== false
+        && appRegistry) {
+      scheduleDomainReconciliation(address, leaseUuid, serviceName, customDomain, appRegistry);
+    }
     return { success: false, error: err instanceof Error ? err.message : 'Failed to set custom domain.' };
   }
 

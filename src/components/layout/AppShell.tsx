@@ -39,16 +39,16 @@ export function AppShell() {
   const { setWalletContext } = useAI();
   const {
     clientManager,
-    clientAddress,
     address,
     signing,
     isConnected: isManifestConnected,
   } = useManifestMCP();
   const { isWalletConnected, isWalletConnecting, openView, status, message, disconnect } = useChain(CHAIN_NAME);
   const toast = useToast();
-  const contextMatchesAddress = isManifestConnected && clientAddress === address;
-  const activeClientManager = contextMatchesAddress ? clientManager : null;
-  const activeSigning = contextMatchesAddress ? signing : undefined;
+  // useManifestMCP only reports connected when its clientAddress matches the
+  // live cosmos-kit address, so this is the single publication gate.
+  const activeClientManager = isManifestConnected ? clientManager : null;
+  const activeSigning = isManifestConnected ? signing : undefined;
 
   // Account-setup funding needs the signing CosmosClientManager (the same
   // aiStore singleton wired below). Never expose an old address's manager

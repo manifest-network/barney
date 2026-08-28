@@ -6,15 +6,10 @@ import { AppShell } from './AppShell';
 
 // --- Mocks ---
 
-const mockSetClientManager = vi.fn();
-const mockSetAddress = vi.fn();
 const mockSetWalletContext = vi.fn();
 
 vi.mock('../../hooks/useAI', () => ({
   useAI: () => ({
-    setClientManager: mockSetClientManager,
-    setAddress: mockSetAddress,
-    setSigning: vi.fn(),
     setWalletContext: mockSetWalletContext,
   }),
 }));
@@ -152,13 +147,15 @@ describe('AppShell', () => {
   });
 
   it('syncs wallet state to AI context', () => {
+    const manager = { wallet: 'current' };
     mockIsWalletConnected = true;
     mockAddress = 'manifest1test';
     mockClientAddress = 'manifest1test';
+    mockClientManager = manager;
     mockManifestConnected = true;
     render();
     expect(mockSetWalletContext).toHaveBeenCalledWith({
-      clientManager: null,
+      clientManager: manager,
       address: 'manifest1test',
       signing: undefined,
       chainId: 'manifest-test',
@@ -171,7 +168,9 @@ describe('AppShell', () => {
     mockAddress = 'manifest1walletb';
     mockClientAddress = 'manifest1walleta';
     mockClientManager = oldClient;
-    mockManifestConnected = true;
+    // This is the real transition shape from useManifestMCP: it withholds
+    // isConnected while its clientAddress still belongs to the old wallet.
+    mockManifestConnected = false;
 
     render();
 

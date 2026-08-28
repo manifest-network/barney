@@ -272,7 +272,6 @@ describe('executeConfirmedTool', () => {
     const result = await executeConfirmedTool(
       'deploy_app',
       {},
-      CLIENT_MANAGER,
       makeOptions({ authorization: undefined, assertAuthorization: undefined }),
     );
     expect(result).toEqual({ success: false, error: 'Transaction authorization context is missing.' });
@@ -283,7 +282,6 @@ describe('executeConfirmedTool', () => {
     const result = await executeConfirmedTool(
       'fund_credits',
       { address: 'manifest1walleta', amount: 5 },
-      CLIENT_MANAGER,
       makeOptions({
         address: 'manifest1walletb',
         authorization: {
@@ -296,13 +294,11 @@ describe('executeConfirmedTool', () => {
     expect(executeConfirmedFundCredits).not.toHaveBeenCalled();
   });
 
-  it('rejects a signing client outside the bound executor context', async () => {
-    const otherManager = {} as CosmosClientManager;
+  it('fails closed when the bound executor client is missing', async () => {
     const result = await executeConfirmedTool(
       'stop_app',
       {},
-      otherManager,
-      makeOptions(),
+      makeOptions({ clientManager: null }),
     );
     expect(result.success).toBe(false);
     expect(executeConfirmedStopApp).not.toHaveBeenCalled();
@@ -312,7 +308,6 @@ describe('executeConfirmedTool', () => {
     const result = await executeConfirmedTool(
       'stop_app',
       {},
-      CLIENT_MANAGER,
       makeOptions({ assertAuthorization: () => { throw new Error('identity changed'); } }),
     );
     expect(result).toEqual({ success: false, error: 'identity changed' });
@@ -324,7 +319,7 @@ describe('executeConfirmedTool', () => {
     vi.mocked(executeConfirmedDeployApp).mockResolvedValue(txResult);
 
     const options = makeOptions();
-    const result = await executeConfirmedTool('deploy_app', {}, CLIENT_MANAGER, options);
+    const result = await executeConfirmedTool('deploy_app', {}, options);
 
     expect(result).toBe(txResult);
     expect(executeConfirmedDeployApp).toHaveBeenCalled();
@@ -335,7 +330,7 @@ describe('executeConfirmedTool', () => {
     vi.mocked(executeConfirmedBatchDeploy).mockResolvedValue(txResult);
 
     const options = makeOptions();
-    const result = await executeConfirmedTool('batch_deploy', { entries: [] }, CLIENT_MANAGER, options);
+    const result = await executeConfirmedTool('batch_deploy', { entries: [] }, options);
 
     expect(result).toBe(txResult);
     expect(executeConfirmedBatchDeploy).toHaveBeenCalled();
@@ -346,7 +341,7 @@ describe('executeConfirmedTool', () => {
     vi.mocked(executeConfirmedStopApp).mockResolvedValue(txResult);
 
     const options = makeOptions();
-    const result = await executeConfirmedTool('stop_app', { name: 'test' }, CLIENT_MANAGER, options);
+    const result = await executeConfirmedTool('stop_app', { name: 'test' }, options);
 
     expect(result).toBe(txResult);
   });
@@ -356,7 +351,7 @@ describe('executeConfirmedTool', () => {
     vi.mocked(executeConfirmedFundCredits).mockResolvedValue(txResult);
 
     const options = makeOptions();
-    const result = await executeConfirmedTool('fund_credits', { amount: 50 }, CLIENT_MANAGER, options);
+    const result = await executeConfirmedTool('fund_credits', { amount: 50 }, options);
 
     expect(result).toBe(txResult);
   });
@@ -366,7 +361,7 @@ describe('executeConfirmedTool', () => {
     vi.mocked(executeConfirmedCosmosTx).mockResolvedValue(txResult);
 
     const options = makeOptions();
-    const result = await executeConfirmedTool('cosmos_tx', { module: 'bank', subcommand: 'send', args: '[]' }, CLIENT_MANAGER, options);
+    const result = await executeConfirmedTool('cosmos_tx', { module: 'bank', subcommand: 'send', args: '[]' }, options);
 
     expect(result).toBe(txResult);
   });
@@ -376,7 +371,7 @@ describe('executeConfirmedTool', () => {
     vi.mocked(executeConfirmedRestartApp).mockResolvedValue(txResult);
 
     const options = makeOptions();
-    const result = await executeConfirmedTool('restart_app', { app_name: 'my-app' }, CLIENT_MANAGER, options);
+    const result = await executeConfirmedTool('restart_app', { app_name: 'my-app' }, options);
 
     expect(result).toBe(txResult);
     expect(executeConfirmedRestartApp).toHaveBeenCalled();
@@ -387,14 +382,14 @@ describe('executeConfirmedTool', () => {
     vi.mocked(executeConfirmedUpdateApp).mockResolvedValue(txResult);
 
     const options = makeOptions();
-    const result = await executeConfirmedTool('update_app', { app_name: 'my-app' }, CLIENT_MANAGER, options);
+    const result = await executeConfirmedTool('update_app', { app_name: 'my-app' }, options);
 
     expect(result).toBe(txResult);
     expect(executeConfirmedUpdateApp).toHaveBeenCalled();
   });
 
   it('returns error for unknown confirmed tool', async () => {
-    const result = await executeConfirmedTool('nonexistent', {}, CLIENT_MANAGER, makeOptions());
+    const result = await executeConfirmedTool('nonexistent', {}, makeOptions());
     expect(result).toEqual({
       success: false,
       error: 'Unknown confirmed tool: nonexistent',
@@ -404,7 +399,7 @@ describe('executeConfirmedTool', () => {
   it('catches and wraps errors', async () => {
     vi.mocked(executeConfirmedFundCredits).mockRejectedValue(new Error('tx failed'));
 
-    const result = await executeConfirmedTool('fund_credits', {}, CLIENT_MANAGER, makeOptions());
+    const result = await executeConfirmedTool('fund_credits', {}, makeOptions());
     expect(result).toEqual({
       success: false,
       error: 'tx failed',

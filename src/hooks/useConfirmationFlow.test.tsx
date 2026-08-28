@@ -130,25 +130,26 @@ describe('confirmation flow (Zustand store)', () => {
         stop_app: { app_name: 'web', leaseUuid: 'lease-1' },
         update_app: { app_name: 'web', leaseUuid: 'lease-1', _generatedManifest: '{"image":"nginx:2"}' },
       };
+      const stalePending: PendingConfirmation = {
+        id: 'pending-a',
+        messageId: 'tool-consent',
+        action: Object.freeze({
+          originAddress: 'manifest1walleta',
+          chainId: identity.chainId,
+          clientGeneration: identity.clientGeneration,
+          signerGeneration: identity.signerGeneration,
+          id: 'action-a',
+          toolName,
+          args: argsByTool[toolName],
+          description: `Confirm ${toolName}?`,
+        }),
+      };
       store.setState({
         messages: [{
           id: 'tool-consent', role: 'tool', content: 'Confirm transaction?', timestamp: 1,
           toolName, isStreaming: false, awaitingConfirmation: true,
         }],
-        pendingConfirmation: {
-          id: 'pending-a',
-          messageId: 'tool-consent',
-          action: Object.freeze({
-            originAddress: 'manifest1walleta',
-            chainId: identity.chainId,
-            clientGeneration: identity.clientGeneration,
-            signerGeneration: identity.signerGeneration,
-            id: 'action-a',
-            toolName,
-            args: argsByTool[toolName],
-            description: `Confirm ${toolName}?`,
-          }),
-        },
+        pendingConfirmation: stalePending,
       });
 
       container = document.createElement('div');
@@ -181,9 +182,24 @@ describe('confirmation flow (Zustand store)', () => {
         (button) => button.textContent?.includes('Confirm'),
       )).toBe(false);
 
-      // A stale UI callback is harmless after the context switch: there is no
-      // pending authorization left for wallet B to execute.
-      await store.getState().confirmAction();
+      // Adversarial race: restore the stale A consent without using the atomic
+      // context API, then click the real rendered Confirm button as wallet B.
+      // The confirm-time authorization check must still fail closed.
+      await act(async () => {
+        store.setState({ pendingConfirmation: stalePending });
+      });
+      const staleConfirmButton = Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent?.includes('Confirm'),
+      );
+      expect(staleConfirmButton).toBeDefined();
+      await act(async () => {
+        staleConfirmButton?.click();
+        await Promise.resolve();
+      });
+
+      expect(store.getState().pendingConfirmation).toBeNull();
+      expect(store.getState().messages.find((message) => message.id === 'tool-consent')?.content)
+        .toContain('cancelled and was not submitted');
       expect(executeConfirmedTool).not.toHaveBeenCalled();
     },
   );

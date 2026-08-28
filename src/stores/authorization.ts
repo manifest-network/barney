@@ -1,18 +1,23 @@
 import type { TransactionAuthorization } from '../ai/toolExecutor/types';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 
 export const AUTHORIZATION_CANCELLED_MESSAGE =
   'Wallet or network changed. This transaction was cancelled and was not submitted.';
 
 export const ACTIVE_WORK_CANCELLED_MESSAGE =
-  'Wallet or network changed. Active AI and transaction work was cancelled.';
+  'Wallet or network changed. Active AI work was cancelled.';
 
-export const AUTHORIZATION_CHANGED_ERROR = 'authorization_context_changed';
+export const TRANSACTION_INTERRUPTED_MESSAGE =
+  'Wallet or network changed while this transaction was in progress. It may already have been submitted; check its status before retrying.';
+
+export const TRANSACTION_FINISHED_AFTER_CONTEXT_CHANGE_MESSAGE =
+  'This transaction finished for the previous wallet after the wallet or network changed.';
 
 /** Minimal state needed to capture and validate a transaction authorization. */
 export interface AuthorizationState {
   address: string | undefined;
   chainId: string;
-  clientManager: unknown | null;
+  clientManager: CosmosClientManager | null;
   clientGeneration: number;
   signerGeneration: number;
 }

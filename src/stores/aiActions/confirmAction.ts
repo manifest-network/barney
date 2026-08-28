@@ -3,7 +3,7 @@
  */
 
 import { streamChat } from '../../api/morpheus';
-import { executeConfirmedTool } from '../../ai/toolExecutor';
+import { executeConfirmedTool, type ToolResult } from '../../ai/toolExecutor';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
 import { bigIntReplacer } from '../../utils/json';
@@ -12,7 +12,8 @@ import { normalizeFqdn } from '../../utils/connection';
 import type { AIStore } from '../aiStore';
 import {
   AUTHORIZATION_CANCELLED_MESSAGE,
-  AUTHORIZATION_CHANGED_ERROR,
+  TRANSACTION_FINISHED_AFTER_CONTEXT_CHANGE_MESSAGE,
+  TRANSACTION_INTERRUPTED_MESSAGE,
   assertTransactionAuthorizationCurrent,
   isTransactionAuthorizationCurrent,
 } from '../authorization';
@@ -43,6 +44,66 @@ function mergeCustomDomainOverride(
 
 type Get = () => AIStore;
 type Set = (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) => void;
+
+function serializeToolResult(result: ToolResult, authorizationNotice?: string): string {
+  return JSON.stringify({
+    success: result.success,
+    data: result.data,
+    error: result.error,
+    ...(authorizationNotice ? { authorizationNotice } : {}),
+  }, bigIntReplacer, 2);
+}
+
+function resultSummary(result: ToolResult): string | undefined {
+  if (!result.success) return result.error;
+  if (!result.data || typeof result.data !== 'object') return undefined;
+  const message = (result.data as { message?: unknown }).message;
+  return typeof message === 'string' && message !== '' ? message : undefined;
+}
+
+/** Resolve only the originating tool row after its wallet context has gone
+ * stale. Never stream the result into the next wallet's AI turn or attach a
+ * wallet-scoped display card. */
+function finalizeStaleToolResult(
+  set: Set,
+  messageId: string,
+  result: ToolResult,
+): void {
+  const summary = resultSummary(result);
+  const visibleOutcome = result.success
+    ? `${TRANSACTION_FINISHED_AFTER_CONTEXT_CHANGE_MESSAGE}${summary ? ` ${summary}` : ''}`
+    : (summary ?? TRANSACTION_INTERRUPTED_MESSAGE);
+  set((state) => ({
+    messages: state.messages.map((message) =>
+      message.id === messageId
+        ? {
+            ...message,
+            content: serializeToolResult(result, visibleOutcome),
+            error: visibleOutcome,
+            isStreaming: false,
+            awaitingConfirmation: false,
+          }
+        : message
+    ),
+  }));
+}
+
+function finalizeStaleToolError(set: Set, messageId: string, error: unknown): void {
+  const detail = error instanceof Error ? error.message : TRANSACTION_INTERRUPTED_MESSAGE;
+  set((state) => ({
+    messages: state.messages.map((message) =>
+      message.id === messageId
+        ? {
+            ...message,
+            content: detail,
+            error: detail,
+            isStreaming: false,
+            awaitingConfirmation: false,
+          }
+        : message
+    ),
+  }));
+}
 
 /** User-confirmable overrides applied at confirm-time before broadcast.
  *  Single source of truth — `ConfirmationCard.handleConfirm` and `aiStore.confirmAction`
@@ -87,7 +148,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
           ? {
               ...m,
               content: AUTHORIZATION_CANCELLED_MESSAGE,
-              error: AUTHORIZATION_CHANGED_ERROR,
+              error: AUTHORIZATION_CANCELLED_MESSAGE,
               isStreaming: false,
               awaitingConfirmation: false,
             }
@@ -124,17 +185,29 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
   }
   const action = { ...pendingConfirmation.action, args: confirmedArgs, payload: confirmedPayload };
 
-  set({ pendingConfirmation: null, isStreaming: true });
-
   const abort = new AbortController();
-  set({ abortController: abort });
+  set({
+    pendingConfirmation: null,
+    activeTransactionMessageId: messageId,
+    isStreaming: true,
+    abortController: abort,
+    messages: get().messages.map((message) =>
+      message.id === messageId
+        ? { ...message, isStreaming: true, awaitingConfirmation: false }
+        : message
+    ),
+  });
 
   const assertAuthorization = () => {
-    if (abort.signal.aborted || get().abortController !== abort) {
-      throw new Error(AUTHORIZATION_CANCELLED_MESSAGE);
-    }
     assertTransactionAuthorizationCurrent(get(), authorization);
   };
+
+  const contextIsCurrent = () => get().authorizationEpoch === authorizationEpoch
+    && get().abortController === abort
+    && isTransactionAuthorizationCurrent(get(), authorization);
+
+  let transactionResolved = false;
+  let followUpAssistantMessageId: string | null = null;
 
   try {
     set({ deployProgress: null });
@@ -146,7 +219,6 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     const result = await executeConfirmedTool(
       action.toolName,
       action.args,
-      clientManager,
       {
         clientManager,
         address,
@@ -166,9 +238,10 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
       action.payload
     );
 
-    if (get().authorizationEpoch !== authorizationEpoch
-        || get().abortController !== abort
-        || !isTransactionAuthorizationCurrent(get(), authorization)) return;
+    if (!contextIsCurrent()) {
+      finalizeStaleToolResult(set, messageId, result);
+      return;
+    }
 
     // For simple operations (restart/update), clear progress on failure
     if (!result.success) {
@@ -178,16 +251,36 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
       }
     }
 
-    const resultContent = JSON.stringify({
-      success: result.success,
-      data: result.data,
-      error: result.error,
-    }, bigIntReplacer, 2);
+    const resultContent = serializeToolResult(result);
 
     const toolError = result.success ? undefined : result.error;
 
-    // Update tool message and append assistant message in one atomic update
+    const displayCard = result.success && !result.requiresConfirmation ? result.displayCard : undefined;
+    const resolvedToolMessages = get().messages.map((m) =>
+      m.id === messageId
+        ? {
+            ...m,
+            content: resultContent,
+            card: displayCard,
+            error: toolError,
+            isStreaming: false,
+            awaitingConfirmation: false,
+          }
+        : m
+    );
+    set({ messages: resolvedToolMessages, activeTransactionMessageId: null });
+    transactionResolved = true;
+
+    // A user cancellation stops the transaction orchestration without asking
+    // the model for follow-up copy on the already-aborted stream signal. The
+    // concrete executor's result remains visible on the tool row and says
+    // whether submission was impossible or the on-chain outcome is unknown.
+    if (abort.signal.aborted) return;
+
+    // Append the follow-up assistant message only after the transaction row is
+    // resolved and the operation is still live.
     const newAssistantMessageId = generateMessageId();
+    followUpAssistantMessageId = newAssistantMessageId;
     const newAssistantMessage = {
       id: newAssistantMessageId,
       role: 'assistant' as const,
@@ -196,13 +289,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
       isStreaming: true,
     };
 
-    const displayCard = result.success && !result.requiresConfirmation ? result.displayCard : undefined;
-    const updatedWithAssistant = get().messages.map((m) =>
-      m.id === messageId
-        ? { ...m, content: resultContent, card: displayCard, isStreaming: false, awaitingConfirmation: false }
-        : m
-    );
-    set({ messages: [...updatedWithAssistant, newAssistantMessage] });
+    set({ messages: [...get().messages, newAssistantMessage] });
 
     const updatedMessages = get().messages.filter((m) => m.id !== newAssistantMessageId);
 
@@ -245,8 +332,30 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     );
     set({ messages: updated2 });
   } catch (error) {
-    if (get().authorizationEpoch !== authorizationEpoch
-        || get().abortController !== abort) return;
+    // Once the tool row is resolved, subsequent failures belong only to the AI
+    // follow-up stream. Never rewrite a completed transaction as failed, and
+    // let a wallet-context reset's own closure message stand untouched.
+    if (transactionResolved) {
+      if (!contextIsCurrent()) return;
+      logError('AIContext.confirmAction.followUp', error);
+      const detail = error instanceof Error ? error.message : 'Unknown error';
+      const content = detail.includes('timeout')
+        ? 'The AI server took too long to summarize the completed transaction.'
+        : 'The transaction completed, but the AI follow-up response failed.';
+      set({
+        messages: get().messages.map((message) =>
+          message.id === followUpAssistantMessageId
+            ? { ...message, content, error: detail, isStreaming: false }
+            : message
+        ),
+      });
+      return;
+    }
+
+    if (!contextIsCurrent()) {
+      finalizeStaleToolError(set, messageId, error);
+      return;
+    }
     logError('AIContext.confirmAction', error);
     set({ deployProgress: null });
     const errorMessage = error instanceof Error && error.message.includes('timeout')
@@ -258,11 +367,11 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
         ? { ...m, content: errorMessage, error: error instanceof Error ? error.message : 'Unknown error', isStreaming: false, awaitingConfirmation: false }
         : m
     );
-    set({ messages: updated });
+    set({ messages: updated, activeTransactionMessageId: null });
   } finally {
     if (get().authorizationEpoch === authorizationEpoch
         && get().abortController === abort) {
-      set({ isStreaming: false, pendingPayload: null });
+      set({ isStreaming: false, pendingPayload: null, activeTransactionMessageId: null });
       abort.abort();
       set({ abortController: null });
     }

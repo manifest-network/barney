@@ -3,7 +3,6 @@
  * Bridges AI tool calls to actual blockchain operations.
  */
 
-import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import {
   executeListApps,
   executeAppStatus,
@@ -61,6 +60,9 @@ const TX_TOOLS = new Set([
   'update_app',
   'set_custom_domain',
 ]);
+
+/** Public TX tools plus the UI-only batch pseudo-tool and raw escape hatch. */
+const CONFIRMED_TX_TOOLS = new Set([...TX_TOOLS, 'batch_deploy', 'cosmos_tx']);
 
 /**
  * Execute a tool call from the AI assistant.
@@ -159,29 +161,20 @@ export async function executeTool(
 export async function executeConfirmedTool(
   toolName: string,
   args: Record<string, unknown>,
-  clientManager: CosmosClientManager,
   options: ToolExecutorOptions,
   payload?: PayloadAttachment
 ): Promise<ToolResult> {
-  const knownConfirmedTool = toolName === 'deploy_app'
-    || toolName === 'batch_deploy'
-    || toolName === 'stop_app'
-    || toolName === 'fund_credits'
-    || toolName === 'cosmos_tx'
-    || toolName === 'restart_app'
-    || toolName === 'update_app'
-    || toolName === 'set_custom_domain';
-  if (!knownConfirmedTool) {
+  if (!CONFIRMED_TX_TOOLS.has(toolName)) {
     return { success: false, error: `Unknown confirmed tool: ${toolName}` };
   }
 
   try {
-    const { authorization, assertAuthorization } = options;
+    const { authorization, assertAuthorization, clientManager } = options;
     if (!authorization || !assertAuthorization) {
       return { success: false, error: 'Transaction authorization context is missing.' };
     }
-    if (!options.clientManager || options.clientManager !== clientManager) {
-      return { success: false, error: 'Transaction cancelled: signing client does not match the authorized context.' };
+    if (!clientManager) {
+      return { success: false, error: 'Transaction authorization client is missing.' };
     }
     if (options.address !== authorization.originAddress) {
       return { success: false, error: 'Transaction cancelled: authorized wallet address mismatch.' };
@@ -190,6 +183,7 @@ export async function executeConfirmedTool(
       return { success: false, error: 'Transaction cancelled: action target address does not match the authorized wallet.' };
     }
     assertAuthorization();
+    options.signal?.throwIfAborted();
 
     switch (toolName) {
       case 'deploy_app':

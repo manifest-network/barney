@@ -83,6 +83,19 @@ function makeMessage(overrides: Partial<AIStore['messages'][0]> = {}): AIStore['
   };
 }
 
+function updateWalletContext(
+  store: Store,
+  updates: Partial<Pick<AIStore, 'clientManager' | 'address' | 'signing' | 'chainId'>>,
+): void {
+  const state = store.getState();
+  state.setWalletContext({
+    clientManager: 'clientManager' in updates ? updates.clientManager ?? null : state.clientManager,
+    address: 'address' in updates ? updates.address : state.address,
+    signing: 'signing' in updates ? updates.signing : state.signing,
+    chainId: updates.chainId ?? state.chainId,
+  });
+}
+
 describe('aiStore', () => {
   let store: Store;
 
@@ -195,11 +208,11 @@ describe('aiStore', () => {
 
   // ---- Wallet setters ----
 
-  describe('setAddress', () => {
+  describe('setWalletContext', () => {
     it('clears tool cache and deployProgress on change', () => {
       store.getState().cacheToolResult('key1', { success: true, data: 'x' });
       store.setState({ deployProgress: { phase: 'ready' } as AIStore['deployProgress'] });
-      store.getState().setAddress('manifest1abc');
+      updateWalletContext(store, { address: 'manifest1abc' });
       expect(store.getState()._toolCache.size).toBe(0);
       expect(store.getState().deployProgress).toBeNull();
     });
@@ -218,32 +231,28 @@ describe('aiStore', () => {
           ],
         ]) as AIStore['dnsStatuses'],
       );
-      store.getState().setAddress('manifest1abc');
+      updateWalletContext(store, { address: 'manifest1abc' });
       expect(store.getState().dnsStatuses.size).toBe(0);
     });
 
     it('does not clear cache if address is unchanged', () => {
-      store.getState().setAddress('manifest1abc');
+      updateWalletContext(store, { address: 'manifest1abc' });
       store.getState().cacheToolResult('key1', { success: true, data: 'x' });
-      store.getState().setAddress('manifest1abc');
+      updateWalletContext(store, { address: 'manifest1abc' });
       expect(store.getState()._toolCache.size).toBe(1);
     });
-  });
 
-  describe('setClientManager', () => {
     it('stores the client manager', () => {
       const mgr = {} as AIStore['clientManager'];
-      store.getState().setClientManager(mgr);
+      updateWalletContext(store, { clientManager: mgr });
       expect(store.getState().clientManager).toBe(mgr);
     });
-  });
 
-  describe('setSigning', () => {
     it('stores and clears the signing context', () => {
       const ctx = {} as AIStore['signing'];
-      store.getState().setSigning(ctx);
+      updateWalletContext(store, { signing: ctx });
       expect(store.getState().signing).toBe(ctx);
-      store.getState().setSigning(undefined);
+      updateWalletContext(store, { signing: undefined });
       expect(store.getState().signing).toBeUndefined();
     });
   });
@@ -314,19 +323,17 @@ describe('aiStore', () => {
         expect(state._rafId).toBeNull();
         expect(state.isStreaming).toBe(false);
         expect(state.messages[0].content).toContain('cancelled and was not submitted');
+        expect(state.messages[0].error).toContain('cancelled and was not submitted');
+        expect(state.messages[0].error).not.toBe('authorization_context_changed');
         expect(state.messages[0].awaitingConfirmation).toBe(false);
-        expect(state.messages.at(-1)).toMatchObject({
-          role: 'assistant',
-          local: true,
-          content: expect.stringContaining('cancelled and was not submitted'),
-        });
+        expect(state.messages).toHaveLength(1);
 
         cancelRafSpy.mockRestore();
       },
     );
 
     it('does not let a file read from the old identity restore pendingPayload', async () => {
-      store.getState().setAddress('manifest1a');
+      updateWalletContext(store, { address: 'manifest1a' });
       let resolveRead!: (value: ArrayBuffer) => void;
       const file = {
         name: 'manifest.json',
@@ -336,7 +343,7 @@ describe('aiStore', () => {
       } as unknown as File;
 
       const attaching = store.getState().attachPayload(file);
-      store.getState().setAddress('manifest1b');
+      updateWalletContext(store, { address: 'manifest1b' });
       resolveRead(new TextEncoder().encode('{"image":"nginx"}').buffer as ArrayBuffer);
 
       const result = await attaching;
@@ -411,7 +418,7 @@ describe('aiStore', () => {
 
   describe('tool cache', () => {
     it('generates keys that include address', () => {
-      store.getState().setAddress('addr1');
+      updateWalletContext(store, { address: 'addr1' });
       const key = store.getState().getToolCacheKey('list_apps', { state: 'running' });
       expect(key).toContain('addr1');
       expect(key).toContain('list_apps');

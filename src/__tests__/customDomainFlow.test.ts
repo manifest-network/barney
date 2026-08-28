@@ -137,7 +137,6 @@ describe('customDomainFlow integration', () => {
     const confirmed = await executeConfirmedTool(
       'set_custom_domain',
       pendingArgs,
-      CLIENT_MANAGER,
       options,
     );
     expect(confirmed.success).toBe(true);

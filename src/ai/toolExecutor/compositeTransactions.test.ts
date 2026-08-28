@@ -2197,6 +2197,61 @@ describe('executeConfirmedStopApp', () => {
     expect((result.data as any).failed).toEqual(['postgres']);
   });
 
+  it('preserves completed stops when authorization changes between bulk entries', async () => {
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as any);
+    const assertAuthorization = vi.fn()
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => { throw new Error('wallet changed'); });
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+    ];
+
+    const result = await executeConfirmedStopApp(
+      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps), assertAuthorization }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      stopped: ['redis'],
+      cancelled: ['postgres'],
+      unconfirmed: [],
+    });
+    expect(stopApp).toHaveBeenCalledOnce();
+  });
+
+  it('reports the current bulk stop as unconfirmed when cancellation wins after broadcast', async () => {
+    vi.mocked(stopApp)
+      .mockResolvedValueOnce({ outcome: 'stopped' } as any)
+      .mockRejectedValueOnce(new ManifestMCPError(
+        ManifestMCPErrorCode.OPERATION_CANCELLED,
+        'the broadcast may still commit',
+        { sent: true },
+      ));
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+      makeApp({ name: 'nginx', leaseUuid: 'uuid-3' }),
+    ];
+
+    const result = await executeConfirmedStopApp(
+      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps) }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      stopped: ['redis'],
+      unconfirmed: ['postgres'],
+      cancelled: ['nginx'],
+    });
+    expect((result.data as { message: string }).message).toContain('check on-chain status before retrying');
+    expect(stopApp).toHaveBeenCalledTimes(2);
+  });
+
   it('treats an already-inactive lease as success (single)', async () => {
     vi.mocked(stopApp).mockResolvedValue({ outcome: 'already_inactive' } as any);
 

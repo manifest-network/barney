@@ -104,6 +104,27 @@ interface CollectedConfirmation {
   authorization: TransactionAuthorization;
 }
 
+function markConfirmationsAuthorizationCancelled(
+  get: Get,
+  set: Set,
+  confirmations: readonly CollectedConfirmation[],
+): void {
+  const messageIds = new Set(confirmations.map((confirmation) => confirmation.toolMessageId));
+  set({
+    messages: get().messages.map((message) =>
+      messageIds.has(message.id)
+        ? {
+            ...message,
+            content: AUTHORIZATION_CANCELLED_MESSAGE,
+            error: AUTHORIZATION_CANCELLED_MESSAGE,
+            isStreaming: false,
+            awaitingConfirmation: false,
+          }
+        : message
+    ),
+  });
+}
+
 /** Set a single pending confirmation on the store. */
 function setSingleConfirmation(
   get: Get,
@@ -167,6 +188,7 @@ async function mergeBatchDeployConfirmations(
 
       if (get().authorizationEpoch !== authorizationEpoch
           || !isTransactionAuthorizationCurrent(get(), conf.authorization)) {
+        markConfirmationsAuthorizationCancelled(get, set, deployConfs);
         return false;
       }
 
@@ -273,6 +295,7 @@ async function mergeBatchDeployConfirmations(
 
   if (get().authorizationEpoch !== authorizationEpoch
       || !isTransactionAuthorizationCurrent(get(), lastConf.authorization)) {
+    markConfirmationsAuthorizationCancelled(get, set, deployConfs);
     return false;
   }
 

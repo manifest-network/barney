@@ -34,12 +34,11 @@ vi.mock('../../api/morpheus', () => ({
 const mockExecuteConfirmedTool = vi.fn<(
   toolName: string,
   args: Record<string, unknown>,
-  clientManager: unknown,
   options: unknown,
   payload?: unknown
 ) => Promise<ToolResult>>();
 vi.mock('../../ai/toolExecutor', () => ({
-  executeConfirmedTool: (...args: unknown[]) => mockExecuteConfirmedTool(...(args as [string, Record<string, unknown>, unknown, unknown, unknown?])),
+  executeConfirmedTool: (...args: unknown[]) => mockExecuteConfirmedTool(...(args as [string, Record<string, unknown>, unknown, unknown?])),
 }));
 
 const mockProcessStream = vi.fn<() => Promise<StreamResult>>();
@@ -131,7 +130,8 @@ function makeToolMessage(id: string): ChatMessage {
     toolName: 'deploy_app',
     toolCallId: 'tc_1',
     timestamp: 1000,
-    isStreaming: true,
+    isStreaming: false,
+    awaitingConfirmation: true,
   };
 }
 
@@ -271,7 +271,7 @@ describe('confirmAction', () => {
       const callArgs = mockExecuteConfirmedTool.mock.calls[0];
       expect(callArgs[1]._generatedManifest).toBe('{"new":"manifest"}');
       // payload should be cleared (set to undefined)
-      expect(callArgs[4]).toBeUndefined();
+      expect(callArgs[3]).toBeUndefined();
     });
 
     it('does not replace when no _generatedManifest in args', async () => {
@@ -328,6 +328,90 @@ describe('confirmAction', () => {
       expect(assistantMsg).toBeDefined();
       expect(assistantMsg!.content).toBe('Deployed successfully!');
       expect(assistantMsg!.isStreaming).toBe(false);
+    });
+
+    it('resolves an in-flight tool row when the wallet changes', async () => {
+      let finishTransaction!: (result: ToolResult) => void;
+      mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((resolve) => {
+        finishTransaction = resolve;
+      }));
+
+      const pending = makePendingConfirmation();
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+
+      const confirming = store.getState().confirmAction();
+      expect(mockExecuteConfirmedTool).toHaveBeenCalledOnce();
+      expect(store.getState().activeTransactionMessageId).toBe(pending.messageId);
+      expect(store.getState().messages[0]).toMatchObject({
+        isStreaming: true,
+        awaitingConfirmation: false,
+      });
+
+      const nextManager = { fake: 'next' } as unknown as NonNullable<AIStore['clientManager']>;
+      store.getState().setWalletContext({
+        clientManager: nextManager,
+        address: 'manifest1next',
+        signing: undefined,
+        chainId: 'manifest-test',
+      });
+
+      let tool = store.getState().messages.find((message) => message.id === pending.messageId);
+      expect(tool).toMatchObject({
+        isStreaming: false,
+        awaitingConfirmation: false,
+        error: expect.stringContaining('may already have been submitted'),
+      });
+
+      finishTransaction({
+        success: true,
+        data: { message: 'Deployment completed for the previous wallet.' },
+      });
+      await confirming;
+
+      tool = store.getState().messages.find((message) => message.id === pending.messageId);
+      expect(tool?.content).toContain('"success": true');
+      expect(tool?.content).toContain('"authorizationNotice"');
+      expect(tool?.content).toContain('previous wallet');
+      expect(tool?.error).toContain('finished for the previous wallet');
+      expect(tool?.isStreaming).toBe(false);
+      expect(store.getState().address).toBe('manifest1next');
+      expect(store.getState().activeTransactionMessageId).toBeNull();
+      expect(mockProcessStream).not.toHaveBeenCalled();
+    });
+
+    it('does not misclassify an ordinary Stop as a wallet authorization change', async () => {
+      let finishTransaction!: (result: ToolResult) => void;
+      mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((resolve) => {
+        finishTransaction = resolve;
+      }));
+
+      const pending = makePendingConfirmation();
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+
+      const confirming = store.getState().confirmAction();
+      const executorOptions = mockExecuteConfirmedTool.mock.calls[0][2] as {
+        assertAuthorization: () => void;
+      };
+
+      store.getState().stopStreaming();
+      expect(executorOptions.assertAuthorization).not.toThrow();
+
+      finishTransaction({
+        success: false,
+        error: 'Transaction was cancelled before broadcast; no transaction was sent.',
+      });
+      await confirming;
+
+      const tool = store.getState().messages.find((message) => message.id === pending.messageId);
+      expect(tool?.error).toContain('cancelled before broadcast');
+      expect(tool?.error).not.toContain('Wallet or network changed');
+      expect(mockProcessStream).not.toHaveBeenCalled();
     });
   });
 
@@ -474,6 +558,32 @@ describe('confirmAction', () => {
       expect(assistantMsg).toBeDefined();
       expect(assistantMsg!.content).toContain('Error: stream failed');
       expect(assistantMsg!.error).toBe('stream failed');
+    });
+
+    it('does not rewrite a completed transaction when the follow-up stream throws', async () => {
+      const pending = makePendingConfirmation();
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+      mockExecuteConfirmedTool.mockResolvedValueOnce({
+        success: true,
+        data: { message: 'Deployed.' },
+      });
+      mockProcessStream.mockRejectedValueOnce(new Error('relay disconnected'));
+
+      await store.getState().confirmAction();
+
+      const tool = store.getState().messages.find((message) => message.id === pending.messageId);
+      expect(tool?.content).toContain('"success": true');
+      expect(tool?.error).toBeUndefined();
+      const assistant = store.getState().messages.find((message) => message.role === 'assistant');
+      expect(assistant).toMatchObject({
+        content: expect.stringContaining('transaction completed'),
+        error: 'relay disconnected',
+        isStreaming: false,
+      });
+      expect(logError).toHaveBeenCalledWith('AIContext.confirmAction.followUp', expect.any(Error));
     });
   });
 

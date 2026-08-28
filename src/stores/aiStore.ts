@@ -23,7 +23,7 @@ import { CHAIN_ID } from '../config/chain';
 import {
   ACTIVE_WORK_CANCELLED_MESSAGE,
   AUTHORIZATION_CANCELLED_MESSAGE,
-  AUTHORIZATION_CHANGED_ERROR,
+  TRANSACTION_INTERRUPTED_MESSAGE,
 } from './authorization';
 
 /** Per-domain status report stored in the dnsStatuses map. The map key is
@@ -99,6 +99,9 @@ export interface AIStore {
   /** Changes whenever any authorization-relevant wallet context changes. Async
    * actions capture this epoch so late results cannot repopulate cleared state. */
   authorizationEpoch: number;
+  /** Tool message owned by a confirmed transaction currently executing. Unlike
+   * a pending card, this operation may already have crossed its broadcast seam. */
+  activeTransactionMessageId: string | null;
   abortController: AbortController | null;
   lastMessageTime: number;
   _toolCache: Map<string, { result: ToolResult; timestamp: number }>;
@@ -116,10 +119,6 @@ export interface AIStore {
   getCurrentMessages: (excludeId?: string) => ChatMessage[];
   attachPayload: (file: File) => Promise<{ error?: string }>;
   clearPayload: () => void;
-  setClientManager: (manager: CosmosClientManager | null) => void;
-  setAddress: (address: string | undefined) => void;
-  setSigning: (ctx: SigningContext | undefined) => void;
-  setChainId: (chainId: string) => void;
   setWalletContext: (context: {
     clientManager: CosmosClientManager | null;
     address: string | undefined;
@@ -155,7 +154,17 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
       return {
         ...message,
         content: AUTHORIZATION_CANCELLED_MESSAGE,
-        error: AUTHORIZATION_CHANGED_ERROR,
+        error: AUTHORIZATION_CANCELLED_MESSAGE,
+        isStreaming: false,
+        awaitingConfirmation: false,
+      };
+    }
+
+    if (state.activeTransactionMessageId === message.id) {
+      return {
+        ...message,
+        content: TRANSACTION_INTERRUPTED_MESSAGE,
+        error: TRANSACTION_INTERRUPTED_MESSAGE,
         isStreaming: false,
         awaitingConfirmation: false,
       };
@@ -166,7 +175,7 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
         return {
           ...message,
           content: ACTIVE_WORK_CANCELLED_MESSAGE,
-          error: AUTHORIZATION_CHANGED_ERROR,
+          error: ACTIVE_WORK_CANCELLED_MESSAGE,
           isStreaming: false,
           awaitingConfirmation: false,
         };
@@ -180,18 +189,22 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
   const hadActiveWork = state.isStreaming
     || state.abortController !== null
     || state.pendingConfirmation !== null
+    || state.activeTransactionMessageId !== null
     || state.pendingPayload !== null
     || (state.deployProgress !== null
       && state.deployProgress.phase !== 'ready'
       && state.deployProgress.phase !== 'failed');
 
-  if (hadActiveWork) {
+  // Pending and in-flight transactions already have a durable tool row whose
+  // inline alert explains the closure. Add a local assistant notice only for
+  // active work that has no transaction row to own that status.
+  if (hadActiveWork
+      && state.pendingConfirmation === null
+      && state.activeTransactionMessageId === null) {
     messages.push({
       id: generateMessageId(),
       role: 'assistant',
-      content: state.pendingConfirmation
-        ? AUTHORIZATION_CANCELLED_MESSAGE
-        : ACTIVE_WORK_CANCELLED_MESSAGE,
+      content: ACTIVE_WORK_CANCELLED_MESSAGE,
       timestamp: Date.now(),
       local: true,
     });
@@ -221,6 +234,7 @@ export const createAIStore = () =>
     clientGeneration: 0,
     signerGeneration: 0,
     authorizationEpoch: 0,
+    activeTransactionMessageId: null,
     abortController: null,
     lastMessageTime: 0,
     _toolCache: new Map(),
@@ -300,6 +314,7 @@ export const createAIStore = () =>
         signerGeneration: current.signerGeneration + (signerChanged ? 1 : 0),
         authorizationEpoch: current.authorizationEpoch + 1,
         pendingConfirmation: null,
+        activeTransactionMessageId: null,
         pendingPayload: null,
         deployProgress: null,
         dnsStatuses: new Map(),
@@ -308,46 +323,6 @@ export const createAIStore = () =>
         _pendingStreamUpdate: null,
         _rafId: null,
         messages: messagesAfterAuthorizationChange(current),
-      });
-    },
-
-    setClientManager: (manager) => {
-      const current = get();
-      current.setWalletContext({
-        clientManager: manager,
-        address: current.address,
-        signing: current.signing,
-        chainId: current.chainId,
-      });
-    },
-
-    setAddress: (address) => {
-      const current = get();
-      current.setWalletContext({
-        clientManager: current.clientManager,
-        address,
-        signing: current.signing,
-        chainId: current.chainId,
-      });
-    },
-
-    setSigning: (signing) => {
-      const current = get();
-      current.setWalletContext({
-        clientManager: current.clientManager,
-        address: current.address,
-        signing,
-        chainId: current.chainId,
-      });
-    },
-
-    setChainId: (chainId) => {
-      const current = get();
-      current.setWalletContext({
-        clientManager: current.clientManager,
-        address: current.address,
-        signing: current.signing,
-        chainId,
       });
     },
 

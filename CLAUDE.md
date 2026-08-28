@@ -66,7 +66,7 @@ ErrorBoundary
                   └─ ToastContainer (toast rendering)
 ```
 
-`AppShell` (`src/components/layout/AppShell.tsx`) is the top-level router. It syncs wallet state (clientManager, address, and a `signing` SigningContext) from cosmos-kit into the AI store via `setSigning`.
+`AppShell` (`src/components/layout/AppShell.tsx`) is the top-level router. It atomically syncs wallet state (clientManager, address, chain, and a `signing` SigningContext) from cosmos-kit into the AI store via `setWalletContext`.
 
 ### AI Tool Execution Flow
 

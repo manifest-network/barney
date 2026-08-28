@@ -235,7 +235,6 @@ describe('Deploy Flow Integration', () => {
     const confirmedResult = await executeConfirmedTool(
       'deploy_app',
       deployResult.pendingAction!.args,
-      CLIENT_MANAGER,
       options,
       payload,
     );
@@ -291,7 +290,7 @@ describe('Deploy Flow Integration', () => {
     const stopArgs = stopResult.pendingAction!.args;
     vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as Awaited<ReturnType<typeof stopApp>>);
 
-    const confirmedStop = await executeConfirmedTool('stop_app', stopArgs, CLIENT_MANAGER, options);
+    const confirmedStop = await executeConfirmedTool('stop_app', stopArgs, options);
     expect(confirmedStop.success).toBe(true);
 
     // Verify registry updated
@@ -314,7 +313,6 @@ describe('Deploy Flow Integration', () => {
     const confirmedFund = await executeConfirmedTool(
       'fund_credits',
       fundResult.pendingAction!.args,
-      CLIENT_MANAGER,
       options,
     );
     expect(confirmedFund.success).toBe(true);
