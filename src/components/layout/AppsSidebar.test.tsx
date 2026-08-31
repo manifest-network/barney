@@ -219,6 +219,22 @@ describe('AppsSidebar refresh lifecycle', () => {
     expect(container.querySelector('.apps-sidebar__credits-amount')?.textContent).toBe('--');
     expect(container.textContent).not.toContain('5 PWR');
     expect(container.textContent).not.toContain('~2h remaining');
+    expect(container.textContent).toContain('Couldn’t load credit details.');
+
+    const accountCallsBeforeRetry = mocks.getCreditAccount.mock.calls.length;
+    const retryButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retry',
+    );
+    expect(retryButton).toBeDefined();
+    await act(async () => {
+      retryButton?.click();
+    });
+    expect(mocks.getCreditAccount).toHaveBeenCalledTimes(accountCallsBeforeRetry);
+    expect(mocks.useVisibilityPolling).toHaveBeenLastCalledWith(
+      expect.any(Function),
+      15_000,
+      expect.objectContaining({ restartKey: 'manifest1walletb:1' }),
+    );
 
     // Returning to A creates a new wallet lifecycle; do not resurrect the
     // snapshot from A's earlier session before this lifecycle refreshes.
@@ -226,6 +242,7 @@ describe('AppsSidebar refresh lifecycle', () => {
     await render();
     expect(container.querySelector('.apps-sidebar__credits-amount')?.textContent).toBe('--');
     expect(container.textContent).not.toContain('5 PWR');
+    expect(container.textContent).not.toContain('Couldn’t load credit details.');
   });
 
   it('does not let wallet A results overwrite wallet B after a context switch', async () => {

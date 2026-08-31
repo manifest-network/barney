@@ -34,6 +34,7 @@ vi.mock('../utils/customDomainValidation', async (importOriginal) => {
 });
 
 import { executeConfirmedTool } from '../ai/toolExecutor';
+import { validateAll } from '../utils/customDomainValidation';
 
 function RenderedConfirmationFlow() {
   const { pendingConfirmation, confirmAction, cancelAction, isStreaming, messages } = useAI();
@@ -55,6 +56,8 @@ describe('confirmation flow (Zustand store)', () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.mocked(validateAll).mockReset();
+    vi.mocked(validateAll).mockResolvedValue({});
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     store = createAIStore();
   });
@@ -120,12 +123,15 @@ describe('confirmation flow (Zustand store)', () => {
 
   it.each([
     {
+      caseName: 'fund_credits',
       toolName: 'fund_credits',
       args: { address: 'manifest1walleta', amount: 5, denomString: '5000000upwr' },
       rendersDeployEditor: false,
       expectsNonDeployManifestOverride: false,
+      domainValidation: 'none',
     },
     {
+      caseName: 'deploy_app with a valid domain',
       toolName: 'deploy_app',
       args: {
         app_name: 'web',
@@ -138,8 +144,26 @@ describe('confirmation flow (Zustand store)', () => {
       },
       rendersDeployEditor: true,
       expectsNonDeployManifestOverride: false,
+      domainValidation: 'valid',
     },
     {
+      caseName: 'deploy_app with a domain validation error',
+      toolName: 'deploy_app',
+      args: {
+        app_name: 'web',
+        size: 'micro',
+        customDomain: 'reserved.example.com',
+        _generatedManifest: JSON.stringify({
+          image: 'nginx:alpine',
+          ports: { '80/tcp': { ingress: true } },
+        }),
+      },
+      rendersDeployEditor: true,
+      expectsNonDeployManifestOverride: false,
+      domainValidation: 'async_error',
+    },
+    {
+      caseName: 'stop_app',
       toolName: 'stop_app',
       args: {
         app_name: 'web',
@@ -147,8 +171,10 @@ describe('confirmation flow (Zustand store)', () => {
       },
       rendersDeployEditor: false,
       expectsNonDeployManifestOverride: false,
+      domainValidation: 'none',
     },
     {
+      caseName: 'update_app',
       // This uniquely drives ConfirmationCard's non-deploy handleConfirm arm
       // with a manifest override present.
       toolName: 'update_app',
@@ -163,13 +189,18 @@ describe('confirmation flow (Zustand store)', () => {
       },
       rendersDeployEditor: true,
       expectsNonDeployManifestOverride: true,
+      domainValidation: 'none',
     },
-  ] as const)('rendered $toolName consent from wallet A cannot be approved by wallet B', async ({
+  ] as const)('rendered $caseName consent from wallet A cannot be approved by wallet B', async ({
     toolName,
     args,
     rendersDeployEditor,
     expectsNonDeployManifestOverride,
+    domainValidation,
   }) => {
+    if (domainValidation === 'async_error') {
+      vi.mocked(validateAll).mockResolvedValue({ error: 'This domain is reserved.' });
+    }
     const managerA = { wallet: 'a' } as unknown as NonNullable<AIStore['clientManager']>;
     const managerB = { wallet: 'b' } as unknown as NonNullable<AIStore['clientManager']>;
     const signerA = { wallet: 'a' } as unknown as NonNullable<AIStore['signing']>;
@@ -222,7 +253,7 @@ describe('confirmation flow (Zustand store)', () => {
       (button) => button.textContent?.includes('Confirm'),
     );
     expect(initialConfirmButton).toBeDefined();
-    if (toolName === 'deploy_app') {
+    if (domainValidation !== 'none') {
       expect(initialConfirmButton?.disabled).toBe(true);
     }
     expect(container.querySelector('[data-testid="manifest-editor"]') !== null)
@@ -256,9 +287,10 @@ describe('confirmation flow (Zustand store)', () => {
     expect(staleConfirmButton).toBeDefined();
     expect(container.querySelector('[data-testid="manifest-editor"]') !== null)
       .toBe(rendersDeployEditor);
-    if (toolName === 'deploy_app') {
+    if (domainValidation !== 'none') {
       // The restored stale consent must remain gated while the domain check is
-      // pending, then still fail closed at the store guard once validation ends.
+      // pending. A valid domain then reaches the stale-wallet store guard; an
+      // invalid one stays blocked in the rendered confirmation surface.
       expect(staleConfirmButton?.disabled).toBe(true);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(300);
@@ -266,7 +298,16 @@ describe('confirmation flow (Zustand store)', () => {
       staleConfirmButton = Array.from(container.querySelectorAll('button')).find(
         (button) => button.textContent?.includes('Confirm'),
       );
-      expect(staleConfirmButton?.disabled).toBe(false);
+      expect(staleConfirmButton?.disabled).toBe(domainValidation === 'async_error');
+    }
+    if (domainValidation === 'async_error') {
+      expect(container.textContent).toContain('This domain is reserved.');
+      await act(async () => {
+        staleConfirmButton?.click();
+      });
+      expect(confirmActionSpy).not.toHaveBeenCalled();
+      expect(store.getState().pendingConfirmation).toBe(stalePending);
+      return;
     }
     const executionTransitions: Array<Pick<AIStore,
       'isStreaming' | 'abortController' | 'activeTransactionMessageId' | 'messages'>> = [];
@@ -295,7 +336,7 @@ describe('confirmation flow (Zustand store)', () => {
         JSON.parse('_generatedManifest' in args ? args._generatedManifest : '{}'),
       );
     }
-    if (toolName === 'deploy_app') {
+    if (domainValidation === 'valid') {
       expect(confirmActionSpy).toHaveBeenCalledWith(expect.objectContaining({
         editedCustomDomain: 'web.example.com',
       }));

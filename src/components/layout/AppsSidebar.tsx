@@ -75,6 +75,11 @@ interface CreditEstimateSnapshot {
   burnRate: number | null;
 }
 
+interface CreditRefreshFailure {
+  balance: boolean;
+  estimate: boolean;
+}
+
 function currentWalletValue<T>(
   snapshot: WalletSnapshot<T> | null,
   context: WalletRenderContext,
@@ -96,6 +101,9 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     useState<WalletSnapshot<number> | null>(null);
   const [creditEstimateSnapshot, setCreditEstimateSnapshot] =
     useState<WalletSnapshot<CreditEstimateSnapshot> | null>(null);
+  const [creditFailureSnapshot, setCreditFailureSnapshot] =
+    useState<WalletSnapshot<CreditRefreshFailure> | null>(null);
+  const [pollRestartGeneration, setPollRestartGeneration] = useState(0);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const refreshGenerationRef = useRef(0);
 
@@ -108,7 +116,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     return () => {
       refreshGenerationRef.current += 1;
     };
-  }, [address]);
+  }, [address, pollRestartGeneration]);
 
   // Scope rendered credit data as well as writes. This hides wallet A's last
   // successful values on the very render that switches to wallet B, including
@@ -123,6 +131,11 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   );
   const hoursRemaining = currentEstimate?.hoursRemaining ?? null;
   const burnRate = currentEstimate?.burnRate ?? null;
+  const creditFailure = currentWalletValue(
+    creditFailureSnapshot,
+    walletContext,
+  );
+  const hasCreditFailure = creditFailure?.balance === true || creditFailure?.estimate === true;
 
   // Load apps and credit info. MainLayout owns the independent recurring
   // chain/registry reconciliation driver outside this sidebar's ErrorBoundary.
@@ -192,17 +205,27 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
       logError('AppsSidebar.refresh.estimate', estimateResult.reason);
     }
 
-    if (creditResult.status === 'rejected' || estimateResult.status === 'rejected') {
+    const failure = {
+      balance: creditResult.status === 'rejected',
+      estimate: estimateResult.status === 'rejected',
+    };
+    setCreditFailureSnapshot({ context: walletContext, value: failure });
+
+    if (failure.balance || failure.estimate) {
       return false;
     }
   }, [address, walletContext]);
+
+  const pollRestartKey = pollRestartGeneration === 0
+    ? address
+    : `${address ?? 'disconnected'}:${pollRestartGeneration}`;
 
   useVisibilityPolling(refresh, AUTO_REFRESH_INTERVAL_MS, {
     enabled: !!address,
     immediate: true,
     backoff: true,
     context: 'AppsSidebar.refresh',
-    restartKey: address,
+    restartKey: pollRestartKey,
   });
 
   // Subscribe to in-tab registry mutations so mid-tool-execution writes
@@ -297,6 +320,22 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
             {burnRate != null && (
               <span className="apps-sidebar__burn-rate"> · {burnRate} PWR/hr</span>
             )}
+          </div>
+        )}
+        {hasCreditFailure && (
+          <div className="apps-sidebar__credits-error" role="status">
+            <span>
+              {creditFailure.balance && creditFailure.estimate
+                ? 'Couldn’t load credit details.'
+                : 'Some credit details couldn’t be refreshed.'}
+            </span>
+            <button
+              type="button"
+              className="apps-sidebar__credits-retry"
+              onClick={() => setPollRestartGeneration((generation) => generation + 1)}
+            >
+              Retry
+            </button>
           </div>
         )}
         {/* Credit gauge */}

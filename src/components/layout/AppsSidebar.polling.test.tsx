@@ -165,4 +165,28 @@ describe('AppsSidebar with the real visibility poller', () => {
 
     expect(mocks.logError).not.toHaveBeenCalled();
   });
+
+  it('restarts the real poller immediately when the user retries a failed read', async () => {
+    mocks.getCreditAccount.mockRejectedValue(new Error('account unavailable'));
+    mocks.getCreditEstimate.mockRejectedValue(new Error('estimate unavailable'));
+    await render();
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('Couldn’t load credit details.');
+    });
+
+    mocks.getCreditAccount.mockResolvedValue(creditAccount(5));
+    mocks.getCreditEstimate.mockResolvedValue(creditEstimate(2));
+    const retryButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retry',
+    );
+    expect(retryButton).toBeDefined();
+    await act(async () => {
+      retryButton?.click();
+    });
+
+    await vi.waitFor(() => expect(container.textContent).toContain('5 PWR'));
+    expect(container.textContent).toContain('~2h remaining');
+    expect(container.textContent).not.toContain('Couldn’t load credit details.');
+    expect(mocks.getCreditAccount).toHaveBeenCalledTimes(2);
+  });
 });
