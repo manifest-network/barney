@@ -314,6 +314,21 @@ describe('executeConfirmedTool', () => {
     expect(executeConfirmedStopApp).not.toHaveBeenCalled();
   });
 
+  it('does not dispatch a confirmed executor when the operation was already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await executeConfirmedTool(
+      'deploy_app',
+      {},
+      makeOptions({ signal: controller.signal }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/abort/i);
+    expect(executeConfirmedDeployApp).not.toHaveBeenCalled();
+  });
+
   it('routes deploy_app to confirmed executor', async () => {
     const txResult: ToolResult = { success: true, data: { message: 'deployed' } };
     vi.mocked(executeConfirmedDeployApp).mockResolvedValue(txResult);

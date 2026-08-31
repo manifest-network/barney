@@ -2252,6 +2252,36 @@ describe('executeConfirmedStopApp', () => {
     expect(stopApp).toHaveBeenCalledTimes(2);
   });
 
+  it('reports current and remaining bulk stops as not submitted when cancellation is pre-broadcast', async () => {
+    vi.mocked(stopApp)
+      .mockResolvedValueOnce({ outcome: 'stopped' } as any)
+      .mockRejectedValueOnce(new ManifestMCPError(
+        ManifestMCPErrorCode.OPERATION_CANCELLED,
+        'no transaction was sent',
+        { sent: false },
+      ));
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+      makeApp({ name: 'nginx', leaseUuid: 'uuid-3' }),
+    ];
+
+    const result = await executeConfirmedStopApp(
+      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps) }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      stopped: ['redis'],
+      unconfirmed: [],
+      cancelled: ['postgres', 'nginx'],
+    });
+    expect((result.data as { message: string }).message).toContain('Not submitted: postgres, nginx');
+    expect(stopApp).toHaveBeenCalledTimes(2);
+  });
+
   it('treats an already-inactive lease as success (single)', async () => {
     vi.mocked(stopApp).mockResolvedValue({ outcome: 'already_inactive' } as any);
 
@@ -2601,6 +2631,23 @@ describe('executeConfirmedBatchDeploy', () => {
     const result = await executeConfirmedBatchDeploy({ entries: [] }, CLIENT_MANAGER, makeOptions());
     expect(result.success).toBe(false);
     expect(result.error).toContain('No entries');
+  });
+
+  it('buckets an authorization guard failure as cancelled before deploy', async () => {
+    const entries = [
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+    ];
+
+    const result = await executeConfirmedBatchDeploy(
+      { entries },
+      CLIENT_MANAGER,
+      makeOptions({ assertAuthorization: () => { throw new Error('wallet changed'); } }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cancelled: game1');
+    expect(result.error).not.toContain('Failed: game1');
+    expect(deployManifest).not.toHaveBeenCalled();
   });
 
   it('deploys all apps in parallel via deployManifest and reports results', async () => {
@@ -3237,6 +3284,27 @@ describe('executeConfirmedRestartApp', () => {
         expect.objectContaining({ name: 'postgres' }),
       ]),
     }));
+  });
+
+  it('buckets an authorization guard failure as cancelled before restart', async () => {
+    const app = makeApp({ name: 'redis', leaseUuid: 'uuid-1' });
+
+    const result = await executeConfirmedRestartApp(
+      {
+        app_name: 'all',
+        entries: [{ app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl }],
+      },
+      CLIENT_MANAGER,
+      makeOptions({
+        appRegistry: makeRegistry([app]),
+        assertAuthorization: () => { throw new Error('wallet changed'); },
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cancelled: redis');
+    expect(result.error).not.toContain('Failed: redis');
+    expect(restartApp).not.toHaveBeenCalled();
   });
 
   it('handles partial failures in batch restart', async () => {

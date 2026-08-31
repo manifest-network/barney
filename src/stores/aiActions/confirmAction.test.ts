@@ -346,8 +346,9 @@ describe('confirmAction', () => {
       expect(mockExecuteConfirmedTool).toHaveBeenCalledOnce();
       expect(store.getState().activeTransactionMessageId).toBe(pending.messageId);
       expect(store.getState().messages[0]).toMatchObject({
-        isStreaming: true,
+        isStreaming: false,
         awaitingConfirmation: false,
+        transactionInFlight: true,
       });
 
       const nextManager = { fake: 'next' } as unknown as NonNullable<AIStore['clientManager']>;
@@ -362,6 +363,7 @@ describe('confirmAction', () => {
       expect(tool).toMatchObject({
         isStreaming: false,
         awaitingConfirmation: false,
+        transactionInFlight: false,
         error: expect.stringContaining('may already have been submitted'),
       });
 
@@ -375,10 +377,42 @@ describe('confirmAction', () => {
       expect(tool?.content).toContain('"success": true');
       expect(tool?.content).toContain('"authorizationNotice"');
       expect(tool?.content).toContain('previous wallet');
-      expect(tool?.error).toContain('finished for the previous wallet');
+      expect(tool?.error).toBeUndefined();
+      expect(tool?.transactionInFlight).toBe(false);
       expect(tool?.isStreaming).toBe(false);
       expect(store.getState().address).toBe('manifest1next');
       expect(store.getState().activeTransactionMessageId).toBeNull();
+      expect(mockProcessStream).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a successful partial summary when Stop aborts the follow-up', async () => {
+      let finishTransaction!: (result: ToolResult) => void;
+      mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((resolve) => {
+        finishTransaction = resolve;
+      }));
+      const pending = makePendingConfirmation({
+        action: { toolName: 'stop_app', args: { app_name: 'all', entries: [] } },
+      });
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+
+      const confirming = store.getState().confirmAction();
+      store.getState().stopStreaming();
+      finishTransaction({
+        success: true,
+        data: {
+          message: 'Stopped: a. Submission uncertain: b; check on-chain status before retrying. Not submitted: c.',
+        },
+      });
+      await confirming;
+
+      const assistant = store.getState().messages.find((message) => message.role === 'assistant');
+      expect(assistant).toMatchObject({
+        local: true,
+        content: expect.stringContaining('Submission uncertain: b'),
+      });
       expect(mockProcessStream).not.toHaveBeenCalled();
     });
 
@@ -516,7 +550,7 @@ describe('confirmAction', () => {
       expect(store.getState().deployProgress).toBeNull();
     });
 
-    it('sets toolError on the follow-up assistant message when execution fails', async () => {
+    it('renders a failed confirmed transaction error only on the tool row', async () => {
       const toolMsg = makeToolMessage('tool_msg_1');
       const store = setupStore({
         pendingConfirmation: makePendingConfirmation(),
@@ -529,9 +563,11 @@ describe('confirmAction', () => {
       await store.getState().confirmAction();
 
       const state = store.getState();
+      const updatedTool = state.messages.find(m => m.id === 'tool_msg_1');
       const assistantMsg = state.messages.find(m => m.role === 'assistant');
+      expect(updatedTool?.error).toBe('insufficient funds');
       expect(assistantMsg).toBeDefined();
-      expect(assistantMsg!.error).toBe('insufficient funds');
+      expect(assistantMsg!.error).toBeUndefined();
     });
   });
 
@@ -579,11 +615,27 @@ describe('confirmAction', () => {
       expect(tool?.error).toBeUndefined();
       const assistant = store.getState().messages.find((message) => message.role === 'assistant');
       expect(assistant).toMatchObject({
-        content: expect.stringContaining('transaction completed'),
+        content: expect.stringContaining('transaction result is shown above'),
         error: 'relay disconnected',
         isStreaming: false,
       });
       expect(logError).toHaveBeenCalledWith('AIContext.confirmAction.followUp', expect.any(Error));
+    });
+
+    it('does not claim a failed transaction completed when its follow-up throws', async () => {
+      const pending = makePendingConfirmation();
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+      mockExecuteConfirmedTool.mockResolvedValueOnce({ success: false, error: 'insufficient funds' });
+      mockProcessStream.mockRejectedValueOnce(new Error('relay disconnected'));
+
+      await store.getState().confirmAction();
+
+      const assistant = store.getState().messages.find((message) => message.role === 'assistant');
+      expect(assistant?.content).toContain('transaction result is shown above');
+      expect(assistant?.content).not.toContain('transaction completed');
     });
   });
 
@@ -637,6 +689,47 @@ describe('confirmAction', () => {
   // Finally invariant
   // -----------------------------------------------------------------------
   describe('finally invariant', () => {
+    it('does not let a stale catch/finally clobber the next wallet work', async () => {
+      let rejectTransaction!: (error: Error) => void;
+      mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectTransaction = reject;
+      }));
+      const pending = makePendingConfirmation();
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+
+      const confirming = store.getState().confirmAction();
+      store.getState().setWalletContext({
+        clientManager: { fake: 'next' } as unknown as NonNullable<AIStore['clientManager']>,
+        address: 'manifest1next',
+        signing: undefined,
+        chainId: 'manifest-test',
+      });
+      const nextAbort = new AbortController();
+      store.setState({
+        isStreaming: true,
+        abortController: nextAbort,
+        activeTransactionMessageId: 'next-wallet-tool',
+      });
+
+      rejectTransaction(new Error('old wallet executor failed'));
+      await confirming;
+
+      expect(store.getState()).toMatchObject({
+        address: 'manifest1next',
+        isStreaming: true,
+        abortController: nextAbort,
+        activeTransactionMessageId: 'next-wallet-tool',
+      });
+      expect(nextAbort.signal.aborted).toBe(false);
+      expect(store.getState().messages[0]).toMatchObject({
+        transactionInFlight: false,
+        error: 'old wallet executor failed',
+      });
+    });
+
     it('clears isStreaming, pendingPayload, and abortController after success', async () => {
       const toolMsg = makeToolMessage('tool_msg_1');
       const store = setupStore({

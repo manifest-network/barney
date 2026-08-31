@@ -7,8 +7,15 @@ import { useChain } from '@cosmos-kit/react';
 import { LogOut, Circle, Zap, History, RotateCcw } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { getApps, reconcileWithChain, subscribeToRegistry, type AppEntry } from '../../registry/appRegistry';
+import {
+  getApps,
+  reconcileCustomDomainsWithChain,
+  reconcileWithChain,
+  subscribeToRegistry,
+  type AppEntry,
+} from '../../registry/appRegistry';
 import { getCreditAccount, getCreditEstimate, getLeasesByTenant, LeaseState } from '../../api/billing';
+import { getDomainAssignments } from '../../api/leaseDomains';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits } from '../../utils/format';
 import { truncateAddress } from '../../utils/address';
@@ -72,9 +79,14 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
         getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING),
       ]);
       const leaseStates = new Map<string, 'active' | 'pending'>();
+      const domainsByLease = new Map<string, ReturnType<typeof getDomainAssignments>>();
       for (const l of pendingLeases) leaseStates.set(l.uuid, 'pending');
       for (const l of activeLeases) leaseStates.set(l.uuid, 'active');
+      for (const lease of [...pendingLeases, ...activeLeases]) {
+        domainsByLease.set(lease.uuid, getDomainAssignments(lease.items));
+      }
       reconcileWithChain(address, leaseStates);
+      reconcileCustomDomainsWithChain(address, domainsByLease);
     } catch (error) {
       logError('AppsSidebar.refresh.reconcile', error);
     }

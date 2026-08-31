@@ -79,9 +79,10 @@ function finalizeStaleToolResult(
         ? {
             ...message,
             content: serializeToolResult(result, visibleOutcome),
-            error: visibleOutcome,
+            error: result.success ? undefined : visibleOutcome,
             isStreaming: false,
             awaitingConfirmation: false,
+            transactionInFlight: false,
           }
         : message
     ),
@@ -99,6 +100,7 @@ function finalizeStaleToolError(set: Set, messageId: string, error: unknown): vo
             error: detail,
             isStreaming: false,
             awaitingConfirmation: false,
+            transactionInFlight: false,
           }
         : message
     ),
@@ -193,7 +195,12 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     abortController: abort,
     messages: get().messages.map((message) =>
       message.id === messageId
-        ? { ...message, isStreaming: true, awaitingConfirmation: false }
+        ? {
+            ...message,
+            isStreaming: false,
+            awaitingConfirmation: false,
+            transactionInFlight: true,
+          }
         : message
     ),
   });
@@ -265,6 +272,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
             error: toolError,
             isStreaming: false,
             awaitingConfirmation: false,
+            transactionInFlight: false,
           }
         : m
     );
@@ -275,7 +283,24 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     // the model for follow-up copy on the already-aborted stream signal. The
     // concrete executor's result remains visible on the tool row and says
     // whether submission was impossible or the on-chain outcome is unknown.
-    if (abort.signal.aborted) return;
+    if (abort.signal.aborted) {
+      const summary = resultSummary(result);
+      if (result.success && summary) {
+        set({
+          messages: [
+            ...get().messages,
+            {
+              id: generateMessageId(),
+              role: 'assistant',
+              content: summary,
+              timestamp: Date.now(),
+              local: true,
+            },
+          ],
+        });
+      }
+      return;
+    }
 
     // Append the follow-up assistant message only after the transaction row is
     // resolved and the operation is still live.
@@ -325,7 +350,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
             ...m,
             content: streamResult.error ? `Error: ${streamResult.error}` : streamResult.content,
             thinking: streamResult.thinking || undefined,
-            error: streamResult.error || toolError,
+            error: streamResult.error,
             isStreaming: false,
           }
         : m
@@ -340,8 +365,8 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
       logError('AIContext.confirmAction.followUp', error);
       const detail = error instanceof Error ? error.message : 'Unknown error';
       const content = detail.includes('timeout')
-        ? 'The AI server took too long to summarize the completed transaction.'
-        : 'The transaction completed, but the AI follow-up response failed.';
+        ? 'The AI server took too long to summarize the transaction result shown above.'
+        : 'The transaction result is shown above, but the AI follow-up response failed.';
       set({
         messages: get().messages.map((message) =>
           message.id === followUpAssistantMessageId
@@ -364,7 +389,14 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
 
     const updated = get().messages.map((m) =>
       m.id === messageId
-        ? { ...m, content: errorMessage, error: error instanceof Error ? error.message : 'Unknown error', isStreaming: false, awaitingConfirmation: false }
+        ? {
+            ...m,
+            content: errorMessage,
+            error: error instanceof Error ? error.message : 'Unknown error',
+            isStreaming: false,
+            awaitingConfirmation: false,
+            transactionInFlight: false,
+          }
         : m
     );
     set({ messages: updated, activeTransactionMessageId: null });

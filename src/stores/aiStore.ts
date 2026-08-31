@@ -157,6 +157,7 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
         error: AUTHORIZATION_CANCELLED_MESSAGE,
         isStreaming: false,
         awaitingConfirmation: false,
+        transactionInFlight: false,
       };
     }
 
@@ -167,6 +168,7 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
         error: TRANSACTION_INTERRUPTED_MESSAGE,
         isStreaming: false,
         awaitingConfirmation: false,
+        transactionInFlight: false,
       };
     }
 
@@ -178,6 +180,7 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
           error: ACTIVE_WORK_CANCELLED_MESSAGE,
           isStreaming: false,
           awaitingConfirmation: false,
+          transactionInFlight: false,
         };
       }
       return { ...message, isStreaming: false };

@@ -48,7 +48,8 @@ export const AppEntrySchema = z.object({
   manifest: z.string().optional(),
   /** Cached chain state for the lease's `LeaseItem.custom_domain` fields.
    *  Written by `executeConfirmedDeployApp` on successful attach and refreshed by
-   *  `executeAppStatus` on every status check. Survives across page refreshes
+   *  `executeAppStatus` plus the recurring sidebar chain reconciliation.
+   *  Survives across page refreshes
    *  via localStorage; the polling driver in MainLayout uses it to know which
    *  apps to monitor without an extra chain round-trip per render. */
   customDomains: z.array(z.object({
@@ -58,6 +59,7 @@ export const AppEntrySchema = z.object({
 });
 
 export type AppEntry = z.infer<typeof AppEntrySchema>;
+export type CustomDomainAssignment = NonNullable<AppEntry['customDomains']>[number];
 
 /** The observation fields plus the legacy `status` that rule 5 falls back to. */
 export type AppStatusInputs = Pick<AppEntry, 'chainState' | 'provisionState' | 'status'>;
@@ -560,4 +562,36 @@ export function reconcileWithChain(
     }
     if (statusChanged) notify(address);
   }
+}
+
+/**
+ * Refresh the registry's custom-domain cache from live chain lease items.
+ *
+ * This is deliberately a recurring chain observation, not a transaction
+ * callback. A page reload, wallet switch, aborted confirmation wait, or slow
+ * commit can all outlive the initiating promise; the next sidebar refresh still
+ * converges the durable registry to the chain. Missing leases are skipped because
+ * `reconcileWithChain` owns their terminal state and there is no live item set to
+ * observe.
+ */
+export function reconcileCustomDomainsWithChain(
+  address: string,
+  domainsByLease: ReadonlyMap<string, readonly CustomDomainAssignment[]>,
+): void {
+  const apps = loadApps(address);
+  let dirty = false;
+
+  for (const app of apps) {
+    const observed = domainsByLease.get(app.leaseUuid);
+    if (!observed || sameStructurally('customDomains', app.customDomains, observed)) continue;
+    app.customDomains = observed.map((domain) => ({ ...domain }));
+    dirty = true;
+  }
+
+  if (!dirty) return;
+  if (!saveApps(address, apps)) {
+    logError('appRegistry.reconcileCustomDomainsWithChain', new Error('localStorage write failed — domain reconciliation may not persist across page reload'));
+    return;
+  }
+  notify(address);
 }

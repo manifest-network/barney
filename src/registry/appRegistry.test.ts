@@ -7,6 +7,7 @@ import {
   addApp,
   updateApp,
   removeApp,
+  reconcileCustomDomainsWithChain,
   reconcileWithChain,
   validateAppName,
   sanitizeManifestForStorage,
@@ -1173,6 +1174,68 @@ describe('appRegistry', () => {
         expect(listener).not.toHaveBeenCalled();
         expect(getApp(ADDR_A, app.name)?.chainState).toBe('active');
       } finally { unsub(); }
+    });
+  });
+
+  describe('reconcileCustomDomainsWithChain', () => {
+    it('repairs a stale domain cache from recurring live lease observations', () => {
+      const app = makeApp({
+        chainState: 'active',
+        customDomains: [{ serviceName: 'web', customDomain: 'old.example.com' }],
+      });
+      addApp(ADDR_A, app);
+
+      reconcileCustomDomainsWithChain(ADDR_A, new Map([[
+        app.leaseUuid,
+        [{ serviceName: 'web', customDomain: 'new.example.com' }],
+      ]]));
+
+      expect(getApp(ADDR_A, app.name)?.customDomains).toEqual([
+        { serviceName: 'web', customDomain: 'new.example.com' },
+      ]);
+    });
+
+    it('clears a cached domain when live lease items no longer carry one', () => {
+      const app = makeApp({
+        chainState: 'active',
+        customDomains: [{ serviceName: 'web', customDomain: 'old.example.com' }],
+      });
+      addApp(ADDR_A, app);
+
+      reconcileCustomDomainsWithChain(ADDR_A, new Map([[app.leaseUuid, []]]));
+
+      expect(getApp(ADDR_A, app.name)?.customDomains).toEqual([]);
+    });
+
+    it('does not erase domains for leases absent from the live observation map', () => {
+      const domains = [{ serviceName: 'web', customDomain: 'kept.example.com' }];
+      const app = makeApp({ chainState: 'absent', customDomains: domains });
+      addApp(ADDR_A, app);
+
+      reconcileCustomDomainsWithChain(ADDR_A, new Map());
+
+      expect(getApp(ADDR_A, app.name)?.customDomains).toEqual(domains);
+    });
+
+    it('does not save or notify again after domain state converges', () => {
+      const domains = [{ serviceName: 'web', customDomain: 'app.example.com' }];
+      const app = makeApp({ chainState: 'active', customDomains: domains });
+      addApp(ADDR_A, app);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      const setItem = vi.spyOn(localStorage, 'setItem');
+      try {
+        reconcileCustomDomainsWithChain(ADDR_A, new Map([[
+          app.leaseUuid,
+          domains.map((domain) => ({ ...domain })),
+        ]]));
+
+        expect(setItem).not.toHaveBeenCalled();
+        expect(listener).not.toHaveBeenCalled();
+      } finally {
+        setItem.mockRestore();
+        unsub();
+      }
     });
   });
 

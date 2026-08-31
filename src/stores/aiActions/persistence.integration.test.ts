@@ -73,6 +73,30 @@ describe('persistence integration with real PersistedMessageSchema', () => {
     expect(result[0].error).toMatch(/Interrupted — message was incomplete/);
   });
 
+  it('round-trips an in-flight transaction into a broadcast-aware closure marker', () => {
+    const persisted = [{
+      id: 'm1',
+      role: 'tool',
+      content: 'Deploy "redis"?',
+      timestamp: 1,
+      toolCallId: 'tc1',
+      toolName: 'deploy_app',
+      transactionInFlight: true,
+    }];
+    localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(persisted));
+
+    const result = loadHistory();
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      transactionInFlight: false,
+      awaitingConfirmation: false,
+      isStreaming: false,
+      error: expect.stringContaining('may already have been submitted'),
+      content: expect.stringContaining('page reloaded'),
+    });
+  });
+
   it('round-trips local=true so synthesized messages keep the filter marker', () => {
     const persisted = [{
       id: 'm1',

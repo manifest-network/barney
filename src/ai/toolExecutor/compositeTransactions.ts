@@ -27,7 +27,7 @@ import { deriveUrlFromConnection, failureText } from './helpers';
 import { normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
-import { getDomainAssignments, getDomainForService } from '../../api/leaseDomains';
+import { getDomainForService } from '../../api/leaseDomains';
 import { validateAll, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { validateAppName, sanitizeManifestForStorage, type AppEntry, type ProvisionState } from '../../registry/appRegistry';
 import { buildStackManifest, mergeManifest, resolveGeneratedPassword } from '../manifest';
@@ -89,47 +89,6 @@ function isTransactionCancellation(error: unknown): boolean {
   return !!error
     && typeof error === 'object'
     && (error as { code?: unknown }).code === ManifestMCPErrorCode.OPERATION_CANCELLED;
-}
-
-const DOMAIN_RECONCILIATION_DELAYS_MS = [15_000, 15_000, 30_000] as const;
-
-/**
- * A cancellation can win the await after set-item-custom-domain was already
- * broadcast. Re-read the lease items independently of the aborted chat signal
- * so a transaction that later commits is not orphaned from the local registry
- * (and therefore from DNS polling/UI state).
- */
-function scheduleDomainReconciliation(
-  address: string,
-  leaseUuid: string,
-  serviceName: string,
-  expectedDomain: string,
-  appRegistry: ToolExecutorOptions['appRegistry'] & object,
-): void {
-  const scheduleAttempt = (attempt: number): void => {
-    const delay = DOMAIN_RECONCILIATION_DELAYS_MS[attempt];
-    setTimeout(() => {
-      void getLeaseItemsForLease(leaseUuid)
-        .then((items) => {
-          const observedDomain = getDomainForService(items, serviceName);
-          appRegistry.updateApp(address, leaseUuid, {
-            customDomains: getDomainAssignments(items),
-          });
-          return observedDomain === expectedDomain;
-        })
-        .catch((error) => {
-          logError('compositeTransactions.scheduleDomainReconciliation', error);
-          return false;
-        })
-        .then((converged) => {
-          if (!converged && attempt + 1 < DOMAIN_RECONCILIATION_DELAYS_MS.length) {
-            scheduleAttempt(attempt + 1);
-          }
-        });
-    }, delay);
-  };
-
-  scheduleAttempt(0);
 }
 
 /**
@@ -1065,7 +1024,14 @@ export async function executeConfirmedBatchDeploy(
       // Broadcasts are already serialized by CosmosClientManager.withBroadcastLock
       // and each token mint by the signing mutex inside providerAuth.
       let result: DeployResult;
-      options.assertAuthorization?.();
+      try {
+        options.assertAuthorization?.();
+        signal?.throwIfAborted();
+      } catch (error) {
+        logError('compositeTransactions.executeConfirmedBatchDeploy.guard', error);
+        updateProgress('failed', 'Cancelled before deployment was submitted');
+        return { name, outcome: 'cancelled' as const };
+      }
       try {
         result = await deployManifest(ctx, spec, callOptions);
       } catch (error) {
@@ -1803,7 +1769,14 @@ async function executeConfirmedBatchRestart(
       // Called DIRECTLY under runBatchWithConcurrency: the primitive mints its
       // own ADR-036 token through the non-reentrant signing mutex, exactly as
       // batch deploy calls deployManifest directly.
-      assertAuthorization?.();
+      try {
+        assertAuthorization?.();
+        signal?.throwIfAborted();
+      } catch (error) {
+        logError('executeConfirmedBatchRestart.guard', error);
+        updateProgress('failed', 'Cancelled before the provider was asked');
+        return { name, outcome: 'cancelled' as const };
+      }
       try {
         await restartApp(
           ctx,
@@ -2617,20 +2590,22 @@ export async function executeConfirmedSetCustomDomain(
             clear: true,
             ...(serviceName !== '' ? { serviceName } : {}),
           }
-        : {
-            leaseUuid: asLeaseUuid(leaseUuid),
-            customDomain: asFqdn(customDomain),
-            ...(serviceName !== '' ? { serviceName } : {}),
-          },
-      { signal: options.signal },
+          : {
+              leaseUuid: asLeaseUuid(leaseUuid),
+              customDomain: asFqdn(customDomain),
+              ...(serviceName !== '' ? { serviceName } : {}),
+            },
+      {
+        // Do not race an already-submitted broadcast against the chat abort
+        // signal. The transaction itself cannot be cancelled; waiting for its
+        // result lets this executor update the originating wallet's registry even
+        // after Stop or a wallet switch. The sidebar's recurring chain-domain
+        // reconciliation is the durable repair path across reloads/disconnects.
+        waitForConfirmation: true,
+      },
     );
   } catch (err) {
     logError('compositeTransactions.executeConfirmedSetCustomDomain', err);
-    if (isTransactionCancellation(err)
-        && cancelledTransactionWasSent(err) !== false
-        && appRegistry) {
-      scheduleDomainReconciliation(address, leaseUuid, serviceName, customDomain, appRegistry);
-    }
     return { success: false, error: err instanceof Error ? err.message : 'Failed to set custom domain.' };
   }
 

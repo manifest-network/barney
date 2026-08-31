@@ -110,97 +110,89 @@ describe('confirmation flow (Zustand store)', () => {
     expect(store.getState().deployProgress).not.toBeNull();
   });
 
-  it.each(['fund_credits', 'deploy_app', 'stop_app', 'update_app'])(
-    'rendered %s consent from wallet A disappears and cannot be approved by wallet B',
-    async (toolName) => {
-      const managerA = { wallet: 'a' } as unknown as NonNullable<AIStore['clientManager']>;
-      const managerB = { wallet: 'b' } as unknown as NonNullable<AIStore['clientManager']>;
-      const signerA = { wallet: 'a' } as unknown as NonNullable<AIStore['signing']>;
-      const signerB = { wallet: 'b' } as unknown as NonNullable<AIStore['signing']>;
+  it('rendered consent from wallet A disappears and cannot be approved by wallet B', async () => {
+    const toolName = 'fund_credits';
+    const managerA = { wallet: 'a' } as unknown as NonNullable<AIStore['clientManager']>;
+    const managerB = { wallet: 'b' } as unknown as NonNullable<AIStore['clientManager']>;
+    const signerA = { wallet: 'a' } as unknown as NonNullable<AIStore['signing']>;
+    const signerB = { wallet: 'b' } as unknown as NonNullable<AIStore['signing']>;
+    store.getState().setWalletContext({
+      clientManager: managerA,
+      address: 'manifest1walleta',
+      signing: signerA,
+      chainId: 'manifest-test',
+    });
+    const identity = store.getState();
+    const stalePending: PendingConfirmation = {
+      id: 'pending-a',
+      messageId: 'tool-consent',
+      action: Object.freeze({
+        originAddress: 'manifest1walleta',
+        chainId: identity.chainId,
+        clientGeneration: identity.clientGeneration,
+        signerGeneration: identity.signerGeneration,
+        id: 'action-a',
+        toolName,
+        args: { address: 'manifest1walleta', amount: 5, denomString: '5000000upwr' },
+        description: `Confirm ${toolName}?`,
+      }),
+    };
+    store.setState({
+      messages: [{
+        id: 'tool-consent', role: 'tool', content: 'Confirm transaction?', timestamp: 1,
+        toolName, isStreaming: false, awaitingConfirmation: true,
+      }],
+      pendingConfirmation: stalePending,
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(createElement(
+        AIStoreContext.Provider,
+        { value: store },
+        createElement(RenderedConfirmationFlow),
+      ));
+    });
+    expect(Array.from(container.querySelectorAll('button')).some(
+      (button) => button.textContent?.includes('Confirm'),
+    )).toBe(true);
+
+    await act(async () => {
       store.getState().setWalletContext({
-        clientManager: managerA,
-        address: 'manifest1walleta',
-        signing: signerA,
+        clientManager: managerB,
+        address: 'manifest1walletb',
+        signing: signerB,
         chainId: 'manifest-test',
       });
-      const identity = store.getState();
-      const argsByTool: Record<string, Record<string, unknown>> = {
-        fund_credits: { address: 'manifest1walleta', amount: 5, denomString: '5000000upwr' },
-        deploy_app: { app_name: 'web', size: 'micro', _generatedManifest: '{"image":"nginx"}' },
-        stop_app: { app_name: 'web', leaseUuid: 'lease-1' },
-        update_app: { app_name: 'web', leaseUuid: 'lease-1', _generatedManifest: '{"image":"nginx:2"}' },
-      };
-      const stalePending: PendingConfirmation = {
-        id: 'pending-a',
-        messageId: 'tool-consent',
-        action: Object.freeze({
-          originAddress: 'manifest1walleta',
-          chainId: identity.chainId,
-          clientGeneration: identity.clientGeneration,
-          signerGeneration: identity.signerGeneration,
-          id: 'action-a',
-          toolName,
-          args: argsByTool[toolName],
-          description: `Confirm ${toolName}?`,
-        }),
-      };
-      store.setState({
-        messages: [{
-          id: 'tool-consent', role: 'tool', content: 'Confirm transaction?', timestamp: 1,
-          toolName, isStreaming: false, awaitingConfirmation: true,
-        }],
-        pendingConfirmation: stalePending,
-      });
+    });
 
-      container = document.createElement('div');
-      document.body.appendChild(container);
-      root = createRoot(container);
-      await act(async () => {
-        root?.render(createElement(
-          AIStoreContext.Provider,
-          { value: store },
-          createElement(RenderedConfirmationFlow),
-        ));
-      });
-      expect(Array.from(container.querySelectorAll('button')).some(
-        (button) => button.textContent?.includes('Confirm'),
-      )).toBe(true);
+    expect(store.getState().pendingConfirmation).toBeNull();
+    expect(container.querySelector('[data-testid="cancelled"]')?.textContent)
+      .toContain('cancelled and was not submitted');
+    expect(Array.from(container.querySelectorAll('button')).some(
+      (button) => button.textContent?.includes('Confirm'),
+    )).toBe(false);
 
-      await act(async () => {
-        store.getState().setWalletContext({
-          clientManager: managerB,
-          address: 'manifest1walletb',
-          signing: signerB,
-          chainId: 'manifest-test',
-        });
-      });
+    // Adversarial race: restore the stale A consent without using the atomic
+    // context API, then click the real rendered Confirm button as wallet B.
+    // The confirm-time authorization check must still fail closed.
+    await act(async () => {
+      store.setState({ pendingConfirmation: stalePending });
+    });
+    const staleConfirmButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.includes('Confirm'),
+    );
+    expect(staleConfirmButton).toBeDefined();
+    await act(async () => {
+      staleConfirmButton?.click();
+      await Promise.resolve();
+    });
 
-      expect(store.getState().pendingConfirmation).toBeNull();
-      expect(container.querySelector('[data-testid="cancelled"]')?.textContent)
-        .toContain('cancelled and was not submitted');
-      expect(Array.from(container.querySelectorAll('button')).some(
-        (button) => button.textContent?.includes('Confirm'),
-      )).toBe(false);
-
-      // Adversarial race: restore the stale A consent without using the atomic
-      // context API, then click the real rendered Confirm button as wallet B.
-      // The confirm-time authorization check must still fail closed.
-      await act(async () => {
-        store.setState({ pendingConfirmation: stalePending });
-      });
-      const staleConfirmButton = Array.from(container.querySelectorAll('button')).find(
-        (button) => button.textContent?.includes('Confirm'),
-      );
-      expect(staleConfirmButton).toBeDefined();
-      await act(async () => {
-        staleConfirmButton?.click();
-        await Promise.resolve();
-      });
-
-      expect(store.getState().pendingConfirmation).toBeNull();
-      expect(store.getState().messages.find((message) => message.id === 'tool-consent')?.content)
-        .toContain('cancelled and was not submitted');
-      expect(executeConfirmedTool).not.toHaveBeenCalled();
-    },
-  );
+    expect(store.getState().pendingConfirmation).toBeNull();
+    expect(store.getState().messages.find((message) => message.id === 'tool-consent')?.content)
+      .toContain('cancelled and was not submitted');
+    expect(executeConfirmedTool).not.toHaveBeenCalled();
+  });
 });

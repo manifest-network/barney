@@ -439,6 +439,60 @@ describe('processToolCallsFn', () => {
     expect(otherToolMsgs.every((m) => !m.awaitingConfirmation)).toBe(true);
   });
 
+  it('closes every collected confirmation when authorization changes during batch assembly', async () => {
+    const makeDeployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          skuUuid: 'sku-123',
+          providerUuid: 'prov-456',
+          providerUrl: 'https://provider.test',
+          _generatedManifest: `{"services":{"${appName}":{}}}`,
+        },
+      },
+    });
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(makeDeployResult('alpha'))
+      .mockResolvedValueOnce(makeDeployResult('beta'));
+    let finishPayload!: (payload: Awaited<ReturnType<typeof buildPayloadFromManifest>>) => void;
+    vi.mocked(buildPayloadFromManifest).mockImplementationOnce(
+      () => new Promise((resolve) => { finishPayload = resolve; }),
+    );
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const tc1 = makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } });
+    const tc2 = makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } });
+
+    const processing = processToolCallsFn(get, set, [tc1, tc2], 'asst_1', {
+      content: '', thinking: '', toolCalls: [tc1, tc2],
+    });
+    await vi.waitFor(() => expect(buildPayloadFromManifest).toHaveBeenCalledOnce());
+    state.address = 'manifest1next';
+    state.clientGeneration += 1;
+    state.authorizationEpoch += 1;
+    finishPayload({ bytes: new Uint8Array([1]), filename: 'manifest.json', size: 1, hash: 'a' });
+
+    const result = await processing;
+
+    expect(result.shouldContinue).toBe(false);
+    expect(state.pendingConfirmation).toBeNull();
+    const toolMessages = state.messages.filter((message) => message.role === 'tool');
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        content: expect.stringContaining('cancelled and was not submitted'),
+        error: expect.stringContaining('cancelled and was not submitted'),
+        isStreaming: false,
+        awaitingConfirmation: false,
+      }),
+    ]));
+    expect(toolMessages.every((message) => message.error?.includes('cancelled and was not submitted'))).toBe(true);
+  });
+
   // Regression: prior to this fix, the merge dropped custom_domain fields,
   // so AI-driven batch deploys silently lost their domain attach. Each
   // entry's custom domain must thread through to executeConfirmedBatchDeploy

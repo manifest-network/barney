@@ -133,12 +133,15 @@ const PersistedMessageSchema = z.object({
   //    message Interrupted on reload
   //  - awaitingConfirmation → same, for tool messages without a paired
   //    pendingConfirmation (intentionally not persisted)
+  //  - transactionInFlight → same, for confirmed transactions whose outcome
+  //    was not observed before reload
   //  - local → toChatApiMessages filter; synthesized UI text (e.g. /help)
   //    must not be replayed back to the model after reload
   // Note: `card` is intentionally NOT whitelisted (cards snapshot live state
   // that goes stale across reloads — see saveHistory comment in persistence.ts).
   isStreaming: z.boolean().optional().catch(undefined),
   awaitingConfirmation: z.boolean().optional().catch(undefined),
+  transactionInFlight: z.boolean().optional().catch(undefined),
   local: z.boolean().optional().catch(undefined),
 }).transform((msg): ChatMessage => ({
   ...msg,
@@ -147,6 +150,7 @@ const PersistedMessageSchema = z.object({
   // persisted `true` and short-circuited the rehydrate Interrupted branch.
   isStreaming: msg.isStreaming ?? false,
   awaitingConfirmation: msg.awaitingConfirmation ?? false,
+  transactionInFlight: msg.transactionInFlight ?? false,
   local: msg.local ?? false,
   // Don't restore toolCalls from localStorage - they're user-controlled and could be
   // malformed/oversized. Historical tool calls aren't needed for conversation continuity.
