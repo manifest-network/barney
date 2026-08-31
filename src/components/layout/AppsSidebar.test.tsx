@@ -91,6 +91,18 @@ function creditEstimate(hours: number, ratePerSecond = 0.001) {
   };
 }
 
+function registryApp(name: string, leaseUuid: string) {
+  return {
+    name,
+    leaseUuid,
+    size: 'micro',
+    providerUuid: `provider-${name}`,
+    providerUrl: `https://${name}.provider.example`,
+    createdAt: 1,
+    status: 'running' as const,
+  };
+}
+
 describe('AppsSidebar refresh lifecycle', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -157,6 +169,32 @@ describe('AppsSidebar refresh lifecycle', () => {
       15_000,
       expect.objectContaining({ restartKey: 'manifest1walletb' }),
     );
+  });
+
+  it('hides wallet A app rows until wallet B registry state refreshes', async () => {
+    mocks.getApps.mockImplementation((address: string) => [
+      address === 'manifest1walleta'
+        ? registryApp('wallet-a-app', 'lease-a')
+        : registryApp('wallet-b-app', 'lease-b'),
+    ]);
+    await render();
+    await act(async () => {
+      await latestRefresh()();
+    });
+    expect(container.textContent).toContain('wallet-a-app');
+
+    mocks.address = 'manifest1walletb';
+    await render();
+
+    expect(container.textContent).not.toContain('wallet-a-app');
+    expect(container.textContent).not.toContain('wallet-b-app');
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await latestRefresh()();
+    });
+    expect(container.textContent).toContain('wallet-b-app');
+    expect(container.textContent).not.toContain('wallet-a-app');
   });
 
   it('settles after stalled credit-read deadlines', async () => {
@@ -230,6 +268,14 @@ describe('AppsSidebar refresh lifecycle', () => {
       retryButton?.click();
     });
     expect(mocks.getCreditAccount).toHaveBeenCalledTimes(accountCallsBeforeRetry);
+    const retryingButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retrying…',
+    );
+    expect(retryingButton).toBeDefined();
+    expect(retryingButton?.disabled).toBe(true);
+    await act(async () => {
+      retryingButton?.click();
+    });
     expect(mocks.useVisibilityPolling).toHaveBeenLastCalledWith(
       expect.any(Function),
       15_000,
@@ -243,6 +289,55 @@ describe('AppsSidebar refresh lifecycle', () => {
     expect(container.querySelector('.apps-sidebar__credits-amount')?.textContent).toBe('--');
     expect(container.textContent).not.toContain('5 PWR');
     expect(container.textContent).not.toContain('Couldn’t load credit details.');
+  });
+
+  it.each([
+    {
+      failedRead: 'both',
+      expectedCopy: 'Couldn’t refresh credit details.',
+    },
+    {
+      failedRead: 'balance',
+      expectedCopy: 'Couldn’t refresh credit balance.',
+    },
+    {
+      failedRead: 'estimate',
+      expectedCopy: 'Couldn’t refresh credit estimate.',
+    },
+  ] as const)('identifies a failed $failedRead refresh while retaining good data', async ({
+    failedRead,
+    expectedCopy,
+  }) => {
+    mocks.getCreditAccount.mockResolvedValue(creditAccount(5));
+    mocks.getCreditEstimate.mockResolvedValue(creditEstimate(2));
+    await render();
+    await act(async () => {
+      await latestRefresh()();
+    });
+
+    if (failedRead === 'both' || failedRead === 'balance') {
+      mocks.getCreditAccount.mockRejectedValue(new Error('account unavailable'));
+    } else {
+      mocks.getCreditAccount.mockResolvedValue(creditAccount(7));
+    }
+    if (failedRead === 'both' || failedRead === 'estimate') {
+      mocks.getCreditEstimate.mockRejectedValue(new Error('estimate unavailable'));
+    } else {
+      mocks.getCreditEstimate.mockResolvedValue(creditEstimate(4));
+    }
+
+    await act(async () => {
+      await expect(latestRefresh()()).resolves.toBe(false);
+    });
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain(expectedCopy);
+    expect(container.textContent).toContain(
+      failedRead === 'estimate' ? '7 PWR' : '5 PWR',
+    );
+    expect(container.textContent).toContain(
+      failedRead === 'balance' ? '~4h remaining' : '~2h remaining',
+    );
   });
 
   it('does not let wallet A results overwrite wallet B after a context switch', async () => {

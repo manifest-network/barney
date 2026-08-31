@@ -191,7 +191,7 @@ describe('confirmation flow (Zustand store)', () => {
       expectsNonDeployManifestOverride: true,
       domainValidation: 'none',
     },
-  ] as const)('rendered $caseName consent from wallet A cannot be approved by wallet B', async ({
+  ] as const)('rendered $caseName restored consent remains fail-closed after a wallet switch', async ({
     toolName,
     args,
     rendersDeployEditor,

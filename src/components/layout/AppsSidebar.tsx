@@ -80,6 +80,26 @@ interface CreditRefreshFailure {
   estimate: boolean;
 }
 
+function creditFailureMessage(
+  failure: CreditRefreshFailure,
+  hasLoadedBalance: boolean,
+  hasLoadedEstimate: boolean,
+): string {
+  if (failure.balance && failure.estimate) {
+    return hasLoadedBalance || hasLoadedEstimate
+      ? 'Couldn’t refresh credit details.'
+      : 'Couldn’t load credit details.';
+  }
+  if (failure.balance) {
+    return hasLoadedBalance
+      ? 'Couldn’t refresh credit balance.'
+      : 'Couldn’t load credit balance.';
+  }
+  return hasLoadedEstimate
+    ? 'Couldn’t refresh credit estimate.'
+    : 'Couldn’t load credit estimate.';
+}
+
 function currentWalletValue<T>(
   snapshot: WalletSnapshot<T> | null,
   context: WalletRenderContext,
@@ -92,20 +112,24 @@ function currentWalletValue<T>(
 export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const { address, disconnect, wallet } = useChain(CHAIN_NAME);
   const { sendMessage, attachPayload, dnsStatuses } = useAI();
-  // Unlike an address string, this identity changes for A → B → A. Credit
-  // snapshots from an earlier visit to A therefore remain hidden until the
-  // current A lifecycle successfully refreshes them.
+  // Unlike an address string, this identity changes for A → B → A. Registry
+  // and credit snapshots from an earlier visit to A therefore remain hidden
+  // until the current A lifecycle successfully refreshes them.
   const walletContext = useMemo(() => ({ address }), [address]);
-  const [apps, setApps] = useState<AppEntry[]>([]);
+  const [appsSnapshot, setAppsSnapshot] =
+    useState<WalletSnapshot<AppEntry[]> | null>(null);
   const [creditBalanceSnapshot, setCreditBalanceSnapshot] =
     useState<WalletSnapshot<number> | null>(null);
   const [creditEstimateSnapshot, setCreditEstimateSnapshot] =
     useState<WalletSnapshot<CreditEstimateSnapshot> | null>(null);
   const [creditFailureSnapshot, setCreditFailureSnapshot] =
     useState<WalletSnapshot<CreditRefreshFailure> | null>(null);
+  const [creditRetryContext, setCreditRetryContext] =
+    useState<WalletRenderContext | null>(null);
   const [pollRestartGeneration, setPollRestartGeneration] = useState(0);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const refreshGenerationRef = useRef(0);
+  const creditRetryContextRef = useRef<WalletRenderContext | null>(null);
 
   // Invalidate every outstanding refresh before passive effects can start the
   // new wallet's immediate polling lifecycle. Layout-effect ordering makes
@@ -118,9 +142,13 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     };
   }, [address, pollRestartGeneration]);
 
-  // Scope rendered credit data as well as writes. This hides wallet A's last
-  // successful values on the very render that switches to wallet B, including
-  // when B's first read fails or times out.
+  // Scope rendered registry and credit data as well as writes. This hides
+  // wallet A's rows and values on the very render that switches to wallet B,
+  // including when B's first refresh fails or times out.
+  const apps = useMemo(
+    () => currentWalletValue(appsSnapshot, walletContext) ?? [],
+    [appsSnapshot, walletContext],
+  );
   const credits = currentWalletValue(
     creditBalanceSnapshot,
     walletContext,
@@ -135,7 +163,15 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     creditFailureSnapshot,
     walletContext,
   );
-  const hasCreditFailure = creditFailure?.balance === true || creditFailure?.estimate === true;
+  const creditFailureCopy = creditFailure
+    && (creditFailure.balance || creditFailure.estimate)
+    ? creditFailureMessage(
+        creditFailure,
+        credits !== null,
+        currentEstimate !== null,
+      )
+    : null;
+  const isCreditRetrying = creditRetryContext === walletContext;
 
   // Load apps and credit info. MainLayout owns the independent recurring
   // chain/registry reconciliation driver outside this sidebar's ErrorBoundary.
@@ -143,7 +179,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     if (!address) return;
     const refreshGeneration = refreshGenerationRef.current;
 
-    setApps(getApps(address));
+    setAppsSnapshot({ context: walletContext, value: getApps(address) });
 
     // Bound and run the independent credit reads together. A stalled RPC can
     // no longer pin useVisibilityPolling's in-flight guard for the session.
@@ -210,6 +246,10 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
       estimate: estimateResult.status === 'rejected',
     };
     setCreditFailureSnapshot({ context: walletContext, value: failure });
+    if (creditRetryContextRef.current === walletContext) {
+      creditRetryContextRef.current = null;
+      setCreditRetryContext((context) => context === walletContext ? null : context);
+    }
 
     if (failure.balance || failure.estimate) {
       return false;
@@ -219,6 +259,15 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const pollRestartKey = pollRestartGeneration === 0
     ? address
     : `${address ?? 'disconnected'}:${pollRestartGeneration}`;
+
+  const retryCreditRefresh = useCallback(() => {
+    // The ref closes the pre-render double-click window; the disabled state
+    // provides the visible/a11y contract while this retry pass is in flight.
+    if (creditRetryContextRef.current === walletContext) return;
+    creditRetryContextRef.current = walletContext;
+    setCreditRetryContext(walletContext);
+    setPollRestartGeneration((generation) => generation + 1);
+  }, [walletContext]);
 
   useVisibilityPolling(refresh, AUTO_REFRESH_INTERVAL_MS, {
     enabled: !!address,
@@ -236,10 +285,10 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     if (!address) return;
     return subscribeToRegistry((mutatedAddress) => {
       if (mutatedAddress === address) {
-        setApps(getApps(address));
+        setAppsSnapshot({ context: walletContext, value: getApps(address) });
       }
     });
-  }, [address]);
+  }, [address, walletContext]);
 
   const runningApps = apps.filter((a) => a.status === 'running' || a.status === 'deploying');
 
@@ -322,19 +371,20 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
             )}
           </div>
         )}
-        {hasCreditFailure && (
-          <div className="apps-sidebar__credits-error" role="status">
-            <span>
-              {creditFailure.balance && creditFailure.estimate
-                ? 'Couldn’t load credit details.'
-                : 'Some credit details couldn’t be refreshed.'}
-            </span>
+        {creditFailureCopy && (
+          <div
+            className="apps-sidebar__credits-error"
+            role="alert"
+            aria-busy={isCreditRetrying}
+          >
+            <span>{creditFailureCopy}</span>
             <button
               type="button"
               className="apps-sidebar__credits-retry"
-              onClick={() => setPollRestartGeneration((generation) => generation + 1)}
+              onClick={retryCreditRefresh}
+              disabled={isCreditRetrying}
             >
-              Retry
+              {isCreditRetrying ? 'Retrying…' : 'Retry'}
             </button>
           </div>
         )}
