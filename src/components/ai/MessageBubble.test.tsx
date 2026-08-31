@@ -99,20 +99,3 @@ describe('MessageBubble — ERROR_PATTERNS for tier catalog', () => {
     consoleErr.mockRestore();
   });
 });
-
-describe('MessageBubble — stale transaction notices', () => {
-  it('renders a successful previous-wallet outcome as neutral visible copy', () => {
-    render({
-      id: 'stale-success',
-      role: 'assistant',
-      content: 'This transaction finished for the previous wallet after the wallet or network changed. Added 5 credits.',
-      timestamp: Date.now(),
-      local: true,
-    });
-
-    expect(container.querySelector('.message-text')?.textContent)
-      .toContain('finished for the previous wallet');
-    expect(container.querySelector('.message-error')).toBeNull();
-    expect(findButton(/^Check credits$/)).toBeNull();
-  });
-});

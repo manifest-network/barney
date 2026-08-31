@@ -106,17 +106,10 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
 
   useVisibilityPolling(refresh, AUTO_REFRESH_INTERVAL_MS, {
     enabled: !!address,
-    immediate: false,
+    immediate: true,
     context: 'AppsSidebar.refresh',
+    restartKey: address,
   });
-
-  // Immediate fetch on mount and when address changes (wallet switch).
-  // The hook's ref sync absorbs callback changes without restarting
-  // the timer, but doesn't re-fetch — this effect handles that.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void refresh();
-  }, [refresh]);
 
   // Subscribe to in-tab registry mutations so mid-tool-execution writes
   // (e.g. executeAppStatus refreshing customDomains, executeConfirmedDeployApp

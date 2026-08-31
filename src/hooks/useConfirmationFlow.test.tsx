@@ -128,6 +128,29 @@ describe('confirmation flow (Zustand store)', () => {
       },
       rendersDeployEditor: true,
     },
+    {
+      toolName: 'stop_app',
+      args: {
+        app_name: 'web',
+        leaseUuid: 'lease-web',
+      },
+      rendersDeployEditor: false,
+    },
+    {
+      // This uniquely drives ConfirmationCard's non-deploy handleConfirm arm
+      // with a manifest override present.
+      toolName: 'update_app',
+      args: {
+        app_name: 'web',
+        leaseUuid: 'lease-web',
+        providerUrl: 'https://fred.example.com',
+        _generatedManifest: JSON.stringify({
+          image: 'nginx:stable',
+          ports: { '80/tcp': { ingress: true } },
+        }),
+      },
+      rendersDeployEditor: true,
+    },
   ] as const)('rendered $toolName consent from wallet A cannot be approved by wallet B', async ({
     toolName,
     args,

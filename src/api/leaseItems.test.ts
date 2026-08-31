@@ -13,10 +13,10 @@ vi.mock('./billing', async (importOriginal) => {
 describe('getLeaseItemsForLease', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns empty array when lease is not found', async () => {
+  it('returns null when lease is not found', async () => {
     vi.mocked(billing.getLease).mockResolvedValue(null);
     const items = await getLeaseItemsForLease('uuid-1');
-    expect(items).toEqual([]);
+    expect(items).toBeNull();
   });
 
   it('returns the lease items when present', async () => {

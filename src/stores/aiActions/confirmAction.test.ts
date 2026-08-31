@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createElement } from 'react';
+import { flushSync } from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import type { StreamResult } from '../../ai/streamUtils';
 import type { PendingAction, ToolResult } from '../../ai/toolExecutor';
 import type { PendingConfirmation, ChatMessage } from '../../contexts/aiTypes';
@@ -50,6 +53,16 @@ vi.mock('../../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
+vi.mock('../../contexts/aiStoreContext', () => ({
+  useAIStore: (selector: (state: {
+    sendMessage: () => Promise<void>;
+    retrySkuTiers: () => Promise<void>;
+  }) => unknown) => selector({
+    sendMessage: vi.fn(() => Promise.resolve()),
+    retrySkuTiers: vi.fn(() => Promise.resolve()),
+  }),
+}));
+
 vi.mock('../../ai/systemPrompt', () => ({
   getSystemPrompt: vi.fn(() => 'system prompt'),
 }));
@@ -83,6 +96,7 @@ vi.mock('../../registry/appRegistry', () => ({
 }));
 
 import { logError } from '../../utils/errors';
+import { MessageBubble } from '../../components/ai/MessageBubble';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -388,6 +402,28 @@ describe('confirmAction', () => {
       });
       expect(notice?.error).toBeUndefined();
       expect(notice?.content).toContain('Deployment completed for the previous wallet.');
+
+      // Render the exact message produced by confirmAction through the real UI
+      // component. This pins the production path and its neutral presentation
+      // together rather than hand-constructing a lookalike message.
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      try {
+        flushSync(() => {
+          root.render(createElement(MessageBubble, { message: notice! }));
+        });
+        expect(container.querySelector('.message-text')?.textContent)
+          .toContain('finished for the previous wallet');
+        expect(container.querySelector('[role="alert"]')).toBeNull();
+        expect(Array.from(container.querySelectorAll('button')).some(
+          (button) => button.textContent?.trim() === 'Check credits'
+        )).toBe(false);
+      } finally {
+        flushSync(() => root.unmount());
+        container.remove();
+      }
+
       expect(store.getState().address).toBe('manifest1next');
       expect(store.getState().activeTransactionMessageId).toBeNull();
       expect(mockProcessStream).not.toHaveBeenCalled();

@@ -2425,7 +2425,7 @@ export async function executeSetCustomDomain(
     return { success: false, error: 'Failed to read lease items from chain. Try again.' };
   }
 
-  if (leaseItems.length === 0) {
+  if (!leaseItems || leaseItems.length === 0) {
     return { success: false, error: `No lease items found for "${appName}". The lease may have been closed.` };
   }
 

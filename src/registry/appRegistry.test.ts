@@ -305,6 +305,36 @@ describe('appRegistry', () => {
   // --- Reconciliation ---
 
   describe('reconcileWithChain', () => {
+    it('does not mark a registry entry created after the chain read began as absent', () => {
+      const app = makeApp({ status: 'deploying', provisionState: 'unconfirmed' });
+      addApp(ADDR_A, app);
+
+      // An empty baseline means this app did not exist when the chain snapshot
+      // began. Its absence from that older snapshot is not evidence it stopped.
+      reconcileWithChain(ADDR_A, new Map(), new Map());
+
+      const preserved = getApp(ADDR_A, app.name);
+      expect(preserved?.status).toBe('deploying');
+      expect(preserved?.chainState).toBeUndefined();
+    });
+
+    it('does not overwrite a newer local chain-state result with an older snapshot', () => {
+      const app = makeApp({ status: 'deploying', chainState: undefined });
+      addApp(ADDR_A, app);
+      updateApp(ADDR_A, app.leaseUuid, { chainState: 'active' });
+
+      reconcileWithChain(
+        ADDR_A,
+        new Map(),
+        new Map([[app.leaseUuid, undefined]]),
+      );
+
+      expect(getApp(ADDR_A, app.name)).toMatchObject({
+        status: 'running',
+        chainState: 'active',
+      });
+    });
+
     it('marks running apps as stopped when lease is no longer active', () => {
       const app = makeApp({ status: 'running' });
       addApp(ADDR_A, app);

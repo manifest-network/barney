@@ -55,7 +55,7 @@ describe('MainLayout registry drivers', () => {
     root = createRoot(container);
     act(() => root.render(createElement(MainLayout)));
 
-    expect(useRegistryReconciliation).toHaveBeenCalledWith('manifest1layout', apps);
+    expect(useRegistryReconciliation).toHaveBeenCalledWith('manifest1layout');
     expect(useDnsStatusPolling).toHaveBeenCalledWith(apps);
   });
 });

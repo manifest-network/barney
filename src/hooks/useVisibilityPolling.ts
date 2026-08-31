@@ -19,6 +19,11 @@ export interface UseVisibilityPollingOptions {
   enabled?: boolean;
   /** Context string for logError (default: 'useVisibilityPolling') */
   context?: string;
+  /**
+   * Restart the polling lifecycle when this key changes. Use for context such
+   * as a wallet address whose change needs an immediate, non-overlapping tick.
+   */
+  restartKey?: string | number;
 }
 
 /**
@@ -35,9 +40,10 @@ export function useVisibilityPolling(
   intervalMs: number,
   options?: UseVisibilityPollingOptions,
 ): void {
-  // Extract enabled as a primitive for the dep array.
-  // Other options stay in the ref (never in deps).
+  // Extract lifecycle controls as primitives for the dependency array.
+  // Other options stay in the ref and do not restart polling.
   const enabled = options?.enabled ?? true;
+  const restartKey = options?.restartKey;
 
   const callbackRef = useRef(callback);
   const optionsRef = useRef(options);
@@ -153,5 +159,5 @@ export function useVisibilityPolling(
         timeoutId = null;
       }
     };
-  }, [intervalMs, enabled]);
+  }, [intervalMs, enabled, restartKey]);
 }

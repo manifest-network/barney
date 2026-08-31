@@ -14,7 +14,10 @@ function renderHook(
   callback: () => Promise<boolean | void>,
   intervalMs: number,
   options?: Parameters<typeof useVisibilityPolling>[2],
-): { unmount: () => void } {
+): {
+  unmount: () => void;
+  rerender: (nextOptions?: Parameters<typeof useVisibilityPolling>[2]) => void;
+} {
   // Unmount any previous hook from this test
   currentCleanup?.();
 
@@ -22,14 +25,22 @@ function renderHook(
   document.body.appendChild(container);
   const root = createRoot(container);
 
-  function TestComponent() {
-    useVisibilityPolling(callback, intervalMs, options);
+  function TestComponent({ hookOptions }: {
+    hookOptions?: Parameters<typeof useVisibilityPolling>[2];
+  }) {
+    useVisibilityPolling(callback, intervalMs, hookOptions);
     return null;
   }
 
   flushSync(() => {
-    root.render(createElement(TestComponent));
+    root.render(createElement(TestComponent, { hookOptions: options }));
   });
+
+  const rerender = (nextOptions?: Parameters<typeof useVisibilityPolling>[2]) => {
+    flushSync(() => {
+      root.render(createElement(TestComponent, { hookOptions: nextOptions }));
+    });
+  };
 
   const unmount = () => {
     flushSync(() => { root.unmount(); });
@@ -38,7 +49,7 @@ function renderHook(
   };
 
   currentCleanup = unmount;
-  return { unmount };
+  return { unmount, rerender };
 }
 
 function setDocumentHidden(hidden: boolean) {
@@ -138,6 +149,36 @@ describe('useVisibilityPolling', () => {
 
     // Should resume normal interval
     await vi.advanceTimersByTimeAsync(5_000);
+    expect(cb).toHaveBeenCalledTimes(3);
+  });
+
+  it('restarts immediately on restartKey changes without bypassing visibility guards', async () => {
+    const cb = vi.fn().mockResolvedValue(true);
+    const { rerender } = renderHook(cb, 5_000, { restartKey: 'wallet-a' });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    // An unrelated option-object change does not restart the lifecycle.
+    rerender({ restartKey: 'wallet-a', backoff: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    rerender({ restartKey: 'wallet-b', backoff: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cb).toHaveBeenCalledTimes(2);
+
+    // A context switch while hidden stays dormant until the regular
+    // visibility handler resumes the poller.
+    setDocumentHidden(true);
+    fireVisibilityChange();
+    rerender({ restartKey: 'wallet-c', backoff: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cb).toHaveBeenCalledTimes(2);
+
+    setDocumentHidden(false);
+    fireVisibilityChange();
+    await vi.advanceTimersByTimeAsync(0);
     expect(cb).toHaveBeenCalledTimes(3);
   });
 

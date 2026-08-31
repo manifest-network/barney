@@ -96,6 +96,17 @@ describe('executeSetCustomDomain', () => {
     if (!r.success) expect(r.error).toMatch(/lease items|try again/i);
   });
 
+  it('returns a clean error when the lease is not found', async () => {
+    const app = makeApp();
+    vi.mocked(getLeaseItemsForLease).mockResolvedValue(null);
+    const r = await executeSetCustomDomain(
+      { app_name: 'myapp', custom_domain: 'app.example.com' },
+      makeOptions(app),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/lease items|closed/i);
+  });
+
   it('returns error when app not found', async () => {
     const r = await executeSetCustomDomain(
       { app_name: 'missing', custom_domain: 'a.example.com' },
@@ -560,10 +571,15 @@ describe('executeConfirmedSetCustomDomain', () => {
     const app = makeApp({ customDomains: [] });
     const registry = makeRegistry([app]);
     const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
     vi.mocked(setItemCustomDomain).mockImplementationOnce(
       (_ctx, _input, callOptions) => new Promise((_resolve, reject) => {
-        const passedSignal = (callOptions as { signal?: AbortSignal } | undefined)?.signal;
-        passedSignal?.addEventListener('abort', () => {
+        receivedSignal = (callOptions as { signal?: AbortSignal } | undefined)?.signal;
+        if (!receivedSignal) {
+          reject(new Error('executor did not thread the chat signal'));
+          return;
+        }
+        receivedSignal.addEventListener('abort', () => {
           reject(new DOMException('This operation was aborted', 'AbortError'));
         }, { once: true });
       }),
@@ -579,6 +595,10 @@ describe('executeConfirmedSetCustomDomain', () => {
       fakeClientManager,
       { ...options(), appRegistry: registry, signal: controller.signal },
     );
+    await Promise.resolve();
+    // Assert before aborting so deleting the production signal wiring fails
+    // immediately instead of leaving the test pending until Vitest's timeout.
+    expect(receivedSignal).toBe(controller.signal);
     controller.abort();
     const result = await executing;
 

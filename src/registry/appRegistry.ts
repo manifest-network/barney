@@ -536,10 +536,13 @@ export function removeApp(address: string, leaseUuid: string): boolean {
  *
  * @param address - wallet address
  * @param leaseStates - map of lease UUID → 'active' | 'pending' for leases still on-chain
+ * @param expectedLocalChainStates - optional pre-RPC baseline; when supplied,
+ *   entries created or changed during the read are skipped as newer local state
  */
 export function reconcileWithChain(
   address: string,
-  leaseStates: Map<string, 'active' | 'pending'>
+  leaseStates: ReadonlyMap<string, 'active' | 'pending'>,
+  expectedLocalChainStates?: ReadonlyMap<string, ChainState | undefined>,
 ): void {
   const apps = loadApps(address);
   // `dirty` persists a fresh observation even when the summary is unchanged;
@@ -548,6 +551,15 @@ export function reconcileWithChain(
   let statusChanged = false;
 
   for (const app of apps) {
+    if (expectedLocalChainStates) {
+      // A registry entry created after the chain request began was not part of
+      // that snapshot. Likewise, a transaction result that changed chainState
+      // while the request was in flight is newer than the snapshot. In both
+      // cases the recurring next pass, not this stale one, owns convergence.
+      if (!expectedLocalChainStates.has(app.leaseUuid)) continue;
+      if (app.chainState !== expectedLocalChainStates.get(app.leaseUuid)) continue;
+    }
+
     // A lease missing from the tenant's live set was OBSERVED to be gone.
     const chainState: ChainState = leaseStates.get(app.leaseUuid) ?? 'absent';
     const status = deriveAppStatus({ ...app, chainState });
