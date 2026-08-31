@@ -2,7 +2,7 @@
  * AppsSidebar — wallet info, credits, running apps list.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { LogOut, Circle, Zap, History, RotateCcw } from 'lucide-react';
 import { useAI } from '../../hooks/useAI';
@@ -61,25 +61,68 @@ const STATUS_COLORS: Record<string, string> = {
   failed: 'text-error-400',
 };
 
+interface WalletRenderContext {
+  address: string | undefined;
+}
+
+interface WalletSnapshot<T> {
+  context: WalletRenderContext;
+  value: T;
+}
+
+interface CreditEstimateSnapshot {
+  hoursRemaining: number | null;
+  burnRate: number | null;
+}
+
+function currentWalletValue<T>(
+  snapshot: WalletSnapshot<T> | null,
+  context: WalletRenderContext,
+): T | null {
+  return snapshot?.context === context
+    ? snapshot.value
+    : null;
+}
+
 export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const { address, disconnect, wallet } = useChain(CHAIN_NAME);
   const { sendMessage, attachPayload, dnsStatuses } = useAI();
+  // Unlike an address string, this identity changes for A → B → A. Credit
+  // snapshots from an earlier visit to A therefore remain hidden until the
+  // current A lifecycle successfully refreshes them.
+  const walletContext = useMemo(() => ({ address }), [address]);
   const [apps, setApps] = useState<AppEntry[]>([]);
-  const [credits, setCredits] = useState<number | null>(null);
-  const [hoursRemaining, setHoursRemaining] = useState<number | null>(null);
-  const [burnRate, setBurnRate] = useState<number | null>(null);
+  const [creditBalanceSnapshot, setCreditBalanceSnapshot] =
+    useState<WalletSnapshot<number> | null>(null);
+  const [creditEstimateSnapshot, setCreditEstimateSnapshot] =
+    useState<WalletSnapshot<CreditEstimateSnapshot> | null>(null);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const refreshGenerationRef = useRef(0);
 
-  // Invalidate every outstanding refresh when the wallet changes. The effect
-  // is declared before useVisibilityPolling, so its generation update runs
-  // before that hook starts the new wallet's immediate polling lifecycle.
-  useEffect(() => {
+  // Invalidate every outstanding refresh before passive effects can start the
+  // new wallet's immediate polling lifecycle. Layout-effect ordering makes
+  // this independent of hook declaration order; cleanup also invalidates work
+  // that settles after unmount.
+  useLayoutEffect(() => {
     refreshGenerationRef.current += 1;
     return () => {
       refreshGenerationRef.current += 1;
     };
   }, [address]);
+
+  // Scope rendered credit data as well as writes. This hides wallet A's last
+  // successful values on the very render that switches to wallet B, including
+  // when B's first read fails or times out.
+  const credits = currentWalletValue(
+    creditBalanceSnapshot,
+    walletContext,
+  );
+  const currentEstimate = currentWalletValue(
+    creditEstimateSnapshot,
+    walletContext,
+  );
+  const hoursRemaining = currentEstimate?.hoursRemaining ?? null;
+  const burnRate = currentEstimate?.burnRate ?? null;
 
   // Load apps and credit info. MainLayout owns the independent recurring
   // chain/registry reconciliation driver outside this sidebar's ErrorBoundary.
@@ -91,7 +134,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
 
     // Bound and run the independent credit reads together. A stalled RPC can
     // no longer pin useVisibilityPolling's in-flight guard for the session.
-    const creditBalance = withTimeout(
+    const creditBalanceRequest = withTimeout(
       getCreditAccount(address),
       AI_TOOL_API_TIMEOUT_MS,
       'Sidebar credit-account refresh',
@@ -102,7 +145,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
       return pwrBal ? fromBaseUnits(pwrBal.amount, pwrBal.denom) : 0;
     });
 
-    const creditEstimate = withTimeout(
+    const creditEstimateRequest = withTimeout(
       getCreditEstimate(address),
       AI_TOOL_API_TIMEOUT_MS,
       'Sidebar credit-estimate refresh',
@@ -123,8 +166,8 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     });
 
     const [creditResult, estimateResult] = await Promise.allSettled([
-      creditBalance,
-      creditEstimate,
+      creditBalanceRequest,
+      creditEstimateRequest,
     ]);
 
     // An older wallet's promises may settle after a context switch. Never let
@@ -132,22 +175,32 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     if (refreshGeneration !== refreshGenerationRef.current) return;
 
     if (creditResult.status === 'fulfilled') {
-      setCredits(creditResult.value);
+      setCreditBalanceSnapshot({
+        context: walletContext,
+        value: creditResult.value,
+      });
     } else {
       logError('AppsSidebar.refresh.credits', creditResult.reason);
     }
 
     if (estimateResult.status === 'fulfilled') {
-      setHoursRemaining(estimateResult.value.hoursRemaining);
-      setBurnRate(estimateResult.value.burnRate);
+      setCreditEstimateSnapshot({
+        context: walletContext,
+        value: estimateResult.value,
+      });
     } else {
       logError('AppsSidebar.refresh.estimate', estimateResult.reason);
     }
-  }, [address]);
+
+    if (creditResult.status === 'rejected' || estimateResult.status === 'rejected') {
+      return false;
+    }
+  }, [address, walletContext]);
 
   useVisibilityPolling(refresh, AUTO_REFRESH_INTERVAL_MS, {
     enabled: !!address,
     immediate: true,
+    backoff: true,
     context: 'AppsSidebar.refresh',
     restartKey: address,
   });

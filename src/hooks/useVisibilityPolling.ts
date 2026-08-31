@@ -32,6 +32,8 @@ export interface UseVisibilityPollingOptions {
  * @param callback — async function to poll. Return `false` to signal failure
  *   (triggers backoff when enabled). Return `true` or `void` to signal success.
  *   Callers do not need to memoize the callback — it is stored in a ref.
+ *   Callbacks awaiting external I/O must impose their own deadline or abort;
+ *   serialization intentionally keeps `inFlight` set until the callback settles.
  * @param intervalMs — base polling interval in milliseconds
  * @param options — optional settings (object identity may change freely)
  */

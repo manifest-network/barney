@@ -125,7 +125,7 @@ describe('AppsSidebar refresh lifecycle', () => {
     });
   }
 
-  function latestRefresh(): () => Promise<void> {
+  function latestRefresh(): () => Promise<boolean | void> {
     const call = mocks.useVisibilityPolling.mock.calls.at(-1);
     expect(call).toBeDefined();
     return call![0];
@@ -143,6 +143,7 @@ describe('AppsSidebar refresh lifecycle', () => {
       expect.objectContaining({
         enabled: true,
         immediate: true,
+        backoff: true,
         restartKey: 'manifest1walleta',
       }),
     );
@@ -158,13 +159,13 @@ describe('AppsSidebar refresh lifecycle', () => {
     );
   });
 
-  it('bounds stalled credit reads so the refresh can settle and a later pass can run', async () => {
+  it('settles after stalled credit-read deadlines', async () => {
     vi.useFakeTimers();
     mocks.getCreditAccount.mockImplementation(() => new Promise(() => undefined));
     mocks.getCreditEstimate.mockImplementation(() => new Promise(() => undefined));
     await render();
 
-    let stalled!: Promise<void>;
+    let stalled!: Promise<boolean | void>;
     act(() => {
       stalled = latestRefresh()();
     });
@@ -193,6 +194,40 @@ describe('AppsSidebar refresh lifecycle', () => {
     expect(container.textContent).toContain('7 PWR');
   });
 
+  it('hides wallet A credit data immediately when wallet B reads fail', async () => {
+    mocks.getCreditAccount.mockResolvedValue(creditAccount(5));
+    mocks.getCreditEstimate.mockResolvedValue(creditEstimate(2));
+    await render();
+    await act(async () => {
+      await latestRefresh()();
+    });
+    expect(container.textContent).toContain('5 PWR');
+    expect(container.textContent).toContain('~2h remaining');
+
+    mocks.address = 'manifest1walletb';
+    mocks.getCreditAccount.mockRejectedValue(new Error('account unavailable'));
+    mocks.getCreditEstimate.mockRejectedValue(new Error('estimate unavailable'));
+    await render();
+
+    expect(container.querySelector('.apps-sidebar__credits-amount')?.textContent).toBe('--');
+    expect(container.textContent).not.toContain('5 PWR');
+    expect(container.textContent).not.toContain('~2h remaining');
+
+    await act(async () => {
+      await expect(latestRefresh()()).resolves.toBe(false);
+    });
+    expect(container.querySelector('.apps-sidebar__credits-amount')?.textContent).toBe('--');
+    expect(container.textContent).not.toContain('5 PWR');
+    expect(container.textContent).not.toContain('~2h remaining');
+
+    // Returning to A creates a new wallet lifecycle; do not resurrect the
+    // snapshot from A's earlier session before this lifecycle refreshes.
+    mocks.address = 'manifest1walleta';
+    await render();
+    expect(container.querySelector('.apps-sidebar__credits-amount')?.textContent).toBe('--');
+    expect(container.textContent).not.toContain('5 PWR');
+  });
+
   it('does not let wallet A results overwrite wallet B after a context switch', async () => {
     const accountA = deferred<ReturnType<typeof creditAccount>>();
     const estimateA = deferred<ReturnType<typeof creditEstimate>>();
@@ -208,7 +243,7 @@ describe('AppsSidebar refresh lifecycle', () => {
     );
     await render();
 
-    let refreshA!: Promise<void>;
+    let refreshA!: Promise<boolean | void>;
     act(() => {
       refreshA = latestRefresh()();
     });

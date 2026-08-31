@@ -25,6 +25,14 @@ vi.mock('../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
+vi.mock('../utils/customDomainValidation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/customDomainValidation')>();
+  return {
+    ...actual,
+    validateAll: vi.fn().mockResolvedValue({}),
+  };
+});
+
 import { executeConfirmedTool } from '../ai/toolExecutor';
 
 function RenderedConfirmationFlow() {
@@ -122,6 +130,7 @@ describe('confirmation flow (Zustand store)', () => {
       args: {
         app_name: 'web',
         size: 'micro',
+        customDomain: 'web.example.com',
         _generatedManifest: JSON.stringify({
           image: 'nginx:alpine',
           ports: { '80/tcp': { ingress: true } },
@@ -209,9 +218,13 @@ describe('confirmation flow (Zustand store)', () => {
         createElement(RenderedConfirmationFlow),
       ));
     });
-    expect(Array.from(container.querySelectorAll('button')).some(
+    const initialConfirmButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent?.includes('Confirm'),
-    )).toBe(true);
+    );
+    expect(initialConfirmButton).toBeDefined();
+    if (toolName === 'deploy_app') {
+      expect(initialConfirmButton?.disabled).toBe(true);
+    }
     expect(container.querySelector('[data-testid="manifest-editor"]') !== null)
       .toBe(rendersDeployEditor);
 
@@ -237,12 +250,24 @@ describe('confirmation flow (Zustand store)', () => {
     await act(async () => {
       store.setState({ pendingConfirmation: stalePending });
     });
-    const staleConfirmButton = Array.from(container.querySelectorAll('button')).find(
+    let staleConfirmButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent?.includes('Confirm'),
     );
     expect(staleConfirmButton).toBeDefined();
     expect(container.querySelector('[data-testid="manifest-editor"]') !== null)
       .toBe(rendersDeployEditor);
+    if (toolName === 'deploy_app') {
+      // The restored stale consent must remain gated while the domain check is
+      // pending, then still fail closed at the store guard once validation ends.
+      expect(staleConfirmButton?.disabled).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      staleConfirmButton = Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent?.includes('Confirm'),
+      );
+      expect(staleConfirmButton?.disabled).toBe(false);
+    }
     const executionTransitions: Array<Pick<AIStore,
       'isStreaming' | 'abortController' | 'activeTransactionMessageId' | 'messages'>> = [];
     const unsubscribe = store.subscribe((state) => {
@@ -269,6 +294,11 @@ describe('confirmation flow (Zustand store)', () => {
       expect(JSON.parse(override?.editedManifestJson ?? '{}')).toEqual(
         JSON.parse('_generatedManifest' in args ? args._generatedManifest : '{}'),
       );
+    }
+    if (toolName === 'deploy_app') {
+      expect(confirmActionSpy).toHaveBeenCalledWith(expect.objectContaining({
+        editedCustomDomain: 'web.example.com',
+      }));
     }
     expect(executionTransitions.length).toBeGreaterThan(0);
     expect(executionTransitions.every((state) =>

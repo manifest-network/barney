@@ -172,6 +172,19 @@ describe('useRegistryReconciliation', () => {
     expect(observations.get('lease-web')?.expectedLocalDomains).toBe(oldDomains);
   });
 
+  it('does not produce an empty-domain observation for a lease that is no longer live', async () => {
+    const prior = [{ serviceName: 'web', customDomain: 'keep.example.com' }];
+    vi.mocked(getApps).mockReturnValue([makeApp({ customDomains: prior })]);
+    vi.mocked(getLeasesByTenant).mockResolvedValue([]);
+    await render(ADDRESS);
+
+    await latestRefresh()();
+
+    const observations = vi.mocked(reconcileCustomDomainsWithChain).mock.calls[0][1];
+    expect(observations.has('lease-web')).toBe(false);
+    expect(observations.size).toBe(0);
+  });
+
   it('reads the newest durable registry snapshot at the start of the next pass', async () => {
     const oldDomains = [{ serviceName: 'web', customDomain: 'old.example.com' }];
     const freshDomains = [{ serviceName: 'web', customDomain: 'fresh.example.com' }];
