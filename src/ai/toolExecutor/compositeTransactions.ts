@@ -2596,12 +2596,12 @@ export async function executeConfirmedSetCustomDomain(
               ...(serviceName !== '' ? { serviceName } : {}),
             },
       {
-        // Do not race an already-submitted broadcast against the chat abort
-        // signal. The transaction itself cannot be cancelled; waiting for its
-        // result lets this executor update the originating wallet's registry even
-        // after Stop or a wallet switch. The sidebar's recurring chain-domain
-        // reconciliation is the durable repair path across reloads/disconnects.
+        // Preserve Stop's pre-submission cancellation window. If cancellation
+        // wins after broadcast, the transaction may still commit; the recurring
+        // chain-domain reconciliation is the durable repair path across that
+        // ambiguity, reloads, and disconnects.
         waitForConfirmation: true,
+        signal: options.signal,
       },
     );
   } catch (err) {

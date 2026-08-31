@@ -2222,6 +2222,29 @@ describe('executeConfirmedStopApp', () => {
     expect(stopApp).toHaveBeenCalledOnce();
   });
 
+  it('does not submit any bulk stop after the live guard aborts the signal', async () => {
+    const controller = new AbortController();
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as never);
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+    ];
+
+    const result = await executeConfirmedStopApp(
+      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      CLIENT_MANAGER,
+      makeOptions({
+        appRegistry: makeRegistry(apps),
+        signal: controller.signal,
+        assertAuthorization: () => controller.abort(),
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Not submitted: redis, postgres');
+    expect(stopApp).not.toHaveBeenCalled();
+  });
+
   it('reports the current bulk stop as unconfirmed when cancellation wins after broadcast', async () => {
     vi.mocked(stopApp)
       .mockResolvedValueOnce({ outcome: 'stopped' } as any)
@@ -2280,6 +2303,27 @@ describe('executeConfirmedStopApp', () => {
     });
     expect((result.data as { message: string }).message).toContain('Not submitted: postgres, nginx');
     expect(stopApp).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a plain pre-broadcast AbortError and all remaining bulk stops as not submitted', async () => {
+    vi.mocked(stopApp).mockRejectedValueOnce(
+      new DOMException('This operation was aborted', 'AbortError'),
+    );
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+    ];
+
+    const result = await executeConfirmedStopApp(
+      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps) }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Not submitted: redis, postgres');
+    expect(result.error).not.toContain('Failed to stop');
+    expect(stopApp).toHaveBeenCalledOnce();
   });
 
   it('treats an already-inactive lease as success (single)', async () => {
@@ -2642,6 +2686,27 @@ describe('executeConfirmedBatchDeploy', () => {
       { entries },
       CLIENT_MANAGER,
       makeOptions({ assertAuthorization: () => { throw new Error('wallet changed'); } }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cancelled: game1');
+    expect(result.error).not.toContain('Failed: game1');
+    expect(deployManifest).not.toHaveBeenCalled();
+  });
+
+  it('buckets a signal aborted by the live deploy guard as cancelled before broadcast', async () => {
+    const controller = new AbortController();
+    const entries = [
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+    ];
+
+    const result = await executeConfirmedBatchDeploy(
+      { entries },
+      CLIENT_MANAGER,
+      makeOptions({
+        signal: controller.signal,
+        assertAuthorization: () => controller.abort(),
+      }),
     );
 
     expect(result.success).toBe(false);
@@ -3298,6 +3363,29 @@ describe('executeConfirmedRestartApp', () => {
       makeOptions({
         appRegistry: makeRegistry([app]),
         assertAuthorization: () => { throw new Error('wallet changed'); },
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cancelled: redis');
+    expect(result.error).not.toContain('Failed: redis');
+    expect(restartApp).not.toHaveBeenCalled();
+  });
+
+  it('buckets a signal aborted by the live restart guard as cancelled before the POST', async () => {
+    const controller = new AbortController();
+    const app = makeApp({ name: 'redis', leaseUuid: 'uuid-1' });
+
+    const result = await executeConfirmedRestartApp(
+      {
+        app_name: 'all',
+        entries: [{ app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl }],
+      },
+      CLIENT_MANAGER,
+      makeOptions({
+        appRegistry: makeRegistry([app]),
+        signal: controller.signal,
+        assertAuthorization: () => controller.abort(),
       }),
     );
 

@@ -512,13 +512,61 @@ describe('executeConfirmedSetCustomDomain', () => {
     if (!r.success) expect(r.error).toBe('reserved suffix');
   });
 
-  it('waits for a submitted domain transaction after chat cancellation and updates the registry', async () => {
+  it('waits for confirmation before updating the registry and threads the chat signal', async () => {
     const app = makeApp({ customDomains: [] });
     const registry = makeRegistry([app]);
     const controller = new AbortController();
     let finish!: (result: SetItemCustomDomainResult) => void;
     vi.mocked(setItemCustomDomain).mockImplementationOnce(
-      () => new Promise((resolve) => { finish = resolve; }),
+      (_ctx, _input, callOptions) => new Promise((resolve, reject) => {
+        finish = resolve;
+        if (callOptions?.waitForConfirmation !== true) {
+          reject(new Error('executor did not request confirmation'));
+          return;
+        }
+        const passedSignal = (callOptions as { signal?: AbortSignal } | undefined)?.signal;
+        if (passedSignal !== controller.signal) {
+          reject(new Error('executor did not thread the chat signal'));
+        }
+      }),
+    );
+
+    const executing = executeConfirmedSetCustomDomain(
+      {
+        app_name: app.name,
+        leaseUuid: app.leaseUuid,
+        serviceName: 'web',
+        customDomain: 'app.example.com',
+      },
+      fakeClientManager,
+      { ...options(), appRegistry: registry, signal: controller.signal },
+    );
+    await Promise.resolve();
+    expect(registry.updateApp).not.toHaveBeenCalled();
+    finish(monoResult({ lease_uuid: app.leaseUuid, service_name: 'web' }));
+    const r = await executing;
+
+    expect(r.success).toBe(true);
+    expect(vi.mocked(setItemCustomDomain).mock.calls[0][2]).toEqual({
+      waitForConfirmation: true,
+      signal: controller.signal,
+    });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDR, app.leaseUuid, {
+      customDomains: [{ serviceName: 'web', customDomain: 'app.example.com' }],
+    });
+  });
+
+  it('lets Stop cancel the SDK before a domain transaction is submitted', async () => {
+    const app = makeApp({ customDomains: [] });
+    const registry = makeRegistry([app]);
+    const controller = new AbortController();
+    vi.mocked(setItemCustomDomain).mockImplementationOnce(
+      (_ctx, _input, callOptions) => new Promise((_resolve, reject) => {
+        const passedSignal = (callOptions as { signal?: AbortSignal } | undefined)?.signal;
+        passedSignal?.addEventListener('abort', () => {
+          reject(new DOMException('This operation was aborted', 'AbortError'));
+        }, { once: true });
+      }),
     );
 
     const executing = executeConfirmedSetCustomDomain(
@@ -532,15 +580,15 @@ describe('executeConfirmedSetCustomDomain', () => {
       { ...options(), appRegistry: registry, signal: controller.signal },
     );
     controller.abort();
-    finish(monoResult({ lease_uuid: app.leaseUuid, service_name: 'web' }));
-    const r = await executing;
+    const result = await executing;
 
-    expect(r.success).toBe(true);
-    expect(vi.mocked(setItemCustomDomain).mock.calls[0][2]).toEqual({ waitForConfirmation: true });
-    expect(vi.mocked(setItemCustomDomain).mock.calls[0][2]).not.toHaveProperty('signal');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDR, app.leaseUuid, {
-      customDomains: [{ serviceName: 'web', customDomain: 'app.example.com' }],
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('aborted');
+    expect(vi.mocked(setItemCustomDomain).mock.calls[0][2]).toMatchObject({
+      waitForConfirmation: true,
+      signal: controller.signal,
     });
+    expect(registry.updateApp).not.toHaveBeenCalled();
   });
 
   it('returns error when mono helper resolves with non-zero code (chain rejection)', async () => {

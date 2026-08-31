@@ -9,13 +9,10 @@ import { useAI } from '../../hooks/useAI';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import {
   getApps,
-  reconcileCustomDomainsWithChain,
-  reconcileWithChain,
   subscribeToRegistry,
   type AppEntry,
 } from '../../registry/appRegistry';
-import { getCreditAccount, getCreditEstimate, getLeasesByTenant, LeaseState } from '../../api/billing';
-import { getDomainAssignments } from '../../api/leaseDomains';
+import { getCreditAccount, getCreditEstimate } from '../../api/billing';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits } from '../../utils/format';
 import { truncateAddress } from '../../utils/address';
@@ -68,30 +65,11 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const [burnRate, setBurnRate] = useState<number | null>(null);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
-  // Load apps and credit info, reconcile with chain state
+  // Load apps and credit info. MainLayout owns the independent recurring
+  // chain/registry reconciliation driver outside this sidebar's ErrorBoundary.
   const refresh = useCallback(async () => {
     if (!address) return;
 
-    // Reconcile registry with on-chain lease state
-    try {
-      const [activeLeases, pendingLeases] = await Promise.all([
-        getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE),
-        getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING),
-      ]);
-      const leaseStates = new Map<string, 'active' | 'pending'>();
-      const domainsByLease = new Map<string, ReturnType<typeof getDomainAssignments>>();
-      for (const l of pendingLeases) leaseStates.set(l.uuid, 'pending');
-      for (const l of activeLeases) leaseStates.set(l.uuid, 'active');
-      for (const lease of [...pendingLeases, ...activeLeases]) {
-        domainsByLease.set(lease.uuid, getDomainAssignments(lease.items));
-      }
-      reconcileWithChain(address, leaseStates);
-      reconcileCustomDomainsWithChain(address, domainsByLease);
-    } catch (error) {
-      logError('AppsSidebar.refresh.reconcile', error);
-    }
-
-    // Re-read after reconciliation
     setApps(getApps(address));
 
     // Credit balance — always available via creditAccount

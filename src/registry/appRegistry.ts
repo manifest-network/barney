@@ -48,7 +48,7 @@ export const AppEntrySchema = z.object({
   manifest: z.string().optional(),
   /** Cached chain state for the lease's `LeaseItem.custom_domain` fields.
    *  Written by `executeConfirmedDeployApp` on successful attach and refreshed by
-   *  `executeAppStatus` plus the recurring sidebar chain reconciliation.
+   *  `executeAppStatus` plus the recurring registry reconciliation driver.
    *  Survives across page refreshes
    *  via localStorage; the polling driver in MainLayout uses it to know which
    *  apps to monitor without an extra chain round-trip per render. */
@@ -60,6 +60,15 @@ export const AppEntrySchema = z.object({
 
 export type AppEntry = z.infer<typeof AppEntrySchema>;
 export type CustomDomainAssignment = NonNullable<AppEntry['customDomains']>[number];
+
+/** One chain observation plus the local value captured before its RPC began.
+ * The expected value is an optimistic-concurrency guard: a transaction result
+ * that refreshes the cache while the query is in flight must win over that
+ * older snapshot. */
+export interface CustomDomainChainObservation {
+  customDomains: readonly CustomDomainAssignment[];
+  expectedLocalDomains: readonly CustomDomainAssignment[] | undefined;
+}
 
 /** The observation fields plus the legacy `status` that rule 5 falls back to. */
 export type AppStatusInputs = Pick<AppEntry, 'chainState' | 'provisionState' | 'status'>;
@@ -179,7 +188,7 @@ function storageKey(address: string): string {
  *
  * Mid-tool-execution writes (`executeAppStatus` updating customDomains,
  * `executeConfirmedDeployApp` flipping status) used to be invisible to the
- * sidebar until its 60s AUTO_REFRESH_INTERVAL_MS tick. Subscribing to this
+ * sidebar until the next 15s registry/sidebar refresh. Subscribing to this
  * pub/sub closes that gap.
  *
  * Only fires for the wallet whose registry was mutated, so a stale subscriber
@@ -569,22 +578,30 @@ export function reconcileWithChain(
  *
  * This is deliberately a recurring chain observation, not a transaction
  * callback. A page reload, wallet switch, aborted confirmation wait, or slow
- * commit can all outlive the initiating promise; the next sidebar refresh still
- * converges the durable registry to the chain. Missing leases are skipped because
+ * commit can all outlive the initiating promise; the next reconciliation pass
+ * still converges the durable registry to the chain. Missing leases are skipped because
  * `reconcileWithChain` owns their terminal state and there is no live item set to
  * observe.
  */
 export function reconcileCustomDomainsWithChain(
   address: string,
-  domainsByLease: ReadonlyMap<string, readonly CustomDomainAssignment[]>,
+  observationsByLease: ReadonlyMap<string, CustomDomainChainObservation>,
 ): void {
   const apps = loadApps(address);
   let dirty = false;
 
   for (const app of apps) {
-    const observed = domainsByLease.get(app.leaseUuid);
-    if (!observed || sameStructurally('customDomains', app.customDomains, observed)) continue;
-    app.customDomains = observed.map((domain) => ({ ...domain }));
+    const observation = observationsByLease.get(app.leaseUuid);
+    if (!observation) continue;
+
+    // `undefined` and `[]` both mean "no custom domains". Normalizing them
+    // avoids a one-shot write/notify for every domain-free app after upgrade.
+    const current = app.customDomains ?? [];
+    const expected = observation.expectedLocalDomains ?? [];
+    if (!sameStructurally('customDomains', current, expected)) continue;
+    if (sameStructurally('customDomains', current, observation.customDomains)) continue;
+
+    app.customDomains = observation.customDomains.map((domain) => ({ ...domain }));
     dirty = true;
   }
 

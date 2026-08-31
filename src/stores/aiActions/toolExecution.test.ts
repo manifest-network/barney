@@ -493,6 +493,65 @@ describe('processToolCallsFn', () => {
     expect(toolMessages.every((message) => message.error?.includes('cancelled and was not submitted'))).toBe(true);
   });
 
+  it('closes every confirmation when authorization changes after the final batch entry is assembled', async () => {
+    const makeDeployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          skuUuid: 'sku-123',
+          providerUuid: 'prov-456',
+          providerUrl: 'https://provider.test',
+          _generatedManifest: `{"image":"${appName}:latest"}`,
+        },
+      },
+    });
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(makeDeployResult('alpha'))
+      .mockResolvedValueOnce(makeDeployResult('beta'));
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const tc1 = makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } });
+    const tc2 = makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } });
+
+    // Flip the identity from the final placeholder write. Both per-entry gates
+    // have already passed at this point, so only the post-loop gate can close
+    // the collected confirmations.
+    const baseSet = set;
+    let switched = false;
+    set = (partial) => {
+      baseSet(partial);
+      const batchPlaceholders = state.messages.filter((message) =>
+        message.role === 'tool' && message.content.startsWith('Batch deploy:')
+      );
+      if (!switched && batchPlaceholders.length === 2) {
+        switched = true;
+        state.address = 'manifest1next';
+        state.clientGeneration += 1;
+        state.authorizationEpoch += 1;
+      }
+    };
+
+    const result = await processToolCallsFn(get, set, [tc1, tc2], 'asst_1', {
+      content: '', thinking: '', toolCalls: [tc1, tc2],
+    });
+
+    expect(switched).toBe(true);
+    expect(buildPayloadFromManifest).toHaveBeenCalledTimes(2);
+    expect(result.shouldContinue).toBe(false);
+    expect(state.pendingConfirmation).toBeNull();
+    const toolMessages = state.messages.filter((message) => message.role === 'tool');
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages.every((message) =>
+      message.error?.includes('cancelled and was not submitted')
+      && message.awaitingConfirmation === false
+      && message.isStreaming === false
+    )).toBe(true);
+  });
+
   // Regression: prior to this fix, the merge dropped custom_domain fields,
   // so AI-driven batch deploys silently lost their domain attach. Each
   // entry's custom domain must thread through to executeConfirmedBatchDeploy

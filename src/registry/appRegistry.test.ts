@@ -1179,30 +1179,44 @@ describe('appRegistry', () => {
 
   describe('reconcileCustomDomainsWithChain', () => {
     it('repairs a stale domain cache from recurring live lease observations', () => {
+      const prior = [{ serviceName: 'web', customDomain: 'old.example.com' }];
       const app = makeApp({
         chainState: 'active',
-        customDomains: [{ serviceName: 'web', customDomain: 'old.example.com' }],
+        customDomains: prior,
       });
       addApp(ADDR_A, app);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
 
-      reconcileCustomDomainsWithChain(ADDR_A, new Map([[
-        app.leaseUuid,
-        [{ serviceName: 'web', customDomain: 'new.example.com' }],
-      ]]));
+      try {
+        reconcileCustomDomainsWithChain(ADDR_A, new Map([[
+          app.leaseUuid,
+          {
+            customDomains: [{ serviceName: 'web', customDomain: 'new.example.com' }],
+            expectedLocalDomains: prior,
+          },
+        ]]));
 
-      expect(getApp(ADDR_A, app.name)?.customDomains).toEqual([
-        { serviceName: 'web', customDomain: 'new.example.com' },
-      ]);
+        expect(getApp(ADDR_A, app.name)?.customDomains).toEqual([
+          { serviceName: 'web', customDomain: 'new.example.com' },
+        ]);
+        expect(listener).toHaveBeenCalledOnce();
+        expect(listener).toHaveBeenCalledWith(ADDR_A);
+      } finally { unsub(); }
     });
 
     it('clears a cached domain when live lease items no longer carry one', () => {
+      const prior = [{ serviceName: 'web', customDomain: 'old.example.com' }];
       const app = makeApp({
         chainState: 'active',
-        customDomains: [{ serviceName: 'web', customDomain: 'old.example.com' }],
+        customDomains: prior,
       });
       addApp(ADDR_A, app);
 
-      reconcileCustomDomainsWithChain(ADDR_A, new Map([[app.leaseUuid, []]]));
+      reconcileCustomDomainsWithChain(ADDR_A, new Map([[app.leaseUuid, {
+        customDomains: [],
+        expectedLocalDomains: prior,
+      }]]));
 
       expect(getApp(ADDR_A, app.name)?.customDomains).toEqual([]);
     });
@@ -1227,9 +1241,60 @@ describe('appRegistry', () => {
       try {
         reconcileCustomDomainsWithChain(ADDR_A, new Map([[
           app.leaseUuid,
-          domains.map((domain) => ({ ...domain })),
+          {
+            customDomains: domains.map((domain) => ({ ...domain })),
+            expectedLocalDomains: domains,
+          },
         ]]));
 
+        expect(setItem).not.toHaveBeenCalled();
+        expect(listener).not.toHaveBeenCalled();
+      } finally {
+        setItem.mockRestore();
+        unsub();
+      }
+    });
+
+    it('does not clobber a transaction update that landed after the chain read began', () => {
+      const baseline = [{ serviceName: 'web', customDomain: 'old.example.com' }];
+      const fresh = [{ serviceName: 'web', customDomain: 'fresh.example.com' }];
+      const app = makeApp({ chainState: 'active', customDomains: baseline });
+      addApp(ADDR_A, app);
+
+      // A confirmed transaction updates the cache while the older chain
+      // request is in flight.
+      updateApp(ADDR_A, app.leaseUuid, { customDomains: fresh });
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      const setItem = vi.spyOn(localStorage, 'setItem');
+      try {
+        reconcileCustomDomainsWithChain(ADDR_A, new Map([[app.leaseUuid, {
+          customDomains: baseline,
+          expectedLocalDomains: baseline,
+        }]]));
+
+        expect(getApp(ADDR_A, app.name)?.customDomains).toEqual(fresh);
+        expect(setItem).not.toHaveBeenCalled();
+        expect(listener).not.toHaveBeenCalled();
+      } finally {
+        setItem.mockRestore();
+        unsub();
+      }
+    });
+
+    it('treats an absent cache and an observed empty list as already converged', () => {
+      const app = makeApp({ chainState: 'active', customDomains: undefined });
+      addApp(ADDR_A, app);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      const setItem = vi.spyOn(localStorage, 'setItem');
+      try {
+        reconcileCustomDomainsWithChain(ADDR_A, new Map([[app.leaseUuid, {
+          customDomains: [],
+          expectedLocalDomains: undefined,
+        }]]));
+
+        expect(getApp(ADDR_A, app.name)?.customDomains).toBeUndefined();
         expect(setItem).not.toHaveBeenCalled();
         expect(listener).not.toHaveBeenCalled();
       } finally {

@@ -380,6 +380,14 @@ describe('confirmAction', () => {
       expect(tool?.error).toBeUndefined();
       expect(tool?.transactionInFlight).toBe(false);
       expect(tool?.isStreaming).toBe(false);
+      const notice = store.getState().messages.find((message) =>
+        message.role === 'assistant' && message.local === true
+      );
+      expect(notice).toMatchObject({
+        content: expect.stringContaining('previous wallet'),
+      });
+      expect(notice?.error).toBeUndefined();
+      expect(notice?.content).toContain('Deployment completed for the previous wallet.');
       expect(store.getState().address).toBe('manifest1next');
       expect(store.getState().activeTransactionMessageId).toBeNull();
       expect(mockProcessStream).not.toHaveBeenCalled();

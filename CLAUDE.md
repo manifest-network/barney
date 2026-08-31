@@ -45,6 +45,7 @@ ErrorBoundary
                   │   ├─ AccountSetupOverlay (blocking stepper during first-connect provisioning)
                   │   ├─ LandingPage (when not connected)
                   │   └─ MainLayout (when connected)
+                  │       ├─ useRegistryReconciliation (mounted here, OUTSIDE the sidebar's ErrorBoundary)
                   │       ├─ useDnsStatusPolling (mounted here, OUTSIDE the sidebar's ErrorBoundary)
                   │       ├─ ErrorBoundary (sidebar isolation)
                   │       │   └─ AppsSidebar (wallet, credits, running apps)
@@ -162,7 +163,7 @@ status-promotion branch: a chain lease being ACTIVE says nothing about whether t
 provisioned the workload (fred v0.13.0 `internal/provisioner/reconciler.go` only closes a failed
 lease after `FailCount >= maxReprovisionAttempts`), so the old `failed → running` /
 `deploying → running` promotions reverted the deploy path's provider verdicts within one 15s
-sidebar tick.
+registry-reconciliation tick.
 
 **Observations must be REFRESHABLE, not one-way latches.** A field a writer can set but never
 re-clear is a latch, and a latch defeats the level-triggered model this refactor exists to build
@@ -171,7 +172,8 @@ points, by field:
 
 | Field | Re-observed by | Cadence |
 |-------|----------------|---------|
-| `chainState` | `reconcileWithChain` (AppsSidebar refresh), `list_apps`, `app_status` | 15s timer + on tool call |
+| `chainState` | `reconcileWithChain` (`useRegistryReconciliation`), `list_apps`, `app_status` | 15s timer + on tool call |
+| `customDomains` | `reconcileCustomDomainsWithChain` (`useRegistryReconciliation`), `app_status` | 15s timer + on tool call |
 | `provisionState` | `app_status` only | on tool call |
 
 `provisionState` having exactly one re-observation point is the model's remaining asymmetry: a user
@@ -199,7 +201,7 @@ precisely how the latch arose. Two rules for anyone extending `AppEntry`:
   cancel the very probe that would have answered. Any future field a repeatable writer rebuilds
   belongs in this set.
 
-Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `deriveAppStatus`, `validateAppName`, `sanitizeManifestForStorage`.
+Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `reconcileCustomDomainsWithChain`, `deriveAppStatus`, `validateAppName`, `sanitizeManifestForStorage`.
 
 Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
 
@@ -302,8 +304,9 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `useCopyToClipboard` | Clipboard copy with feedback state |
 | `useAccountSetup` | One-shot sequential account setup pipeline — requests PWR from the faucet (PWR pays both gas and credits after ENG-243) and funds credits on first connect. Returns `AccountSetupState` (`isInitialSetup` + `phase`) for the `AccountSetupOverlay`. Setup data persisted to localStorage via `versionedStorage`. MFX is no longer part of the blocking flow; users who need MFX can request it via the `request_faucet` chat tool |
 | `useDnsStatusPolling` | Single polling driver for custom-domain DNS state. Mounted in `MainLayout` (outside the sidebar's `ErrorBoundary`, so a sidebar render error doesn't take DNS state down with it). Iterates running apps with `customDomains` and writes per-domain `DnsStatusEntry` rows into `aiStore.dnsStatuses`. All custom-domain surfaces (sidebar dot, single-domain card, multi-domain card, AppCard's deploy-success row) read from this slice — no per-component poll loops |
+| `useRegistryReconciliation` | Recurring chain-to-registry repair driver, mounted in `MainLayout` outside the sidebar boundary. Refreshes live lease state and custom domains every 15s; domain observations use authoritative single-lease reads, tolerate per-lease failures, and carry an optimistic-concurrency baseline so an older chain snapshot cannot overwrite a transaction result that landed mid-read |
 | `useRegistryApps` | `useSyncExternalStore` view of the wallet's app registry, kept live via `subscribeToRegistry`. Used by `MainLayout` to feed the DNS polling driver |
-| `useVisibilityPolling` | Visibility-aware polling with optional exponential backoff. Pauses on tab hidden, resumes on focus. Used by `AIProvider` (health check) and `AppsSidebar` (refresh) |
+| `useVisibilityPolling` | Visibility-aware polling with optional exponential backoff. Pauses on tab hidden, resumes on focus. Used by `AIProvider` (health check), `useRegistryReconciliation`, `useDnsStatusPolling`, and `AppsSidebar` (credits/apps refresh) |
 
 > Note: `useConfirmationFlow.test.tsx`, `useMessageManager.test.ts`, and `useToolCache.test.ts` are pure-logic test files for behaviour now living in `src/stores/aiActions/` and `src/stores/aiStore.ts`. They retain the original hook names because the underlying contracts haven't changed; no source hook file exists.
 

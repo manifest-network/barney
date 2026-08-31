@@ -110,8 +110,29 @@ describe('confirmation flow (Zustand store)', () => {
     expect(store.getState().deployProgress).not.toBeNull();
   });
 
-  it('rendered consent from wallet A disappears and cannot be approved by wallet B', async () => {
-    const toolName = 'fund_credits';
+  it.each([
+    {
+      toolName: 'fund_credits',
+      args: { address: 'manifest1walleta', amount: 5, denomString: '5000000upwr' },
+      rendersDeployEditor: false,
+    },
+    {
+      toolName: 'deploy_app',
+      args: {
+        app_name: 'web',
+        size: 'micro',
+        _generatedManifest: JSON.stringify({
+          image: 'nginx:alpine',
+          ports: { '80/tcp': { ingress: true } },
+        }),
+      },
+      rendersDeployEditor: true,
+    },
+  ] as const)('rendered $toolName consent from wallet A cannot be approved by wallet B', async ({
+    toolName,
+    args,
+    rendersDeployEditor,
+  }) => {
     const managerA = { wallet: 'a' } as unknown as NonNullable<AIStore['clientManager']>;
     const managerB = { wallet: 'b' } as unknown as NonNullable<AIStore['clientManager']>;
     const signerA = { wallet: 'a' } as unknown as NonNullable<AIStore['signing']>;
@@ -133,7 +154,7 @@ describe('confirmation flow (Zustand store)', () => {
         signerGeneration: identity.signerGeneration,
         id: 'action-a',
         toolName,
-        args: { address: 'manifest1walleta', amount: 5, denomString: '5000000upwr' },
+        args,
         description: `Confirm ${toolName}?`,
       }),
     };
@@ -158,6 +179,8 @@ describe('confirmation flow (Zustand store)', () => {
     expect(Array.from(container.querySelectorAll('button')).some(
       (button) => button.textContent?.includes('Confirm'),
     )).toBe(true);
+    expect(container.querySelector('[data-testid="manifest-editor"]') !== null)
+      .toBe(rendersDeployEditor);
 
     await act(async () => {
       store.getState().setWalletContext({
@@ -185,14 +208,34 @@ describe('confirmation flow (Zustand store)', () => {
       (button) => button.textContent?.includes('Confirm'),
     );
     expect(staleConfirmButton).toBeDefined();
+    expect(container.querySelector('[data-testid="manifest-editor"]') !== null)
+      .toBe(rendersDeployEditor);
+    const executionTransitions: Array<Pick<AIStore,
+      'isStreaming' | 'abortController' | 'activeTransactionMessageId' | 'messages'>> = [];
+    const unsubscribe = store.subscribe((state) => {
+      executionTransitions.push({
+        isStreaming: state.isStreaming,
+        abortController: state.abortController,
+        activeTransactionMessageId: state.activeTransactionMessageId,
+        messages: state.messages,
+      });
+    });
     await act(async () => {
       staleConfirmButton?.click();
       await Promise.resolve();
     });
+    unsubscribe();
 
     expect(store.getState().pendingConfirmation).toBeNull();
     expect(store.getState().messages.find((message) => message.id === 'tool-consent')?.content)
       .toContain('cancelled and was not submitted');
     expect(executeConfirmedTool).not.toHaveBeenCalled();
+    expect(executionTransitions.length).toBeGreaterThan(0);
+    expect(executionTransitions.every((state) =>
+      state.isStreaming === false
+      && state.abortController === null
+      && state.activeTransactionMessageId === null
+      && state.messages.every((message) => message.transactionInFlight !== true)
+    )).toBe(true);
   });
 });

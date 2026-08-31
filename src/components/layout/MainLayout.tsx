@@ -13,6 +13,7 @@ import { ErrorBoundary } from '../ui/ErrorBoundary';
 import { Modal } from '../ui/Modal';
 import { useRegistryApps } from '../../hooks/useRegistryApps';
 import { useDnsStatusPolling } from '../../hooks/useDnsStatusPolling';
+import { useRegistryReconciliation } from '../../hooks/useRegistryReconciliation';
 import { CHAIN_NAME } from '../../config/chain';
 
 const SWIPE_THRESHOLD = 80;
@@ -40,6 +41,9 @@ export function MainLayout() {
   // CustomDomainCard) read from the resulting `dnsStatuses` slice.
   const { address } = useChain(CHAIN_NAME);
   const allApps = useRegistryApps(address);
+  // Chain state and custom-domain repair belong beside the DNS driver, outside
+  // the sidebar boundary, so a sidebar render failure cannot stop convergence.
+  useRegistryReconciliation(address, allApps);
   // `useRegistryApps` returns a reference-stable array; `useDnsStatusPolling`
   // relies on that stability (its internal `deriveCandidateTargets` does its
   // own status+customDomains filtering). Do not pre-filter here.

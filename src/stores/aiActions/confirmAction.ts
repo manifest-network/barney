@@ -73,20 +73,36 @@ function finalizeStaleToolResult(
   const visibleOutcome = result.success
     ? `${TRANSACTION_FINISHED_AFTER_CONTEXT_CHANGE_MESSAGE}${summary ? ` ${summary}` : ''}`
     : (summary ?? TRANSACTION_INTERRUPTED_MESSAGE);
-  set((state) => ({
-    messages: state.messages.map((message) =>
-      message.id === messageId
-        ? {
-            ...message,
-            content: serializeToolResult(result, visibleOutcome),
-            error: result.success ? undefined : visibleOutcome,
-            isStreaming: false,
-            awaitingConfirmation: false,
-            transactionInFlight: false,
-          }
-        : message
-    ),
-  }));
+  set((state) => {
+    let resolvedOriginatingRow = false;
+    const messages = state.messages.map((message) => {
+      if (message.id !== messageId) return message;
+      resolvedOriginatingRow = true;
+      return {
+        ...message,
+        content: serializeToolResult(result, visibleOutcome),
+        error: result.success ? undefined : visibleOutcome,
+        isStreaming: false,
+        awaitingConfirmation: false,
+        transactionInFlight: false,
+      };
+    });
+
+    // Successful stale results are not errors, so their collapsed tool row has
+    // no inline alert. Surface the wallet-scoped outcome as local assistant copy
+    // instead: visible in chat, persisted, and excluded from model history.
+    if (result.success && resolvedOriginatingRow) {
+      messages.push({
+        id: generateMessageId(),
+        role: 'assistant',
+        content: visibleOutcome,
+        timestamp: Date.now(),
+        local: true,
+      });
+    }
+
+    return { messages };
+  });
 }
 
 function finalizeStaleToolError(set: Set, messageId: string, error: unknown): void {
