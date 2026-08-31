@@ -74,8 +74,12 @@ import { AppsSidebar } from './AppsSidebar';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }
 
 function creditAccount(pwr: number) {
@@ -284,13 +288,13 @@ describe('AppsSidebar refresh lifecycle', () => {
       retryButton?.click();
     });
     expect(mocks.getCreditAccount).toHaveBeenCalledTimes(accountCallsBeforeRetry);
-    const retryingButton = Array.from(container.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Retrying…',
+    const refreshingButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Refreshing…',
     );
-    expect(retryingButton).toBeDefined();
-    expect(retryingButton?.disabled).toBe(true);
+    expect(refreshingButton).toBeDefined();
+    expect(refreshingButton?.disabled).toBe(true);
     await act(async () => {
-      retryingButton?.click();
+      refreshingButton?.click();
     });
     expect(mocks.useVisibilityPolling).toHaveBeenLastCalledWith(
       expect.any(Function),
@@ -337,10 +341,10 @@ describe('AppsSidebar refresh lifecycle', () => {
       15_000,
       expect.objectContaining({ restartKey: 'manifest1walleta' }),
     );
-    const retryingButton = Array.from(container.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Retrying…',
+    const refreshingButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Refreshing…',
     );
-    expect(retryingButton?.disabled).toBe(true);
+    expect(refreshingButton?.disabled).toBe(true);
 
     await act(async () => {
       account.resolve(creditAccount(42));
@@ -350,6 +354,77 @@ describe('AppsSidebar refresh lifecycle', () => {
     expect(container.textContent).toContain('42 PWR');
     expect(container.textContent).toContain('~6h remaining');
     expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('releases refresh activity when setup throws before the billing reads', async () => {
+    mocks.getCreditAccount.mockRejectedValue(new Error('account unavailable'));
+    mocks.getCreditEstimate.mockRejectedValue(new Error('estimate unavailable'));
+    await render();
+    await act(async () => {
+      await expect(latestRefresh()()).resolves.toBe(false);
+    });
+
+    mocks.getApps.mockImplementationOnce(() => {
+      throw new Error('registry read failed');
+    });
+    await act(async () => {
+      await expect(latestRefresh()()).rejects.toThrow('registry read failed');
+    });
+
+    const retryButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retry',
+    );
+    expect(retryButton?.disabled).toBe(false);
+    expect(retryButton?.getAttribute('aria-busy')).toBe('false');
+  });
+
+  it('keeps Retry disabled until every same-wallet refresh pass settles', async () => {
+    mocks.getCreditAccount.mockRejectedValue(new Error('account unavailable'));
+    mocks.getCreditEstimate.mockRejectedValue(new Error('estimate unavailable'));
+    await render();
+    await act(async () => {
+      await expect(latestRefresh()()).resolves.toBe(false);
+    });
+
+    const accountOne = deferred<ReturnType<typeof creditAccount>>();
+    const estimateOne = deferred<ReturnType<typeof creditEstimate>>();
+    const accountTwo = deferred<ReturnType<typeof creditAccount>>();
+    const estimateTwo = deferred<ReturnType<typeof creditEstimate>>();
+    mocks.getCreditAccount
+      .mockReturnValueOnce(accountOne.promise)
+      .mockReturnValueOnce(accountTwo.promise);
+    mocks.getCreditEstimate
+      .mockReturnValueOnce(estimateOne.promise)
+      .mockReturnValueOnce(estimateTwo.promise);
+
+    const refresh = latestRefresh();
+    let firstPass!: Promise<boolean | void>;
+    let secondPass!: Promise<boolean | void>;
+    act(() => {
+      firstPass = refresh();
+      secondPass = refresh();
+    });
+    expect(Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Refreshing…',
+    )?.disabled).toBe(true);
+
+    await act(async () => {
+      accountOne.reject(new Error('first account failure'));
+      estimateOne.reject(new Error('first estimate failure'));
+      await firstPass;
+    });
+    expect(Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Refreshing…',
+    )?.disabled).toBe(true);
+
+    await act(async () => {
+      accountTwo.reject(new Error('second account failure'));
+      estimateTwo.reject(new Error('second estimate failure'));
+      await secondPass;
+    });
+    expect(Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retry',
+    )?.disabled).toBe(false);
   });
 
   it.each([

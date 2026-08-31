@@ -129,6 +129,7 @@ describe('confirmation flow (Zustand store)', () => {
       rendersDeployEditor: false,
       expectsNonDeployManifestOverride: false,
       domainValidation: 'none',
+      expectedGate: 'wallet',
     },
     {
       caseName: 'deploy_app with a valid domain',
@@ -145,6 +146,7 @@ describe('confirmation flow (Zustand store)', () => {
       rendersDeployEditor: true,
       expectsNonDeployManifestOverride: false,
       domainValidation: 'valid',
+      expectedGate: 'wallet',
     },
     {
       caseName: 'deploy_app with a domain validation error',
@@ -161,6 +163,7 @@ describe('confirmation flow (Zustand store)', () => {
       rendersDeployEditor: true,
       expectsNonDeployManifestOverride: false,
       domainValidation: 'async_error',
+      expectedGate: 'domain',
     },
     {
       caseName: 'stop_app',
@@ -172,6 +175,7 @@ describe('confirmation flow (Zustand store)', () => {
       rendersDeployEditor: false,
       expectsNonDeployManifestOverride: false,
       domainValidation: 'none',
+      expectedGate: 'wallet',
     },
     {
       caseName: 'update_app',
@@ -190,8 +194,9 @@ describe('confirmation flow (Zustand store)', () => {
       rendersDeployEditor: true,
       expectsNonDeployManifestOverride: true,
       domainValidation: 'none',
+      expectedGate: 'wallet',
     },
-  ] as const)('rendered $caseName restored consent remains fail-closed after a wallet switch', async ({
+  ] as const)('rendered $caseName restored consent fails closed at the $expectedGate gate', async ({
     toolName,
     args,
     rendersDeployEditor,

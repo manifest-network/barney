@@ -193,14 +193,19 @@ describe('AppsSidebar with the real visibility poller', () => {
     });
     await vi.waitFor(() => expect(mocks.getCreditAccount).toHaveBeenCalledTimes(2));
 
-    const retryingButton = Array.from(container.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Retrying…',
+    const refreshingButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Refreshing…',
     );
-    expect(retryingButton).toBeDefined();
-    expect(retryingButton?.disabled).toBe(true);
+    expect(refreshingButton).toBeDefined();
+    expect(refreshingButton?.disabled).toBe(true);
+    expect(refreshingButton?.getAttribute('aria-busy')).toBe('true');
+    const errorRow = container.querySelector('.apps-sidebar__credits-error');
+    expect(errorRow?.getAttribute('role')).toBeNull();
+    expect(errorRow?.querySelector('[role="alert"]')?.textContent)
+      .toBe('Couldn’t load credit details.');
     await act(async () => {
-      retryingButton?.click();
-      retryingButton?.click();
+      refreshingButton?.click();
+      refreshingButton?.click();
     });
     expect(mocks.getCreditAccount).toHaveBeenCalledTimes(2);
 
@@ -240,11 +245,12 @@ describe('AppsSidebar with the real visibility poller', () => {
     });
     await vi.waitFor(() => expect(mocks.getCreditAccount).toHaveBeenCalledTimes(2));
 
-    const retryingButton = Array.from(container.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Retrying…',
+    const refreshingButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Refreshing…',
     );
-    expect(retryingButton?.disabled).toBe(true);
-    retryingButton?.blur();
+    expect(refreshingButton?.disabled).toBe(true);
+    document.body.focus();
+    expect(document.activeElement).toBe(document.body);
 
     await act(async () => {
       retryAccount.reject(new Error('account still unavailable'));
@@ -261,6 +267,53 @@ describe('AppsSidebar with the real visibility poller', () => {
       expect(document.activeElement).toBe(enabledRetry);
     });
     expect(container.textContent).toContain('Couldn’t load credit details.');
+  });
+
+  it('does not steal focus moved elsewhere while a retry is in flight', async () => {
+    const retryAccount = deferred<ReturnType<typeof creditAccount>>();
+    const retryEstimate = deferred<ReturnType<typeof creditEstimate>>();
+    mocks.getCreditAccount
+      .mockRejectedValueOnce(new Error('account unavailable'))
+      .mockReturnValueOnce(retryAccount.promise);
+    mocks.getCreditEstimate
+      .mockRejectedValueOnce(new Error('estimate unavailable'))
+      .mockReturnValueOnce(retryEstimate.promise);
+    await render();
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('Couldn’t load credit details.');
+    });
+
+    const outsideInput = document.createElement('input');
+    document.body.appendChild(outsideInput);
+    try {
+      const retryButton = Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent === 'Retry',
+      );
+      retryButton?.focus();
+      await act(async () => {
+        retryButton?.click();
+      });
+      await vi.waitFor(() => expect(mocks.getCreditAccount).toHaveBeenCalledTimes(2));
+
+      outsideInput.focus();
+      expect(document.activeElement).toBe(outsideInput);
+      await act(async () => {
+        retryAccount.reject(new Error('account still unavailable'));
+        retryEstimate.reject(new Error('estimate still unavailable'));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await vi.waitFor(() => {
+        const enabledRetry = Array.from(container.querySelectorAll('button')).find(
+          (button) => button.textContent === 'Retry',
+        );
+        expect(enabledRetry?.disabled).toBe(false);
+      });
+      expect(document.activeElement).toBe(outsideInput);
+    } finally {
+      outsideInput.remove();
+    }
   });
 
   it('does not let wallet A refresh activity disable wallet B Retry', async () => {
@@ -287,7 +340,7 @@ describe('AppsSidebar with the real visibility poller', () => {
     });
     await vi.waitFor(() => expect(mocks.getCreditAccount).toHaveBeenCalledTimes(2));
     expect(Array.from(container.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Retrying…',
+      (button) => button.textContent === 'Refreshing…',
     )?.disabled).toBe(true);
 
     mocks.address = 'manifest1walletb';
