@@ -178,8 +178,12 @@ describe('AppsSidebar refresh lifecycle', () => {
         : registryApp('wallet-b-app', 'lease-b'),
     ]);
     await render();
+    const refreshA = latestRefresh();
+    const subscriptionA = mocks.subscribeToRegistry.mock.calls.at(-1)?.[0] as
+      ((mutatedAddress: string) => void) | undefined;
+    expect(subscriptionA).toBeDefined();
     await act(async () => {
-      await latestRefresh()();
+      await refreshA();
     });
     expect(container.textContent).toContain('wallet-a-app');
 
@@ -190,11 +194,23 @@ describe('AppsSidebar refresh lifecycle', () => {
     expect(container.textContent).not.toContain('wallet-b-app');
     expect(mocks.sendMessage).not.toHaveBeenCalled();
 
+    const refreshB = latestRefresh();
     await act(async () => {
-      await latestRefresh()();
+      await refreshB();
     });
     expect(container.textContent).toContain('wallet-b-app');
     expect(container.textContent).not.toContain('wallet-a-app');
+
+    // Even if an old poll callback or registry subscriber is delivered after
+    // B has populated, neither A writer may replace B's visible snapshot.
+    await act(async () => {
+      await refreshA();
+    });
+    expect(container.textContent).toContain('wallet-b-app');
+    act(() => {
+      subscriptionA?.('manifest1walleta');
+    });
+    expect(container.textContent).toContain('wallet-b-app');
   });
 
   it('settles after stalled credit-read deadlines', async () => {
@@ -289,6 +305,86 @@ describe('AppsSidebar refresh lifecycle', () => {
     expect(container.querySelector('.apps-sidebar__credits-amount')?.textContent).toBe('--');
     expect(container.textContent).not.toContain('5 PWR');
     expect(container.textContent).not.toContain('Couldn’t load credit details.');
+  });
+
+  it('blocks Retry before busy state commits when an automatic pass already started', async () => {
+    mocks.getCreditAccount.mockRejectedValue(new Error('account unavailable'));
+    mocks.getCreditEstimate.mockRejectedValue(new Error('estimate unavailable'));
+    await render();
+    await act(async () => {
+      await expect(latestRefresh()()).resolves.toBe(false);
+    });
+
+    const account = deferred<ReturnType<typeof creditAccount>>();
+    const estimate = deferred<ReturnType<typeof creditEstimate>>();
+    mocks.getCreditAccount.mockReturnValue(account.promise);
+    mocks.getCreditEstimate.mockReturnValue(estimate.promise);
+    const retryButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retry',
+    );
+    expect(retryButton).toBeDefined();
+
+    let automaticRefresh!: Promise<boolean | void>;
+    act(() => {
+      automaticRefresh = latestRefresh()();
+      // This click occurs before React can commit the disabled state. The
+      // imperative in-flight guard must still prevent a poller restart.
+      retryButton?.click();
+    });
+
+    expect(mocks.useVisibilityPolling).toHaveBeenLastCalledWith(
+      expect.any(Function),
+      15_000,
+      expect.objectContaining({ restartKey: 'manifest1walleta' }),
+    );
+    const retryingButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retrying…',
+    );
+    expect(retryingButton?.disabled).toBe(true);
+
+    await act(async () => {
+      account.resolve(creditAccount(42));
+      estimate.resolve(creditEstimate(6));
+      await automaticRefresh;
+    });
+    expect(container.textContent).toContain('42 PWR');
+    expect(container.textContent).toContain('~6h remaining');
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it.each([
+    {
+      failedRead: 'balance',
+      expectedCopy: 'Couldn’t load credit balance.',
+    },
+    {
+      failedRead: 'estimate',
+      expectedCopy: 'Couldn’t load credit estimate.',
+    },
+  ] as const)('identifies a first-load $failedRead failure', async ({
+    failedRead,
+    expectedCopy,
+  }) => {
+    if (failedRead === 'balance') {
+      mocks.getCreditAccount.mockRejectedValue(new Error('account unavailable'));
+      mocks.getCreditEstimate.mockResolvedValue(creditEstimate(4));
+    } else {
+      mocks.getCreditAccount.mockResolvedValue(creditAccount(7));
+      mocks.getCreditEstimate.mockRejectedValue(new Error('estimate unavailable'));
+    }
+    await render();
+    await act(async () => {
+      await expect(latestRefresh()()).resolves.toBe(false);
+    });
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(expectedCopy);
+    if (failedRead === 'balance') {
+      expect(container.querySelector('.apps-sidebar__credits-amount')?.textContent).toBe('--');
+      expect(container.textContent).toContain('~4h remaining');
+    } else {
+      expect(container.textContent).toContain('7 PWR');
+      expect(container.textContent).not.toContain('remaining');
+    }
   });
 
   it.each([

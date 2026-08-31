@@ -166,42 +166,32 @@ describe('AppsSidebar with the real visibility poller', () => {
     expect(mocks.logError).not.toHaveBeenCalled();
   });
 
-  it('keeps Retry single-flight and drops a superseded refresh after retry succeeds', async () => {
-    const supersededAccount = deferred<ReturnType<typeof creditAccount>>();
-    const supersededEstimate = deferred<ReturnType<typeof creditEstimate>>();
-    const retryAccount = deferred<ReturnType<typeof creditAccount>>();
-    const retryEstimate = deferred<ReturnType<typeof creditEstimate>>();
+  it('disables Retry during an automatic pass and preserves its successful result', async () => {
+    const automaticAccount = deferred<ReturnType<typeof creditAccount>>();
+    const automaticEstimate = deferred<ReturnType<typeof creditEstimate>>();
     mocks.getCreditAccount
       .mockRejectedValueOnce(new Error('account unavailable'))
-      .mockReturnValueOnce(supersededAccount.promise)
-      .mockReturnValueOnce(retryAccount.promise);
+      .mockReturnValueOnce(automaticAccount.promise);
     mocks.getCreditEstimate
       .mockRejectedValueOnce(new Error('estimate unavailable'))
-      .mockReturnValueOnce(supersededEstimate.promise)
-      .mockReturnValueOnce(retryEstimate.promise);
+      .mockReturnValueOnce(automaticEstimate.promise);
     await render();
     await vi.waitFor(() => {
       expect(container.textContent).toContain('Couldn’t load credit details.');
     });
     expect(mocks.getCreditAccount).toHaveBeenCalledOnce();
-    mocks.logError.mockClear();
-
-    // Start a normal follow-up pass while the previous error row is still
-    // visible. Retry must supersede this lifecycle and protect its fresh result
-    // if the older pass settles later.
-    await act(async () => {
-      document.dispatchEvent(new Event('visibilitychange'));
-    });
-    await vi.waitFor(() => expect(mocks.getCreditAccount).toHaveBeenCalledTimes(2));
 
     const retryButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent === 'Retry',
     );
-    expect(retryButton).toBeDefined();
+    expect(retryButton?.disabled).toBe(false);
+
+    // A visibility-driven retry must own the existing control before its reads
+    // settle, so a user cannot discard a slow-but-successful automatic pass.
     await act(async () => {
-      retryButton?.click();
+      document.dispatchEvent(new Event('visibilitychange'));
     });
-    await vi.waitFor(() => expect(mocks.getCreditAccount).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(mocks.getCreditAccount).toHaveBeenCalledTimes(2));
 
     const retryingButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent === 'Retrying…',
@@ -212,27 +202,109 @@ describe('AppsSidebar with the real visibility poller', () => {
       retryingButton?.click();
       retryingButton?.click();
     });
-    expect(mocks.getCreditAccount).toHaveBeenCalledTimes(3);
+    expect(mocks.getCreditAccount).toHaveBeenCalledTimes(2);
 
     await act(async () => {
-      retryAccount.resolve(creditAccount(5));
-      retryEstimate.resolve(creditEstimate(2));
+      automaticAccount.resolve(creditAccount(42));
+      automaticEstimate.resolve(creditEstimate(6));
       await Promise.resolve();
     });
 
-    await vi.waitFor(() => expect(container.textContent).toContain('5 PWR'));
-    expect(container.textContent).toContain('~2h remaining');
+    await vi.waitFor(() => expect(container.textContent).toContain('42 PWR'));
+    expect(container.textContent).toContain('~6h remaining');
     expect(container.textContent).not.toContain('Couldn’t load credit details.');
+  });
+
+  it('re-enables and restores focus to Retry after another failed pass', async () => {
+    const retryAccount = deferred<ReturnType<typeof creditAccount>>();
+    const retryEstimate = deferred<ReturnType<typeof creditEstimate>>();
+    mocks.getCreditAccount
+      .mockRejectedValueOnce(new Error('account unavailable'))
+      .mockReturnValueOnce(retryAccount.promise);
+    mocks.getCreditEstimate
+      .mockRejectedValueOnce(new Error('estimate unavailable'))
+      .mockReturnValueOnce(retryEstimate.promise);
+    await render();
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('Couldn’t load credit details.');
+    });
+
+    const retryButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retry',
+    );
+    expect(retryButton).toBeDefined();
+    retryButton?.focus();
+    expect(document.activeElement).toBe(retryButton);
+    await act(async () => {
+      retryButton?.click();
+    });
+    await vi.waitFor(() => expect(mocks.getCreditAccount).toHaveBeenCalledTimes(2));
+
+    const retryingButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retrying…',
+    );
+    expect(retryingButton?.disabled).toBe(true);
+    retryingButton?.blur();
 
     await act(async () => {
-      supersededAccount.reject(new Error('superseded account failure'));
-      supersededEstimate.reject(new Error('superseded estimate failure'));
+      retryAccount.reject(new Error('account still unavailable'));
+      retryEstimate.reject(new Error('estimate still unavailable'));
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(container.textContent).toContain('5 PWR');
-    expect(container.textContent).toContain('~2h remaining');
-    expect(container.querySelector('[role="alert"]')).toBeNull();
-    expect(mocks.logError).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => {
+      const enabledRetry = Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent === 'Retry',
+      );
+      expect(enabledRetry?.disabled).toBe(false);
+      expect(document.activeElement).toBe(enabledRetry);
+    });
+    expect(container.textContent).toContain('Couldn’t load credit details.');
+  });
+
+  it('does not let wallet A refresh activity disable wallet B Retry', async () => {
+    const retryAccountA = deferred<ReturnType<typeof creditAccount>>();
+    const retryEstimateA = deferred<ReturnType<typeof creditEstimate>>();
+    mocks.getCreditAccount
+      .mockRejectedValueOnce(new Error('wallet A account unavailable'))
+      .mockReturnValueOnce(retryAccountA.promise)
+      .mockRejectedValueOnce(new Error('wallet B account unavailable'));
+    mocks.getCreditEstimate
+      .mockRejectedValueOnce(new Error('wallet A estimate unavailable'))
+      .mockReturnValueOnce(retryEstimateA.promise)
+      .mockRejectedValueOnce(new Error('wallet B estimate unavailable'));
+    await render();
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('Couldn’t load credit details.');
+    });
+
+    const retryA = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retry',
+    );
+    await act(async () => {
+      retryA?.click();
+    });
+    await vi.waitFor(() => expect(mocks.getCreditAccount).toHaveBeenCalledTimes(2));
+    expect(Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retrying…',
+    )?.disabled).toBe(true);
+
+    mocks.address = 'manifest1walletb';
+    await render();
+    await vi.waitFor(() => expect(mocks.getCreditAccount).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => {
+      const retryB = Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent === 'Retry',
+      );
+      expect(retryB?.disabled).toBe(false);
+    });
+
+    await act(async () => {
+      retryAccountA.resolve(creditAccount(5));
+      retryEstimateA.resolve(creditEstimate(2));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
   });
 });

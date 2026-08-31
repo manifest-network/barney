@@ -337,6 +337,9 @@ describe('confirmation flow (Zustand store)', () => {
       );
     }
     if (domainValidation === 'valid') {
+      // This row has cleared the domain gate, so the call proves that a valid
+      // edited domain reaches the confirm-time stale-wallet authorization guard.
+      expect(confirmActionSpy).toHaveBeenCalledOnce();
       expect(confirmActionSpy).toHaveBeenCalledWith(expect.objectContaining({
         editedCustomDomain: 'web.example.com',
       }));

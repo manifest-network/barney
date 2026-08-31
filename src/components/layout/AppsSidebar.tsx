@@ -124,23 +124,49 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     useState<WalletSnapshot<CreditEstimateSnapshot> | null>(null);
   const [creditFailureSnapshot, setCreditFailureSnapshot] =
     useState<WalletSnapshot<CreditRefreshFailure> | null>(null);
-  const [creditRetryContext, setCreditRetryContext] =
-    useState<WalletRenderContext | null>(null);
+  const [activeCreditRefreshContexts, setActiveCreditRefreshContexts] =
+    useState<ReadonlySet<WalletRenderContext>>(() => new Set());
   const [pollRestartGeneration, setPollRestartGeneration] = useState(0);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const refreshGenerationRef = useRef(0);
-  const creditRetryContextRef = useRef<WalletRenderContext | null>(null);
+  const currentWalletContextRef = useRef<WalletRenderContext | null>(walletContext);
+  const activeCreditRefreshContextsRef = useRef(new Set<WalletRenderContext>());
+  const retryButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreRetryFocusContextRef = useRef<WalletRenderContext | null>(null);
+
+  const setCreditRefreshActive = useCallback((
+    context: WalletRenderContext,
+    active: boolean,
+  ) => {
+    const contexts = activeCreditRefreshContextsRef.current;
+    if (active) {
+      if (contexts.has(context)) return;
+      contexts.add(context);
+      setActiveCreditRefreshContexts(new Set(contexts));
+      return;
+    }
+    if (!contexts.delete(context)) return;
+    // A stale pass may settle after unmount; update the ref for completeness,
+    // but do not enqueue a state update on a component that no longer exists.
+    if (currentWalletContextRef.current !== null) {
+      setActiveCreditRefreshContexts(new Set(contexts));
+    }
+  }, []);
 
   // Invalidate every outstanding refresh before passive effects can start the
   // new wallet's immediate polling lifecycle. Layout-effect ordering makes
   // this independent of hook declaration order; cleanup also invalidates work
   // that settles after unmount.
   useLayoutEffect(() => {
+    currentWalletContextRef.current = walletContext;
     refreshGenerationRef.current += 1;
     return () => {
+      if (currentWalletContextRef.current === walletContext) {
+        currentWalletContextRef.current = null;
+      }
       refreshGenerationRef.current += 1;
     };
-  }, [address, pollRestartGeneration]);
+  }, [walletContext, pollRestartGeneration]);
 
   // Scope rendered registry and credit data as well as writes. This hides
   // wallet A's rows and values on the very render that switches to wallet B,
@@ -171,13 +197,30 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
         currentEstimate !== null,
       )
     : null;
-  const isCreditRetrying = creditRetryContext === walletContext;
+  const isCreditRefreshing = activeCreditRefreshContexts.has(walletContext);
+
+  useEffect(() => {
+    const focusContext = restoreRetryFocusContextRef.current;
+    if (focusContext === null) return;
+    if (focusContext !== walletContext) {
+      restoreRetryFocusContextRef.current = null;
+      return;
+    }
+    if (!isCreditRefreshing) {
+      if (creditFailureCopy) retryButtonRef.current?.focus();
+      restoreRetryFocusContextRef.current = null;
+    }
+  }, [creditFailureCopy, isCreditRefreshing, walletContext]);
 
   // Load apps and credit info. MainLayout owns the independent recurring
   // chain/registry reconciliation driver outside this sidebar's ErrorBoundary.
   const refresh = useCallback(async () => {
-    if (!address) return;
+    if (!address || currentWalletContextRef.current !== walletContext) return;
     const refreshGeneration = refreshGenerationRef.current;
+    if (document.activeElement === retryButtonRef.current) {
+      restoreRetryFocusContextRef.current = walletContext;
+    }
+    setCreditRefreshActive(walletContext, true);
 
     setAppsSnapshot({ context: walletContext, value: getApps(address) });
 
@@ -221,7 +264,13 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
 
     // An older wallet's promises may settle after a context switch. Never let
     // those results overwrite the new wallet's sidebar state.
-    if (refreshGeneration !== refreshGenerationRef.current) return;
+    if (
+      refreshGeneration !== refreshGenerationRef.current
+      || currentWalletContextRef.current !== walletContext
+    ) {
+      setCreditRefreshActive(walletContext, false);
+      return;
+    }
 
     if (creditResult.status === 'fulfilled') {
       setCreditBalanceSnapshot({
@@ -246,28 +295,27 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
       estimate: estimateResult.status === 'rejected',
     };
     setCreditFailureSnapshot({ context: walletContext, value: failure });
-    if (creditRetryContextRef.current === walletContext) {
-      creditRetryContextRef.current = null;
-      setCreditRetryContext((context) => context === walletContext ? null : context);
-    }
+    setCreditRefreshActive(walletContext, false);
 
     if (failure.balance || failure.estimate) {
       return false;
     }
-  }, [address, walletContext]);
+  }, [address, setCreditRefreshActive, walletContext]);
 
   const pollRestartKey = pollRestartGeneration === 0
     ? address
     : `${address ?? 'disconnected'}:${pollRestartGeneration}`;
 
   const retryCreditRefresh = useCallback(() => {
-    // The ref closes the pre-render double-click window; the disabled state
-    // provides the visible/a11y contract while this retry pass is in flight.
-    if (creditRetryContextRef.current === walletContext) return;
-    creditRetryContextRef.current = walletContext;
-    setCreditRetryContext(walletContext);
+    // The ref closes the pre-render window after any poller pass begins; the
+    // disabled state provides the visible/a11y contract once React commits it.
+    if (activeCreditRefreshContextsRef.current.has(walletContext)) return;
+    if (document.activeElement === retryButtonRef.current) {
+      restoreRetryFocusContextRef.current = walletContext;
+    }
+    setCreditRefreshActive(walletContext, true);
     setPollRestartGeneration((generation) => generation + 1);
-  }, [walletContext]);
+  }, [setCreditRefreshActive, walletContext]);
 
   useVisibilityPolling(refresh, AUTO_REFRESH_INTERVAL_MS, {
     enabled: !!address,
@@ -284,7 +332,10 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   useEffect(() => {
     if (!address) return;
     return subscribeToRegistry((mutatedAddress) => {
-      if (mutatedAddress === address) {
+      if (
+        mutatedAddress === address
+        && currentWalletContextRef.current === walletContext
+      ) {
         setAppsSnapshot({ context: walletContext, value: getApps(address) });
       }
     });
@@ -375,16 +426,17 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
           <div
             className="apps-sidebar__credits-error"
             role="alert"
-            aria-busy={isCreditRetrying}
+            aria-busy={isCreditRefreshing}
           >
             <span>{creditFailureCopy}</span>
             <button
               type="button"
+              ref={retryButtonRef}
               className="apps-sidebar__credits-retry"
               onClick={retryCreditRefresh}
-              disabled={isCreditRetrying}
+              disabled={isCreditRefreshing}
             >
-              {isCreditRetrying ? 'Retrying…' : 'Retry'}
+              {isCreditRefreshing ? 'Retrying…' : 'Retry'}
             </button>
           </div>
         )}
