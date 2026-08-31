@@ -3,6 +3,7 @@ import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { useVisibilityPolling } from './useVisibilityPolling';
+import { withTimeout } from '../api/utils';
 
 vi.mock('../utils/errors', () => ({ logError: vi.fn() }));
 
@@ -201,6 +202,33 @@ describe('useVisibilityPolling', () => {
     expect(cb).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(cb).toHaveBeenCalledTimes(3);
+  });
+
+  it('runs a later tick after a deadline releases a stalled callback', async () => {
+    const work = vi.fn()
+      .mockImplementationOnce(() => new Promise(() => undefined))
+      .mockResolvedValue(undefined);
+    const cb = vi.fn(async () => {
+      try {
+        await withTimeout(work(), 100, 'Polling test work');
+      } catch {
+        return false;
+      }
+    });
+    renderHook(cb, 1_000, { backoff: true });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(work).toHaveBeenCalledTimes(1);
+
+    // The callback deadline settles the first tick. One failure doubles the
+    // next delay, proving the real poller's in-flight guard was released.
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(cb).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(cb).toHaveBeenCalledTimes(2);
+    expect(work).toHaveBeenCalledTimes(2);
   });
 
   it('caps backoff at maxBackoffMultiplier', async () => {

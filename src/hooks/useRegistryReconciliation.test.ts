@@ -15,10 +15,6 @@ vi.mock('../api/billing', () => ({
   getLeasesByTenant: vi.fn(),
 }));
 
-vi.mock('../api/leaseItems', () => ({
-  getLeaseItemsForLease: vi.fn(),
-}));
-
 vi.mock('../registry/appRegistry', () => ({
   getApps: vi.fn(),
   reconcileWithChain: vi.fn(),
@@ -32,7 +28,6 @@ vi.mock('../utils/errors', () => ({
 import { useRegistryReconciliation } from './useRegistryReconciliation';
 import { useVisibilityPolling } from './useVisibilityPolling';
 import { getLeasesByTenant, LeaseState } from '../api/billing';
-import { getLeaseItemsForLease } from '../api/leaseItems';
 import {
   getApps,
   reconcileCustomDomainsWithChain,
@@ -40,7 +35,6 @@ import {
   type AppEntry,
 } from '../registry/appRegistry';
 import { AI_TOOL_API_TIMEOUT_MS } from '../config/constants';
-import { logError } from '../utils/errors';
 
 const ADDRESS = 'manifest1registry';
 
@@ -83,7 +77,6 @@ describe('useRegistryReconciliation', () => {
         ? [{ uuid: 'lease-web', items: [] } as never]
         : []
     );
-    vi.mocked(getLeaseItemsForLease).mockResolvedValue([]);
     vi.mocked(getApps).mockReturnValue([makeApp()]);
   });
 
@@ -106,13 +99,18 @@ describe('useRegistryReconciliation', () => {
     return call![0];
   }
 
-  it('routes immediate repair through the poller and authoritative per-lease reads', async () => {
+  it('routes immediate repair through the poller and consumes lease-list items', async () => {
     const prior = [{ serviceName: 'web', customDomain: 'old.example.com' }];
     const app = makeApp({ customDomains: prior });
     vi.mocked(getApps).mockReturnValue([app]);
-    vi.mocked(getLeaseItemsForLease).mockResolvedValue([
-      { serviceName: 'web', customDomain: 'new.example.com' } as never,
-    ]);
+    vi.mocked(getLeasesByTenant).mockImplementation(async (_address, state) =>
+      state === LeaseState.LEASE_STATE_ACTIVE
+        ? [{
+            uuid: 'lease-web',
+            items: [{ serviceName: 'web', customDomain: 'new.example.com' }],
+          } as never]
+        : []
+    );
 
     await render(ADDRESS);
 
@@ -139,53 +137,11 @@ describe('useRegistryReconciliation', () => {
       new Map([['lease-web', 'active']]),
       new Map([['lease-web', undefined]]),
     );
-    // The list fixture intentionally has items: []; the observed domain must
-    // come from getLeaseItemsForLease's authoritative single-lease query.
-    expect(getLeaseItemsForLease).toHaveBeenCalledWith('lease-web');
     const observations = vi.mocked(reconcileCustomDomainsWithChain).mock.calls[0][1];
     expect(observations.get('lease-web')).toEqual({
       customDomains: [{ serviceName: 'web', customDomain: 'new.example.com' }],
       expectedLocalDomains: prior,
     });
-  });
-
-  it('skips a not-found single-lease result instead of clearing cached domains', async () => {
-    const prior = [{ serviceName: 'web', customDomain: 'keep.example.com' }];
-    vi.mocked(getApps).mockReturnValue([makeApp({ customDomains: prior })]);
-    vi.mocked(getLeaseItemsForLease).mockResolvedValue(null);
-    await render(ADDRESS);
-
-    await latestRefresh()();
-
-    const observations = vi.mocked(reconcileCustomDomainsWithChain).mock.calls[0][1];
-    expect(observations.has('lease-web')).toBe(false);
-  });
-
-  it('skips a failed lease-item read without blocking a healthy observation', async () => {
-    const api = makeApp({ name: 'api', leaseUuid: 'lease-api' });
-    vi.mocked(getLeasesByTenant).mockImplementation(async (_address, state) =>
-      state === LeaseState.LEASE_STATE_ACTIVE
-        ? [{ uuid: 'lease-web' } as never, { uuid: 'lease-api' } as never]
-        : []
-    );
-    vi.mocked(getLeaseItemsForLease).mockImplementation(async (leaseUuid) => {
-      if (leaseUuid === 'lease-web') throw new Error('RPC unavailable');
-      return [{ serviceName: 'api', customDomain: 'api.example.com' } as never];
-    });
-    vi.mocked(getApps).mockReturnValue([makeApp(), api]);
-    await render(ADDRESS);
-
-    await latestRefresh()();
-
-    const observations = vi.mocked(reconcileCustomDomainsWithChain).mock.calls[0][1];
-    expect(observations.has('lease-web')).toBe(false);
-    expect(observations.get('lease-api')?.customDomains).toEqual([
-      { serviceName: 'api', customDomain: 'api.example.com' },
-    ]);
-    expect(logError).toHaveBeenCalledWith(
-      'useRegistryReconciliation.leaseItems',
-      expect.objectContaining({ message: 'RPC unavailable' }),
-    );
   });
 
   it('captures the concurrency baseline before the lease-list RPC settles', async () => {
@@ -223,7 +179,19 @@ describe('useRegistryReconciliation', () => {
     const freshApp = { ...oldApp, customDomains: freshDomains, chainState: 'active' as const };
     vi.mocked(getApps).mockReturnValue([oldApp]);
     await render(ADDRESS);
+
+    await latestRefresh()();
+    expect(reconcileWithChain).toHaveBeenLastCalledWith(
+      ADDRESS,
+      expect.any(Map),
+      new Map([['lease-web', 'pending']]),
+    );
+    expect(vi.mocked(reconcileCustomDomainsWithChain).mock.calls.at(-1)?.[1]
+      .get('lease-web')?.expectedLocalDomains).toBe(oldDomains);
+
     vi.mocked(getApps).mockReturnValue([freshApp]);
+    vi.mocked(reconcileWithChain).mockClear();
+    vi.mocked(reconcileCustomDomainsWithChain).mockClear();
 
     await latestRefresh()();
 
@@ -257,48 +225,31 @@ describe('useRegistryReconciliation', () => {
     expect(reconcileWithChain).toHaveBeenCalledOnce();
   });
 
-  it('skips a stalled lease-item read after its deadline instead of killing the pass', async () => {
-    vi.useFakeTimers();
-    vi.mocked(getLeaseItemsForLease).mockImplementation(() => new Promise(() => undefined));
-    await render(ADDRESS);
-
-    const stalled = latestRefresh()();
-    const pending = Symbol('pending');
-    let outcome: boolean | void | symbol = pending;
-    void stalled.then((value) => { outcome = value; });
-    await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS + 1);
-    expect(outcome).not.toBe(pending);
-    await stalled;
-
-    expect(reconcileWithChain).toHaveBeenCalledOnce();
-    const observations = vi.mocked(reconcileCustomDomainsWithChain).mock.calls[0][1];
-    expect(observations.size).toBe(0);
-    expect(logError).toHaveBeenCalledWith(
-      'useRegistryReconciliation.leaseItems',
-      expect.objectContaining({ message: expect.stringContaining('timed out') }),
-    );
-  });
-
-  it('caps total single-lease reads per pass and rotates through larger registries', async () => {
+  it('reconciles a larger registry with only the two tenant-list reads', async () => {
     const apps = Array.from({ length: 6 }, (_, index) => makeApp({
       name: `app-${index}`,
       leaseUuid: `lease-${index}`,
     }));
     vi.mocked(getLeasesByTenant).mockImplementation(async (_address, state) =>
       state === LeaseState.LEASE_STATE_ACTIVE
-        ? apps.map((app) => ({ uuid: app.leaseUuid } as never))
+        ? apps.map((app, index) => ({
+            uuid: app.leaseUuid,
+            items: [{
+              serviceName: app.name,
+              customDomain: `app-${index}.example.com`,
+            }],
+          } as never))
         : []
     );
     vi.mocked(getApps).mockReturnValue(apps);
     await render(ADDRESS);
 
     await latestRefresh()();
-    expect(vi.mocked(getLeaseItemsForLease).mock.calls.map(([leaseUuid]) => leaseUuid))
-      .toEqual(['lease-0', 'lease-1', 'lease-2', 'lease-3']);
-
-    vi.mocked(getLeaseItemsForLease).mockClear();
-    await latestRefresh()();
-    expect(vi.mocked(getLeaseItemsForLease).mock.calls.map(([leaseUuid]) => leaseUuid))
-      .toEqual(['lease-4', 'lease-5', 'lease-0', 'lease-1']);
+    expect(getLeasesByTenant).toHaveBeenCalledTimes(2);
+    const observations = vi.mocked(reconcileCustomDomainsWithChain).mock.calls[0][1];
+    expect(observations.size).toBe(6);
+    expect(observations.get('lease-5')?.customDomains).toEqual([
+      { serviceName: 'app-5', customDomain: 'app-5.example.com' },
+    ]);
   });
 });

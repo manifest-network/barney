@@ -115,6 +115,7 @@ describe('confirmation flow (Zustand store)', () => {
       toolName: 'fund_credits',
       args: { address: 'manifest1walleta', amount: 5, denomString: '5000000upwr' },
       rendersDeployEditor: false,
+      expectsNonDeployManifestOverride: false,
     },
     {
       toolName: 'deploy_app',
@@ -127,6 +128,7 @@ describe('confirmation flow (Zustand store)', () => {
         }),
       },
       rendersDeployEditor: true,
+      expectsNonDeployManifestOverride: false,
     },
     {
       toolName: 'stop_app',
@@ -135,6 +137,7 @@ describe('confirmation flow (Zustand store)', () => {
         leaseUuid: 'lease-web',
       },
       rendersDeployEditor: false,
+      expectsNonDeployManifestOverride: false,
     },
     {
       // This uniquely drives ConfirmationCard's non-deploy handleConfirm arm
@@ -150,11 +153,13 @@ describe('confirmation flow (Zustand store)', () => {
         }),
       },
       rendersDeployEditor: true,
+      expectsNonDeployManifestOverride: true,
     },
   ] as const)('rendered $toolName consent from wallet A cannot be approved by wallet B', async ({
     toolName,
     args,
     rendersDeployEditor,
+    expectsNonDeployManifestOverride,
   }) => {
     const managerA = { wallet: 'a' } as unknown as NonNullable<AIStore['clientManager']>;
     const managerB = { wallet: 'b' } as unknown as NonNullable<AIStore['clientManager']>;
@@ -188,6 +193,11 @@ describe('confirmation flow (Zustand store)', () => {
       }],
       pendingConfirmation: stalePending,
     });
+    const originalConfirmAction = store.getState().confirmAction;
+    const confirmActionSpy = vi.fn((overrides?: Parameters<typeof originalConfirmAction>[0]) =>
+      originalConfirmAction(overrides)
+    );
+    store.setState({ confirmAction: confirmActionSpy });
 
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -253,6 +263,13 @@ describe('confirmation flow (Zustand store)', () => {
     expect(store.getState().messages.find((message) => message.id === 'tool-consent')?.content)
       .toContain('cancelled and was not submitted');
     expect(executeConfirmedTool).not.toHaveBeenCalled();
+    if (expectsNonDeployManifestOverride) {
+      const override = confirmActionSpy.mock.calls.at(-1)?.[0];
+      expect(override?.editedManifestJson).toBeDefined();
+      expect(JSON.parse(override?.editedManifestJson ?? '{}')).toEqual(
+        JSON.parse('_generatedManifest' in args ? args._generatedManifest : '{}'),
+      );
+    }
     expect(executionTransitions.length).toBeGreaterThan(0);
     expect(executionTransitions.every((state) =>
       state.isStreaming === false

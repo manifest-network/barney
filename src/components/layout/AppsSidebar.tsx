@@ -13,13 +13,18 @@ import {
   type AppEntry,
 } from '../../registry/appRegistry';
 import { getCreditAccount, getCreditEstimate } from '../../api/billing';
+import { withTimeout } from '../../api/utils';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits } from '../../utils/format';
 import { truncateAddress } from '../../utils/address';
 import { logError } from '../../utils/errors';
 import { CHAIN_NAME } from '../../config/chain';
 import { findExampleByAppName, buildExampleManifest } from '../../config/exampleApps';
-import { SECONDS_PER_HOUR, AUTO_REFRESH_INTERVAL_MS } from '../../config/constants';
+import {
+  AI_TOOL_API_TIMEOUT_MS,
+  AUTO_REFRESH_INTERVAL_MS,
+  SECONDS_PER_HOUR,
+} from '../../config/constants';
 import { useVisibilityPolling } from '../../hooks/useVisibilityPolling';
 import { dnsStatusKey, type DnsStatusEntry } from '../../stores/aiStore';
 import type { CustomDomainStatusKind } from '../../utils/customDomainStatus';
@@ -64,28 +69,44 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const [hoursRemaining, setHoursRemaining] = useState<number | null>(null);
   const [burnRate, setBurnRate] = useState<number | null>(null);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
+  const refreshGenerationRef = useRef(0);
+
+  // Invalidate every outstanding refresh when the wallet changes. The effect
+  // is declared before useVisibilityPolling, so its generation update runs
+  // before that hook starts the new wallet's immediate polling lifecycle.
+  useEffect(() => {
+    refreshGenerationRef.current += 1;
+    return () => {
+      refreshGenerationRef.current += 1;
+    };
+  }, [address]);
 
   // Load apps and credit info. MainLayout owns the independent recurring
   // chain/registry reconciliation driver outside this sidebar's ErrorBoundary.
   const refresh = useCallback(async () => {
     if (!address) return;
+    const refreshGeneration = refreshGenerationRef.current;
 
     setApps(getApps(address));
 
-    // Credit balance — always available via creditAccount
-    try {
-      const creditResponse = await getCreditAccount(address);
+    // Bound and run the independent credit reads together. A stalled RPC can
+    // no longer pin useVisibilityPolling's in-flight guard for the session.
+    const creditBalance = withTimeout(
+      getCreditAccount(address),
+      AI_TOOL_API_TIMEOUT_MS,
+      'Sidebar credit-account refresh',
+    ).then((creditResponse) => {
       const pwrBal = creditResponse.balances.find(
         (b) => b.denom === DENOMS.PWR || b.denom.includes('upwr'),
       );
-      setCredits(pwrBal ? fromBaseUnits(pwrBal.amount, pwrBal.denom) : 0);
-    } catch (error) {
-      logError('AppsSidebar.refresh.credits', error);
-    }
+      return pwrBal ? fromBaseUnits(pwrBal.amount, pwrBal.denom) : 0;
+    });
 
-    // Burn rate / time remaining — only meaningful with active leases
-    try {
-      const estimate = await getCreditEstimate(address);
+    const creditEstimate = withTimeout(
+      getCreditEstimate(address),
+      AI_TOOL_API_TIMEOUT_MS,
+      'Sidebar credit-estimate refresh',
+    ).then((estimate) => {
       let ratePerSecond = 0;
       if (estimate?.totalRatePerSecond) {
         for (const rate of estimate.totalRatePerSecond) {
@@ -93,14 +114,34 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
         }
       }
       if (ratePerSecond > 0 && estimate?.estimatedDurationSeconds) {
-        setHoursRemaining(Math.floor(Number(estimate.estimatedDurationSeconds) / SECONDS_PER_HOUR));
-        setBurnRate(Math.round(ratePerSecond * SECONDS_PER_HOUR * 100) / 100);
-      } else {
-        setHoursRemaining(null);
-        setBurnRate(null);
+        return {
+          hoursRemaining: Math.floor(Number(estimate.estimatedDurationSeconds) / SECONDS_PER_HOUR),
+          burnRate: Math.round(ratePerSecond * SECONDS_PER_HOUR * 100) / 100,
+        };
       }
-    } catch (error) {
-      logError('AppsSidebar.refresh.estimate', error);
+      return { hoursRemaining: null, burnRate: null };
+    });
+
+    const [creditResult, estimateResult] = await Promise.allSettled([
+      creditBalance,
+      creditEstimate,
+    ]);
+
+    // An older wallet's promises may settle after a context switch. Never let
+    // those results overwrite the new wallet's sidebar state.
+    if (refreshGeneration !== refreshGenerationRef.current) return;
+
+    if (creditResult.status === 'fulfilled') {
+      setCredits(creditResult.value);
+    } else {
+      logError('AppsSidebar.refresh.credits', creditResult.reason);
+    }
+
+    if (estimateResult.status === 'fulfilled') {
+      setHoursRemaining(estimateResult.value.hoursRemaining);
+      setBurnRate(estimateResult.value.burnRate);
+    } else {
+      logError('AppsSidebar.refresh.estimate', estimateResult.reason);
     }
   }, [address]);
 

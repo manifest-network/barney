@@ -2,15 +2,13 @@
  * Recurring chain-to-registry reconciliation.
  *
  * Mounted by MainLayout outside the sidebar ErrorBoundary so registry repair
- * survives a sidebar render failure. Lease lists provide the live state set;
- * custom domains come from authoritative single-lease reads rather than
- * assuming the list endpoint populated Lease.items. Every read has a deadline,
- * and per-lease reads use a bounded rotating fan-out.
+ * survives a sidebar render failure. The tenant lease-list responses provide
+ * both the live state set and each lease's items/custom domains. The paired
+ * list read has a deadline so one stalled RPC cannot pin the polling loop.
  */
 
-import { useCallback, useRef } from 'react';
+import { useCallback } from 'react';
 import { getLeasesByTenant, LeaseState } from '../api/billing';
-import { getLeaseItemsForLease } from '../api/leaseItems';
 import { getDomainAssignments } from '../api/leaseDomains';
 import { withTimeout } from '../api/utils';
 import {
@@ -23,17 +21,9 @@ import { AI_TOOL_API_TIMEOUT_MS, AUTO_REFRESH_INTERVAL_MS } from '../config/cons
 import { logError } from '../utils/errors';
 import { useVisibilityPolling } from './useVisibilityPolling';
 
-/**
- * Bound total fan-out, not only simultaneous awaits. Larger registries rotate
- * through this many live leases per pass and still converge over later ticks.
- */
-const LEASE_ITEM_READS_PER_PASS = 4;
-
 export function useRegistryReconciliation(
   address: string | undefined,
 ): void {
-  const leaseItemCursorByAddressRef = useRef(new Map<string, number>());
-
   const refresh = useCallback(async (): Promise<boolean | void> => {
     if (!address) return;
 
@@ -64,43 +54,21 @@ export function useRegistryReconciliation(
       for (const lease of activeLeases) leaseStates.set(lease.uuid, 'active');
       reconcileWithChain(address, leaseStates, expectedChainStates);
 
-      const liveRegisteredLeaseUuids = [...expectedDomains.keys()]
-        .filter((leaseUuid) => leaseStates.has(leaseUuid));
-      const cursor = leaseItemCursorByAddressRef.current.get(address) ?? 0;
-      const readCount = Math.min(LEASE_ITEM_READS_PER_PASS, liveRegisteredLeaseUuids.length);
-      const leaseUuidsForThisPass = Array.from({ length: readCount }, (_, offset) =>
-        liveRegisteredLeaseUuids[(cursor + offset) % liveRegisteredLeaseUuids.length]
+      // manifestjs returns Lease.items on tenant-list reads just as it does on
+      // getLease. Reuse those authoritative list payloads instead of issuing
+      // one redundant RPC per registered lease on every polling pass.
+      const liveLeases = new Map(
+        [...pendingLeases, ...activeLeases].map((lease) => [lease.uuid, lease] as const),
       );
-      if (liveRegisteredLeaseUuids.length > 0) {
-        leaseItemCursorByAddressRef.current.set(
-          address,
-          (cursor + readCount) % liveRegisteredLeaseUuids.length,
-        );
-      }
       const observations = new Map<string, CustomDomainChainObservation>();
-      await Promise.all(
-        leaseUuidsForThisPass.map(async (leaseUuid) => {
-          try {
-            const items = await withTimeout(
-              getLeaseItemsForLease(leaseUuid),
-              AI_TOOL_API_TIMEOUT_MS,
-              `Registry lease-item refresh (${leaseUuid})`,
-            );
-            // The list observed this lease as live, but a single-lease read from
-            // another/older RPC could still report not-found. That is uncertainty,
-            // not an authoritative empty item set, so preserve the cache.
-            if (items === null) return;
-            observations.set(leaseUuid, {
-              customDomains: getDomainAssignments(items),
-              expectedLocalDomains: expectedDomains.get(leaseUuid),
-            });
-          } catch (error) {
-            // A transient failure for one lease must not turn into an empty-domain
-            // observation or prevent healthy leases from converging.
-            logError('useRegistryReconciliation.leaseItems', error);
-          }
-        }),
-      );
+      for (const [leaseUuid, expectedLocalDomains] of expectedDomains) {
+        const lease = liveLeases.get(leaseUuid);
+        if (!lease) continue;
+        observations.set(leaseUuid, {
+          customDomains: getDomainAssignments(lease.items),
+          expectedLocalDomains,
+        });
+      }
       reconcileCustomDomainsWithChain(address, observations);
     } catch (error) {
       logError('useRegistryReconciliation', error);
