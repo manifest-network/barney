@@ -115,6 +115,22 @@ describe('persistence actions', () => {
       expect(result[0].awaitingConfirmation).toBe(false);
     });
 
+    it('rewrites an in-flight transaction with a broadcast-aware reload warning', () => {
+      const msgs = [makeMessage({
+        id: 'm1',
+        role: 'tool',
+        content: 'Deploy "redis"?',
+        transactionInFlight: true,
+      })];
+      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
+
+      const result = loadHistory();
+
+      expect(result[0].content).toContain('page reloaded');
+      expect(result[0].error).toContain('may already have been submitted');
+      expect(result[0].transactionInFlight).toBe(false);
+    });
+
     it('does NOT rewrite tool messages with confirmation-prompt content but no awaitingConfirmation flag', () => {
       const msgs = [makeMessage({
         id: 'm1',
@@ -285,6 +301,43 @@ describe('persistence actions', () => {
       expect(stored).not.toBeNull();
       expect(JSON.parse(stored!)).toHaveLength(1);
       expect(JSON.parse(stored!)[0].id).toBe('u1');
+
+      unsub();
+    });
+
+    it('persists a same-count confirmation-to-transaction transition mid-stream', () => {
+      const pendingTool = makeMessage({
+        id: 'tool-1',
+        role: 'tool',
+        content: 'Deploy?',
+        awaitingConfirmation: true,
+        isStreaming: false,
+      });
+      const miniStore = createMiniStore();
+      miniStore.setState({ messages: [makeMessage({ id: 'u1' }), pendingTool] });
+      saveHistory(miniStore.getState().messages, true);
+      const unsub = setupPersistenceSubscriptions(miniStore);
+
+      miniStore.setState({
+        isStreaming: true,
+        messages: miniStore.getState().messages.map((message) =>
+          message.id === pendingTool.id
+            ? {
+                ...message,
+                awaitingConfirmation: false,
+                transactionInFlight: true,
+              }
+            : message
+        ),
+      });
+
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY_HISTORY)!);
+      expect(stored.map((message: ChatMessage) => message.id)).toEqual(['u1', 'tool-1']);
+      expect(stored[1]).toMatchObject({
+        isStreaming: false,
+        awaitingConfirmation: false,
+        transactionInFlight: true,
+      });
 
       unsub();
     });

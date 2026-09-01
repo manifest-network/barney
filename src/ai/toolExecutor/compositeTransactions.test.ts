@@ -126,6 +126,7 @@ import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
 import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
 import { TerminalChainStateError, deployManifest, stopApp, waitForLeaseStatus, isLeaseFailureTerminal, restartApp, updateApp, FRED_REASON_GUIDANCE } from '@manifest-network/manifest-sdk/deploy';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
+import { getReadClient } from '../../api/readClient';
 
 const ADDRESS = 'manifest1abc';
 const CLIENT_MANAGER = {} as CosmosClientManager;
@@ -1813,6 +1814,33 @@ describe('executeConfirmedDeployApp', () => {
 
   const ARGS = { app_name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' };
 
+  it('blocks an A to B switch after async setup and immediately before deploy', async () => {
+    let resolveReadClient!: (client: Awaited<ReturnType<typeof getReadClient>>) => void;
+    vi.mocked(getReadClient).mockImplementationOnce(
+      () => new Promise((resolve) => { resolveReadClient = resolve; }),
+    );
+    let activeAddress = ADDRESS;
+    const deploying = executeConfirmedDeployApp(
+      ARGS,
+      CLIENT_MANAGER,
+      makeOptions({
+        assertAuthorization: () => {
+          if (activeAddress !== ADDRESS) throw new Error('wallet changed');
+        },
+      }),
+      makePayload(),
+    );
+    await vi.waitFor(() => expect(getReadClient).toHaveBeenCalledOnce());
+
+    activeAddress = 'manifest1walletb';
+    resolveReadClient(
+      { query: { __tag: 'read-query-client' } } as unknown as Awaited<ReturnType<typeof getReadClient>>,
+    );
+
+    await expect(deploying).rejects.toThrow('wallet changed');
+    expect(deployManifest).not.toHaveBeenCalled();
+  });
+
   it('deploys via deployManifest and shapes URL from connection (top-level ports)', async () => {
     mockDeploySuccess({
       connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
@@ -2169,6 +2197,135 @@ describe('executeConfirmedStopApp', () => {
     expect((result.data as any).failed).toEqual(['postgres']);
   });
 
+  it('preserves completed stops when authorization changes between bulk entries', async () => {
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as any);
+    const assertAuthorization = vi.fn()
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => { throw new Error('wallet changed'); });
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+    ];
+
+    const result = await executeConfirmedStopApp(
+      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps), assertAuthorization }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      stopped: ['redis'],
+      cancelled: ['postgres'],
+      unconfirmed: [],
+    });
+    expect(stopApp).toHaveBeenCalledOnce();
+  });
+
+  it('does not submit any bulk stop after the live guard aborts the signal', async () => {
+    const controller = new AbortController();
+    vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as never);
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+    ];
+
+    const result = await executeConfirmedStopApp(
+      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      CLIENT_MANAGER,
+      makeOptions({
+        appRegistry: makeRegistry(apps),
+        signal: controller.signal,
+        assertAuthorization: () => controller.abort(),
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Not submitted: redis, postgres');
+    expect(stopApp).not.toHaveBeenCalled();
+  });
+
+  it('reports the current bulk stop as unconfirmed when cancellation wins after broadcast', async () => {
+    vi.mocked(stopApp)
+      .mockResolvedValueOnce({ outcome: 'stopped' } as any)
+      .mockRejectedValueOnce(new ManifestMCPError(
+        ManifestMCPErrorCode.OPERATION_CANCELLED,
+        'the broadcast may still commit',
+        { sent: true },
+      ));
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+      makeApp({ name: 'nginx', leaseUuid: 'uuid-3' }),
+    ];
+
+    const result = await executeConfirmedStopApp(
+      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps) }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      stopped: ['redis'],
+      unconfirmed: ['postgres'],
+      cancelled: ['nginx'],
+    });
+    expect((result.data as { message: string }).message).toContain('check on-chain status before retrying');
+    expect(stopApp).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports current and remaining bulk stops as not submitted when cancellation is pre-broadcast', async () => {
+    vi.mocked(stopApp)
+      .mockResolvedValueOnce({ outcome: 'stopped' } as any)
+      .mockRejectedValueOnce(new ManifestMCPError(
+        ManifestMCPErrorCode.OPERATION_CANCELLED,
+        'no transaction was sent',
+        { sent: false },
+      ));
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+      makeApp({ name: 'nginx', leaseUuid: 'uuid-3' }),
+    ];
+
+    const result = await executeConfirmedStopApp(
+      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps) }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      stopped: ['redis'],
+      unconfirmed: [],
+      cancelled: ['postgres', 'nginx'],
+    });
+    expect((result.data as { message: string }).message).toContain('Not submitted: postgres, nginx');
+    expect(stopApp).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a plain pre-broadcast AbortError and all remaining bulk stops as not submitted', async () => {
+    vi.mocked(stopApp).mockRejectedValueOnce(
+      new DOMException('This operation was aborted', 'AbortError'),
+    );
+    const apps = [
+      makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
+      makeApp({ name: 'postgres', leaseUuid: 'uuid-2' }),
+    ];
+
+    const result = await executeConfirmedStopApp(
+      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps) }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Not submitted: redis, postgres');
+    expect(result.error).not.toContain('Failed to stop');
+    expect(stopApp).toHaveBeenCalledOnce();
+  });
+
   it('treats an already-inactive lease as success (single)', async () => {
     vi.mocked(stopApp).mockResolvedValue({ outcome: 'already_inactive' } as any);
 
@@ -2230,11 +2387,33 @@ describe('executeConfirmedFundCredits', () => {
 
     const result = await executeConfirmedFundCredits(
       { amount: 50, denomString: '50000000upwr', address: ADDRESS },
-      CLIENT_MANAGER
+      CLIENT_MANAGER,
+      makeOptions(),
     );
 
     expect(result.success).toBe(true);
     expect((result.data as any).amount).toBe(50);
+  });
+
+  it('does not broadcast when the pending target belongs to another wallet', async () => {
+    const result = await executeConfirmedFundCredits(
+      { amount: 50, denomString: '50000000upwr', address: 'manifest1walleta' },
+      CLIENT_MANAGER,
+      makeOptions({ address: 'manifest1walletb' }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(cosmosTx).not.toHaveBeenCalled();
+  });
+
+  it('runs the live authorization guard immediately before broadcast', async () => {
+    await expect(executeConfirmedFundCredits(
+      { amount: 50, denomString: '50000000upwr', address: ADDRESS },
+      CLIENT_MANAGER,
+      makeOptions({ assertAuthorization: () => { throw new Error('identity changed'); } }),
+    )).rejects.toThrow('identity changed');
+
+    expect(cosmosTx).not.toHaveBeenCalled();
   });
 });
 
@@ -2251,6 +2430,7 @@ describe('executeCosmosTransaction', () => {
     );
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args.address).toBe(ADDRESS);
   });
 });
 
@@ -2262,7 +2442,8 @@ describe('executeConfirmedCosmosTx', () => {
 
     const result = await executeConfirmedCosmosTx(
       { module: 'bank', subcommand: 'send', parsedArgs: ['addr', '100umfx'] },
-      CLIENT_MANAGER
+      CLIENT_MANAGER,
+      makeOptions(),
     );
 
     expect(result.success).toBe(true);
@@ -2494,6 +2675,44 @@ describe('executeConfirmedBatchDeploy', () => {
     const result = await executeConfirmedBatchDeploy({ entries: [] }, CLIENT_MANAGER, makeOptions());
     expect(result.success).toBe(false);
     expect(result.error).toContain('No entries');
+  });
+
+  it('buckets an authorization guard failure as cancelled before deploy', async () => {
+    const entries = [
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+    ];
+
+    const result = await executeConfirmedBatchDeploy(
+      { entries },
+      CLIENT_MANAGER,
+      makeOptions({ assertAuthorization: () => { throw new Error('wallet changed'); } }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cancelled: game1');
+    expect(result.error).not.toContain('Failed: game1');
+    expect(deployManifest).not.toHaveBeenCalled();
+  });
+
+  it('buckets a signal aborted by the live deploy guard as cancelled before broadcast', async () => {
+    const controller = new AbortController();
+    const entries = [
+      { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
+    ];
+
+    const result = await executeConfirmedBatchDeploy(
+      { entries },
+      CLIENT_MANAGER,
+      makeOptions({
+        signal: controller.signal,
+        assertAuthorization: () => controller.abort(),
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cancelled: game1');
+    expect(result.error).not.toContain('Failed: game1');
+    expect(deployManifest).not.toHaveBeenCalled();
   });
 
   it('deploys all apps in parallel via deployManifest and reports results', async () => {
@@ -3130,6 +3349,50 @@ describe('executeConfirmedRestartApp', () => {
         expect.objectContaining({ name: 'postgres' }),
       ]),
     }));
+  });
+
+  it('buckets an authorization guard failure as cancelled before restart', async () => {
+    const app = makeApp({ name: 'redis', leaseUuid: 'uuid-1' });
+
+    const result = await executeConfirmedRestartApp(
+      {
+        app_name: 'all',
+        entries: [{ app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl }],
+      },
+      CLIENT_MANAGER,
+      makeOptions({
+        appRegistry: makeRegistry([app]),
+        assertAuthorization: () => { throw new Error('wallet changed'); },
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cancelled: redis');
+    expect(result.error).not.toContain('Failed: redis');
+    expect(restartApp).not.toHaveBeenCalled();
+  });
+
+  it('buckets a signal aborted by the live restart guard as cancelled before the POST', async () => {
+    const controller = new AbortController();
+    const app = makeApp({ name: 'redis', leaseUuid: 'uuid-1' });
+
+    const result = await executeConfirmedRestartApp(
+      {
+        app_name: 'all',
+        entries: [{ app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl }],
+      },
+      CLIENT_MANAGER,
+      makeOptions({
+        appRegistry: makeRegistry([app]),
+        signal: controller.signal,
+        assertAuthorization: () => controller.abort(),
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cancelled: redis');
+    expect(result.error).not.toContain('Failed: redis');
+    expect(restartApp).not.toHaveBeenCalled();
   });
 
   it('handles partial failures in batch restart', async () => {

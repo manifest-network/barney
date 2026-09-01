@@ -114,6 +114,12 @@ export interface ChatMessage {
    *  interrupted confirmations after a reload (since `pendingConfirmation`
    *  is intentionally not persisted). */
   awaitingConfirmation?: boolean;
+  /** True after the user confirms a transaction and until its executor settles.
+   *  Unlike `isStreaming`, this marker is persisted: a reload must retain the
+   *  tool row and close it with a broadcast-aware warning. It also keeps the
+   *  unresolved confirmation prompt out of model history while execution is in
+   *  flight. */
+  transactionInFlight?: boolean;
 }
 
 export interface PendingConfirmation {

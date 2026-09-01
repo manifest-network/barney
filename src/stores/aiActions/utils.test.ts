@@ -40,6 +40,25 @@ describe('toChatApiMessages', () => {
     expect(result[2].content).toBe('done');
   });
 
+  it('filters a persisted transaction row until its executor resolves', () => {
+    const msgs: ChatMessage[] = [
+      { id: '1', role: 'user', content: 'deploy redis', timestamp: 1 },
+      {
+        id: '2', role: 'assistant', content: 'Calling tools.', timestamp: 2,
+        toolCalls: [{ id: 'tc_1', type: 'function', function: { name: 'deploy_app', arguments: {} } }],
+      },
+      {
+        id: '3', role: 'tool', content: 'Deploy redis?', timestamp: 3,
+        toolCallId: 'tc_1', transactionInFlight: true,
+      },
+    ];
+
+    const result = toChatApiMessages(msgs, undefined);
+
+    expect(result.map((message) => message.role)).toEqual(['system', 'user', 'assistant']);
+    expect(result.some((message) => message.role === 'tool')).toBe(false);
+  });
+
   it('converts tool role messages with tool_call_id', () => {
     // Tool preceded by its assistant (with tool_calls) so it is not a leading
     // orphan — the strip only removes a tool run at the very front of the window.

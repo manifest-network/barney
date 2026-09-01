@@ -7,6 +7,10 @@ import { executeBatchDeploy, deriveAppName } from '../../ai/toolExecutor/composi
 import { logError } from '../../utils/errors';
 import { sha256, toHex } from '../../utils/hash';
 import type { AIStore } from '../aiStore';
+import {
+  captureTransactionAuthorization,
+  isTransactionAuthorizationCurrent,
+} from '../authorization';
 import { generateMessageId, trimMessages, getAppRegistryAccess } from './utils';
 
 type Get = () => AIStore;
@@ -29,10 +33,15 @@ export async function requestBatchDeployFn(
   // `requestStopAppFn`); found by architect's cycle-4 pattern scan.
   if (isStreaming || !isConnected || pendingConfirmation !== null) return;
 
+  const authorizationEpoch = get().authorizationEpoch;
+  const authorization = captureTransactionAuthorization(get());
+  if (!authorization) return;
+
   // No catalog pre-gate: `executeBatchDeploy` resolves the cheapest tier (or
   // returns "Tier catalog unavailable" for an empty catalog), and that error
   // surfaces inline on the tool message — the single failure channel.
-  set({ isStreaming: true });
+  const abort = new AbortController();
+  set({ isStreaming: true, abortController: abort });
 
   let toolMsgId: string | undefined;
   try {
@@ -86,33 +95,47 @@ export async function requestBatchDeployFn(
       };
     }));
 
+    if (get().authorizationEpoch !== authorizationEpoch
+        || get().abortController !== abort) return;
+
     const { clientManager, address, signing, skuTiers } = get();
 
     const result = await executeBatchDeploy(entries, {
       clientManager,
       address,
       signing,
-      onProgress: (progress) => set({ deployProgress: { ...progress } }),
+      onProgress: (progress) => {
+        if (get().authorizationEpoch === authorizationEpoch
+            && get().abortController === abort) {
+          set({ deployProgress: { ...progress } });
+        }
+      },
       appRegistry: getAppRegistryAccess(),
+      signal: abort.signal,
       tiers: skuTiers.tiers,
     });
 
+    if (get().authorizationEpoch !== authorizationEpoch
+        || get().abortController !== abort) return;
+
     if (result.requiresConfirmation) {
+      if (!authorization || !isTransactionAuthorizationCurrent(get(), authorization)) return;
       set({
         pendingConfirmation: {
           id: generateMessageId(),
-          action: {
+          action: Object.freeze({
+            ...authorization,
             id: 'batch',
             toolName: 'batch_deploy',
             args: result.pendingAction!.args,
             description: result.confirmationMessage!,
-          },
+          }),
           messageId: toolMsgId,
         },
       });
       const updated = get().messages.map((m) =>
         m.id === toolMsgId
-          ? { ...m, content: result.confirmationMessage!, isStreaming: false }
+          ? { ...m, content: result.confirmationMessage!, isStreaming: false, awaitingConfirmation: true }
           : m
       );
       set({ messages: updated });
@@ -126,6 +149,8 @@ export async function requestBatchDeployFn(
       set({ messages: updated });
     }
   } catch (error) {
+    if (get().authorizationEpoch !== authorizationEpoch
+        || get().abortController !== abort) return;
     logError('AIContext.requestBatchDeploy', error);
     if (toolMsgId) {
       const updated = get().messages.map((m) =>
@@ -141,6 +166,10 @@ export async function requestBatchDeployFn(
       set({ messages: updated });
     }
   } finally {
-    set({ isStreaming: false });
+    if (get().authorizationEpoch === authorizationEpoch
+        && get().abortController === abort) {
+      abort.abort();
+      set({ isStreaming: false, abortController: null });
+    }
   }
 }

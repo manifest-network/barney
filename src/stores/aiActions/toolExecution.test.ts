@@ -81,6 +81,10 @@ describe('processToolCallsFn', () => {
     deployProgress: AIStore['deployProgress'];
     clientManager: AIStore['clientManager'];
     address: AIStore['address'];
+    chainId: AIStore['chainId'];
+    clientGeneration: AIStore['clientGeneration'];
+    signerGeneration: AIStore['signerGeneration'];
+    authorizationEpoch: AIStore['authorizationEpoch'];
     abortController: AIStore['abortController'];
     _toolCache: Map<string, { result: ToolResult; timestamp: number }>;
   };
@@ -95,8 +99,12 @@ describe('processToolCallsFn', () => {
       pendingConfirmation: null,
       pendingPayload: null,
       deployProgress: null,
-      clientManager: null,
+      clientManager: {} as AIStore['clientManager'],
       address: 'manifest1test',
+      chainId: 'manifest-test',
+      clientGeneration: 1,
+      signerGeneration: 1,
+      authorizationEpoch: 1,
       abortController: null,
       _toolCache: new Map(),
     };
@@ -188,6 +196,42 @@ describe('processToolCallsFn', () => {
     expect(result.shouldContinue).toBe(false);
     expect(state.pendingConfirmation).not.toBeNull();
     expect(state.pendingConfirmation!.action.toolName).toBe('deploy_app');
+    expect(state.pendingConfirmation!.action).toMatchObject({
+      originAddress: 'manifest1test',
+      chainId: 'manifest-test',
+      clientGeneration: 1,
+      signerGeneration: 1,
+    });
+    expect(Object.isFrozen(state.pendingConfirmation!.action)).toBe(true);
+  });
+
+  it('drops a late confirmation produced after an A to B identity switch', async () => {
+    let resolveExecution!: (result: ToolResult) => void;
+    vi.mocked(executeTool).mockImplementationOnce(
+      () => new Promise<ToolResult>((resolve) => { resolveExecution = resolve; }),
+    );
+
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const toolCall = makeToolCall({ function: { name: 'fund_credits', arguments: { amount: 5 } } });
+    const processing = processToolCallsFn(get, set, [toolCall], 'asst_1', {
+      content: '', thinking: '', toolCalls: [toolCall],
+    });
+    await vi.waitFor(() => expect(executeTool).toHaveBeenCalledOnce());
+
+    state.address = 'manifest1walletb';
+    state.clientManager = { wallet: 'b' } as unknown as AIStore['clientManager'];
+    state.clientGeneration += 1;
+    state.authorizationEpoch += 1;
+    resolveExecution({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Fund?',
+      pendingAction: { toolName: 'fund_credits', args: { address: 'manifest1test', amount: 5 } },
+    });
+
+    const result = await processing;
+    expect(result.shouldContinue).toBe(false);
+    expect(state.pendingConfirmation).toBeNull();
   });
 
   it('sets card on message and stops for displayCard result', async () => {
@@ -393,6 +437,119 @@ describe('processToolCallsFn', () => {
     );
     expect(otherToolMsgs.length).toBeGreaterThan(0);
     expect(otherToolMsgs.every((m) => !m.awaitingConfirmation)).toBe(true);
+  });
+
+  it('closes every collected confirmation when authorization changes during batch assembly', async () => {
+    const makeDeployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          skuUuid: 'sku-123',
+          providerUuid: 'prov-456',
+          providerUrl: 'https://provider.test',
+          _generatedManifest: `{"services":{"${appName}":{}}}`,
+        },
+      },
+    });
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(makeDeployResult('alpha'))
+      .mockResolvedValueOnce(makeDeployResult('beta'));
+    let finishPayload!: (payload: Awaited<ReturnType<typeof buildPayloadFromManifest>>) => void;
+    vi.mocked(buildPayloadFromManifest).mockImplementationOnce(
+      () => new Promise((resolve) => { finishPayload = resolve; }),
+    );
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const tc1 = makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } });
+    const tc2 = makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } });
+
+    const processing = processToolCallsFn(get, set, [tc1, tc2], 'asst_1', {
+      content: '', thinking: '', toolCalls: [tc1, tc2],
+    });
+    await vi.waitFor(() => expect(buildPayloadFromManifest).toHaveBeenCalledOnce());
+    state.address = 'manifest1next';
+    state.clientGeneration += 1;
+    state.authorizationEpoch += 1;
+    finishPayload({ bytes: new Uint8Array([1]), filename: 'manifest.json', size: 1, hash: 'a' });
+
+    const result = await processing;
+
+    expect(result.shouldContinue).toBe(false);
+    expect(state.pendingConfirmation).toBeNull();
+    const toolMessages = state.messages.filter((message) => message.role === 'tool');
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        content: expect.stringContaining('cancelled and was not submitted'),
+        error: expect.stringContaining('cancelled and was not submitted'),
+        isStreaming: false,
+        awaitingConfirmation: false,
+      }),
+    ]));
+    expect(toolMessages.every((message) => message.error?.includes('cancelled and was not submitted'))).toBe(true);
+  });
+
+  it('closes every confirmation when authorization changes after the final batch entry is assembled', async () => {
+    const makeDeployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          skuUuid: 'sku-123',
+          providerUuid: 'prov-456',
+          providerUrl: 'https://provider.test',
+          _generatedManifest: `{"image":"${appName}:latest"}`,
+        },
+      },
+    });
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(makeDeployResult('alpha'))
+      .mockResolvedValueOnce(makeDeployResult('beta'));
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const tc1 = makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } });
+    const tc2 = makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } });
+
+    // Flip the identity from the final placeholder write. Both per-entry gates
+    // have already passed at this point, so only the post-loop gate can close
+    // the collected confirmations.
+    const baseSet = set;
+    let switched = false;
+    set = (partial) => {
+      baseSet(partial);
+      const batchPlaceholders = state.messages.filter((message) =>
+        message.role === 'tool' && message.content.startsWith('Batch deploy:')
+      );
+      if (!switched && batchPlaceholders.length === 2) {
+        switched = true;
+        state.address = 'manifest1next';
+        state.clientGeneration += 1;
+        state.authorizationEpoch += 1;
+      }
+    };
+
+    const result = await processToolCallsFn(get, set, [tc1, tc2], 'asst_1', {
+      content: '', thinking: '', toolCalls: [tc1, tc2],
+    });
+
+    expect(switched).toBe(true);
+    expect(buildPayloadFromManifest).toHaveBeenCalledTimes(2);
+    expect(result.shouldContinue).toBe(false);
+    expect(state.pendingConfirmation).toBeNull();
+    const toolMessages = state.messages.filter((message) => message.role === 'tool');
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages.every((message) =>
+      message.error?.includes('cancelled and was not submitted')
+      && message.awaitingConfirmation === false
+      && message.isStreaming === false
+    )).toBe(true);
   });
 
   // Regression: prior to this fix, the merge dropped custom_domain fields,

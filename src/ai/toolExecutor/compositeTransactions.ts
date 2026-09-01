@@ -73,6 +73,25 @@ function isAbortError(error: unknown): boolean {
 }
 
 /**
+ * Read the SDK's structured transaction-cancellation verdict without relying
+ * solely on `instanceof` (duplicate package copies can break it). `true` means
+ * broadcast was started and the chain outcome is unknown; `false` proves that
+ * nothing was submitted.
+ */
+function cancelledTransactionWasSent(error: unknown): boolean | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const candidate = error as { code?: unknown; details?: { sent?: unknown } };
+  if (candidate.code !== ManifestMCPErrorCode.OPERATION_CANCELLED) return undefined;
+  return typeof candidate.details?.sent === 'boolean' ? candidate.details.sent : undefined;
+}
+
+function isTransactionCancellation(error: unknown): boolean {
+  return !!error
+    && typeof error === 'object'
+    && (error as { code?: unknown }).code === ManifestMCPErrorCode.OPERATION_CANCELLED;
+}
+
+/**
  * The provisioning OBSERVATION carried by a `waitForLeaseStatus` REJECTION.
  *
  * A poll timeout is SILENCE, not a verdict — the same `'poll'` vs
@@ -581,20 +600,28 @@ export async function executeConfirmedDeployApp(
     },
   };
 
+  const deployErrorContext = () => ({
+    name,
+    leaseUuid: capturedLeaseUuid,
+    providerUrl: capturedProviderUrl ?? providerUrl,
+    address,
+    signing,
+    appRegistry,
+    onProgress,
+  });
+  let ctx: Awaited<ReturnType<typeof buildFredAuthCtx>>;
+  try {
+    ctx = await buildFredAuthCtx(clientManager, signing);
+  } catch (error) {
+    return await handleDeployManifestError(error, deployErrorContext());
+  }
+
+  options.assertAuthorization?.();
   let result: DeployResult;
   try {
-    const ctx = await buildFredAuthCtx(clientManager, signing);
     result = await deployManifest(ctx, spec, callOptions);
   } catch (error) {
-    return await handleDeployManifestError(error, {
-      name,
-      leaseUuid: capturedLeaseUuid,
-      providerUrl: capturedProviderUrl ?? providerUrl,
-      address,
-      signing,
-      appRegistry,
-      onProgress,
-    });
+    return await handleDeployManifestError(error, deployErrorContext());
   }
 
   const leaseUuid = result.lease_uuid;
@@ -998,6 +1025,14 @@ export async function executeConfirmedBatchDeploy(
       // and each token mint by the signing mutex inside providerAuth.
       let result: DeployResult;
       try {
+        options.assertAuthorization?.();
+        signal?.throwIfAborted();
+      } catch (error) {
+        logError('compositeTransactions.executeConfirmedBatchDeploy.guard', error);
+        updateProgress('failed', 'Cancelled before deployment was submitted');
+        return { name, outcome: 'cancelled' as const };
+      }
+      try {
         result = await deployManifest(ctx, spec, callOptions);
       } catch (error) {
         const errResult = await handleDeployManifestError(error, {
@@ -1164,7 +1199,7 @@ export async function executeConfirmedStopApp(
   clientManager: CosmosClientManager,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const { address, appRegistry } = options;
+  const { address, appRegistry, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -1186,10 +1221,26 @@ export async function executeConfirmedStopApp(
   if (entries && entries.length > 0) {
     const stopped: string[] = [];
     const failed: string[] = [];
+    const unconfirmed: string[] = [];
+    const cancelled: string[] = [];
 
-    for (const entry of entries) {
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
       try {
-        await stopApp(ctx, { leaseUuid: asLeaseUuid(entry.leaseUuid) }, { waitForConfirmation: false });
+        options.assertAuthorization?.();
+        signal?.throwIfAborted();
+      } catch (error) {
+        logError('compositeTransactions.executeConfirmedStopApp.bulk.guard', error);
+        cancelled.push(...entries.slice(index).map((remaining) => remaining.app_name));
+        break;
+      }
+
+      try {
+        await stopApp(
+          ctx,
+          { leaseUuid: asLeaseUuid(entry.leaseUuid) },
+          { waitForConfirmation: false, signal },
+        );
         // CHAIN observation only, and optimistic: waitForConfirmation is false,
         // so all we know is the TX reached the mempool; `reconcileWithChain`
         // corrects a DeliverTx rejection later. Nothing is written about
@@ -1199,17 +1250,34 @@ export async function executeConfirmedStopApp(
         stopped.push(entry.app_name);
       } catch (err) {
         logError('compositeTransactions.executeConfirmedStopApp.bulk', err);
+        const sent = cancelledTransactionWasSent(err);
+        if (isTransactionCancellation(err) && sent !== false) {
+          unconfirmed.push(entry.app_name);
+          cancelled.push(...entries.slice(index + 1).map((remaining) => remaining.app_name));
+          break;
+        }
+        if (sent === false || isAbortError(err)) {
+          cancelled.push(...entries.slice(index).map((remaining) => remaining.app_name));
+          break;
+        }
         failed.push(entry.app_name);
       }
     }
 
-    if (failed.length > 0 && stopped.length === 0) {
-      return { success: false, error: `Failed to stop: ${failed.join(', ')}` };
+    if (stopped.length === 0 && unconfirmed.length === 0) {
+      const parts: string[] = [];
+      if (failed.length > 0) parts.push(`Failed to stop: ${failed.join(', ')}.`);
+      if (cancelled.length > 0) parts.push(`Not submitted: ${cancelled.join(', ')}.`);
+      return { success: false, error: parts.join(' ') || 'No apps were stopped.' };
     }
 
     const parts: string[] = [];
     if (stopped.length > 0) parts.push(`Stopped: ${stopped.join(', ')}.`);
+    if (unconfirmed.length > 0) {
+      parts.push(`Submission uncertain: ${unconfirmed.join(', ')}; check on-chain status before retrying.`);
+    }
     if (failed.length > 0) parts.push(`Failed to stop: ${failed.join(', ')}.`);
+    if (cancelled.length > 0) parts.push(`Not submitted: ${cancelled.join(', ')}.`);
 
     return {
       success: true,
@@ -1217,7 +1285,9 @@ export async function executeConfirmedStopApp(
         message: parts.join(' '),
         stopped,
         failed,
-        status: 'stopped',
+        unconfirmed,
+        cancelled,
+        status: unconfirmed.length > 0 ? 'unconfirmed' : 'stopped',
       },
     };
   }
@@ -1229,8 +1299,13 @@ export async function executeConfirmedStopApp(
   const name = args.app_name as string;
   const leaseUuid = args.leaseUuid as string;
 
+  options.assertAuthorization?.();
   try {
-    const result: StopAppResult = await stopApp(ctx, { leaseUuid: asLeaseUuid(leaseUuid) }, { waitForConfirmation: true });
+    const result: StopAppResult = await stopApp(
+      ctx,
+      { leaseUuid: asLeaseUuid(leaseUuid) },
+      { waitForConfirmation: true, signal: options.signal },
+    );
     // CHAIN observation only — authoritative here, since waitForConfirmation
     // blocks for the DeliverTx outcome. No provisioning observation touched.
     appRegistry.updateApp(address, leaseUuid, { chainState: 'absent' });
@@ -1296,12 +1371,18 @@ export function executeFundCredits(
  */
 export async function executeConfirmedFundCredits(
   args: Record<string, unknown>,
-  clientManager: CosmosClientManager
+  clientManager: CosmosClientManager,
+  options: ToolExecutorOptions,
 ): Promise<ToolResult> {
   const address = args.address as string;
   const denomString = args.denomString as string;
   const amount = args.amount as number;
 
+  if (!address || address !== options.address) {
+    return { success: false, error: 'Transaction cancelled: credit target does not match the authorized wallet.' };
+  }
+
+  options.assertAuthorization?.();
   const result = await cosmosTx(clientManager, 'billing', 'fund-credit', [address, denomString], true);
 
   if (result.code !== 0) {
@@ -1368,7 +1449,7 @@ export function executeCosmosTransaction(
     confirmationMessage: `Execute ${module} ${subcommand}${argsSummary}?`,
     pendingAction: {
       toolName: 'cosmos_tx',
-      args: { module, subcommand, parsedArgs },
+      args: { module, subcommand, parsedArgs, address },
     },
   };
 }
@@ -1378,12 +1459,18 @@ export function executeCosmosTransaction(
  */
 export async function executeConfirmedCosmosTx(
   args: Record<string, unknown>,
-  clientManager: CosmosClientManager
+  clientManager: CosmosClientManager,
+  options: ToolExecutorOptions,
 ): Promise<ToolResult> {
   const module = args.module as string;
   const subcommand = args.subcommand as string;
   const parsedArgs = (args.parsedArgs as string[]) ?? [];
 
+  if (typeof args.address === 'string' && args.address !== options.address) {
+    return { success: false, error: 'Transaction cancelled: action address does not match the authorized wallet.' };
+  }
+
+  options.assertAuthorization?.();
   const result = await cosmosTx(clientManager, module, subcommand, parsedArgs, true);
 
   if (result.code !== 0) {
@@ -1509,7 +1596,16 @@ export async function executeConfirmedRestartApp(
   // Batch restart
   const entries = args.entries as Array<{ app_name: string; leaseUuid: string; providerUrl: string }> | undefined;
   if (entries && entries.length > 0) {
-    return executeConfirmedBatchRestart(entries, address, appRegistry, signing, onProgress, signal, clientManager);
+    return executeConfirmedBatchRestart(
+      entries,
+      address,
+      appRegistry,
+      signing,
+      onProgress,
+      signal,
+      clientManager,
+      options.assertAuthorization,
+    );
   }
 
   // ENG-312 Phase 6: the readiness wait now runs through the SDK's
@@ -1526,6 +1622,7 @@ export async function executeConfirmedRestartApp(
 
   onProgress?.({ phase: 'restarting', detail: 'Restarting app...', operation: 'restart' });
 
+  options.assertAuthorization?.();
   try {
     // The primitive mints its OWN ADR-036 token through ctx.providerAuth, so
     // never wrap it in a caller-side sign-lock (reentrant mutex deadlock).
@@ -1648,7 +1745,8 @@ async function executeConfirmedBatchRestart(
   signing: SigningContext,
   onProgress: ToolExecutorOptions['onProgress'],
   signal: AbortSignal | undefined,
-  clientManager: CosmosClientManager
+  clientManager: CosmosClientManager,
+  assertAuthorization: ToolExecutorOptions['assertAuthorization'],
 ): Promise<ToolResult> {
   const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
 
@@ -1671,6 +1769,14 @@ async function executeConfirmedBatchRestart(
       // Called DIRECTLY under runBatchWithConcurrency: the primitive mints its
       // own ADR-036 token through the non-reentrant signing mutex, exactly as
       // batch deploy calls deployManifest directly.
+      try {
+        assertAuthorization?.();
+        signal?.throwIfAborted();
+      } catch (error) {
+        logError('executeConfirmedBatchRestart.guard', error);
+        updateProgress('failed', 'Cancelled before the provider was asked');
+        return { name, outcome: 'cancelled' as const };
+      }
       try {
         await restartApp(
           ctx,
@@ -2001,6 +2107,7 @@ export async function executeConfirmedUpdateApp(
   // deliberately NOT passed on: a second merge would re-inject deleted fields.
   const manifestJson = new TextDecoder().decode(payload.bytes);
 
+  options.assertAuthorization?.();
   try {
     // `pollOptions: false` + `providerUrl` are both mandatory — see the JSDoc
     // on executeRestartApp. Never wrapped in a caller-side sign-lock.
@@ -2318,7 +2425,7 @@ export async function executeSetCustomDomain(
     return { success: false, error: 'Failed to read lease items from chain. Try again.' };
   }
 
-  if (leaseItems.length === 0) {
+  if (!leaseItems || leaseItems.length === 0) {
     return { success: false, error: `No lease items found for "${appName}". The lease may have been closed.` };
   }
 
@@ -2468,7 +2575,12 @@ export async function executeConfirmedSetCustomDomain(
   const isApexWarning = typeof args.warning === 'string' && args.warning.length > 0;
   const clearing = customDomain === '';
 
+  if (typeof args.address === 'string' && args.address !== address) {
+    return { success: false, error: 'Transaction cancelled: domain action address does not match the authorized wallet.' };
+  }
+
   let result: Awaited<ReturnType<typeof monoSetItemCustomDomain>>;
+  options.assertAuthorization?.();
   try {
     result = await monoSetItemCustomDomain(
       { chain: clientManager, logger: noopLogger },
@@ -2478,11 +2590,19 @@ export async function executeConfirmedSetCustomDomain(
             clear: true,
             ...(serviceName !== '' ? { serviceName } : {}),
           }
-        : {
-            leaseUuid: asLeaseUuid(leaseUuid),
-            customDomain: asFqdn(customDomain),
-            ...(serviceName !== '' ? { serviceName } : {}),
-          },
+          : {
+              leaseUuid: asLeaseUuid(leaseUuid),
+              customDomain: asFqdn(customDomain),
+              ...(serviceName !== '' ? { serviceName } : {}),
+            },
+      {
+        // Preserve Stop's pre-submission cancellation window. If cancellation
+        // wins after broadcast, the transaction may still commit; the recurring
+        // chain-domain reconciliation is the durable repair path across that
+        // ambiguity, reloads, and disconnects.
+        waitForConfirmation: true,
+        signal: options.signal,
+      },
     );
   } catch (err) {
     logError('compositeTransactions.executeConfirmedSetCustomDomain', err);

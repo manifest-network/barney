@@ -9768,6 +9768,7 @@ code.lease-card-mono {
   .main-layout__sidebar .apps-sidebar__disconnect,
   .main-layout__sidebar .apps-sidebar__credits-amount,
   .main-layout__sidebar .apps-sidebar__credits-runway,
+  .main-layout__sidebar .apps-sidebar__credits-error,
   .main-layout__sidebar .apps-sidebar__gauge,
   .main-layout__sidebar .apps-sidebar__credits-header span,
   .main-layout__sidebar .apps-sidebar__apps-header span,
@@ -9787,6 +9788,7 @@ code.lease-card-mono {
   .main-layout__sidebar:hover .apps-sidebar__disconnect,
   .main-layout__sidebar:hover .apps-sidebar__credits-amount,
   .main-layout__sidebar:hover .apps-sidebar__credits-runway,
+  .main-layout__sidebar:hover .apps-sidebar__credits-error,
   .main-layout__sidebar:hover .apps-sidebar__gauge,
   .main-layout__sidebar:hover .apps-sidebar__credits-header span,
   .main-layout__sidebar:hover .apps-sidebar__apps-header span,
@@ -10040,6 +10042,45 @@ code.lease-card-mono {
 
 .apps-sidebar__burn-rate {
   color: var(--text-dim);
+}
+
+.apps-sidebar__credits-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.6875rem;
+  line-height: 1.35;
+  color: var(--color-error-400);
+}
+
+.apps-sidebar__credits-retry {
+  flex: none;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.apps-sidebar__credits-retry:not(:disabled):hover {
+  background: var(--interactive-hover);
+}
+
+.apps-sidebar__credits-retry:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.apps-sidebar__credits-retry:focus-visible {
+  outline: 2px solid var(--color-primary-400);
+  outline-offset: 2px;
 }
 
 .apps-sidebar__gauge {

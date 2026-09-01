@@ -16,6 +16,8 @@ export interface DomainAssignment {
  * which domains are attached to a lease should go through here:
  *   - `executeAppStatus` (compositeQueries.ts) — surfacing domains and emitting
  *     the CustomDomainCard.
+ *   - `useRegistryReconciliation` — refreshing the durable registry cache from
+ *     authoritative tenant lease-list records.
  *   - `executeSetCustomDomain` (compositeTransactions.ts) — looking up the
  *     current domain on the matched LeaseItem to decide attach / change / clear.
  *

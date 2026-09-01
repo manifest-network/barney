@@ -83,6 +83,19 @@ function makeMessage(overrides: Partial<AIStore['messages'][0]> = {}): AIStore['
   };
 }
 
+function updateWalletContext(
+  store: Store,
+  updates: Partial<Pick<AIStore, 'clientManager' | 'address' | 'signing' | 'chainId'>>,
+): void {
+  const state = store.getState();
+  state.setWalletContext({
+    clientManager: 'clientManager' in updates ? updates.clientManager ?? null : state.clientManager,
+    address: 'address' in updates ? updates.address : state.address,
+    signing: 'signing' in updates ? updates.signing : state.signing,
+    chainId: updates.chainId ?? state.chainId,
+  });
+}
+
 describe('aiStore', () => {
   let store: Store;
 
@@ -195,11 +208,11 @@ describe('aiStore', () => {
 
   // ---- Wallet setters ----
 
-  describe('setAddress', () => {
+  describe('setWalletContext', () => {
     it('clears tool cache and deployProgress on change', () => {
       store.getState().cacheToolResult('key1', { success: true, data: 'x' });
       store.setState({ deployProgress: { phase: 'ready' } as AIStore['deployProgress'] });
-      store.getState().setAddress('manifest1abc');
+      updateWalletContext(store, { address: 'manifest1abc' });
       expect(store.getState()._toolCache.size).toBe(0);
       expect(store.getState().deployProgress).toBeNull();
     });
@@ -218,33 +231,124 @@ describe('aiStore', () => {
           ],
         ]) as AIStore['dnsStatuses'],
       );
-      store.getState().setAddress('manifest1abc');
+      updateWalletContext(store, { address: 'manifest1abc' });
       expect(store.getState().dnsStatuses.size).toBe(0);
     });
 
     it('does not clear cache if address is unchanged', () => {
-      store.getState().setAddress('manifest1abc');
+      updateWalletContext(store, { address: 'manifest1abc' });
       store.getState().cacheToolResult('key1', { success: true, data: 'x' });
-      store.getState().setAddress('manifest1abc');
+      updateWalletContext(store, { address: 'manifest1abc' });
       expect(store.getState()._toolCache.size).toBe(1);
     });
-  });
 
-  describe('setClientManager', () => {
     it('stores the client manager', () => {
       const mgr = {} as AIStore['clientManager'];
-      store.getState().setClientManager(mgr);
+      updateWalletContext(store, { clientManager: mgr });
       expect(store.getState().clientManager).toBe(mgr);
+    });
+
+    it('stores and clears the signing context', () => {
+      const ctx = {} as AIStore['signing'];
+      updateWalletContext(store, { signing: ctx });
+      expect(store.getState().signing).toBe(ctx);
+      updateWalletContext(store, { signing: undefined });
+      expect(store.getState().signing).toBeUndefined();
     });
   });
 
-  describe('setSigning', () => {
-    it('stores and clears the signing context', () => {
-      const ctx = {} as AIStore['signing'];
-      store.getState().setSigning(ctx);
-      expect(store.getState().signing).toBe(ctx);
-      store.getState().setSigning(undefined);
-      expect(store.getState().signing).toBeUndefined();
+  describe('authorization context invalidation', () => {
+    it.each(['address', 'chain', 'client', 'signing'] as const)(
+      'atomically cancels authorization state when %s changes',
+      (changedField) => {
+        const managerA = { id: 'client-a' } as unknown as NonNullable<AIStore['clientManager']>;
+        const managerB = { id: 'client-b' } as unknown as NonNullable<AIStore['clientManager']>;
+        const signingA = { id: 'signer-a' } as unknown as NonNullable<AIStore['signing']>;
+        const signingB = { id: 'signer-b' } as unknown as NonNullable<AIStore['signing']>;
+
+        store.getState().setWalletContext({
+          clientManager: managerA,
+          address: 'manifest1a',
+          signing: signingA,
+          chainId: 'chain-a',
+        });
+        const bound = store.getState();
+        const controller = new AbortController();
+        const abortSpy = vi.spyOn(controller, 'abort');
+        const cancelRafSpy = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+        store.setState({
+          isStreaming: true,
+          abortController: controller,
+          _rafId: 17,
+          _pendingStreamUpdate: { messageId: 'tool-1', content: 'late update' },
+          pendingPayload: { bytes: new Uint8Array([1]), size: 1, hash: 'a' },
+          deployProgress: { phase: 'creating_lease', operation: 'deploy' },
+          messages: [{
+            id: 'tool-1', role: 'tool', content: 'Confirm?', timestamp: 1,
+            isStreaming: false, awaitingConfirmation: true,
+          }],
+          pendingConfirmation: {
+            id: 'pending-1',
+            messageId: 'tool-1',
+            action: {
+              originAddress: bound.address!,
+              chainId: bound.chainId,
+              clientGeneration: bound.clientGeneration,
+              signerGeneration: bound.signerGeneration,
+              id: 'action-1',
+              toolName: 'fund_credits',
+              args: { address: bound.address, amount: 1 },
+              description: 'Fund?',
+            },
+          },
+        });
+
+        const beforeEpoch = store.getState().authorizationEpoch;
+        store.getState().setWalletContext({
+          clientManager: changedField === 'client' ? managerB : managerA,
+          address: changedField === 'address' ? 'manifest1b' : 'manifest1a',
+          signing: changedField === 'signing' ? signingB : signingA,
+          chainId: changedField === 'chain' ? 'chain-b' : 'chain-a',
+        });
+
+        const state = store.getState();
+        expect(abortSpy).toHaveBeenCalledOnce();
+        expect(cancelRafSpy).toHaveBeenCalledWith(17);
+        expect(state.authorizationEpoch).toBe(beforeEpoch + 1);
+        expect(state.pendingConfirmation).toBeNull();
+        expect(state.pendingPayload).toBeNull();
+        expect(state.deployProgress).toBeNull();
+        expect(state.abortController).toBeNull();
+        expect(state._pendingStreamUpdate).toBeNull();
+        expect(state._rafId).toBeNull();
+        expect(state.isStreaming).toBe(false);
+        expect(state.messages[0].content).toContain('cancelled and was not submitted');
+        expect(state.messages[0].error).toContain('cancelled and was not submitted');
+        expect(state.messages[0].error).not.toBe('authorization_context_changed');
+        expect(state.messages[0].awaitingConfirmation).toBe(false);
+        expect(state.messages).toHaveLength(1);
+
+        cancelRafSpy.mockRestore();
+      },
+    );
+
+    it('does not let a file read from the old identity restore pendingPayload', async () => {
+      updateWalletContext(store, { address: 'manifest1a' });
+      let resolveRead!: (value: ArrayBuffer) => void;
+      const file = {
+        name: 'manifest.json',
+        size: 18,
+        type: 'application/json',
+        arrayBuffer: () => new Promise<ArrayBuffer>((resolve) => { resolveRead = resolve; }),
+      } as unknown as File;
+
+      const attaching = store.getState().attachPayload(file);
+      updateWalletContext(store, { address: 'manifest1b' });
+      resolveRead(new TextEncoder().encode('{"image":"nginx"}').buffer as ArrayBuffer);
+
+      const result = await attaching;
+      expect(result.error).toContain('cancelled');
+      expect(store.getState().pendingPayload).toBeNull();
     });
   });
 
@@ -314,7 +418,7 @@ describe('aiStore', () => {
 
   describe('tool cache', () => {
     it('generates keys that include address', () => {
-      store.getState().setAddress('addr1');
+      updateWalletContext(store, { address: 'addr1' });
       const key = store.getState().getToolCacheKey('list_apps', { state: 'running' });
       expect(key).toContain('addr1');
       expect(key).toContain('list_apps');

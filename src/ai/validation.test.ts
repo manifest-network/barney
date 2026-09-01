@@ -217,6 +217,14 @@ describe('validateChatHistory', () => {
     expect(result[0].awaitingConfirmation).toBe(true);
   });
 
+  it('preserves transactionInFlight for broadcast-aware reload recovery', () => {
+    const result = validateChatHistory([{
+      id: 'm1', role: 'tool', content: 'Deploy?', timestamp: 1,
+      transactionInFlight: true, toolCallId: 'tc1', toolName: 'deploy_app',
+    }]);
+    expect(result[0].transactionInFlight).toBe(true);
+  });
+
   it('preserves local flag for synthesized messages', () => {
     const result = validateChatHistory([
       { id: 'm1', role: 'assistant', content: '/help canned text', timestamp: 1, local: true },
@@ -230,6 +238,7 @@ describe('validateChatHistory', () => {
     ]);
     expect(result[0].isStreaming).toBe(false);
     expect(result[0].awaitingConfirmation).toBe(false);
+    expect(result[0].transactionInFlight).toBe(false);
     expect(result[0].local).toBe(false);
   });
 

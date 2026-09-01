@@ -169,7 +169,11 @@ describe('serializeManifest', () => {
 
 describe('parseEditableManifest', () => {
   function makeAction(json: string) {
-    return { id: '1', toolName: 'deploy_app', args: { _generatedManifest: json }, description: '' };
+    return {
+      originAddress: 'manifest1test', chainId: 'manifest-test',
+      clientGeneration: 1, signerGeneration: 1,
+      id: '1', toolName: 'deploy_app', args: { _generatedManifest: json }, description: '',
+    };
   }
 
   it('extracts _notice into notice', () => {

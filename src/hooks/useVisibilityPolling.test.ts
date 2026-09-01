@@ -3,6 +3,7 @@ import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { useVisibilityPolling } from './useVisibilityPolling';
+import { withTimeout } from '../api/utils';
 
 vi.mock('../utils/errors', () => ({ logError: vi.fn() }));
 
@@ -14,7 +15,10 @@ function renderHook(
   callback: () => Promise<boolean | void>,
   intervalMs: number,
   options?: Parameters<typeof useVisibilityPolling>[2],
-): { unmount: () => void } {
+): {
+  unmount: () => void;
+  rerender: (nextOptions?: Parameters<typeof useVisibilityPolling>[2]) => void;
+} {
   // Unmount any previous hook from this test
   currentCleanup?.();
 
@@ -22,14 +26,22 @@ function renderHook(
   document.body.appendChild(container);
   const root = createRoot(container);
 
-  function TestComponent() {
-    useVisibilityPolling(callback, intervalMs, options);
+  function TestComponent({ hookOptions }: {
+    hookOptions?: Parameters<typeof useVisibilityPolling>[2];
+  }) {
+    useVisibilityPolling(callback, intervalMs, hookOptions);
     return null;
   }
 
   flushSync(() => {
-    root.render(createElement(TestComponent));
+    root.render(createElement(TestComponent, { hookOptions: options }));
   });
+
+  const rerender = (nextOptions?: Parameters<typeof useVisibilityPolling>[2]) => {
+    flushSync(() => {
+      root.render(createElement(TestComponent, { hookOptions: nextOptions }));
+    });
+  };
 
   const unmount = () => {
     flushSync(() => { root.unmount(); });
@@ -38,7 +50,7 @@ function renderHook(
   };
 
   currentCleanup = unmount;
-  return { unmount };
+  return { unmount, rerender };
 }
 
 function setDocumentHidden(hidden: boolean) {
@@ -141,6 +153,36 @@ describe('useVisibilityPolling', () => {
     expect(cb).toHaveBeenCalledTimes(3);
   });
 
+  it('restarts immediately on restartKey changes without bypassing visibility guards', async () => {
+    const cb = vi.fn().mockResolvedValue(true);
+    const { rerender } = renderHook(cb, 5_000, { restartKey: 'wallet-a' });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    // An unrelated option-object change does not restart the lifecycle.
+    rerender({ restartKey: 'wallet-a', backoff: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    rerender({ restartKey: 'wallet-b', backoff: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cb).toHaveBeenCalledTimes(2);
+
+    // A context switch while hidden stays dormant until the regular
+    // visibility handler resumes the poller.
+    setDocumentHidden(true);
+    fireVisibilityChange();
+    rerender({ restartKey: 'wallet-c', backoff: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cb).toHaveBeenCalledTimes(2);
+
+    setDocumentHidden(false);
+    fireVisibilityChange();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cb).toHaveBeenCalledTimes(3);
+  });
+
   it('applies exponential backoff on consecutive failures', async () => {
     const cb = vi.fn().mockResolvedValue(false);
     renderHook(cb, 1_000, { backoff: true, maxBackoffMultiplier: 8 });
@@ -160,6 +202,33 @@ describe('useVisibilityPolling', () => {
     expect(cb).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(cb).toHaveBeenCalledTimes(3);
+  });
+
+  it('runs a later tick after a deadline releases a stalled callback', async () => {
+    const work = vi.fn()
+      .mockImplementationOnce(() => new Promise(() => undefined))
+      .mockResolvedValue(undefined);
+    const cb = vi.fn(async () => {
+      try {
+        await withTimeout(work(), 100, 'Polling test work');
+      } catch {
+        return false;
+      }
+    });
+    renderHook(cb, 1_000, { backoff: true });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(work).toHaveBeenCalledTimes(1);
+
+    // The callback deadline settles the first tick. One failure doubles the
+    // next delay, proving the real poller's in-flight guard was released.
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(cb).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(cb).toHaveBeenCalledTimes(2);
+    expect(work).toHaveBeenCalledTimes(2);
   });
 
   it('caps backoff at maxBackoffMultiplier', async () => {

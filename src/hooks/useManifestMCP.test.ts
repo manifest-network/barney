@@ -131,6 +131,7 @@ describe('useManifestMCP signing capability gate', () => {
 
     // Connected: clientManager present.
     expect(captured?.clientManager).toBe(mockManager);
+    expect(captured?.clientAddress).toBe('manifest1test');
     expect(captured?.isConnected).toBe(true);
   });
 
@@ -145,6 +146,7 @@ describe('useManifestMCP signing capability gate', () => {
     expect(mockCreateSignerAdapter).not.toHaveBeenCalled();
     // Chain TXs/queries still work: clientManager is present and connected.
     expect(captured?.clientManager).toBe(mockManager);
+    expect(captured?.clientAddress).toBe('manifest1test');
     expect(captured?.isConnected).toBe(true);
   });
 
@@ -158,6 +160,7 @@ describe('useManifestMCP signing capability gate', () => {
     render();
     expect(captured?.signing).toBeUndefined();
     expect(captured?.clientManager).toBeNull();
+    expect(captured?.clientAddress).toBeUndefined();
     expect(captured?.isConnected).toBe(false);
   });
 });

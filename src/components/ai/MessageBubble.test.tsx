@@ -18,6 +18,7 @@ vi.mock('../../contexts/aiStoreContext', () => ({
 }));
 
 import { MessageBubble } from './MessageBubble';
+import { TRANSACTION_FINISHED_AFTER_CONTEXT_CHANGE_MESSAGE } from '../../stores/authorization';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -82,6 +83,19 @@ describe('MessageBubble — ERROR_PATTERNS for tier catalog', () => {
   it('does not match unrelated error text', () => {
     render(makeError('Some unrelated tool failure happened.'));
     expect(findButton(/^Retry$/)).toBeNull();
+  });
+
+  it('does not derive error suggestions from neutral message content', () => {
+    render({
+      id: 'm-neutral',
+      role: 'assistant',
+      content: `${TRANSACTION_FINISHED_AFTER_CONTEXT_CHANGE_MESSAGE} Added 5 credits.`,
+      timestamp: Date.now(),
+      local: true,
+    });
+
+    expect(container.textContent).toContain('Added 5 credits');
+    expect(findButton(/^Check credits$/)).toBeNull();
   });
 
   it('logs but does not throw when retrySkuTiers rejects', async () => {

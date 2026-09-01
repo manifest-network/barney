@@ -193,6 +193,10 @@ describe('requestBatchDeploy', () => {
       const priorConfirmation = {
         id: 'prior-1',
         action: {
+          originAddress: 'manifest1test',
+          chainId: store.getState().chainId,
+          clientGeneration: store.getState().clientGeneration,
+          signerGeneration: store.getState().signerGeneration,
           id: 'prior-action',
           toolName: 'deploy_app',
           args: { app_name: 'web' },

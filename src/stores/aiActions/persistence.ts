@@ -62,6 +62,20 @@ export function loadHistory(): ChatMessage[] {
  */
 function rehydrateChatHistory(msgs: ChatMessage[]): ChatMessage[] {
   return msgs.map((m) => {
+    // A confirmed transaction can outlive the page. Its broadcast cannot be
+    // rolled back, so preserve the row and close it with an outcome-unknown
+    // warning rather than pretending confirmation was still pending.
+    if (m.role === 'tool' && m.transactionInFlight) {
+      const detail = 'The page reloaded while this transaction was in progress. It may already have been submitted; check its status before retrying.';
+      return {
+        ...m,
+        content: detail,
+        error: detail,
+        isStreaming: false,
+        awaitingConfirmation: false,
+        transactionInFlight: false,
+      };
+    }
     // Streaming-in-progress on disk → interrupted. Drop the streaming flag,
     // strip any partial toolCalls (they may contain truncated JSON in
     // function.arguments and would confuse the model on replay), and
@@ -141,11 +155,18 @@ export function clearHistoryStorage(): void {
   localStorage.removeItem(STORAGE_KEY_HISTORY);
 }
 
-/** Count the messages saveHistory would persist (streaming ones are excluded). */
-function countPersistable(messages: ChatMessage[]): number {
-  let n = 0;
-  for (const m of messages) if (!m.isStreaming) n++;
-  return n;
+/** Detect changes to the non-streaming subset without serializing on every
+ * token frame. Store actions preserve object identity for untouched messages,
+ * so a same-length transition (confirmation → in-flight, in-flight → result)
+ * is observable while streaming assistant updates remain free. */
+function persistableMessagesChanged(
+  messages: ChatMessage[],
+  previousMessages: ChatMessage[],
+): boolean {
+  const persistable = messages.filter((message) => !message.isStreaming);
+  const previousPersistable = previousMessages.filter((message) => !message.isStreaming);
+  if (persistable.length !== previousPersistable.length) return true;
+  return persistable.some((message, index) => message !== previousPersistable[index]);
 }
 
 /**
@@ -181,14 +202,10 @@ export function setupPersistenceSubscriptions(store: StoreApi<AIStore>): () => v
         saveHistory(state.messages, state.settings.saveHistory);
         return;
       }
-      // Streaming: the ~60/s per-frame updates only mutate the streaming
-      // assistant message, which saveHistory excludes — they don't change the
-      // persisted subset, so skip them. But a NON-streaming message appended or
-      // finalized mid-turn (the user's message, a tool result, the final
-      // assistant) grows the persisted subset and must be written immediately,
-      // else a reload/crash mid-turn loses it. Gate on the persisted count, not
-      // on isStreaming.
-      if (countPersistable(state.messages) !== countPersistable(prev.messages)) {
+      // Streaming: skip ~60/s token updates, but persist any added, removed, or
+      // changed NON-streaming row immediately. Comparing references catches
+      // same-count state changes such as pending confirmation → confirmed TX.
+      if (persistableMessagesChanged(state.messages, prev.messages)) {
         saveHistory(state.messages, state.settings.saveHistory);
       }
     }

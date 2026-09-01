@@ -19,6 +19,12 @@ import {
 } from '../config/constants';
 import type { ChatMessage, PendingConfirmation, MessageCard } from '../contexts/aiTypes';
 import type { CustomDomainStatusKind } from '../utils/customDomainStatus';
+import { CHAIN_ID } from '../config/chain';
+import {
+  ACTIVE_WORK_CANCELLED_MESSAGE,
+  AUTHORIZATION_CANCELLED_MESSAGE,
+  TRANSACTION_INTERRUPTED_MESSAGE,
+} from './authorization';
 
 /** Per-domain status report stored in the dnsStatuses map. The map key is
  *  `${leaseUuid}::${customDomain}` so multi-domain stacks don't collide. */
@@ -86,6 +92,16 @@ export interface AIStore {
   clientManager: CosmosClientManager | null;
   address: string | undefined;
   signing: SigningContext | undefined;
+  chainId: string;
+  /** Monotonic identities for concrete SDK client/signer instances. */
+  clientGeneration: number;
+  signerGeneration: number;
+  /** Changes whenever any authorization-relevant wallet context changes. Async
+   * actions capture this epoch so late results cannot repopulate cleared state. */
+  authorizationEpoch: number;
+  /** Tool message owned by a confirmed transaction currently executing. Unlike
+   * a pending card, this operation may already have crossed its broadcast seam. */
+  activeTransactionMessageId: string | null;
   abortController: AbortController | null;
   lastMessageTime: number;
   _toolCache: Map<string, { result: ToolResult; timestamp: number }>;
@@ -103,9 +119,12 @@ export interface AIStore {
   getCurrentMessages: (excludeId?: string) => ChatMessage[];
   attachPayload: (file: File) => Promise<{ error?: string }>;
   clearPayload: () => void;
-  setClientManager: (manager: CosmosClientManager | null) => void;
-  setAddress: (address: string | undefined) => void;
-  setSigning: (ctx: SigningContext | undefined) => void;
+  setWalletContext: (context: {
+    clientManager: CosmosClientManager | null;
+    address: string | undefined;
+    signing: SigningContext | undefined;
+    chainId: string;
+  }) => void;
   setDnsStatuses: (statuses: ReadonlyMap<string, DnsStatusEntry>) => void;
   updateSettings: (settings: Partial<AISettings>) => void;
   clearHistory: () => void;
@@ -129,6 +148,74 @@ export interface AIStore {
   destroy: () => void;
 }
 
+function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
+  const messages = state.messages.map((message) => {
+    if (state.pendingConfirmation?.messageId === message.id) {
+      return {
+        ...message,
+        content: AUTHORIZATION_CANCELLED_MESSAGE,
+        error: AUTHORIZATION_CANCELLED_MESSAGE,
+        isStreaming: false,
+        awaitingConfirmation: false,
+        transactionInFlight: false,
+      };
+    }
+
+    if (state.activeTransactionMessageId === message.id) {
+      return {
+        ...message,
+        content: TRANSACTION_INTERRUPTED_MESSAGE,
+        error: TRANSACTION_INTERRUPTED_MESSAGE,
+        isStreaming: false,
+        awaitingConfirmation: false,
+        transactionInFlight: false,
+      };
+    }
+
+    if (message.isStreaming) {
+      if (message.role === 'tool') {
+        return {
+          ...message,
+          content: ACTIVE_WORK_CANCELLED_MESSAGE,
+          error: ACTIVE_WORK_CANCELLED_MESSAGE,
+          isStreaming: false,
+          awaitingConfirmation: false,
+          transactionInFlight: false,
+        };
+      }
+      return { ...message, isStreaming: false };
+    }
+
+    return message;
+  });
+
+  const hadActiveWork = state.isStreaming
+    || state.abortController !== null
+    || state.pendingConfirmation !== null
+    || state.activeTransactionMessageId !== null
+    || state.pendingPayload !== null
+    || (state.deployProgress !== null
+      && state.deployProgress.phase !== 'ready'
+      && state.deployProgress.phase !== 'failed');
+
+  // Pending and in-flight transactions already have a durable tool row whose
+  // inline alert explains the closure. Add a local assistant notice only for
+  // active work that has no transaction row to own that status.
+  if (hadActiveWork
+      && state.pendingConfirmation === null
+      && state.activeTransactionMessageId === null) {
+    messages.push({
+      id: generateMessageId(),
+      role: 'assistant',
+      content: ACTIVE_WORK_CANCELLED_MESSAGE,
+      timestamp: Date.now(),
+      local: true,
+    });
+  }
+
+  return trimMessages(messages);
+}
+
 export const createAIStore = () =>
   createStore<AIStore>((set, get) => ({
     // --- Initial state ---
@@ -146,6 +233,11 @@ export const createAIStore = () =>
     clientManager: null,
     address: undefined,
     signing: undefined,
+    chainId: CHAIN_ID,
+    clientGeneration: 0,
+    signerGeneration: 0,
+    authorizationEpoch: 0,
+    activeTransactionMessageId: null,
     abortController: null,
     lastMessageTime: 0,
     _toolCache: new Map(),
@@ -204,28 +296,37 @@ export const createAIStore = () =>
     },
 
     // --- Wallet setters ---
-    setClientManager: (manager) => {
-      set({ clientManager: manager });
-    },
+    setWalletContext: (context) => {
+      const current = get();
+      const clientChanged = context.clientManager !== current.clientManager;
+      const addressChanged = context.address !== current.address;
+      const signerChanged = context.signing !== current.signing;
+      const chainChanged = context.chainId !== current.chainId;
+      if (!clientChanged && !addressChanged && !signerChanged && !chainChanged) return;
 
-    setAddress: (address) => {
-      if (address !== get().address) {
-        // Wallet identity is part of both the transaction and paid-relay trust
-        // boundaries. Do not let work begun for the prior wallet keep streaming.
-        get().abortController?.abort();
-        get()._toolCache.clear();
-        // Drop dnsStatuses too — entries belong to the prior wallet's running
-        // apps and would otherwise leak across wallets and grow the map on
-        // every switch. Also bounds (does not fully eliminate) the race where
-        // an in-flight DoH probe from the prior wallet resolves after this
-        // call; any post-reset resolution is overwritten on the next 30s tick.
-        set({ deployProgress: null, dnsStatuses: new Map() });
-      }
-      set({ address });
-    },
+      // Abort first, then publish the new identity and the complete cleared
+      // authorization state in one Zustand update. The epoch/generation checks
+      // in async actions make any callbacks already queued by the old work inert.
+      current.abortController?.abort();
+      if (current._rafId !== null) cancelAnimationFrame(current._rafId);
+      current._toolCache.clear();
 
-    setSigning: (ctx) => {
-      set({ signing: ctx });
+      set({
+        ...context,
+        clientGeneration: current.clientGeneration + (clientChanged ? 1 : 0),
+        signerGeneration: current.signerGeneration + (signerChanged ? 1 : 0),
+        authorizationEpoch: current.authorizationEpoch + 1,
+        pendingConfirmation: null,
+        activeTransactionMessageId: null,
+        pendingPayload: null,
+        deployProgress: null,
+        dnsStatuses: new Map(),
+        abortController: null,
+        isStreaming: false,
+        _pendingStreamUpdate: null,
+        _rafId: null,
+        messages: messagesAfterAuthorizationChange(current),
+      });
     },
 
     setDnsStatuses: (statuses) => {
@@ -234,6 +335,7 @@ export const createAIStore = () =>
 
     // --- Payload attachment ---
     attachPayload: async (file) => {
+      const authorizationEpoch = get().authorizationEpoch;
       const validation = validateFile(file);
       if (!validation.valid) {
         return { error: validation.error };
@@ -250,6 +352,10 @@ export const createAIStore = () =>
 
         const hashBytes = await sha256(bytes);
         const hash = toHex(hashBytes);
+
+        if (get().authorizationEpoch !== authorizationEpoch) {
+          return { error: ACTIVE_WORK_CANCELLED_MESSAGE };
+        }
 
         const attachment: PayloadAttachment = {
           bytes,

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   executeSetCustomDomain,
   executeConfirmedSetCustomDomain,
@@ -23,7 +23,10 @@ vi.mock('../../utils/errors', () => ({ logError: vi.fn() }));
 
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
-import { asFqdn, asLeaseUuid } from '@manifest-network/manifest-sdk';
+import {
+  asFqdn,
+  asLeaseUuid,
+} from '@manifest-network/manifest-sdk';
 import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
 import type { SetItemCustomDomainResult } from '@manifest-network/manifest-sdk/deploy';
 
@@ -91,6 +94,17 @@ describe('executeSetCustomDomain', () => {
     );
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error).toMatch(/lease items|try again/i);
+  });
+
+  it('returns a clean error when the lease is not found', async () => {
+    const app = makeApp();
+    vi.mocked(getLeaseItemsForLease).mockResolvedValue(null);
+    const r = await executeSetCustomDomain(
+      { app_name: 'myapp', custom_domain: 'app.example.com' },
+      makeOptions(app),
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error).toMatch(/lease items|closed/i);
   });
 
   it('returns error when app not found', async () => {
@@ -343,6 +357,7 @@ describe('executeSetCustomDomain', () => {
 
 describe('executeConfirmedSetCustomDomain', () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.useRealTimers());
 
   const fakeClientManager = {} as CosmosClientManager;
 
@@ -506,6 +521,94 @@ describe('executeConfirmedSetCustomDomain', () => {
     );
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error).toBe('reserved suffix');
+  });
+
+  it('waits for confirmation before updating the registry and threads the chat signal', async () => {
+    const app = makeApp({ customDomains: [] });
+    const registry = makeRegistry([app]);
+    const controller = new AbortController();
+    let finish!: (result: SetItemCustomDomainResult) => void;
+    vi.mocked(setItemCustomDomain).mockImplementationOnce(
+      (_ctx, _input, callOptions) => new Promise((resolve, reject) => {
+        finish = resolve;
+        if (callOptions?.waitForConfirmation !== true) {
+          reject(new Error('executor did not request confirmation'));
+          return;
+        }
+        const passedSignal = (callOptions as { signal?: AbortSignal } | undefined)?.signal;
+        if (passedSignal !== controller.signal) {
+          reject(new Error('executor did not thread the chat signal'));
+        }
+      }),
+    );
+
+    const executing = executeConfirmedSetCustomDomain(
+      {
+        app_name: app.name,
+        leaseUuid: app.leaseUuid,
+        serviceName: 'web',
+        customDomain: 'app.example.com',
+      },
+      fakeClientManager,
+      { ...options(), appRegistry: registry, signal: controller.signal },
+    );
+    await Promise.resolve();
+    expect(registry.updateApp).not.toHaveBeenCalled();
+    finish(monoResult({ lease_uuid: app.leaseUuid, service_name: 'web' }));
+    const r = await executing;
+
+    expect(r.success).toBe(true);
+    expect(vi.mocked(setItemCustomDomain).mock.calls[0][2]).toEqual({
+      waitForConfirmation: true,
+      signal: controller.signal,
+    });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDR, app.leaseUuid, {
+      customDomains: [{ serviceName: 'web', customDomain: 'app.example.com' }],
+    });
+  });
+
+  it('lets Stop cancel the SDK before a domain transaction is submitted', async () => {
+    const app = makeApp({ customDomains: [] });
+    const registry = makeRegistry([app]);
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    vi.mocked(setItemCustomDomain).mockImplementationOnce(
+      (_ctx, _input, callOptions) => new Promise((_resolve, reject) => {
+        receivedSignal = (callOptions as { signal?: AbortSignal } | undefined)?.signal;
+        if (!receivedSignal) {
+          reject(new Error('executor did not thread the chat signal'));
+          return;
+        }
+        receivedSignal.addEventListener('abort', () => {
+          reject(new DOMException('This operation was aborted', 'AbortError'));
+        }, { once: true });
+      }),
+    );
+
+    const executing = executeConfirmedSetCustomDomain(
+      {
+        app_name: app.name,
+        leaseUuid: app.leaseUuid,
+        serviceName: 'web',
+        customDomain: 'app.example.com',
+      },
+      fakeClientManager,
+      { ...options(), appRegistry: registry, signal: controller.signal },
+    );
+    await Promise.resolve();
+    // Assert before aborting so deleting the production signal wiring fails
+    // immediately instead of leaving the test pending until Vitest's timeout.
+    expect(receivedSignal).toBe(controller.signal);
+    controller.abort();
+    const result = await executing;
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('aborted');
+    expect(vi.mocked(setItemCustomDomain).mock.calls[0][2]).toMatchObject({
+      waitForConfirmation: true,
+      signal: controller.signal,
+    });
+    expect(registry.updateApp).not.toHaveBeenCalled();
   });
 
   it('returns error when mono helper resolves with non-zero code (chain rejection)', async () => {

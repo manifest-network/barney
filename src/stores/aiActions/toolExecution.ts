@@ -5,6 +5,7 @@
 import type { ToolCall } from '../../api/morpheus';
 import { getToolCallDescription, isValidToolName } from '../../ai/tools';
 import { executeTool, type ToolResult } from '../../ai/toolExecutor';
+import type { TransactionAuthorization } from '../../ai/toolExecutor/types';
 import { buildPayloadFromManifest, type SingleDeployEntry } from '../../ai/toolExecutor/compositeTransactions';
 import { sanitizeToolArgs } from '../../ai/validation';
 import type { StreamResult } from '../../ai/streamUtils';
@@ -12,6 +13,11 @@ import { logError } from '../../utils/errors';
 import { bigIntReplacer } from '../../utils/json';
 import { validateAppName } from '../../registry/appRegistry';
 import type { AIStore } from '../aiStore';
+import {
+  AUTHORIZATION_CANCELLED_MESSAGE,
+  captureTransactionAuthorization,
+  isTransactionAuthorizationCurrent,
+} from '../authorization';
 import {
   generateMessageId,
   trimMessages,
@@ -30,16 +36,20 @@ async function handleToolCall(
   get: Get,
   set: Set,
   toolCall: ToolCall,
-): Promise<ToolResult> {
+  authorizationEpoch: number,
+): Promise<{ result: ToolResult; authorization: TransactionAuthorization | null }> {
   if (!isValidToolName(toolCall.function.name)) {
-    return { success: false, error: `Unknown tool: ${toolCall.function.name}` };
+    return {
+      result: { success: false, error: `Unknown tool: ${toolCall.function.name}` },
+      authorization: null,
+    };
   }
 
   const sanitizedArgs = sanitizeToolArgs(toolCall.function.arguments);
 
   const cacheKey = get().getToolCacheKey(toolCall.function.name, sanitizedArgs);
   const cachedResult = get().getCachedToolResult(cacheKey);
-  if (cachedResult) return cachedResult;
+  if (cachedResult) return { result: cachedResult, authorization: null };
 
   // Clear stale deploy progress, but preserve active deploys
   const { deployProgress } = get();
@@ -48,22 +58,42 @@ async function handleToolCall(
   }
 
   const { clientManager, address, signing, abortController, pendingPayload, skuTiers } = get();
+  const authorization = captureTransactionAuthorization(get());
 
   const result = await executeTool(toolCall.function.name, sanitizedArgs, {
     clientManager,
     address,
     signing,
-    onProgress: (progress) => set({ deployProgress: { ...progress } }),
+    onProgress: (progress) => {
+      if (get().authorizationEpoch === authorizationEpoch) {
+        set({ deployProgress: { ...progress } });
+      }
+    },
     appRegistry: getAppRegistryAccess(),
     signal: abortController?.signal,
     tiers: skuTiers.tiers,
   }, pendingPayload ?? undefined);
 
+  if (get().authorizationEpoch !== authorizationEpoch) {
+    return {
+      result: { success: false, error: AUTHORIZATION_CANCELLED_MESSAGE },
+      authorization,
+    };
+  }
+
+  if (result.requiresConfirmation
+      && (!authorization || !isTransactionAuthorizationCurrent(get(), authorization))) {
+    return {
+      result: { success: false, error: AUTHORIZATION_CANCELLED_MESSAGE },
+      authorization,
+    };
+  }
+
   if (result.success && !result.requiresConfirmation) {
     get().cacheToolResult(cacheKey, result);
   }
 
-  return result;
+  return { result, authorization };
 }
 
 /** Collected confirmation from a single tool call. */
@@ -71,6 +101,28 @@ interface CollectedConfirmation {
   toolCall: ToolCall;
   toolMessageId: string;
   result: ToolResult & { requiresConfirmation: true };
+  authorization: TransactionAuthorization;
+}
+
+function markConfirmationsAuthorizationCancelled(
+  get: Get,
+  set: Set,
+  confirmations: readonly CollectedConfirmation[],
+): void {
+  const messageIds = new Set(confirmations.map((confirmation) => confirmation.toolMessageId));
+  set({
+    messages: get().messages.map((message) =>
+      messageIds.has(message.id)
+        ? {
+            ...message,
+            content: AUTHORIZATION_CANCELLED_MESSAGE,
+            error: AUTHORIZATION_CANCELLED_MESSAGE,
+            isStreaming: false,
+            awaitingConfirmation: false,
+          }
+        : message
+    ),
+  });
 }
 
 /** Set a single pending confirmation on the store. */
@@ -79,6 +131,7 @@ function setSingleConfirmation(
   set: Set,
   conf: CollectedConfirmation,
 ): void {
+  if (!isTransactionAuthorizationCurrent(get(), conf.authorization)) return;
   const toolName = conf.result.pendingAction?.toolName || conf.toolCall.function.name;
   const actionPayload = (toolName === 'deploy_app' || toolName === 'update_app')
     ? get().pendingPayload ?? undefined
@@ -87,13 +140,14 @@ function setSingleConfirmation(
   set({
     pendingConfirmation: {
       id: generateMessageId(),
-      action: {
+      action: Object.freeze({
+        ...conf.authorization,
         id: conf.toolCall.id,
         toolName,
         args: conf.result.pendingAction?.args || {},
         description: conf.result.confirmationMessage || 'Confirm action?',
         payload: actionPayload,
-      },
+      }),
       messageId: conf.toolMessageId,
     },
   });
@@ -117,6 +171,7 @@ async function mergeBatchDeployConfirmations(
   get: Get,
   set: Set,
   deployConfs: CollectedConfirmation[],
+  authorizationEpoch: number,
 ): Promise<boolean> {
   const entries: SingleDeployEntry[] = [];
   const address = get().address;
@@ -130,6 +185,12 @@ async function mergeBatchDeployConfirmations(
       let payload = typeof args._generatedManifest === 'string'
         ? await buildPayloadFromManifest(args._generatedManifest)
         : undefined;
+
+      if (get().authorizationEpoch !== authorizationEpoch
+          || !isTransactionAuthorizationCurrent(get(), conf.authorization)) {
+        markConfirmationsAuthorizationCancelled(get, set, deployConfs);
+        return false;
+      }
 
       // Fall back to pending payload from store (file-upload path) — only once
       if (!payload && !pendingPayloadUsed) {
@@ -232,15 +293,22 @@ async function mergeBatchDeployConfirmations(
   const description = `Deploy ${entries.length} apps: ${appNames}?`;
   const lastConf = deployConfs[deployConfs.length - 1];
 
+  if (get().authorizationEpoch !== authorizationEpoch
+      || !isTransactionAuthorizationCurrent(get(), lastConf.authorization)) {
+    markConfirmationsAuthorizationCancelled(get, set, deployConfs);
+    return false;
+  }
+
   set({
     pendingConfirmation: {
       id: generateMessageId(),
-      action: {
+      action: Object.freeze({
+        ...lastConf.authorization,
         id: lastConf.toolCall.id,
         toolName: 'batch_deploy',
         args: { entries } as unknown as Record<string, unknown>,
         description,
-      },
+      }),
       messageId: lastConf.toolMessageId,
     },
   });
@@ -284,6 +352,7 @@ async function coalesceConfirmations(
   get: Get,
   set: Set,
   collected: CollectedConfirmation[],
+  authorizationEpoch: number,
 ): Promise<ProcessToolCallsResult> {
   const deployConfs = collected.filter(
     (c) => (c.result.pendingAction?.toolName || c.toolCall.function.name) === 'deploy_app',
@@ -292,7 +361,10 @@ async function coalesceConfirmations(
 
   // Path 1: 2+ deploy_app — try to merge into a batch.
   if (deployConfs.length >= 2) {
-    const merged = await mergeBatchDeployConfirmations(get, set, deployConfs);
+    const merged = await mergeBatchDeployConfirmations(get, set, deployConfs, authorizationEpoch);
+    if (get().authorizationEpoch !== authorizationEpoch) {
+      return { shouldContinue: false };
+    }
     if (merged) {
       // Batch merge succeeded — mark non-deploy confirmations as skipped.
       markSkipped(get, set, nonDeployConfs);
@@ -341,7 +413,9 @@ export async function processToolCallsFn(
   toolCalls: ToolCall[],
   currentAssistantMessageId: string,
   streamResult: StreamResult,
+  authorizationEpoch = get().authorizationEpoch,
 ): Promise<ProcessToolCallsResult> {
+  if (get().authorizationEpoch !== authorizationEpoch) return { shouldContinue: false };
   // Update the assistant message with the stream result
   const updated1 = get().messages.map((m) =>
     m.id === currentAssistantMessageId
@@ -354,6 +428,7 @@ export async function processToolCallsFn(
   const collectedConfirmations: CollectedConfirmation[] = [];
 
   for (const toolCall of toolCalls) {
+    if (get().authorizationEpoch !== authorizationEpoch) return { shouldContinue: false };
     const toolDescription = getToolCallDescription(toolCall.function.name, toolCall.function.arguments);
     const toolMessageId = generateMessageId();
 
@@ -370,11 +445,19 @@ export async function processToolCallsFn(
     };
     set({ messages: trimMessages([...get().messages, toolMsg]) });
 
-    const result = await handleToolCall(get, set, toolCall);
+    const handled = await handleToolCall(get, set, toolCall, authorizationEpoch);
+    if (get().authorizationEpoch !== authorizationEpoch) return { shouldContinue: false };
+    const { result, authorization } = handled;
 
     if (result.requiresConfirmation) {
+      if (!authorization) return { shouldContinue: false };
       // Collect confirmation — don't return early so remaining tool calls are processed
-      collectedConfirmations.push({ toolCall, toolMessageId, result: result as CollectedConfirmation['result'] });
+      collectedConfirmations.push({
+        toolCall,
+        toolMessageId,
+        result: result as CollectedConfirmation['result'],
+        authorization,
+      });
       continue;
     }
 
@@ -402,7 +485,7 @@ export async function processToolCallsFn(
 
   // Handle collected confirmations
   if (collectedConfirmations.length > 0) {
-    return await coalesceConfirmations(get, set, collectedConfirmations);
+    return await coalesceConfirmations(get, set, collectedConfirmations, authorizationEpoch);
   }
 
   if (hasDisplayCard) {

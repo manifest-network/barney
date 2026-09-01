@@ -50,6 +50,9 @@ class CosmosKitWalletProvider implements WalletProvider {
 
 export interface UseManifestMCPResult {
   clientManager: CosmosClientManager | null;
+  /** Address for which `clientManager` and `signing` were constructed. This can
+   * briefly lag cosmos-kit's live `address` during a wallet switch. */
+  clientAddress: string | undefined;
   signing: SigningContext | undefined;
   isConnected: boolean;
   address: string | undefined;
@@ -62,6 +65,7 @@ export interface UseManifestMCPResult {
 export function useManifestMCP(): UseManifestMCPResult {
   const { address, isWalletConnected, getOfflineSigner, signArbitrary } = useChain(CHAIN_NAME);
   const [clientManager, setClientManager] = useState<CosmosClientManager | null>(null);
+  const [clientAddress, setClientAddress] = useState<string | undefined>(undefined);
   const [signing, setSigning] = useState<SigningContext | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const clientManagerRef = useRef<CosmosClientManager | null>(null);
@@ -87,6 +91,7 @@ export function useManifestMCP(): UseManifestMCPResult {
         }
         if (isMounted) {
           setClientManager(null);
+          setClientAddress(undefined);
           setSigning(undefined);
           setError(null);
         }
@@ -171,6 +176,7 @@ export function useManifestMCP(): UseManifestMCPResult {
 
         if (isMounted) {
           setClientManager(manager);
+          setClientAddress(address);
           setSigning(signingContext);
           setError(null);
         }
@@ -179,6 +185,7 @@ export function useManifestMCP(): UseManifestMCPResult {
         if (isMounted) {
           setError(err instanceof Error ? err.message : 'Failed to connect');
           setClientManager(null);
+          setClientAddress(undefined);
           setSigning(undefined);
         }
       }
@@ -203,8 +210,9 @@ export function useManifestMCP(): UseManifestMCPResult {
 
   return {
     clientManager,
+    clientAddress,
     signing,
-    isConnected: isWalletConnected && clientManager !== null,
+    isConnected: isWalletConnected && clientManager !== null && clientAddress === address,
     address,
     error,
   };

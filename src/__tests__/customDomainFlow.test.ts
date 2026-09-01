@@ -92,6 +92,13 @@ describe('customDomainFlow integration', () => {
       address: ADDR,
       appRegistry: registry,
       tiers: [],
+      authorization: {
+        originAddress: ADDR,
+        chainId: 'manifest-test',
+        clientGeneration: 1,
+        signerGeneration: 1,
+      },
+      assertAuthorization: vi.fn(),
     };
 
     // Chain reports a single legacy (unnamed) lease item with no current domain.
@@ -130,7 +137,6 @@ describe('customDomainFlow integration', () => {
     const confirmed = await executeConfirmedTool(
       'set_custom_domain',
       pendingArgs,
-      CLIENT_MANAGER,
       options,
     );
     expect(confirmed.success).toBe(true);

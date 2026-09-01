@@ -141,6 +141,13 @@ describe('Deploy Flow Integration', () => {
         },
         relayAuth: { signChallenge: vi.fn() },
       },
+      authorization: {
+        originAddress: ADDRESS,
+        chainId: 'manifest-test',
+        clientGeneration: 1,
+        signerGeneration: 1,
+      },
+      assertAuthorization: vi.fn(),
       tiers: [
         { skuName: 'docker-micro', skuUuid: 'sku-micro', providerUuid: PROVIDER_UUID, cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
         { skuName: 'docker-small', skuUuid: SKU_UUID, providerUuid: PROVIDER_UUID, cores: 1, ramMB: 1024, diskGB: 5, pricePerHour: 0.1, denomSymbol: 'PWR', unit: 1 },
@@ -225,7 +232,12 @@ describe('Deploy Flow Integration', () => {
       },
     });
 
-    const confirmedResult = await executeConfirmedTool('deploy_app', { app_name: 'my-app', size: 'small' }, CLIENT_MANAGER, options, payload);
+    const confirmedResult = await executeConfirmedTool(
+      'deploy_app',
+      deployResult.pendingAction!.args,
+      options,
+      payload,
+    );
     expect(confirmedResult.success).toBe(true);
 
     // Verify app was added to registry
@@ -278,7 +290,7 @@ describe('Deploy Flow Integration', () => {
     const stopArgs = stopResult.pendingAction!.args;
     vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as Awaited<ReturnType<typeof stopApp>>);
 
-    const confirmedStop = await executeConfirmedTool('stop_app', stopArgs, CLIENT_MANAGER, options);
+    const confirmedStop = await executeConfirmedTool('stop_app', stopArgs, options);
     expect(confirmedStop.success).toBe(true);
 
     // Verify registry updated
@@ -298,7 +310,11 @@ describe('Deploy Flow Integration', () => {
       code: 0, transactionHash: 'tx-hash-fund', rawLog: '', events: [],
     } as Awaited<ReturnType<typeof cosmosTx>>);
 
-    const confirmedFund = await executeConfirmedTool('fund_credits', { amount: 50 }, CLIENT_MANAGER, options);
+    const confirmedFund = await executeConfirmedTool(
+      'fund_credits',
+      fundResult.pendingAction!.args,
+      options,
+    );
     expect(confirmedFund.success).toBe(true);
   });
 

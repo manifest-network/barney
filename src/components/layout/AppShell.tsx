@@ -4,7 +4,7 @@
  * Transitions between views with a fade + slide animation.
  */
 
-import { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, lazy, Suspense } from 'react';
 import { useChain } from '@cosmos-kit/react';
 import { useAI } from '../../hooks/useAI';
 import { useManifestMCP } from '../../hooks/useManifestMCP';
@@ -12,7 +12,7 @@ import { useToast } from '../../hooks/useToast';
 import { useAccountSetup } from '../../hooks/useAccountSetup';
 import { AccountSetupOverlay } from './AccountSetupOverlay';
 import { logError } from '../../utils/errors';
-import { CHAIN_NAME } from '../../config/chain';
+import { CHAIN_ID, CHAIN_NAME } from '../../config/chain';
 import { invalidateReservedDomainSuffixesCache } from '../../api/billingParams';
 import { invalidateMorpheusSession, logoutMorpheusSession } from '../../api/morpheusSession';
 
@@ -36,16 +36,25 @@ function isPopupClosedError(msg: string): boolean {
 }
 
 export function AppShell() {
-  const { setClientManager, setAddress, setSigning } = useAI();
-  const { clientManager, address, signing } = useManifestMCP();
+  const { setWalletContext } = useAI();
+  const {
+    clientManager,
+    address,
+    signing,
+    isConnected: isManifestConnected,
+  } = useManifestMCP();
   const { isWalletConnected, isWalletConnecting, openView, status, message, disconnect } = useChain(CHAIN_NAME);
   const toast = useToast();
+  // useManifestMCP only reports connected when its clientAddress matches the
+  // live cosmos-kit address, so this is the single publication gate.
+  const activeClientManager = isManifestConnected ? clientManager : null;
+  const activeSigning = isManifestConnected ? signing : undefined;
 
   // Account-setup funding needs the signing CosmosClientManager (the same
-  // aiStore singleton wired via setClientManager below). Expose it via a ref so
-  // useAccountSetup's effect deps stay stable; it's read lazily at funding time.
-  const clientManagerRef = useRef(clientManager);
-  useEffect(() => { clientManagerRef.current = clientManager; }, [clientManager]);
+  // aiStore singleton wired below). Never expose an old address's manager
+  // during the transition; useAccountSetup reads this ref lazily at funding time.
+  const clientManagerRef = useRef(activeClientManager);
+  useLayoutEffect(() => { clientManagerRef.current = activeClientManager; }, [activeClientManager]);
 
   // Invalidate chain-scoped caches when the connected address changes (different
   // wallet, possibly different chain → different governance Params).
@@ -69,12 +78,17 @@ export function AppShell() {
     }
   }, [address]);
 
-  // Sync wallet state with AI context.
-  useEffect(() => {
-    setClientManager(clientManager);
-    setAddress(address);
-    setSigning(signing);
-  }, [clientManager, address, signing, setClientManager, setAddress, setSigning]);
+  // Sync wallet state with AI context. Layout timing prevents a confirmation
+  // for the prior wallet from surviving into a painted frame that already
+  // displays the next wallet.
+  useLayoutEffect(() => {
+    setWalletContext({
+      clientManager: activeClientManager,
+      address,
+      signing: activeSigning,
+      chainId: CHAIN_ID,
+    });
+  }, [activeClientManager, address, activeSigning, setWalletContext]);
 
   // Watch for wallet connection errors (e.g. Safari popup blocking)
   const prevStatusRef = useRef(status);

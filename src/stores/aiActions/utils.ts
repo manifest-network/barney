@@ -40,10 +40,13 @@ export function toChatApiMessages(
   };
 
   const conversationMessages: ChatApiMessage[] = msgs
-    // Drop streaming-in-progress messages and UI-synthesized messages (e.g. /help text).
+    // Drop streaming/in-flight messages and UI-synthesized messages (e.g. /help text).
+    // A confirmed transaction row remains non-streaming so it can be persisted,
+    // but its confirmation prompt is not a completed tool result and must not be
+    // replayed to the model until the executor resolves it.
     // Local messages render in chat but must not be replayed to the model — otherwise
     // the model treats its own canned UI strings as prior assistant output.
-    .filter((m) => !m.isStreaming && !m.local)
+    .filter((m) => !m.isStreaming && !m.transactionInFlight && !m.local)
     .map((m) => {
       if (m.role === 'tool') {
         return {

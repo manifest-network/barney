@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createElement } from 'react';
+import { flushSync } from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import type { StreamResult } from '../../ai/streamUtils';
-import type { ToolResult } from '../../ai/toolExecutor';
+import type { PendingAction, ToolResult } from '../../ai/toolExecutor';
 import type { PendingConfirmation, ChatMessage } from '../../contexts/aiTypes';
 import { createAIStore, type AIStore } from '../aiStore';
 
@@ -34,12 +37,11 @@ vi.mock('../../api/morpheus', () => ({
 const mockExecuteConfirmedTool = vi.fn<(
   toolName: string,
   args: Record<string, unknown>,
-  clientManager: unknown,
   options: unknown,
   payload?: unknown
 ) => Promise<ToolResult>>();
 vi.mock('../../ai/toolExecutor', () => ({
-  executeConfirmedTool: (...args: unknown[]) => mockExecuteConfirmedTool(...(args as [string, Record<string, unknown>, unknown, unknown, unknown?])),
+  executeConfirmedTool: (...args: unknown[]) => mockExecuteConfirmedTool(...(args as [string, Record<string, unknown>, unknown, unknown?])),
 }));
 
 const mockProcessStream = vi.fn<() => Promise<StreamResult>>();
@@ -49,6 +51,16 @@ vi.mock('../../ai/streamUtils', () => ({
 
 vi.mock('../../utils/errors', () => ({
   logError: vi.fn(),
+}));
+
+vi.mock('../../contexts/aiStoreContext', () => ({
+  useAIStore: (selector: (state: {
+    sendMessage: () => Promise<void>;
+    retrySkuTiers: () => Promise<void>;
+  }) => unknown) => selector({
+    sendMessage: vi.fn(() => Promise.resolve()),
+    retrySkuTiers: vi.fn(() => Promise.resolve()),
+  }),
 }));
 
 vi.mock('../../ai/systemPrompt', () => ({
@@ -84,6 +96,7 @@ vi.mock('../../registry/appRegistry', () => ({
 }));
 
 import { logError } from '../../utils/errors';
+import { MessageBubble } from '../../components/ai/MessageBubble';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -100,17 +113,26 @@ function makeStreamResult(overrides: Partial<StreamResult> = {}): StreamResult {
   };
 }
 
-function makePendingConfirmation(overrides: Partial<PendingConfirmation> = {}): PendingConfirmation {
+function makePendingConfirmation(
+  overrides: Omit<Partial<PendingConfirmation>, 'action'> & { action?: Partial<PendingAction> } = {},
+): PendingConfirmation {
+  const { action: actionOverrides, ...confirmationOverrides } = overrides;
+  const action = {
+    originAddress: 'manifest1test',
+    chainId: 'manifest-test',
+    clientGeneration: 0,
+    signerGeneration: 0,
+    id: 'action_1',
+    toolName: 'deploy_app',
+    args: { image: 'nginx' },
+    description: 'Deploy nginx?',
+    ...actionOverrides,
+  };
   return {
     id: 'confirm_1',
-    action: {
-      id: 'action_1',
-      toolName: 'deploy_app',
-      args: { image: 'nginx' },
-      description: 'Deploy nginx?',
-    },
     messageId: 'tool_msg_1',
-    ...overrides,
+    ...confirmationOverrides,
+    action,
   };
 }
 
@@ -122,7 +144,8 @@ function makeToolMessage(id: string): ChatMessage {
     toolName: 'deploy_app',
     toolCallId: 'tc_1',
     timestamp: 1000,
-    isStreaming: true,
+    isStreaming: false,
+    awaitingConfirmation: true,
   };
 }
 
@@ -136,6 +159,7 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
     lastMessageTime: 0,
     clientManager: fakeClientManager,
     address: 'manifest1test',
+    chainId: 'manifest-test',
     settings: {
       saveHistory: false,
     },
@@ -185,6 +209,25 @@ describe('confirmAction', () => {
       expect(mockExecuteConfirmedTool).not.toHaveBeenCalled();
       // pendingConfirmation should remain unchanged
       expect(store.getState().pendingConfirmation).not.toBeNull();
+    });
+
+    it.each([
+      ['originAddress', 'manifest1other'],
+      ['chainId', 'other-chain'],
+      ['clientGeneration', 1],
+      ['signerGeneration', 1],
+    ] as const)('fails closed when bound %s no longer matches', async (field, value) => {
+      const pending = makePendingConfirmation({ action: { [field]: value } });
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+
+      await store.getState().confirmAction();
+
+      expect(mockExecuteConfirmedTool).not.toHaveBeenCalled();
+      expect(store.getState().pendingConfirmation).toBeNull();
+      expect(store.getState().messages[0].content).toContain('cancelled and was not submitted');
     });
   });
 
@@ -242,7 +285,7 @@ describe('confirmAction', () => {
       const callArgs = mockExecuteConfirmedTool.mock.calls[0];
       expect(callArgs[1]._generatedManifest).toBe('{"new":"manifest"}');
       // payload should be cleared (set to undefined)
-      expect(callArgs[4]).toBeUndefined();
+      expect(callArgs[3]).toBeUndefined();
     });
 
     it('does not replace when no _generatedManifest in args', async () => {
@@ -299,6 +342,154 @@ describe('confirmAction', () => {
       expect(assistantMsg).toBeDefined();
       expect(assistantMsg!.content).toBe('Deployed successfully!');
       expect(assistantMsg!.isStreaming).toBe(false);
+    });
+
+    it('resolves an in-flight tool row when the wallet changes', async () => {
+      let finishTransaction!: (result: ToolResult) => void;
+      mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((resolve) => {
+        finishTransaction = resolve;
+      }));
+
+      const pending = makePendingConfirmation();
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+
+      const confirming = store.getState().confirmAction();
+      expect(mockExecuteConfirmedTool).toHaveBeenCalledOnce();
+      expect(store.getState().activeTransactionMessageId).toBe(pending.messageId);
+      expect(store.getState().messages[0]).toMatchObject({
+        isStreaming: false,
+        awaitingConfirmation: false,
+        transactionInFlight: true,
+      });
+
+      const nextManager = { fake: 'next' } as unknown as NonNullable<AIStore['clientManager']>;
+      store.getState().setWalletContext({
+        clientManager: nextManager,
+        address: 'manifest1next',
+        signing: undefined,
+        chainId: 'manifest-test',
+      });
+
+      let tool = store.getState().messages.find((message) => message.id === pending.messageId);
+      expect(tool).toMatchObject({
+        isStreaming: false,
+        awaitingConfirmation: false,
+        transactionInFlight: false,
+        error: expect.stringContaining('may already have been submitted'),
+      });
+
+      finishTransaction({
+        success: true,
+        data: { message: 'Deployment completed for the previous wallet.' },
+      });
+      await confirming;
+
+      tool = store.getState().messages.find((message) => message.id === pending.messageId);
+      expect(tool?.content).toContain('"success": true');
+      expect(tool?.content).toContain('"authorizationNotice"');
+      expect(tool?.content).toContain('previous wallet');
+      expect(tool?.error).toBeUndefined();
+      expect(tool?.transactionInFlight).toBe(false);
+      expect(tool?.isStreaming).toBe(false);
+      const notice = store.getState().messages.find((message) =>
+        message.role === 'assistant' && message.local === true
+      );
+      expect(notice).toMatchObject({
+        content: expect.stringContaining('previous wallet'),
+      });
+      expect(notice?.error).toBeUndefined();
+      expect(notice?.content).toContain('Deployment completed for the previous wallet.');
+
+      // Render the exact message produced by confirmAction through the real UI
+      // component. This pins the production path and its neutral presentation
+      // together rather than hand-constructing a lookalike message.
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      try {
+        flushSync(() => {
+          root.render(createElement(MessageBubble, { message: notice! }));
+        });
+        expect(container.querySelector('.message-text')?.textContent)
+          .toContain('finished for the previous wallet');
+        expect(container.querySelector('[role="alert"]')).toBeNull();
+        expect(Array.from(container.querySelectorAll('button')).some(
+          (button) => button.textContent?.trim() === 'Check credits'
+        )).toBe(false);
+      } finally {
+        flushSync(() => root.unmount());
+        container.remove();
+      }
+
+      expect(store.getState().address).toBe('manifest1next');
+      expect(store.getState().activeTransactionMessageId).toBeNull();
+      expect(mockProcessStream).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a successful partial summary when Stop aborts the follow-up', async () => {
+      let finishTransaction!: (result: ToolResult) => void;
+      mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((resolve) => {
+        finishTransaction = resolve;
+      }));
+      const pending = makePendingConfirmation({
+        action: { toolName: 'stop_app', args: { app_name: 'all', entries: [] } },
+      });
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+
+      const confirming = store.getState().confirmAction();
+      store.getState().stopStreaming();
+      finishTransaction({
+        success: true,
+        data: {
+          message: 'Stopped: a. Submission uncertain: b; check on-chain status before retrying. Not submitted: c.',
+        },
+      });
+      await confirming;
+
+      const assistant = store.getState().messages.find((message) => message.role === 'assistant');
+      expect(assistant).toMatchObject({
+        local: true,
+        content: expect.stringContaining('Submission uncertain: b'),
+      });
+      expect(mockProcessStream).not.toHaveBeenCalled();
+    });
+
+    it('does not misclassify an ordinary Stop as a wallet authorization change', async () => {
+      let finishTransaction!: (result: ToolResult) => void;
+      mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((resolve) => {
+        finishTransaction = resolve;
+      }));
+
+      const pending = makePendingConfirmation();
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+
+      const confirming = store.getState().confirmAction();
+      const executorOptions = mockExecuteConfirmedTool.mock.calls[0][2] as {
+        assertAuthorization: () => void;
+      };
+
+      store.getState().stopStreaming();
+      expect(executorOptions.assertAuthorization).not.toThrow();
+
+      finishTransaction({
+        success: false,
+        error: 'Transaction was cancelled before broadcast; no transaction was sent.',
+      });
+      await confirming;
+
+      const tool = store.getState().messages.find((message) => message.id === pending.messageId);
+      expect(tool?.error).toContain('cancelled before broadcast');
+      expect(tool?.error).not.toContain('Wallet or network changed');
+      expect(mockProcessStream).not.toHaveBeenCalled();
     });
   });
 
@@ -403,7 +594,7 @@ describe('confirmAction', () => {
       expect(store.getState().deployProgress).toBeNull();
     });
 
-    it('sets toolError on the follow-up assistant message when execution fails', async () => {
+    it('renders a failed confirmed transaction error only on the tool row', async () => {
       const toolMsg = makeToolMessage('tool_msg_1');
       const store = setupStore({
         pendingConfirmation: makePendingConfirmation(),
@@ -416,9 +607,11 @@ describe('confirmAction', () => {
       await store.getState().confirmAction();
 
       const state = store.getState();
+      const updatedTool = state.messages.find(m => m.id === 'tool_msg_1');
       const assistantMsg = state.messages.find(m => m.role === 'assistant');
+      expect(updatedTool?.error).toBe('insufficient funds');
       expect(assistantMsg).toBeDefined();
-      expect(assistantMsg!.error).toBe('insufficient funds');
+      expect(assistantMsg!.error).toBeUndefined();
     });
   });
 
@@ -445,6 +638,48 @@ describe('confirmAction', () => {
       expect(assistantMsg).toBeDefined();
       expect(assistantMsg!.content).toContain('Error: stream failed');
       expect(assistantMsg!.error).toBe('stream failed');
+    });
+
+    it('does not rewrite a completed transaction when the follow-up stream throws', async () => {
+      const pending = makePendingConfirmation();
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+      mockExecuteConfirmedTool.mockResolvedValueOnce({
+        success: true,
+        data: { message: 'Deployed.' },
+      });
+      mockProcessStream.mockRejectedValueOnce(new Error('relay disconnected'));
+
+      await store.getState().confirmAction();
+
+      const tool = store.getState().messages.find((message) => message.id === pending.messageId);
+      expect(tool?.content).toContain('"success": true');
+      expect(tool?.error).toBeUndefined();
+      const assistant = store.getState().messages.find((message) => message.role === 'assistant');
+      expect(assistant).toMatchObject({
+        content: expect.stringContaining('transaction result is shown above'),
+        error: 'relay disconnected',
+        isStreaming: false,
+      });
+      expect(logError).toHaveBeenCalledWith('AIContext.confirmAction.followUp', expect.any(Error));
+    });
+
+    it('does not claim a failed transaction completed when its follow-up throws', async () => {
+      const pending = makePendingConfirmation();
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+      mockExecuteConfirmedTool.mockResolvedValueOnce({ success: false, error: 'insufficient funds' });
+      mockProcessStream.mockRejectedValueOnce(new Error('relay disconnected'));
+
+      await store.getState().confirmAction();
+
+      const assistant = store.getState().messages.find((message) => message.role === 'assistant');
+      expect(assistant?.content).toContain('transaction result is shown above');
+      expect(assistant?.content).not.toContain('transaction completed');
     });
   });
 
@@ -498,6 +733,47 @@ describe('confirmAction', () => {
   // Finally invariant
   // -----------------------------------------------------------------------
   describe('finally invariant', () => {
+    it('does not let a stale catch/finally clobber the next wallet work', async () => {
+      let rejectTransaction!: (error: Error) => void;
+      mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectTransaction = reject;
+      }));
+      const pending = makePendingConfirmation();
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+
+      const confirming = store.getState().confirmAction();
+      store.getState().setWalletContext({
+        clientManager: { fake: 'next' } as unknown as NonNullable<AIStore['clientManager']>,
+        address: 'manifest1next',
+        signing: undefined,
+        chainId: 'manifest-test',
+      });
+      const nextAbort = new AbortController();
+      store.setState({
+        isStreaming: true,
+        abortController: nextAbort,
+        activeTransactionMessageId: 'next-wallet-tool',
+      });
+
+      rejectTransaction(new Error('old wallet executor failed'));
+      await confirming;
+
+      expect(store.getState()).toMatchObject({
+        address: 'manifest1next',
+        isStreaming: true,
+        abortController: nextAbort,
+        activeTransactionMessageId: 'next-wallet-tool',
+      });
+      expect(nextAbort.signal.aborted).toBe(false);
+      expect(store.getState().messages[0]).toMatchObject({
+        transactionInFlight: false,
+        error: 'old wallet executor failed',
+      });
+    });
+
     it('clears isStreaming, pendingPayload, and abortController after success', async () => {
       const toolMsg = makeToolMessage('tool_msg_1');
       const store = setupStore({

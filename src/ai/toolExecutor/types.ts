@@ -53,6 +53,21 @@ export interface PayloadAttachment {
 }
 
 /**
+ * Immutable wallet context that authorized a pending transaction.
+ *
+ * The address and chain identify the account the confirmation was rendered
+ * for. The two generations bind it to the exact client and signing capability
+ * instances that performed pre-validation, so reconnecting the same address
+ * still invalidates the old consent.
+ */
+export interface TransactionAuthorization {
+  readonly originAddress: string;
+  readonly chainId: string;
+  readonly clientGeneration: number;
+  readonly signerGeneration: number;
+}
+
+/**
  * Per-tool successful-result data shapes.
  *
  * `data: unknown` on ToolResultSuccess accepts anything, but the AI consumes
@@ -190,9 +205,16 @@ export interface ToolExecutorOptions {
    *  "not ready" — deploy executors must refuse with
    *  "Tier catalog unavailable" before any broadcast. */
   tiers: readonly ResolvedSkuTier[];
+
+  /** Bound identity for a confirmed transaction. Required by
+   * `executeConfirmedTool`; omitted during read/pre-validation execution. */
+  authorization?: TransactionAuthorization;
+  /** Live fail-closed check supplied by the store. Confirmed executors call it
+   * again immediately before each non-idempotent request. */
+  assertAuthorization?: () => void;
 }
 
-export interface PendingAction {
+export interface PendingAction extends TransactionAuthorization {
   id: string;
   toolName: string;
   args: Record<string, unknown>;
