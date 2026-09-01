@@ -115,6 +115,25 @@ describe('persistence actions', () => {
       expect(result[0].awaitingConfirmation).toBe(false);
     });
 
+    it('replaces a retryable re-plan error when its confirmation cannot survive reload', () => {
+      const msgs = [makeMessage({
+        id: 'm1',
+        role: 'tool',
+        content: 'Deploy 2 apps?',
+        error: 'Tier catalog unavailable',
+        awaitingConfirmation: true,
+      })];
+      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
+
+      const result = loadHistory();
+
+      expect(result[0]).toMatchObject({
+        content: 'Interrupted — confirmation was pending when the page reloaded.',
+        error: 'Interrupted',
+        awaitingConfirmation: false,
+      });
+    });
+
     it('rewrites an in-flight transaction with a broadcast-aware reload warning', () => {
       const msgs = [makeMessage({
         id: 'm1',

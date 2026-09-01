@@ -439,6 +439,85 @@ describe('processToolCallsFn', () => {
     )).toBe(true);
   });
 
+  it('attributes an entry-local planner rejection and keeps valid siblings confirmable', async () => {
+    const preparedDraft = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Prepare ${appName} for batch deployment?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          _batchDeployDraft: true,
+          app_name: appName,
+          size: 'micro',
+          _generatedManifest: `{"image":"${appName}:latest"}`,
+        },
+      },
+    });
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(preparedDraft('redis'))
+      .mockResolvedValueOnce(preparedDraft('nginx'))
+      .mockResolvedValueOnce(preparedDraft('ghost'));
+    vi.mocked(executeBatchDeploy).mockResolvedValueOnce({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Deploy 2 apps (nginx, ghost)?',
+      pendingAction: {
+        toolName: 'batch_deploy',
+        args: {
+          plan: {
+            version: 1,
+            entries: [
+              { draftIndex: 1, app_name: 'nginx' },
+              { draftIndex: 2, app_name: 'ghost' },
+            ],
+            totalServiceCount: 2,
+            totalPricePerHour: 0.2,
+            denomSymbol: 'PWR',
+            planHash: 'plan-hash',
+          },
+        },
+      },
+      rejectedEntries: [{
+        draftIndex: 0,
+        error: '"cache.example.com" is already attached to "old-app".',
+      }],
+    });
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const toolCalls = [
+      makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } }),
+      makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } }),
+      makeToolCall({ id: 'tc_3', function: { name: 'deploy_app', arguments: {} } }),
+    ];
+
+    const result = await processToolCallsFn(get, set, toolCalls, 'asst_1', {
+      content: '', thinking: '', toolCalls,
+    });
+
+    expect(result.shouldContinue).toBe(false);
+    expect(executeBatchDeploy).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Object),
+      undefined,
+      { allowPartialEntries: true },
+    );
+    expect(state.messages.find((message) => message.toolCallId === 'tc_1')).toMatchObject({
+      error: expect.stringContaining('cache.example.com'),
+      awaitingConfirmation: false,
+    });
+    expect(state.messages.find((message) => message.toolCallId === 'tc_2')).toMatchObject({
+      content: 'Batch deploy: nginx',
+      error: undefined,
+    });
+    expect(state.messages.find((message) => message.toolCallId === 'tc_3')).toMatchObject({
+      content: 'Batch deploy: ghost',
+      awaitingConfirmation: true,
+      error: undefined,
+    });
+    expect(state.pendingConfirmation?.messageId)
+      .toBe(state.messages.find((message) => message.toolCallId === 'tc_3')?.id);
+  });
+
   it('runs aggregate affordability for model-coalesced deploys instead of trusting individual checks', async () => {
     const makeDeployResult = (appName: string): ToolResult => ({
       success: true,

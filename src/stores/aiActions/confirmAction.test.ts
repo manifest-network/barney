@@ -426,6 +426,35 @@ describe('confirmAction', () => {
   // Successful execution
   // -----------------------------------------------------------------------
   describe('successful execution', () => {
+    it('clears a retryable re-plan error as soon as broadcast dispatch begins', async () => {
+      let finishTransaction!: (result: ToolResult) => void;
+      mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((resolve) => {
+        finishTransaction = resolve;
+      }));
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult());
+      const pending = makePendingConfirmation({
+        action: { toolName: 'batch_deploy', args: { plan: { version: 1 } } },
+      });
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [{
+          ...makeToolMessage(pending.messageId),
+          error: 'Tier catalog unavailable',
+        }],
+      });
+
+      const confirming = store.getState().confirmAction();
+
+      expect(store.getState().messages[0]).toMatchObject({
+        error: undefined,
+        awaitingConfirmation: false,
+        transactionInFlight: true,
+      });
+
+      finishTransaction({ success: true, data: { deployed: true } });
+      await confirming;
+    });
+
     it('updates tool message with result and streams follow-up', async () => {
       const toolMsg = makeToolMessage('tool_msg_1');
       const store = setupStore({

@@ -2734,6 +2734,58 @@ describe('executeBatchDeploy', () => {
     expect(result.success).toBe(true);
   });
 
+  it('keeps valid coalesced drafts when one custom domain is already attached', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockImplementation(async (domain) =>
+      domain === 'cache.example.com' ? { leaseUuid: 'old-lease' } as any : null
+    );
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntry('redis'), draftIndex: 0, customDomain: 'cache.example.com' },
+      { ...makeBatchEntry('nginx'), draftIndex: 1 },
+      { ...makeBatchEntry('ghost'), draftIndex: 2 },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.requiresConfirmation).toBe(true);
+    if (!result.requiresConfirmation) throw new Error('expected partial batch confirmation');
+    expect(result.rejectedEntries).toEqual([{
+      draftIndex: 0,
+      error: expect.stringContaining('cache.example.com'),
+    }]);
+    const plan = result.pendingAction.args.plan as any;
+    expect(plan.entries.map((entry: any) => entry.draftIndex)).toEqual([1, 2]);
+    expect(plan.entries.map((entry: any) => entry.app_name)).toEqual(['nginx', 'ghost']);
+    expect(getCreditAccount).toHaveBeenCalledOnce();
+  });
+
+  it('preserves actionable multi-service custom-domain validation errors', async () => {
+    const stackManifest = JSON.stringify({
+      services: {
+        web: { image: 'wordpress:6' },
+        db: { image: 'mysql:9' },
+      },
+    });
+    const stackBytes = new TextEncoder().encode(stackManifest);
+    const stackEntry: BatchDeployEntry = {
+      app_name: 'wordpress',
+      customDomain: 'wp.example.com',
+      payload: {
+        bytes: stackBytes,
+        filename: 'wordpress.json',
+        size: stackBytes.length,
+        hash: 'b'.repeat(64),
+      },
+    };
+
+    const missing = await executeBatchDeploy([stackEntry], makeOptions());
+    expect(missing.success).toBe(false);
+    expect(missing.error).toMatch(/pass service_name.*web, db/i);
+
+    const unknown = await executeBatchDeploy([
+      { ...stackEntry, customDomainServiceName: 'api' },
+    ], makeOptions());
+    expect(unknown.success).toBe(false);
+    expect(unknown.error).toContain('Service "api" not found in stack. Available: web, db.');
+  });
+
   it('stops awaiting an in-flight custom-domain check when planning is aborted', async () => {
     const controller = new AbortController();
     vi.mocked(queryLeaseByCustomDomain).mockReturnValueOnce(new Promise<never>(() => {}));

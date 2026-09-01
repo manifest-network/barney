@@ -56,7 +56,9 @@ import {
   planBatchDeploy,
   verifyBatchDeployPlanIntegrity,
   type BatchDeployEntry,
+  type BatchDeployEntryRejection,
   type BatchDeployPlanEntry,
+  type BatchDeployPlanningOptions,
 } from './batchDeployPlan';
 
 // Re-export the public deploy-helper symbols so existing consumers/tests that
@@ -65,6 +67,10 @@ export { buildPayloadFromManifest, deriveAppName, extractServiceNamesFromPayload
 export { extractUrlFromFredStatus } from './deployUrl';
 export { classifyLeaseChainState, handleDeployManifestError } from './deployError';
 export type { BatchDeployEntry, BatchDeployPlan, BatchDeployPlanEntry } from './batchDeployPlan';
+
+export type BatchDeployToolResult = ToolResult & {
+  rejectedEntries?: readonly BatchDeployEntryRejection[];
+};
 
 /**
  * Was the thrown thing ITSELF an abort?
@@ -770,14 +776,21 @@ export async function executeConfirmedDeployApp(
 export async function executeBatchDeploy(
   entries: BatchDeployEntry[],
   options: ToolExecutorOptions,
-  size?: string
-): Promise<ToolResult> {
+  size?: string,
+  planningOptions?: BatchDeployPlanningOptions,
+): Promise<BatchDeployToolResult> {
   const drafts = entries.map((entry) => ({ ...entry, size: entry.size ?? size }));
   // Initial consent and confirm-time validation must use the same live catalog.
   // Otherwise a session-cached price/provider can produce a plan whose hash can
   // never survive the mandatory refresh immediately before broadcast.
-  const result = await planBatchDeploy(drafts, options);
-  if (!result.success) return result;
+  const result = await planBatchDeploy(drafts, options, planningOptions);
+  if (!result.success) {
+    return {
+      success: false,
+      error: result.error,
+      ...(result.rejectedEntries ? { rejectedEntries: result.rejectedEntries } : {}),
+    };
+  }
   return {
     success: true,
     requiresConfirmation: true,
@@ -786,6 +799,9 @@ export async function executeBatchDeploy(
       toolName: 'batch_deploy',
       args: { plan: result.plan },
     },
+    ...(result.rejectedEntries.length > 0
+      ? { rejectedEntries: result.rejectedEntries }
+      : {}),
   };
 }
 

@@ -376,6 +376,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
       message.id === messageId
         ? {
             ...message,
+            error: undefined,
             isStreaming: false,
             awaitingConfirmation: false,
             transactionInFlight: true,

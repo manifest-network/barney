@@ -58,6 +58,28 @@ describe('persistence integration with real PersistedMessageSchema', () => {
     expect(result[0].awaitingConfirmation).toBe(false);
   });
 
+  it('closes an error-carrying failed re-plan confirmation after reload', () => {
+    const persisted = [{
+      id: 'm1',
+      role: 'tool',
+      content: 'Deploy 2 apps?',
+      timestamp: 1,
+      toolCallId: 'tc_2',
+      toolName: 'batch_deploy',
+      awaitingConfirmation: true,
+      error: 'Tier catalog unavailable',
+    }];
+    localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(persisted));
+
+    const result = loadHistory();
+
+    expect(result[0]).toMatchObject({
+      content: 'Interrupted — confirmation was pending when the page reloaded.',
+      error: 'Interrupted',
+      awaitingConfirmation: false,
+    });
+  });
+
   it('round-trips isStreaming=true into the interrupted-stream rehydrate branch', () => {
     const persisted = [{
       id: 'm1',

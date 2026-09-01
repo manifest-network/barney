@@ -596,6 +596,64 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                           [draft.draftIndex]: { state, changed: true },
                         }))}
                       />
+                      <label
+                        className="confirmation-details-title"
+                        htmlFor={`batch-domain-${draft.draftIndex}`}
+                      >
+                        Custom domain (optional)
+                      </label>
+                      <input
+                        id={`batch-domain-${draft.draftIndex}`}
+                        type="text"
+                        inputMode="url"
+                        autoComplete="off"
+                        spellCheck={false}
+                        className="manifest-editor-input"
+                        aria-label={`Custom domain for ${draft.app_name}`}
+                        placeholder="app.example.com (leave empty to skip)"
+                        value={draft.customDomain ?? ''}
+                        onChange={(event) => {
+                          const customDomain = event.target.value;
+                          setBatchDrafts((current) => current.map((entry) =>
+                            entry.draftIndex === draft.draftIndex
+                              ? {
+                                  ...entry,
+                                  customDomain,
+                                  customDomainServiceName: customDomain.trim()
+                                    ? entry.customDomainServiceName
+                                    : undefined,
+                                  customDomainWarning: undefined,
+                                }
+                              : entry));
+                        }}
+                      />
+                      {draft.customDomain?.trim()
+                        && services
+                        && services.filter((service) => service.name).length > 1 && (
+                        <>
+                          <label
+                            className="confirmation-details-title"
+                            htmlFor={`batch-domain-service-${draft.draftIndex}`}
+                          >
+                            Domain service
+                          </label>
+                          <select
+                            id={`batch-domain-service-${draft.draftIndex}`}
+                            className="manifest-editor-input"
+                            aria-label={`Service for ${draft.app_name} custom domain`}
+                            value={draft.customDomainServiceName ?? ''}
+                            onChange={(event) => setBatchDrafts((current) => current.map((entry) =>
+                              entry.draftIndex === draft.draftIndex
+                                ? { ...entry, customDomainServiceName: event.target.value }
+                                : entry))}
+                          >
+                            <option value="">Select a service</option>
+                            {services.filter((service) => service.name).map((service) => (
+                              <option key={service.name} value={service.name}>{service.name}</option>
+                            ))}
+                          </select>
+                        </>
+                      )}
                     </div>
                   )}
 
@@ -634,7 +692,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                     </div>
                   ))}
 
-                  {draft.customDomain && (
+                  {draft.customDomain && !editing && (
                     <div className="confirmation-batch-domain">
                       <span className="font-mono text-xs text-dim">
                         domain: {draft.customDomain}

@@ -267,13 +267,13 @@ async function mergeBatchDeployConfirmations(
     return true;
   }
 
-  // The confirmation is owned by the last entry that actually survived draft
-  // assembly. A later broken model call must retain its own error instead of
-  // becoming the owner of a batch it is not part of.
-  const lastConf = entryConfirmations[entryConfirmations.length - 1];
+  // Use any assembled draft for the authorization guard while planning. The
+  // actual confirmation owner is selected after entry-local planner
+  // rejections are known, so a rejected last draft can never own the card.
+  const planningConf = entryConfirmations[entryConfirmations.length - 1];
 
   if (get().authorizationEpoch !== authorizationEpoch
-      || !isTransactionAuthorizationCurrent(get(), lastConf.authorization)) {
+      || !isTransactionAuthorizationCurrent(get(), planningConf.authorization)) {
     markConfirmationsAuthorizationCancelled(get, set, deployConfs);
     return false;
   }
@@ -282,36 +282,67 @@ async function mergeBatchDeployConfirmations(
   // are never treated as aggregate affordability proof: run the exact same
   // canonical planner used by the UI-direct batch entry point.
   const current = get();
-  const planned = await executeBatchDeploy(entries, {
+  const batchOptions = {
     clientManager: current.clientManager,
     address: current.address,
     signing: current.signing,
     appRegistry: getAppRegistryAccess(),
     signal: current.abortController?.signal,
     tiers: current.skuTiers.tiers,
-  });
+  };
+  const planned = containsPreparedBatchDraft
+    ? await executeBatchDeploy(entries, batchOptions, undefined, { allowPartialEntries: true })
+    : await executeBatchDeploy(entries, batchOptions);
 
   if (get().authorizationEpoch !== authorizationEpoch
-      || !isTransactionAuthorizationCurrent(get(), lastConf.authorization)) {
+      || !isTransactionAuthorizationCurrent(get(), planningConf.authorization)) {
     markConfirmationsAuthorizationCancelled(get, set, deployConfs);
     return false;
+  }
+
+  const rejectedByDraft = new Map<number, string>();
+  for (const rejection of planned.rejectedEntries ?? []) {
+    if (!Number.isInteger(rejection.draftIndex)
+        || rejection.draftIndex < 0
+        || rejection.draftIndex >= entryConfirmations.length
+        || rejectedByDraft.has(rejection.draftIndex)) {
+      const error = 'Batch deploy planner returned rejected draft identities that do not match the validated drafts.';
+      const ids = new Set(entryConfirmations.map((conf) => conf.toolMessageId));
+      set({
+        messages: get().messages.map((message) => ids.has(message.id)
+          ? { ...message, content: `Error: ${error}`, error, isStreaming: false, awaitingConfirmation: false }
+          : message),
+      });
+      return false;
+    }
+    rejectedByDraft.set(rejection.draftIndex, rejection.error);
   }
 
   if (!planned.requiresConfirmation) {
     const error = planned.success
       ? 'Batch deploy did not return a confirmation plan.'
       : planned.error;
-    const ids = new Set(entryConfirmations.map((conf) => conf.toolMessageId));
     set({
-      messages: get().messages.map((message) => ids.has(message.id)
-        ? { ...message, content: `Error: ${error}`, error, isStreaming: false, awaitingConfirmation: false }
-        : message),
+      messages: get().messages.map((message) => {
+        const draftIndex = entryConfirmations.findIndex(
+          (confirmation) => confirmation.toolMessageId === message.id,
+        );
+        if (draftIndex < 0) return message;
+        const detail = rejectedByDraft.get(draftIndex) ?? error;
+        return {
+          ...message,
+          content: `Error: ${detail}`,
+          error: detail,
+          isStreaming: false,
+          awaitingConfirmation: false,
+        };
+      }),
     });
     return false;
   }
 
   const plan = planned.pendingAction.args.plan as BatchDeployPlan;
-  if (plan.entries.length !== entryConfirmations.length) {
+  if (plan.entries.length + rejectedByDraft.size !== entryConfirmations.length) {
     const error = 'Batch deploy planner returned an entry count that does not match the validated drafts.';
     const ids = new Set(entryConfirmations.map((conf) => conf.toolMessageId));
     set({
@@ -326,6 +357,7 @@ async function mergeBatchDeployConfirmations(
     if (!Number.isInteger(entry.draftIndex)
         || entry.draftIndex < 0
         || entry.draftIndex >= entryConfirmations.length
+        || rejectedByDraft.has(entry.draftIndex)
         || plannedNamesByDraft.has(entry.draftIndex)) {
       const error = 'Batch deploy planner returned draft identities that do not match the validated drafts.';
       const ids = new Set(entryConfirmations.map((conf) => conf.toolMessageId));
@@ -341,11 +373,36 @@ async function mergeBatchDeployConfirmations(
   set({
     messages: get().messages.map((message) => {
       const index = entryConfirmations.findIndex((conf) => conf.toolMessageId === message.id);
-      return index >= 0
-        ? { ...message, content: `Batch deploy: ${plannedNamesByDraft.get(index)!}`, isStreaming: false }
-        : message;
+      if (index < 0) return message;
+      const rejection = rejectedByDraft.get(index);
+      if (rejection) {
+        return {
+          ...message,
+          content: `Error: ${rejection}`,
+          error: rejection,
+          isStreaming: false,
+          awaitingConfirmation: false,
+        };
+      }
+      return {
+        ...message,
+        content: `Batch deploy: ${plannedNamesByDraft.get(index)!}`,
+        error: undefined,
+        isStreaming: false,
+      };
     }),
   });
+
+  const survivingConfirmations = entryConfirmations.filter(
+    (_confirmation, draftIndex) => plannedNamesByDraft.has(draftIndex),
+  );
+  const lastConf = survivingConfirmations[survivingConfirmations.length - 1];
+  if (!lastConf
+      || get().authorizationEpoch !== authorizationEpoch
+      || !isTransactionAuthorizationCurrent(get(), lastConf.authorization)) {
+    markConfirmationsAuthorizationCancelled(get, set, deployConfs);
+    return false;
+  }
 
   set({
     pendingConfirmation: {

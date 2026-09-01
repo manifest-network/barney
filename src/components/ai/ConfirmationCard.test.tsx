@@ -1315,7 +1315,8 @@ describe('ConfirmationCard canonical batch plan', () => {
   });
 
   it('edits an entry, clears the old hash, and requires re-planning before confirmation', () => {
-    const { container, onConfirm, cleanup } = renderBatch();
+    const action = makePlannedBatchAction();
+    const { container, onConfirm, render, cleanup } = renderBatch(vi.fn(), action);
     try {
       const edit = container.querySelector('button[aria-label="Edit alpha"]') as HTMLButtonElement;
       flushSync(() => edit.click());
@@ -1323,6 +1324,13 @@ describe('ConfirmationCard canonical batch plan', () => {
       flushSync(() => removePort.click());
 
       expect(container.textContent).toContain('Manifest SHA-256: Pending revalidation');
+      // A failed re-plan replaces action args while preserving the card id.
+      // Parsed editor state must survive that parent render without re-parsing
+      // the original manifest back over the local edit.
+      render({
+        ...action,
+        args: { ...action.args, _batchReplanError: 'temporary planner failure' },
+      });
       const review = Array.from(container.querySelectorAll('button'))
         .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
       flushSync(() => review.click());
@@ -1332,6 +1340,84 @@ describe('ConfirmationCard canonical batch plan', () => {
       const alpha = override.editedBatchEntries.find((entry: { app_name: string }) => entry.app_name === 'alpha');
       expect(JSON.parse(alpha.manifest).ports).toBeUndefined();
       expect(onConfirm).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('lets a one-entry batch survivor edit its custom domain and stack service', () => {
+    const action = makePlannedBatchAction();
+    const plan = action.args.plan as {
+      entries: Array<Record<string, unknown>>;
+      totalServiceCount: number;
+      totalPricePerHour: number;
+    };
+    plan.entries = [plan.entries[1]];
+    plan.totalServiceCount = 2;
+    plan.totalPricePerHour = 0.2;
+    const { container, onConfirm, cleanup } = renderBatch(vi.fn(), action);
+    try {
+      const edit = container.querySelector('button[aria-label="Edit beta"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+
+      const input = container.querySelector('input[aria-label="Custom domain for beta"]') as HTMLInputElement;
+      expect(input).not.toBeNull();
+      flushSync(() => {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+        setter.call(input, 'beta.example.com');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+
+      const select = container.querySelector(
+        'select[aria-label="Service for beta custom domain"]',
+      ) as HTMLSelectElement;
+      expect(select).not.toBeNull();
+      flushSync(() => {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!;
+        setter.call(select, 'web');
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+
+      const review = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
+      flushSync(() => review.click());
+
+      expect(onConfirm).toHaveBeenCalledWith({
+        editedBatchEntries: [expect.objectContaining({
+          draftIndex: 1,
+          app_name: 'beta',
+          customDomain: 'beta.example.com',
+          customDomainServiceName: 'web',
+        })],
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('disables confirmation when a plan entry has no services', () => {
+    const action = makePlannedBatchAction();
+    const plan = action.args.plan as {
+      entries: Array<Record<string, unknown>>;
+      totalServiceCount: number;
+      totalPricePerHour: number;
+    };
+    plan.entries = [{
+      ...plan.entries[0],
+      services: [],
+      serviceNames: [],
+      serviceCount: 0,
+      totalPricePerHour: 0,
+    }];
+    plan.totalServiceCount = 0;
+    plan.totalPricePerHour = 0;
+    const { container, cleanup } = renderBatch(vi.fn(), action);
+    try {
+      expect(container.querySelector('[data-testid="batch-deploy-total"]')?.textContent)
+        .toContain('Pending revalidation');
+      const confirm = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Confirm')) as HTMLButtonElement;
+      expect(confirm.disabled).toBe(true);
     } finally {
       cleanup();
     }

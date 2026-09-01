@@ -111,15 +111,34 @@ interface PreparedBatchDeployEntry {
 
 type PlannedEntryResult =
   | { success: true; entry: BatchDeployPlanEntry }
-  | { success: false; error: string };
+  | { success: false; draftIndex: number; error: string };
+
+export interface BatchDeployEntryRejection {
+  draftIndex: number;
+  error: string;
+}
+
+export interface BatchDeployPlanningOptions {
+  /**
+   * Model-coalesced drafts preserve the historical partial-batch behavior:
+   * reject an invalid entry by identity and continue planning valid siblings.
+   * UI-authored and confirm-time plans remain atomic by default.
+   */
+  allowPartialEntries?: boolean;
+}
 
 export type BatchDeployPlanningResult =
   | {
       success: true;
       plan: BatchDeployPlan;
       confirmationMessage: string;
+      rejectedEntries: BatchDeployEntryRejection[];
     }
-  | { success: false; error: string };
+  | {
+      success: false;
+      error: string;
+      rejectedEntries?: BatchDeployEntryRejection[];
+    };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -385,6 +404,7 @@ export function batchPlanToEntries(plan: BatchDeployPlan): BatchDeployEntry[] {
 export async function planBatchDeploy(
   drafts: readonly BatchDeployEntry[],
   options: ToolExecutorOptions,
+  planningOptions: BatchDeployPlanningOptions = {},
 ): Promise<BatchDeployPlanningResult> {
   const { address, appRegistry } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
@@ -429,6 +449,12 @@ export async function planBatchDeploy(
   const usedDomains = new Set<string>();
   const usedDraftIndices = new Set<number>();
   const preparedEntries: PreparedBatchDeployEntry[] = [];
+  const rejectedEntries: BatchDeployEntryRejection[] = [];
+  const rejectDraft = (draftIndex: number, error: string): boolean => {
+    if (!planningOptions.allowPartialEntries) return false;
+    rejectedEntries.push({ draftIndex, error });
+    return true;
+  };
 
   for (const [inputIndex, draft] of drafts.entries()) {
     assertPlanningCurrent(options);
@@ -438,24 +464,30 @@ export async function planBatchDeploy(
     }
     usedDraftIndices.add(draftIndex);
     const resolvedName = nextAvailableName(draft.app_name, address, usedNames);
-    if (!resolvedName.name) return { success: false, error: resolvedName.error! };
+    if (!resolvedName.name) {
+      const error = resolvedName.error!;
+      if (rejectDraft(draftIndex, error)) continue;
+      return { success: false, error };
+    }
     const name = resolvedName.name;
-    usedNames.add(name);
 
     let manifest: string;
     try {
       manifest = new TextDecoder('utf-8', { fatal: true }).decode(draft.payload.bytes);
     } catch {
-      return { success: false, error: `Cannot deploy "${name}": manifest is not valid UTF-8 text.` };
+      const error = `Cannot deploy "${name}": manifest is not valid UTF-8 text.`;
+      if (rejectDraft(draftIndex, error)) continue;
+      return { success: false, error };
     }
     if (draft.payload.bytes.length === 0) {
-      return { success: false, error: `Cannot deploy "${name}": manifest is empty.` };
+      const error = `Cannot deploy "${name}": manifest is empty.`;
+      if (rejectDraft(draftIndex, error)) continue;
+      return { success: false, error };
     }
     if (draft.payload.bytes.length > MAX_PAYLOAD_SIZE) {
-      return {
-        success: false,
-        error: `Cannot deploy "${name}": manifest exceeds the ${MAX_PAYLOAD_SIZE / 1024}KB limit.`,
-      };
+      const error = `Cannot deploy "${name}": manifest exceeds the ${MAX_PAYLOAD_SIZE / 1024}KB limit.`;
+      if (rejectDraft(draftIndex, error)) continue;
+      return { success: false, error };
     }
     // TextDecoder canonicalizes accepted UTF-8 (notably stripping a leading
     // BOM). Hash and size the exact UTF-8 text that the plan stores and the SDK
@@ -466,36 +498,44 @@ export async function planBatchDeploy(
     try {
       parsed = JSON.parse(manifest);
     } catch {
-      return { success: false, error: `Cannot deploy "${name}": manifest must be valid JSON.` };
+      const error = `Cannot deploy "${name}": manifest must be valid JSON.`;
+      if (rejectDraft(draftIndex, error)) continue;
+      return { success: false, error };
     }
     const validation = validateManifest(parsed);
     if (!validation.valid) {
-      return {
-        success: false,
-        error: `Cannot deploy "${name}": invalid manifest: ${validation.errors.join('; ')}`,
-      };
+      const error = `Cannot deploy "${name}": invalid manifest: ${validation.errors.join('; ')}`;
+      if (rejectDraft(draftIndex, error)) continue;
+      return { success: false, error };
     }
     const envError = validateManifestEnvNames(parsed);
-    if (envError) return { success: false, error: `Cannot deploy "${name}": ${envError}` };
+    if (envError) {
+      const error = `Cannot deploy "${name}": ${envError}`;
+      if (rejectDraft(draftIndex, error)) continue;
+      return { success: false, error };
+    }
 
     const services = summarizeBatchManifest(parsed);
     if (!services || services.length === 0) {
-      return { success: false, error: `Cannot deploy "${name}": manifest has no services.` };
+      const error = `Cannot deploy "${name}": manifest has no services.`;
+      if (rejectDraft(draftIndex, error)) continue;
+      return { success: false, error };
     }
     const serviceNames = services.map((service) => service.name).filter(Boolean);
     const serviceCount = services.length;
 
     const resolution = resolveSizeOrCheapest(draft.size, tiers);
     if (!resolution) {
-      return { success: false, error: 'Tier catalog unavailable — try again in a moment.' };
+      const error = 'Tier catalog unavailable — try again in a moment.';
+      if (rejectDraft(draftIndex, error)) continue;
+      return { success: false, error };
     }
     const tier = resolution.tier;
     const provider = providers.find((candidate) => candidate.uuid === tier.providerUuid);
     if (!provider?.apiUrl) {
-      return {
-        success: false,
-        error: `No available provider found for the ${tier.skuName} tier.`,
-      };
+      const error = `No available provider found for the ${tier.skuName} tier.`;
+      if (rejectDraft(draftIndex, error)) continue;
+      return { success: false, error };
     }
 
     let customDomain = draft.customDomain?.trim() ?? '';
@@ -504,24 +544,33 @@ export async function planBatchDeploy(
     if (customDomain) {
       customDomain = customDomain.toLowerCase().replace(/\.$/, '');
       if (usedDomains.has(customDomain)) {
-        return { success: false, error: `Custom domain "${customDomain}" is repeated in this batch.` };
+        const error = `Custom domain "${customDomain}" is repeated in this batch.`;
+        if (rejectDraft(draftIndex, error)) continue;
+        return { success: false, error };
       }
-      usedDomains.add(customDomain);
 
       if (serviceNames.length > 1) {
-        if (!customDomainServiceName || !serviceNames.includes(customDomainServiceName)) {
-          return {
-            success: false,
-            error: `"${name}" is a multi-service stack — choose one of: ${serviceNames.join(', ')}.`,
-          };
+        if (!customDomainServiceName) {
+          const error = `"${name}" is a multi-service stack — pass service_name to attach the custom domain to one of: ${serviceNames.join(', ')}.`;
+          if (rejectDraft(draftIndex, error)) continue;
+          return { success: false, error };
+        }
+        if (!serviceNames.includes(customDomainServiceName)) {
+          const error = `Service "${customDomainServiceName}" not found in stack. Available: ${serviceNames.join(', ')}.`;
+          if (rejectDraft(draftIndex, error)) continue;
+          return { success: false, error };
         }
       } else if (serviceNames.length === 1) {
         customDomainServiceName = serviceNames[0];
       } else {
         customDomainServiceName = '';
       }
+    } else {
+      customDomainServiceName = '';
     }
 
+    usedNames.add(name);
+    if (customDomain) usedDomains.add(customDomain);
     preparedEntries.push({
       draftIndex,
       app_name: name,
@@ -542,6 +591,14 @@ export async function planBatchDeploy(
     });
   }
 
+  if (preparedEntries.length === 0) {
+    return {
+      success: false,
+      error: 'No valid apps remain in this batch.',
+      ...(rejectedEntries.length > 0 ? { rejectedEntries } : {}),
+    };
+  }
+
   // Domain reads are independent once names, manifests, tiers, and duplicate
   // domains have been validated synchronously. Run them in parallel so one
   // slow lease lookup does not multiply confirm-time latency by batch size.
@@ -557,7 +614,11 @@ export async function planBatchDeploy(
       assertPlanningCurrent(options);
       if (domainValidation.error) {
         await manifestHashPromise;
-        return { success: false, error: domainValidation.error };
+        return {
+          success: false,
+          draftIndex: prepared.draftIndex,
+          error: domainValidation.error,
+        };
       }
       customDomainWarning = domainValidation.warning;
 
@@ -574,6 +635,7 @@ export async function planBatchDeploy(
           await manifestHashPromise;
           return {
             success: false,
+            draftIndex: prepared.draftIndex,
             error: `"${prepared.customDomain}" is already attached to ${friendly}. Pick a different domain or detach it first.`,
           };
         }
@@ -619,8 +681,19 @@ export async function planBatchDeploy(
 
   const entries: BatchDeployPlanEntry[] = [];
   for (const result of entryResults) {
-    if (!result.success) return result;
+    if (!result.success) {
+      if (rejectDraft(result.draftIndex, result.error)) continue;
+      return { success: false, error: result.error };
+    }
     entries.push(result.entry);
+  }
+
+  if (entries.length === 0) {
+    return {
+      success: false,
+      error: 'No valid apps remain in this batch.',
+      ...(rejectedEntries.length > 0 ? { rejectedEntries } : {}),
+    };
   }
 
   const denomSymbols = new Set(entries.map((entry) => entry.denomSymbol));
@@ -628,6 +701,7 @@ export async function planBatchDeploy(
     return {
       success: false,
       error: 'Batch entries use different billing denominations and cannot be aggregated safely.',
+      ...(rejectedEntries.length > 0 ? { rejectedEntries } : {}),
     };
   }
   const denomSymbol = entries[0].denomSymbol;
@@ -651,18 +725,21 @@ export async function planBatchDeploy(
     return {
       success: false,
       error: 'Could not verify aggregate credit balance. No transaction was submitted.',
+      ...(rejectedEntries.length > 0 ? { rejectedEntries } : {}),
     };
   }
   if (creditBalance === null) {
     return {
       success: false,
       error: 'Could not verify aggregate credit balance. No transaction was submitted.',
+      ...(rejectedEntries.length > 0 ? { rejectedEntries } : {}),
     };
   }
   if (totalPricePerHour > 0 && creditBalance < totalPricePerHour) {
     return {
       success: false,
       error: `Insufficient credits. You have ${creditBalance.toFixed(2)} credits but need at least ${totalPricePerHour.toFixed(2)} ${denomSymbol} for 1 hour of ${totalServiceCount} service${totalServiceCount === 1 ? '' : 's'} across ${entries.length} app${entries.length === 1 ? '' : 's'}.`,
+      ...(rejectedEntries.length > 0 ? { rejectedEntries } : {}),
     };
   }
 
@@ -689,5 +766,6 @@ export async function planBatchDeploy(
     success: true,
     plan: deepFreeze(plan),
     confirmationMessage,
+    rejectedEntries,
   };
 }
