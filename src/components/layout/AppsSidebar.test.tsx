@@ -107,6 +107,13 @@ function registryApp(name: string, leaseUuid: string) {
   };
 }
 
+function isWalletContext(value: unknown, address: string): boolean {
+  return typeof value === 'object'
+    && value !== null
+    && 'address' in value
+    && value.address === address;
+}
+
 describe('AppsSidebar refresh lifecycle', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -354,6 +361,64 @@ describe('AppsSidebar refresh lifecycle', () => {
     expect(container.textContent).toContain('42 PWR');
     expect(container.textContent).toContain('~6h remaining');
     expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('releases an unclaimed Retry reservation when its wallet lifecycle ends', async () => {
+    mocks.getCreditAccount.mockRejectedValue(new Error('account unavailable'));
+    mocks.getCreditEstimate.mockRejectedValue(new Error('estimate unavailable'));
+    await render();
+    await act(async () => {
+      await expect(latestRefresh()()).resolves.toBe(false);
+    });
+
+    const retryButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retry',
+    );
+    await act(async () => {
+      retryButton?.click();
+    });
+    expect(container.textContent).toContain('Refreshing…');
+
+    const mapDeleteSpy = vi.spyOn(Map.prototype, 'delete');
+    const setDeleteSpy = vi.spyOn(Set.prototype, 'delete');
+    try {
+      mocks.address = 'manifest1walletb';
+      await render();
+
+      expect(mapDeleteSpy.mock.calls.some(([context]) =>
+        isWalletContext(context, 'manifest1walleta')
+      )).toBe(true);
+      expect(setDeleteSpy.mock.calls.some(([context]) =>
+        isWalletContext(context, 'manifest1walleta')
+      )).toBe(true);
+
+      // Ownership must advance with the replacement wallet; otherwise every
+      // later switch would keep trying to release A while leaking B, C, ….
+      await act(async () => {
+        await expect(latestRefresh()()).resolves.toBe(false);
+      });
+      const walletBRetry = Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent === 'Retry',
+      );
+      await act(async () => {
+        walletBRetry?.click();
+      });
+      expect(container.textContent).toContain('Refreshing…');
+      mapDeleteSpy.mockClear();
+      setDeleteSpy.mockClear();
+
+      mocks.address = 'manifest1walletc';
+      await render();
+      expect(mapDeleteSpy.mock.calls.some(([context]) =>
+        isWalletContext(context, 'manifest1walletb')
+      )).toBe(true);
+      expect(setDeleteSpy.mock.calls.some(([context]) =>
+        isWalletContext(context, 'manifest1walletb')
+      )).toBe(true);
+    } finally {
+      mapDeleteSpy.mockRestore();
+      setDeleteSpy.mockRestore();
+    }
   });
 
   it('releases refresh activity when setup throws before the billing reads', async () => {

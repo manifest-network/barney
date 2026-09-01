@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createElement } from 'react';
+import { createElement, StrictMode } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
@@ -133,6 +133,12 @@ describe('AppsSidebar with the real visibility poller', () => {
     });
   }
 
+  async function renderStrict(): Promise<void> {
+    await act(async () => {
+      root.render(createElement(StrictMode, null, createElement(AppsSidebar)));
+    });
+  }
+
   it('populates the initial wallet and restarts immediately for a wallet switch', async () => {
     await render();
     await vi.waitFor(() => expect(container.textContent).toContain('5 PWR'));
@@ -164,6 +170,48 @@ describe('AppsSidebar with the real visibility poller', () => {
     });
 
     expect(mocks.logError).not.toHaveBeenCalled();
+  });
+
+  it('preserves StrictMode pass counts when effects replay for the same wallet', async () => {
+    const firstAccount = deferred<ReturnType<typeof creditAccount>>();
+    const firstEstimate = deferred<ReturnType<typeof creditEstimate>>();
+    const secondAccount = deferred<ReturnType<typeof creditAccount>>();
+    const secondEstimate = deferred<ReturnType<typeof creditEstimate>>();
+    mocks.getCreditAccount
+      .mockReturnValueOnce(firstAccount.promise)
+      .mockReturnValueOnce(secondAccount.promise);
+    mocks.getCreditEstimate
+      .mockReturnValueOnce(firstEstimate.promise)
+      .mockReturnValueOnce(secondEstimate.promise);
+
+    await renderStrict();
+    await vi.waitFor(() => expect(mocks.getCreditAccount).toHaveBeenCalledTimes(2));
+
+    // The current (second) pass fails first. The stale first pass is still
+    // active, so the visible Retry control must remain disabled.
+    await act(async () => {
+      secondAccount.reject(new Error('current account failure'));
+      secondEstimate.reject(new Error('current estimate failure'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => {
+      expect(Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent === 'Refreshing…',
+      )?.disabled).toBe(true);
+    });
+
+    await act(async () => {
+      firstAccount.reject(new Error('stale account failure'));
+      firstEstimate.reject(new Error('stale estimate failure'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => {
+      expect(Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent === 'Retry',
+      )?.disabled).toBe(false);
+    });
   });
 
   it('disables Retry during an automatic pass and preserves its successful result', async () => {

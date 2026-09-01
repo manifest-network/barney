@@ -132,6 +132,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const currentWalletContextRef = useRef<WalletRenderContext | null>(walletContext);
   const activeCreditRefreshCountsRef = useRef(new Map<WalletRenderContext, number>());
   const pendingCreditRetryContextsRef = useRef(new Set<WalletRenderContext>());
+  const creditRefreshOwnerContextRef = useRef(walletContext);
   const retryButtonRef = useRef<HTMLButtonElement>(null);
   const restoreRetryFocusContextRef = useRef<WalletRenderContext | null>(null);
 
@@ -174,6 +175,23 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
       refreshGenerationRef.current += 1;
     };
   }, [walletContext, pollRestartGeneration]);
+
+  // A button click reserves activity before the restarted poll can claim it.
+  // Reconcile ownership from the replacement wallet's setup, not cleanup:
+  // StrictMode replays effect cleanup without ending the wallet lifecycle.
+  // Keying only on walletContext also ensures a same-wallet poll restart keeps
+  // the reservation it is about to claim.
+  useEffect(() => {
+    const previousContext = creditRefreshOwnerContextRef.current;
+    if (previousContext === walletContext) return;
+    pendingCreditRetryContextsRef.current.delete(previousContext);
+    const counts = activeCreditRefreshCountsRef.current;
+    const hadActivity = counts.delete(previousContext);
+    creditRefreshOwnerContextRef.current = walletContext;
+    if (hadActivity) {
+      setActiveCreditRefreshContexts(new Set(counts.keys()));
+    }
+  }, [walletContext]);
 
   // Scope rendered registry and credit data as well as writes. This hides
   // wallet A's rows and values on the very render that switches to wallet B,
@@ -438,6 +456,8 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
           </div>
         )}
         {creditFailureCopy && (
+          // The toggling control must stay outside the assertive region, and
+          // its busy label must not imply that an automatic poll was user-led.
           <div className="apps-sidebar__credits-error">
             <span role="alert">{creditFailureCopy}</span>
             <button
