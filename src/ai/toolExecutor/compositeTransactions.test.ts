@@ -183,7 +183,7 @@ function makeDeployResult(overrides: Partial<DeployResult> = {}): DeployResult {
 // now rejected before reaching confirmation — see "rejects a non-JSON file
 // upload" below).
 function makeJsonPayload(filename = 'docker-compose.json'): PayloadAttachment {
-  const json = JSON.stringify({ image: 'nginx', port: '80' });
+  const json = JSON.stringify({ image: 'nginx', ports: { '80/tcp': {} } });
   const bytes = new TextEncoder().encode(json);
   return { bytes, filename, size: bytes.length, hash: 'b'.repeat(64) };
 }
@@ -2456,19 +2456,66 @@ describe('executeConfirmedCosmosTx', () => {
 // ============================================================================
 
 function makeBatchEntry(name: string): BatchDeployEntry {
+  const bytes = new TextEncoder().encode(JSON.stringify({ image: `${name}:latest`, ports: { '8080/tcp': {} } }));
   return {
     app_name: name,
     payload: {
-      bytes: new Uint8Array([1, 2, 3]),
+      bytes,
       filename: `manifest-${name}.json`,
-      size: 3,
+      size: bytes.length,
       hash: 'a'.repeat(64),
     },
   };
 }
 
+function mockLiveBatchCatalog(tiers = SAMPLE_TIERS): void {
+  vi.mocked(getSKUs).mockResolvedValue(tiers.map((tier) => ({
+    uuid: tier.skuUuid,
+    name: tier.skuName,
+    providerUuid: tier.providerUuid,
+    basePrice: {
+      amount: String(Math.round(tier.pricePerHour * 1_000_000)),
+      denom: 'upwr',
+    },
+    unit: Unit.UNIT_PER_HOUR,
+  } as any)));
+  vi.mocked(getProviders).mockResolvedValue([
+    { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+  ]);
+  vi.mocked(getCreditAccount).mockResolvedValue({
+    balances: [{ denom: 'upwr', amount: '1000000000' }],
+  } as any);
+}
+
+async function confirmedBatchArgs(
+  entries: BatchDeployEntry[],
+  options: ToolExecutorOptions = makeOptions(),
+): Promise<Record<string, unknown>> {
+  const validEntries = entries.map((entry) => {
+    try {
+      JSON.parse(new TextDecoder().decode(entry.payload.bytes));
+      return entry;
+    } catch {
+      return { ...entry, payload: makeJsonPayload(entry.payload.filename) };
+    }
+  });
+  const result = await executeBatchDeploy(validEntries, options);
+  if (!result.requiresConfirmation) {
+    throw new Error(result.success ? 'Expected batch confirmation' : result.error);
+  }
+  return result.pendingAction.args;
+}
+
 describe('executeBatchDeploy', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+    ]);
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      balances: [{ denom: 'upwr', amount: '1000000000' }],
+    } as any);
+  });
 
   it('returns error without wallet', async () => {
     const result = await executeBatchDeploy([makeBatchEntry('app1')], makeOptions({ address: undefined }));
@@ -2486,10 +2533,9 @@ describe('executeBatchDeploy', () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
     const result = await executeBatchDeploy([makeBatchEntry('app1')], makeOptions(), 'xxlarge');
     expect(result.success).toBe(true);
-    const entries = result.pendingAction?.args.entries as Array<{ size: string }>;
+    const entries = (result.pendingAction?.args.plan as { entries: Array<{ size: string }> }).entries;
     expect(entries[0].size).toBe('docker-micro'); // SAMPLE_TIERS cheapest
   });
 
@@ -2497,7 +2543,6 @@ describe('executeBatchDeploy', () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
 
     // Arrange so the cheapest tier (docker-small @ 0.01 PWR/hr) is NOT tiers[0].
     // A `tiers[0]`-based regression would silently pass against SAMPLE_TIERS;
@@ -2515,7 +2560,7 @@ describe('executeBatchDeploy', () => {
 
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
-    const entries = result.pendingAction?.args.entries as Array<{ size: string }>;
+    const entries = (result.pendingAction?.args.plan as { entries: Array<{ size: string }> }).entries;
     expect(entries[0].size).toBe('docker-small');
   });
 
@@ -2526,7 +2571,6 @@ describe('executeBatchDeploy', () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
 
     const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
     const result = await executeBatchDeploy(entries, makeOptions());
@@ -2537,7 +2581,7 @@ describe('executeBatchDeploy', () => {
     expect(result.confirmationMessage).toContain('app1');
     expect(result.confirmationMessage).toContain('app2');
     expect(result.pendingAction?.toolName).toBe('batch_deploy');
-    expect(result.pendingAction?.args.entries).toHaveLength(2);
+    expect((result.pendingAction?.args.plan as { entries: unknown[] }).entries).toHaveLength(2);
   });
 
   // Pass-16 batch-side regression catchers. Mirrors the single-deploy pair
@@ -2552,7 +2596,6 @@ describe('executeBatchDeploy', () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
 
     const freeTier = [
       { skuName: 'docker-micro', skuUuid: 'sku-free', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0, denomSymbol: 'PWR', unit: 1 },
@@ -2577,15 +2620,13 @@ describe('executeBatchDeploy', () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
 
     const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
     const result = await executeBatchDeploy(entries, makeOptions());
 
     expect(result.success).toBe(true);
-    // Default SAMPLE_TIERS docker-micro is 0.036 PWR/hr — same pin as the
-    // single-deploy happy-path regression catcher.
-    expect(result.confirmationMessage).toContain('0.0360 PWR/hr');
+    // Two one-service apps at 0.036 PWR/hr each are disclosed as the aggregate.
+    expect(result.confirmationMessage).toContain('0.0720 PWR/hr total');
   });
 
   it('returns insufficient credits error when total cost exceeds balance', async () => {
@@ -2605,6 +2646,49 @@ describe('executeBatchDeploy', () => {
     expect(result.error).toContain('Insufficient credits');
   });
 
+  it('rejects two apps that are individually affordable but collectively unaffordable', async () => {
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      // Each 1 PWR/hr app is affordable on its own; the 2 PWR/hr batch is not.
+      balances: [{ denom: 'upwr', amount: '1500000' }],
+    } as any);
+    const oneCreditTier = SAMPLE_TIERS.map((tier) => ({ ...tier, pricePerHour: 1 }));
+
+    const result = await executeBatchDeploy(
+      [makeBatchEntry('alpha'), makeBatchEntry('beta')],
+      makeOptions({ tiers: oneCreditTier }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Insufficient credits');
+    expect(result.error).toContain('2.00 PWR');
+  });
+
+  it('stores a deeply frozen consent plan with exact manifest and plan hashes', async () => {
+    const result = await executeBatchDeploy(
+      [makeBatchEntry('alpha'), makeBatchEntry('beta')],
+      makeOptions(),
+    );
+
+    expect(result.requiresConfirmation).toBe(true);
+    if (!result.requiresConfirmation) throw new Error('expected confirmation');
+    const plan = result.pendingAction.args.plan as any;
+    expect(plan.planHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(plan.entries[0].manifestHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(plan.entries[0].manifest).toContain('alpha:latest');
+    expect(plan.totalPricePerHour).toBeCloseTo(0.072);
+    expect(Object.isFrozen(plan)).toBe(true);
+    expect(Object.isFrozen(plan.entries)).toBe(true);
+    expect(Object.isFrozen(plan.entries[0])).toBe(true);
+    expect(Object.isFrozen(plan.entries[0].services)).toBe(true);
+  });
+
+  it('fails closed when aggregate balance cannot be verified', async () => {
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+    const result = await executeBatchDeploy([makeBatchEntry('alpha')], makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Could not verify aggregate credit balance');
+  });
+
   it('extracts service names from stack manifest payloads', async () => {
     vi.mocked(getSKUs).mockResolvedValue([
       { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
@@ -2612,7 +2696,6 @@ describe('executeBatchDeploy', () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
 
     const stackManifest = {
       services: {
@@ -2631,7 +2714,7 @@ describe('executeBatchDeploy', () => {
 
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
-    const resolvedEntries = result.pendingAction?.args.entries as any[];
+    const resolvedEntries = (result.pendingAction?.args.plan as { entries: any[] }).entries;
     expect(resolvedEntries).toHaveLength(1);
     expect(resolvedEntries[0].serviceNames).toEqual(['web', 'db']);
   });
@@ -2669,12 +2752,65 @@ describe('executeBatchDeploy', () => {
 });
 
 describe('executeConfirmedBatchDeploy', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLiveBatchCatalog();
+  });
 
-  it('returns error for empty entries', async () => {
+  it('rejects a legacy/unplanned batch action', async () => {
     const result = await executeConfirmedBatchDeploy({ entries: [] }, CLIENT_MANAGER, makeOptions());
     expect(result.success).toBe(false);
-    expect(result.error).toContain('No entries');
+    expect(result.error).toContain('Invalid batch deployment plan');
+  });
+
+  it('rejects payload tampering before any deployment is submitted', async () => {
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha'), makeBatchEntry('beta')]);
+    const plan = args.plan as any;
+    const tampered = {
+      ...plan,
+      entries: plan.entries.map((entry: any, index: number) => index === 0
+        ? { ...entry, manifest: entry.manifest.replace('alpha:latest', 'attacker:latest') }
+        : entry),
+    };
+
+    const result = await executeConfirmedBatchDeploy(
+      { plan: tampered },
+      CLIENT_MANAGER,
+      makeOptions(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('integrity check failed');
+    expect(deployManifest).not.toHaveBeenCalled();
+  });
+
+  it('rejects a price change discovered immediately before execution', async () => {
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha'), makeBatchEntry('beta')]);
+    mockLiveBatchCatalog(SAMPLE_TIERS.map((tier) => ({
+      ...tier,
+      pricePerHour: tier.pricePerHour + 0.01,
+    })));
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions());
+
+    expect(getSKUs).toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('plan changed after approval');
+    expect(deployManifest).not.toHaveBeenCalled();
+  });
+
+  it('recomputes aggregate balance immediately before execution', async () => {
+    vi.mocked(getCreditAccount)
+      .mockResolvedValueOnce({ balances: [{ denom: 'upwr', amount: '1000000000' }] } as any)
+      .mockResolvedValueOnce({ balances: [{ denom: 'upwr', amount: '10000' }] } as any);
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha'), makeBatchEntry('beta')]);
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Insufficient credits');
+    expect(getCreditAccount).toHaveBeenCalledTimes(2);
+    expect(deployManifest).not.toHaveBeenCalled();
   });
 
   it('buckets an authorization guard failure as cancelled before deploy', async () => {
@@ -2683,7 +2819,7 @@ describe('executeConfirmedBatchDeploy', () => {
     ];
 
     const result = await executeConfirmedBatchDeploy(
-      { entries },
+      await confirmedBatchArgs(entries),
       CLIENT_MANAGER,
       makeOptions({ assertAuthorization: () => { throw new Error('wallet changed'); } }),
     );
@@ -2701,7 +2837,7 @@ describe('executeConfirmedBatchDeploy', () => {
     ];
 
     const result = await executeConfirmedBatchDeploy(
-      { entries },
+      await confirmedBatchArgs(entries),
       CLIENT_MANAGER,
       makeOptions({
         signal: controller.signal,
@@ -2730,7 +2866,7 @@ describe('executeConfirmedBatchDeploy', () => {
 
     const opts = makeOptions({ appRegistry: registry, onProgress });
 
-    const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+    const result = await executeConfirmedBatchDeploy(await confirmedBatchArgs(entries, opts), CLIENT_MANAGER, opts);
 
     expect(result.success).toBe(true);
     const data = result.data as any;
@@ -2747,6 +2883,33 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(lastProgress.batch).toBeDefined();
   });
 
+  it('broadcasts manifests and resolved SKUs semantically equivalent to the displayed plan', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult();
+    });
+    const args = await confirmedBatchArgs([
+      makeBatchEntry('alpha'),
+      { ...makeBatchEntry('beta'), size: 'docker-small' },
+    ]);
+    const displayedPlan = args.plan as any;
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions());
+
+    expect(result.success).toBe(true);
+    const specs = vi.mocked(deployManifest).mock.calls.map((call) => call[1]);
+    expect(specs.map((spec) => spec.manifest)).toEqual(
+      expect.arrayContaining(displayedPlan.entries.map((entry: any) => entry.manifest)),
+    );
+    expect(specs.map((spec) => spec.sku)).toEqual(expect.arrayContaining(
+      displayedPlan.entries.map((entry: any) => ({
+        kind: 'resolved',
+        skuUuid: entry.skuUuid,
+        providerUuid: entry.providerUuid,
+      })),
+    ));
+  });
+
   it('records the deployManifest-resolved providerUrl (onLeaseCreated arg), not the stale entry value', async () => {
     // Regression guard (Copilot PR #106): the registry must record the URL
     // deployManifest actually resolved (onLeaseCreated's 2nd arg), mirroring
@@ -2761,7 +2924,11 @@ describe('executeConfirmedBatchDeploy', () => {
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://stale.example.com', payload: makePayload() },
     ];
 
-    await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ appRegistry: registry }));
+    await executeConfirmedBatchDeploy(
+      await confirmedBatchArgs(entries),
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+    );
 
     expect(registry.addApp).toHaveBeenCalledWith(
       expect.anything(),
@@ -2794,7 +2961,7 @@ describe('executeConfirmedBatchDeploy', () => {
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://stale.example.com', payload: makePayload() },
     ];
 
-    await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+    await executeConfirmedBatchDeploy(await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions());
 
     expect(getLeaseProvision).toHaveBeenCalledWith('https://resolved.example.com', 'lease-x', expect.anything());
     expect(getLeaseProvision).not.toHaveBeenCalledWith('https://stale.example.com', 'lease-x', expect.anything());
@@ -2821,7 +2988,11 @@ describe('executeConfirmedBatchDeploy', () => {
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
     ];
 
-    await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ onProgress }));
+    await executeConfirmedBatchDeploy(
+      await confirmedBatchArgs(entries),
+      CLIENT_MANAGER,
+      makeOptions({ onProgress }),
+    );
 
     // Batch per-app detail lands in onProgress's `batch` array, not the top-level detail.
     const details = onProgress.mock.calls
@@ -2864,7 +3035,7 @@ describe('executeConfirmedBatchDeploy', () => {
     ];
 
     const result = await executeConfirmedBatchDeploy(
-      { entries }, CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry(), onProgress })
+      await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry(), onProgress })
     );
 
     const data = result.data as any;
@@ -2893,7 +3064,11 @@ describe('executeConfirmedBatchDeploy', () => {
       { app_name: 'game2', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
     ];
 
-    const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ appRegistry: registry }));
+    const result = await executeConfirmedBatchDeploy(
+      await confirmedBatchArgs(entries),
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+    );
 
     expect(result.success).toBe(true);
     expect((result.data as any).deployed.map((d: any) => d.name)).toContain('game1');
@@ -2913,7 +3088,7 @@ describe('executeConfirmedBatchDeploy', () => {
       const entries = [
         { app_name: 'a1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'a1.example.com' },
       ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+      await executeConfirmedBatchDeploy(await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions());
 
       const spec = vi.mocked(deployManifest).mock.calls[0][1];
       expect(spec.customDomain).toBe('a1.example.com');
@@ -2923,10 +3098,22 @@ describe('executeConfirmedBatchDeploy', () => {
 
     it('passes serviceName into the spec for a multi-service stack entry', async () => {
       mockDeploy();
+      const stackBytes = new TextEncoder().encode(JSON.stringify({
+        services: {
+          web: { image: 'wordpress:latest', ports: { '80/tcp': {} } },
+          db: { image: 'mysql:latest' },
+        },
+      }));
       const entries = [
-        { app_name: 'wp', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), serviceNames: ['web', 'db'], customDomain: 'wp.example.com', customDomainServiceName: 'web' },
+        {
+          app_name: 'wp',
+          size: 'small',
+          payload: { bytes: stackBytes, filename: 'wp.json', size: stackBytes.length, hash: 'ignored' },
+          customDomain: 'wp.example.com',
+          customDomainServiceName: 'web',
+        },
       ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+      await executeConfirmedBatchDeploy(await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions());
 
       const spec = vi.mocked(deployManifest).mock.calls[0][1];
       expect(spec.customDomain).toBe('wp.example.com');
@@ -2938,7 +3125,7 @@ describe('executeConfirmedBatchDeploy', () => {
       const entries = [
         { app_name: 'plain', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
       ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+      await executeConfirmedBatchDeploy(await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions());
 
       const spec = vi.mocked(deployManifest).mock.calls[0][1];
       expect('customDomain' in spec).toBe(false);
@@ -2957,7 +3144,11 @@ describe('executeConfirmedBatchDeploy', () => {
       const entries = [
         { app_name: 'cached', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'cached.example.com' },
       ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ appRegistry: reg }));
+      await executeConfirmedBatchDeploy(
+        await confirmedBatchArgs(entries),
+        CLIENT_MANAGER,
+        makeOptions({ appRegistry: reg }),
+      );
 
       const domainWrite = updateSpy.mock.calls.find((c) => Array.isArray((c[2] as any).customDomains));
       expect(domainWrite).toBeDefined();
@@ -2973,7 +3164,11 @@ describe('executeConfirmedBatchDeploy', () => {
       const entries = [
         { app_name: 'rej', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'rej.example.com' },
       ];
-      const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+      const result = await executeConfirmedBatchDeploy(
+        await confirmedBatchArgs(entries),
+        CLIENT_MANAGER,
+        makeOptions(),
+      );
 
       expect(result.success).toBe(false); // all entries failed
       expect(result.error).toContain('rej');
@@ -6081,6 +6276,7 @@ describe('batch summary and progress agree on an unconfirmed batch', () => {
       await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
       return makeDeployResult();
     });
+    mockLiveBatchCatalog();
     const onProgress = vi.fn();
     const entries = [
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
@@ -6088,7 +6284,7 @@ describe('batch summary and progress agree on an unconfirmed batch', () => {
     ];
 
     const result = await executeConfirmedBatchDeploy(
-      { entries }, CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry(), onProgress })
+      await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry(), onProgress })
     );
 
     expect(result.success).toBe(true);

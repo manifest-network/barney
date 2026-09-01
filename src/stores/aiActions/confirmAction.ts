@@ -4,6 +4,11 @@
 
 import { streamChat } from '../../api/morpheus';
 import { executeConfirmedTool, type ToolResult } from '../../ai/toolExecutor';
+import {
+  buildPayloadFromManifest,
+  executeBatchDeploy,
+  type BatchDeployEntry,
+} from '../../ai/toolExecutor/compositeTransactions';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
 import { bigIntReplacer } from '../../utils/json';
@@ -137,6 +142,126 @@ export interface ConfirmActionOverrides {
   editedCustomDomain?: string;
   /** deploy_app only: service to attach the domain to (multi-service stacks). */
   editedCustomDomainServiceName?: string;
+  /** batch_deploy only: edited/remaining drafts. Supplying this never
+   * broadcasts; it creates a newly validated plan that must be confirmed. */
+  editedBatchEntries?: Array<{
+    app_name: string;
+    size: string;
+    manifest: string;
+    manifestFilename: string;
+    customDomain?: string;
+    customDomainServiceName?: string;
+    customDomainWarning?: string;
+  }>;
+}
+
+async function replanEditedBatch(
+  get: Get,
+  set: Set,
+  pendingConfirmation: NonNullable<AIStore['pendingConfirmation']>,
+  edits: NonNullable<ConfirmActionOverrides['editedBatchEntries']>,
+): Promise<void> {
+  const authorizationEpoch = get().authorizationEpoch;
+  set({ isStreaming: true });
+
+  try {
+    const entries: BatchDeployEntry[] = await Promise.all(edits.map(async (edit) => ({
+      app_name: edit.app_name,
+      size: edit.size,
+      payload: {
+        ...await buildPayloadFromManifest(edit.manifest),
+        filename: edit.manifestFilename,
+      },
+      ...(edit.customDomain ? { customDomain: edit.customDomain } : {}),
+      ...(edit.customDomainServiceName
+        ? { customDomainServiceName: edit.customDomainServiceName }
+        : {}),
+      ...(edit.customDomainWarning
+        ? { customDomainWarning: edit.customDomainWarning }
+        : {}),
+    })));
+
+    if (get().authorizationEpoch !== authorizationEpoch
+        || !isTransactionAuthorizationCurrent(get(), pendingConfirmation.action)) {
+      return;
+    }
+
+    const current = get();
+    const result = await executeBatchDeploy(entries, {
+      clientManager: current.clientManager,
+      address: current.address,
+      signing: current.signing,
+      appRegistry: getAppRegistryAccess(),
+      tiers: current.skuTiers.tiers,
+    });
+
+    if (get().authorizationEpoch !== authorizationEpoch
+        || !isTransactionAuthorizationCurrent(get(), pendingConfirmation.action)) {
+      return;
+    }
+
+    if (!result.requiresConfirmation) {
+      const error = result.success
+        ? 'Batch deploy did not return a confirmation plan.'
+        : result.error;
+      set({
+        pendingConfirmation: null,
+        pendingPayload: null,
+        messages: get().messages.map((message) => message.id === pendingConfirmation.messageId
+          ? {
+              ...message,
+              content: `Error: ${error}`,
+              error,
+              isStreaming: false,
+              awaitingConfirmation: false,
+            }
+          : message),
+      });
+      return;
+    }
+
+    set({
+      pendingConfirmation: {
+        id: generateMessageId(),
+        messageId: pendingConfirmation.messageId,
+        action: Object.freeze({
+          ...pendingConfirmation.action,
+          args: result.pendingAction.args,
+          description: result.confirmationMessage,
+        }),
+      },
+      pendingPayload: null,
+      messages: get().messages.map((message) => message.id === pendingConfirmation.messageId
+        ? {
+            ...message,
+            content: result.confirmationMessage,
+            error: undefined,
+            isStreaming: false,
+            awaitingConfirmation: true,
+          }
+        : message),
+    });
+  } catch (error) {
+    logError('confirmAction.replanEditedBatch', error);
+    if (get().authorizationEpoch === authorizationEpoch) {
+      const detail = error instanceof Error ? error.message : 'Failed to rebuild batch plan';
+      set({
+        pendingConfirmation: null,
+        pendingPayload: null,
+        messages: get().messages.map((message) => message.id === pendingConfirmation.messageId
+          ? {
+              ...message,
+              content: `Error: ${detail}`,
+              error: detail,
+              isStreaming: false,
+              awaitingConfirmation: false,
+            }
+          : message),
+      });
+    }
+  } finally {
+    if (get().authorizationEpoch === authorizationEpoch) set({ isStreaming: false });
+  }
 }
 
 export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmActionOverrides): Promise<void> {
@@ -180,6 +305,12 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
   const { messageId } = pendingConfirmation;
   const authorization = pendingConfirmation.action;
   const authorizationEpoch = get().authorizationEpoch;
+
+  if (pendingConfirmation.action.toolName === 'batch_deploy'
+      && overrides?.editedBatchEntries) {
+    await replanEditedBatch(get, set, pendingConfirmation, overrides.editedBatchEntries);
+    return;
+  }
 
   // Clone action to avoid mutating React state; apply user edits if present.
   let confirmedArgs = pendingConfirmation.action.args;

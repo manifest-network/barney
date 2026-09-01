@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
+  executeBatchDeploy,
   executeConfirmedDeployApp,
   executeConfirmedBatchDeploy,
+  type BatchDeployEntry,
 } from './compositeTransactions';
 // NOTE: executeConfirmedBatchDeploy is imported in Task 6 (its first use) and
 // getLease in Task 5 — deferred so every intermediate C0 `npm run build` gate
@@ -59,7 +61,7 @@ vi.mock('../../api/billing', async (importOriginal) => {
 });
 vi.mock('../../api/sku', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/sku')>();
-  return { ...actual, getProviders: vi.fn() };
+  return { ...actual, getProviders: vi.fn(), getSKUs: vi.fn() };
 });
 vi.mock('../../api/provider-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/provider-api')>();
@@ -104,7 +106,8 @@ vi.mock('../../api/leaseByCustomDomain', () => ({
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
 import { deployManifest } from '@manifest-network/manifest-sdk/deploy';
-import { getLease } from '../../api/billing';
+import { getCreditAccount, getLease } from '../../api/billing';
+import { getProviders, getSKUs, Unit } from '../../api/sku';
 
 const ADDRESS = 'manifest1abc';
 const CLIENT_MANAGER = {} as CosmosClientManager;
@@ -132,7 +135,36 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
 }
 
 function makePayload(): PayloadAttachment {
-  return { bytes: new Uint8Array([1, 2, 3]), filename: 'manifest.json', size: 3, hash: 'a'.repeat(64) };
+  const bytes = new TextEncoder().encode(JSON.stringify({
+    image: 'nginx:latest',
+    ports: { '8080/tcp': {} },
+  }));
+  return { bytes, filename: 'manifest.json', size: bytes.length, hash: 'a'.repeat(64) };
+}
+
+async function confirmedBatchArgs(
+  entries: BatchDeployEntry[],
+  options: ToolExecutorOptions,
+): Promise<Record<string, unknown>> {
+  vi.mocked(getProviders).mockResolvedValue([
+    { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as never,
+  ]);
+  vi.mocked(getSKUs).mockResolvedValue(SAMPLE_TIERS.map((tier) => ({
+    uuid: tier.skuUuid,
+    name: tier.skuName,
+    providerUuid: tier.providerUuid,
+    basePrice: { amount: String(Math.round(tier.pricePerHour * 1_000_000)), denom: 'upwr' },
+    unit: Unit.UNIT_PER_HOUR,
+  })) as never);
+  vi.mocked(getCreditAccount).mockResolvedValue({
+    balances: [{ denom: 'upwr', amount: '1000000000' }],
+  } as never);
+
+  const result = await executeBatchDeploy(entries, options);
+  if (!result.requiresConfirmation) {
+    throw new Error(result.success ? 'Expected batch confirmation' : result.error);
+  }
+  return result.pendingAction.args;
 }
 
 const CONFIRMED_ARGS = {
@@ -406,10 +438,11 @@ describe('C0 characterization — executeConfirmedBatchDeploy', () => {
     mockHappyPath();
     const onProgress = vi.fn();
     const registry = makeRegistry();
+    const options = makeOptions({ appRegistry: registry, onProgress });
     const result = await executeConfirmedBatchDeploy(
-      { entries: [batchEntry('game1'), batchEntry('game2')] },
+      await confirmedBatchArgs([batchEntry('game1'), batchEntry('game2')], options),
       CLIENT_MANAGER,
-      makeOptions({ appRegistry: registry, onProgress }),
+      options,
     );
 
     expect(result.success).toBe(true);
@@ -443,10 +476,11 @@ describe('C0 characterization — executeConfirmedBatchDeploy', () => {
       })
       .mockRejectedValueOnce(new Error('insufficient funds'));
 
+    const options = makeOptions();
     const result = await executeConfirmedBatchDeploy(
-      { entries: [batchEntry('game1'), batchEntry('game2')] },
+      await confirmedBatchArgs([batchEntry('game1'), batchEntry('game2')], options),
       CLIENT_MANAGER,
-      makeOptions(),
+      options,
     );
 
     const data = result.data as { deployed: unknown[]; failed: unknown[] };
@@ -467,10 +501,11 @@ describe('C0 characterization — executeConfirmedBatchDeploy', () => {
       connection: { host: '5.6.7.8', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
     } as never);
 
+    const options = makeOptions();
     const result = await executeConfirmedBatchDeploy(
-      { entries: [batchEntry('game1')] },
+      await confirmedBatchArgs([batchEntry('game1')], options),
       CLIENT_MANAGER,
-      makeOptions(),
+      options,
     );
 
     expect(result.success).toBe(true);

@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { AlertTriangle, Check, X, Paperclip, Copy, CheckCheck, Eye, EyeOff } from 'lucide-react';
+import { AlertTriangle, Check, X, Paperclip, Copy, CheckCheck, Eye, EyeOff, Pencil, Trash2 } from 'lucide-react';
 import { FocusTrap } from 'focus-trap-react';
 import type { PendingAction } from '../../ai/toolExecutor';
 import { formatFileSize } from '../../utils/format';
@@ -14,6 +14,11 @@ import { resolveSizeOrCheapest, formatTierSpecs } from '../../api/skuTiers';
 import { useAI } from '../../hooks/useAI';
 import { CustomDomainBranch, CloudflareProxyHint } from './ConfirmationCardCustomDomain';
 import { parseCustomDomainArgs } from './customDomainBranchData';
+import {
+  isBatchDeployPlan,
+  type BatchDeployPlan,
+  type BatchDeployServiceSummary,
+} from '../../ai/toolExecutor/batchDeployPlan';
 import {
   parseEditableManifest, serializeManifest,
   parseEditableStackManifest, serializeStackManifest,
@@ -36,6 +41,93 @@ interface StackServiceSummary {
   image: string;
   ports: string[];
   envCount: number;
+}
+
+interface BatchDeployDraft {
+  app_name: string;
+  size: string;
+  manifest: string;
+  manifestFilename: string;
+  customDomain?: string;
+  customDomainServiceName?: string;
+  customDomainWarning?: string;
+}
+
+function batchDraftsFromPlan(plan: BatchDeployPlan | null): BatchDeployDraft[] {
+  if (!plan) return [];
+  return plan.entries.map((entry) => ({
+    app_name: entry.app_name,
+    size: entry.size,
+    manifest: entry.manifest,
+    manifestFilename: entry.manifestFilename,
+    ...(entry.customDomain ? { customDomain: entry.customDomain } : {}),
+    ...(entry.customDomainServiceName
+      ? { customDomainServiceName: entry.customDomainServiceName }
+      : {}),
+    ...(entry.customDomainWarning ? { customDomainWarning: entry.customDomainWarning } : {}),
+  }));
+}
+
+function summarizeBatchManifest(manifest: string): BatchDeployServiceSummary[] | null {
+  try {
+    const parsed = JSON.parse(manifest) as Record<string, unknown>;
+    const summarize = (name: string, raw: unknown): BatchDeployServiceSummary => {
+      const service = raw && typeof raw === 'object' && !Array.isArray(raw)
+        ? raw as Record<string, unknown>
+        : {};
+      const ports = service.ports && typeof service.ports === 'object' && !Array.isArray(service.ports)
+        ? Object.entries(service.ports as Record<string, unknown>).map(([port, options]) =>
+            options && typeof options === 'object' && !Array.isArray(options)
+              && (options as Record<string, unknown>).ingress === true
+              ? `${port} (ingress)`
+              : port)
+        : [];
+      const environmentKeys = service.env && typeof service.env === 'object' && !Array.isArray(service.env)
+        ? Object.keys(service.env as Record<string, unknown>)
+        : [];
+      return {
+        name,
+        image: typeof service.image === 'string' ? service.image : 'unknown',
+        ports,
+        environmentKeys,
+      };
+    };
+
+    if (parsed.services && typeof parsed.services === 'object' && !Array.isArray(parsed.services)) {
+      const services = Object.entries(parsed.services as Record<string, unknown>)
+        .map(([name, service]) => summarize(name, service));
+      return services.length > 0 ? services : null;
+    }
+    return [summarize('', parsed)];
+  } catch {
+    return null;
+  }
+}
+
+function BatchManifestEditor({ manifest, onChange }: {
+  manifest: string;
+  onChange: (manifest: string) => void;
+}) {
+  const editorAction = useMemo(() => ({
+    originAddress: '',
+    chainId: '',
+    clientGeneration: 0,
+    signerGeneration: 0,
+    id: 'batch-entry-editor',
+    toolName: 'deploy_app',
+    args: { _generatedManifest: manifest },
+    description: '',
+  } satisfies PendingAction), [manifest]);
+  const stack = useMemo(() => parseEditableStackManifest(editorAction), [editorAction]);
+  const single = useMemo(() => parseEditableManifest(editorAction), [editorAction]);
+
+  if (stack) {
+    return <StackManifestEditor stack={stack} onChange={(next) => onChange(serializeStackManifest(next))} />;
+  }
+  if (single) {
+    return <ManifestEditor manifest={single} onChange={(next) => onChange(serializeManifest(next))} />;
+  }
+  return <p className="text-xs text-error" role="alert">This manifest cannot be edited until it is valid JSON.</p>;
 }
 
 function parseStackManifest(action: PendingAction): Record<string, StackServiceSummary> | null {
@@ -139,6 +231,19 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
 
   const customDomainData = useMemo(() => parseCustomDomainArgs(action), [action]);
 
+  const batchPlan = useMemo(
+    () => action.toolName === 'batch_deploy' && isBatchDeployPlan(action.args.plan)
+      ? action.args.plan
+      : null,
+    [action],
+  );
+  const invalidBatchPlan = action.toolName === 'batch_deploy' && batchPlan === null;
+  const initialBatchDrafts = useMemo(() => batchDraftsFromPlan(batchPlan), [batchPlan]);
+  const [batchDrafts, setBatchDrafts] = useState<BatchDeployDraft[]>(initialBatchDrafts);
+  const [editingBatchEntry, setEditingBatchEntry] = useState<string | null>(null);
+  const batchIsDirty = batchPlan !== null
+    && JSON.stringify(batchDrafts) !== JSON.stringify(initialBatchDrafts);
+
   // Editable custom domain input on deploy_app ConfirmationCards. Defaults to
   // any AI-prefilled value (`args.customDomain`) so a chat message like
   // "deploy redis with custom domain X" pre-fills the input. Empty input means
@@ -146,6 +251,58 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   const isDeployApp = action.toolName === 'deploy_app';
 
   const { skuTiers } = useAI();
+  const batchDraftPricing = useMemo(() => {
+    if (!batchPlan) return null;
+    let total = 0;
+    let totalServices = 0;
+    let denom = '';
+    let valid = batchDrafts.length > 0;
+
+    const entries = batchDrafts.map((draft) => {
+      const original = batchPlan.entries.find((entry) => entry.app_name === draft.app_name);
+      const manifestIsDirty = !original || original.manifest !== draft.manifest;
+      const tierIsDirty = !original || original.size !== draft.size;
+      // An approved card renders only values from its immutable, hashed plan.
+      // Store SKU refreshes must not silently change what the user sees. Local
+      // estimates are used only after an edit, while the hash is explicitly
+      // marked pending and confirmation routes through a fresh plan.
+      const services = manifestIsDirty ? summarizeBatchManifest(draft.manifest) : original.services;
+      const resolution = tierIsDirty
+        ? resolveSizeOrCheapest(draft.size, skuTiers.tiers)
+        : undefined;
+      const tier = resolution?.tier;
+      const serviceCount = manifestIsDirty ? (services?.length ?? 0) : original.serviceCount;
+      const pricePerServiceHour = tierIsDirty ? tier?.pricePerHour : original.pricePerServiceHour;
+      const denomSymbol = tierIsDirty ? tier?.denomSymbol : original.denomSymbol;
+      const resources = tierIsDirty ? tier : original.resources;
+      if (!services || pricePerServiceHour === undefined || !denomSymbol) valid = false;
+      const entryTotal = (pricePerServiceHour ?? 0) * serviceCount;
+      total += entryTotal;
+      totalServices += serviceCount;
+      if (denom && denomSymbol && denom !== denomSymbol) valid = false;
+      if (denomSymbol) denom = denomSymbol;
+      return {
+        draft,
+        original,
+        services,
+        resources,
+        serviceCount,
+        pricePerServiceHour,
+        denomSymbol,
+        entryTotal,
+      };
+    });
+
+    return batchIsDirty
+      ? { entries, total, totalServices, denom, valid }
+      : {
+          entries,
+          total: batchPlan.totalPricePerHour,
+          totalServices: batchPlan.totalServiceCount,
+          denom: batchPlan.denomSymbol,
+          valid,
+        };
+  }, [batchDrafts, batchIsDirty, batchPlan, skuTiers.tiers]);
   // Resolve the deploy size through the SAME helper the executor uses, so the
   // price/specs shown here are exactly what will deploy. An omitted or
   // unavailable size resolves to the cheapest tier; `fallback` drives the
@@ -258,6 +415,11 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     && editedCustomDomainServiceName === '';
 
   const handleConfirm = useCallback(() => {
+    if (batchPlan) {
+      onConfirm(batchIsDirty ? { editedBatchEntries: batchDrafts } : undefined);
+      return;
+    }
+
     const manifestOverride = editedManifest
       ? serializeManifest(editedManifest)
       : editedStack
@@ -279,7 +441,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     //    and stackServicePickerError blocks confirm when still '')
     overrides.editedCustomDomainServiceName = editedDomainTrimmed ? editedCustomDomainServiceName : '';
     onConfirm(overrides);
-  }, [editedManifest, editedStack, isDeployApp, editedDomainTrimmed, editedCustomDomainServiceName, onConfirm]);
+  }, [batchPlan, batchIsDirty, batchDrafts, editedManifest, editedStack, isDeployApp, editedDomainTrimmed, editedCustomDomainServiceName, onConfirm]);
 
   // Filter to user-facing args only. The AI tool schema in AI_TOOLS is the
   // single source of truth — this avoids the drift bug where every new TX
@@ -311,7 +473,144 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
       <div className="confirmation-body">
         <p id="confirmation-description" className="confirmation-description">{action.description}</p>
 
-        {customDomainData ? (
+        {invalidBatchPlan ? (
+          <div className="confirmation-details">
+            <p className="text-sm text-error" role="alert">
+              This batch plan is invalid or incomplete. Cancel it and create a new plan.
+            </p>
+          </div>
+        ) : batchPlan && batchDraftPricing ? (
+          <div className="batch-deploy-plan" data-testid="batch-deploy-plan">
+            {batchDraftPricing.entries.map(({ draft, original, services, resources, serviceCount, pricePerServiceHour, denomSymbol, entryTotal }) => {
+              const editing = editingBatchEntry === draft.app_name;
+              const manifestChanged = original?.manifest !== draft.manifest;
+              return (
+                <section className="batch-deploy-entry" key={draft.app_name} data-testid="batch-deploy-entry">
+                  <div className="batch-deploy-entry__header">
+                    <div>
+                      <strong>{draft.app_name}</strong>
+                      <span className="text-muted"> · {draft.size}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        onClick={() => setEditingBatchEntry(editing ? null : draft.app_name)}
+                        aria-label={`${editing ? 'Finish editing' : 'Edit'} ${draft.app_name}`}
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        onClick={() => {
+                          setBatchDrafts((current) => current.filter((entry) => entry.app_name !== draft.app_name));
+                          if (editing) setEditingBatchEntry(null);
+                        }}
+                        aria-label={`Remove ${draft.app_name}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-error" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {editing && (
+                    <div className="batch-deploy-entry__editor">
+                      <label className="confirmation-details-title" htmlFor={`batch-tier-${draft.app_name}`}>Resource tier</label>
+                      <select
+                        id={`batch-tier-${draft.app_name}`}
+                        className="manifest-editor-input"
+                        value={draft.size}
+                        onChange={(event) => setBatchDrafts((current) => current.map((entry) =>
+                          entry.app_name === draft.app_name ? { ...entry, size: event.target.value } : entry))}
+                      >
+                        {skuTiers.tiers.map((candidate) => (
+                          <option key={`${candidate.providerUuid}:${candidate.skuUuid}`} value={candidate.skuName}>
+                            {candidate.skuName} — {candidate.pricePerHour.toFixed(4)} {candidate.denomSymbol}/hr per service
+                          </option>
+                        ))}
+                      </select>
+                      <BatchManifestEditor
+                        manifest={draft.manifest}
+                        onChange={(manifest) => setBatchDrafts((current) => current.map((entry) =>
+                          entry.app_name === draft.app_name ? { ...entry, manifest } : entry))}
+                      />
+                    </div>
+                  )}
+
+                  <dl className="batch-deploy-entry__facts">
+                    <div>
+                      <dt>Rate</dt>
+                      <dd>
+                        {pricePerServiceHour === undefined || !denomSymbol
+                          ? 'Pending revalidation'
+                          : `${pricePerServiceHour.toFixed(4)} ${denomSymbol}/hr per service${serviceCount > 1 ? ` · ${entryTotal.toFixed(4)} ${denomSymbol}/hr app total` : ''}`}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Resources</dt>
+                      <dd>{resources ? formatTierSpecs(resources) : 'Pending revalidation'}</dd>
+                    </div>
+                  </dl>
+
+                  {services?.map((service, serviceIndex) => (
+                    <div className="batch-deploy-service" key={service.name || serviceIndex}>
+                      {service.name && <code className="batch-deploy-service__name">{service.name}</code>}
+                      <div><span>Image</span><code>{service.image}</code></div>
+                      <div><span>Ports</span><code>{service.ports.length > 0 ? service.ports.join(', ') : 'none'}</code></div>
+                      <div>
+                        <span>Environment</span>
+                        <code>{service.environmentKeys.length > 0
+                          ? service.environmentKeys.map((key) => `${key}=••••`).join(', ')
+                          : 'none'}</code>
+                      </div>
+                    </div>
+                  ))}
+
+                  {draft.customDomain && (
+                    <div className="confirmation-batch-domain">
+                      <span className="font-mono text-xs text-dim">
+                        domain: {draft.customDomain}
+                        {draft.customDomainServiceName && (
+                          <> · service: <code>{draft.customDomainServiceName}</code></>
+                        )}
+                      </span>
+                      {draft.customDomainWarning && (
+                        <p className="confirmation-apex-warning" role="alert">{draft.customDomainWarning}</p>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="batch-deploy-hash">
+                    Manifest SHA-256: {manifestChanged ? 'Pending revalidation' : original?.manifestHash}
+                  </div>
+                </section>
+              );
+            })}
+
+            {batchDrafts.length === 0 && (
+              <p className="text-sm text-warning" role="alert">At least one app is required.</p>
+            )}
+
+            <div className="batch-deploy-total" data-testid="batch-deploy-total">
+              <strong>Aggregate rate</strong>
+              <span>
+                {batchDraftPricing.valid
+                  ? `${batchDraftPricing.total.toFixed(4)} ${batchDraftPricing.denom}/hr`
+                  : 'Pending revalidation'}
+              </span>
+              <small>{batchDraftPricing.totalServices} service{batchDraftPricing.totalServices === 1 ? '' : 's'} across {batchDrafts.length} app{batchDrafts.length === 1 ? '' : 's'}</small>
+            </div>
+            <div className="batch-deploy-hash">
+              Batch plan SHA-256: {batchIsDirty ? 'Pending revalidation' : batchPlan.planHash}
+            </div>
+            {batchIsDirty && (
+              <p className="text-xs text-warning" role="status">
+                Review changes to recalculate prices and hashes. The updated plan will require a separate confirmation.
+              </p>
+            )}
+          </div>
+        ) : customDomainData ? (
           <CustomDomainBranch data={customDomainData} />
         ) : isStackEditable && editedStack ? (
           <div className="confirmation-details">
@@ -528,6 +827,8 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           onClick={handleConfirm}
           disabled={
             isExecuting ||
+            invalidBatchPlan ||
+            (batchPlan !== null && (!batchDraftPricing?.valid || batchDrafts.length === 0)) ||
             (isDeployApp && (
               editedDomainError != null ||
               asyncDomainPending ||
@@ -537,7 +838,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           className="btn btn-success btn-sm"
         >
           <Check className="w-4 h-4" />
-          {isExecuting ? 'Executing...' : 'Confirm'}
+          {isExecuting ? 'Executing...' : batchIsDirty ? 'Review updated plan' : 'Confirm'}
         </button>
       </div>
     </div>

@@ -6,12 +6,16 @@ import type { ToolCall } from '../../api/morpheus';
 import { getToolCallDescription, isValidToolName } from '../../ai/tools';
 import { executeTool, type ToolResult } from '../../ai/toolExecutor';
 import type { TransactionAuthorization } from '../../ai/toolExecutor/types';
-import { buildPayloadFromManifest, type SingleDeployEntry } from '../../ai/toolExecutor/compositeTransactions';
+import {
+  buildPayloadFromManifest,
+  executeBatchDeploy,
+  type BatchDeployEntry,
+  type BatchDeployPlan,
+} from '../../ai/toolExecutor/compositeTransactions';
 import { sanitizeToolArgs } from '../../ai/validation';
 import type { StreamResult } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
 import { bigIntReplacer } from '../../utils/json';
-import { validateAppName } from '../../registry/appRegistry';
 import type { AIStore } from '../aiStore';
 import {
   AUTHORIZATION_CANCELLED_MESSAGE,
@@ -173,9 +177,8 @@ async function mergeBatchDeployConfirmations(
   deployConfs: CollectedConfirmation[],
   authorizationEpoch: number,
 ): Promise<boolean> {
-  const entries: SingleDeployEntry[] = [];
-  const address = get().address;
-  const usedNames = new Set<string>();
+  const entries: BatchDeployEntry[] = [];
+  const entryConfirmations: CollectedConfirmation[] = [];
   let pendingPayloadUsed = false;
 
   for (const conf of deployConfs) {
@@ -201,38 +204,15 @@ async function mergeBatchDeployConfirmations(
         throw new Error('Payload missing');
       }
 
-      // Deduplicate app names within the batch
-      let name = typeof args.app_name === 'string' ? args.app_name : '';
+      const name = typeof args.app_name === 'string' ? args.app_name : '';
       if (!name) {
         throw new Error('App name missing');
       }
-      if (address && (usedNames.has(name) || validateAppName(name, address) !== null)) {
-        const baseName = name;
-        let suffix = 2;
-        let resolved = false;
-        while (suffix <= 99) {
-          const candidate = `${baseName}-${suffix}`.slice(0, 32);
-          if (!usedNames.has(candidate) && (!address || validateAppName(candidate, address) === null)) {
-            name = candidate;
-            resolved = true;
-            break;
-          }
-          suffix++;
-        }
-        if (!resolved) {
-          throw new Error(`Cannot find unique name for "${baseName}"`);
-        }
-      }
-      usedNames.add(name);
 
       entries.push({
         app_name: name,
-        size: typeof args.size === 'string' ? args.size : 'micro',
-        skuUuid: args.skuUuid as string,
-        providerUuid: args.providerUuid as string,
-        providerUrl: args.providerUrl as string,
+        size: typeof args.size === 'string' ? args.size : undefined,
         payload,
-        serviceNames: args._serviceNames as string[] | undefined,
         // Thread per-entry custom domain through into the batch. Without this
         // the batch path used to silently drop the attach — both deploys
         // succeeded but no MsgSetItemCustomDomain ever broadcast, leaving the
@@ -245,6 +225,7 @@ async function mergeBatchDeployConfirmations(
             ? { customDomainWarning: args.customDomainWarning } : {}),
         } : {}),
       });
+      entryConfirmations.push(conf);
 
       // Mark this tool message as awaiting batch confirmation
       const updated = get().messages.map((m) =>
@@ -273,31 +254,63 @@ async function mergeBatchDeployConfirmations(
 
   // If only one survived, treat as single deploy
   if (entries.length === 1) {
-    // Find the original confirmation that produced this surviving entry
-    const surviving = deployConfs.find(
-      (c) => {
-        const argName = typeof c.result.pendingAction?.args?.app_name === 'string'
-          ? c.result.pendingAction.args.app_name
-          : undefined;
-        // Match by original name or deduped name
-        return argName === entries[0].app_name || (argName && entries[0].app_name.startsWith(argName));
-      }
-    );
-    // Fallback to first deploy conf if dedup renamed beyond recognition
-    setSingleConfirmation(get, set, surviving ?? deployConfs[0]);
+    setSingleConfirmation(get, set, entryConfirmations[0]);
     return true;
   }
 
-  // Build batch confirmation description
-  const appNames = entries.map((e) => e.app_name).join(', ');
-  const description = `Deploy ${entries.length} apps: ${appNames}?`;
-  const lastConf = deployConfs[deployConfs.length - 1];
+  // The confirmation is owned by the last entry that actually survived draft
+  // assembly. A later broken model call must retain its own error instead of
+  // becoming the owner of a batch it is not part of.
+  const lastConf = entryConfirmations[entryConfirmations.length - 1];
 
   if (get().authorizationEpoch !== authorizationEpoch
       || !isTransactionAuthorizationCurrent(get(), lastConf.authorization)) {
     markConfirmationsAuthorizationCancelled(get, set, deployConfs);
     return false;
   }
+
+  // The individual deploy confirmations above are only draft material. They
+  // are never treated as aggregate affordability proof: run the exact same
+  // canonical planner used by the UI-direct batch entry point.
+  const current = get();
+  const planned = await executeBatchDeploy(entries, {
+    clientManager: current.clientManager,
+    address: current.address,
+    signing: current.signing,
+    appRegistry: getAppRegistryAccess(),
+    signal: current.abortController?.signal,
+    tiers: current.skuTiers.tiers,
+  });
+
+  if (get().authorizationEpoch !== authorizationEpoch
+      || !isTransactionAuthorizationCurrent(get(), lastConf.authorization)) {
+    markConfirmationsAuthorizationCancelled(get, set, deployConfs);
+    return false;
+  }
+
+  if (!planned.requiresConfirmation) {
+    const error = planned.success
+      ? 'Batch deploy did not return a confirmation plan.'
+      : planned.error;
+    const ids = new Set(entryConfirmations.map((conf) => conf.toolMessageId));
+    set({
+      messages: get().messages.map((message) => ids.has(message.id)
+        ? { ...message, content: `Error: ${error}`, error, isStreaming: false, awaitingConfirmation: false }
+        : message),
+    });
+    return false;
+  }
+
+  const plan = planned.pendingAction.args.plan as BatchDeployPlan;
+  const plannedNames = plan.entries.map((entry) => entry.app_name);
+  set({
+    messages: get().messages.map((message) => {
+      const index = entryConfirmations.findIndex((conf) => conf.toolMessageId === message.id);
+      return index >= 0
+        ? { ...message, content: `Batch deploy: ${plannedNames[index]}`, isStreaming: false }
+        : message;
+    }),
+  });
 
   set({
     pendingConfirmation: {
@@ -306,8 +319,8 @@ async function mergeBatchDeployConfirmations(
         ...lastConf.authorization,
         id: lastConf.toolCall.id,
         toolName: 'batch_deploy',
-        args: { entries } as unknown as Record<string, unknown>,
-        description,
+        args: planned.pendingAction.args,
+        description: planned.confirmationMessage,
       }),
       messageId: lastConf.toolMessageId,
     },

@@ -51,12 +51,20 @@ import {
 } from './deployArgs';
 import { resolveAppUrl } from './deployUrl';
 import { handleDeployManifestError } from './deployError';
+import {
+  batchPlanToEntries,
+  planBatchDeploy,
+  verifyBatchDeployPlanIntegrity,
+  type BatchDeployEntry,
+  type BatchDeployPlanEntry,
+} from './batchDeployPlan';
 
 // Re-export the public deploy-helper symbols so existing consumers/tests that
 // import them from './compositeTransactions' keep working after the ENG-576 split.
 export { buildPayloadFromManifest, deriveAppName, extractServiceNamesFromPayload, parseAndValidateStackServices } from './deployArgs';
 export { extractUrlFromFredStatus } from './deployUrl';
 export { classifyLeaseChainState, handleDeployManifestError } from './deployError';
+export type { BatchDeployEntry, BatchDeployPlan, BatchDeployPlanEntry } from './batchDeployPlan';
 
 /**
  * Was the thrown thing ITSELF an abort?
@@ -722,180 +730,25 @@ export async function executeConfirmedDeployApp(
 }
 
 // ============================================================================
-// deploy_app — single-app core helper (shared by single & batch paths)
-// ============================================================================
-
-export interface SingleDeployEntry {
-  app_name: string;
-  size: string;
-  skuUuid: string;
-  providerUuid: string;
-  providerUrl: string;
-  payload: PayloadAttachment;
-  serviceNames?: string[];
-  // Per-LeaseItem custom domain attached between create-lease and payload
-  // upload, mirroring the `spec` built in `executeConfirmedDeployApp`. Missing
-  // or empty `customDomain` = no attach. `customDomainServiceName` selects
-  // the target LeaseItem in a multi-service stack; empty string = the
-  // single-item-lease default. `customDomainWarning` is the apex warning
-  // surfaced post-broadcast (computed at deploy_app validation time).
-  customDomain?: string;
-  customDomainServiceName?: string;
-  customDomainWarning?: string;
-}
-
-// ============================================================================
 // batch_deploy
 // ============================================================================
 
-export interface BatchDeployEntry {
-  app_name: string;
-  payload: PayloadAttachment;
-}
-
-/**
- * Pre-validation for batch deploy. Resolves SKU/provider once,
- * checks total credits, validates all names.
- * Returns a single ToolResultConfirmation with args.entries.
- */
+/** Plan every batch entry through the canonical consent/affordability path. */
 export async function executeBatchDeploy(
   entries: BatchDeployEntry[],
   options: ToolExecutorOptions,
   size?: string
 ): Promise<ToolResult> {
-  const { address, appRegistry, tiers } = options;
-  if (!address) return { success: false, error: 'Wallet not connected' };
-  if (!appRegistry) return { success: false, error: 'App registry not available' };
-  if (entries.length === 0) return { success: false, error: 'No apps to deploy' };
-  // Resolve size once for the whole batch. Omitted/unavailable falls back to the
-  // cheapest tier (resolveSizeOrCheapest); an empty catalog is the only hard
-  // failure. Mirrors the single-deploy path.
-  const resolution = resolveSizeOrCheapest(size, tiers);
-  if (!resolution) {
-    return { success: false, error: 'Tier catalog unavailable — try again in a moment.' };
-  }
-  const matched = resolution.tier;
-  const skuUuid = matched.skuUuid;
-  const normalizedSize = matched.skuName;  // canonical SKU name
-
-  // Find provider — still need apiUrl, which isn't in ResolvedSkuTier.
-  let providers;
-  try {
-    providers = await withTimeout(getProviders(true), undefined, 'Fetch providers');
-  } catch (error) {
-    logError('compositeTransactions.update.fetchProviders', error);
-    return { success: false, error: 'Failed to fetch providers. Please try again.' };
-  }
-
-  const provider = providers.find((p) => p.uuid === matched.providerUuid);
-
-  if (!provider || !provider.apiUrl) {
-    return { success: false, error: 'No available provider found for this tier.' };
-  }
-
-  // Validate all names (auto-suffix on collision)
-  const resolvedEntries: Array<SingleDeployEntry> = [];
-  const usedNames = new Set<string>();
-
-  for (const entry of entries) {
-    let name = entry.app_name;
-
-    // Auto-suffix for duplicates within the batch
-    let nameError = validateAppName(name, address);
-    if (nameError || usedNames.has(name)) {
-      const baseName = name;
-      let suffix = 2;
-      while ((nameError || usedNames.has(name)) && suffix <= 99) {
-        const candidate = `${baseName}-${suffix}`.slice(0, 32);
-        nameError = validateAppName(candidate, address);
-        if (!nameError && !usedNames.has(candidate)) {
-          name = candidate;
-          nameError = null;
-        }
-        suffix++;
-      }
-      if (nameError) {
-        return { success: false, error: `Cannot deploy "${entry.app_name}": ${nameError}` };
-      }
-    }
-
-    usedNames.add(name);
-
-    // Extract service names from the stack manifest payload (JSON only —
-    // batch entries are always JSON-serialized in-memory, never file uploads).
-    const extractedNames = extractServiceNamesFromPayload(entry.payload.bytes);
-    const serviceNames = extractedNames.length > 0 ? extractedNames : undefined;
-
-    resolvedEntries.push({
-      app_name: name,
-      size: normalizedSize,
-      skuUuid,
-      providerUuid: provider.uuid,
-      providerUrl: provider.apiUrl,
-      payload: entry.payload,
-      serviceNames,
-    });
-  }
-
-  // Pricing is already normalized to $/hour at the source (`resolveSkuTiers`).
-  // Pass-11 invariant: every resolved tier has `basePrice`, so
-  // `pricePerHour === 0` is a genuinely-free tier (`basePrice.amount === '0'`),
-  // NOT a missing-price candidate. Format unconditionally so free tiers
-  // surface "0.0000 .../hr" on the confirmation card instead of going blank
-  // (billing-transparency — same category as pass 5).
-  const skuHourlyCost = matched.pricePerHour;
-  const priceDisplay = `${skuHourlyCost.toFixed(4)} ${matched.denomSymbol}/hr`;
-
-  // Count total services across all entries (stacks contribute multiple services)
-  const totalServiceCount = resolvedEntries.reduce(
-    (sum, e) => sum + (e.serviceNames && e.serviceNames.length > 0 ? e.serviceNames.length : 1),
-    0
-  );
-  const totalHourlyCost = skuHourlyCost * totalServiceCount;
-  let creditWarning = '';
-
-  try {
-    const creditAccount = await withTimeout(getCreditAccount(address), undefined, 'Credit check');
-    if (creditAccount?.balances) {
-      let credits = 0;
-      for (const bal of creditAccount.balances) {
-        if (bal.denom === DENOMS.PWR || bal.denom.includes('upwr')) {
-          credits = fromBaseUnits(bal.amount, bal.denom);
-          break;
-        }
-      }
-
-      if (totalHourlyCost > 0 && credits < totalHourlyCost) {
-        return {
-          success: false,
-          error: `Insufficient credits. You have ${Math.round(credits * 100) / 100} credits but need at least ${Math.round(totalHourlyCost * 100) / 100} for 1 hour of ${totalServiceCount} services across ${entries.length} apps.`,
-        };
-      }
-
-      if (totalHourlyCost > 0) {
-        const hoursAffordable = credits / totalHourlyCost;
-        if (hoursAffordable < 24) {
-          creditWarning = ` Warning: only ~${Math.floor(hoursAffordable)}h of credits remaining at this rate.`;
-        }
-      }
-    }
-  } catch (error) {
-    logError('compositeTransactions.executeBatchDeploy.creditCheck', error);
-    creditWarning = ' Warning: could not verify credit balance — proceed with caution.';
-  }
-
-  const names = resolvedEntries.map((e) => e.app_name);
-  // priceDisplay is always non-empty (pass-16 invariant) — no need for a
-  // truthy guard around the ` (~… each)` wrapper.
-  const confirmationMessage = `Deploy ${entries.length} apps (${names.join(', ')}) on ${normalizedSize} tier (~${priceDisplay} each)?${creditWarning}`;
-
+  const drafts = entries.map((entry) => ({ ...entry, size: entry.size ?? size }));
+  const result = await planBatchDeploy(drafts, options);
+  if (!result.success) return result;
   return {
     success: true,
     requiresConfirmation: true,
-    confirmationMessage,
+    confirmationMessage: result.confirmationMessage,
     pendingAction: {
       toolName: 'batch_deploy',
-      args: { entries: resolvedEntries },
+      args: { plan: result.plan },
     },
   };
 }
@@ -916,15 +769,30 @@ export async function executeConfirmedBatchDeploy(
   clientManager: CosmosClientManager,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
-  const entries = args.entries as SingleDeployEntry[] | undefined;
-  if (!entries || entries.length === 0) {
-    return { success: false, error: 'No entries to deploy' };
-  }
-
   const { address, appRegistry, signing, onProgress, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
+
+  const integrity = await verifyBatchDeployPlanIntegrity(args.plan);
+  if (!integrity.success) return { success: false, error: integrity.error };
+
+  // Re-run the same planner with a fresh chain SKU catalog and aggregate
+  // balance. Any changed price/provider/name/payload invalidates the consent
+  // artifact before the first non-idempotent call.
+  const refreshed = await planBatchDeploy(
+    batchPlanToEntries(integrity.plan),
+    options,
+    { refreshPrices: true },
+  );
+  if (!refreshed.success) return refreshed;
+  if (refreshed.plan.planHash !== integrity.plan.planHash) {
+    return {
+      success: false,
+      error: 'The batch deployment plan changed after approval (price, provider, name, or payload). No transaction was submitted; review a new plan and confirm again.',
+    };
+  }
+  const entries: BatchDeployPlanEntry[] = refreshed.plan.entries;
 
   const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
 
@@ -941,7 +809,7 @@ export async function executeConfirmedBatchDeploy(
     executeOne: async (entry, _i, updateProgress) => {
       const name = entry.app_name;
 
-      const manifest = new TextDecoder().decode(entry.payload.bytes);
+      const manifest = entry.manifest;
 
       const customDomainArg =
         typeof entry.customDomain === 'string' ? entry.customDomain : '';

@@ -468,6 +468,7 @@ export function ChatPanel() {
             {pendingConfirmation && (
               <Suspense fallback={null}>
                 <ConfirmationCard
+                  key={pendingConfirmation.id}
                   action={pendingConfirmation.action}
                   onConfirm={confirmAction}
                   onCancel={cancelAction}

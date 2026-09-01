@@ -44,6 +44,17 @@ vi.mock('../../ai/toolExecutor', () => ({
   executeConfirmedTool: (...args: unknown[]) => mockExecuteConfirmedTool(...(args as [string, Record<string, unknown>, unknown, unknown?])),
 }));
 
+const mockExecuteBatchDeploy = vi.fn<() => Promise<ToolResult>>();
+const mockBuildPayloadFromManifest = vi.fn(async (manifest: string) => {
+  const bytes = new TextEncoder().encode(manifest);
+  return { bytes, filename: 'manifest.json', size: bytes.length, hash: 'new-hash' };
+});
+vi.mock('../../ai/toolExecutor/compositeTransactions', () => ({
+  executeBatchDeploy: (...args: unknown[]) => mockExecuteBatchDeploy(...(args as [])),
+  buildPayloadFromManifest: (...args: unknown[]) => mockBuildPayloadFromManifest(...(args as [string])),
+  deriveAppName: vi.fn((filename: string) => filename.replace(/\.[^.]+$/, '')),
+}));
+
 const mockProcessStream = vi.fn<() => Promise<StreamResult>>();
 vi.mock('../../ai/streamUtils', () => ({
   processStreamWithTimeout: (...args: unknown[]) => mockProcessStream(...(args as [])),
@@ -311,6 +322,60 @@ describe('confirmAction', () => {
       // _generatedManifest should not have been added
       const callArgs = mockExecuteConfirmedTool.mock.calls[0];
       expect(callArgs[1]._generatedManifest).toBeUndefined();
+    });
+  });
+
+  describe('batch edit re-planning', () => {
+    it('creates a new confirmation plan and never broadcasts edited entries directly', async () => {
+      const pending = makePendingConfirmation({
+        action: {
+          toolName: 'batch_deploy',
+          args: { plan: { version: 1, planHash: 'old-plan' } },
+          description: 'Deploy 2 apps for 0.2000 PWR/hr total?',
+        },
+      });
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+      const newPlan = {
+        version: 1,
+        entries: [{ app_name: 'alpha', manifest: '{"image":"alpha:v2"}' }],
+        totalServiceCount: 1,
+        totalPricePerHour: 0.1,
+        denomSymbol: 'PWR',
+        planHash: 'new-plan',
+      };
+      mockExecuteBatchDeploy.mockResolvedValueOnce({
+        success: true,
+        requiresConfirmation: true,
+        confirmationMessage: 'Deploy 1 app (alpha) for 0.1000 PWR/hr total?',
+        pendingAction: { toolName: 'batch_deploy', args: { plan: newPlan } },
+      });
+
+      await store.getState().confirmAction({
+        editedBatchEntries: [{
+          app_name: 'alpha',
+          size: 'docker-micro',
+          manifest: '{"image":"alpha:v2"}',
+          manifestFilename: 'alpha.json',
+        }],
+      });
+
+      expect(mockBuildPayloadFromManifest).toHaveBeenCalledWith('{"image":"alpha:v2"}');
+      expect(mockExecuteBatchDeploy).toHaveBeenCalledWith(
+        [expect.objectContaining({
+          app_name: 'alpha',
+          size: 'docker-micro',
+          payload: expect.objectContaining({ filename: 'alpha.json' }),
+        })],
+        expect.objectContaining({ address: 'manifest1test' }),
+      );
+      expect(mockExecuteConfirmedTool).not.toHaveBeenCalled();
+      expect(store.getState().pendingConfirmation?.action.args.plan).toBe(newPlan);
+      expect(store.getState().pendingConfirmation?.id).not.toBe(pending.id);
+      expect(store.getState().messages[0].content).toContain('0.1000 PWR/hr total');
+      expect(store.getState().isStreaming).toBe(false);
     });
   });
 
