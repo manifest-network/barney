@@ -1027,6 +1027,30 @@ describe('executeDeployApp', () => {
     expect(result.error).toContain('Wallet not connected');
   });
 
+  it('prepares a coalesced draft without repeating network-backed consent checks', async () => {
+    const result = await executeDeployApp({
+      image: 'redis:8',
+      size: 'micro',
+      custom_domain: 'redis.example.com',
+    }, makeOptions({ prepareBatchDeployDraft: true }));
+
+    expect(result).toMatchObject({
+      success: true,
+      requiresConfirmation: true,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          _batchDeployDraft: true,
+          size: 'micro',
+          customDomain: 'redis.example.com',
+        },
+      },
+    });
+    expect(getProviders).not.toHaveBeenCalled();
+    expect(getCreditAccount).not.toHaveBeenCalled();
+    expect(queryLeaseByCustomDomain).not.toHaveBeenCalled();
+  });
+
   it('falls back to the cheapest tier for an unavailable size instead of erroring', async () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
@@ -2648,6 +2672,7 @@ describe('executeBatchDeploy', () => {
     if (!result.requiresConfirmation) throw new Error('expected confirmation');
     const plan = result.pendingAction.args.plan as any;
     expect(plan.planHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(plan.entries.map((entry: any) => entry.draftIndex)).toEqual([0, 1]);
     expect(plan.entries[0].manifestHash).toMatch(/^[a-f0-9]{64}$/);
     expect(plan.entries[0].manifest).toContain('alpha:latest');
     expect(plan.totalPricePerHour).toBeCloseTo(0.072);
@@ -2772,6 +2797,27 @@ describe('executeConfirmedBatchDeploy', () => {
       ...plan,
       entries: plan.entries.map((entry: any, index: number) => index === 0
         ? { ...entry, manifest: entry.manifest.replace('alpha:latest', 'attacker:latest') }
+        : entry),
+    };
+
+    const result = await executeConfirmedBatchDeploy(
+      { plan: tampered },
+      CLIENT_MANAGER,
+      makeOptions(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('integrity check failed');
+    expect(deployManifest).not.toHaveBeenCalled();
+  });
+
+  it('hashes stable draft identities and rejects identity tampering before broadcast', async () => {
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha'), makeBatchEntry('beta')]);
+    const plan = args.plan as any;
+    const tampered = {
+      ...plan,
+      entries: plan.entries.map((entry: any, index: number) => index === 0
+        ? { ...entry, draftIndex: 99 }
         : entry),
     };
 

@@ -303,6 +303,39 @@ export async function executeDeployApp(
     name = `app-${Date.now().toString(36)}`;
   }
 
+  // A model turn can emit several deploy_app calls. In that case these
+  // individual results are draft assembly only: the canonical batch planner
+  // below the store layer performs name/SKU/provider/credit/domain validation
+  // once for the whole set. Keeping this branch before every network-backed
+  // consent check avoids N redundant reads and, importantly, prevents a
+  // per-entry affordability verdict from being mistaken for aggregate proof.
+  if (options.prepareBatchDeployDraft) {
+    const customDomain = typeof args.custom_domain === 'string'
+      ? args.custom_domain.trim()
+      : '';
+    const customDomainServiceName = typeof args.service_name === 'string'
+      ? args.service_name.trim()
+      : '';
+    return {
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Prepare "${name}" for batch deployment?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          _batchDeployDraft: true,
+          app_name: name,
+          ...(typeof args.size === 'string' ? { size: args.size } : {}),
+          ...(args._generatedManifest ? { _generatedManifest: args._generatedManifest } : {}),
+          ...(customDomain ? {
+            customDomain,
+            customDomainServiceName,
+          } : {}),
+        },
+      },
+    };
+  }
+
   // Validate name — auto-suffix on collision with running/deploying apps
   let nameError = validateAppName(name, address);
   if (nameError) {

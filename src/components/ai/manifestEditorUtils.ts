@@ -124,10 +124,14 @@ export function parseEditableManifest(action: PendingAction): ManifestFields | n
  * Passthrough fields (command, args, health_check, etc.) are merged first so
  * editable fields always take precedence.
  */
-export function serializeManifest(manifest: ManifestFields): string {
+export function manifestFieldsToObject(manifest: ManifestFields): Record<string, unknown> {
   const obj: Record<string, unknown> = { ...(manifest.passthrough ?? {}) };
   writeEditableFields(obj, manifest);
-  return JSON.stringify(obj, null, 2);
+  return obj;
+}
+
+export function serializeManifest(manifest: ManifestFields): string {
+  return JSON.stringify(manifestFieldsToObject(manifest), null, 2);
 }
 
 /**
@@ -173,12 +177,18 @@ export function parseEditableStackManifest(action: PendingAction): StackManifest
 /**
  * Serialize a StackManifestFields back to a JSON string, merging editable fields with passthrough.
  */
-export function serializeStackManifest(stack: StackManifestFields): string {
+export function stackManifestFieldsToObject(
+  stack: StackManifestFields,
+): { services: Record<string, Record<string, unknown>> } {
   const services: Record<string, Record<string, unknown>> = {};
   for (const [name, { editable, passthrough }] of Object.entries(stack)) {
     const svc: Record<string, unknown> = { ...passthrough };
     writeEditableFields(svc, editable);
     services[name] = svc;
   }
-  return JSON.stringify({ services }, null, 2);
+  return { services };
+}
+
+export function serializeStackManifest(stack: StackManifestFields): string {
+  return JSON.stringify(stackManifestFieldsToObject(stack), null, 2);
 }

@@ -70,7 +70,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
       pendingConfirmation: null,
       messages: get().messages.map((m) =>
         m.id === staleConfirmation.messageId
-          ? { ...m, content: 'Superseded by a new request — this transaction was not submitted.', isStreaming: false, awaitingConfirmation: false }
+          ? { ...m, content: 'Superseded by a new request — this transaction was not submitted.', error: undefined, isStreaming: false, awaitingConfirmation: false }
           : m,
       ),
     });

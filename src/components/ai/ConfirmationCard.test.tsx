@@ -1148,6 +1148,7 @@ function makePlannedBatchAction(): PendingAction {
         version: 1,
         entries: [
           {
+            draftIndex: 0,
             app_name: 'alpha',
             size: 'docker-micro',
             skuUuid: 'sku-micro',
@@ -1168,6 +1169,7 @@ function makePlannedBatchAction(): PendingAction {
             denomSymbol: 'PWR',
           },
           {
+            draftIndex: 1,
             app_name: 'beta',
             size: 'docker-micro',
             skuUuid: 'sku-micro',
@@ -1219,7 +1221,7 @@ function makeDomainBatchAction(
     args: {
       plan: {
         ...plan,
-        entries: overrides.map((entry) => ({ ...template, ...entry })),
+        entries: overrides.map((entry, draftIndex) => ({ ...template, ...entry, draftIndex })),
         totalServiceCount: overrides.length,
         totalPricePerHour: overrides.length * Number(template.totalPricePerHour),
       },

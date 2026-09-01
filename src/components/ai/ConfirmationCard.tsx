@@ -16,12 +16,14 @@ import { CustomDomainBranch, CloudflareProxyHint } from './ConfirmationCardCusto
 import { parseCustomDomainArgs } from './customDomainBranchData';
 import {
   isBatchDeployPlan,
-  summarizeBatchManifestText,
+  summarizeBatchManifest,
   type BatchDeployPlan,
 } from '../../ai/toolExecutor/batchDeployPlan';
 import {
+  manifestFieldsToObject,
   parseEditableManifest, serializeManifest,
   parseEditableStackManifest, serializeStackManifest,
+  stackManifestFieldsToObject,
   type ManifestFields, type StackManifestFields,
 } from './manifestEditorUtils';
 
@@ -44,6 +46,7 @@ interface StackServiceSummary {
 }
 
 interface BatchDeployDraft {
+  draftIndex: number;
   app_name: string;
   size: string;
   manifest: string;
@@ -56,6 +59,7 @@ interface BatchDeployDraft {
 function batchDraftsFromPlan(plan: BatchDeployPlan | null): BatchDeployDraft[] {
   if (!plan) return [];
   return plan.entries.map((entry) => ({
+    draftIndex: entry.draftIndex,
     app_name: entry.app_name,
     size: entry.size,
     manifest: entry.manifest,
@@ -68,27 +72,42 @@ function batchDraftsFromPlan(plan: BatchDeployPlan | null): BatchDeployDraft[] {
   }));
 }
 
+const BATCH_DEPLOY_DRAFT_FIELDS = {
+  draftIndex: true,
+  app_name: true,
+  size: true,
+  manifest: true,
+  manifestFilename: true,
+  customDomain: true,
+  customDomainServiceName: true,
+  customDomainWarning: true,
+} as const satisfies Record<keyof BatchDeployDraft, true>;
+
+const BATCH_DEPLOY_DRAFT_KEYS = Object.keys(BATCH_DEPLOY_DRAFT_FIELDS) as Array<
+  keyof BatchDeployDraft
+>;
+
 function batchDraftsMatch(
   current: readonly BatchDeployDraft[],
   initial: readonly BatchDeployDraft[],
 ): boolean {
   return current.length === initial.length && current.every((draft, index) => {
     const original = initial[index];
-    return draft.app_name === original.app_name
-      && draft.size === original.size
-      && draft.manifest === original.manifest
-      && draft.manifestFilename === original.manifestFilename
-      && draft.customDomain === original.customDomain
-      && draft.customDomainServiceName === original.customDomainServiceName
-      && draft.customDomainWarning === original.customDomainWarning;
+    return BATCH_DEPLOY_DRAFT_KEYS.every((key) => draft[key] === original[key]);
   });
 }
 
-function BatchManifestEditor({ manifest, onChange }: {
-  manifest: string;
-  onChange: (manifest: string) => void;
-}) {
-  const editorAction = useMemo(() => ({
+type BatchManifestEditorState =
+  | { kind: 'single'; manifest: ManifestFields }
+  | { kind: 'stack'; stack: StackManifestFields };
+
+interface BatchManifestEdit {
+  state: BatchManifestEditorState;
+  changed: boolean;
+}
+
+function parseBatchManifestEditor(manifest: string): BatchManifestEditorState | null {
+  const editorAction = {
     originAddress: '',
     chainId: '',
     clientGeneration: 0,
@@ -97,15 +116,35 @@ function BatchManifestEditor({ manifest, onChange }: {
     toolName: 'deploy_app',
     args: { _generatedManifest: manifest },
     description: '',
-  } satisfies PendingAction), [manifest]);
-  const stack = useMemo(() => parseEditableStackManifest(editorAction), [editorAction]);
-  const single = useMemo(() => parseEditableManifest(editorAction), [editorAction]);
+  } satisfies PendingAction;
+  const stack = parseEditableStackManifest(editorAction);
+  if (stack) return { kind: 'stack', stack };
+  const single = parseEditableManifest(editorAction);
+  return single ? { kind: 'single', manifest: single } : null;
+}
 
-  if (stack) {
-    return <StackManifestEditor stack={stack} onChange={(next) => onChange(serializeStackManifest(next))} />;
+function serializeBatchManifestEditor(state: BatchManifestEditorState): string {
+  return state.kind === 'stack'
+    ? serializeStackManifest(state.stack)
+    : serializeManifest(state.manifest);
+}
+
+function summarizeBatchManifestEditor(state: BatchManifestEditorState) {
+  const value = state.kind === 'stack'
+    ? stackManifestFieldsToObject(state.stack)
+    : manifestFieldsToObject(state.manifest);
+  return summarizeBatchManifest(value);
+}
+
+function BatchManifestEditor({ state, onChange }: {
+  state: BatchManifestEditorState | null;
+  onChange: (state: BatchManifestEditorState) => void;
+}) {
+  if (state?.kind === 'stack') {
+    return <StackManifestEditor stack={state.stack} onChange={(stack) => onChange({ kind: 'stack', stack })} />;
   }
-  if (single) {
-    return <ManifestEditor manifest={single} onChange={(next) => onChange(serializeManifest(next))} />;
+  if (state?.kind === 'single') {
+    return <ManifestEditor manifest={state.manifest} onChange={(manifest) => onChange({ kind: 'single', manifest })} />;
   }
   return <p className="text-xs text-error" role="alert">This manifest cannot be edited until it is valid JSON.</p>;
 }
@@ -224,9 +263,13 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     : null;
   const initialBatchDrafts = useMemo(() => batchDraftsFromPlan(batchPlan), [batchPlan]);
   const [batchDrafts, setBatchDrafts] = useState<BatchDeployDraft[]>(initialBatchDrafts);
-  const [editingBatchEntry, setEditingBatchEntry] = useState<string | null>(null);
+  const [batchManifestEdits, setBatchManifestEdits] = useState<Record<number, BatchManifestEdit>>({});
+  const [editingBatchEntry, setEditingBatchEntry] = useState<number | null>(null);
+  const batchHasManifestEdits = batchDrafts.some(
+    (draft) => batchManifestEdits[draft.draftIndex]?.changed === true,
+  );
   const batchIsDirty = batchPlan !== null
-    && !batchDraftsMatch(batchDrafts, initialBatchDrafts);
+    && (!batchDraftsMatch(batchDrafts, initialBatchDrafts) || batchHasManifestEdits);
 
   // Editable custom domain input on deploy_app ConfirmationCards. Defaults to
   // any AI-prefilled value (`args.customDomain`) so a chat message like
@@ -243,14 +286,17 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     let valid = batchDrafts.length > 0;
 
     const entries = batchDrafts.map((draft) => {
-      const original = batchPlan.entries.find((entry) => entry.app_name === draft.app_name);
-      const manifestIsDirty = !original || original.manifest !== draft.manifest;
+      const original = batchPlan.entries.find((entry) => entry.draftIndex === draft.draftIndex);
+      const manifestEdit = batchManifestEdits[draft.draftIndex];
+      const manifestIsDirty = !original || manifestEdit?.changed === true;
       const tierIsDirty = !original || original.size !== draft.size;
       // An approved card renders only values from its immutable, hashed plan.
       // Store SKU refreshes must not silently change what the user sees. Local
       // estimates are used only after an edit, while the hash is explicitly
       // marked pending and confirmation routes through a fresh plan.
-      const services = manifestIsDirty ? summarizeBatchManifestText(draft.manifest) : original.services;
+      const services = manifestEdit?.changed
+        ? summarizeBatchManifestEditor(manifestEdit.state)
+        : original?.services ?? null;
       const resolution = tierIsDirty
         ? resolveSizeOrCheapest(draft.size, skuTiers.tiers)
         : undefined;
@@ -263,7 +309,9 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
       const pricePerServiceHour = tierIsDirty ? tier?.pricePerHour : original.pricePerServiceHour;
       const denomSymbol = tierIsDirty ? tier?.denomSymbol : original.denomSymbol;
       const resources = tierIsDirty ? tier : original.resources;
-      if (!services || pricePerServiceHour === undefined || !denomSymbol) valid = false;
+      if (!services || services.length === 0 || pricePerServiceHour === undefined || !denomSymbol) {
+        valid = false;
+      }
       const entryTotal = (pricePerServiceHour ?? 0) * serviceCount;
       total += entryTotal;
       totalServices += serviceCount;
@@ -292,7 +340,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           denom: batchPlan.denomSymbol,
           valid,
         };
-  }, [batchDrafts, batchIsDirty, batchPlan, skuTiers.tiers]);
+  }, [batchDrafts, batchIsDirty, batchManifestEdits, batchPlan, skuTiers.tiers]);
   // Resolve the deploy size through the SAME helper the executor uses, so the
   // price/specs shown here are exactly what will deploy. An omitted or
   // unavailable size resolves to the cheapest tier; `fallback` drives the
@@ -406,7 +454,15 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
 
   const handleConfirm = useCallback(() => {
     if (batchPlan) {
-      onConfirm(batchIsDirty ? { editedBatchEntries: batchDrafts } : undefined);
+      const editedBatchEntries = batchIsDirty
+        ? batchDrafts.map((draft) => {
+            const edit = batchManifestEdits[draft.draftIndex];
+            return edit?.changed
+              ? { ...draft, manifest: serializeBatchManifestEditor(edit.state) }
+              : draft;
+          })
+        : undefined;
+      onConfirm(editedBatchEntries ? { editedBatchEntries } : undefined);
       return;
     }
 
@@ -431,7 +487,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     //    and stackServicePickerError blocks confirm when still '')
     overrides.editedCustomDomainServiceName = editedDomainTrimmed ? editedCustomDomainServiceName : '';
     onConfirm(overrides);
-  }, [batchPlan, batchIsDirty, batchDrafts, editedManifest, editedStack, isDeployApp, editedDomainTrimmed, editedCustomDomainServiceName, onConfirm]);
+  }, [batchPlan, batchIsDirty, batchDrafts, batchManifestEdits, editedManifest, editedStack, isDeployApp, editedDomainTrimmed, editedCustomDomainServiceName, onConfirm]);
 
   // Filter to user-facing args only. The AI tool schema in AI_TOOLS is the
   // single source of truth — this avoids the drift bug where every new TX
@@ -472,10 +528,10 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         ) : batchPlan && batchDraftPricing ? (
           <div className="batch-deploy-plan" data-testid="batch-deploy-plan">
             {batchDraftPricing.entries.map(({ draft, original, services, resources, serviceCount, pricePerServiceHour, denomSymbol, entryTotal, effectiveSize, substitutedRequest }) => {
-              const editing = editingBatchEntry === draft.app_name;
-              const manifestChanged = original?.manifest !== draft.manifest;
+              const editing = editingBatchEntry === draft.draftIndex;
+              const manifestChanged = batchManifestEdits[draft.draftIndex]?.changed === true;
               return (
-                <section className="batch-deploy-entry" key={draft.app_name} data-testid="batch-deploy-entry">
+                <section className="batch-deploy-entry" key={draft.draftIndex} data-testid="batch-deploy-entry">
                   <div className="batch-deploy-entry__header">
                     <div>
                       <strong>{draft.app_name}</strong>
@@ -485,7 +541,20 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                       <button
                         type="button"
                         className="btn-icon"
-                        onClick={() => setEditingBatchEntry(editing ? null : draft.app_name)}
+                        onClick={() => {
+                          if (editing) {
+                            setEditingBatchEntry(null);
+                            return;
+                          }
+                          setBatchManifestEdits((current) => {
+                            if (current[draft.draftIndex]) return current;
+                            const state = parseBatchManifestEditor(draft.manifest);
+                            return state
+                              ? { ...current, [draft.draftIndex]: { state, changed: false } }
+                              : current;
+                          });
+                          setEditingBatchEntry(draft.draftIndex);
+                        }}
                         aria-label={`${editing ? 'Finish editing' : 'Edit'} ${draft.app_name}`}
                       >
                         <Pencil className="w-3.5 h-3.5" />
@@ -494,7 +563,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                         type="button"
                         className="btn-icon"
                         onClick={() => {
-                          setBatchDrafts((current) => current.filter((entry) => entry.app_name !== draft.app_name));
+                          setBatchDrafts((current) => current.filter((entry) => entry.draftIndex !== draft.draftIndex));
                           if (editing) setEditingBatchEntry(null);
                         }}
                         aria-label={`Remove ${draft.app_name}`}
@@ -512,7 +581,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                         className="manifest-editor-input"
                         value={draft.size}
                         onChange={(event) => setBatchDrafts((current) => current.map((entry) =>
-                          entry.app_name === draft.app_name ? { ...entry, size: event.target.value } : entry))}
+                          entry.draftIndex === draft.draftIndex ? { ...entry, size: event.target.value } : entry))}
                       >
                         {skuTiers.tiers.map((candidate) => (
                           <option key={`${candidate.providerUuid}:${candidate.skuUuid}`} value={candidate.skuName}>
@@ -521,9 +590,11 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                         ))}
                       </select>
                       <BatchManifestEditor
-                        manifest={draft.manifest}
-                        onChange={(manifest) => setBatchDrafts((current) => current.map((entry) =>
-                          entry.app_name === draft.app_name ? { ...entry, manifest } : entry))}
+                        state={batchManifestEdits[draft.draftIndex]?.state ?? null}
+                        onChange={(state) => setBatchManifestEdits((current) => ({
+                          ...current,
+                          [draft.draftIndex]: { state, changed: true },
+                        }))}
                       />
                     </div>
                   )}

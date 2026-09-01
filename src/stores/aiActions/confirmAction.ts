@@ -145,6 +145,7 @@ export interface ConfirmActionOverrides {
   /** batch_deploy only: edited/remaining drafts. Supplying this never
    * broadcasts; it creates a newly validated plan that must be confirmed. */
   editedBatchEntries?: Array<{
+    draftIndex: number;
     app_name: string;
     size: string;
     manifest: string;
@@ -220,6 +221,7 @@ async function replanEditedBatch(
   try {
     assertAuthorization();
     const entries: BatchDeployEntry[] = await Promise.all(edits.map(async (edit) => ({
+      draftIndex: edit.draftIndex,
       app_name: edit.app_name,
       size: edit.size,
       payload: {
@@ -600,7 +602,7 @@ export function cancelActionFn(get: Get, set: Set): void {
 
   const updated = get().messages.map((m) =>
     m.id === messageId
-      ? { ...m, content: 'Action cancelled by user.', isStreaming: false, awaitingConfirmation: false }
+      ? { ...m, content: 'Action cancelled by user.', error: undefined, isStreaming: false, awaitingConfirmation: false }
       : m
   );
   set({ messages: updated });

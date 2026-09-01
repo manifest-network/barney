@@ -32,6 +32,8 @@ import { validateManifestEnvNames } from './deployArgs';
 export const BATCH_DEPLOY_PLAN_VERSION = 1 as const;
 
 export interface BatchDeployEntry {
+  /** Stable identity assigned by the caller; defaults to input position. */
+  draftIndex?: number;
   app_name: string;
   payload: PayloadAttachment;
   /** Per-entry size is used by model-coalesced batches. UI-direct batches may
@@ -52,6 +54,8 @@ export interface BatchDeployServiceSummary {
 }
 
 export interface BatchDeployPlanEntry {
+  /** Stable identity of the source draft, independent of planner ordering. */
+  draftIndex: number;
   app_name: string;
   size: string;
   /** Original unavailable size request when the planner substituted cheapest. */
@@ -89,6 +93,7 @@ export interface BatchDeployPlan {
 }
 
 interface PreparedBatchDeployEntry {
+  draftIndex: number;
   app_name: string;
   requestedSize?: string;
   tier: ResolvedSkuTier;
@@ -237,6 +242,7 @@ function planHashContent(plan: Omit<BatchDeployPlan, 'planHash'> | BatchDeployPl
   return {
     version: plan.version,
     entries: plan.entries.map((entry) => ({
+      draftIndex: entry.draftIndex,
       app_name: entry.app_name,
       size: entry.size,
       ...(entry.requestedSize ? { requestedSize: entry.requestedSize } : {}),
@@ -293,7 +299,9 @@ function validServiceSummary(value: unknown): value is BatchDeployServiceSummary
 function validPlanEntry(value: unknown): value is BatchDeployPlanEntry {
   if (!isRecord(value) || !isRecord(value.resources)) return false;
   const optionalStrings = ['customDomain', 'customDomainServiceName', 'customDomainWarning'] as const;
-  return typeof value.app_name === 'string'
+  return Number.isInteger(value.draftIndex)
+    && (value.draftIndex as number) >= 0
+    && typeof value.app_name === 'string'
     && typeof value.size === 'string'
     && (value.requestedSize === undefined || typeof value.requestedSize === 'string')
     && typeof value.skuUuid === 'string'
@@ -318,15 +326,19 @@ function validPlanEntry(value: unknown): value is BatchDeployPlanEntry {
 }
 
 export function isBatchDeployPlan(value: unknown): value is BatchDeployPlan {
-  return isRecord(value)
-    && value.version === BATCH_DEPLOY_PLAN_VERSION
-    && Array.isArray(value.entries)
-    && value.entries.length > 0
-    && value.entries.every(validPlanEntry)
-    && typeof value.totalServiceCount === 'number'
-    && typeof value.totalPricePerHour === 'number'
-    && typeof value.denomSymbol === 'string'
-    && typeof value.planHash === 'string';
+  if (!isRecord(value)
+      || value.version !== BATCH_DEPLOY_PLAN_VERSION
+      || !Array.isArray(value.entries)
+      || value.entries.length === 0
+      || !value.entries.every(validPlanEntry)
+      || typeof value.totalServiceCount !== 'number'
+      || typeof value.totalPricePerHour !== 'number'
+      || typeof value.denomSymbol !== 'string'
+      || typeof value.planHash !== 'string') {
+    return false;
+  }
+  const draftIndices = value.entries.map((entry) => entry.draftIndex);
+  return new Set(draftIndices).size === draftIndices.length;
 }
 
 export async function verifyBatchDeployPlanIntegrity(plan: unknown): Promise<
@@ -350,6 +362,7 @@ export function batchPlanToEntries(plan: BatchDeployPlan): BatchDeployEntry[] {
   return plan.entries.map((entry) => {
     const bytes = new TextEncoder().encode(entry.manifest);
     return {
+      draftIndex: entry.draftIndex,
       app_name: entry.app_name,
       size: entry.requestedSize ?? entry.size,
       payload: {
@@ -414,10 +427,16 @@ export async function planBatchDeploy(
 
   const usedNames = new Set<string>();
   const usedDomains = new Set<string>();
+  const usedDraftIndices = new Set<number>();
   const preparedEntries: PreparedBatchDeployEntry[] = [];
 
-  for (const draft of drafts) {
+  for (const [inputIndex, draft] of drafts.entries()) {
     assertPlanningCurrent(options);
+    const draftIndex = draft.draftIndex ?? inputIndex;
+    if (!Number.isInteger(draftIndex) || draftIndex < 0 || usedDraftIndices.has(draftIndex)) {
+      return { success: false, error: 'Batch deploy drafts must have unique non-negative identities.' };
+    }
+    usedDraftIndices.add(draftIndex);
     const resolvedName = nextAvailableName(draft.app_name, address, usedNames);
     if (!resolvedName.name) return { success: false, error: resolvedName.error! };
     const name = resolvedName.name;
@@ -504,6 +523,7 @@ export async function planBatchDeploy(
     }
 
     preparedEntries.push({
+      draftIndex,
       app_name: name,
       ...(resolution.fallback === 'cheapest-unavailable' && resolution.requested
         ? { requestedSize: resolution.requested }
@@ -570,6 +590,7 @@ export async function planBatchDeploy(
     return {
       success: true,
       entry: {
+        draftIndex: prepared.draftIndex,
         app_name: prepared.app_name,
         size: tier.skuName,
         ...(prepared.requestedSize ? { requestedSize: prepared.requestedSize } : {}),

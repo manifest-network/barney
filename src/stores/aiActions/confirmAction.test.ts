@@ -340,7 +340,7 @@ describe('confirmAction', () => {
       });
       const newPlan = {
         version: 1,
-        entries: [{ app_name: 'alpha', manifest: '{"image":"alpha:v2"}' }],
+        entries: [{ draftIndex: 0, app_name: 'alpha', manifest: '{"image":"alpha:v2"}' }],
         totalServiceCount: 1,
         totalPricePerHour: 0.1,
         denomSymbol: 'PWR',
@@ -355,6 +355,7 @@ describe('confirmAction', () => {
 
       await store.getState().confirmAction({
         editedBatchEntries: [{
+          draftIndex: 0,
           app_name: 'alpha',
           size: 'docker-micro',
           manifest: '{"image":"alpha:v2"}',
@@ -397,6 +398,7 @@ describe('confirmAction', () => {
 
       await store.getState().confirmAction({
         editedBatchEntries: [{
+          draftIndex: 0,
           app_name: 'alpha',
           size: 'docker-micro',
           manifest: '{"image":"alpha:v2"}',
@@ -967,7 +969,10 @@ describe('cancelAction', () => {
   });
 
   it('updates tool message with cancellation content', () => {
-    const toolMsg = makeToolMessage('tool_msg_1');
+    const toolMsg = {
+      ...makeToolMessage('tool_msg_1'),
+      error: 'Tier catalog unavailable',
+    };
     const store = setupStore({
       pendingConfirmation: makePendingConfirmation(),
       messages: [toolMsg],
@@ -979,6 +984,8 @@ describe('cancelAction', () => {
     const updated = state.messages.find(m => m.id === 'tool_msg_1');
     expect(updated).toBeDefined();
     expect(updated!.content).toBe('Action cancelled by user.');
+    expect(updated!.error).toBeUndefined();
     expect(updated!.isStreaming).toBe(false);
+    expect(updated!.awaitingConfirmation).toBe(false);
   });
 });

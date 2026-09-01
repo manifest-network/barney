@@ -104,7 +104,10 @@ describe('processToolCallsFn', () => {
         args: {
           plan: {
             version: 1,
-            entries: entries.map((entry) => ({ ...entry })),
+            entries: entries.map((entry, index) => ({
+              ...entry,
+              draftIndex: entry.draftIndex ?? index,
+            })),
             totalServiceCount: entries.length,
             totalPricePerHour: 0.1,
             denomSymbol: 'PWR',
@@ -395,6 +398,45 @@ describe('processToolCallsFn', () => {
     expect(entries.map(e => e.app_name)).toEqual(['tetris', 'doom', 'hextris']);
     expect(buildPayloadFromManifest).toHaveBeenCalledTimes(3);
     expect(executeBatchDeploy).toHaveBeenCalledOnce();
+    expect(vi.mocked(executeTool).mock.calls.every(([, , options]) =>
+      options.prepareBatchDeployDraft === true
+    )).toBe(true);
+  });
+
+  it('canonically plans a lone prepared draft when another deploy call fails', async () => {
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce({
+        success: true,
+        requiresConfirmation: true,
+        confirmationMessage: 'Prepare alpha for batch deployment?',
+        pendingAction: {
+          toolName: 'deploy_app',
+          args: {
+            _batchDeployDraft: true,
+            app_name: 'alpha',
+            size: 'micro',
+            _generatedManifest: '{"image":"alpha:latest"}',
+          },
+        },
+      })
+      .mockResolvedValueOnce({ success: false, error: 'Invalid beta manifest' });
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const toolCalls = [
+      makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } }),
+      makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } }),
+    ];
+
+    const result = await processToolCallsFn(get, set, toolCalls, 'asst_1', {
+      content: '', thinking: '', toolCalls,
+    });
+
+    expect(result.shouldContinue).toBe(false);
+    expect(executeBatchDeploy).toHaveBeenCalledOnce();
+    expect(state.pendingConfirmation?.action.toolName).toBe('batch_deploy');
+    expect(state.pendingConfirmation?.action.args).not.toHaveProperty('_batchDeployDraft');
+    expect(vi.mocked(executeTool).mock.calls.every(([, , options]) =>
+      options.prepareBatchDeployDraft === true
+    )).toBe(true);
   });
 
   it('runs aggregate affordability for model-coalesced deploys instead of trusting individual checks', async () => {
@@ -470,7 +512,7 @@ describe('processToolCallsFn', () => {
         args: {
           plan: {
             version: 1,
-            entries: [{ app_name: 'alpha' }],
+            entries: [{ draftIndex: 0, app_name: 'alpha' }],
             totalServiceCount: 1,
             totalPricePerHour: 0.1,
             denomSymbol: 'PWR',
@@ -497,6 +539,60 @@ describe('processToolCallsFn', () => {
       message.error?.includes('entry count that does not match')
       && message.awaitingConfirmation === false
     )).toBe(true);
+  });
+
+  it('maps planner output to tool messages by stable draft identity when entries reorder', async () => {
+    const deployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          _generatedManifest: `{"image":"${appName}:latest"}`,
+        },
+      },
+    });
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(deployResult('alpha'))
+      .mockResolvedValueOnce(deployResult('beta'));
+    vi.mocked(executeBatchDeploy).mockResolvedValueOnce({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Deploy beta-2 and alpha-2?',
+      pendingAction: {
+        toolName: 'batch_deploy',
+        args: {
+          plan: {
+            version: 1,
+            entries: [
+              { draftIndex: 1, app_name: 'beta-2' },
+              { draftIndex: 0, app_name: 'alpha-2' },
+            ],
+            totalServiceCount: 2,
+            totalPricePerHour: 0.2,
+            denomSymbol: 'PWR',
+            planHash: 'plan-hash',
+          },
+        },
+      },
+    });
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const toolCalls = [
+      makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } }),
+      makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } }),
+    ];
+
+    await processToolCallsFn(get, set, toolCalls, 'asst_1', {
+      content: '', thinking: '', toolCalls,
+    });
+
+    expect(state.messages.find((message) => message.toolCallId === 'tc_1')?.content)
+      .toBe('Batch deploy: alpha-2');
+    expect(state.messages.find((message) => message.toolCallId === 'tc_2')?.content)
+      .toBe('Batch deploy: beta-2');
   });
 
   // Regression: batch path used to leave the owning tool message without

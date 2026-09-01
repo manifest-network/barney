@@ -206,6 +206,14 @@ export interface ToolExecutorOptions {
    *  "Tier catalog unavailable" before any broadcast. */
   tiers: readonly ResolvedSkuTier[];
 
+  /**
+   * Model turns with multiple `deploy_app` calls use the single canonical
+   * batch planner for provider, pricing, credit, name, and domain checks.
+   * Individual deploy execution then only assembles immutable draft material;
+   * the store must not expose that draft as a directly confirmable action.
+   */
+  prepareBatchDeployDraft?: boolean;
+
   /** Bound identity for a confirmed transaction. Required by
    * `executeConfirmedTool`; omitted during read/pre-validation execution. */
   authorization?: TransactionAuthorization;

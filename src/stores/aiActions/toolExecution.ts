@@ -41,6 +41,7 @@ async function handleToolCall(
   set: Set,
   toolCall: ToolCall,
   authorizationEpoch: number,
+  prepareBatchDeployDraft: boolean,
 ): Promise<{ result: ToolResult; authorization: TransactionAuthorization | null }> {
   if (!isValidToolName(toolCall.function.name)) {
     return {
@@ -76,6 +77,7 @@ async function handleToolCall(
     appRegistry: getAppRegistryAccess(),
     signal: abortController?.signal,
     tiers: skuTiers.tiers,
+    prepareBatchDeployDraft,
   }, pendingPayload ?? undefined);
 
   if (get().authorizationEpoch !== authorizationEpoch) {
@@ -210,6 +212,7 @@ async function mergeBatchDeployConfirmations(
       }
 
       entries.push({
+        draftIndex: entryConfirmations.length,
         app_name: name,
         size: typeof args.size === 'string' ? args.size : undefined,
         payload,
@@ -252,8 +255,14 @@ async function mergeBatchDeployConfirmations(
     return false;
   }
 
-  // If only one survived, treat as single deploy
-  if (entries.length === 1) {
+  const containsPreparedBatchDraft = entryConfirmations.some(
+    (confirmation) => confirmation.result.pendingAction.args._batchDeployDraft === true,
+  );
+
+  // A normal single deploy already has a complete consent result. A draft
+  // prepared as part of a multi-deploy turn does not: even when every sibling
+  // failed assembly, route the survivor through the canonical planner.
+  if (entries.length === 1 && !containsPreparedBatchDraft) {
     setSingleConfirmation(get, set, entryConfirmations[0]);
     return true;
   }
@@ -312,12 +321,28 @@ async function mergeBatchDeployConfirmations(
     });
     return false;
   }
-  const plannedNames = plan.entries.map((entry) => entry.app_name);
+  const plannedNamesByDraft = new Map<number, string>();
+  for (const entry of plan.entries) {
+    if (!Number.isInteger(entry.draftIndex)
+        || entry.draftIndex < 0
+        || entry.draftIndex >= entryConfirmations.length
+        || plannedNamesByDraft.has(entry.draftIndex)) {
+      const error = 'Batch deploy planner returned draft identities that do not match the validated drafts.';
+      const ids = new Set(entryConfirmations.map((conf) => conf.toolMessageId));
+      set({
+        messages: get().messages.map((message) => ids.has(message.id)
+          ? { ...message, content: `Error: ${error}`, error, isStreaming: false, awaitingConfirmation: false }
+          : message),
+      });
+      return false;
+    }
+    plannedNamesByDraft.set(entry.draftIndex, entry.app_name);
+  }
   set({
     messages: get().messages.map((message) => {
       const index = entryConfirmations.findIndex((conf) => conf.toolMessageId === message.id);
       return index >= 0
-        ? { ...message, content: `Batch deploy: ${plannedNames[index]}`, isStreaming: false }
+        ? { ...message, content: `Batch deploy: ${plannedNamesByDraft.get(index)!}`, isStreaming: false }
         : message;
     }),
   });
@@ -363,9 +388,10 @@ async function mergeBatchDeployConfirmations(
  * cleanly.
  *
  * Disposition (in priority order):
- *   1. 2+ deploy_app and at least one buildable payload → merge into a single
- *      `batch_deploy` confirmation; non-deploy confirmations marked "skipped".
- *   2. 2+ deploy_app where every payload build failed AND no other TX types →
+ *   1. 2+ deploy_app, or a prepared survivor from such a turn, and at least
+ *      one buildable payload → merge into a single `batch_deploy`
+ *      confirmation; non-deploy confirmations marked "skipped".
+ *   2. A batch candidate where every payload build failed AND no other TX types →
  *      no confirmation set; the per-entry error messages already in chat tell
  *      the AI what went wrong, so let the stream continue.
  *   3. Otherwise → set the first non-deploy confirmation (or first deploy when
@@ -382,8 +408,13 @@ async function coalesceConfirmations(
   );
   const nonDeployConfs = collected.filter((c) => !deployConfs.includes(c));
 
-  // Path 1: 2+ deploy_app — try to merge into a batch.
-  if (deployConfs.length >= 2) {
+  const hasPreparedBatchDraft = deployConfs.some(
+    (confirmation) => confirmation.result.pendingAction.args._batchDeployDraft === true,
+  );
+
+  // Path 1: 2+ deploy_app, or a lone survivor from a multi-deploy turn — try
+  // to merge into a canonical batch plan.
+  if (deployConfs.length >= 2 || hasPreparedBatchDraft) {
     const merged = await mergeBatchDeployConfirmations(get, set, deployConfs, authorizationEpoch);
     if (get().authorizationEpoch !== authorizationEpoch) {
       return { shouldContinue: false };
@@ -449,6 +480,9 @@ export async function processToolCallsFn(
 
   let hasDisplayCard = false;
   const collectedConfirmations: CollectedConfirmation[] = [];
+  const prepareBatchDeployDrafts = toolCalls.filter(
+    (toolCall) => toolCall.function.name === 'deploy_app',
+  ).length >= 2;
 
   for (const toolCall of toolCalls) {
     if (get().authorizationEpoch !== authorizationEpoch) return { shouldContinue: false };
@@ -468,7 +502,13 @@ export async function processToolCallsFn(
     };
     set({ messages: trimMessages([...get().messages, toolMsg]) });
 
-    const handled = await handleToolCall(get, set, toolCall, authorizationEpoch);
+    const handled = await handleToolCall(
+      get,
+      set,
+      toolCall,
+      authorizationEpoch,
+      prepareBatchDeployDrafts && toolCall.function.name === 'deploy_app',
+    );
     if (get().authorizationEpoch !== authorizationEpoch) return { shouldContinue: false };
     const { result, authorization } = handled;
 
