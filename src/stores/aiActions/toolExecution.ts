@@ -302,6 +302,16 @@ async function mergeBatchDeployConfirmations(
   }
 
   const plan = planned.pendingAction.args.plan as BatchDeployPlan;
+  if (plan.entries.length !== entryConfirmations.length) {
+    const error = 'Batch deploy planner returned an entry count that does not match the validated drafts.';
+    const ids = new Set(entryConfirmations.map((conf) => conf.toolMessageId));
+    set({
+      messages: get().messages.map((message) => ids.has(message.id)
+        ? { ...message, content: `Error: ${error}`, error, isStreaming: false, awaitingConfirmation: false }
+        : message),
+    });
+    return false;
+  }
   const plannedNames = plan.entries.map((entry) => entry.app_name);
   set({
     messages: get().messages.map((message) => {

@@ -198,4 +198,15 @@ describe('validateAll', () => {
     const r = await validateAll('app.example.com');
     expect(r.error).toBeUndefined();
   });
+
+  it('forwards and preserves explicit cancellation', async () => {
+    const controller = new AbortController();
+    vi.mocked(billingParams.getReservedDomainSuffixes).mockRejectedValueOnce(
+      new DOMException('cancelled', 'AbortError'),
+    );
+
+    await expect(validateAll('app.example.com', controller.signal))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(billingParams.getReservedDomainSuffixes).toHaveBeenCalledWith(controller.signal);
+  });
 });

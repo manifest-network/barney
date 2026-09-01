@@ -2509,12 +2509,7 @@ async function confirmedBatchArgs(
 describe('executeBatchDeploy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-    vi.mocked(getCreditAccount).mockResolvedValue({
-      balances: [{ denom: 'upwr', amount: '1000000000' }],
-    } as any);
+    mockLiveBatchCatalog();
   });
 
   it('returns error without wallet', async () => {
@@ -2530,13 +2525,13 @@ describe('executeBatchDeploy', () => {
   });
 
   it('batch falls back to the cheapest tier for an unavailable size', async () => {
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
     const result = await executeBatchDeploy([makeBatchEntry('app1')], makeOptions(), 'xxlarge');
     expect(result.success).toBe(true);
-    const entries = (result.pendingAction?.args.plan as { entries: Array<{ size: string }> }).entries;
+    const entries = (result.pendingAction?.args.plan as {
+      entries: Array<{ size: string; requestedSize?: string }>;
+    }).entries;
     expect(entries[0].size).toBe('docker-micro'); // SAMPLE_TIERS cheapest
+    expect(entries[0].requestedSize).toBe('xxlarge');
   });
 
   it('batch defaults to the cheapest resolved tier when size is omitted', async () => {
@@ -2552,6 +2547,7 @@ describe('executeBatchDeploy', () => {
       { skuName: 'docker-small', skuUuid: 'sku-s', providerUuid: 'p1', cores: 1, ramMB: 1024, diskGB: 5, pricePerHour: 0.01, denomSymbol: 'PWR', unit: 1 },
       { skuName: 'docker-micro', skuUuid: 'sku-mi', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
     ];
+    mockLiveBatchCatalog(tiersOutOfPriceOrder);
 
     const result = await executeBatchDeploy(
       [makeBatchEntry('app1')],
@@ -2565,13 +2561,6 @@ describe('executeBatchDeploy', () => {
   });
 
   it('returns confirmation for valid batch', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-
     const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
     const result = await executeBatchDeploy(entries, makeOptions());
 
@@ -2590,16 +2579,10 @@ describe('executeBatchDeploy', () => {
   // price wrapper entirely when priceDisplay was empty — and priceDisplay
   // was empty whenever pricePerHour was 0 (the pass-11-now-incorrect guard).
   it('renders "0.0000 .../hr" on the batch confirmation message for a free tier (pass-16)', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-free', name: 'docker-micro', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-
     const freeTier = [
       { skuName: 'docker-micro', skuUuid: 'sku-free', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0, denomSymbol: 'PWR', unit: 1 },
     ];
+    mockLiveBatchCatalog(freeTier);
     const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
     const result = await executeBatchDeploy(entries, makeOptions({ tiers: freeTier }));
 
@@ -2614,13 +2597,6 @@ describe('executeBatchDeploy', () => {
   });
 
   it('still renders the price display for a positive-price batch tier (pass-16 happy-path regression)', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-
     const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
     const result = await executeBatchDeploy(entries, makeOptions());
 
@@ -2630,15 +2606,13 @@ describe('executeBatchDeploy', () => {
   });
 
   it('returns insufficient credits error when total cost exceeds balance', async () => {
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
+    const tiersWithHighPrice = SAMPLE_TIERS.map(t => ({ ...t, pricePerHour: 1.0 }));
+    mockLiveBatchCatalog(tiersWithHighPrice);
     // 0.5 PWR balance with tier price 1 PWR/hour × 3 entries = need 3, have 0.5
     vi.mocked(getCreditAccount).mockResolvedValue({
       balances: [{ denom: 'upwr', amount: '500000' }],
     } as any);
 
-    const tiersWithHighPrice = SAMPLE_TIERS.map(t => ({ ...t, pricePerHour: 1.0 }));
     const entries = [makeBatchEntry('app1'), makeBatchEntry('app2'), makeBatchEntry('app3')];
     const result = await executeBatchDeploy(entries, makeOptions({ tiers: tiersWithHighPrice }));
 
@@ -2647,11 +2621,12 @@ describe('executeBatchDeploy', () => {
   });
 
   it('rejects two apps that are individually affordable but collectively unaffordable', async () => {
+    const oneCreditTier = SAMPLE_TIERS.map((tier) => ({ ...tier, pricePerHour: 1 }));
+    mockLiveBatchCatalog(oneCreditTier);
     vi.mocked(getCreditAccount).mockResolvedValue({
       // Each 1 PWR/hr app is affordable on its own; the 2 PWR/hr batch is not.
       balances: [{ denom: 'upwr', amount: '1500000' }],
     } as any);
-    const oneCreditTier = SAMPLE_TIERS.map((tier) => ({ ...tier, pricePerHour: 1 }));
 
     const result = await executeBatchDeploy(
       [makeBatchEntry('alpha'), makeBatchEntry('beta')],
@@ -2690,13 +2665,6 @@ describe('executeBatchDeploy', () => {
   });
 
   it('extracts service names from stack manifest payloads', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-
     const stackManifest = {
       services: {
         web: { image: 'wordpress:6', ports: { '80/tcp': {} }, env: { WORDPRESS_DB_HOST: 'db:3306' } },
@@ -2719,10 +2687,45 @@ describe('executeBatchDeploy', () => {
     expect(resolvedEntries[0].serviceNames).toEqual(['web', 'db']);
   });
 
+  it('checks independent custom domains in parallel', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.mocked(queryLeaseByCustomDomain).mockImplementation(async () => {
+      await gate;
+      return null;
+    });
+    const planning = executeBatchDeploy([
+      { ...makeBatchEntry('alpha'), customDomain: 'alpha.example.com' },
+      { ...makeBatchEntry('beta'), customDomain: 'beta.example.com' },
+    ], makeOptions());
+
+    try {
+      await vi.waitFor(() => expect(queryLeaseByCustomDomain).toHaveBeenCalledTimes(2));
+    } finally {
+      release();
+    }
+    const result = await planning;
+
+    expect(result.success).toBe(true);
+  });
+
+  it('stops awaiting an in-flight custom-domain check when planning is aborted', async () => {
+    const controller = new AbortController();
+    vi.mocked(queryLeaseByCustomDomain).mockReturnValueOnce(new Promise<never>(() => {}));
+    const planning = executeBatchDeploy([
+      { ...makeBatchEntry('alpha'), customDomain: 'alpha.example.com' },
+    ], makeOptions({ signal: controller.signal }));
+    await vi.waitFor(() => expect(queryLeaseByCustomDomain).toHaveBeenCalledOnce());
+
+    controller.abort();
+
+    await expect(planning).rejects.toMatchObject({ name: 'AbortError' });
+    expect(getCreditAccount).not.toHaveBeenCalled();
+  });
+
   it('counts services (not just entries) for credit check on stack deploys', async () => {
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
+    const tiersWithHighPrice = SAMPLE_TIERS.map(t => ({ ...t, pricePerHour: 1.0 }));
+    mockLiveBatchCatalog(tiersWithHighPrice);
     // 1.5 credits: enough for 1 entry but not 2 services at 1 PWR/hr each
     vi.mocked(getCreditAccount).mockResolvedValue({
       balances: [{ denom: 'upwr', amount: '1500000' }],
@@ -2741,7 +2744,6 @@ describe('executeBatchDeploy', () => {
       payload: { bytes, filename: 'manifest-wordpress.json', size: bytes.length, hash: 'b'.repeat(64) },
     };
 
-    const tiersWithHighPrice = SAMPLE_TIERS.map(t => ({ ...t, pricePerHour: 1.0 }));
     // 1 entry with 2 services → needs 2 credits, but only 1.5 available
     const result = await executeBatchDeploy([entry], makeOptions({ tiers: tiersWithHighPrice }));
 
@@ -2799,6 +2801,83 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(deployManifest).not.toHaveBeenCalled();
   });
 
+  it('builds the initial and confirmed plans from the same live catalog', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult();
+    });
+    const staleStoreTiers = SAMPLE_TIERS.map((tier) => ({
+      ...tier,
+      pricePerHour: tier.pricePerHour + 10,
+    }));
+    const options = makeOptions({ tiers: staleStoreTiers });
+
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha')], options);
+    const plan = args.plan as { totalPricePerHour: number };
+    expect(plan.totalPricePerHour).toBeCloseTo(SAMPLE_TIERS[0].pricePerHour);
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, options);
+
+    expect(result.success).toBe(true);
+    expect(getSKUs).toHaveBeenCalledTimes(2);
+    expect(deployManifest).toHaveBeenCalledOnce();
+  });
+
+  it('hashes and sizes the canonical stored manifest when input has a UTF-8 BOM', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult();
+    });
+    const manifestBytes = new TextEncoder().encode('{"image":"bom:latest"}');
+    const bytesWithBom = new Uint8Array(manifestBytes.length + 3);
+    bytesWithBom.set([0xef, 0xbb, 0xbf]);
+    bytesWithBom.set(manifestBytes, 3);
+    const entry: BatchDeployEntry = {
+      app_name: 'bom-app',
+      payload: {
+        bytes: bytesWithBom,
+        filename: 'manifest-bom.json',
+        size: bytesWithBom.length,
+        hash: 'b'.repeat(64),
+      },
+    };
+
+    const args = await confirmedBatchArgs([entry]);
+    const plannedEntry = (args.plan as any).entries[0];
+    expect(plannedEntry.manifest).toBe('{"image":"bom:latest"}');
+    expect(plannedEntry.manifestSize).toBe(manifestBytes.length);
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions());
+
+    expect(result.success).toBe(true);
+    expect(deployManifest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ manifest: '{"image":"bom:latest"}' }),
+      expect.anything(),
+    );
+  });
+
+  it('preserves an unavailable-size substitution across confirm-time replanning', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult();
+    });
+    const args = await confirmedBatchArgs([{
+      ...makeBatchEntry('fallback-app'),
+      size: 'xxlarge',
+    }]);
+    const plannedEntry = (args.plan as any).entries[0];
+    expect(plannedEntry).toMatchObject({
+      size: 'docker-micro',
+      requestedSize: 'xxlarge',
+    });
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions());
+
+    expect(result.success).toBe(true);
+    expect(deployManifest).toHaveBeenCalledOnce();
+  });
+
   it('recomputes aggregate balance immediately before execution', async () => {
     vi.mocked(getCreditAccount)
       .mockResolvedValueOnce({ balances: [{ denom: 'upwr', amount: '1000000000' }] } as any)
@@ -2813,41 +2892,35 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(deployManifest).not.toHaveBeenCalled();
   });
 
-  it('buckets an authorization guard failure as cancelled before deploy', async () => {
+  it('stops confirm-time planning when the authorization guard fails', async () => {
     const entries = [
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
     ];
 
-    const result = await executeConfirmedBatchDeploy(
+    await expect(executeConfirmedBatchDeploy(
       await confirmedBatchArgs(entries),
       CLIENT_MANAGER,
       makeOptions({ assertAuthorization: () => { throw new Error('wallet changed'); } }),
-    );
+    )).rejects.toThrow('wallet changed');
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Cancelled: game1');
-    expect(result.error).not.toContain('Failed: game1');
     expect(deployManifest).not.toHaveBeenCalled();
   });
 
-  it('buckets a signal aborted by the live deploy guard as cancelled before broadcast', async () => {
+  it('stops confirm-time planning when the live guard aborts the signal', async () => {
     const controller = new AbortController();
     const entries = [
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
     ];
 
-    const result = await executeConfirmedBatchDeploy(
+    await expect(executeConfirmedBatchDeploy(
       await confirmedBatchArgs(entries),
       CLIENT_MANAGER,
       makeOptions({
         signal: controller.signal,
         assertAuthorization: () => controller.abort(),
       }),
-    );
+    )).rejects.toMatchObject({ name: 'AbortError' });
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Cancelled: game1');
-    expect(result.error).not.toContain('Failed: game1');
     expect(deployManifest).not.toHaveBeenCalled();
   });
 

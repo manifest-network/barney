@@ -17,7 +17,7 @@ let cached: Promise<string[]> | null = null;
  * as the authoritative reservation check post-broadcast.
  * See PR #93 Copilot 3243993831.
  */
-export async function getReservedDomainSuffixes(): Promise<string[]> {
+export async function getReservedDomainSuffixes(signal?: AbortSignal): Promise<string[]> {
   if (!cached) {
     cached = withTimeout(getBillingParams(), undefined, 'getBillingParams')
       .then((params) => params.reservedDomainSuffixes ?? [])
@@ -26,7 +26,11 @@ export async function getReservedDomainSuffixes(): Promise<string[]> {
         throw err;
       });
   }
-  return cached;
+  // The cached chain read remains shared, but each caller can stop awaiting it
+  // immediately when its own workflow is cancelled.
+  return signal
+    ? withTimeout(cached, undefined, 'getReservedDomainSuffixes', signal)
+    : cached;
 }
 
 export function invalidateReservedDomainSuffixesCache(): void {

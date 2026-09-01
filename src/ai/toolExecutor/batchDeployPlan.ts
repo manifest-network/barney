@@ -4,9 +4,9 @@
  * Both batch entry points feed drafts into this module. The returned plan is
  * the complete consent artifact: exact manifest bytes (stored as immutable
  * UTF-8 strings), resolved SKUs/providers, per-app and aggregate rates, and
- * user-facing manifest summaries. Confirmed execution rebuilds the plan with
- * live prices and balance, verifies its hash, and only broadcasts when the
- * refreshed plan is identical to the one the user approved.
+ * user-facing manifest summaries. Initial and confirmed planning both resolve
+ * the active chain catalog; confirmed execution then verifies the rebuilt hash
+ * and only broadcasts when it is identical to the plan the user approved.
  */
 
 import { validateManifest } from '@manifest-network/manifest-sdk/deploy';
@@ -25,7 +25,7 @@ import { logError } from '../../utils/errors';
 import { fromBaseUnits } from '../../utils/format';
 import { MAX_PAYLOAD_SIZE, sha256, toHex } from '../../utils/hash';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
-import { withTimeout } from '../../api/utils';
+import { throwIfAborted, withTimeout } from '../../api/utils';
 import type { PayloadAttachment, ToolExecutorOptions } from './types';
 import { validateManifestEnvNames } from './deployArgs';
 
@@ -54,6 +54,8 @@ export interface BatchDeployServiceSummary {
 export interface BatchDeployPlanEntry {
   app_name: string;
   size: string;
+  /** Original unavailable size request when the planner substituted cheapest. */
+  requestedSize?: string;
   skuUuid: string;
   providerUuid: string;
   providerUrl: string;
@@ -86,19 +88,33 @@ export interface BatchDeployPlan {
   planHash: string;
 }
 
+interface PreparedBatchDeployEntry {
+  app_name: string;
+  requestedSize?: string;
+  tier: ResolvedSkuTier;
+  providerUrl: string;
+  manifest: string;
+  manifestBytes: Uint8Array;
+  manifestFilename: string;
+  services: BatchDeployServiceSummary[];
+  serviceNames: string[];
+  serviceCount: number;
+  customDomain: string;
+  customDomainServiceName: string;
+  customDomainWarning?: string;
+}
+
+type PlannedEntryResult =
+  | { success: true; entry: BatchDeployPlanEntry }
+  | { success: false; error: string };
+
 export type BatchDeployPlanningResult =
   | {
       success: true;
       plan: BatchDeployPlan;
       confirmationMessage: string;
-      creditBalance: number;
     }
   | { success: false; error: string };
-
-export interface BatchDeployPlanningOptions {
-  /** Query the chain for active SKUs and rebuild prices before planning. */
-  refreshPrices?: boolean;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -115,7 +131,9 @@ function parseEnvironmentKeys(value: unknown): string[] {
   return isRecord(value) ? Object.keys(value) : [];
 }
 
-function summarizeManifest(parsed: Record<string, unknown>): BatchDeployServiceSummary[] {
+/** Shared display summary for the exact manifest object validated by the planner. */
+export function summarizeBatchManifest(parsed: unknown): BatchDeployServiceSummary[] | null {
+  if (!isRecord(parsed)) return null;
   if (isRecord(parsed.services)) {
     return Object.entries(parsed.services).map(([name, raw]) => {
       const service = isRecord(raw) ? raw : {};
@@ -136,6 +154,15 @@ function summarizeManifest(parsed: Record<string, unknown>): BatchDeployServiceS
   }];
 }
 
+/** Parse and summarize manifest text for local, pre-replan card estimates. */
+export function summarizeBatchManifestText(manifest: string): BatchDeployServiceSummary[] | null {
+  try {
+    return summarizeBatchManifest(JSON.parse(manifest));
+  } catch {
+    return null;
+  }
+}
+
 function specsFromTiers(tiers: readonly ResolvedSkuTier[]): SkuSpecMap {
   const specs: SkuSpecMap = {};
   for (const tier of tiers) {
@@ -150,16 +177,26 @@ function specsFromTiers(tiers: readonly ResolvedSkuTier[]): SkuSpecMap {
 
 async function currentTiers(
   tiers: readonly ResolvedSkuTier[],
-  refreshPrices: boolean,
+  signal?: AbortSignal,
 ): Promise<readonly ResolvedSkuTier[]> {
-  if (!refreshPrices) return tiers;
   if (tiers.length === 0) return [];
   const refreshed = await withTimeout(
     resolveSkuTiers(specsFromTiers(tiers)),
     undefined,
     'Refresh batch deploy prices',
+    signal,
   );
   return refreshed.tiers;
+}
+
+function assertPlanningCurrent(options: ToolExecutorOptions): void {
+  options.assertAuthorization?.();
+  throwIfAborted(options.signal, 'Batch deploy planning');
+}
+
+function rethrowPlanningInterruption(error: unknown, options: ToolExecutorOptions): void {
+  if (error instanceof Error && error.name === 'AbortError') throw error;
+  assertPlanningCurrent(options);
 }
 
 function findAvailableCredits(account: Awaited<ReturnType<typeof getCreditAccount>>): number | null {
@@ -202,6 +239,7 @@ function planHashContent(plan: Omit<BatchDeployPlan, 'planHash'> | BatchDeployPl
     entries: plan.entries.map((entry) => ({
       app_name: entry.app_name,
       size: entry.size,
+      ...(entry.requestedSize ? { requestedSize: entry.requestedSize } : {}),
       skuUuid: entry.skuUuid,
       providerUuid: entry.providerUuid,
       providerUrl: entry.providerUrl,
@@ -257,6 +295,7 @@ function validPlanEntry(value: unknown): value is BatchDeployPlanEntry {
   const optionalStrings = ['customDomain', 'customDomainServiceName', 'customDomainWarning'] as const;
   return typeof value.app_name === 'string'
     && typeof value.size === 'string'
+    && (value.requestedSize === undefined || typeof value.requestedSize === 'string')
     && typeof value.skuUuid === 'string'
     && typeof value.providerUuid === 'string'
     && typeof value.providerUrl === 'string'
@@ -312,7 +351,7 @@ export function batchPlanToEntries(plan: BatchDeployPlan): BatchDeployEntry[] {
     const bytes = new TextEncoder().encode(entry.manifest);
     return {
       app_name: entry.app_name,
-      size: entry.size,
+      size: entry.requestedSize ?? entry.size,
       payload: {
         bytes,
         filename: entry.manifestFilename,
@@ -333,17 +372,21 @@ export function batchPlanToEntries(plan: BatchDeployPlan): BatchDeployEntry[] {
 export async function planBatchDeploy(
   drafts: readonly BatchDeployEntry[],
   options: ToolExecutorOptions,
-  planningOptions: BatchDeployPlanningOptions = {},
 ): Promise<BatchDeployPlanningResult> {
   const { address, appRegistry } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (drafts.length === 0) return { success: false, error: 'No apps to deploy' };
+  assertPlanningCurrent(options);
 
   let tiers: readonly ResolvedSkuTier[];
   try {
-    tiers = await currentTiers(options.tiers, planningOptions.refreshPrices === true);
+    tiers = await currentTiers(
+      options.tiers,
+      options.signal,
+    );
   } catch (error) {
+    rethrowPlanningInterruption(error, options);
     logError('batchDeployPlan.refreshPrices', error);
     return {
       success: false,
@@ -353,20 +396,28 @@ export async function planBatchDeploy(
   if (tiers.length === 0) {
     return { success: false, error: 'Tier catalog unavailable — try again in a moment.' };
   }
+  assertPlanningCurrent(options);
 
   let providers: Awaited<ReturnType<typeof getProviders>>;
   try {
-    providers = await withTimeout(getProviders(true), undefined, 'Fetch providers');
+    providers = await withTimeout(
+      getProviders(true),
+      undefined,
+      'Fetch providers',
+      options.signal,
+    );
   } catch (error) {
+    rethrowPlanningInterruption(error, options);
     logError('batchDeployPlan.fetchProviders', error);
     return { success: false, error: 'Failed to fetch providers. Please try again.' };
   }
 
   const usedNames = new Set<string>();
   const usedDomains = new Set<string>();
-  const entries: BatchDeployPlanEntry[] = [];
+  const preparedEntries: PreparedBatchDeployEntry[] = [];
 
   for (const draft of drafts) {
+    assertPlanningCurrent(options);
     const resolvedName = nextAvailableName(draft.app_name, address, usedNames);
     if (!resolvedName.name) return { success: false, error: resolvedName.error! };
     const name = resolvedName.name;
@@ -387,6 +438,10 @@ export async function planBatchDeploy(
         error: `Cannot deploy "${name}": manifest exceeds the ${MAX_PAYLOAD_SIZE / 1024}KB limit.`,
       };
     }
+    // TextDecoder canonicalizes accepted UTF-8 (notably stripping a leading
+    // BOM). Hash and size the exact UTF-8 text that the plan stores and the SDK
+    // will receive, so confirm-time re-encoding cannot drift from consent.
+    const manifestBytes = new TextEncoder().encode(manifest);
 
     let parsed: unknown;
     try {
@@ -404,7 +459,10 @@ export async function planBatchDeploy(
     const envError = validateManifestEnvNames(parsed);
     if (envError) return { success: false, error: `Cannot deploy "${name}": ${envError}` };
 
-    const services = summarizeManifest(parsed as Record<string, unknown>);
+    const services = summarizeBatchManifest(parsed);
+    if (!services || services.length === 0) {
+      return { success: false, error: `Cannot deploy "${name}": manifest has no services.` };
+    }
     const serviceNames = services.map((service) => service.name).filter(Boolean);
     const serviceCount = services.length;
 
@@ -423,35 +481,13 @@ export async function planBatchDeploy(
 
     let customDomain = draft.customDomain?.trim() ?? '';
     let customDomainServiceName = draft.customDomainServiceName?.trim() ?? '';
-    let customDomainWarning = draft.customDomainWarning;
+    const customDomainWarning = draft.customDomainWarning;
     if (customDomain) {
       customDomain = customDomain.toLowerCase().replace(/\.$/, '');
       if (usedDomains.has(customDomain)) {
         return { success: false, error: `Custom domain "${customDomain}" is repeated in this batch.` };
       }
       usedDomains.add(customDomain);
-
-      const domainValidation = await validateAll(customDomain);
-      if (domainValidation.error) return { success: false, error: domainValidation.error };
-      customDomainWarning = domainValidation.warning;
-
-      try {
-        const existing = await withTimeout(
-          queryLeaseByCustomDomain(customDomain),
-          undefined,
-          'queryLeaseByCustomDomain',
-        );
-        if (existing) {
-          const heldByApp = appRegistry.getAppByLease(address, existing.leaseUuid);
-          const friendly = heldByApp ? `"${heldByApp.name}"` : 'another lease';
-          return {
-            success: false,
-            error: `"${customDomain}" is already attached to ${friendly}. Pick a different domain or detach it first.`,
-          };
-        }
-      } catch (error) {
-        logError('batchDeployPlan.queryLeaseByCustomDomain', error);
-      }
 
       if (serviceNames.length > 1) {
         if (!customDomainServiceName || !serviceNames.includes(customDomainServiceName)) {
@@ -467,28 +503,103 @@ export async function planBatchDeploy(
       }
     }
 
-    const manifestHash = toHex(await sha256(draft.payload.bytes));
-    entries.push({
+    preparedEntries.push({
       app_name: name,
-      size: tier.skuName,
-      skuUuid: tier.skuUuid,
-      providerUuid: tier.providerUuid,
+      ...(resolution.fallback === 'cheapest-unavailable' && resolution.requested
+        ? { requestedSize: resolution.requested }
+        : {}),
+      tier,
       providerUrl: provider.apiUrl,
-      resources: { cores: tier.cores, ramMB: tier.ramMB, diskGB: tier.diskGB },
       manifest,
+      manifestBytes,
       manifestFilename: draft.payload.filename || 'manifest.json',
-      manifestSize: draft.payload.bytes.length,
-      manifestHash,
       services,
       serviceNames,
       serviceCount,
-      pricePerServiceHour: tier.pricePerHour,
-      totalPricePerHour: tier.pricePerHour * serviceCount,
-      denomSymbol: tier.denomSymbol,
-      ...(customDomain ? { customDomain } : {}),
-      ...(customDomainServiceName ? { customDomainServiceName } : {}),
-      ...(customDomainWarning ? { customDomainWarning } : {}),
+      customDomain,
+      customDomainServiceName,
+      customDomainWarning,
     });
+  }
+
+  // Domain reads are independent once names, manifests, tiers, and duplicate
+  // domains have been validated synchronously. Run them in parallel so one
+  // slow lease lookup does not multiply confirm-time latency by batch size.
+  const entryResults = await Promise.all(preparedEntries.map(async (
+    prepared,
+  ): Promise<PlannedEntryResult> => {
+    const manifestHashPromise = sha256(prepared.manifestBytes);
+    let customDomainWarning = prepared.customDomainWarning;
+
+    if (prepared.customDomain) {
+      assertPlanningCurrent(options);
+      const domainValidation = await validateAll(prepared.customDomain, options.signal);
+      assertPlanningCurrent(options);
+      if (domainValidation.error) {
+        await manifestHashPromise;
+        return { success: false, error: domainValidation.error };
+      }
+      customDomainWarning = domainValidation.warning;
+
+      try {
+        const existing = await withTimeout(
+          queryLeaseByCustomDomain(prepared.customDomain),
+          undefined,
+          'queryLeaseByCustomDomain',
+          options.signal,
+        );
+        if (existing) {
+          const heldByApp = appRegistry.getAppByLease(address, existing.leaseUuid);
+          const friendly = heldByApp ? `"${heldByApp.name}"` : 'another lease';
+          await manifestHashPromise;
+          return {
+            success: false,
+            error: `"${prepared.customDomain}" is already attached to ${friendly}. Pick a different domain or detach it first.`,
+          };
+        }
+      } catch (error) {
+        rethrowPlanningInterruption(error, options);
+        logError('batchDeployPlan.queryLeaseByCustomDomain', error);
+      }
+    }
+
+    assertPlanningCurrent(options);
+    const manifestHash = toHex(await manifestHashPromise);
+    assertPlanningCurrent(options);
+    const { tier } = prepared;
+    return {
+      success: true,
+      entry: {
+        app_name: prepared.app_name,
+        size: tier.skuName,
+        ...(prepared.requestedSize ? { requestedSize: prepared.requestedSize } : {}),
+        skuUuid: tier.skuUuid,
+        providerUuid: tier.providerUuid,
+        providerUrl: prepared.providerUrl,
+        resources: { cores: tier.cores, ramMB: tier.ramMB, diskGB: tier.diskGB },
+        manifest: prepared.manifest,
+        manifestFilename: prepared.manifestFilename,
+        manifestSize: prepared.manifestBytes.length,
+        manifestHash,
+        services: prepared.services,
+        serviceNames: prepared.serviceNames,
+        serviceCount: prepared.serviceCount,
+        pricePerServiceHour: tier.pricePerHour,
+        totalPricePerHour: tier.pricePerHour * prepared.serviceCount,
+        denomSymbol: tier.denomSymbol,
+        ...(prepared.customDomain ? { customDomain: prepared.customDomain } : {}),
+        ...(prepared.customDomainServiceName
+          ? { customDomainServiceName: prepared.customDomainServiceName }
+          : {}),
+        ...(customDomainWarning ? { customDomainWarning } : {}),
+      },
+    };
+  }));
+
+  const entries: BatchDeployPlanEntry[] = [];
+  for (const result of entryResults) {
+    if (!result.success) return result;
+    entries.push(result.entry);
   }
 
   const denomSymbols = new Set(entries.map((entry) => entry.denomSymbol));
@@ -504,9 +615,17 @@ export async function planBatchDeploy(
 
   let creditBalance: number | null;
   try {
-    const account = await withTimeout(getCreditAccount(address), undefined, 'Credit check');
+    assertPlanningCurrent(options);
+    const account = await withTimeout(
+      getCreditAccount(address),
+      undefined,
+      'Credit check',
+      options.signal,
+    );
+    assertPlanningCurrent(options);
     creditBalance = findAvailableCredits(account);
   } catch (error) {
+    rethrowPlanningInterruption(error, options);
     logError('batchDeployPlan.creditCheck', error);
     return {
       success: false,
@@ -537,6 +656,7 @@ export async function planBatchDeploy(
     ...withoutHash,
     planHash: await computePlanHash(withoutHash),
   };
+  assertPlanningCurrent(options);
   const runway = totalPricePerHour > 0 ? creditBalance / totalPricePerHour : Number.POSITIVE_INFINITY;
   const runwayWarning = runway < 24
     ? ` Warning: only ~${Math.floor(runway)}h of credits remaining at this rate.`
@@ -548,6 +668,5 @@ export async function planBatchDeploy(
     success: true,
     plan: deepFreeze(plan),
     confirmationMessage,
-    creditBalance,
   };
 }

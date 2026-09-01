@@ -162,9 +162,63 @@ async function replanEditedBatch(
   edits: NonNullable<ConfirmActionOverrides['editedBatchEntries']>,
 ): Promise<void> {
   const authorizationEpoch = get().authorizationEpoch;
-  set({ isStreaming: true });
+  const abort = new AbortController();
+  const cleanArgs = { ...pendingConfirmation.action.args };
+  delete cleanArgs._batchReplanError;
+  const cleanAction = Object.freeze({
+    ...pendingConfirmation.action,
+    args: cleanArgs,
+  });
+  set({
+    isStreaming: true,
+    abortController: abort,
+    pendingConfirmation: {
+      ...pendingConfirmation,
+      // Keep the same confirmation id so React preserves the card's draft
+      // state while the edited plan is revalidated.
+      action: cleanAction,
+    },
+    messages: get().messages.map((message) => message.id === pendingConfirmation.messageId
+      ? { ...message, error: undefined, awaitingConfirmation: true }
+      : message),
+  });
+
+  const contextIsCurrent = () => get().authorizationEpoch === authorizationEpoch
+    && get().abortController === abort
+    && get().pendingConfirmation?.id === pendingConfirmation.id
+    && isTransactionAuthorizationCurrent(get(), pendingConfirmation.action);
+  const assertAuthorization = () => {
+    if (get().authorizationEpoch !== authorizationEpoch
+        || get().abortController !== abort
+        || get().pendingConfirmation?.id !== pendingConfirmation.id) {
+      throw new Error(AUTHORIZATION_CANCELLED_MESSAGE);
+    }
+    assertTransactionAuthorizationCurrent(get(), pendingConfirmation.action);
+  };
+  const preserveEditsForRetry = (detail: string) => {
+    if (!contextIsCurrent()) return;
+    set({
+      pendingConfirmation: {
+        ...pendingConfirmation,
+        action: Object.freeze({
+          ...pendingConfirmation.action,
+          args: { ...cleanArgs, _batchReplanError: detail },
+        }),
+      },
+      messages: get().messages.map((message) => message.id === pendingConfirmation.messageId
+        ? {
+            ...message,
+            content: pendingConfirmation.action.description,
+            error: detail,
+            isStreaming: false,
+            awaitingConfirmation: true,
+          }
+        : message),
+    });
+  };
 
   try {
+    assertAuthorization();
     const entries: BatchDeployEntry[] = await Promise.all(edits.map(async (edit) => ({
       app_name: edit.app_name,
       size: edit.size,
@@ -181,10 +235,7 @@ async function replanEditedBatch(
         : {}),
     })));
 
-    if (get().authorizationEpoch !== authorizationEpoch
-        || !isTransactionAuthorizationCurrent(get(), pendingConfirmation.action)) {
-      return;
-    }
+    assertAuthorization();
 
     const current = get();
     const result = await executeBatchDeploy(entries, {
@@ -192,31 +243,19 @@ async function replanEditedBatch(
       address: current.address,
       signing: current.signing,
       appRegistry: getAppRegistryAccess(),
+      signal: abort.signal,
       tiers: current.skuTiers.tiers,
+      authorization: pendingConfirmation.action,
+      assertAuthorization,
     });
 
-    if (get().authorizationEpoch !== authorizationEpoch
-        || !isTransactionAuthorizationCurrent(get(), pendingConfirmation.action)) {
-      return;
-    }
+    assertAuthorization();
 
     if (!result.requiresConfirmation) {
       const error = result.success
         ? 'Batch deploy did not return a confirmation plan.'
         : result.error;
-      set({
-        pendingConfirmation: null,
-        pendingPayload: null,
-        messages: get().messages.map((message) => message.id === pendingConfirmation.messageId
-          ? {
-              ...message,
-              content: `Error: ${error}`,
-              error,
-              isStreaming: false,
-              awaitingConfirmation: false,
-            }
-          : message),
-      });
+      preserveEditsForRetry(error);
       return;
     }
 
@@ -243,24 +282,15 @@ async function replanEditedBatch(
     });
   } catch (error) {
     logError('confirmAction.replanEditedBatch', error);
-    if (get().authorizationEpoch === authorizationEpoch) {
+    if (contextIsCurrent()) {
       const detail = error instanceof Error ? error.message : 'Failed to rebuild batch plan';
-      set({
-        pendingConfirmation: null,
-        pendingPayload: null,
-        messages: get().messages.map((message) => message.id === pendingConfirmation.messageId
-          ? {
-              ...message,
-              content: `Error: ${detail}`,
-              error: detail,
-              isStreaming: false,
-              awaitingConfirmation: false,
-            }
-          : message),
-      });
+      preserveEditsForRetry(detail);
     }
   } finally {
-    if (get().authorizationEpoch === authorizationEpoch) set({ isStreaming: false });
+    abort.abort();
+    if (get().authorizationEpoch === authorizationEpoch && get().abortController === abort) {
+      set({ isStreaming: false, abortController: null });
+    }
   }
 }
 

@@ -16,8 +16,8 @@ import { CustomDomainBranch, CloudflareProxyHint } from './ConfirmationCardCusto
 import { parseCustomDomainArgs } from './customDomainBranchData';
 import {
   isBatchDeployPlan,
+  summarizeBatchManifestText,
   type BatchDeployPlan,
-  type BatchDeployServiceSummary,
 } from '../../ai/toolExecutor/batchDeployPlan';
 import {
   parseEditableManifest, serializeManifest,
@@ -68,40 +68,20 @@ function batchDraftsFromPlan(plan: BatchDeployPlan | null): BatchDeployDraft[] {
   }));
 }
 
-function summarizeBatchManifest(manifest: string): BatchDeployServiceSummary[] | null {
-  try {
-    const parsed = JSON.parse(manifest) as Record<string, unknown>;
-    const summarize = (name: string, raw: unknown): BatchDeployServiceSummary => {
-      const service = raw && typeof raw === 'object' && !Array.isArray(raw)
-        ? raw as Record<string, unknown>
-        : {};
-      const ports = service.ports && typeof service.ports === 'object' && !Array.isArray(service.ports)
-        ? Object.entries(service.ports as Record<string, unknown>).map(([port, options]) =>
-            options && typeof options === 'object' && !Array.isArray(options)
-              && (options as Record<string, unknown>).ingress === true
-              ? `${port} (ingress)`
-              : port)
-        : [];
-      const environmentKeys = service.env && typeof service.env === 'object' && !Array.isArray(service.env)
-        ? Object.keys(service.env as Record<string, unknown>)
-        : [];
-      return {
-        name,
-        image: typeof service.image === 'string' ? service.image : 'unknown',
-        ports,
-        environmentKeys,
-      };
-    };
-
-    if (parsed.services && typeof parsed.services === 'object' && !Array.isArray(parsed.services)) {
-      const services = Object.entries(parsed.services as Record<string, unknown>)
-        .map(([name, service]) => summarize(name, service));
-      return services.length > 0 ? services : null;
-    }
-    return [summarize('', parsed)];
-  } catch {
-    return null;
-  }
+function batchDraftsMatch(
+  current: readonly BatchDeployDraft[],
+  initial: readonly BatchDeployDraft[],
+): boolean {
+  return current.length === initial.length && current.every((draft, index) => {
+    const original = initial[index];
+    return draft.app_name === original.app_name
+      && draft.size === original.size
+      && draft.manifest === original.manifest
+      && draft.manifestFilename === original.manifestFilename
+      && draft.customDomain === original.customDomain
+      && draft.customDomainServiceName === original.customDomainServiceName
+      && draft.customDomainWarning === original.customDomainWarning;
+  });
 }
 
 function BatchManifestEditor({ manifest, onChange }: {
@@ -238,11 +218,15 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     [action],
   );
   const invalidBatchPlan = action.toolName === 'batch_deploy' && batchPlan === null;
+  const batchReplanError = action.toolName === 'batch_deploy'
+    && typeof action.args._batchReplanError === 'string'
+    ? action.args._batchReplanError
+    : null;
   const initialBatchDrafts = useMemo(() => batchDraftsFromPlan(batchPlan), [batchPlan]);
   const [batchDrafts, setBatchDrafts] = useState<BatchDeployDraft[]>(initialBatchDrafts);
   const [editingBatchEntry, setEditingBatchEntry] = useState<string | null>(null);
   const batchIsDirty = batchPlan !== null
-    && JSON.stringify(batchDrafts) !== JSON.stringify(initialBatchDrafts);
+    && !batchDraftsMatch(batchDrafts, initialBatchDrafts);
 
   // Editable custom domain input on deploy_app ConfirmationCards. Defaults to
   // any AI-prefilled value (`args.customDomain`) so a chat message like
@@ -266,11 +250,15 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
       // Store SKU refreshes must not silently change what the user sees. Local
       // estimates are used only after an edit, while the hash is explicitly
       // marked pending and confirmation routes through a fresh plan.
-      const services = manifestIsDirty ? summarizeBatchManifest(draft.manifest) : original.services;
+      const services = manifestIsDirty ? summarizeBatchManifestText(draft.manifest) : original.services;
       const resolution = tierIsDirty
         ? resolveSizeOrCheapest(draft.size, skuTiers.tiers)
         : undefined;
       const tier = resolution?.tier;
+      const effectiveSize = tierIsDirty ? (tier?.skuName ?? draft.size) : original.size;
+      const substitutedRequest = tierIsDirty
+        ? (resolution?.fallback === 'cheapest-unavailable' ? resolution.requested : undefined)
+        : original.requestedSize;
       const serviceCount = manifestIsDirty ? (services?.length ?? 0) : original.serviceCount;
       const pricePerServiceHour = tierIsDirty ? tier?.pricePerHour : original.pricePerServiceHour;
       const denomSymbol = tierIsDirty ? tier?.denomSymbol : original.denomSymbol;
@@ -290,6 +278,8 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         pricePerServiceHour,
         denomSymbol,
         entryTotal,
+        effectiveSize,
+        substitutedRequest,
       };
     });
 
@@ -481,7 +471,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           </div>
         ) : batchPlan && batchDraftPricing ? (
           <div className="batch-deploy-plan" data-testid="batch-deploy-plan">
-            {batchDraftPricing.entries.map(({ draft, original, services, resources, serviceCount, pricePerServiceHour, denomSymbol, entryTotal }) => {
+            {batchDraftPricing.entries.map(({ draft, original, services, resources, serviceCount, pricePerServiceHour, denomSymbol, entryTotal, effectiveSize, substitutedRequest }) => {
               const editing = editingBatchEntry === draft.app_name;
               const manifestChanged = original?.manifest !== draft.manifest;
               return (
@@ -489,7 +479,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                   <div className="batch-deploy-entry__header">
                     <div>
                       <strong>{draft.app_name}</strong>
-                      <span className="text-muted"> · {draft.size}</span>
+                      <span className="text-muted"> · {effectiveSize}</span>
                     </div>
                     <div className="flex items-center gap-1">
                       <button
@@ -553,6 +543,12 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                     </div>
                   </dl>
 
+                  {substitutedRequest && (
+                    <p className="text-xs text-muted" role="note">
+                      Requested size ‘{substitutedRequest}’ isn’t offered on this network — deploying ‘{effectiveSize}’ (cheapest available) instead.
+                    </p>
+                  )}
+
                   {services?.map((service, serviceIndex) => (
                     <div className="batch-deploy-service" key={service.name || serviceIndex}>
                       {service.name && <code className="batch-deploy-service__name">{service.name}</code>}
@@ -609,6 +605,11 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                 Review changes to recalculate prices and hashes. The updated plan will require a separate confirmation.
               </p>
             )}
+            {batchReplanError && (
+              <p className="text-sm text-error" role="alert">
+                Could not rebuild the batch plan: {batchReplanError}. Your edits are still here; fix the issue and try again.
+              </p>
+            )}
           </div>
         ) : customDomainData ? (
           <CustomDomainBranch data={customDomainData} />
@@ -642,43 +643,16 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                   ))}
                 </div>
               </div>
-            ) : action.args.entries && Array.isArray(action.args.entries) && action.args.entries.length > 0 ? (
+            ) : (action.toolName === 'stop_app' || action.toolName === 'restart_app')
+                && Array.isArray(action.args.entries) && action.args.entries.length > 0 ? (
               <div className="confirmation-details">
                 <p className="confirmation-details-title">
-                  {action.toolName === 'stop_app' ? 'Apps to stop:' : action.toolName === 'restart_app' ? 'Apps to restart:' : 'Apps to deploy:'}
+                  {action.toolName === 'stop_app' ? 'Apps to stop:' : 'Apps to restart:'}
                 </p>
                 <ul className="confirmation-batch-list">
-                  {(action.args.entries as Array<{
-                    app_name: string;
-                    size?: string;
-                    customDomain?: string;
-                    customDomainServiceName?: string;
-                    customDomainWarning?: string;
-                  }>).map((entry) => (
+                  {(action.args.entries as Array<{ app_name: string }>).map((entry) => (
                     <li key={entry.app_name}>
-                      <span>{entry.app_name}{entry.size ? ` (${entry.size})` : ''}</span>
-                      {/* Per-entry custom-domain display. Render only when
-                          present so non-domain entries (stop_app, restart_app,
-                          batch deploys without a domain attached) stay tight
-                          and the markup matches the pre-fix `<li>` exactly.
-                          Mirrors the single-deploy card's customDomainData
-                          branch: fqdn + optional service-name + apex warning
-                          when set. See PR #93 Copilot 3248436597. */}
-                      {entry.customDomain && (
-                        <div className="confirmation-batch-domain">
-                          <span className="font-mono text-xs text-dim">
-                            domain: {entry.customDomain}
-                            {entry.customDomainServiceName && (
-                              <> · service: <code>{entry.customDomainServiceName}</code></>
-                            )}
-                          </span>
-                          {entry.customDomainWarning && (
-                            <p className="confirmation-apex-warning" role="alert">
-                              {entry.customDomainWarning}
-                            </p>
-                          )}
-                        </div>
-                      )}
+                      <span>{entry.app_name}</span>
                     </li>
                   ))}
                 </ul>
@@ -838,7 +812,9 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           className="btn btn-success btn-sm"
         >
           <Check className="w-4 h-4" />
-          {isExecuting ? 'Executing...' : batchIsDirty ? 'Review updated plan' : 'Confirm'}
+          {isExecuting
+            ? (batchIsDirty ? 'Revalidating...' : 'Executing...')
+            : batchIsDirty ? 'Review updated plan' : 'Confirm'}
         </button>
       </div>
     </div>

@@ -444,6 +444,61 @@ describe('processToolCallsFn', () => {
     expect(failures.every((message) => message.error?.includes('Insufficient credits'))).toBe(true);
   });
 
+  it('fails closed when the planner result cannot be mapped one-to-one to draft confirmations', async () => {
+    const deployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          _generatedManifest: `{"image":"${appName}:latest"}`,
+        },
+      },
+    });
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(deployResult('alpha'))
+      .mockResolvedValueOnce(deployResult('beta'));
+    vi.mocked(executeBatchDeploy).mockResolvedValueOnce({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Malformed planner result',
+      pendingAction: {
+        toolName: 'batch_deploy',
+        args: {
+          plan: {
+            version: 1,
+            entries: [{ app_name: 'alpha' }],
+            totalServiceCount: 1,
+            totalPricePerHour: 0.1,
+            denomSymbol: 'PWR',
+            planHash: 'plan-hash',
+          },
+        },
+      },
+    });
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const toolCalls = [
+      makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } }),
+      makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } }),
+    ];
+
+    const result = await processToolCallsFn(get, set, toolCalls, 'asst_1', {
+      content: '', thinking: '', toolCalls,
+    });
+
+    expect(result.shouldContinue).toBe(true);
+    expect(state.pendingConfirmation).toBeNull();
+    const toolMessages = state.messages.filter((message) => message.role === 'tool');
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages.every((message) =>
+      message.error?.includes('entry count that does not match')
+      && message.awaitingConfirmation === false
+    )).toBe(true);
+  });
+
   // Regression: batch path used to leave the owning tool message without
   // `awaitingConfirmation: true`. The schema fix (87b22b2) made the flag
   // survive Zod, so the persistence rehydrate at persistence.ts:82-89

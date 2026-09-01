@@ -740,6 +740,9 @@ export async function executeBatchDeploy(
   size?: string
 ): Promise<ToolResult> {
   const drafts = entries.map((entry) => ({ ...entry, size: entry.size ?? size }));
+  // Initial consent and confirm-time validation must use the same live catalog.
+  // Otherwise a session-cached price/provider can produce a plan whose hash can
+  // never survive the mandatory refresh immediately before broadcast.
   const result = await planBatchDeploy(drafts, options);
   if (!result.success) return result;
   return {
@@ -783,7 +786,6 @@ export async function executeConfirmedBatchDeploy(
   const refreshed = await planBatchDeploy(
     batchPlanToEntries(integrity.plan),
     options,
-    { refreshPrices: true },
   );
   if (!refreshed.success) return refreshed;
   if (refreshed.plan.planHash !== integrity.plan.planHash) {

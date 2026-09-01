@@ -46,6 +46,22 @@ describe('getReservedDomainSuffixes', () => {
     expect(billing.getBillingParams).toHaveBeenCalledTimes(1);
   });
 
+  it('lets a caller stop awaiting the shared cached read without poisoning it', async () => {
+    let resolveParams!: (value: Awaited<ReturnType<typeof billing.getBillingParams>>) => void;
+    vi.mocked(billing.getBillingParams).mockReturnValueOnce(new Promise((resolve) => {
+      resolveParams = resolve;
+    }));
+    const controller = new AbortController();
+    const aborted = getReservedDomainSuffixes(controller.signal);
+
+    controller.abort();
+    await expect(aborted).rejects.toMatchObject({ name: 'AbortError' });
+
+    resolveParams({ reservedDomainSuffixes: ['.still-cached'] } as any);
+    await expect(getReservedDomainSuffixes()).resolves.toEqual(['.still-cached']);
+    expect(billing.getBillingParams).toHaveBeenCalledOnce();
+  });
+
   it('refetches after cache invalidation', async () => {
     vi.mocked(billing.getBillingParams).mockResolvedValue({
       reservedDomainSuffixes: ['.x'],

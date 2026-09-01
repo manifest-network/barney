@@ -1068,13 +1068,9 @@ describe('ConfirmationCard with stack manifest', () => {
   });
 });
 
-// Regression: PR #93 Copilot 3248436597. Batch deploys carried per-entry
-// `customDomain`, `customDomainServiceName`, `customDomainWarning` through
-// `toolExecution.ts:178-184` into the pending action's `args.entries`, but
-// the batch render branch in `ConfirmationCard.tsx` only typed entries as
-// `{ app_name, size? }` — so users approved batches attaching custom
-// domains they never saw on the confirmation card.
-describe('ConfirmationCard batch render — per-entry custom-domain (Copilot 3248436597)', () => {
+// Regression: per-entry domain consent must render from the canonical hashed
+// plan; the legacy args.entries batch shape is intentionally not exercised.
+describe('ConfirmationCard canonical batch render — per-entry custom-domain', () => {
   it('renders domain + apex warning only for entries that carry them', () => {
     const action = makeDomainBatchAction([
       {
@@ -1232,20 +1228,27 @@ function makeDomainBatchAction(
 }
 
 describe('ConfirmationCard canonical batch plan', () => {
-  function renderBatch(onConfirm = vi.fn()) {
+  function renderBatch(
+    onConfirm = vi.fn(),
+    action: PendingAction = makePlannedBatchAction(),
+    isExecuting = false,
+  ) {
     const container = document.createElement('div');
     document.body.appendChild(container);
     const root = createRoot(container);
-    flushSync(() => {
+    const render = (nextAction = action, nextIsExecuting = isExecuting) => flushSync(() => {
       root.render(createElement(ConfirmationCard, {
-        action: makePlannedBatchAction(),
+        action: nextAction,
         onConfirm,
         onCancel: vi.fn(),
+        isExecuting: nextIsExecuting,
       }));
     });
+    render();
     return {
       container,
       onConfirm,
+      render,
       cleanup: () => {
         flushSync(() => root.unmount());
         container.remove();
@@ -1270,6 +1273,19 @@ describe('ConfirmationCard canonical batch plan', () => {
       expect(text).toContain(`Batch plan SHA-256: ${'c'.repeat(64)}`);
       expect(text).toContain('0.3000 PWR/hr');
       expect(text).toContain('3 services across 2 apps');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('discloses an unavailable requested size recorded by the canonical plan', () => {
+    const action = makePlannedBatchAction();
+    const plan = action.args.plan as { entries: Array<Record<string, unknown>> };
+    plan.entries[0].requestedSize = 'xxlarge';
+    const { container, cleanup } = renderBatch(vi.fn(), action);
+    try {
+      expect(container.textContent).toContain("Requested size ‘xxlarge’ isn’t offered on this network");
+      expect(container.textContent).toContain("deploying ‘docker-micro’ (cheapest available) instead");
     } finally {
       cleanup();
     }
@@ -1314,6 +1330,32 @@ describe('ConfirmationCard canonical batch plan', () => {
       const alpha = override.editedBatchEntries.find((entry: { app_name: string }) => entry.app_name === 'alpha');
       expect(JSON.parse(alpha.manifest).ports).toBeUndefined();
       expect(onConfirm).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('preserves local drafts across a failed re-plan and labels revalidation accurately', () => {
+    const action = makePlannedBatchAction();
+    const { container, render, cleanup } = renderBatch(vi.fn(), action);
+    try {
+      const remove = container.querySelector('button[aria-label="Remove beta"]') as HTMLButtonElement;
+      flushSync(() => remove.click());
+
+      render(action, true);
+      expect(container.textContent).toContain('Revalidating...');
+
+      render({
+        ...action,
+        args: {
+          ...action.args,
+          _batchReplanError: 'Tier catalog unavailable',
+        },
+      }, false);
+      expect(container.textContent).toContain('Could not rebuild the batch plan: Tier catalog unavailable');
+      expect(container.textContent).toContain('Your edits are still here');
+      expect(container.textContent).not.toContain('beta-web:v2');
+      expect(container.textContent).toContain('1 service across 1 app');
     } finally {
       cleanup();
     }

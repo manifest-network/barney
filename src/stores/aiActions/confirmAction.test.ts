@@ -377,6 +377,47 @@ describe('confirmAction', () => {
       expect(store.getState().messages[0].content).toContain('0.1000 PWR/hr total');
       expect(store.getState().isStreaming).toBe(false);
     });
+
+    it('keeps the edited confirmation mounted and retryable when re-planning fails', async () => {
+      const pending = makePendingConfirmation({
+        action: {
+          toolName: 'batch_deploy',
+          args: { plan: { version: 1, planHash: 'old-plan' } },
+          description: 'Deploy 2 apps for 0.2000 PWR/hr total?',
+        },
+      });
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+      mockExecuteBatchDeploy.mockResolvedValueOnce({
+        success: false,
+        error: 'Tier catalog unavailable — try again in a moment.',
+      });
+
+      await store.getState().confirmAction({
+        editedBatchEntries: [{
+          app_name: 'alpha',
+          size: 'docker-micro',
+          manifest: '{"image":"alpha:v2"}',
+          manifestFilename: 'alpha.json',
+        }],
+      });
+
+      const state = store.getState();
+      expect(state.pendingConfirmation?.id).toBe(pending.id);
+      expect(state.pendingConfirmation?.action.args.plan).toBe(pending.action.args.plan);
+      expect(state.pendingConfirmation?.action.args._batchReplanError).toContain('Tier catalog unavailable');
+      expect(state.messages[0]).toMatchObject({
+        content: pending.action.description,
+        error: expect.stringContaining('Tier catalog unavailable'),
+        awaitingConfirmation: true,
+        isStreaming: false,
+      });
+      expect(state.abortController).toBeNull();
+      expect(state.isStreaming).toBe(false);
+      expect(mockExecuteConfirmedTool).not.toHaveBeenCalled();
+    });
   });
 
   // -----------------------------------------------------------------------
