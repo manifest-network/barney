@@ -372,28 +372,29 @@ describe('AppsSidebar refresh lifecycle', () => {
     // Watching delete calls alone could be satisfied by an unrelated stale
     // refresh that happens to use the same wallet-context key.
     const mapSetSpy = vi.spyOn(Map.prototype, 'set');
-    const setDeleteSpy = vi.spyOn(Set.prototype, 'delete');
     let activityCounts!: Map<unknown, unknown>;
     let pendingRetries!: Set<unknown>;
     try {
-      await act(async () => {
-        await expect(latestRefresh()()).resolves.toBe(false);
-      });
-      const countReceiverIndex = mapSetSpy.mock.calls.findIndex(([context, count]) =>
-        isWalletContext(context, 'manifest1walleta') && count === 1
-      );
-      const pendingReceiverIndex = setDeleteSpy.mock.calls.findIndex(([context]) =>
-        isWalletContext(context, 'manifest1walleta')
-      );
-      expect(countReceiverIndex).toBeGreaterThanOrEqual(0);
-      expect(pendingReceiverIndex).toBeGreaterThanOrEqual(0);
-      activityCounts = mapSetSpy.mock.contexts[countReceiverIndex] as Map<unknown, unknown>;
-      pendingRetries = setDeleteSpy.mock.contexts[pendingReceiverIndex] as Set<unknown>;
-      expect(activityCounts).toBeInstanceOf(Map);
-      expect(pendingRetries).toBeInstanceOf(Set);
+      const setDeleteSpy = vi.spyOn(Set.prototype, 'delete');
+      try {
+        await act(async () => {
+          await expect(latestRefresh()()).resolves.toBe(false);
+        });
+        const countReceiverIndex = mapSetSpy.mock.calls.findIndex(([context, count]) =>
+          isWalletContext(context, 'manifest1walleta') && count === 1
+        );
+        const pendingReceiverIndex = setDeleteSpy.mock.calls.findIndex(([context]) =>
+          isWalletContext(context, 'manifest1walleta')
+        );
+        expect(countReceiverIndex).toBeGreaterThanOrEqual(0);
+        expect(pendingReceiverIndex).toBeGreaterThanOrEqual(0);
+        activityCounts = mapSetSpy.mock.contexts[countReceiverIndex] as Map<unknown, unknown>;
+        pendingRetries = setDeleteSpy.mock.contexts[pendingReceiverIndex] as Set<unknown>;
+      } finally {
+        setDeleteSpy.mockRestore();
+      }
     } finally {
       mapSetSpy.mockRestore();
-      setDeleteSpy.mockRestore();
     }
     expect(activityCounts.size).toBe(0);
     expect(pendingRetries.size).toBe(0);
