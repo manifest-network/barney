@@ -179,8 +179,8 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   // A button click reserves activity before the restarted poll can claim it.
   // Reconcile ownership from the replacement wallet's setup, not cleanup:
   // StrictMode replays effect cleanup without ending the wallet lifecycle.
-  // Keying only on walletContext also ensures a same-wallet poll restart keeps
-  // the reservation it is about to claim.
+  // The identity guard makes same-wallet replays no-ops and preserves the
+  // reservation handoff; the narrow dependency avoids redundant effect runs.
   useEffect(() => {
     const previousContext = creditRefreshOwnerContextRef.current;
     if (previousContext === walletContext) return;

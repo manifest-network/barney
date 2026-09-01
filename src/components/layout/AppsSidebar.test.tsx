@@ -367,9 +367,36 @@ describe('AppsSidebar refresh lifecycle', () => {
     mocks.getCreditAccount.mockRejectedValue(new Error('account unavailable'));
     mocks.getCreditEstimate.mockRejectedValue(new Error('estimate unavailable'));
     await render();
-    await act(async () => {
-      await expect(latestRefresh()()).resolves.toBe(false);
-    });
+
+    // Capture the exact activity collections, then assert their retained size.
+    // Watching delete calls alone could be satisfied by an unrelated stale
+    // refresh that happens to use the same wallet-context key.
+    const mapSetSpy = vi.spyOn(Map.prototype, 'set');
+    const setDeleteSpy = vi.spyOn(Set.prototype, 'delete');
+    let activityCounts!: Map<unknown, unknown>;
+    let pendingRetries!: Set<unknown>;
+    try {
+      await act(async () => {
+        await expect(latestRefresh()()).resolves.toBe(false);
+      });
+      const countReceiverIndex = mapSetSpy.mock.calls.findIndex(([context, count]) =>
+        isWalletContext(context, 'manifest1walleta') && count === 1
+      );
+      const pendingReceiverIndex = setDeleteSpy.mock.calls.findIndex(([context]) =>
+        isWalletContext(context, 'manifest1walleta')
+      );
+      expect(countReceiverIndex).toBeGreaterThanOrEqual(0);
+      expect(pendingReceiverIndex).toBeGreaterThanOrEqual(0);
+      activityCounts = mapSetSpy.mock.contexts[countReceiverIndex] as Map<unknown, unknown>;
+      pendingRetries = setDeleteSpy.mock.contexts[pendingReceiverIndex] as Set<unknown>;
+      expect(activityCounts).toBeInstanceOf(Map);
+      expect(pendingRetries).toBeInstanceOf(Set);
+    } finally {
+      mapSetSpy.mockRestore();
+      setDeleteSpy.mockRestore();
+    }
+    expect(activityCounts.size).toBe(0);
+    expect(pendingRetries.size).toBe(0);
 
     const retryButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent === 'Retry',
@@ -378,47 +405,33 @@ describe('AppsSidebar refresh lifecycle', () => {
       retryButton?.click();
     });
     expect(container.textContent).toContain('Refreshing…');
+    expect(activityCounts.size).toBe(1);
+    expect(pendingRetries.size).toBe(1);
 
-    const mapDeleteSpy = vi.spyOn(Map.prototype, 'delete');
-    const setDeleteSpy = vi.spyOn(Set.prototype, 'delete');
-    try {
-      mocks.address = 'manifest1walletb';
-      await render();
+    mocks.address = 'manifest1walletb';
+    await render();
+    expect(activityCounts.size).toBe(0);
+    expect(pendingRetries.size).toBe(0);
 
-      expect(mapDeleteSpy.mock.calls.some(([context]) =>
-        isWalletContext(context, 'manifest1walleta')
-      )).toBe(true);
-      expect(setDeleteSpy.mock.calls.some(([context]) =>
-        isWalletContext(context, 'manifest1walleta')
-      )).toBe(true);
+    // Ownership must advance with the replacement wallet; otherwise every
+    // later switch would keep trying to release A while leaking B, C, ….
+    await act(async () => {
+      await expect(latestRefresh()()).resolves.toBe(false);
+    });
+    const walletBRetry = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Retry',
+    );
+    await act(async () => {
+      walletBRetry?.click();
+    });
+    expect(container.textContent).toContain('Refreshing…');
+    expect(activityCounts.size).toBe(1);
+    expect(pendingRetries.size).toBe(1);
 
-      // Ownership must advance with the replacement wallet; otherwise every
-      // later switch would keep trying to release A while leaking B, C, ….
-      await act(async () => {
-        await expect(latestRefresh()()).resolves.toBe(false);
-      });
-      const walletBRetry = Array.from(container.querySelectorAll('button')).find(
-        (button) => button.textContent === 'Retry',
-      );
-      await act(async () => {
-        walletBRetry?.click();
-      });
-      expect(container.textContent).toContain('Refreshing…');
-      mapDeleteSpy.mockClear();
-      setDeleteSpy.mockClear();
-
-      mocks.address = 'manifest1walletc';
-      await render();
-      expect(mapDeleteSpy.mock.calls.some(([context]) =>
-        isWalletContext(context, 'manifest1walletb')
-      )).toBe(true);
-      expect(setDeleteSpy.mock.calls.some(([context]) =>
-        isWalletContext(context, 'manifest1walletb')
-      )).toBe(true);
-    } finally {
-      mapDeleteSpy.mockRestore();
-      setDeleteSpy.mockRestore();
-    }
+    mocks.address = 'manifest1walletc';
+    await render();
+    expect(activityCounts.size).toBe(0);
+    expect(pendingRetries.size).toBe(0);
   });
 
   it('releases refresh activity when setup throws before the billing reads', async () => {
