@@ -14,6 +14,7 @@ import { logError } from '../../utils/errors';
 import { bigIntReplacer } from '../../utils/json';
 import { isApex, APEX_WARNING } from '../../utils/customDomainValidation';
 import { normalizeFqdn } from '../../utils/connection';
+import { walletIdentityMatches } from '../../utils/walletIdentity';
 import type { AIStore } from '../aiStore';
 import {
   AUTHORIZATION_CANCELLED_MESSAGE,
@@ -481,6 +482,16 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
       }
       return;
     }
+
+    // The transaction result remains visible even if the store is somehow
+    // missing its selected transcript, but wallet-scoped messages must never be
+    // sent to the model until that identity is selected.
+    const followUpState = get();
+    if (!walletIdentityMatches(
+      followUpState.historyIdentity,
+      followUpState.chainId,
+      followUpState.address,
+    )) return;
 
     // Append the follow-up assistant message only after the transaction row is
     // resolved and the operation is still live.

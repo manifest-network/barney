@@ -131,9 +131,10 @@ If you fork Barney and add a third-party script, widen the CSP minimally (specif
 
 ### 7. Chat history hygiene
 
-- **Validation on load.** `barney-ai-history` is plain JSON validated by `validateChatHistory` (`src/ai/validation.ts`); on `JSON.parse` failure or invalid shape the catch block removes the key and the app starts with an empty history. There is no version envelope and no migration chain — that pattern (`src/utils/versionedStorage.ts`) is used by the account-setup flag, not by the app registry, chat history, or settings.
+- **Identity selection before use.** The AI store starts with no selected transcript. `setWalletContext` derives a stable identity from the exact chain ID and trimmed, lowercase wallet address, then atomically loads only that identity's history. Disconnect selects no history. Both initial messages and transaction follow-up model requests fail closed unless the selected history identity matches the active wallet context.
+- **Versioned, scoped persistence.** History uses `barney-ai-history:v1:{chainId}:{normalizedAddress}` and a versioned envelope that repeats the identity. `validateChatHistory` validates its messages; malformed, future-version, unversioned, or identity-mismatched scoped data is cleared. The old global `barney-ai-history` key is always discarded because it has no trustworthy wallet owner and is never silently migrated.
 - **Streaming messages excluded from persistence.** Half-finished assistant messages don't make it to localStorage; only completed messages do.
-- **Storage scoping.** The app registry (`barney-apps-{address}`) and the account-setup flag (`barney-refill-{address}`) are keyed by wallet address; chat history (`barney-ai-history`), AI settings (`barney-ai-settings`), and theme (`barney-theme`) are global to the browser profile. Switching wallets isolates per-wallet state but does not clear global state.
+- **Retention and deletion.** Each transcript remains in localStorage until its active identity runs `/clear`/uses the settings clear action, the user clears site data, or the browser-global **Save Chat History** preference is disabled. The clear action removes only the active wallet/network transcript; disabling persistence removes all scoped transcripts. AI settings and theme remain global to the browser profile.
 
 ## Cosmos-side trust
 

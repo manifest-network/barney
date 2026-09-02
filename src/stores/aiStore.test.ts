@@ -69,7 +69,7 @@ vi.mock('./aiActions/batchDeploy', () => ({
 import { createAIStore, type AIStore } from './aiStore';
 import { logError } from '../utils/errors';
 import { validateFile } from '../utils/fileValidation';
-import { clearHistoryStorage } from './aiActions/persistence';
+import { clearHistoryStorage, loadHistory, saveHistory } from './aiActions/persistence';
 
 type Store = StoreApi<AIStore>;
 
@@ -209,6 +209,22 @@ describe('aiStore', () => {
   // ---- Wallet setters ----
 
   describe('setWalletContext', () => {
+    it('starts without loading any wallet history', () => {
+      expect(store.getState().historyIdentity).toBeNull();
+      expect(store.getState().messages).toEqual([]);
+      expect(loadHistory).not.toHaveBeenCalled();
+    });
+
+    it('selects history only after a normalized wallet identity is available', () => {
+      updateWalletContext(store, { address: '  MANIFEST1ABC  ', chainId: 'chain-a' });
+
+      expect(store.getState().historyIdentity).toEqual({
+        chainId: 'chain-a',
+        address: 'manifest1abc',
+      });
+      expect(loadHistory).toHaveBeenCalledWith(store.getState().historyIdentity);
+    });
+
     it('clears tool cache and deployProgress on change', () => {
       store.getState().cacheToolResult('key1', { success: true, data: 'x' });
       store.setState({ deployProgress: { phase: 'ready' } as AIStore['deployProgress'] });
@@ -322,11 +338,25 @@ describe('aiStore', () => {
         expect(state._pendingStreamUpdate).toBeNull();
         expect(state._rafId).toBeNull();
         expect(state.isStreaming).toBe(false);
-        expect(state.messages[0].content).toContain('cancelled and was not submitted');
-        expect(state.messages[0].error).toContain('cancelled and was not submitted');
-        expect(state.messages[0].error).not.toBe('authorization_context_changed');
-        expect(state.messages[0].awaitingConfirmation).toBe(false);
-        expect(state.messages).toHaveLength(1);
+        if (changedField === 'address' || changedField === 'chain') {
+          // The closure is persisted to A, but must never be painted as part of
+          // B's newly selected transcript.
+          expect(state.messages).toEqual([]);
+          expect(saveHistory).toHaveBeenLastCalledWith(
+            expect.objectContaining({ chainId: 'chain-a', address: 'manifest1a' }),
+            [expect.objectContaining({
+              content: expect.stringContaining('cancelled and was not submitted'),
+              awaitingConfirmation: false,
+            })],
+            true,
+          );
+        } else {
+          expect(state.messages[0].content).toContain('cancelled and was not submitted');
+          expect(state.messages[0].error).toContain('cancelled and was not submitted');
+          expect(state.messages[0].error).not.toBe('authorization_context_changed');
+          expect(state.messages[0].awaitingConfirmation).toBe(false);
+          expect(state.messages).toHaveLength(1);
+        }
 
         cancelRafSpy.mockRestore();
       },
@@ -364,13 +394,15 @@ describe('aiStore', () => {
   // ---- History ----
 
   describe('clearHistory', () => {
-    it('clears messages, tool cache, and localStorage', () => {
+    it('clears messages, tool cache, and only the active wallet storage', () => {
+      updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
+      const activeIdentity = store.getState().historyIdentity;
       store.getState().addMessage(makeMessage());
       store.getState().cacheToolResult('k', { success: true, data: 1 });
       store.getState().clearHistory();
       expect(store.getState().messages).toHaveLength(0);
       expect(store.getState()._toolCache.size).toBe(0);
-      expect(clearHistoryStorage).toHaveBeenCalled();
+      expect(clearHistoryStorage).toHaveBeenCalledWith(activeIdentity);
     });
   });
 

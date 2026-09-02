@@ -156,7 +156,7 @@ The dependency-free Node relay owns the only paid route. `auth.mjs` verifies one
 
 ### 6. App registry (`src/registry/appRegistry.ts`)
 
-A localStorage-backed mapping of `name → lease` scoped per wallet address (`barney-apps-{address}`). Provides a friendly identifier layer on top of raw lease UUIDs. Manifests stored in the registry are sanitized — secret-shaped env var values are scrubbed before write, and empty values trigger auto-generation on re-deploy. Per-wallet keys are isolated by address but persist forever in localStorage; only in-memory state (the tool cache and `deployProgress`) is cleared when the connected wallet changes.
+A localStorage-backed mapping of `name → lease` scoped per wallet address (`barney-apps-{address}`). Provides a friendly identifier layer on top of raw lease UUIDs. Manifests stored in the registry are sanitized — secret-shaped env var values are scrubbed before write, and empty values trigger auto-generation on re-deploy. Per-wallet registry keys persist until browser data is cleared. A wallet change clears registry-derived in-memory state such as the tool cache and `deployProgress`; the chat store separately switches to the new chain/address-scoped transcript.
 
 ## Request flows
 
@@ -286,10 +286,17 @@ Query tool results are cached per `(walletAddress, toolName, sortedArgs)` for `A
 | Key | Contents |
 |-----|----------|
 | `barney-ai-settings` | AI settings — currently just `{ saveHistory: boolean }`. Other timeouts and limits are runtime-config env vars, not in-app settings. |
-| `barney-ai-history` | Chat history (validated and sanitized on load; corrupted data cleared). Skipped when `saveHistory` is `false`. |
+| `barney-ai-history:v1:{chainId}:{normalizedAddress}` | Versioned chat-history envelope containing the same chain ID and normalized wallet address. Selected only after connection; invalid/mismatched data is cleared. |
 | `barney-apps-{address}` | App registry, scoped per wallet |
 | `barney-refill-{address}` | One-shot setup completion flag (versioned; legacy name from the prior `useAutoRefill` hook) |
 | `barney-theme` | next-themes selection |
+
+The legacy global `barney-ai-history` key is discarded because its owning
+wallet cannot be established safely. Wallet switches synchronously persist the
+old identity and load the new one; disconnect selects no history. `/clear`
+removes only the active wallet/network key, while disabling the browser-global
+`saveHistory` preference removes all scoped history keys. Histories otherwise
+remain until the site's browser data is cleared.
 
 `src/utils/versionedStorage.ts` provides envelope-format storage with a chained migration pipeline; new schema versions plug in without forcing data loss.
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { StreamResult } from '../../ai/streamUtils';
 import { createAIStore } from '../aiStore';
+import { createWalletIdentity } from '../../utils/walletIdentity';
 
 // ---------------------------------------------------------------------------
 // Deterministic IDs
@@ -79,6 +80,7 @@ vi.mock('../../registry/appRegistry', () => ({
   updateApp: vi.fn(),
 }));
 
+import { streamChat } from '../../api/morpheus';
 import { logError } from '../../utils/errors';
 import { AI_STREAM_TIMEOUT_MS, AI_STREAM_TOTAL_TIMEOUT_MS } from '../../config/constants';
 
@@ -107,6 +109,8 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
       saveHistory: false,
     },
     address: 'manifest1test',
+    chainId: 'manifest-test',
+    historyIdentity: createWalletIdentity('manifest-test', 'manifest1test'),
     ...overrides,
   });
   return store;
@@ -156,6 +160,25 @@ describe('sendMessage', () => {
       await store.getState().sendMessage('hello');
       expect(store.getState().isStreaming).toBe(false);
       expect(store.getState().messages).toHaveLength(0);
+    });
+
+    it('does not send existing wallet messages before their identity is selected', async () => {
+      const priorWalletMessage = {
+        id: 'prior-wallet',
+        role: 'user' as const,
+        content: 'private wallet A context',
+        timestamp: 1,
+      };
+      const store = setupStore({
+        historyIdentity: null,
+        messages: [priorWalletMessage],
+      });
+
+      await store.getState().sendMessage('hello from wallet B');
+
+      expect(streamChat).not.toHaveBeenCalled();
+      expect(store.getState().messages).toEqual([priorWalletMessage]);
+      expect(store.getState().isStreaming).toBe(false);
     });
 
     it('supersedes a stale pending confirmation instead of orphaning its tool message (ENG-573)', async () => {

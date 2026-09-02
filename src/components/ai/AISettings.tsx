@@ -77,8 +77,8 @@ export function AISettings({ onClose }: AISettingsProps) {
               </label>
               <p id="save-history-hint" className="ai-settings-hint">
                 {settings.saveHistory
-                  ? 'Chat history will be saved across sessions'
-                  : 'Chat history will not be saved'}
+                  ? 'History is saved separately for each wallet and network'
+                  : 'No wallet histories are retained'}
               </p>
             </div>
             <button
@@ -126,7 +126,7 @@ export function AISettings({ onClose }: AISettingsProps) {
               className="btn btn-danger btn-sm"
             >
               <Trash2 className="w-4 h-4" />
-              Clear History ({messages.length} messages)
+                Clear This Wallet's History ({messages.length} messages)
             </button>
           )}
         </div>

@@ -276,7 +276,7 @@ Run cosmos_tx bank send with [...]
 - **Local fast-path for example apps.** Any prompt beginning with `deploy` is checked locally: the text after `deploy` is split on `,`/`and`/`&` and each name is matched against the example-app catalog. If two or more names match, Barney batch-deploys the matched subset directly (unmatched names are silently dropped, not sent to the model); if exactly one matches, it deploys that one. Only when NO name matches an example app is the whole prompt sent to the model. To force the AI path, phrase the request differently ("Please deploy redis and postgres for me").
 - **For bulk stop/restart**, use comma-separated lists or `all`. The AI will fall back to `list_apps` first if you ask by pattern (e.g. "stop all tetris apps").
 - **The `/help` slash command** prints the in-app cheat sheet.
-- **The `/clear` slash command** wipes chat history (the on-chain state is unaffected).
+- **The `/clear` slash command** wipes the active wallet/network's chat history (other wallets and on-chain state are unaffected).
 - **If a tool fails transiently**, the underlying network calls retry automatically with exponential backoff (`AI_MAX_RETRIES`, default 3 attempts on top of the initial call) before the failure is surfaced. If the tool still returns a transient error, the AI is instructed to retry the call once more before giving up. The next message you see is a plain-language error and a suggested next step.
 
 ## What the AI will not do

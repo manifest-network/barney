@@ -1,11 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createElement } from 'react';
-import { flushSync } from 'react-dom';
-import { createRoot } from 'react-dom/client';
 import type { StreamResult } from '../../ai/streamUtils';
 import type { PendingAction, ToolResult } from '../../ai/toolExecutor';
 import type { PendingConfirmation, ChatMessage } from '../../contexts/aiTypes';
 import { createAIStore, type AIStore } from '../aiStore';
+import { createWalletIdentity } from '../../utils/walletIdentity';
 
 // ---------------------------------------------------------------------------
 // Deterministic IDs
@@ -107,7 +105,7 @@ vi.mock('../../registry/appRegistry', () => ({
 }));
 
 import { logError } from '../../utils/errors';
-import { MessageBubble } from '../../components/ai/MessageBubble';
+import { streamChat } from '../../api/morpheus';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -171,6 +169,7 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
     clientManager: fakeClientManager,
     address: 'manifest1test',
     chainId: 'manifest-test',
+    historyIdentity: createWalletIdentity('manifest-test', 'manifest1test'),
     settings: {
       saveHistory: false,
     },
@@ -481,7 +480,24 @@ describe('confirmAction', () => {
       expect(assistantMsg!.isStreaming).toBe(false);
     });
 
-    it('resolves an in-flight tool row when the wallet changes', async () => {
+    it('does not send transaction history to the model without a selected identity', async () => {
+      const pending = makePendingConfirmation();
+      const store = setupStore({
+        historyIdentity: null,
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+      mockExecuteConfirmedTool.mockResolvedValueOnce({ success: true, data: { deployed: true } });
+
+      await store.getState().confirmAction();
+
+      expect(streamChat).not.toHaveBeenCalled();
+      expect(mockProcessStream).not.toHaveBeenCalled();
+      expect(store.getState().messages).toHaveLength(1);
+      expect(store.getState().messages[0].content).toContain('"success": true');
+    });
+
+    it('does not expose an in-flight tool row after the wallet changes', async () => {
       let finishTransaction!: (result: ToolResult) => void;
       mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((resolve) => {
         finishTransaction = resolve;
@@ -510,13 +526,7 @@ describe('confirmAction', () => {
         chainId: 'manifest-test',
       });
 
-      let tool = store.getState().messages.find((message) => message.id === pending.messageId);
-      expect(tool).toMatchObject({
-        isStreaming: false,
-        awaitingConfirmation: false,
-        transactionInFlight: false,
-        error: expect.stringContaining('may already have been submitted'),
-      });
+      expect(store.getState().messages).toEqual([]);
 
       finishTransaction({
         success: true,
@@ -524,42 +534,9 @@ describe('confirmAction', () => {
       });
       await confirming;
 
-      tool = store.getState().messages.find((message) => message.id === pending.messageId);
-      expect(tool?.content).toContain('"success": true');
-      expect(tool?.content).toContain('"authorizationNotice"');
-      expect(tool?.content).toContain('previous wallet');
-      expect(tool?.error).toBeUndefined();
-      expect(tool?.transactionInFlight).toBe(false);
-      expect(tool?.isStreaming).toBe(false);
-      const notice = store.getState().messages.find((message) =>
-        message.role === 'assistant' && message.local === true
-      );
-      expect(notice).toMatchObject({
-        content: expect.stringContaining('previous wallet'),
-      });
-      expect(notice?.error).toBeUndefined();
-      expect(notice?.content).toContain('Deployment completed for the previous wallet.');
-
-      // Render the exact message produced by confirmAction through the real UI
-      // component. This pins the production path and its neutral presentation
-      // together rather than hand-constructing a lookalike message.
-      const container = document.createElement('div');
-      document.body.appendChild(container);
-      const root = createRoot(container);
-      try {
-        flushSync(() => {
-          root.render(createElement(MessageBubble, { message: notice! }));
-        });
-        expect(container.querySelector('.message-text')?.textContent)
-          .toContain('finished for the previous wallet');
-        expect(container.querySelector('[role="alert"]')).toBeNull();
-        expect(Array.from(container.querySelectorAll('button')).some(
-          (button) => button.textContent?.trim() === 'Check credits'
-        )).toBe(false);
-      } finally {
-        flushSync(() => root.unmount());
-        container.remove();
-      }
+      // The late result belongs to A. It cannot repopulate B's transcript with
+      // the tool row, its address-bearing summary, or a local status card.
+      expect(store.getState().messages).toEqual([]);
 
       expect(store.getState().address).toBe('manifest1next');
       expect(store.getState().activeTransactionMessageId).toBeNull();
@@ -905,10 +882,7 @@ describe('confirmAction', () => {
         activeTransactionMessageId: 'next-wallet-tool',
       });
       expect(nextAbort.signal.aborted).toBe(false);
-      expect(store.getState().messages[0]).toMatchObject({
-        transactionInFlight: false,
-        error: 'old wallet executor failed',
-      });
+      expect(store.getState().messages).toEqual([]);
     });
 
     it('clears isStreaming, pendingPayload, and abortController after success', async () => {

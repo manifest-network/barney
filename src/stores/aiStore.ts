@@ -13,6 +13,11 @@ import type { DeployProgress } from '../ai/progress';
 import { validateFile, validateManifestContent } from '../utils/fileValidation';
 import { sha256, toHex } from '../utils/hash';
 import { logError } from '../utils/errors';
+import type { WalletIdentity } from '../utils/walletIdentity';
+import {
+  createWalletIdentity,
+  walletIdentitiesEqual,
+} from '../utils/walletIdentity';
 import {
   AI_TOOL_CACHE_TTL_MS,
   AI_TOOL_CACHE_MAX_SIZE,
@@ -44,7 +49,12 @@ export interface DnsStatusEntry {
 export const dnsStatusKey = (leaseUuid: string, customDomain: string) =>
   `${leaseUuid}::${customDomain}`;
 
-import { loadSettings, loadHistory, clearHistoryStorage } from './aiActions/persistence';
+import {
+  loadSettings,
+  loadHistory,
+  saveHistory,
+  clearHistoryStorage,
+} from './aiActions/persistence';
 import { scheduleStreamingUpdateFn, flushPendingUpdateFn } from './aiActions/streaming';
 import { sendMessageFn } from './aiActions/sendMessage';
 import { confirmActionFn, cancelActionFn, type ConfirmActionOverrides } from './aiActions/confirmAction';
@@ -93,6 +103,9 @@ export interface AIStore {
   address: string | undefined;
   signing: SigningContext | undefined;
   chainId: string;
+  /** Wallet identity whose transcript is currently selected. Null while
+   * disconnected so no prior transcript can be displayed or sent. */
+  historyIdentity: WalletIdentity | null;
   /** Monotonic identities for concrete SDK client/signer instances. */
   clientGeneration: number;
   signerGeneration: number;
@@ -220,7 +233,10 @@ export const createAIStore = () =>
   createStore<AIStore>((set, get) => ({
     // --- Initial state ---
     isOpen: false,
-    messages: loadHistory(),
+    // History is selected only after AppShell publishes a concrete wallet
+    // identity. Starting empty prevents pre-connection model requests from
+    // inheriting whichever wallet used this browser most recently.
+    messages: [],
     isStreaming: false,
     isConnected: false,
     settings: loadSettings(),
@@ -234,6 +250,7 @@ export const createAIStore = () =>
     address: undefined,
     signing: undefined,
     chainId: CHAIN_ID,
+    historyIdentity: null,
     clientGeneration: 0,
     signerGeneration: 0,
     authorizationEpoch: 0,
@@ -304,6 +321,12 @@ export const createAIStore = () =>
       const chainChanged = context.chainId !== current.chainId;
       if (!clientChanged && !addressChanged && !signerChanged && !chainChanged) return;
 
+      const nextHistoryIdentity = createWalletIdentity(context.chainId, context.address);
+      const historyIdentityChanged = !walletIdentitiesEqual(
+        current.historyIdentity,
+        nextHistoryIdentity,
+      );
+
       // Abort first, then publish the new identity and the complete cleared
       // authorization state in one Zustand update. The epoch/generation checks
       // in async actions make any callbacks already queued by the old work inert.
@@ -311,8 +334,33 @@ export const createAIStore = () =>
       if (current._rafId !== null) cancelAnimationFrame(current._rafId);
       current._toolCache.clear();
 
+      const closedMessages = messagesAfterAuthorizationChange(current);
+
+      // Finish and persist the old transcript before publishing the new
+      // identity. This is deliberately synchronous: the persistence
+      // subscriber ignores identity transitions so it can never save A's
+      // messages under B's key.
+      if (historyIdentityChanged && current.historyIdentity) {
+        saveHistory(
+          current.historyIdentity,
+          closedMessages,
+          current.settings.saveHistory,
+        );
+      }
+
+      let nextMessages = closedMessages;
+      if (historyIdentityChanged) {
+        if (nextHistoryIdentity && current.settings.saveHistory) {
+          nextMessages = loadHistory(nextHistoryIdentity);
+        } else {
+          if (nextHistoryIdentity) clearHistoryStorage(nextHistoryIdentity);
+          nextMessages = [];
+        }
+      }
+
       set({
         ...context,
+        historyIdentity: nextHistoryIdentity,
         clientGeneration: current.clientGeneration + (clientChanged ? 1 : 0),
         signerGeneration: current.signerGeneration + (signerChanged ? 1 : 0),
         authorizationEpoch: current.authorizationEpoch + 1,
@@ -325,7 +373,7 @@ export const createAIStore = () =>
         isStreaming: false,
         _pendingStreamUpdate: null,
         _rafId: null,
-        messages: messagesAfterAuthorizationChange(current),
+        messages: nextMessages,
       });
     },
 
@@ -391,8 +439,9 @@ export const createAIStore = () =>
 
     // --- History ---
     clearHistory: () => {
-      get()._toolCache.clear();
-      clearHistoryStorage();
+      const current = get();
+      current._toolCache.clear();
+      if (current.historyIdentity) clearHistoryStorage(current.historyIdentity);
       set({ messages: [] });
     },
 

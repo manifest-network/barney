@@ -16,6 +16,9 @@ import {
   saveSettings,
   saveHistory,
   clearHistoryStorage,
+  clearAllHistoryStorage,
+  discardLegacyHistoryStorage,
+  historyStorageKey,
   setupPersistenceSubscriptions,
   defaultSettings,
 } from './persistence';
@@ -25,9 +28,23 @@ import type { ChatMessage } from '../../contexts/aiTypes';
 import type { AISettings } from '../../ai/validation';
 import type { StoreApi } from 'zustand';
 import type { AIStore } from '../aiStore';
+import { createWalletIdentity } from '../../utils/walletIdentity';
 
 const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
-const STORAGE_KEY_HISTORY = 'barney-ai-history';
+const LEGACY_STORAGE_KEY_HISTORY = 'barney-ai-history';
+const IDENTITY = createWalletIdentity('manifest-test', '  MANIFEST1ALICE  ')!;
+const STORAGE_KEY_HISTORY = historyStorageKey(IDENTITY);
+
+function storeHistory(messages: ChatMessage[]): void {
+  localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify({
+    v: 1,
+    data: { identity: IDENTITY, messages },
+  }));
+}
+
+function storedMessages(): ChatMessage[] {
+  return JSON.parse(localStorage.getItem(STORAGE_KEY_HISTORY)!).data.messages;
+}
 
 function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
   return {
@@ -73,30 +90,74 @@ describe('persistence actions', () => {
   // ---- loadHistory ----
 
   describe('loadHistory', () => {
+    it('derives the key from the exact chain ID and normalized address', () => {
+      const identity = createWalletIdentity(' chain/with:punctuation ', ' MANIFEST1ALICE ')!;
+
+      expect(identity).toEqual({
+        chainId: 'chain/with:punctuation',
+        address: 'manifest1alice',
+      });
+      expect(historyStorageKey(identity)).toBe(
+        'barney-ai-history:v1:chain%2Fwith%3Apunctuation:manifest1alice',
+      );
+    });
+
     it('returns [] when localStorage is empty', () => {
-      expect(loadHistory()).toEqual([]);
+      expect(loadHistory(IDENTITY)).toEqual([]);
+    });
+
+    it('discards valid legacy global history instead of assigning it', () => {
+      localStorage.setItem(
+        LEGACY_STORAGE_KEY_HISTORY,
+        JSON.stringify([makeMessage({ content: 'wallet owner is unknown' })]),
+      );
+
+      expect(loadHistory(IDENTITY)).toEqual([]);
+      expect(localStorage.getItem(LEGACY_STORAGE_KEY_HISTORY)).toBeNull();
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+    });
+
+    it('discards malformed legacy global history without parsing or importing it', () => {
+      localStorage.setItem(LEGACY_STORAGE_KEY_HISTORY, '{malformed');
+
+      expect(() => discardLegacyHistoryStorage()).not.toThrow();
+      expect(localStorage.getItem(LEGACY_STORAGE_KEY_HISTORY)).toBeNull();
     });
 
     it('validates and returns saved messages', () => {
       const msgs = [makeMessage({ id: 'm1' }), makeMessage({ id: 'm2' })];
-      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
-      const result = loadHistory();
+      storeHistory(msgs);
+      const result = loadHistory(IDENTITY);
       expect(validateChatHistory).toHaveBeenCalledWith(msgs);
       expect(result).toHaveLength(2);
     });
 
     it('returns [] and clears on corrupt data', () => {
       localStorage.setItem(STORAGE_KEY_HISTORY, 'not-json-at-all');
-      const result = loadHistory();
+      const result = loadHistory(IDENTITY);
       expect(result).toEqual([]);
       expect(logError).toHaveBeenCalled();
       expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
     });
 
+    it('rejects an envelope whose identity does not match its scoped key', () => {
+      const otherIdentity = createWalletIdentity('manifest-other', 'manifest1bob')!;
+      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify({
+        v: 1,
+        data: {
+          identity: otherIdentity,
+          messages: [makeMessage({ content: 'belongs elsewhere' })],
+        },
+      }));
+
+      expect(loadHistory(IDENTITY)).toEqual([]);
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+    });
+
     it('clears isStreaming on rehydrated messages and surfaces an interrupted error', () => {
       const msgs = [makeMessage({ id: 'm1', isStreaming: true, content: 'half-streamed' })];
-      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
-      const result = loadHistory();
+      storeHistory(msgs);
+      const result = loadHistory(IDENTITY);
       expect(result[0].isStreaming).toBe(false);
       expect(result[0].error).toMatch(/interrupted/i);
     });
@@ -108,8 +169,8 @@ describe('persistence actions', () => {
         content: 'Deploy "redis" on micro tier?',
         awaitingConfirmation: true,
       })];
-      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
-      const result = loadHistory();
+      storeHistory(msgs);
+      const result = loadHistory(IDENTITY);
       expect(result[0].error).toBe('Interrupted');
       expect(result[0].content).toMatch(/interrupted/i);
       expect(result[0].awaitingConfirmation).toBe(false);
@@ -123,9 +184,9 @@ describe('persistence actions', () => {
         error: 'Tier catalog unavailable',
         awaitingConfirmation: true,
       })];
-      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
+      storeHistory(msgs);
 
-      const result = loadHistory();
+      const result = loadHistory(IDENTITY);
 
       expect(result[0]).toMatchObject({
         content: 'Interrupted — confirmation was pending when the page reloaded.',
@@ -141,9 +202,9 @@ describe('persistence actions', () => {
         content: 'Deploy "redis"?',
         transactionInFlight: true,
       })];
-      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
+      storeHistory(msgs);
 
-      const result = loadHistory();
+      const result = loadHistory(IDENTITY);
 
       expect(result[0].content).toContain('page reloaded');
       expect(result[0].error).toContain('may already have been submitted');
@@ -156,8 +217,8 @@ describe('persistence actions', () => {
         role: 'tool',
         content: 'Deploy "redis" on micro tier?',
       })];
-      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
-      const result = loadHistory();
+      storeHistory(msgs);
+      const result = loadHistory(IDENTITY);
       expect(result[0].error).toBeUndefined();
       expect(result[0].content).toBe('Deploy "redis" on micro tier?');
     });
@@ -170,8 +231,8 @@ describe('persistence actions', () => {
         isStreaming: true,
         toolCalls: [{ id: 'tc_1', type: 'function', function: { name: 'deploy_app', arguments: { partial: 'truncated' } } }] as any,
       })];
-      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
-      const result = loadHistory();
+      storeHistory(msgs);
+      const result = loadHistory(IDENTITY);
       expect(result[0].toolCalls).toBeUndefined();
     });
 
@@ -180,8 +241,8 @@ describe('persistence actions', () => {
         makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
         makeMessage({ id: 'a1', role: 'assistant', content: 'hello!' }),
       ];
-      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(msgs));
-      const result = loadHistory();
+      storeHistory(msgs);
+      const result = loadHistory(IDENTITY);
       expect(result[0].error).toBeUndefined();
       expect(result[1].error).toBeUndefined();
       expect(result[1].content).toBe('hello!');
@@ -202,13 +263,25 @@ describe('persistence actions', () => {
   // ---- saveHistory ----
 
   describe('saveHistory', () => {
+    it('writes a versioned envelope containing the normalized identity', () => {
+      saveHistory(IDENTITY, [makeMessage({ id: 'm1' })], true);
+
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEY_HISTORY)!)).toMatchObject({
+        v: 1,
+        data: {
+          identity: IDENTITY,
+          messages: [{ id: 'm1' }],
+        },
+      });
+    });
+
     it('filters out streaming messages', () => {
       const msgs = [
         makeMessage({ id: 'm1', isStreaming: false }),
         makeMessage({ id: 'm2', isStreaming: true }),
       ];
-      saveHistory(msgs, true);
-      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY_HISTORY)!);
+      saveHistory(IDENTITY, msgs, true);
+      const stored = storedMessages();
       expect(stored).toHaveLength(1);
       expect(stored[0].id).toBe('m1');
     });
@@ -223,8 +296,8 @@ describe('persistence actions', () => {
           toolCalls: [{ id: 'tc1', type: 'function' as const, function: { name: 'list_apps', arguments: {} } }],
         }),
       ];
-      saveHistory(msgs, true);
-      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY_HISTORY)!);
+      saveHistory(IDENTITY, msgs, true);
+      const stored = storedMessages();
       expect(stored[0].content).toBe('[help displayed to user]');
       expect(stored[0].card).toBeUndefined();
       expect(stored[0].toolCalls).toBeUndefined();
@@ -232,7 +305,15 @@ describe('persistence actions', () => {
 
     it('removes localStorage key when saveHistory is false', () => {
       localStorage.setItem(STORAGE_KEY_HISTORY, 'some data');
-      saveHistory([], false);
+      saveHistory(IDENTITY, [], false);
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+    });
+
+    it('removes the scoped key when no persistable messages remain', () => {
+      localStorage.setItem(STORAGE_KEY_HISTORY, 'some data');
+
+      saveHistory(IDENTITY, [], true);
+
       expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
     });
   });
@@ -242,8 +323,21 @@ describe('persistence actions', () => {
   describe('clearHistoryStorage', () => {
     it('removes the history key', () => {
       localStorage.setItem(STORAGE_KEY_HISTORY, 'data');
-      clearHistoryStorage();
+      clearHistoryStorage(IDENTITY);
       expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+    });
+
+    it('can clear every scoped wallet history without touching unrelated state', () => {
+      const otherIdentity = createWalletIdentity('manifest-other', 'manifest1bob')!;
+      saveHistory(IDENTITY, [makeMessage()], true);
+      saveHistory(otherIdentity, [makeMessage()], true);
+      localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(defaultSettings));
+
+      clearAllHistoryStorage();
+
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+      expect(localStorage.getItem(historyStorageKey(otherIdentity))).toBeNull();
+      expect(localStorage.getItem(STORAGE_KEY_SETTINGS)).not.toBeNull();
     });
   });
 
@@ -255,6 +349,7 @@ describe('persistence actions', () => {
         settings: { ...defaultSettings },
         messages: [] as ChatMessage[],
         isStreaming: false,
+        historyIdentity: IDENTITY,
       })) as unknown as StoreApi<AIStore>;
     }
 
@@ -267,6 +362,22 @@ describe('persistence actions', () => {
       const stored = localStorage.getItem(STORAGE_KEY_SETTINGS);
       expect(stored).not.toBeNull();
       expect(JSON.parse(stored!).saveHistory).toBe(false);
+
+      unsub();
+    });
+
+    it('turning history off while disconnected deletes every wallet transcript', () => {
+      const otherIdentity = createWalletIdentity('manifest-other', 'manifest1bob')!;
+      saveHistory(IDENTITY, [makeMessage()], true);
+      saveHistory(otherIdentity, [makeMessage()], true);
+      const miniStore = createMiniStore();
+      miniStore.setState({ historyIdentity: null });
+      const unsub = setupPersistenceSubscriptions(miniStore);
+
+      miniStore.setState({ settings: { ...defaultSettings, saveHistory: false } });
+
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+      expect(localStorage.getItem(historyStorageKey(otherIdentity))).toBeNull();
 
       unsub();
     });
@@ -318,8 +429,8 @@ describe('persistence actions', () => {
 
       const stored = localStorage.getItem(STORAGE_KEY_HISTORY);
       expect(stored).not.toBeNull();
-      expect(JSON.parse(stored!)).toHaveLength(1);
-      expect(JSON.parse(stored!)[0].id).toBe('u1');
+      expect(JSON.parse(stored!).data.messages).toHaveLength(1);
+      expect(JSON.parse(stored!).data.messages[0].id).toBe('u1');
 
       unsub();
     });
@@ -334,7 +445,7 @@ describe('persistence actions', () => {
       });
       const miniStore = createMiniStore();
       miniStore.setState({ messages: [makeMessage({ id: 'u1' }), pendingTool] });
-      saveHistory(miniStore.getState().messages, true);
+      saveHistory(IDENTITY, miniStore.getState().messages, true);
       const unsub = setupPersistenceSubscriptions(miniStore);
 
       miniStore.setState({
@@ -350,7 +461,7 @@ describe('persistence actions', () => {
         ),
       });
 
-      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY_HISTORY)!);
+      const stored = storedMessages();
       expect(stored.map((message: ChatMessage) => message.id)).toEqual(['u1', 'tool-1']);
       expect(stored[1]).toMatchObject({
         isStreaming: false,
@@ -376,8 +487,8 @@ describe('persistence actions', () => {
 
       const stored = localStorage.getItem(STORAGE_KEY_HISTORY);
       expect(stored).not.toBeNull();
-      expect(JSON.parse(stored!)).toHaveLength(1);
-      expect(JSON.parse(stored!)[0].id).toBe('a1');
+      expect(JSON.parse(stored!).data.messages).toHaveLength(1);
+      expect(JSON.parse(stored!).data.messages[0].id).toBe('a1');
 
       unsub();
     });

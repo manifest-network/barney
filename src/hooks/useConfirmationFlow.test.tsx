@@ -274,8 +274,9 @@ describe('confirmation flow (Zustand store)', () => {
     });
 
     expect(store.getState().pendingConfirmation).toBeNull();
+    expect(store.getState().messages).toEqual([]);
     expect(container.querySelector('[data-testid="cancelled"]')?.textContent)
-      .toContain('cancelled and was not submitted');
+      .toBe('No confirmation');
     expect(Array.from(container.querySelectorAll('button')).some(
       (button) => button.textContent?.includes('Confirm'),
     )).toBe(false);
@@ -331,8 +332,8 @@ describe('confirmation flow (Zustand store)', () => {
     unsubscribe();
 
     expect(store.getState().pendingConfirmation).toBeNull();
-    expect(store.getState().messages.find((message) => message.id === 'tool-consent')?.content)
-      .toContain('cancelled and was not submitted');
+    expect(store.getState().messages.find((message) => message.id === 'tool-consent'))
+      .toBeUndefined();
     expect(executeConfirmedTool).not.toHaveBeenCalled();
     if (expectsNonDeployManifestOverride) {
       const override = confirmActionSpy.mock.calls.at(-1)?.[0];

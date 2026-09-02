@@ -7,6 +7,7 @@ import { buildAITools } from '../../ai/tools';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { validateUserInput } from '../../ai/validation';
 import { logError } from '../../utils/errors';
+import { walletIdentityMatches } from '../../utils/walletIdentity';
 import {
   AI_MAX_TOOL_ITERATIONS,
   AI_STREAM_TOTAL_TIMEOUT_MS,
@@ -25,7 +26,16 @@ type Get = () => AIStore;
 type Set = (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) => void;
 
 export async function sendMessageFn(get: Get, set: Set, content: string): Promise<void> {
-  const { pendingPayload, isConnected, isStreaming, lastMessageTime } = get();
+  const initialState = get();
+  const {
+    pendingPayload,
+    isConnected,
+    isStreaming,
+    lastMessageTime,
+    historyIdentity,
+    chainId,
+    address,
+  } = initialState;
 
   let effectiveContent = content;
   if (pendingPayload) {
@@ -39,6 +49,10 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
   if (!validatedInput) return;
   if (!isConnected) return;
   if (isStreaming) return;
+  // A wallet address can be published a render before its scoped transcript is
+  // selected. Never build a model request from state unless those identities
+  // match exactly.
+  if (!walletIdentityMatches(historyIdentity, chainId, address)) return;
 
   const now = Date.now();
   if (now - lastMessageTime < AI_MESSAGE_DEBOUNCE_MS) return;
@@ -109,8 +123,17 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
     while (iteration < AI_MAX_TOOL_ITERATIONS) {
       iteration++;
 
-      const currentMessages = get().messages.filter((m) => m.id !== currentAssistantMessageId);
-      const { address, signing, skuTiers } = get();
+      const activeState = get();
+      if (activeState.authorizationEpoch !== authorizationEpoch
+          || activeState.abortController !== abort
+          || !walletIdentityMatches(
+            activeState.historyIdentity,
+            activeState.chainId,
+            activeState.address,
+          )) return;
+
+      const currentMessages = activeState.messages.filter((m) => m.id !== currentAssistantMessageId);
+      const { address, signing, skuTiers } = activeState;
       const apiMessages = toChatApiMessages(currentMessages, address, skuTiers.tiers);
       const tools = buildAITools(skuTiers.tiers);
 
