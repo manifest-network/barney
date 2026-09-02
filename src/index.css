@@ -5192,6 +5192,106 @@ h1, h2, h3, h4, h5, h6 {
   gap: 0.25rem;
 }
 
+.batch-deploy-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.batch-deploy-entry {
+  background: oklch(0.12 0.02 260 / 0.6);
+  border: 1px solid oklch(0.30 0.03 260 / 0.45);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+}
+
+.batch-deploy-entry__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.batch-deploy-entry__editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid oklch(0.30 0.03 260 / 0.35);
+}
+
+.batch-deploy-entry__facts {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.65rem 0;
+  font-size: 0.75rem;
+}
+
+.batch-deploy-entry__facts > div,
+.batch-deploy-service > div {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: 0.5rem;
+}
+
+.batch-deploy-entry__facts dt,
+.batch-deploy-service > div > span {
+  color: var(--text-muted);
+}
+
+.batch-deploy-entry__facts dd {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.batch-deploy-service {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  border-radius: var(--radius-sm);
+  background: oklch(0.10 0.015 260 / 0.5);
+  font-size: 0.75rem;
+}
+
+.batch-deploy-service code {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.batch-deploy-service__name {
+  color: var(--color-primary-400) !important;
+  font-weight: 600;
+}
+
+.batch-deploy-hash {
+  margin-top: 0.5rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
+}
+
+.batch-deploy-total {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.25rem 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-primary-600);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.batch-deploy-total small {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+}
+
 .confirmation-actions {
   display: flex;
   justify-content: flex-end;

@@ -44,6 +44,17 @@ vi.mock('../../ai/toolExecutor', () => ({
   executeConfirmedTool: (...args: unknown[]) => mockExecuteConfirmedTool(...(args as [string, Record<string, unknown>, unknown, unknown?])),
 }));
 
+const mockExecuteBatchDeploy = vi.fn<() => Promise<ToolResult>>();
+const mockBuildPayloadFromManifest = vi.fn(async (manifest: string) => {
+  const bytes = new TextEncoder().encode(manifest);
+  return { bytes, filename: 'manifest.json', size: bytes.length, hash: 'new-hash' };
+});
+vi.mock('../../ai/toolExecutor/compositeTransactions', () => ({
+  executeBatchDeploy: (...args: unknown[]) => mockExecuteBatchDeploy(...(args as [])),
+  buildPayloadFromManifest: (...args: unknown[]) => mockBuildPayloadFromManifest(...(args as [string])),
+  deriveAppName: vi.fn((filename: string) => filename.replace(/\.[^.]+$/, '')),
+}));
+
 const mockProcessStream = vi.fn<() => Promise<StreamResult>>();
 vi.mock('../../ai/streamUtils', () => ({
   processStreamWithTimeout: (...args: unknown[]) => mockProcessStream(...(args as [])),
@@ -314,10 +325,136 @@ describe('confirmAction', () => {
     });
   });
 
+  describe('batch edit re-planning', () => {
+    it('creates a new confirmation plan and never broadcasts edited entries directly', async () => {
+      const pending = makePendingConfirmation({
+        action: {
+          toolName: 'batch_deploy',
+          args: { plan: { version: 1, planHash: 'old-plan' } },
+          description: 'Deploy 2 apps for 0.2000 PWR/hr total?',
+        },
+      });
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+      const newPlan = {
+        version: 1,
+        entries: [{ draftIndex: 0, app_name: 'alpha', manifest: '{"image":"alpha:v2"}' }],
+        totalServiceCount: 1,
+        totalPricePerHour: 0.1,
+        denomSymbol: 'PWR',
+        planHash: 'new-plan',
+      };
+      mockExecuteBatchDeploy.mockResolvedValueOnce({
+        success: true,
+        requiresConfirmation: true,
+        confirmationMessage: 'Deploy 1 app (alpha) for 0.1000 PWR/hr total?',
+        pendingAction: { toolName: 'batch_deploy', args: { plan: newPlan } },
+      });
+
+      await store.getState().confirmAction({
+        editedBatchEntries: [{
+          draftIndex: 0,
+          app_name: 'alpha',
+          size: 'docker-micro',
+          manifest: '{"image":"alpha:v2"}',
+          manifestFilename: 'alpha.json',
+        }],
+      });
+
+      expect(mockBuildPayloadFromManifest).toHaveBeenCalledWith('{"image":"alpha:v2"}');
+      expect(mockExecuteBatchDeploy).toHaveBeenCalledWith(
+        [expect.objectContaining({
+          app_name: 'alpha',
+          size: 'docker-micro',
+          payload: expect.objectContaining({ filename: 'alpha.json' }),
+        })],
+        expect.objectContaining({ address: 'manifest1test' }),
+      );
+      expect(mockExecuteConfirmedTool).not.toHaveBeenCalled();
+      expect(store.getState().pendingConfirmation?.action.args.plan).toBe(newPlan);
+      expect(store.getState().pendingConfirmation?.id).not.toBe(pending.id);
+      expect(store.getState().messages[0].content).toContain('0.1000 PWR/hr total');
+      expect(store.getState().isStreaming).toBe(false);
+    });
+
+    it('keeps the edited confirmation mounted and retryable when re-planning fails', async () => {
+      const pending = makePendingConfirmation({
+        action: {
+          toolName: 'batch_deploy',
+          args: { plan: { version: 1, planHash: 'old-plan' } },
+          description: 'Deploy 2 apps for 0.2000 PWR/hr total?',
+        },
+      });
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+      });
+      mockExecuteBatchDeploy.mockResolvedValueOnce({
+        success: false,
+        error: 'Tier catalog unavailable — try again in a moment.',
+      });
+
+      await store.getState().confirmAction({
+        editedBatchEntries: [{
+          draftIndex: 0,
+          app_name: 'alpha',
+          size: 'docker-micro',
+          manifest: '{"image":"alpha:v2"}',
+          manifestFilename: 'alpha.json',
+        }],
+      });
+
+      const state = store.getState();
+      expect(state.pendingConfirmation?.id).toBe(pending.id);
+      expect(state.pendingConfirmation?.action.args.plan).toBe(pending.action.args.plan);
+      expect(state.pendingConfirmation?.action.args._batchReplanError).toContain('Tier catalog unavailable');
+      expect(state.messages[0]).toMatchObject({
+        content: pending.action.description,
+        error: expect.stringContaining('Tier catalog unavailable'),
+        awaitingConfirmation: true,
+        isStreaming: false,
+      });
+      expect(state.abortController).toBeNull();
+      expect(state.isStreaming).toBe(false);
+      expect(mockExecuteConfirmedTool).not.toHaveBeenCalled();
+    });
+  });
+
   // -----------------------------------------------------------------------
   // Successful execution
   // -----------------------------------------------------------------------
   describe('successful execution', () => {
+    it('clears a retryable re-plan error as soon as broadcast dispatch begins', async () => {
+      let finishTransaction!: (result: ToolResult) => void;
+      mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((resolve) => {
+        finishTransaction = resolve;
+      }));
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult());
+      const pending = makePendingConfirmation({
+        action: { toolName: 'batch_deploy', args: { plan: { version: 1 } } },
+      });
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [{
+          ...makeToolMessage(pending.messageId),
+          error: 'Tier catalog unavailable',
+        }],
+      });
+
+      const confirming = store.getState().confirmAction();
+
+      expect(store.getState().messages[0]).toMatchObject({
+        error: undefined,
+        awaitingConfirmation: false,
+        transactionInFlight: true,
+      });
+
+      finishTransaction({ success: true, data: { deployed: true } });
+      await confirming;
+    });
+
     it('updates tool message with result and streams follow-up', async () => {
       const toolMsg = makeToolMessage('tool_msg_1');
       const store = setupStore({
@@ -861,7 +998,10 @@ describe('cancelAction', () => {
   });
 
   it('updates tool message with cancellation content', () => {
-    const toolMsg = makeToolMessage('tool_msg_1');
+    const toolMsg = {
+      ...makeToolMessage('tool_msg_1'),
+      error: 'Tier catalog unavailable',
+    };
     const store = setupStore({
       pendingConfirmation: makePendingConfirmation(),
       messages: [toolMsg],
@@ -873,6 +1013,8 @@ describe('cancelAction', () => {
     const updated = state.messages.find(m => m.id === 'tool_msg_1');
     expect(updated).toBeDefined();
     expect(updated!.content).toBe('Action cancelled by user.');
+    expect(updated!.error).toBeUndefined();
     expect(updated!.isStreaming).toBe(false);
+    expect(updated!.awaitingConfirmation).toBe(false);
   });
 });

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
+import type { ResolvedSkuTier } from '../../api/skuTiers';
 
 // Stub validateAll so the async-validate effect resolves deterministically
 // without hitting the (mocked) chain RPC for reserved-suffix params. The
@@ -19,12 +20,19 @@ vi.mock('../../utils/customDomainValidation', async (importOriginal) => {
   };
 });
 
-// ConfirmationCard reads `skuTiers` from useAI for the deploy_app price row.
-// Stub it so the tests can render without an AIProvider — all assertions here
-// focus on the manifest-editor and custom-domain branches, not the price line.
+let mockSkuTiers: {
+  phase: 'ready';
+  tiers: ResolvedSkuTier[];
+  denomSymbol: string;
+  error: null;
+} = { phase: 'ready', tiers: [], denomSymbol: 'PWR', error: null };
+
+// ConfirmationCard reads `skuTiers` from useAI for deploy and batch pricing.
+// Keep the default catalog empty, while allowing batch-tier tests to install
+// concrete tiers without mounting an AIProvider.
 vi.mock('../../hooks/useAI', () => ({
   useAI: () => ({
-    skuTiers: { phase: 'ready', tiers: [], denomSymbol: 'PWR', error: null },
+    skuTiers: mockSkuTiers,
   }),
 }));
 
@@ -35,6 +43,10 @@ import {
   type ManifestFields, type StackManifestFields,
 } from './manifestEditorUtils';
 import type { PendingAction } from '../../ai/toolExecutor';
+
+beforeEach(() => {
+  mockSkuTiers = { phase: 'ready', tiers: [], denomSymbol: 'PWR', error: null };
+});
 
 function makeAction(overrides?: Partial<PendingAction>): PendingAction {
   return {
@@ -1068,34 +1080,19 @@ describe('ConfirmationCard with stack manifest', () => {
   });
 });
 
-// Regression: PR #93 Copilot 3248436597. Batch deploys carried per-entry
-// `customDomain`, `customDomainServiceName`, `customDomainWarning` through
-// `toolExecution.ts:178-184` into the pending action's `args.entries`, but
-// the batch render branch in `ConfirmationCard.tsx` only typed entries as
-// `{ app_name, size? }` — so users approved batches attaching custom
-// domains they never saw on the confirmation card.
-describe('ConfirmationCard batch render — per-entry custom-domain (Copilot 3248436597)', () => {
+// Regression: per-entry domain consent must render from the canonical hashed
+// plan; the legacy args.entries batch shape is intentionally not exercised.
+describe('ConfirmationCard canonical batch render — per-entry custom-domain', () => {
   it('renders domain + apex warning only for entries that carry them', () => {
-    const action = makeAction({
-      toolName: 'batch_deploy',
-      args: {
-        entries: [
-          {
-            app_name: 'wp',
-            size: 'small',
-            customDomain: 'example.com',          // apex
-            customDomainServiceName: 'web',
-            customDomainWarning: 'Apex CNAMEs are RFC-prohibited; use ALIAS/ANAME/CNAME-flattening at your registrar.',
-          },
-          {
-            app_name: 'plain',
-            size: 'micro',
-            // no customDomain at all
-          },
-        ],
+    const action = makeDomainBatchAction([
+      {
+        app_name: 'wp',
+        customDomain: 'example.com',
+        customDomainServiceName: 'web',
+        customDomainWarning: 'Apex CNAMEs are RFC-prohibited; use ALIAS/ANAME/CNAME-flattening at your registrar.',
       },
-      description: 'Deploy 2 apps?',
-    });
+      { app_name: 'plain' },
+    ]);
 
     const container = document.createElement('div');
     document.body.appendChild(container);
@@ -1121,20 +1118,10 @@ describe('ConfirmationCard batch render — per-entry custom-domain (Copilot 324
   });
 
   it('renders the service-name annotation only when customDomainServiceName is non-empty', () => {
-    const action = makeAction({
-      toolName: 'batch_deploy',
-      args: {
-        entries: [
-          {
-            app_name: 'redis',
-            size: 'micro',
-            customDomain: 'redis.example.com',
-            customDomainServiceName: '',  // single-item lease — no service annotation
-          },
-        ],
-      },
-      description: 'Deploy redis?',
-    });
+    const action = makeDomainBatchAction([{
+      app_name: 'redis',
+      customDomain: 'redis.example.com',
+    }]);
 
     const container = document.createElement('div');
     document.body.appendChild(container);
@@ -1149,6 +1136,585 @@ describe('ConfirmationCard batch render — per-entry custom-domain (Copilot 324
     } finally {
       flushSync(() => { act(() => { root.unmount(); }); });
       container.remove();
+    }
+  });
+});
+
+function makePlannedBatchAction(): PendingAction {
+  const alphaManifest = JSON.stringify({
+    image: 'alpha:v1',
+    ports: { '8080/tcp': { ingress: true } },
+    env: { API_TOKEN: 'alpha-secret-value' },
+  });
+  const betaManifest = JSON.stringify({
+    services: {
+      web: { image: 'beta-web:v2', ports: { '80/tcp': {} }, env: { SESSION_SECRET: 'beta-secret-value' } },
+      db: { image: 'postgres:18', ports: { '5432/tcp': {} }, env: { POSTGRES_PASSWORD: 'db-secret-value' } },
+    },
+  });
+  return makeAction({
+    toolName: 'batch_deploy',
+    description: 'Deploy 2 apps (alpha, beta) for 0.3000 PWR/hr total?',
+    args: {
+      plan: {
+        version: 1,
+        entries: [
+          {
+            draftIndex: 0,
+            app_name: 'alpha',
+            size: 'docker-micro',
+            skuUuid: 'sku-micro',
+            providerUuid: 'provider-1',
+            providerUrl: 'https://fred.example.com',
+            resources: { cores: 0.5, ramMB: 512, diskGB: 1 },
+            manifest: alphaManifest,
+            manifestFilename: 'alpha.json',
+            manifestSize: alphaManifest.length,
+            manifestHash: 'a'.repeat(64),
+            services: [{
+              name: '', image: 'alpha:v1', ports: ['8080/tcp (ingress)'], environmentKeys: ['API_TOKEN'],
+            }],
+            serviceNames: [],
+            serviceCount: 1,
+            pricePerServiceHour: 0.1,
+            totalPricePerHour: 0.1,
+            denomSymbol: 'PWR',
+          },
+          {
+            draftIndex: 1,
+            app_name: 'beta',
+            size: 'docker-micro',
+            skuUuid: 'sku-micro',
+            providerUuid: 'provider-1',
+            providerUrl: 'https://fred.example.com',
+            resources: { cores: 0.5, ramMB: 512, diskGB: 1 },
+            manifest: betaManifest,
+            manifestFilename: 'beta.json',
+            manifestSize: betaManifest.length,
+            manifestHash: 'b'.repeat(64),
+            services: [
+              { name: 'web', image: 'beta-web:v2', ports: ['80/tcp'], environmentKeys: ['SESSION_SECRET'] },
+              { name: 'db', image: 'postgres:18', ports: ['5432/tcp'], environmentKeys: ['POSTGRES_PASSWORD'] },
+            ],
+            serviceNames: ['web', 'db'],
+            serviceCount: 2,
+            pricePerServiceHour: 0.1,
+            totalPricePerHour: 0.2,
+            denomSymbol: 'PWR',
+          },
+        ],
+        totalServiceCount: 3,
+        totalPricePerHour: 0.3,
+        denomSymbol: 'PWR',
+        planHash: 'c'.repeat(64),
+      },
+    },
+  });
+}
+
+function makeDomainBatchAction(
+  overrides: Array<{
+    app_name: string;
+    customDomain?: string;
+    customDomainServiceName?: string;
+    customDomainWarning?: string;
+  }>,
+): PendingAction {
+  const action = makePlannedBatchAction();
+  const plan = action.args.plan as {
+    entries: Array<Record<string, unknown>>;
+    totalServiceCount: number;
+    totalPricePerHour: number;
+  };
+  const template = plan.entries[0];
+  return {
+    ...action,
+    description: `Deploy ${overrides.length} app${overrides.length === 1 ? '' : 's'}?`,
+    args: {
+      plan: {
+        ...plan,
+        entries: overrides.map((entry, draftIndex) => ({ ...template, ...entry, draftIndex })),
+        totalServiceCount: overrides.length,
+        totalPricePerHour: overrides.length * Number(template.totalPricePerHour),
+      },
+    },
+  };
+}
+
+const BATCH_EDIT_TIERS: ResolvedSkuTier[] = [
+  {
+    skuName: 'docker-micro',
+    skuUuid: 'sku-micro',
+    providerUuid: 'provider-1',
+    cores: 0.5,
+    ramMB: 512,
+    diskGB: 1,
+    pricePerHour: 0.1,
+    denomSymbol: 'PWR',
+    unit: 1,
+  },
+  {
+    skuName: 'docker-small',
+    skuUuid: 'sku-small',
+    providerUuid: 'provider-1',
+    cores: 1,
+    ramMB: 1024,
+    diskGB: 5,
+    pricePerHour: 0.25,
+    denomSymbol: 'PWR',
+    unit: 1,
+  },
+];
+
+const MIXED_DENOM_EDIT_TIERS: ResolvedSkuTier[] = [
+  ...BATCH_EDIT_TIERS,
+  {
+    skuName: 'docker-usdc',
+    skuUuid: 'sku-usdc',
+    providerUuid: 'provider-2',
+    cores: 2,
+    ramMB: 2048,
+    diskGB: 10,
+    pricePerHour: 0.2,
+    denomSymbol: 'USDC',
+    unit: 1,
+  },
+];
+
+describe('ConfirmationCard canonical batch plan', () => {
+  function renderBatch(
+    onConfirm = vi.fn(),
+    action: PendingAction = makePlannedBatchAction(),
+    isExecuting = false,
+  ) {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const render = (nextAction = action, nextIsExecuting = isExecuting) => flushSync(() => {
+      root.render(createElement(ConfirmationCard, {
+        action: nextAction,
+        onConfirm,
+        onCancel: vi.fn(),
+        isExecuting: nextIsExecuting,
+      }));
+    });
+    render();
+    return {
+      container,
+      onConfirm,
+      render,
+      cleanup: () => {
+        flushSync(() => root.unmount());
+        container.remove();
+      },
+    };
+  }
+
+  it('renders every app payload detail, redacted environments, hashes, and aggregate rate', () => {
+    const { container, cleanup } = renderBatch();
+    try {
+      const text = container.textContent ?? '';
+      expect(text).toContain('alpha:v1');
+      expect(text).toContain('beta-web:v2');
+      expect(text).toContain('postgres:18');
+      expect(text).toContain('8080/tcp (ingress)');
+      expect(text).toContain('0.5 vCPU · 512 MB RAM · 1 GB disk');
+      expect(text).toContain('API_TOKEN=••••');
+      expect(text).toContain('SESSION_SECRET=••••');
+      expect(text).not.toContain('alpha-secret-value');
+      expect(text).not.toContain('beta-secret-value');
+      expect(text).toContain(`Manifest SHA-256: ${'a'.repeat(64)}`);
+      expect(text).toContain(`Batch plan SHA-256: ${'c'.repeat(64)}`);
+      expect(text).toContain('0.3000 PWR/hr');
+      expect(text).toContain('3 services across 2 apps');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('discloses an unavailable requested size recorded by the canonical plan', () => {
+    const action = makePlannedBatchAction();
+    const plan = action.args.plan as { entries: Array<Record<string, unknown>> };
+    plan.entries[0].requestedSize = 'xxlarge';
+    const { container, cleanup } = renderBatch(vi.fn(), action);
+    try {
+      expect(container.textContent).toContain("Requested size ‘xxlarge’ isn’t offered on this network");
+      expect(container.textContent).toContain("deploying ‘docker-micro’ (cheapest available) instead");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('recalculates batch pricing and resources when an entry tier changes', () => {
+    mockSkuTiers = {
+      phase: 'ready',
+      tiers: BATCH_EDIT_TIERS,
+      denomSymbol: 'PWR',
+      error: null,
+    };
+    const { container, onConfirm, cleanup } = renderBatch();
+    try {
+      const edit = container.querySelector('button[aria-label="Edit alpha"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+      const select = container.querySelector('#batch-tier-alpha') as HTMLSelectElement;
+      expect(Array.from(select.options).map((option) => option.value)).toEqual([
+        'docker-micro',
+        'docker-small',
+      ]);
+
+      flushSync(() => {
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLSelectElement.prototype,
+          'value',
+        )!.set!;
+        setter.call(select, 'docker-small');
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain('alpha · docker-small');
+      expect(container.textContent).toContain('0.2500 PWR/hr per service');
+      expect(container.textContent).toContain('1 vCPU · 1 GB RAM · 5 GB disk');
+      expect(container.textContent).toContain('0.4500 PWR/hr');
+      expect(container.textContent).toContain('Batch plan SHA-256: Pending revalidation');
+      const review = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
+      flushSync(() => review.click());
+      expect(onConfirm).toHaveBeenCalledWith({
+        editedBatchEntries: expect.arrayContaining([
+          expect.objectContaining({ app_name: 'alpha', size: 'docker-small' }),
+        ]),
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('explains and blocks a mixed-denomination tier edit', () => {
+    mockSkuTiers = {
+      phase: 'ready',
+      tiers: MIXED_DENOM_EDIT_TIERS,
+      denomSymbol: 'PWR',
+      error: null,
+    };
+    const { container, cleanup } = renderBatch();
+    try {
+      const edit = container.querySelector('button[aria-label="Edit alpha"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+      const select = container.querySelector('#batch-tier-alpha') as HTMLSelectElement;
+      flushSync(() => {
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLSelectElement.prototype,
+          'value',
+        )!.set!;
+        setter.call(select, 'docker-usdc');
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain('alpha · docker-usdc');
+      expect(container.textContent).toContain('0.2000 USDC/hr per service');
+      expect(container.textContent).toContain('2 vCPU · 2 GB RAM · 10 GB disk');
+      expect(container.textContent).toContain(
+        'Selected resource tiers use different billing denominations',
+      );
+      expect(container.querySelector('[data-testid="batch-deploy-total"]')?.textContent)
+        .toContain('Pending revalidation');
+      expect(container.textContent).toContain('Batch plan SHA-256: Pending revalidation');
+      const review = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
+      expect(review.disabled).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('removes an entry without retaining its stale aggregate total and requests a new plan', () => {
+    const { container, onConfirm, cleanup } = renderBatch();
+    try {
+      const remove = container.querySelector('button[aria-label="Remove beta"]') as HTMLButtonElement;
+      flushSync(() => remove.click());
+
+      const text = container.textContent ?? '';
+      expect(text).toContain('0.1000 PWR/hr');
+      expect(text).toContain('1 service across 1 app');
+      expect(text).toContain('Batch plan SHA-256: Pending revalidation');
+      const review = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
+      flushSync(() => review.click());
+      expect(onConfirm).toHaveBeenCalledWith({
+        editedBatchEntries: [expect.objectContaining({ app_name: 'alpha' })],
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('preserves an edited entry across a parent render and editor close/reopen', () => {
+    const action = makePlannedBatchAction();
+    const { container, onConfirm, render, cleanup } = renderBatch(vi.fn(), action);
+    try {
+      const edit = container.querySelector('button[aria-label="Edit alpha"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+      const removePort = container.querySelector('button[aria-label="Remove port 8080/tcp"]') as HTMLButtonElement;
+      flushSync(() => removePort.click());
+
+      expect(container.textContent).toContain('Manifest SHA-256: Pending revalidation');
+      // A failed re-plan replaces action args while preserving the card id.
+      // Parsed editor state must survive that parent render without re-parsing
+      // the original manifest back over the local edit.
+      render({
+        ...action,
+        args: { ...action.args, _batchReplanError: 'temporary planner failure' },
+      });
+      const finishEdit = container.querySelector(
+        'button[aria-label="Finish editing alpha"]',
+      ) as HTMLButtonElement;
+      flushSync(() => finishEdit.click());
+      const reopenEdit = container.querySelector(
+        'button[aria-label="Edit alpha"]',
+      ) as HTMLButtonElement;
+      flushSync(() => reopenEdit.click());
+
+      expect(container.querySelector('#batch-tier-alpha')).not.toBeNull();
+      expect(container.querySelector('button[aria-label="Remove port 8080/tcp"]')).toBeNull();
+      expect(container.textContent).toContain('Manifest SHA-256: Pending revalidation');
+      const review = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
+      flushSync(() => review.click());
+
+      const override = onConfirm.mock.calls[0][0];
+      expect(override.editedBatchEntries).toHaveLength(2);
+      const alpha = override.editedBatchEntries.find((entry: { app_name: string }) => entry.app_name === 'alpha');
+      expect(JSON.parse(alpha.manifest).ports).toBeUndefined();
+      expect(onConfirm).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('keeps a reversed manifest edit pending revalidation', () => {
+    const { container, onConfirm, cleanup } = renderBatch();
+    try {
+      const edit = container.querySelector('button[aria-label="Edit alpha"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+
+      let ingress = container.querySelector(
+        'input[aria-label="Ingress for 8080/tcp"]',
+      ) as HTMLInputElement;
+      expect(ingress.checked).toBe(true);
+      flushSync(() => ingress.click());
+      ingress = container.querySelector(
+        'input[aria-label="Ingress for 8080/tcp"]',
+      ) as HTMLInputElement;
+      expect(ingress.checked).toBe(false);
+      flushSync(() => ingress.click());
+
+      ingress = container.querySelector(
+        'input[aria-label="Ingress for 8080/tcp"]',
+      ) as HTMLInputElement;
+      expect(ingress.checked).toBe(true);
+      expect(container.textContent).toContain('Manifest SHA-256: Pending revalidation');
+      expect(container.textContent).toContain('Batch plan SHA-256: Pending revalidation');
+      const review = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
+      flushSync(() => review.click());
+
+      const override = onConfirm.mock.calls[0][0];
+      const alpha = override.editedBatchEntries.find(
+        (entry: { app_name: string }) => entry.app_name === 'alpha',
+      );
+      expect(JSON.parse(alpha.manifest).ports).toEqual({
+        '8080/tcp': { ingress: true },
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('returns to the approved plan when a newly entered domain is cleared', () => {
+    const { container, onConfirm, cleanup } = renderBatch();
+    try {
+      const edit = container.querySelector('button[aria-label="Edit alpha"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+      const input = container.querySelector(
+        'input[aria-label="Custom domain for alpha"]',
+      ) as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )!.set!;
+
+      flushSync(() => {
+        setter.call(input, 'alpha.example.com');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect(container.textContent).toContain('Batch plan SHA-256: Pending revalidation');
+
+      flushSync(() => {
+        setter.call(input, '');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect(container.textContent).toContain(`Batch plan SHA-256: ${'c'.repeat(64)}`);
+      const confirm = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.trim() === 'Confirm') as HTMLButtonElement;
+      flushSync(() => confirm.click());
+
+      expect(onConfirm).toHaveBeenCalledWith(undefined);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('restores approved domain metadata when the original domain is re-entered', () => {
+    const action = makePlannedBatchAction();
+    const plan = action.args.plan as {
+      entries: Array<Record<string, unknown>>;
+      totalServiceCount: number;
+      totalPricePerHour: number;
+    };
+    plan.entries = [{
+      ...plan.entries[1],
+      customDomain: 'beta.example.com',
+      customDomainServiceName: 'web',
+      customDomainWarning: 'Original domain warning',
+    }];
+    plan.totalServiceCount = 2;
+    plan.totalPricePerHour = 0.2;
+    const { container, onConfirm, cleanup } = renderBatch(vi.fn(), action);
+    try {
+      const edit = container.querySelector('button[aria-label="Edit beta"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+      const input = container.querySelector(
+        'input[aria-label="Custom domain for beta"]',
+      ) as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )!.set!;
+
+      flushSync(() => {
+        setter.call(input, '');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      flushSync(() => {
+        setter.call(input, 'beta.example.com');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+
+      const service = container.querySelector(
+        'select[aria-label="Service for beta custom domain"]',
+      ) as HTMLSelectElement;
+      expect(service.value).toBe('web');
+      expect(container.textContent).toContain(`Batch plan SHA-256: ${'c'.repeat(64)}`);
+      const confirm = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.trim() === 'Confirm') as HTMLButtonElement;
+      flushSync(() => confirm.click());
+      expect(onConfirm).toHaveBeenCalledWith(undefined);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('lets a one-entry batch survivor edit its custom domain and stack service', () => {
+    const action = makePlannedBatchAction();
+    const plan = action.args.plan as {
+      entries: Array<Record<string, unknown>>;
+      totalServiceCount: number;
+      totalPricePerHour: number;
+    };
+    plan.entries = [plan.entries[1]];
+    plan.totalServiceCount = 2;
+    plan.totalPricePerHour = 0.2;
+    const { container, onConfirm, cleanup } = renderBatch(vi.fn(), action);
+    try {
+      const edit = container.querySelector('button[aria-label="Edit beta"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+
+      const input = container.querySelector('input[aria-label="Custom domain for beta"]') as HTMLInputElement;
+      expect(input).not.toBeNull();
+      flushSync(() => {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+        setter.call(input, 'beta.example.com');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+
+      const select = container.querySelector(
+        'select[aria-label="Service for beta custom domain"]',
+      ) as HTMLSelectElement;
+      expect(select).not.toBeNull();
+      flushSync(() => {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!;
+        setter.call(select, 'web');
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+
+      const review = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
+      flushSync(() => review.click());
+
+      expect(onConfirm).toHaveBeenCalledWith({
+        editedBatchEntries: [expect.objectContaining({
+          draftIndex: 1,
+          app_name: 'beta',
+          customDomain: 'beta.example.com',
+          customDomainServiceName: 'web',
+        })],
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('disables confirmation when a plan entry has no services', () => {
+    const action = makePlannedBatchAction();
+    const plan = action.args.plan as {
+      entries: Array<Record<string, unknown>>;
+      totalServiceCount: number;
+      totalPricePerHour: number;
+    };
+    plan.entries = [{
+      ...plan.entries[0],
+      services: [],
+      serviceNames: [],
+      serviceCount: 0,
+      totalPricePerHour: 0,
+    }];
+    plan.totalServiceCount = 0;
+    plan.totalPricePerHour = 0;
+    const { container, cleanup } = renderBatch(vi.fn(), action);
+    try {
+      expect(container.querySelector('[data-testid="batch-deploy-total"]')?.textContent)
+        .toContain('Pending revalidation');
+      const confirm = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Confirm')) as HTMLButtonElement;
+      expect(confirm.disabled).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('preserves local drafts across a failed re-plan and labels revalidation accurately', () => {
+    const action = makePlannedBatchAction();
+    const { container, render, cleanup } = renderBatch(vi.fn(), action);
+    try {
+      const remove = container.querySelector('button[aria-label="Remove beta"]') as HTMLButtonElement;
+      flushSync(() => remove.click());
+
+      render(action, true);
+      expect(container.textContent).toContain('Revalidating...');
+
+      render({
+        ...action,
+        args: {
+          ...action.args,
+          _batchReplanError: 'Tier catalog unavailable',
+        },
+      }, false);
+      expect(container.textContent).toContain('Could not rebuild the batch plan: Tier catalog unavailable');
+      expect(container.textContent).toContain('Your edits are still here');
+      expect(container.textContent).not.toContain('beta-web:v2');
+      expect(container.textContent).toContain('1 service across 1 app');
+    } finally {
+      cleanup();
     }
   });
 });

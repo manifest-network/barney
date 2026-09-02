@@ -106,6 +106,8 @@ This is a defense in depth: even if the localStorage data were exfiltrated (via 
 
 Every AI-initiated transaction returns `{ requiresConfirmation: true, … }` and surfaces a `ConfirmationCard` with the rendered manifest. The user can edit the manifest, accept, or cancel. The chain transaction is broadcast only after explicit acceptance.
 
+Batch deploys use a single immutable consent plan for both UI-direct requests and coalesced model deploys. The card renders each app's image, resources, ports, redacted environment summary, per-app rate, aggregate rate, manifest hash, and batch-plan hash. Removing or editing an entry creates a new validated/priced plan that must be confirmed separately. Immediately before execution, the plan is rebuilt with current chain SKU prices and a fresh aggregate balance; hash, payload, name, provider, or price drift rejects the whole batch before its first broadcast.
+
 Pending confirmations auto-cancel after `AI_CONFIRMATION_TIMEOUT_MS` (5 min by default). The cleanup logic lives in `src/contexts/AIContext.tsx`. This protects against stuck UI state where a user walks away mid-confirmation.
 
 ### 6. CSP

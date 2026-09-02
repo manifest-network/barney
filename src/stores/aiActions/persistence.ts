@@ -93,7 +93,7 @@ function rehydrateChatHistory(msgs: ChatMessage[]): ChatMessage[] {
     // is nothing to confirm against. Use the structural flag rather than
     // pattern-matching content (executors emit tool-specific
     // confirmationMessage strings that don't share any keyword).
-    if (m.role === 'tool' && m.awaitingConfirmation && !m.error) {
+    if (m.role === 'tool' && m.awaitingConfirmation) {
       return {
         ...m,
         content: 'Interrupted — confirmation was pending when the page reloaded.',

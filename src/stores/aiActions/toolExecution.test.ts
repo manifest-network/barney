@@ -22,6 +22,7 @@ vi.mock('../../ai/toolExecutor/compositeTransactions', () => ({
     size: 2,
     hash: 'abc123',
   }),
+  executeBatchDeploy: vi.fn(),
 }));
 
 vi.mock('../../ai/validation', () => ({
@@ -49,7 +50,7 @@ vi.mock('../../registry/appRegistry', () => ({
 import { processToolCallsFn } from './toolExecution';
 import { isValidToolName } from '../../ai/tools';
 import { executeTool } from '../../ai/toolExecutor';
-import { buildPayloadFromManifest } from '../../ai/toolExecutor/compositeTransactions';
+import { buildPayloadFromManifest, executeBatchDeploy } from '../../ai/toolExecutor/compositeTransactions';
 
 function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
   return {
@@ -93,6 +94,28 @@ describe('processToolCallsFn', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+
+    vi.mocked(executeBatchDeploy).mockImplementation(async (entries) => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${entries.length} apps for 0.1000 PWR/hr total?`,
+      pendingAction: {
+        toolName: 'batch_deploy',
+        args: {
+          plan: {
+            version: 1,
+            entries: entries.map((entry, index) => ({
+              ...entry,
+              draftIndex: entry.draftIndex ?? index,
+            })),
+            totalServiceCount: entries.length,
+            totalPricePerHour: 0.1,
+            denomSymbol: 'PWR',
+            planHash: 'plan-hash',
+          },
+        },
+      },
+    } as ToolResult));
 
     state = {
       messages: [],
@@ -370,10 +393,285 @@ describe('processToolCallsFn', () => {
     expect(state.pendingConfirmation).not.toBeNull();
     expect(state.pendingConfirmation!.action.toolName).toBe('batch_deploy');
 
-    const entries = state.pendingConfirmation!.action.args.entries as Array<{ app_name: string }>;
+    const entries = (state.pendingConfirmation!.action.args.plan as { entries: Array<{ app_name: string }> }).entries;
     expect(entries).toHaveLength(3);
     expect(entries.map(e => e.app_name)).toEqual(['tetris', 'doom', 'hextris']);
     expect(buildPayloadFromManifest).toHaveBeenCalledTimes(3);
+    expect(executeBatchDeploy).toHaveBeenCalledOnce();
+    expect(vi.mocked(executeTool).mock.calls.every(([, , options]) =>
+      options.prepareBatchDeployDraft === true
+    )).toBe(true);
+  });
+
+  it('canonically plans a lone prepared draft when another deploy call fails', async () => {
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce({
+        success: true,
+        requiresConfirmation: true,
+        confirmationMessage: 'Prepare alpha for batch deployment?',
+        pendingAction: {
+          toolName: 'deploy_app',
+          args: {
+            _batchDeployDraft: true,
+            app_name: 'alpha',
+            size: 'micro',
+            _generatedManifest: '{"image":"alpha:latest"}',
+          },
+        },
+      })
+      .mockResolvedValueOnce({ success: false, error: 'Invalid beta manifest' });
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const toolCalls = [
+      makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } }),
+      makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } }),
+    ];
+
+    const result = await processToolCallsFn(get, set, toolCalls, 'asst_1', {
+      content: '', thinking: '', toolCalls,
+    });
+
+    expect(result.shouldContinue).toBe(false);
+    expect(executeBatchDeploy).toHaveBeenCalledOnce();
+    expect(state.pendingConfirmation?.action.toolName).toBe('batch_deploy');
+    expect(state.pendingConfirmation?.action.args).not.toHaveProperty('_batchDeployDraft');
+    expect(vi.mocked(executeTool).mock.calls.every(([, , options]) =>
+      options.prepareBatchDeployDraft === true
+    )).toBe(true);
+  });
+
+  it('attributes an entry-local planner rejection and keeps valid siblings confirmable', async () => {
+    const preparedDraft = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Prepare ${appName} for batch deployment?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          _batchDeployDraft: true,
+          app_name: appName,
+          size: 'micro',
+          _generatedManifest: `{"image":"${appName}:latest"}`,
+        },
+      },
+    });
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(preparedDraft('redis'))
+      .mockResolvedValueOnce(preparedDraft('nginx'))
+      .mockResolvedValueOnce(preparedDraft('ghost'));
+    vi.mocked(executeBatchDeploy).mockResolvedValueOnce({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Deploy 2 apps (nginx, ghost)?',
+      pendingAction: {
+        toolName: 'batch_deploy',
+        args: {
+          plan: {
+            version: 1,
+            entries: [
+              { draftIndex: 1, app_name: 'nginx' },
+              { draftIndex: 2, app_name: 'ghost' },
+            ],
+            totalServiceCount: 2,
+            totalPricePerHour: 0.2,
+            denomSymbol: 'PWR',
+            planHash: 'plan-hash',
+          },
+        },
+      },
+      rejectedEntries: [{
+        draftIndex: 0,
+        error: '"cache.example.com" is already attached to "old-app".',
+      }],
+    });
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const toolCalls = [
+      makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } }),
+      makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } }),
+      makeToolCall({ id: 'tc_3', function: { name: 'deploy_app', arguments: {} } }),
+    ];
+
+    const result = await processToolCallsFn(get, set, toolCalls, 'asst_1', {
+      content: '', thinking: '', toolCalls,
+    });
+
+    expect(result.shouldContinue).toBe(false);
+    expect(executeBatchDeploy).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Object),
+      undefined,
+      { allowPartialEntries: true },
+    );
+    expect(state.messages.find((message) => message.toolCallId === 'tc_1')).toMatchObject({
+      error: expect.stringContaining('cache.example.com'),
+      awaitingConfirmation: false,
+    });
+    expect(state.messages.find((message) => message.toolCallId === 'tc_2')).toMatchObject({
+      content: 'Batch deploy: nginx',
+      error: undefined,
+    });
+    expect(state.messages.find((message) => message.toolCallId === 'tc_3')).toMatchObject({
+      content: 'Batch deploy: ghost',
+      awaitingConfirmation: true,
+      error: undefined,
+    });
+    expect(state.pendingConfirmation?.messageId)
+      .toBe(state.messages.find((message) => message.toolCallId === 'tc_3')?.id);
+  });
+
+  it('runs aggregate affordability for model-coalesced deploys instead of trusting individual checks', async () => {
+    const makeDeployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      // Each single-app planner said yes; only the canonical batch planner has
+      // enough context to see that the two together are unaffordable.
+      confirmationMessage: `Deploy ${appName} for 1 PWR/hr?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          _generatedManifest: `{"image":"${appName}:latest"}`,
+        },
+      },
+    });
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(makeDeployResult('alpha'))
+      .mockResolvedValueOnce(makeDeployResult('beta'));
+    vi.mocked(executeBatchDeploy).mockResolvedValueOnce({
+      success: false,
+      error: 'Insufficient credits. You have 1.50 credits but need at least 2.00 PWR.',
+    });
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const toolCalls = [
+      makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } }),
+      makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } }),
+    ];
+
+    const result = await processToolCallsFn(get, set, toolCalls, 'asst_1', {
+      content: '', thinking: '', toolCalls,
+    });
+
+    expect(result.shouldContinue).toBe(true);
+    expect(state.pendingConfirmation).toBeNull();
+    expect(executeBatchDeploy).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ app_name: 'alpha' }),
+        expect.objectContaining({ app_name: 'beta' }),
+      ]),
+      expect.objectContaining({ address: 'manifest1test' }),
+    );
+    const failures = state.messages.filter((message) => message.role === 'tool');
+    expect(failures).toHaveLength(2);
+    expect(failures.every((message) => message.error?.includes('Insufficient credits'))).toBe(true);
+  });
+
+  it('fails closed when the planner result cannot be mapped one-to-one to draft confirmations', async () => {
+    const deployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          _generatedManifest: `{"image":"${appName}:latest"}`,
+        },
+      },
+    });
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(deployResult('alpha'))
+      .mockResolvedValueOnce(deployResult('beta'));
+    vi.mocked(executeBatchDeploy).mockResolvedValueOnce({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Malformed planner result',
+      pendingAction: {
+        toolName: 'batch_deploy',
+        args: {
+          plan: {
+            version: 1,
+            entries: [{ draftIndex: 0, app_name: 'alpha' }],
+            totalServiceCount: 1,
+            totalPricePerHour: 0.1,
+            denomSymbol: 'PWR',
+            planHash: 'plan-hash',
+          },
+        },
+      },
+    });
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const toolCalls = [
+      makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } }),
+      makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } }),
+    ];
+
+    const result = await processToolCallsFn(get, set, toolCalls, 'asst_1', {
+      content: '', thinking: '', toolCalls,
+    });
+
+    expect(result.shouldContinue).toBe(true);
+    expect(state.pendingConfirmation).toBeNull();
+    const toolMessages = state.messages.filter((message) => message.role === 'tool');
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages.every((message) =>
+      message.error?.includes('entry count that does not match')
+      && message.awaitingConfirmation === false
+    )).toBe(true);
+  });
+
+  it('maps planner output to tool messages by stable draft identity when entries reorder', async () => {
+    const deployResult = (appName: string): ToolResult => ({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: `Deploy ${appName}?`,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          app_name: appName,
+          size: 'micro',
+          _generatedManifest: `{"image":"${appName}:latest"}`,
+        },
+      },
+    });
+    vi.mocked(executeTool)
+      .mockResolvedValueOnce(deployResult('alpha'))
+      .mockResolvedValueOnce(deployResult('beta'));
+    vi.mocked(executeBatchDeploy).mockResolvedValueOnce({
+      success: true,
+      requiresConfirmation: true,
+      confirmationMessage: 'Deploy beta-2 and alpha-2?',
+      pendingAction: {
+        toolName: 'batch_deploy',
+        args: {
+          plan: {
+            version: 1,
+            entries: [
+              { draftIndex: 1, app_name: 'beta-2' },
+              { draftIndex: 0, app_name: 'alpha-2' },
+            ],
+            totalServiceCount: 2,
+            totalPricePerHour: 0.2,
+            denomSymbol: 'PWR',
+            planHash: 'plan-hash',
+          },
+        },
+      },
+    });
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const toolCalls = [
+      makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } }),
+      makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } }),
+    ];
+
+    await processToolCallsFn(get, set, toolCalls, 'asst_1', {
+      content: '', thinking: '', toolCalls,
+    });
+
+    expect(state.messages.find((message) => message.toolCallId === 'tc_1')?.content)
+      .toBe('Batch deploy: alpha-2');
+    expect(state.messages.find((message) => message.toolCallId === 'tc_2')?.content)
+      .toBe('Batch deploy: beta-2');
   });
 
   // Regression: batch path used to leave the owning tool message without
@@ -595,7 +893,7 @@ describe('processToolCallsFn', () => {
     });
 
     expect(state.pendingConfirmation!.action.toolName).toBe('batch_deploy');
-    const entries = state.pendingConfirmation!.action.args.entries as Array<Record<string, unknown>>;
+    const entries = (state.pendingConfirmation!.action.args.plan as { entries: Array<Record<string, unknown>> }).entries;
     expect(entries).toHaveLength(2);
 
     expect(entries[0].customDomain).toBe('alpha.example.com');
@@ -626,16 +924,19 @@ describe('processToolCallsFn', () => {
       },
     });
 
-    // Middle entry will fail payload build
+    // A middle and trailing entry fail payload build. The trailing failure must
+    // not become the owner of the surviving batch confirmation.
     vi.mocked(buildPayloadFromManifest)
       .mockResolvedValueOnce({ bytes: new Uint8Array([1]), filename: 'manifest.json', size: 1, hash: 'a' })
       .mockRejectedValueOnce(new Error('Hash computation failed'))
-      .mockResolvedValueOnce({ bytes: new Uint8Array([3]), filename: 'manifest.json', size: 1, hash: 'c' });
+      .mockResolvedValueOnce({ bytes: new Uint8Array([3]), filename: 'manifest.json', size: 1, hash: 'c' })
+      .mockRejectedValueOnce(new Error('Trailing hash computation failed'));
 
     vi.mocked(executeTool)
       .mockResolvedValueOnce(makeDeployResult('tetris'))
       .mockResolvedValueOnce(makeDeployResult('doom'))
-      .mockResolvedValueOnce(makeDeployResult('hextris'));
+      .mockResolvedValueOnce(makeDeployResult('hextris'))
+      .mockResolvedValueOnce(makeDeployResult('quake'));
 
     const assistantMsg = makeMessage({ id: 'asst_1' });
     state.messages = [assistantMsg];
@@ -643,25 +944,32 @@ describe('processToolCallsFn', () => {
     const tc1 = makeToolCall({ id: 'tc_1', function: { name: 'deploy_app', arguments: {} } });
     const tc2 = makeToolCall({ id: 'tc_2', function: { name: 'deploy_app', arguments: {} } });
     const tc3 = makeToolCall({ id: 'tc_3', function: { name: 'deploy_app', arguments: {} } });
+    const tc4 = makeToolCall({ id: 'tc_4', function: { name: 'deploy_app', arguments: {} } });
 
-    const result = await processToolCallsFn(get, set, [tc1, tc2, tc3], 'asst_1', {
+    const result = await processToolCallsFn(get, set, [tc1, tc2, tc3, tc4], 'asst_1', {
       content: '',
       thinking: '',
-      toolCalls: [tc1, tc2, tc3],
+      toolCalls: [tc1, tc2, tc3, tc4],
     });
 
     expect(result.shouldContinue).toBe(false);
     expect(state.pendingConfirmation).not.toBeNull();
     expect(state.pendingConfirmation!.action.toolName).toBe('batch_deploy');
 
-    const entries = state.pendingConfirmation!.action.args.entries as Array<{ app_name: string }>;
+    const entries = (state.pendingConfirmation!.action.args.plan as { entries: Array<{ app_name: string }> }).entries;
     expect(entries).toHaveLength(2);
     expect(entries.map(e => e.app_name)).toEqual(['tetris', 'hextris']);
 
-    // The failed tool message should contain the error
-    const errorMsg = state.messages.find(m => m.role === 'tool' && m.error);
-    expect(errorMsg).toBeDefined();
-    expect(errorMsg!.error).toBe('Hash computation failed');
+    const errorMessages = state.messages.filter(m => m.role === 'tool' && m.error);
+    expect(errorMessages.map((message) => message.content)).toEqual(expect.arrayContaining([
+      'Error: Hash computation failed',
+      'Error: Trailing hash computation failed',
+    ]));
+    const owningMessage = state.messages.find(
+      (message) => message.id === state.pendingConfirmation!.messageId,
+    );
+    expect(owningMessage?.error).toBeUndefined();
+    expect(owningMessage?.content).toBe('Batch deploy: hextris');
   });
 
   it('returns shouldContinue=true when all batch deploy entries fail', async () => {

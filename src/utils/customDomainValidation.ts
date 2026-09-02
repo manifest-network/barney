@@ -99,14 +99,18 @@ export function isReservedSuffix(fqdn: string, suffixes: readonly string[]): boo
  * Composite validation: format + reserved-suffix (hard errors) and apex (warning).
  * Reserved-suffix list is fetched from chain `Params.reservedDomainSuffixes`.
  */
-export async function validateAll(fqdn: string): Promise<CustomDomainValidationResult> {
+export async function validateAll(
+  fqdn: string,
+  signal?: AbortSignal,
+): Promise<CustomDomainValidationResult> {
   const formatError = validateCustomDomainFormat(fqdn);
   if (formatError) return { error: formatError };
 
   let suffixes: string[] = [];
   try {
-    suffixes = await getReservedDomainSuffixes();
-  } catch {
+    suffixes = await getReservedDomainSuffixes(signal);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
     // Chain unreachable → don't block; the chain will reject authoritatively.
   }
 

@@ -6,12 +6,16 @@ import type { ToolCall } from '../../api/morpheus';
 import { getToolCallDescription, isValidToolName } from '../../ai/tools';
 import { executeTool, type ToolResult } from '../../ai/toolExecutor';
 import type { TransactionAuthorization } from '../../ai/toolExecutor/types';
-import { buildPayloadFromManifest, type SingleDeployEntry } from '../../ai/toolExecutor/compositeTransactions';
+import {
+  buildPayloadFromManifest,
+  executeBatchDeploy,
+  type BatchDeployEntry,
+  type BatchDeployPlan,
+} from '../../ai/toolExecutor/compositeTransactions';
 import { sanitizeToolArgs } from '../../ai/validation';
 import type { StreamResult } from '../../ai/streamUtils';
 import { logError } from '../../utils/errors';
 import { bigIntReplacer } from '../../utils/json';
-import { validateAppName } from '../../registry/appRegistry';
 import type { AIStore } from '../aiStore';
 import {
   AUTHORIZATION_CANCELLED_MESSAGE,
@@ -37,6 +41,7 @@ async function handleToolCall(
   set: Set,
   toolCall: ToolCall,
   authorizationEpoch: number,
+  prepareBatchDeployDraft: boolean,
 ): Promise<{ result: ToolResult; authorization: TransactionAuthorization | null }> {
   if (!isValidToolName(toolCall.function.name)) {
     return {
@@ -72,6 +77,7 @@ async function handleToolCall(
     appRegistry: getAppRegistryAccess(),
     signal: abortController?.signal,
     tiers: skuTiers.tiers,
+    prepareBatchDeployDraft,
   }, pendingPayload ?? undefined);
 
   if (get().authorizationEpoch !== authorizationEpoch) {
@@ -173,9 +179,8 @@ async function mergeBatchDeployConfirmations(
   deployConfs: CollectedConfirmation[],
   authorizationEpoch: number,
 ): Promise<boolean> {
-  const entries: SingleDeployEntry[] = [];
-  const address = get().address;
-  const usedNames = new Set<string>();
+  const entries: BatchDeployEntry[] = [];
+  const entryConfirmations: CollectedConfirmation[] = [];
   let pendingPayloadUsed = false;
 
   for (const conf of deployConfs) {
@@ -201,38 +206,16 @@ async function mergeBatchDeployConfirmations(
         throw new Error('Payload missing');
       }
 
-      // Deduplicate app names within the batch
-      let name = typeof args.app_name === 'string' ? args.app_name : '';
+      const name = typeof args.app_name === 'string' ? args.app_name : '';
       if (!name) {
         throw new Error('App name missing');
       }
-      if (address && (usedNames.has(name) || validateAppName(name, address) !== null)) {
-        const baseName = name;
-        let suffix = 2;
-        let resolved = false;
-        while (suffix <= 99) {
-          const candidate = `${baseName}-${suffix}`.slice(0, 32);
-          if (!usedNames.has(candidate) && (!address || validateAppName(candidate, address) === null)) {
-            name = candidate;
-            resolved = true;
-            break;
-          }
-          suffix++;
-        }
-        if (!resolved) {
-          throw new Error(`Cannot find unique name for "${baseName}"`);
-        }
-      }
-      usedNames.add(name);
 
       entries.push({
+        draftIndex: entryConfirmations.length,
         app_name: name,
-        size: typeof args.size === 'string' ? args.size : 'micro',
-        skuUuid: args.skuUuid as string,
-        providerUuid: args.providerUuid as string,
-        providerUrl: args.providerUrl as string,
+        size: typeof args.size === 'string' ? args.size : undefined,
         payload,
-        serviceNames: args._serviceNames as string[] | undefined,
         // Thread per-entry custom domain through into the batch. Without this
         // the batch path used to silently drop the attach — both deploys
         // succeeded but no MsgSetItemCustomDomain ever broadcast, leaving the
@@ -245,6 +228,7 @@ async function mergeBatchDeployConfirmations(
             ? { customDomainWarning: args.customDomainWarning } : {}),
         } : {}),
       });
+      entryConfirmations.push(conf);
 
       // Mark this tool message as awaiting batch confirmation
       const updated = get().messages.map((m) =>
@@ -271,29 +255,150 @@ async function mergeBatchDeployConfirmations(
     return false;
   }
 
-  // If only one survived, treat as single deploy
-  if (entries.length === 1) {
-    // Find the original confirmation that produced this surviving entry
-    const surviving = deployConfs.find(
-      (c) => {
-        const argName = typeof c.result.pendingAction?.args?.app_name === 'string'
-          ? c.result.pendingAction.args.app_name
-          : undefined;
-        // Match by original name or deduped name
-        return argName === entries[0].app_name || (argName && entries[0].app_name.startsWith(argName));
-      }
-    );
-    // Fallback to first deploy conf if dedup renamed beyond recognition
-    setSingleConfirmation(get, set, surviving ?? deployConfs[0]);
+  const containsPreparedBatchDraft = entryConfirmations.some(
+    (confirmation) => confirmation.result.pendingAction.args._batchDeployDraft === true,
+  );
+
+  // A normal single deploy already has a complete consent result. A draft
+  // prepared as part of a multi-deploy turn does not: even when every sibling
+  // failed assembly, route the survivor through the canonical planner.
+  if (entries.length === 1 && !containsPreparedBatchDraft) {
+    setSingleConfirmation(get, set, entryConfirmations[0]);
     return true;
   }
 
-  // Build batch confirmation description
-  const appNames = entries.map((e) => e.app_name).join(', ');
-  const description = `Deploy ${entries.length} apps: ${appNames}?`;
-  const lastConf = deployConfs[deployConfs.length - 1];
+  // Use any assembled draft for the authorization guard while planning. The
+  // actual confirmation owner is selected after entry-local planner
+  // rejections are known, so a rejected last draft can never own the card.
+  const planningConf = entryConfirmations[entryConfirmations.length - 1];
 
   if (get().authorizationEpoch !== authorizationEpoch
+      || !isTransactionAuthorizationCurrent(get(), planningConf.authorization)) {
+    markConfirmationsAuthorizationCancelled(get, set, deployConfs);
+    return false;
+  }
+
+  // The individual deploy confirmations above are only draft material. They
+  // are never treated as aggregate affordability proof: run the exact same
+  // canonical planner used by the UI-direct batch entry point.
+  const current = get();
+  const batchOptions = {
+    clientManager: current.clientManager,
+    address: current.address,
+    signing: current.signing,
+    appRegistry: getAppRegistryAccess(),
+    signal: current.abortController?.signal,
+    tiers: current.skuTiers.tiers,
+  };
+  const planned = containsPreparedBatchDraft
+    ? await executeBatchDeploy(entries, batchOptions, undefined, { allowPartialEntries: true })
+    : await executeBatchDeploy(entries, batchOptions);
+
+  if (get().authorizationEpoch !== authorizationEpoch
+      || !isTransactionAuthorizationCurrent(get(), planningConf.authorization)) {
+    markConfirmationsAuthorizationCancelled(get, set, deployConfs);
+    return false;
+  }
+
+  const rejectedByDraft = new Map<number, string>();
+  for (const rejection of planned.rejectedEntries ?? []) {
+    if (!Number.isInteger(rejection.draftIndex)
+        || rejection.draftIndex < 0
+        || rejection.draftIndex >= entryConfirmations.length
+        || rejectedByDraft.has(rejection.draftIndex)) {
+      const error = 'Batch deploy planner returned rejected draft identities that do not match the validated drafts.';
+      const ids = new Set(entryConfirmations.map((conf) => conf.toolMessageId));
+      set({
+        messages: get().messages.map((message) => ids.has(message.id)
+          ? { ...message, content: `Error: ${error}`, error, isStreaming: false, awaitingConfirmation: false }
+          : message),
+      });
+      return false;
+    }
+    rejectedByDraft.set(rejection.draftIndex, rejection.error);
+  }
+
+  if (!planned.requiresConfirmation) {
+    const error = planned.success
+      ? 'Batch deploy did not return a confirmation plan.'
+      : planned.error;
+    set({
+      messages: get().messages.map((message) => {
+        const draftIndex = entryConfirmations.findIndex(
+          (confirmation) => confirmation.toolMessageId === message.id,
+        );
+        if (draftIndex < 0) return message;
+        const detail = rejectedByDraft.get(draftIndex) ?? error;
+        return {
+          ...message,
+          content: `Error: ${detail}`,
+          error: detail,
+          isStreaming: false,
+          awaitingConfirmation: false,
+        };
+      }),
+    });
+    return false;
+  }
+
+  const plan = planned.pendingAction.args.plan as BatchDeployPlan;
+  if (plan.entries.length + rejectedByDraft.size !== entryConfirmations.length) {
+    const error = 'Batch deploy planner returned an entry count that does not match the validated drafts.';
+    const ids = new Set(entryConfirmations.map((conf) => conf.toolMessageId));
+    set({
+      messages: get().messages.map((message) => ids.has(message.id)
+        ? { ...message, content: `Error: ${error}`, error, isStreaming: false, awaitingConfirmation: false }
+        : message),
+    });
+    return false;
+  }
+  const plannedNamesByDraft = new Map<number, string>();
+  for (const entry of plan.entries) {
+    if (!Number.isInteger(entry.draftIndex)
+        || entry.draftIndex < 0
+        || entry.draftIndex >= entryConfirmations.length
+        || rejectedByDraft.has(entry.draftIndex)
+        || plannedNamesByDraft.has(entry.draftIndex)) {
+      const error = 'Batch deploy planner returned draft identities that do not match the validated drafts.';
+      const ids = new Set(entryConfirmations.map((conf) => conf.toolMessageId));
+      set({
+        messages: get().messages.map((message) => ids.has(message.id)
+          ? { ...message, content: `Error: ${error}`, error, isStreaming: false, awaitingConfirmation: false }
+          : message),
+      });
+      return false;
+    }
+    plannedNamesByDraft.set(entry.draftIndex, entry.app_name);
+  }
+  set({
+    messages: get().messages.map((message) => {
+      const index = entryConfirmations.findIndex((conf) => conf.toolMessageId === message.id);
+      if (index < 0) return message;
+      const rejection = rejectedByDraft.get(index);
+      if (rejection) {
+        return {
+          ...message,
+          content: `Error: ${rejection}`,
+          error: rejection,
+          isStreaming: false,
+          awaitingConfirmation: false,
+        };
+      }
+      return {
+        ...message,
+        content: `Batch deploy: ${plannedNamesByDraft.get(index)!}`,
+        error: undefined,
+        isStreaming: false,
+      };
+    }),
+  });
+
+  const survivingConfirmations = entryConfirmations.filter(
+    (_confirmation, draftIndex) => plannedNamesByDraft.has(draftIndex),
+  );
+  const lastConf = survivingConfirmations[survivingConfirmations.length - 1];
+  if (!lastConf
+      || get().authorizationEpoch !== authorizationEpoch
       || !isTransactionAuthorizationCurrent(get(), lastConf.authorization)) {
     markConfirmationsAuthorizationCancelled(get, set, deployConfs);
     return false;
@@ -306,8 +411,8 @@ async function mergeBatchDeployConfirmations(
         ...lastConf.authorization,
         id: lastConf.toolCall.id,
         toolName: 'batch_deploy',
-        args: { entries } as unknown as Record<string, unknown>,
-        description,
+        args: planned.pendingAction.args,
+        description: planned.confirmationMessage,
       }),
       messageId: lastConf.toolMessageId,
     },
@@ -340,9 +445,10 @@ async function mergeBatchDeployConfirmations(
  * cleanly.
  *
  * Disposition (in priority order):
- *   1. 2+ deploy_app and at least one buildable payload → merge into a single
- *      `batch_deploy` confirmation; non-deploy confirmations marked "skipped".
- *   2. 2+ deploy_app where every payload build failed AND no other TX types →
+ *   1. 2+ deploy_app, or a prepared survivor from such a turn, and at least
+ *      one buildable payload → merge into a single `batch_deploy`
+ *      confirmation; non-deploy confirmations marked "skipped".
+ *   2. A batch candidate where every payload build failed AND no other TX types →
  *      no confirmation set; the per-entry error messages already in chat tell
  *      the AI what went wrong, so let the stream continue.
  *   3. Otherwise → set the first non-deploy confirmation (or first deploy when
@@ -359,8 +465,13 @@ async function coalesceConfirmations(
   );
   const nonDeployConfs = collected.filter((c) => !deployConfs.includes(c));
 
-  // Path 1: 2+ deploy_app — try to merge into a batch.
-  if (deployConfs.length >= 2) {
+  const hasPreparedBatchDraft = deployConfs.some(
+    (confirmation) => confirmation.result.pendingAction.args._batchDeployDraft === true,
+  );
+
+  // Path 1: 2+ deploy_app, or a lone survivor from a multi-deploy turn — try
+  // to merge into a canonical batch plan.
+  if (deployConfs.length >= 2 || hasPreparedBatchDraft) {
     const merged = await mergeBatchDeployConfirmations(get, set, deployConfs, authorizationEpoch);
     if (get().authorizationEpoch !== authorizationEpoch) {
       return { shouldContinue: false };
@@ -426,6 +537,9 @@ export async function processToolCallsFn(
 
   let hasDisplayCard = false;
   const collectedConfirmations: CollectedConfirmation[] = [];
+  const prepareBatchDeployDrafts = toolCalls.filter(
+    (toolCall) => toolCall.function.name === 'deploy_app',
+  ).length >= 2;
 
   for (const toolCall of toolCalls) {
     if (get().authorizationEpoch !== authorizationEpoch) return { shouldContinue: false };
@@ -445,7 +559,13 @@ export async function processToolCallsFn(
     };
     set({ messages: trimMessages([...get().messages, toolMsg]) });
 
-    const handled = await handleToolCall(get, set, toolCall, authorizationEpoch);
+    const handled = await handleToolCall(
+      get,
+      set,
+      toolCall,
+      authorizationEpoch,
+      prepareBatchDeployDrafts && toolCall.function.name === 'deploy_app',
+    );
     if (get().authorizationEpoch !== authorizationEpoch) return { shouldContinue: false };
     const { result, authorization } = handled;
 

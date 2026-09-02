@@ -183,7 +183,7 @@ function makeDeployResult(overrides: Partial<DeployResult> = {}): DeployResult {
 // now rejected before reaching confirmation — see "rejects a non-JSON file
 // upload" below).
 function makeJsonPayload(filename = 'docker-compose.json'): PayloadAttachment {
-  const json = JSON.stringify({ image: 'nginx', port: '80' });
+  const json = JSON.stringify({ image: 'nginx', ports: { '80/tcp': {} } });
   const bytes = new TextEncoder().encode(json);
   return { bytes, filename, size: bytes.length, hash: 'b'.repeat(64) };
 }
@@ -1025,6 +1025,30 @@ describe('executeDeployApp', () => {
     const result = await executeDeployApp({}, makeOptions({ address: undefined }), makePayload());
     expect(result.success).toBe(false);
     expect(result.error).toContain('Wallet not connected');
+  });
+
+  it('prepares a coalesced draft without repeating network-backed consent checks', async () => {
+    const result = await executeDeployApp({
+      image: 'redis:8',
+      size: 'micro',
+      custom_domain: 'redis.example.com',
+    }, makeOptions({ prepareBatchDeployDraft: true }));
+
+    expect(result).toMatchObject({
+      success: true,
+      requiresConfirmation: true,
+      pendingAction: {
+        toolName: 'deploy_app',
+        args: {
+          _batchDeployDraft: true,
+          size: 'micro',
+          customDomain: 'redis.example.com',
+        },
+      },
+    });
+    expect(getProviders).not.toHaveBeenCalled();
+    expect(getCreditAccount).not.toHaveBeenCalled();
+    expect(queryLeaseByCustomDomain).not.toHaveBeenCalled();
   });
 
   it('falls back to the cheapest tier for an unavailable size instead of erroring', async () => {
@@ -2456,19 +2480,75 @@ describe('executeConfirmedCosmosTx', () => {
 // ============================================================================
 
 function makeBatchEntry(name: string): BatchDeployEntry {
+  const bytes = new TextEncoder().encode(JSON.stringify({ image: `${name}:latest`, ports: { '8080/tcp': {} } }));
   return {
     app_name: name,
     payload: {
-      bytes: new Uint8Array([1, 2, 3]),
+      bytes,
       filename: `manifest-${name}.json`,
-      size: 3,
+      size: bytes.length,
       hash: 'a'.repeat(64),
     },
   };
 }
 
+function makeBatchEntryFromText(name: string, manifest: string): BatchDeployEntry {
+  const bytes = new TextEncoder().encode(manifest);
+  return {
+    app_name: name,
+    payload: {
+      bytes,
+      filename: `manifest-${name}.json`,
+      size: bytes.length,
+      hash: 'a'.repeat(64),
+    },
+  };
+}
+
+function mockLiveBatchCatalog(tiers = SAMPLE_TIERS): void {
+  vi.mocked(getSKUs).mockResolvedValue(tiers.map((tier) => ({
+    uuid: tier.skuUuid,
+    name: tier.skuName,
+    providerUuid: tier.providerUuid,
+    basePrice: {
+      amount: String(Math.round(tier.pricePerHour * 1_000_000)),
+      denom: 'upwr',
+    },
+    unit: Unit.UNIT_PER_HOUR,
+  } as any)));
+  vi.mocked(getProviders).mockResolvedValue([
+    { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+  ]);
+  vi.mocked(getCreditAccount).mockResolvedValue({
+    balances: [{ denom: 'upwr', amount: '1000000000' }],
+  } as any);
+}
+
+async function confirmedBatchArgs(
+  entries: BatchDeployEntry[],
+  options: ToolExecutorOptions = makeOptions(),
+): Promise<Record<string, unknown>> {
+  const validEntries = entries.map((entry) => {
+    try {
+      JSON.parse(new TextDecoder().decode(entry.payload.bytes));
+      return entry;
+    } catch {
+      return { ...entry, payload: makeJsonPayload(entry.payload.filename) };
+    }
+  });
+  const result = await executeBatchDeploy(validEntries, options);
+  if (!result.requiresConfirmation) {
+    throw new Error(result.success ? 'Expected batch confirmation' : result.error);
+  }
+  return result.pendingAction.args;
+}
+
 describe('executeBatchDeploy', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValue(null);
+    mockLiveBatchCatalog();
+  });
 
   it('returns error without wallet', async () => {
     const result = await executeBatchDeploy([makeBatchEntry('app1')], makeOptions({ address: undefined }));
@@ -2483,21 +2563,19 @@ describe('executeBatchDeploy', () => {
   });
 
   it('batch falls back to the cheapest tier for an unavailable size', async () => {
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
     const result = await executeBatchDeploy([makeBatchEntry('app1')], makeOptions(), 'xxlarge');
     expect(result.success).toBe(true);
-    const entries = result.pendingAction?.args.entries as Array<{ size: string }>;
+    const entries = (result.pendingAction?.args.plan as {
+      entries: Array<{ size: string; requestedSize?: string }>;
+    }).entries;
     expect(entries[0].size).toBe('docker-micro'); // SAMPLE_TIERS cheapest
+    expect(entries[0].requestedSize).toBe('xxlarge');
   });
 
   it('batch defaults to the cheapest resolved tier when size is omitted', async () => {
     vi.mocked(getProviders).mockResolvedValue([
       { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
     ]);
-    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
 
     // Arrange so the cheapest tier (docker-small @ 0.01 PWR/hr) is NOT tiers[0].
     // A `tiers[0]`-based regression would silently pass against SAMPLE_TIERS;
@@ -2507,6 +2585,7 @@ describe('executeBatchDeploy', () => {
       { skuName: 'docker-small', skuUuid: 'sku-s', providerUuid: 'p1', cores: 1, ramMB: 1024, diskGB: 5, pricePerHour: 0.01, denomSymbol: 'PWR', unit: 1 },
       { skuName: 'docker-micro', skuUuid: 'sku-mi', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0.036, denomSymbol: 'PWR', unit: 1 },
     ];
+    mockLiveBatchCatalog(tiersOutOfPriceOrder);
 
     const result = await executeBatchDeploy(
       [makeBatchEntry('app1')],
@@ -2515,19 +2594,11 @@ describe('executeBatchDeploy', () => {
 
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
-    const entries = result.pendingAction?.args.entries as Array<{ size: string }>;
+    const entries = (result.pendingAction?.args.plan as { entries: Array<{ size: string }> }).entries;
     expect(entries[0].size).toBe('docker-small');
   });
 
   it('returns confirmation for valid batch', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
-
     const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
     const result = await executeBatchDeploy(entries, makeOptions());
 
@@ -2537,7 +2608,7 @@ describe('executeBatchDeploy', () => {
     expect(result.confirmationMessage).toContain('app1');
     expect(result.confirmationMessage).toContain('app2');
     expect(result.pendingAction?.toolName).toBe('batch_deploy');
-    expect(result.pendingAction?.args.entries).toHaveLength(2);
+    expect((result.pendingAction?.args.plan as { entries: unknown[] }).entries).toHaveLength(2);
   });
 
   // Pass-16 batch-side regression catchers. Mirrors the single-deploy pair
@@ -2546,17 +2617,10 @@ describe('executeBatchDeploy', () => {
   // price wrapper entirely when priceDisplay was empty — and priceDisplay
   // was empty whenever pricePerHour was 0 (the pass-11-now-incorrect guard).
   it('renders "0.0000 .../hr" on the batch confirmation message for a free tier (pass-16)', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-free', name: 'docker-micro', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
-
     const freeTier = [
       { skuName: 'docker-micro', skuUuid: 'sku-free', providerUuid: 'p1', cores: 0.5, ramMB: 512, diskGB: 1, pricePerHour: 0, denomSymbol: 'PWR', unit: 1 },
     ];
+    mockLiveBatchCatalog(freeTier);
     const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
     const result = await executeBatchDeploy(entries, makeOptions({ tiers: freeTier }));
 
@@ -2571,33 +2635,22 @@ describe('executeBatchDeploy', () => {
   });
 
   it('still renders the price display for a positive-price batch tier (pass-16 happy-path regression)', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
-
     const entries = [makeBatchEntry('app1'), makeBatchEntry('app2')];
     const result = await executeBatchDeploy(entries, makeOptions());
 
     expect(result.success).toBe(true);
-    // Default SAMPLE_TIERS docker-micro is 0.036 PWR/hr — same pin as the
-    // single-deploy happy-path regression catcher.
-    expect(result.confirmationMessage).toContain('0.0360 PWR/hr');
+    // Two one-service apps at 0.036 PWR/hr each are disclosed as the aggregate.
+    expect(result.confirmationMessage).toContain('0.0720 PWR/hr total');
   });
 
   it('returns insufficient credits error when total cost exceeds balance', async () => {
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
+    const tiersWithHighPrice = SAMPLE_TIERS.map(t => ({ ...t, pricePerHour: 1.0 }));
+    mockLiveBatchCatalog(tiersWithHighPrice);
     // 0.5 PWR balance with tier price 1 PWR/hour × 3 entries = need 3, have 0.5
     vi.mocked(getCreditAccount).mockResolvedValue({
       balances: [{ denom: 'upwr', amount: '500000' }],
     } as any);
 
-    const tiersWithHighPrice = SAMPLE_TIERS.map(t => ({ ...t, pricePerHour: 1.0 }));
     const entries = [makeBatchEntry('app1'), makeBatchEntry('app2'), makeBatchEntry('app3')];
     const result = await executeBatchDeploy(entries, makeOptions({ tiers: tiersWithHighPrice }));
 
@@ -2605,15 +2658,52 @@ describe('executeBatchDeploy', () => {
     expect(result.error).toContain('Insufficient credits');
   });
 
-  it('extracts service names from stack manifest payloads', async () => {
-    vi.mocked(getSKUs).mockResolvedValue([
-      { uuid: 'sku-1', name: 'docker-micro', providerUuid: 'p1' } as any,
-    ]);
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
-    ]);
-    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+  it('rejects two apps that are individually affordable but collectively unaffordable', async () => {
+    const oneCreditTier = SAMPLE_TIERS.map((tier) => ({ ...tier, pricePerHour: 1 }));
+    mockLiveBatchCatalog(oneCreditTier);
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      // Each 1 PWR/hr app is affordable on its own; the 2 PWR/hr batch is not.
+      balances: [{ denom: 'upwr', amount: '1500000' }],
+    } as any);
 
+    const result = await executeBatchDeploy(
+      [makeBatchEntry('alpha'), makeBatchEntry('beta')],
+      makeOptions({ tiers: oneCreditTier }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Insufficient credits');
+    expect(result.error).toContain('2.00 PWR');
+  });
+
+  it('stores a deeply frozen consent plan with exact manifest and plan hashes', async () => {
+    const result = await executeBatchDeploy(
+      [makeBatchEntry('alpha'), makeBatchEntry('beta')],
+      makeOptions(),
+    );
+
+    expect(result.requiresConfirmation).toBe(true);
+    if (!result.requiresConfirmation) throw new Error('expected confirmation');
+    const plan = result.pendingAction.args.plan as any;
+    expect(plan.planHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(plan.entries.map((entry: any) => entry.draftIndex)).toEqual([0, 1]);
+    expect(plan.entries[0].manifestHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(plan.entries[0].manifest).toContain('alpha:latest');
+    expect(plan.totalPricePerHour).toBeCloseTo(0.072);
+    expect(Object.isFrozen(plan)).toBe(true);
+    expect(Object.isFrozen(plan.entries)).toBe(true);
+    expect(Object.isFrozen(plan.entries[0])).toBe(true);
+    expect(Object.isFrozen(plan.entries[0].services)).toBe(true);
+  });
+
+  it('fails closed when aggregate balance cannot be verified', async () => {
+    vi.mocked(getCreditAccount).mockResolvedValue(null as any);
+    const result = await executeBatchDeploy([makeBatchEntry('alpha')], makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Could not verify aggregate credit balance');
+  });
+
+  it('extracts service names from stack manifest payloads', async () => {
     const stackManifest = {
       services: {
         web: { image: 'wordpress:6', ports: { '80/tcp': {} }, env: { WORDPRESS_DB_HOST: 'db:3306' } },
@@ -2631,15 +2721,246 @@ describe('executeBatchDeploy', () => {
 
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
-    const resolvedEntries = result.pendingAction?.args.entries as any[];
+    const resolvedEntries = (result.pendingAction?.args.plan as { entries: any[] }).entries;
     expect(resolvedEntries).toHaveLength(1);
     expect(resolvedEntries[0].serviceNames).toEqual(['web', 'db']);
   });
 
-  it('counts services (not just entries) for credit check on stack deploys', async () => {
-    vi.mocked(getProviders).mockResolvedValue([
-      { uuid: 'p1', apiUrl: 'https://fred.example.com', active: true } as any,
+  it('checks independent custom domains in parallel', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.mocked(queryLeaseByCustomDomain).mockImplementation(async () => {
+      await gate;
+      return null;
+    });
+    const planning = executeBatchDeploy([
+      { ...makeBatchEntry('alpha'), customDomain: 'alpha.example.com' },
+      { ...makeBatchEntry('beta'), customDomain: 'beta.example.com' },
+    ], makeOptions());
+
+    try {
+      await vi.waitFor(() => expect(queryLeaseByCustomDomain).toHaveBeenCalledTimes(2));
+    } finally {
+      release();
+    }
+    const result = await planning;
+
+    expect(result.success).toBe(true);
+  });
+
+  it('keeps valid coalesced drafts when one custom domain is already attached', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockImplementation(async (domain) =>
+      domain === 'cache.example.com' ? { leaseUuid: 'old-lease' } as any : null
+    );
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntry('redis'), draftIndex: 0, customDomain: 'cache.example.com' },
+      { ...makeBatchEntry('nginx'), draftIndex: 1 },
+      { ...makeBatchEntry('ghost'), draftIndex: 2 },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.requiresConfirmation).toBe(true);
+    if (!result.requiresConfirmation) throw new Error('expected partial batch confirmation');
+    expect(result.rejectedEntries).toEqual([{
+      draftIndex: 0,
+      error: expect.stringContaining('cache.example.com'),
+    }]);
+    const plan = result.pendingAction.args.plan as any;
+    expect(plan.entries.map((entry: any) => entry.draftIndex)).toEqual([1, 2]);
+    expect(plan.entries.map((entry: any) => entry.app_name)).toEqual(['nginx', 'ghost']);
+    expect(getCreditAccount).toHaveBeenCalledOnce();
+  });
+
+  it('reserves names and domains only for synchronously valid drafts', async () => {
+    const stack = JSON.stringify({
+      services: {
+        web: { image: 'wordpress:6' },
+        db: { image: 'mysql:9' },
+      },
+    });
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntryFromText('redis', 'not-json'), draftIndex: 0 },
+      { ...makeBatchEntry('redis'), draftIndex: 1 },
+      {
+        ...makeBatchEntryFromText('wordpress', stack),
+        draftIndex: 2,
+        customDomain: 'shared.example.com',
+      },
+      {
+        ...makeBatchEntry('web'),
+        draftIndex: 3,
+        customDomain: 'shared.example.com',
+      },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.requiresConfirmation).toBe(true);
+    if (!result.requiresConfirmation) throw new Error('expected partial batch confirmation');
+    expect(result.rejectedEntries).toEqual([
+      { draftIndex: 0, error: expect.stringContaining('valid JSON') },
+      { draftIndex: 2, error: expect.stringContaining('pass service_name') },
     ]);
+    const plan = result.pendingAction.args.plan as any;
+    expect(plan.entries.map((entry: any) => ({
+      draftIndex: entry.draftIndex,
+      app_name: entry.app_name,
+      customDomain: entry.customDomain,
+    }))).toEqual([
+      { draftIndex: 1, app_name: 'redis', customDomain: undefined },
+      { draftIndex: 3, app_name: 'web', customDomain: 'shared.example.com' },
+    ]);
+  });
+
+  it('does not reserve a name for a draft rejected by an async domain check', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockImplementation(async (domain) =>
+      domain === 'taken.example.com' ? { leaseUuid: 'old-lease' } as any : null
+    );
+    const result = await executeBatchDeploy([
+      {
+        ...makeBatchEntry('redis'),
+        draftIndex: 0,
+        customDomain: 'taken.example.com',
+      },
+      { ...makeBatchEntry('redis'), draftIndex: 1 },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.requiresConfirmation).toBe(true);
+    if (!result.requiresConfirmation) throw new Error('expected partial batch confirmation');
+    expect(result.rejectedEntries).toEqual([{
+      draftIndex: 0,
+      error: expect.stringContaining('taken.example.com'),
+    }]);
+    const plan = result.pendingAction.args.plan as any;
+    expect(plan.entries).toHaveLength(1);
+    expect(plan.entries[0]).toMatchObject({ draftIndex: 1, app_name: 'redis' });
+  });
+
+  it('assigns unique names to valid same-name partial-batch survivors', async () => {
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntry('redis'), draftIndex: 0 },
+      { ...makeBatchEntry('redis'), draftIndex: 1 },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.requiresConfirmation).toBe(true);
+    if (!result.requiresConfirmation) throw new Error('expected batch confirmation');
+    const plan = result.pendingAction.args.plan as any;
+    expect(plan.entries.map((entry: any) => entry.app_name)).toEqual(['redis', 'redis-2']);
+  });
+
+  it('reserves a custom domain for the first valid survivor only', async () => {
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntry('alpha'), draftIndex: 0, customDomain: 'shared.example.com' },
+      { ...makeBatchEntry('beta'), draftIndex: 1, customDomain: 'shared.example.com' },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.requiresConfirmation).toBe(true);
+    if (!result.requiresConfirmation) throw new Error('expected partial batch confirmation');
+    expect(result.rejectedEntries).toEqual([{
+      draftIndex: 1,
+      error: 'Custom domain "shared.example.com" is repeated in this batch.',
+    }]);
+    const plan = result.pendingAction.args.plan as any;
+    expect(plan.entries).toHaveLength(1);
+    expect(plan.entries[0]).toMatchObject({
+      draftIndex: 0,
+      app_name: 'alpha',
+      customDomain: 'shared.example.com',
+    });
+  });
+
+  it('reports every synchronous rejection when no valid drafts remain', async () => {
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntryFromText('broken-json', 'not-json'), draftIndex: 0 },
+      { ...makeBatchEntryFromText('empty', ''), draftIndex: 1 },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('No valid apps remain in this batch.');
+    expect(result.rejectedEntries).toEqual([
+      { draftIndex: 0, error: expect.stringContaining('valid JSON') },
+      { draftIndex: 1, error: expect.stringContaining('manifest is empty') },
+    ]);
+    expect(getCreditAccount).not.toHaveBeenCalled();
+  });
+
+  it('reports every asynchronous rejection when no valid drafts remain', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValue({ leaseUuid: 'old-lease' } as any);
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntry('alpha'), draftIndex: 0, customDomain: 'alpha.example.com' },
+      { ...makeBatchEntry('beta'), draftIndex: 1, customDomain: 'beta.example.com' },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('No valid apps remain in this batch.');
+    expect(result.rejectedEntries).toEqual([
+      { draftIndex: 0, error: expect.stringContaining('alpha.example.com') },
+      { draftIndex: 1, error: expect.stringContaining('beta.example.com') },
+    ]);
+    expect(getCreditAccount).not.toHaveBeenCalled();
+  });
+
+  it('retains entry-local rejections when a surviving plan fails affordability', async () => {
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      balances: [{ denom: 'upwr', amount: '0' }],
+    } as any);
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntryFromText('broken', 'not-json'), draftIndex: 0 },
+      { ...makeBatchEntry('valid'), draftIndex: 1 },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Insufficient credits');
+    expect(result.rejectedEntries).toEqual([{
+      draftIndex: 0,
+      error: expect.stringContaining('valid JSON'),
+    }]);
+  });
+
+  it('preserves actionable multi-service custom-domain validation errors', async () => {
+    const stackManifest = JSON.stringify({
+      services: {
+        web: { image: 'wordpress:6' },
+        db: { image: 'mysql:9' },
+      },
+    });
+    const stackBytes = new TextEncoder().encode(stackManifest);
+    const stackEntry: BatchDeployEntry = {
+      app_name: 'wordpress',
+      customDomain: 'wp.example.com',
+      payload: {
+        bytes: stackBytes,
+        filename: 'wordpress.json',
+        size: stackBytes.length,
+        hash: 'b'.repeat(64),
+      },
+    };
+
+    const missing = await executeBatchDeploy([stackEntry], makeOptions());
+    expect(missing.success).toBe(false);
+    expect(missing.error).toMatch(/pass service_name.*web, db/i);
+
+    const unknown = await executeBatchDeploy([
+      { ...stackEntry, customDomainServiceName: 'api' },
+    ], makeOptions());
+    expect(unknown.success).toBe(false);
+    expect(unknown.error).toContain('Service "api" not found in stack. Available: web, db.');
+  });
+
+  it('stops awaiting an in-flight custom-domain check when planning is aborted', async () => {
+    const controller = new AbortController();
+    vi.mocked(queryLeaseByCustomDomain).mockReturnValueOnce(new Promise<never>(() => {}));
+    const planning = executeBatchDeploy([
+      { ...makeBatchEntry('alpha'), customDomain: 'alpha.example.com' },
+    ], makeOptions({ signal: controller.signal }));
+    await vi.waitFor(() => expect(queryLeaseByCustomDomain).toHaveBeenCalledOnce());
+
+    controller.abort();
+
+    await expect(planning).rejects.toMatchObject({ name: 'AbortError' });
+    expect(getCreditAccount).not.toHaveBeenCalled();
+  });
+
+  it('counts services (not just entries) for credit check on stack deploys', async () => {
+    const tiersWithHighPrice = SAMPLE_TIERS.map(t => ({ ...t, pricePerHour: 1.0 }));
+    mockLiveBatchCatalog(tiersWithHighPrice);
     // 1.5 credits: enough for 1 entry but not 2 services at 1 PWR/hr each
     vi.mocked(getCreditAccount).mockResolvedValue({
       balances: [{ denom: 'upwr', amount: '1500000' }],
@@ -2658,7 +2979,6 @@ describe('executeBatchDeploy', () => {
       payload: { bytes, filename: 'manifest-wordpress.json', size: bytes.length, hash: 'b'.repeat(64) },
     };
 
-    const tiersWithHighPrice = SAMPLE_TIERS.map(t => ({ ...t, pricePerHour: 1.0 }));
     // 1 entry with 2 services → needs 2 credits, but only 1.5 available
     const result = await executeBatchDeploy([entry], makeOptions({ tiers: tiersWithHighPrice }));
 
@@ -2669,49 +2989,194 @@ describe('executeBatchDeploy', () => {
 });
 
 describe('executeConfirmedBatchDeploy', () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it('returns error for empty entries', async () => {
-    const result = await executeConfirmedBatchDeploy({ entries: [] }, CLIENT_MANAGER, makeOptions());
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('No entries');
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLiveBatchCatalog();
   });
 
-  it('buckets an authorization guard failure as cancelled before deploy', async () => {
+  it('rejects a legacy/unplanned batch action', async () => {
+    const result = await executeConfirmedBatchDeploy({ entries: [] }, CLIENT_MANAGER, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid batch deployment plan');
+  });
+
+  it('rejects payload tampering before any deployment is submitted', async () => {
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha'), makeBatchEntry('beta')]);
+    const plan = args.plan as any;
+    const tampered = {
+      ...plan,
+      entries: plan.entries.map((entry: any, index: number) => index === 0
+        ? { ...entry, manifest: entry.manifest.replace('alpha:latest', 'attacker:latest') }
+        : entry),
+    };
+
+    const result = await executeConfirmedBatchDeploy(
+      { plan: tampered },
+      CLIENT_MANAGER,
+      makeOptions(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('integrity check failed');
+    expect(deployManifest).not.toHaveBeenCalled();
+  });
+
+  it('hashes stable draft identities and rejects identity tampering before broadcast', async () => {
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha'), makeBatchEntry('beta')]);
+    const plan = args.plan as any;
+    const tampered = {
+      ...plan,
+      entries: plan.entries.map((entry: any, index: number) => index === 0
+        ? { ...entry, draftIndex: 99 }
+        : entry),
+    };
+
+    const result = await executeConfirmedBatchDeploy(
+      { plan: tampered },
+      CLIENT_MANAGER,
+      makeOptions(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('integrity check failed');
+    expect(deployManifest).not.toHaveBeenCalled();
+  });
+
+  it('rejects a price change discovered immediately before execution', async () => {
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha'), makeBatchEntry('beta')]);
+    mockLiveBatchCatalog(SAMPLE_TIERS.map((tier) => ({
+      ...tier,
+      pricePerHour: tier.pricePerHour + 0.01,
+    })));
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions());
+
+    expect(getSKUs).toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('plan changed after approval');
+    expect(deployManifest).not.toHaveBeenCalled();
+  });
+
+  it('builds the initial and confirmed plans from the same live catalog', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult();
+    });
+    const staleStoreTiers = SAMPLE_TIERS.map((tier) => ({
+      ...tier,
+      pricePerHour: tier.pricePerHour + 10,
+    }));
+    const options = makeOptions({ tiers: staleStoreTiers });
+
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha')], options);
+    const plan = args.plan as { totalPricePerHour: number };
+    expect(plan.totalPricePerHour).toBeCloseTo(SAMPLE_TIERS[0].pricePerHour);
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, options);
+
+    expect(result.success).toBe(true);
+    expect(getSKUs).toHaveBeenCalledTimes(2);
+    expect(deployManifest).toHaveBeenCalledOnce();
+  });
+
+  it('hashes and sizes the canonical stored manifest when input has a UTF-8 BOM', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult();
+    });
+    const manifestBytes = new TextEncoder().encode('{"image":"bom:latest"}');
+    const bytesWithBom = new Uint8Array(manifestBytes.length + 3);
+    bytesWithBom.set([0xef, 0xbb, 0xbf]);
+    bytesWithBom.set(manifestBytes, 3);
+    const entry: BatchDeployEntry = {
+      app_name: 'bom-app',
+      payload: {
+        bytes: bytesWithBom,
+        filename: 'manifest-bom.json',
+        size: bytesWithBom.length,
+        hash: 'b'.repeat(64),
+      },
+    };
+
+    const args = await confirmedBatchArgs([entry]);
+    const plannedEntry = (args.plan as any).entries[0];
+    expect(plannedEntry.manifest).toBe('{"image":"bom:latest"}');
+    expect(plannedEntry.manifestSize).toBe(manifestBytes.length);
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions());
+
+    expect(result.success).toBe(true);
+    expect(deployManifest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ manifest: '{"image":"bom:latest"}' }),
+      expect.anything(),
+    );
+  });
+
+  it('preserves an unavailable-size substitution across confirm-time replanning', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult();
+    });
+    const args = await confirmedBatchArgs([{
+      ...makeBatchEntry('fallback-app'),
+      size: 'xxlarge',
+    }]);
+    const plannedEntry = (args.plan as any).entries[0];
+    expect(plannedEntry).toMatchObject({
+      size: 'docker-micro',
+      requestedSize: 'xxlarge',
+    });
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions());
+
+    expect(result.success).toBe(true);
+    expect(deployManifest).toHaveBeenCalledOnce();
+  });
+
+  it('recomputes aggregate balance immediately before execution', async () => {
+    vi.mocked(getCreditAccount)
+      .mockResolvedValueOnce({ balances: [{ denom: 'upwr', amount: '1000000000' }] } as any)
+      .mockResolvedValueOnce({ balances: [{ denom: 'upwr', amount: '10000' }] } as any);
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha'), makeBatchEntry('beta')]);
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Insufficient credits');
+    expect(getCreditAccount).toHaveBeenCalledTimes(2);
+    expect(deployManifest).not.toHaveBeenCalled();
+  });
+
+  it('stops confirm-time planning when the authorization guard fails', async () => {
     const entries = [
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
     ];
 
-    const result = await executeConfirmedBatchDeploy(
-      { entries },
+    await expect(executeConfirmedBatchDeploy(
+      await confirmedBatchArgs(entries),
       CLIENT_MANAGER,
       makeOptions({ assertAuthorization: () => { throw new Error('wallet changed'); } }),
-    );
+    )).rejects.toThrow('wallet changed');
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Cancelled: game1');
-    expect(result.error).not.toContain('Failed: game1');
     expect(deployManifest).not.toHaveBeenCalled();
   });
 
-  it('buckets a signal aborted by the live deploy guard as cancelled before broadcast', async () => {
+  it('stops confirm-time planning when the live guard aborts the signal', async () => {
     const controller = new AbortController();
     const entries = [
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
     ];
 
-    const result = await executeConfirmedBatchDeploy(
-      { entries },
+    await expect(executeConfirmedBatchDeploy(
+      await confirmedBatchArgs(entries),
       CLIENT_MANAGER,
       makeOptions({
         signal: controller.signal,
         assertAuthorization: () => controller.abort(),
       }),
-    );
+    )).rejects.toMatchObject({ name: 'AbortError' });
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Cancelled: game1');
-    expect(result.error).not.toContain('Failed: game1');
     expect(deployManifest).not.toHaveBeenCalled();
   });
 
@@ -2730,7 +3195,7 @@ describe('executeConfirmedBatchDeploy', () => {
 
     const opts = makeOptions({ appRegistry: registry, onProgress });
 
-    const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, opts);
+    const result = await executeConfirmedBatchDeploy(await confirmedBatchArgs(entries, opts), CLIENT_MANAGER, opts);
 
     expect(result.success).toBe(true);
     const data = result.data as any;
@@ -2747,6 +3212,33 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(lastProgress.batch).toBeDefined();
   });
 
+  it('broadcasts manifests and resolved SKUs semantically equivalent to the displayed plan', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult();
+    });
+    const args = await confirmedBatchArgs([
+      makeBatchEntry('alpha'),
+      { ...makeBatchEntry('beta'), size: 'docker-small' },
+    ]);
+    const displayedPlan = args.plan as any;
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions());
+
+    expect(result.success).toBe(true);
+    const specs = vi.mocked(deployManifest).mock.calls.map((call) => call[1]);
+    expect(specs.map((spec) => spec.manifest)).toEqual(
+      expect.arrayContaining(displayedPlan.entries.map((entry: any) => entry.manifest)),
+    );
+    expect(specs.map((spec) => spec.sku)).toEqual(expect.arrayContaining(
+      displayedPlan.entries.map((entry: any) => ({
+        kind: 'resolved',
+        skuUuid: entry.skuUuid,
+        providerUuid: entry.providerUuid,
+      })),
+    ));
+  });
+
   it('records the deployManifest-resolved providerUrl (onLeaseCreated arg), not the stale entry value', async () => {
     // Regression guard (Copilot PR #106): the registry must record the URL
     // deployManifest actually resolved (onLeaseCreated's 2nd arg), mirroring
@@ -2761,7 +3253,11 @@ describe('executeConfirmedBatchDeploy', () => {
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://stale.example.com', payload: makePayload() },
     ];
 
-    await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ appRegistry: registry }));
+    await executeConfirmedBatchDeploy(
+      await confirmedBatchArgs(entries),
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+    );
 
     expect(registry.addApp).toHaveBeenCalledWith(
       expect.anything(),
@@ -2794,7 +3290,7 @@ describe('executeConfirmedBatchDeploy', () => {
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://stale.example.com', payload: makePayload() },
     ];
 
-    await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+    await executeConfirmedBatchDeploy(await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions());
 
     expect(getLeaseProvision).toHaveBeenCalledWith('https://resolved.example.com', 'lease-x', expect.anything());
     expect(getLeaseProvision).not.toHaveBeenCalledWith('https://stale.example.com', 'lease-x', expect.anything());
@@ -2821,7 +3317,11 @@ describe('executeConfirmedBatchDeploy', () => {
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
     ];
 
-    await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ onProgress }));
+    await executeConfirmedBatchDeploy(
+      await confirmedBatchArgs(entries),
+      CLIENT_MANAGER,
+      makeOptions({ onProgress }),
+    );
 
     // Batch per-app detail lands in onProgress's `batch` array, not the top-level detail.
     const details = onProgress.mock.calls
@@ -2864,7 +3364,7 @@ describe('executeConfirmedBatchDeploy', () => {
     ];
 
     const result = await executeConfirmedBatchDeploy(
-      { entries }, CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry(), onProgress })
+      await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry(), onProgress })
     );
 
     const data = result.data as any;
@@ -2893,7 +3393,11 @@ describe('executeConfirmedBatchDeploy', () => {
       { app_name: 'game2', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
     ];
 
-    const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ appRegistry: registry }));
+    const result = await executeConfirmedBatchDeploy(
+      await confirmedBatchArgs(entries),
+      CLIENT_MANAGER,
+      makeOptions({ appRegistry: registry }),
+    );
 
     expect(result.success).toBe(true);
     expect((result.data as any).deployed.map((d: any) => d.name)).toContain('game1');
@@ -2913,7 +3417,7 @@ describe('executeConfirmedBatchDeploy', () => {
       const entries = [
         { app_name: 'a1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'a1.example.com' },
       ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+      await executeConfirmedBatchDeploy(await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions());
 
       const spec = vi.mocked(deployManifest).mock.calls[0][1];
       expect(spec.customDomain).toBe('a1.example.com');
@@ -2923,10 +3427,22 @@ describe('executeConfirmedBatchDeploy', () => {
 
     it('passes serviceName into the spec for a multi-service stack entry', async () => {
       mockDeploy();
+      const stackBytes = new TextEncoder().encode(JSON.stringify({
+        services: {
+          web: { image: 'wordpress:latest', ports: { '80/tcp': {} } },
+          db: { image: 'mysql:latest' },
+        },
+      }));
       const entries = [
-        { app_name: 'wp', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), serviceNames: ['web', 'db'], customDomain: 'wp.example.com', customDomainServiceName: 'web' },
+        {
+          app_name: 'wp',
+          size: 'small',
+          payload: { bytes: stackBytes, filename: 'wp.json', size: stackBytes.length, hash: 'ignored' },
+          customDomain: 'wp.example.com',
+          customDomainServiceName: 'web',
+        },
       ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+      await executeConfirmedBatchDeploy(await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions());
 
       const spec = vi.mocked(deployManifest).mock.calls[0][1];
       expect(spec.customDomain).toBe('wp.example.com');
@@ -2938,7 +3454,7 @@ describe('executeConfirmedBatchDeploy', () => {
       const entries = [
         { app_name: 'plain', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
       ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+      await executeConfirmedBatchDeploy(await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions());
 
       const spec = vi.mocked(deployManifest).mock.calls[0][1];
       expect('customDomain' in spec).toBe(false);
@@ -2957,7 +3473,11 @@ describe('executeConfirmedBatchDeploy', () => {
       const entries = [
         { app_name: 'cached', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'cached.example.com' },
       ];
-      await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions({ appRegistry: reg }));
+      await executeConfirmedBatchDeploy(
+        await confirmedBatchArgs(entries),
+        CLIENT_MANAGER,
+        makeOptions({ appRegistry: reg }),
+      );
 
       const domainWrite = updateSpy.mock.calls.find((c) => Array.isArray((c[2] as any).customDomains));
       expect(domainWrite).toBeDefined();
@@ -2973,7 +3493,11 @@ describe('executeConfirmedBatchDeploy', () => {
       const entries = [
         { app_name: 'rej', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload(), customDomain: 'rej.example.com' },
       ];
-      const result = await executeConfirmedBatchDeploy({ entries }, CLIENT_MANAGER, makeOptions());
+      const result = await executeConfirmedBatchDeploy(
+        await confirmedBatchArgs(entries),
+        CLIENT_MANAGER,
+        makeOptions(),
+      );
 
       expect(result.success).toBe(false); // all entries failed
       expect(result.error).toContain('rej');
@@ -6081,6 +6605,7 @@ describe('batch summary and progress agree on an unconfirmed batch', () => {
       await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
       return makeDeployResult();
     });
+    mockLiveBatchCatalog();
     const onProgress = vi.fn();
     const entries = [
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
@@ -6088,7 +6613,7 @@ describe('batch summary and progress agree on an unconfirmed batch', () => {
     ];
 
     const result = await executeConfirmedBatchDeploy(
-      { entries }, CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry(), onProgress })
+      await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry(), onProgress })
     );
 
     expect(result.success).toBe(true);

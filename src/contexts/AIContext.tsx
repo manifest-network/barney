@@ -80,6 +80,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
                   content: `Action timed out - confirmation not received within ${timeoutMinutes} minutes.`,
                   isStreaming: false,
                   error: 'timeout',
+                  awaitingConfirmation: false,
                 }
               : m
           );

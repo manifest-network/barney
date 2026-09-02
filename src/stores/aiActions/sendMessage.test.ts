@@ -175,6 +175,7 @@ describe('sendMessage', () => {
             toolName: 'deploy_app',
             awaitingConfirmation: true,
             isStreaming: false,
+            error: 'Tier catalog unavailable',
           },
         ],
       });
@@ -186,6 +187,7 @@ describe('sendMessage', () => {
       // Its tool message is marked superseded and no longer awaiting confirmation.
       const priorMsg = store.getState().messages.find((m) => m.id === 'tool_a');
       expect(priorMsg?.awaitingConfirmation).toBe(false);
+      expect(priorMsg?.error).toBeUndefined();
       expect(priorMsg?.content).toMatch(/superseded/i);
       // The new request still proceeded (user message was appended).
       expect(store.getState().messages.some((m) => m.role === 'user')).toBe(true);
