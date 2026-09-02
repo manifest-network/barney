@@ -2833,6 +2833,18 @@ describe('executeBatchDeploy', () => {
     expect(plan.entries[0]).toMatchObject({ draftIndex: 1, app_name: 'redis' });
   });
 
+  it('assigns unique names to valid same-name partial-batch survivors', async () => {
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntry('redis'), draftIndex: 0 },
+      { ...makeBatchEntry('redis'), draftIndex: 1 },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.requiresConfirmation).toBe(true);
+    if (!result.requiresConfirmation) throw new Error('expected batch confirmation');
+    const plan = result.pendingAction.args.plan as any;
+    expect(plan.entries.map((entry: any) => entry.app_name)).toEqual(['redis', 'redis-2']);
+  });
+
   it('reserves a custom domain for the first valid survivor only', async () => {
     const result = await executeBatchDeploy([
       { ...makeBatchEntry('alpha'), draftIndex: 0, customDomain: 'shared.example.com' },

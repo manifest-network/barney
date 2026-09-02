@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
+import type { ResolvedSkuTier } from '../../api/skuTiers';
 
 // Stub validateAll so the async-validate effect resolves deterministically
 // without hitting the (mocked) chain RPC for reserved-suffix params. The
@@ -19,12 +20,19 @@ vi.mock('../../utils/customDomainValidation', async (importOriginal) => {
   };
 });
 
-// ConfirmationCard reads `skuTiers` from useAI for the deploy_app price row.
-// Stub it so the tests can render without an AIProvider — all assertions here
-// focus on the manifest-editor and custom-domain branches, not the price line.
+let mockSkuTiers: {
+  phase: 'ready';
+  tiers: ResolvedSkuTier[];
+  denomSymbol: string;
+  error: null;
+} = { phase: 'ready', tiers: [], denomSymbol: 'PWR', error: null };
+
+// ConfirmationCard reads `skuTiers` from useAI for deploy and batch pricing.
+// Keep the default catalog empty, while allowing batch-tier tests to install
+// concrete tiers without mounting an AIProvider.
 vi.mock('../../hooks/useAI', () => ({
   useAI: () => ({
-    skuTiers: { phase: 'ready', tiers: [], denomSymbol: 'PWR', error: null },
+    skuTiers: mockSkuTiers,
   }),
 }));
 
@@ -35,6 +43,10 @@ import {
   type ManifestFields, type StackManifestFields,
 } from './manifestEditorUtils';
 import type { PendingAction } from '../../ai/toolExecutor';
+
+beforeEach(() => {
+  mockSkuTiers = { phase: 'ready', tiers: [], denomSymbol: 'PWR', error: null };
+});
 
 function makeAction(overrides?: Partial<PendingAction>): PendingAction {
   return {
@@ -1229,6 +1241,31 @@ function makeDomainBatchAction(
   };
 }
 
+const BATCH_EDIT_TIERS: ResolvedSkuTier[] = [
+  {
+    skuName: 'docker-micro',
+    skuUuid: 'sku-micro',
+    providerUuid: 'provider-1',
+    cores: 0.5,
+    ramMB: 512,
+    diskGB: 1,
+    pricePerHour: 0.1,
+    denomSymbol: 'PWR',
+    unit: 1,
+  },
+  {
+    skuName: 'docker-small',
+    skuUuid: 'sku-small',
+    providerUuid: 'provider-1',
+    cores: 1,
+    ramMB: 1024,
+    diskGB: 5,
+    pricePerHour: 0.25,
+    denomSymbol: 'PWR',
+    unit: 1,
+  },
+];
+
 describe('ConfirmationCard canonical batch plan', () => {
   function renderBatch(
     onConfirm = vi.fn(),
@@ -1293,6 +1330,99 @@ describe('ConfirmationCard canonical batch plan', () => {
     }
   });
 
+  it('recalculates batch pricing and resources when an entry tier changes', () => {
+    mockSkuTiers = {
+      phase: 'ready',
+      tiers: BATCH_EDIT_TIERS,
+      denomSymbol: 'PWR',
+      error: null,
+    };
+    const { container, onConfirm, cleanup } = renderBatch();
+    try {
+      const edit = container.querySelector('button[aria-label="Edit alpha"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+      const select = container.querySelector('#batch-tier-alpha') as HTMLSelectElement;
+      expect(Array.from(select.options).map((option) => option.value)).toEqual([
+        'docker-micro',
+        'docker-small',
+      ]);
+
+      flushSync(() => {
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLSelectElement.prototype,
+          'value',
+        )!.set!;
+        setter.call(select, 'docker-small');
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain('alpha · docker-small');
+      expect(container.textContent).toContain('0.2500 PWR/hr per service');
+      expect(container.textContent).toContain('1 vCPU · 1 GB RAM · 5 GB disk');
+      expect(container.textContent).toContain('0.4500 PWR/hr');
+      expect(container.textContent).toContain('Batch plan SHA-256: Pending revalidation');
+      const review = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
+      flushSync(() => review.click());
+      expect(onConfirm).toHaveBeenCalledWith({
+        editedBatchEntries: expect.arrayContaining([
+          expect.objectContaining({ app_name: 'alpha', size: 'docker-small' }),
+        ]),
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('falls back when an edited tier disappears and explains an unavailable catalog', () => {
+    mockSkuTiers = {
+      phase: 'ready',
+      tiers: BATCH_EDIT_TIERS,
+      denomSymbol: 'PWR',
+      error: null,
+    };
+    const action = makePlannedBatchAction();
+    const { container, render, cleanup } = renderBatch(vi.fn(), action);
+    try {
+      const edit = container.querySelector('button[aria-label="Edit alpha"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+      const select = container.querySelector('#batch-tier-alpha') as HTMLSelectElement;
+      flushSync(() => {
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLSelectElement.prototype,
+          'value',
+        )!.set!;
+        setter.call(select, 'docker-small');
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+
+      mockSkuTiers = {
+        phase: 'ready',
+        tiers: [BATCH_EDIT_TIERS[0]],
+        denomSymbol: 'PWR',
+        error: null,
+      };
+      render({ ...action, args: { ...action.args } });
+      expect(container.textContent).toContain("Requested size ‘docker-small’ isn’t offered");
+      expect(container.textContent).toContain("deploying ‘docker-micro’ (cheapest available) instead");
+      let review = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
+      expect(review.disabled).toBe(false);
+
+      mockSkuTiers = { phase: 'ready', tiers: [], denomSymbol: 'PWR', error: null };
+      render({ ...action, args: { ...action.args } });
+
+      expect(container.textContent).toContain('Resource tiers are currently unavailable');
+      expect(container.querySelector('[data-testid="batch-deploy-total"]')?.textContent)
+        .toContain('Pending revalidation');
+      review = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
+      expect(review.disabled).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
   it('removes an entry without retaining its stale aggregate total and requests a new plan', () => {
     const { container, onConfirm, cleanup } = renderBatch();
     try {
@@ -1340,6 +1470,7 @@ describe('ConfirmationCard canonical batch plan', () => {
       ) as HTMLButtonElement;
       flushSync(() => reopenEdit.click());
 
+      expect(container.querySelector('#batch-tier-alpha')).not.toBeNull();
       expect(container.querySelector('button[aria-label="Remove port 8080/tcp"]')).toBeNull();
       expect(container.textContent).toContain('Manifest SHA-256: Pending revalidation');
       const review = Array.from(container.querySelectorAll('button'))

@@ -301,6 +301,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         ? resolveSizeOrCheapest(draft.size, skuTiers.tiers)
         : undefined;
       const tier = resolution?.tier;
+      const tierUnavailable = tierIsDirty && tier === undefined;
       const effectiveSize = tierIsDirty ? (tier?.skuName ?? draft.size) : original.size;
       const substitutedRequest = tierIsDirty
         ? (resolution?.fallback === 'cheapest-unavailable' ? resolution.requested : undefined)
@@ -328,6 +329,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         entryTotal,
         effectiveSize,
         substitutedRequest,
+        tierUnavailable,
       };
     });
 
@@ -527,7 +529,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           </div>
         ) : batchPlan && batchDraftPricing ? (
           <div className="batch-deploy-plan" data-testid="batch-deploy-plan">
-            {batchDraftPricing.entries.map(({ draft, original, services, resources, serviceCount, pricePerServiceHour, denomSymbol, entryTotal, effectiveSize, substitutedRequest }) => {
+            {batchDraftPricing.entries.map(({ draft, original, services, resources, serviceCount, pricePerServiceHour, denomSymbol, entryTotal, effectiveSize, substitutedRequest, tierUnavailable }) => {
               const editing = editingBatchEntry === draft.draftIndex;
               const manifestChanged = batchManifestEdits[draft.draftIndex]?.changed === true;
               return (
@@ -680,6 +682,12 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                       <dd>{resources ? formatTierSpecs(resources) : 'Pending revalidation'}</dd>
                     </div>
                   </dl>
+
+                  {tierUnavailable && (
+                    <p className="text-xs text-error" role="alert">
+                      Resource tiers are currently unavailable. Wait for the catalog to reload before reviewing this change.
+                    </p>
+                  )}
 
                   {substitutedRequest && (
                     <p className="text-xs text-muted" role="note">
