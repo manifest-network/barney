@@ -1266,6 +1266,21 @@ const BATCH_EDIT_TIERS: ResolvedSkuTier[] = [
   },
 ];
 
+const MIXED_DENOM_EDIT_TIERS: ResolvedSkuTier[] = [
+  ...BATCH_EDIT_TIERS,
+  {
+    skuName: 'docker-usdc',
+    skuUuid: 'sku-usdc',
+    providerUuid: 'provider-2',
+    cores: 2,
+    ramMB: 2048,
+    diskGB: 10,
+    pricePerHour: 0.2,
+    denomSymbol: 'USDC',
+    unit: 1,
+  },
+];
+
 describe('ConfirmationCard canonical batch plan', () => {
   function renderBatch(
     onConfirm = vi.fn(),
@@ -1374,15 +1389,14 @@ describe('ConfirmationCard canonical batch plan', () => {
     }
   });
 
-  it('falls back when an edited tier disappears and explains an unavailable catalog', () => {
+  it('explains and blocks a mixed-denomination tier edit', () => {
     mockSkuTiers = {
       phase: 'ready',
-      tiers: BATCH_EDIT_TIERS,
+      tiers: MIXED_DENOM_EDIT_TIERS,
       denomSymbol: 'PWR',
       error: null,
     };
-    const action = makePlannedBatchAction();
-    const { container, render, cleanup } = renderBatch(vi.fn(), action);
+    const { container, cleanup } = renderBatch();
     try {
       const edit = container.querySelector('button[aria-label="Edit alpha"]') as HTMLButtonElement;
       flushSync(() => edit.click());
@@ -1392,30 +1406,20 @@ describe('ConfirmationCard canonical batch plan', () => {
           window.HTMLSelectElement.prototype,
           'value',
         )!.set!;
-        setter.call(select, 'docker-small');
+        setter.call(select, 'docker-usdc');
         select.dispatchEvent(new Event('change', { bubbles: true }));
       });
 
-      mockSkuTiers = {
-        phase: 'ready',
-        tiers: [BATCH_EDIT_TIERS[0]],
-        denomSymbol: 'PWR',
-        error: null,
-      };
-      render({ ...action, args: { ...action.args } });
-      expect(container.textContent).toContain("Requested size ‘docker-small’ isn’t offered");
-      expect(container.textContent).toContain("deploying ‘docker-micro’ (cheapest available) instead");
-      let review = Array.from(container.querySelectorAll('button'))
-        .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
-      expect(review.disabled).toBe(false);
-
-      mockSkuTiers = { phase: 'ready', tiers: [], denomSymbol: 'PWR', error: null };
-      render({ ...action, args: { ...action.args } });
-
-      expect(container.textContent).toContain('Resource tiers are currently unavailable');
+      expect(container.textContent).toContain('alpha · docker-usdc');
+      expect(container.textContent).toContain('0.2000 USDC/hr per service');
+      expect(container.textContent).toContain('2 vCPU · 2 GB RAM · 10 GB disk');
+      expect(container.textContent).toContain(
+        'Selected resource tiers use different billing denominations',
+      );
       expect(container.querySelector('[data-testid="batch-deploy-total"]')?.textContent)
         .toContain('Pending revalidation');
-      review = Array.from(container.querySelectorAll('button'))
+      expect(container.textContent).toContain('Batch plan SHA-256: Pending revalidation');
+      const review = Array.from(container.querySelectorAll('button'))
         .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
       expect(review.disabled).toBe(true);
     } finally {
@@ -1482,6 +1486,45 @@ describe('ConfirmationCard canonical batch plan', () => {
       const alpha = override.editedBatchEntries.find((entry: { app_name: string }) => entry.app_name === 'alpha');
       expect(JSON.parse(alpha.manifest).ports).toBeUndefined();
       expect(onConfirm).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('keeps a reversed manifest edit pending revalidation', () => {
+    const { container, onConfirm, cleanup } = renderBatch();
+    try {
+      const edit = container.querySelector('button[aria-label="Edit alpha"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+
+      let ingress = container.querySelector(
+        'input[aria-label="Ingress for 8080/tcp"]',
+      ) as HTMLInputElement;
+      expect(ingress.checked).toBe(true);
+      flushSync(() => ingress.click());
+      ingress = container.querySelector(
+        'input[aria-label="Ingress for 8080/tcp"]',
+      ) as HTMLInputElement;
+      expect(ingress.checked).toBe(false);
+      flushSync(() => ingress.click());
+
+      ingress = container.querySelector(
+        'input[aria-label="Ingress for 8080/tcp"]',
+      ) as HTMLInputElement;
+      expect(ingress.checked).toBe(true);
+      expect(container.textContent).toContain('Manifest SHA-256: Pending revalidation');
+      expect(container.textContent).toContain('Batch plan SHA-256: Pending revalidation');
+      const review = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
+      flushSync(() => review.click());
+
+      const override = onConfirm.mock.calls[0][0];
+      const alpha = override.editedBatchEntries.find(
+        (entry: { app_name: string }) => entry.app_name === 'alpha',
+      );
+      expect(JSON.parse(alpha.manifest).ports).toEqual({
+        '8080/tcp': { ingress: true },
+      });
     } finally {
       cleanup();
     }

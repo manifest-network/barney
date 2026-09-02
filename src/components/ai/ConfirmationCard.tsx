@@ -265,6 +265,8 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   const [batchDrafts, setBatchDrafts] = useState<BatchDeployDraft[]>(initialBatchDrafts);
   const [batchManifestEdits, setBatchManifestEdits] = useState<Record<number, BatchManifestEdit>>({});
   const [editingBatchEntry, setEditingBatchEntry] = useState<number | null>(null);
+  // Any manifest-editor interaction intentionally requires a fresh plan and
+  // hash, even when the user later returns the visible fields to their original values.
   const batchHasManifestEdits = batchDrafts.some(
     (draft) => batchManifestEdits[draft.draftIndex]?.changed === true,
   );
@@ -283,6 +285,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     let total = 0;
     let totalServices = 0;
     let denom = '';
+    let denominationMismatch = false;
     let valid = batchDrafts.length > 0;
 
     const entries = batchDrafts.map((draft) => {
@@ -301,7 +304,6 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         ? resolveSizeOrCheapest(draft.size, skuTiers.tiers)
         : undefined;
       const tier = resolution?.tier;
-      const tierUnavailable = tierIsDirty && tier === undefined;
       const effectiveSize = tierIsDirty ? (tier?.skuName ?? draft.size) : original.size;
       const substitutedRequest = tierIsDirty
         ? (resolution?.fallback === 'cheapest-unavailable' ? resolution.requested : undefined)
@@ -316,7 +318,10 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
       const entryTotal = (pricePerServiceHour ?? 0) * serviceCount;
       total += entryTotal;
       totalServices += serviceCount;
-      if (denom && denomSymbol && denom !== denomSymbol) valid = false;
+      if (denom && denomSymbol && denom !== denomSymbol) {
+        denominationMismatch = true;
+        valid = false;
+      }
       if (denomSymbol) denom = denomSymbol;
       return {
         draft,
@@ -329,17 +334,17 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
         entryTotal,
         effectiveSize,
         substitutedRequest,
-        tierUnavailable,
       };
     });
 
     return batchIsDirty
-      ? { entries, total, totalServices, denom, valid }
+      ? { entries, total, totalServices, denom, denominationMismatch, valid }
       : {
           entries,
           total: batchPlan.totalPricePerHour,
           totalServices: batchPlan.totalServiceCount,
           denom: batchPlan.denomSymbol,
+          denominationMismatch,
           valid,
         };
   }, [batchDrafts, batchIsDirty, batchManifestEdits, batchPlan, skuTiers.tiers]);
@@ -529,7 +534,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           </div>
         ) : batchPlan && batchDraftPricing ? (
           <div className="batch-deploy-plan" data-testid="batch-deploy-plan">
-            {batchDraftPricing.entries.map(({ draft, original, services, resources, serviceCount, pricePerServiceHour, denomSymbol, entryTotal, effectiveSize, substitutedRequest, tierUnavailable }) => {
+            {batchDraftPricing.entries.map(({ draft, original, services, resources, serviceCount, pricePerServiceHour, denomSymbol, entryTotal, effectiveSize, substitutedRequest }) => {
               const editing = editingBatchEntry === draft.draftIndex;
               const manifestChanged = batchManifestEdits[draft.draftIndex]?.changed === true;
               return (
@@ -683,12 +688,6 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                     </div>
                   </dl>
 
-                  {tierUnavailable && (
-                    <p className="text-xs text-error" role="alert">
-                      Resource tiers are currently unavailable. Wait for the catalog to reload before reviewing this change.
-                    </p>
-                  )}
-
                   {substitutedRequest && (
                     <p className="text-xs text-muted" role="note">
                       Requested size ‘{substitutedRequest}’ isn’t offered on this network — deploying ‘{effectiveSize}’ (cheapest available) instead.
@@ -729,6 +728,12 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                 </section>
               );
             })}
+
+            {batchDraftPricing.denominationMismatch && (
+              <p className="text-sm text-error" role="alert">
+                Selected resource tiers use different billing denominations. Choose tiers with the same billing denomination before reviewing this batch.
+              </p>
+            )}
 
             {batchDrafts.length === 0 && (
               <p className="text-sm text-warning" role="alert">At least one app is required.</p>
