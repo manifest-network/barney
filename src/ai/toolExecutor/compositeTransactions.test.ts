@@ -2492,6 +2492,19 @@ function makeBatchEntry(name: string): BatchDeployEntry {
   };
 }
 
+function makeBatchEntryFromText(name: string, manifest: string): BatchDeployEntry {
+  const bytes = new TextEncoder().encode(manifest);
+  return {
+    app_name: name,
+    payload: {
+      bytes,
+      filename: `manifest-${name}.json`,
+      size: bytes.length,
+      hash: 'a'.repeat(64),
+    },
+  };
+}
+
 function mockLiveBatchCatalog(tiers = SAMPLE_TIERS): void {
   vi.mocked(getSKUs).mockResolvedValue(tiers.map((tier) => ({
     uuid: tier.skuUuid,
@@ -2533,6 +2546,7 @@ async function confirmedBatchArgs(
 describe('executeBatchDeploy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValue(null);
     mockLiveBatchCatalog();
   });
 
@@ -2754,6 +2768,138 @@ describe('executeBatchDeploy', () => {
     expect(plan.entries.map((entry: any) => entry.draftIndex)).toEqual([1, 2]);
     expect(plan.entries.map((entry: any) => entry.app_name)).toEqual(['nginx', 'ghost']);
     expect(getCreditAccount).toHaveBeenCalledOnce();
+  });
+
+  it('reserves names and domains only for synchronously valid drafts', async () => {
+    const stack = JSON.stringify({
+      services: {
+        web: { image: 'wordpress:6' },
+        db: { image: 'mysql:9' },
+      },
+    });
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntryFromText('redis', 'not-json'), draftIndex: 0 },
+      { ...makeBatchEntry('redis'), draftIndex: 1 },
+      {
+        ...makeBatchEntryFromText('wordpress', stack),
+        draftIndex: 2,
+        customDomain: 'shared.example.com',
+      },
+      {
+        ...makeBatchEntry('web'),
+        draftIndex: 3,
+        customDomain: 'shared.example.com',
+      },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.requiresConfirmation).toBe(true);
+    if (!result.requiresConfirmation) throw new Error('expected partial batch confirmation');
+    expect(result.rejectedEntries).toEqual([
+      { draftIndex: 0, error: expect.stringContaining('valid JSON') },
+      { draftIndex: 2, error: expect.stringContaining('pass service_name') },
+    ]);
+    const plan = result.pendingAction.args.plan as any;
+    expect(plan.entries.map((entry: any) => ({
+      draftIndex: entry.draftIndex,
+      app_name: entry.app_name,
+      customDomain: entry.customDomain,
+    }))).toEqual([
+      { draftIndex: 1, app_name: 'redis', customDomain: undefined },
+      { draftIndex: 3, app_name: 'web', customDomain: 'shared.example.com' },
+    ]);
+  });
+
+  it('does not reserve a name for a draft rejected by an async domain check', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockImplementation(async (domain) =>
+      domain === 'taken.example.com' ? { leaseUuid: 'old-lease' } as any : null
+    );
+    const result = await executeBatchDeploy([
+      {
+        ...makeBatchEntry('redis'),
+        draftIndex: 0,
+        customDomain: 'taken.example.com',
+      },
+      { ...makeBatchEntry('redis'), draftIndex: 1 },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.requiresConfirmation).toBe(true);
+    if (!result.requiresConfirmation) throw new Error('expected partial batch confirmation');
+    expect(result.rejectedEntries).toEqual([{
+      draftIndex: 0,
+      error: expect.stringContaining('taken.example.com'),
+    }]);
+    const plan = result.pendingAction.args.plan as any;
+    expect(plan.entries).toHaveLength(1);
+    expect(plan.entries[0]).toMatchObject({ draftIndex: 1, app_name: 'redis' });
+  });
+
+  it('reserves a custom domain for the first valid survivor only', async () => {
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntry('alpha'), draftIndex: 0, customDomain: 'shared.example.com' },
+      { ...makeBatchEntry('beta'), draftIndex: 1, customDomain: 'shared.example.com' },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.requiresConfirmation).toBe(true);
+    if (!result.requiresConfirmation) throw new Error('expected partial batch confirmation');
+    expect(result.rejectedEntries).toEqual([{
+      draftIndex: 1,
+      error: 'Custom domain "shared.example.com" is repeated in this batch.',
+    }]);
+    const plan = result.pendingAction.args.plan as any;
+    expect(plan.entries).toHaveLength(1);
+    expect(plan.entries[0]).toMatchObject({
+      draftIndex: 0,
+      app_name: 'alpha',
+      customDomain: 'shared.example.com',
+    });
+  });
+
+  it('reports every synchronous rejection when no valid drafts remain', async () => {
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntryFromText('broken-json', 'not-json'), draftIndex: 0 },
+      { ...makeBatchEntryFromText('empty', ''), draftIndex: 1 },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('No valid apps remain in this batch.');
+    expect(result.rejectedEntries).toEqual([
+      { draftIndex: 0, error: expect.stringContaining('valid JSON') },
+      { draftIndex: 1, error: expect.stringContaining('manifest is empty') },
+    ]);
+    expect(getCreditAccount).not.toHaveBeenCalled();
+  });
+
+  it('reports every asynchronous rejection when no valid drafts remain', async () => {
+    vi.mocked(queryLeaseByCustomDomain).mockResolvedValue({ leaseUuid: 'old-lease' } as any);
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntry('alpha'), draftIndex: 0, customDomain: 'alpha.example.com' },
+      { ...makeBatchEntry('beta'), draftIndex: 1, customDomain: 'beta.example.com' },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('No valid apps remain in this batch.');
+    expect(result.rejectedEntries).toEqual([
+      { draftIndex: 0, error: expect.stringContaining('alpha.example.com') },
+      { draftIndex: 1, error: expect.stringContaining('beta.example.com') },
+    ]);
+    expect(getCreditAccount).not.toHaveBeenCalled();
+  });
+
+  it('retains entry-local rejections when a surviving plan fails affordability', async () => {
+    vi.mocked(getCreditAccount).mockResolvedValue({
+      balances: [{ denom: 'upwr', amount: '0' }],
+    } as any);
+    const result = await executeBatchDeploy([
+      { ...makeBatchEntryFromText('broken', 'not-json'), draftIndex: 0 },
+      { ...makeBatchEntry('valid'), draftIndex: 1 },
+    ], makeOptions(), undefined, { allowPartialEntries: true });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Insufficient credits');
+    expect(result.rejectedEntries).toEqual([{
+      draftIndex: 0,
+      error: expect.stringContaining('valid JSON'),
+    }]);
   });
 
   it('preserves actionable multi-service custom-domain validation errors', async () => {

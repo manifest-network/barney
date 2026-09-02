@@ -1314,7 +1314,7 @@ describe('ConfirmationCard canonical batch plan', () => {
     }
   });
 
-  it('edits an entry, clears the old hash, and requires re-planning before confirmation', () => {
+  it('preserves an edited entry across a parent render and editor close/reopen', () => {
     const action = makePlannedBatchAction();
     const { container, onConfirm, render, cleanup } = renderBatch(vi.fn(), action);
     try {
@@ -1331,6 +1331,17 @@ describe('ConfirmationCard canonical batch plan', () => {
         ...action,
         args: { ...action.args, _batchReplanError: 'temporary planner failure' },
       });
+      const finishEdit = container.querySelector(
+        'button[aria-label="Finish editing alpha"]',
+      ) as HTMLButtonElement;
+      flushSync(() => finishEdit.click());
+      const reopenEdit = container.querySelector(
+        'button[aria-label="Edit alpha"]',
+      ) as HTMLButtonElement;
+      flushSync(() => reopenEdit.click());
+
+      expect(container.querySelector('button[aria-label="Remove port 8080/tcp"]')).toBeNull();
+      expect(container.textContent).toContain('Manifest SHA-256: Pending revalidation');
       const review = Array.from(container.querySelectorAll('button'))
         .find((button) => button.textContent?.includes('Review updated plan')) as HTMLButtonElement;
       flushSync(() => review.click());
@@ -1340,6 +1351,90 @@ describe('ConfirmationCard canonical batch plan', () => {
       const alpha = override.editedBatchEntries.find((entry: { app_name: string }) => entry.app_name === 'alpha');
       expect(JSON.parse(alpha.manifest).ports).toBeUndefined();
       expect(onConfirm).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('returns to the approved plan when a newly entered domain is cleared', () => {
+    const { container, onConfirm, cleanup } = renderBatch();
+    try {
+      const edit = container.querySelector('button[aria-label="Edit alpha"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+      const input = container.querySelector(
+        'input[aria-label="Custom domain for alpha"]',
+      ) as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )!.set!;
+
+      flushSync(() => {
+        setter.call(input, 'alpha.example.com');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect(container.textContent).toContain('Batch plan SHA-256: Pending revalidation');
+
+      flushSync(() => {
+        setter.call(input, '');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect(container.textContent).toContain(`Batch plan SHA-256: ${'c'.repeat(64)}`);
+      const confirm = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.trim() === 'Confirm') as HTMLButtonElement;
+      flushSync(() => confirm.click());
+
+      expect(onConfirm).toHaveBeenCalledWith(undefined);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('restores approved domain metadata when the original domain is re-entered', () => {
+    const action = makePlannedBatchAction();
+    const plan = action.args.plan as {
+      entries: Array<Record<string, unknown>>;
+      totalServiceCount: number;
+      totalPricePerHour: number;
+    };
+    plan.entries = [{
+      ...plan.entries[1],
+      customDomain: 'beta.example.com',
+      customDomainServiceName: 'web',
+      customDomainWarning: 'Original domain warning',
+    }];
+    plan.totalServiceCount = 2;
+    plan.totalPricePerHour = 0.2;
+    const { container, onConfirm, cleanup } = renderBatch(vi.fn(), action);
+    try {
+      const edit = container.querySelector('button[aria-label="Edit beta"]') as HTMLButtonElement;
+      flushSync(() => edit.click());
+      const input = container.querySelector(
+        'input[aria-label="Custom domain for beta"]',
+      ) as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )!.set!;
+
+      flushSync(() => {
+        setter.call(input, '');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      flushSync(() => {
+        setter.call(input, 'beta.example.com');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+
+      const service = container.querySelector(
+        'select[aria-label="Service for beta custom domain"]',
+      ) as HTMLSelectElement;
+      expect(service.value).toBe('web');
+      expect(container.textContent).toContain(`Batch plan SHA-256: ${'c'.repeat(64)}`);
+      const confirm = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.trim() === 'Confirm') as HTMLButtonElement;
+      flushSync(() => confirm.click());
+      expect(onConfirm).toHaveBeenCalledWith(undefined);
     } finally {
       cleanup();
     }

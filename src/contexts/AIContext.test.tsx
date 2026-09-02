@@ -59,6 +59,7 @@ import { AIStoreContext, useAIStore } from './aiStoreContext';
 import { checkApiHealth } from '../api/morpheus';
 import { logError } from '../utils/errors';
 import type { AIStore } from '../stores/aiStore';
+import { AI_CONFIRMATION_TIMEOUT_MS } from '../config/constants';
 
 const rendered: { root: Root; container: HTMLElement }[] = [];
 
@@ -74,6 +75,7 @@ afterEach(() => {
     container.remove();
   }
   rendered.length = 0;
+  vi.useRealTimers();
 });
 
 function StatusProbe() {
@@ -173,6 +175,59 @@ describe('AIProvider — checkConnection failure path', () => {
 
     expect(container.querySelector('[data-testid="status"]')?.textContent).toBe('not-connected');
     expect(logError).toHaveBeenCalledWith('aiStore.checkConnection', expect.any(Error));
+  });
+});
+
+describe('AIProvider — confirmation timeout', () => {
+  it('closes the owning tool row when an unanswered confirmation times out', () => {
+    vi.useFakeTimers();
+    let observedStore: StoreApi<AIStore> | null = null;
+
+    function StoreProbe() {
+      const store = useContext(AIStoreContext);
+      useEffect(() => {
+        observedStore = store;
+      }, [store]);
+      return null;
+    }
+
+    mount(createElement(AIProvider, null, createElement(StoreProbe)));
+    expect(observedStore).not.toBeNull();
+    const store = observedStore!;
+    const messageId = 'timed-out-tool-message';
+    store.setState({
+      messages: [{
+        id: messageId,
+        role: 'tool',
+        content: 'Deploy app?',
+        timestamp: 1,
+        awaitingConfirmation: true,
+      }],
+      pendingConfirmation: {
+        id: 'timed-out-confirmation',
+        messageId,
+        action: {
+          originAddress: 'manifest1test',
+          chainId: store.getState().chainId,
+          clientGeneration: 0,
+          signerGeneration: 0,
+          id: 'deploy-call',
+          toolName: 'deploy_app',
+          args: { app_name: 'test' },
+          description: 'Deploy app?',
+        },
+      },
+    });
+
+    vi.advanceTimersByTime(AI_CONFIRMATION_TIMEOUT_MS);
+
+    expect(store.getState().pendingConfirmation).toBeNull();
+    expect(store.getState().messages[0]).toMatchObject({
+      content: expect.stringContaining('Action timed out'),
+      error: 'timeout',
+      awaitingConfirmation: false,
+      isStreaming: false,
+    });
   });
 });
 

@@ -614,15 +614,24 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
                         value={draft.customDomain ?? ''}
                         onChange={(event) => {
                           const customDomain = event.target.value;
+                          const normalizedCustomDomain = customDomain.trim()
+                            ? customDomain
+                            : undefined;
+                          const matchesOriginalDomain = normalizedCustomDomain === original?.customDomain;
                           setBatchDrafts((current) => current.map((entry) =>
                             entry.draftIndex === draft.draftIndex
                               ? {
                                   ...entry,
-                                  customDomain,
-                                  customDomainServiceName: customDomain.trim()
+                                  customDomain: normalizedCustomDomain,
+                                  customDomainServiceName: normalizedCustomDomain
                                     ? entry.customDomainServiceName
+                                      ?? (matchesOriginalDomain
+                                        ? original?.customDomainServiceName
+                                        : undefined)
                                     : undefined,
-                                  customDomainWarning: undefined,
+                                  customDomainWarning: matchesOriginalDomain
+                                    ? original?.customDomainWarning
+                                    : undefined,
                                 }
                               : entry));
                         }}

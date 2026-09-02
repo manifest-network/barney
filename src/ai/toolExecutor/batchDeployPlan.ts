@@ -94,7 +94,7 @@ export interface BatchDeployPlan {
 
 interface PreparedBatchDeployEntry {
   draftIndex: number;
-  app_name: string;
+  requestedAppName: string;
   requestedSize?: string;
   tier: ResolvedSkuTier;
   providerUrl: string;
@@ -110,7 +110,12 @@ interface PreparedBatchDeployEntry {
 }
 
 type PlannedEntryResult =
-  | { success: true; entry: BatchDeployPlanEntry }
+  | {
+      success: true;
+      prepared: PreparedBatchDeployEntry;
+      manifestHash: string;
+      customDomainWarning: string | undefined;
+    }
   | { success: false; draftIndex: number; error: string };
 
 export interface BatchDeployEntryRejection {
@@ -463,6 +468,9 @@ export async function planBatchDeploy(
       return { success: false, error: 'Batch deploy drafts must have unique non-negative identities.' };
     }
     usedDraftIndices.add(draftIndex);
+    // Validate against the registry now, but do not reserve a sibling-visible
+    // name until every entry-local check has passed. `usedNames` intentionally
+    // remains empty throughout this preparation loop.
     const resolvedName = nextAvailableName(draft.app_name, address, usedNames);
     if (!resolvedName.name) {
       const error = resolvedName.error!;
@@ -543,12 +551,6 @@ export async function planBatchDeploy(
     const customDomainWarning = draft.customDomainWarning;
     if (customDomain) {
       customDomain = customDomain.toLowerCase().replace(/\.$/, '');
-      if (usedDomains.has(customDomain)) {
-        const error = `Custom domain "${customDomain}" is repeated in this batch.`;
-        if (rejectDraft(draftIndex, error)) continue;
-        return { success: false, error };
-      }
-
       if (serviceNames.length > 1) {
         if (!customDomainServiceName) {
           const error = `"${name}" is a multi-service stack — pass service_name to attach the custom domain to one of: ${serviceNames.join(', ')}.`;
@@ -569,11 +571,9 @@ export async function planBatchDeploy(
       customDomainServiceName = '';
     }
 
-    usedNames.add(name);
-    if (customDomain) usedDomains.add(customDomain);
     preparedEntries.push({
       draftIndex,
-      app_name: name,
+      requestedAppName: draft.app_name,
       ...(resolution.fallback === 'cheapest-unavailable' && resolution.requested
         ? { requestedSize: resolution.requested }
         : {}),
@@ -599,9 +599,10 @@ export async function planBatchDeploy(
     };
   }
 
-  // Domain reads are independent once names, manifests, tiers, and duplicate
-  // domains have been validated synchronously. Run them in parallel so one
-  // slow lease lookup does not multiply confirm-time latency by batch size.
+  // Domain reads are independent after entry-local synchronous validation.
+  // Run them in parallel so one slow lease lookup does not multiply
+  // confirm-time latency by batch size. Intra-batch names and domains are
+  // reserved only after these checks identify the final survivors.
   const entryResults = await Promise.all(preparedEntries.map(async (
     prepared,
   ): Promise<PlannedEntryResult> => {
@@ -648,34 +649,11 @@ export async function planBatchDeploy(
     assertPlanningCurrent(options);
     const manifestHash = toHex(await manifestHashPromise);
     assertPlanningCurrent(options);
-    const { tier } = prepared;
     return {
       success: true,
-      entry: {
-        draftIndex: prepared.draftIndex,
-        app_name: prepared.app_name,
-        size: tier.skuName,
-        ...(prepared.requestedSize ? { requestedSize: prepared.requestedSize } : {}),
-        skuUuid: tier.skuUuid,
-        providerUuid: tier.providerUuid,
-        providerUrl: prepared.providerUrl,
-        resources: { cores: tier.cores, ramMB: tier.ramMB, diskGB: tier.diskGB },
-        manifest: prepared.manifest,
-        manifestFilename: prepared.manifestFilename,
-        manifestSize: prepared.manifestBytes.length,
-        manifestHash,
-        services: prepared.services,
-        serviceNames: prepared.serviceNames,
-        serviceCount: prepared.serviceCount,
-        pricePerServiceHour: tier.pricePerHour,
-        totalPricePerHour: tier.pricePerHour * prepared.serviceCount,
-        denomSymbol: tier.denomSymbol,
-        ...(prepared.customDomain ? { customDomain: prepared.customDomain } : {}),
-        ...(prepared.customDomainServiceName
-          ? { customDomainServiceName: prepared.customDomainServiceName }
-          : {}),
-        ...(customDomainWarning ? { customDomainWarning } : {}),
-      },
+      prepared,
+      manifestHash,
+      customDomainWarning,
     };
   }));
 
@@ -685,7 +663,51 @@ export async function planBatchDeploy(
       if (rejectDraft(result.draftIndex, result.error)) continue;
       return { success: false, error: result.error };
     }
-    entries.push(result.entry);
+    const { prepared } = result;
+    // Reserve names and domains only for final survivors. In particular, an
+    // entry rejected by an async custom-domain check must not force a valid
+    // same-name sibling onto an unnecessary numeric suffix.
+    const resolvedName = nextAvailableName(prepared.requestedAppName, address, usedNames);
+    if (!resolvedName.name) {
+      const error = resolvedName.error!;
+      if (rejectDraft(prepared.draftIndex, error)) continue;
+      return { success: false, error };
+    }
+    const name = resolvedName.name;
+    if (prepared.customDomain && usedDomains.has(prepared.customDomain)) {
+      const error = `Custom domain "${prepared.customDomain}" is repeated in this batch.`;
+      if (rejectDraft(prepared.draftIndex, error)) continue;
+      return { success: false, error };
+    }
+
+    usedNames.add(name);
+    if (prepared.customDomain) usedDomains.add(prepared.customDomain);
+    const { tier } = prepared;
+    entries.push({
+      draftIndex: prepared.draftIndex,
+      app_name: name,
+      size: tier.skuName,
+      ...(prepared.requestedSize ? { requestedSize: prepared.requestedSize } : {}),
+      skuUuid: tier.skuUuid,
+      providerUuid: tier.providerUuid,
+      providerUrl: prepared.providerUrl,
+      resources: { cores: tier.cores, ramMB: tier.ramMB, diskGB: tier.diskGB },
+      manifest: prepared.manifest,
+      manifestFilename: prepared.manifestFilename,
+      manifestSize: prepared.manifestBytes.length,
+      manifestHash: result.manifestHash,
+      services: prepared.services,
+      serviceNames: prepared.serviceNames,
+      serviceCount: prepared.serviceCount,
+      pricePerServiceHour: tier.pricePerHour,
+      totalPricePerHour: tier.pricePerHour * prepared.serviceCount,
+      denomSymbol: tier.denomSymbol,
+      ...(prepared.customDomain ? { customDomain: prepared.customDomain } : {}),
+      ...(prepared.customDomainServiceName
+        ? { customDomainServiceName: prepared.customDomainServiceName }
+        : {}),
+      ...(result.customDomainWarning ? { customDomainWarning: result.customDomainWarning } : {}),
+    });
   }
 
   if (entries.length === 0) {
