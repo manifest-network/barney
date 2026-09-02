@@ -286,17 +286,20 @@ Query tool results are cached per `(walletAddress, toolName, sortedArgs)` for `A
 | Key | Contents |
 |-----|----------|
 | `barney-ai-settings` | AI settings — currently just `{ saveHistory: boolean }`. Other timeouts and limits are runtime-config env vars, not in-app settings. |
-| `barney-ai-history:v1:{chainId}:{normalizedAddress}` | Versioned chat-history envelope containing the same chain ID and normalized wallet address. Selected only after connection; invalid/mismatched data is cleared. |
+| `barney-ai-history:v1:{chainId}:{normalizedAddress}` | Versioned chat-history envelope containing the same chain ID and normalized wallet address. Selected only after connection; invalid/mismatched data is cleared, while envelopes from a future version are preserved but not loaded. |
 | `barney-apps-{address}` | App registry, scoped per wallet |
 | `barney-refill-{address}` | One-shot setup completion flag (versioned; legacy name from the prior `useAutoRefill` hook) |
 | `barney-theme` | next-themes selection |
 
 The legacy global `barney-ai-history` key is discarded because its owning
-wallet cannot be established safely. Wallet switches synchronously persist the
-old identity and load the new one; disconnect selects no history. `/clear`
-removes only the active wallet/network key, while disabling the browser-global
-`saveHistory` preference removes all scoped history keys. Histories otherwise
-remain until the site's browser data is cleared.
+wallet cannot be established safely. Wallet switches cache the old identity's
+session transcript and select the new one atomically; a first visit loads that
+identity's scoped storage, while switching back uses the in-memory copy.
+Disconnect selects no history. `/clear` removes only the active wallet/network
+key. Disabling the browser-global `saveHistory` preference stops future writes
+without deleting existing keys; new messages remain isolated in the current
+tab. Histories otherwise remain until explicitly cleared or the site's browser
+data is cleared.
 
 `src/utils/versionedStorage.ts` provides envelope-format storage with a chained migration pipeline; new schema versions plug in without forcing data loss.
 

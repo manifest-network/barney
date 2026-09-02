@@ -13,6 +13,7 @@ import type { WalletIdentity } from '../../utils/walletIdentity';
 import {
   createWalletIdentity,
   walletIdentitiesEqual,
+  walletIdentityKey,
 } from '../../utils/walletIdentity';
 import type { ChatMessage } from '../../contexts/aiTypes';
 import type { StoreApi } from 'zustand';
@@ -22,6 +23,7 @@ const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const LEGACY_STORAGE_KEY_HISTORY = 'barney-ai-history';
 const STORAGE_KEY_HISTORY_PREFIX = 'barney-ai-history:v1:';
 const HISTORY_STORAGE_VERSION = 1;
+const futureHistoryKeys = new Set<string>();
 
 interface PersistedHistory {
   identity: WalletIdentity;
@@ -59,12 +61,6 @@ export const defaultSettings: AISettings = {
   saveHistory: true,
 };
 
-function canonicalHistoryIdentity(identity: WalletIdentity): WalletIdentity {
-  const canonical = createWalletIdentity(identity.chainId, identity.address);
-  if (!canonical) throw new Error('Wallet history requires a chain ID and wallet address');
-  return canonical;
-}
-
 export function loadSettings(): AISettings {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_SETTINGS);
@@ -80,8 +76,7 @@ export function loadSettings(): AISettings {
 }
 
 export function historyStorageKey(identity: WalletIdentity): string {
-  const canonical = canonicalHistoryIdentity(identity);
-  return `${STORAGE_KEY_HISTORY_PREFIX}${encodeURIComponent(canonical.chainId)}:${encodeURIComponent(canonical.address)}`;
+  return `${STORAGE_KEY_HISTORY_PREFIX}${walletIdentityKey(identity)}`;
 }
 
 /**
@@ -92,15 +87,41 @@ export function discardLegacyHistoryStorage(): void {
   historyStorage.clear(LEGACY_STORAGE_KEY_HISTORY);
 }
 
-export function loadHistory(identity: WalletIdentity): ChatMessage[] {
-  discardLegacyHistoryStorage();
+/** `versionedStorage` deliberately treats a newer envelope as unreadable
+ * without deleting it. Keep that distinction when deciding whether a failed
+ * history load is safe to clean up or overwrite. */
+function hasFutureHistoryVersion(key: string): boolean {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return false;
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'object'
+      && parsed !== null
+      && 'v' in parsed
+      && typeof parsed.v === 'number'
+      && Number.isInteger(parsed.v)
+      && parsed.v > HISTORY_STORAGE_VERSION;
+  } catch {
+    return false;
+  }
+}
 
-  const canonical = canonicalHistoryIdentity(identity);
-  const key = historyStorageKey(canonical);
+export function loadHistory(identity: WalletIdentity): ChatMessage[] {
+  const key = historyStorageKey(identity);
   const saved = historyStorage.load(key);
-  if (!saved || !walletIdentitiesEqual(saved.identity, canonical)) {
-    // Corrupt, unversioned, future-version, and identity-mismatched entries all
-    // fail closed. Clearing prevents repeated parsing and accidental reuse.
+  if (!saved) {
+    // A future build's envelope must survive a temporary downgrade. Other
+    // unreadable shapes are untrusted and are cleared to avoid repeated work.
+    if (hasFutureHistoryVersion(key)) {
+      futureHistoryKeys.add(key);
+    } else {
+      futureHistoryKeys.delete(key);
+      historyStorage.clear(key);
+    }
+    return [];
+  }
+  futureHistoryKeys.delete(key);
+  if (!walletIdentitiesEqual(saved.identity, identity)) {
     historyStorage.clear(key);
     return [];
   }
@@ -127,7 +148,7 @@ function rehydrateChatHistory(msgs: ChatMessage[]): ChatMessage[] {
     // rolled back, so preserve the row and close it with an outcome-unknown
     // warning rather than pretending confirmation was still pending.
     if (m.role === 'tool' && m.transactionInFlight) {
-      const detail = 'The page reloaded while this transaction was in progress. It may already have been submitted; check its status before retrying.';
+      const detail = 'The session ended while this transaction was in progress. It may already have been submitted; check its status before retrying.';
       return {
         ...m,
         content: detail,
@@ -146,7 +167,7 @@ function rehydrateChatHistory(msgs: ChatMessage[]): ChatMessage[] {
         ...m,
         isStreaming: false,
         toolCalls: undefined,
-        error: m.error ?? 'Interrupted — message was incomplete when the page reloaded.',
+        error: m.error ?? 'Interrupted — message was incomplete when the session ended.',
       };
     }
     // Tool message awaiting confirmation when the tab died. The paired
@@ -157,7 +178,7 @@ function rehydrateChatHistory(msgs: ChatMessage[]): ChatMessage[] {
     if (m.role === 'tool' && m.awaitingConfirmation) {
       return {
         ...m,
-        content: 'Interrupted — confirmation was pending when the page reloaded.',
+        content: 'Interrupted — confirmation was pending when the session ended.',
         error: 'Interrupted',
         awaitingConfirmation: false,
       };
@@ -179,65 +200,54 @@ export function saveHistory(
   messages: ChatMessage[],
   saveHistory: boolean,
 ): void {
-  const canonical = canonicalHistoryIdentity(identity);
-  const key = historyStorageKey(canonical);
-  if (saveHistory) {
-    // Strip `card` and `toolCalls` from messages before persisting.
-    //
-    // The strip is INTENTIONAL — do not "fix" it by adding `card` to
-    // PersistedMessageSchema in `ai/validation.ts`. Cards snapshot live
-    // state (DNS status, lease shape, balances) at the moment the message
-    // was emitted. Rehydrating them after a reload would surface stale
-    // data that disagrees with the chain.
-    //
-    // Recovery path for custom-domain cards specifically:
-    //   - The sidebar custom-domain dot stays live because
-    //     `useDnsStatusPolling` iterates the wallet's app registry,
-    //     not chat history.
-    //   - The inline `CustomDomainCard` re-emits when the user runs
-    //     `app_status` — `compositeQueries.executeAppStatus` already
-    //     attaches `displayCard: { type: 'custom_domain' }` for
-    //     single-domain leases.
-    //
-    // Belt-and-suspenders: PersistedMessageSchema doesn't whitelist
-    // `card` either, so anything that leaks through this filter is
-    // dropped by Zod on rehydrate.
-    const toSave = messages
-      .filter((m) => !m.isStreaming)
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- see comment above
-      .map(({ card, toolCalls, ...rest }) =>
-        card ? { ...rest, content: `[${card.type} displayed to user]` } : rest
-      );
-    if (toSave.length === 0) {
-      historyStorage.clear(key);
-      return;
-    }
-    historyStorage.save(key, { identity: canonical, messages: toSave });
-  } else {
-    historyStorage.clear(key);
+  // This preference controls future writes. Destruction remains an explicit,
+  // confirmed action so toggling a setting cannot erase another wallet's data.
+  if (!saveHistory) return;
+
+  const key = historyStorageKey(identity);
+  // Do not let an older build overwrite data it cannot understand.
+  if (futureHistoryKeys.has(key)) {
+    if (hasFutureHistoryVersion(key)) return;
+    futureHistoryKeys.delete(key);
   }
+
+  // Strip `card` and `toolCalls` from messages before persisting.
+  //
+  // The strip is INTENTIONAL — do not "fix" it by adding `card` to
+  // PersistedMessageSchema in `ai/validation.ts`. Cards snapshot live
+  // state (DNS status, lease shape, balances) at the moment the message
+  // was emitted. Rehydrating them after a reload would surface stale
+  // data that disagrees with the chain.
+  //
+  // Recovery path for custom-domain cards specifically:
+  //   - The sidebar custom-domain dot stays live because
+  //     `useDnsStatusPolling` iterates the wallet's app registry,
+  //     not chat history.
+  //   - The inline `CustomDomainCard` re-emits when the user runs
+  //     `app_status` — `compositeQueries.executeAppStatus` already
+  //     attaches `displayCard: { type: 'custom_domain' }` for
+  //     single-domain leases.
+  //
+  // Belt-and-suspenders: PersistedMessageSchema doesn't whitelist
+  // `card` either, so anything that leaks through this filter is
+  // dropped by Zod on rehydrate.
+  const toSave = messages
+    .filter((m) => !m.isStreaming)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- see comment above
+    .map(({ card, toolCalls, ...rest }) =>
+      card ? { ...rest, content: `[${card.type} displayed to user]` } : rest
+    );
+  if (toSave.length === 0) {
+    historyStorage.clear(key);
+    return;
+  }
+  historyStorage.save(key, { identity, messages: toSave });
 }
 
 export function clearHistoryStorage(identity: WalletIdentity): void {
-  historyStorage.clear(historyStorageKey(identity));
-}
-
-/** Delete every wallet-scoped transcript. The save-history preference is
- * browser-global, so turning it off must not leave another wallet's history
- * retained merely because that wallet is not currently connected. */
-export function clearAllHistoryStorage(): void {
-  try {
-    const keys: string[] = [];
-    for (let index = 0; index < localStorage.length; index++) {
-      const key = localStorage.key(index);
-      if (key === LEGACY_STORAGE_KEY_HISTORY || key?.startsWith(STORAGE_KEY_HISTORY_PREFIX)) {
-        keys.push(key);
-      }
-    }
-    for (const key of keys) localStorage.removeItem(key);
-  } catch (error) {
-    logError('AIContext.clearAllHistoryStorage', error);
-  }
+  const key = historyStorageKey(identity);
+  futureHistoryKeys.delete(key);
+  historyStorage.clear(key);
 }
 
 /** Detect changes to the non-streaming subset without serializing on every
@@ -262,7 +272,6 @@ export function setupPersistenceSubscriptions(store: StoreApi<AIStore>): () => v
   // Safe migration for the former browser-global transcript. There is no way
   // to establish which wallet owned it, so startup always discards it.
   discardLegacyHistoryStorage();
-  if (!store.getState().settings.saveHistory) clearAllHistoryStorage();
 
   const unsubSettings = store.subscribe(
     (state, prev) => {
@@ -274,16 +283,14 @@ export function setupPersistenceSubscriptions(store: StoreApi<AIStore>): () => v
 
   const unsubHistory = store.subscribe(
     (state, prev) => {
-      // The preference is browser-global. Turning it off deletes every scoped
-      // transcript even when no wallet is connected; turning it on starts by
-      // saving only the currently selected wallet, if any.
+      // The browser-global preference controls future writes only. Turning it
+      // back on snapshots the selected wallet; deletion stays behind the
+      // separately confirmed clear action.
       if (state.settings.saveHistory !== prev.settings.saveHistory) {
         if (state.settings.saveHistory) {
           if (state.historyIdentity) {
             saveHistory(state.historyIdentity, state.messages, true);
           }
-        } else {
-          clearAllHistoryStorage();
         }
         return;
       }

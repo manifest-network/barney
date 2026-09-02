@@ -178,17 +178,20 @@ export function ChatPanel() {
           .filter((app): app is ExampleApp => app != null);
 
         if (matched.length > 1) {
-          await requestBatchDeploy(matched, message);
+          const accepted = await requestBatchDeploy(matched, message);
+          if (!accepted) setInput((current) => current || message);
           return;
         }
         if (matched.length === 1) {
-          await deployExample(matched[0]);
+          const accepted = await deployExample(matched[0]);
+          if (!accepted) setInput((current) => current || message);
           return;
         }
       }
     }
 
-    await sendMessage(message);
+    const accepted = await sendMessage(message);
+    if (!accepted) setInput((current) => current || message);
   };
 
   const handleSubmit = (e: FormEvent) => {
@@ -268,7 +271,7 @@ export function ChatPanel() {
     e.target.value = '';
   };
 
-  const deployExample = async (app: ExampleApp) => {
+  const deployExample = async (app: ExampleApp): Promise<boolean> => {
     const manifestJson = buildExampleManifest(app);
     const filename = `manifest-${app.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}.json`;
     const blob = new Blob([manifestJson], { type: 'application/json' });
@@ -276,14 +279,15 @@ export function ChatPanel() {
     const result = await attachPayload(file);
     if (result.error) {
       setAttachError(result.error);
-      return;
+      return false;
     }
     try {
       // No size hint — example deploys land on the cheapest available tier
       // (executor's resolveSizeOrCheapest default).
-      await sendMessage(`Deploy ${app.label}`);
+      return await sendMessage(`Deploy ${app.label}`);
     } catch (error) {
       logError('ChatPanel.deployExample', error);
+      return false;
     }
   };
 

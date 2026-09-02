@@ -14,8 +14,16 @@ import { logError } from '../../utils/errors';
 import { bigIntReplacer } from '../../utils/json';
 import { isApex, APEX_WARNING } from '../../utils/customDomainValidation';
 import { normalizeFqdn } from '../../utils/connection';
-import { walletIdentityMatches } from '../../utils/walletIdentity';
+import {
+  createWalletIdentity,
+  walletIdentitiesEqual,
+  walletIdentityKey,
+  walletIdentityMatches,
+  type WalletIdentity,
+} from '../../utils/walletIdentity';
+import type { ChatMessage } from '../../contexts/aiTypes';
 import type { AIStore } from '../aiStore';
+import { loadHistory, saveHistory } from './persistence';
 import {
   AUTHORIZATION_CANCELLED_MESSAGE,
   TRANSACTION_FINISHED_AFTER_CONTEXT_CHANGE_MESSAGE,
@@ -23,7 +31,7 @@ import {
   assertTransactionAuthorizationCurrent,
   isTransactionAuthorizationCurrent,
 } from '../authorization';
-import { generateMessageId, toChatApiMessages, getAppRegistryAccess } from './utils';
+import { generateMessageId, trimMessages, toChatApiMessages, getAppRegistryAccess } from './utils';
 
 const DEPLOY_DOMAIN_KEYS = ['customDomain', 'customDomainServiceName', 'customDomainWarning'] as const;
 
@@ -67,11 +75,49 @@ function resultSummary(result: ToolResult): string | undefined {
   return typeof message === 'string' && message !== '' ? message : undefined;
 }
 
+/** Update a transaction row in its owning transcript. If another wallet is
+ * visible, update the session cache (and that owner's persisted key) without
+ * publishing any of the originating wallet's data into the active chat. */
+function updateOriginatingTranscript(
+  get: Get,
+  set: Set,
+  identity: WalletIdentity,
+  messageId: string,
+  update: (message: ChatMessage) => ChatMessage,
+  append?: ChatMessage,
+): void {
+  const state = get();
+  const isVisible = walletIdentitiesEqual(state.historyIdentity, identity);
+  const cacheKey = walletIdentityKey(identity);
+  const source = isVisible
+    ? state.messages
+    : (state._historyCache.get(cacheKey) ?? loadHistory(identity));
+  let found = false;
+  const messages = source.map((message) => {
+    if (message.id !== messageId) return message;
+    found = true;
+    return update(message);
+  });
+  if (!found) return;
+  if (append) messages.push(append);
+
+  const updated = trimMessages(messages);
+  if (isVisible) {
+    set({ messages: updated });
+    return;
+  }
+
+  state._historyCache.set(cacheKey, updated);
+  saveHistory(identity, updated, state.settings.saveHistory);
+}
+
 /** Resolve only the originating tool row after its wallet context has gone
  * stale. Never stream the result into the next wallet's AI turn or attach a
  * wallet-scoped display card. */
 function finalizeStaleToolResult(
+  get: Get,
   set: Set,
+  identity: WalletIdentity,
   messageId: string,
   result: ToolResult,
 ): void {
@@ -79,53 +125,49 @@ function finalizeStaleToolResult(
   const visibleOutcome = result.success
     ? `${TRANSACTION_FINISHED_AFTER_CONTEXT_CHANGE_MESSAGE}${summary ? ` ${summary}` : ''}`
     : (summary ?? TRANSACTION_INTERRUPTED_MESSAGE);
-  set((state) => {
-    let resolvedOriginatingRow = false;
-    const messages = state.messages.map((message) => {
-      if (message.id !== messageId) return message;
-      resolvedOriginatingRow = true;
-      return {
-        ...message,
-        content: serializeToolResult(result, visibleOutcome),
-        error: result.success ? undefined : visibleOutcome,
-        isStreaming: false,
-        awaitingConfirmation: false,
-        transactionInFlight: false,
-      };
-    });
-
+  updateOriginatingTranscript(
+    get,
+    set,
+    identity,
+    messageId,
+    (message) => ({
+      ...message,
+      content: serializeToolResult(result, visibleOutcome),
+      error: result.success ? undefined : visibleOutcome,
+      isStreaming: false,
+      awaitingConfirmation: false,
+      transactionInFlight: false,
+    }),
     // Successful stale results are not errors, so their collapsed tool row has
     // no inline alert. Surface the wallet-scoped outcome as local assistant copy
     // instead: visible in chat, persisted, and excluded from model history.
-    if (result.success && resolvedOriginatingRow) {
-      messages.push({
-        id: generateMessageId(),
-        role: 'assistant',
-        content: visibleOutcome,
-        timestamp: Date.now(),
-        local: true,
-      });
-    }
-
-    return { messages };
-  });
+    result.success
+      ? {
+          id: generateMessageId(),
+          role: 'assistant',
+          content: visibleOutcome,
+          timestamp: Date.now(),
+          local: true,
+        }
+      : undefined,
+  );
 }
 
-function finalizeStaleToolError(set: Set, messageId: string, error: unknown): void {
+function finalizeStaleToolError(
+  get: Get,
+  set: Set,
+  identity: WalletIdentity,
+  messageId: string,
+  error: unknown,
+): void {
   const detail = error instanceof Error ? error.message : TRANSACTION_INTERRUPTED_MESSAGE;
-  set((state) => ({
-    messages: state.messages.map((message) =>
-      message.id === messageId
-        ? {
-            ...message,
-            content: detail,
-            error: detail,
-            isStreaming: false,
-            awaitingConfirmation: false,
-            transactionInFlight: false,
-          }
-        : message
-    ),
+  updateOriginatingTranscript(get, set, identity, messageId, (message) => ({
+    ...message,
+    content: detail,
+    error: detail,
+    isStreaming: false,
+    awaitingConfirmation: false,
+    transactionInFlight: false,
   }));
 }
 
@@ -313,7 +355,13 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     return;
   }
 
-  if (!isTransactionAuthorizationCurrent(get(), pendingConfirmation.action)) {
+  const confirmationState = get();
+  if (!isTransactionAuthorizationCurrent(confirmationState, pendingConfirmation.action)
+      || !walletIdentityMatches(
+        confirmationState.historyIdentity,
+        confirmationState.chainId,
+        confirmationState.address,
+      )) {
     const { messageId } = pendingConfirmation;
     set({
       pendingConfirmation: null,
@@ -338,6 +386,10 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
   const { messageId } = pendingConfirmation;
   const authorization = pendingConfirmation.action;
   const authorizationEpoch = get().authorizationEpoch;
+  const originHistoryIdentity = createWalletIdentity(
+    authorization.chainId,
+    authorization.originAddress,
+  );
 
   if (pendingConfirmation.action.toolName === 'batch_deploy'
       && overrides?.editedBatchEntries) {
@@ -427,7 +479,9 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     );
 
     if (!contextIsCurrent()) {
-      finalizeStaleToolResult(set, messageId, result);
+      if (originHistoryIdentity) {
+        finalizeStaleToolResult(get, set, originHistoryIdentity, messageId, result);
+      }
       return;
     }
 
@@ -482,16 +536,6 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
       }
       return;
     }
-
-    // The transaction result remains visible even if the store is somehow
-    // missing its selected transcript, but wallet-scoped messages must never be
-    // sent to the model until that identity is selected.
-    const followUpState = get();
-    if (!walletIdentityMatches(
-      followUpState.historyIdentity,
-      followUpState.chainId,
-      followUpState.address,
-    )) return;
 
     // Append the follow-up assistant message only after the transaction row is
     // resolved and the operation is still live.
@@ -569,7 +613,9 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     }
 
     if (!contextIsCurrent()) {
-      finalizeStaleToolError(set, messageId, error);
+      if (originHistoryIdentity) {
+        finalizeStaleToolError(get, set, originHistoryIdentity, messageId, error);
+      }
       return;
     }
     logError('AIContext.confirmAction', error);

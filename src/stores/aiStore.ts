@@ -17,6 +17,7 @@ import type { WalletIdentity } from '../utils/walletIdentity';
 import {
   createWalletIdentity,
   walletIdentitiesEqual,
+  walletIdentityKey,
 } from '../utils/walletIdentity';
 import {
   AI_TOOL_CACHE_TTL_MS,
@@ -117,6 +118,9 @@ export interface AIStore {
   activeTransactionMessageId: string | null;
   abortController: AbortController | null;
   lastMessageTime: number;
+  /** Session transcripts keyed by wallet identity. This keeps wallet switches
+   * lossless even when persistence is disabled or a browser write fails. */
+  _historyCache: Map<string, ChatMessage[]>;
   _toolCache: Map<string, { result: ToolResult; timestamp: number }>;
   _pendingStreamUpdate: { messageId: string; content: string; thinking?: string } | null;
   _rafId: number | null;
@@ -124,7 +128,8 @@ export interface AIStore {
 
   // --- Actions ---
   setIsOpen: (open: boolean) => void;
-  sendMessage: (content: string) => Promise<void>;
+  /** Resolves false only when preflight rejected the message before enqueue. */
+  sendMessage: (content: string) => Promise<boolean>;
   confirmAction: (overrides?: ConfirmActionOverrides) => Promise<void>;
   cancelAction: () => void;
   addMessage: (message: ChatMessage) => void;
@@ -141,7 +146,7 @@ export interface AIStore {
   setDnsStatuses: (statuses: ReadonlyMap<string, DnsStatusEntry>) => void;
   updateSettings: (settings: Partial<AISettings>) => void;
   clearHistory: () => void;
-  requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
+  requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<boolean>;
   requestStopApp: (appName: string) => void;
   loadSkuTiers: () => Promise<void>;
   retrySkuTiers: () => Promise<void>;
@@ -162,8 +167,10 @@ export interface AIStore {
 }
 
 function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
+  let changed = false;
   const messages = state.messages.map((message) => {
     if (state.pendingConfirmation?.messageId === message.id) {
+      changed = true;
       return {
         ...message,
         content: AUTHORIZATION_CANCELLED_MESSAGE,
@@ -175,6 +182,7 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
     }
 
     if (state.activeTransactionMessageId === message.id) {
+      changed = true;
       return {
         ...message,
         content: TRANSACTION_INTERRUPTED_MESSAGE,
@@ -186,6 +194,7 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
     }
 
     if (message.isStreaming) {
+      changed = true;
       if (message.role === 'tool') {
         return {
           ...message,
@@ -217,6 +226,7 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
   if (hadActiveWork
       && state.pendingConfirmation === null
       && state.activeTransactionMessageId === null) {
+    changed = true;
     messages.push({
       id: generateMessageId(),
       role: 'assistant',
@@ -226,7 +236,7 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
     });
   }
 
-  return trimMessages(messages);
+  return changed ? trimMessages(messages) : state.messages;
 }
 
 export const createAIStore = () =>
@@ -257,6 +267,7 @@ export const createAIStore = () =>
     activeTransactionMessageId: null,
     abortController: null,
     lastMessageTime: 0,
+    _historyCache: new Map(),
     _toolCache: new Map(),
     _pendingStreamUpdate: null,
     _rafId: null,
@@ -321,11 +332,16 @@ export const createAIStore = () =>
       const chainChanged = context.chainId !== current.chainId;
       if (!clientChanged && !addressChanged && !signerChanged && !chainChanged) return;
 
-      const nextHistoryIdentity = createWalletIdentity(context.chainId, context.address);
+      const candidateHistoryIdentity = createWalletIdentity(context.chainId, context.address);
       const historyIdentityChanged = !walletIdentitiesEqual(
         current.historyIdentity,
-        nextHistoryIdentity,
+        candidateHistoryIdentity,
       );
+      // Keep reference stability across signer/client refreshes for consumers
+      // that select the identity object itself.
+      const nextHistoryIdentity = historyIdentityChanged
+        ? candidateHistoryIdentity
+        : current.historyIdentity;
 
       // Abort first, then publish the new identity and the complete cleared
       // authorization state in one Zustand update. The epoch/generation checks
@@ -336,24 +352,32 @@ export const createAIStore = () =>
 
       const closedMessages = messagesAfterAuthorizationChange(current);
 
-      // Finish and persist the old transcript before publishing the new
-      // identity. This is deliberately synchronous: the persistence
-      // subscriber ignores identity transitions so it can never save A's
-      // messages under B's key.
+      // Cache the old transcript before publishing the new identity. Ordinary
+      // completed messages were already persisted synchronously by the store
+      // subscription; write here only when this transition added closure state.
+      // This keeps the common wallet-switch path free of JSON serialization.
       if (historyIdentityChanged && current.historyIdentity) {
-        saveHistory(
-          current.historyIdentity,
+        current._historyCache.set(
+          walletIdentityKey(current.historyIdentity),
           closedMessages,
-          current.settings.saveHistory,
         );
+        if (closedMessages !== current.messages) {
+          saveHistory(
+            current.historyIdentity,
+            closedMessages,
+            current.settings.saveHistory,
+          );
+        }
       }
 
       let nextMessages = closedMessages;
       if (historyIdentityChanged) {
-        if (nextHistoryIdentity && current.settings.saveHistory) {
-          nextMessages = loadHistory(nextHistoryIdentity);
+        if (nextHistoryIdentity) {
+          const cacheKey = walletIdentityKey(nextHistoryIdentity);
+          const cached = current._historyCache.get(cacheKey);
+          nextMessages = cached ?? loadHistory(nextHistoryIdentity);
+          if (cached === undefined) current._historyCache.set(cacheKey, nextMessages);
         } else {
-          if (nextHistoryIdentity) clearHistoryStorage(nextHistoryIdentity);
           nextMessages = [];
         }
       }
@@ -441,7 +465,10 @@ export const createAIStore = () =>
     clearHistory: () => {
       const current = get();
       current._toolCache.clear();
-      if (current.historyIdentity) clearHistoryStorage(current.historyIdentity);
+      if (current.historyIdentity) {
+        current._historyCache.set(walletIdentityKey(current.historyIdentity), []);
+        clearHistoryStorage(current.historyIdentity);
+      }
       set({ messages: [] });
     },
 
@@ -502,9 +529,10 @@ export const createAIStore = () =>
 
     // --- Lifecycle ---
     destroy: () => {
-      const { _rafId, abortController } = get();
+      const { _rafId, abortController, _historyCache } = get();
       if (_rafId) cancelAnimationFrame(_rafId);
       if (abortController) abortController.abort();
+      _historyCache.clear();
       set({ _rafId: null, abortController: null });
     },
   }));

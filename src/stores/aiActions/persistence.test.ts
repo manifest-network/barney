@@ -16,7 +16,6 @@ import {
   saveSettings,
   saveHistory,
   clearHistoryStorage,
-  clearAllHistoryStorage,
   discardLegacyHistoryStorage,
   historyStorageKey,
   setupPersistenceSubscriptions,
@@ -106,14 +105,14 @@ describe('persistence actions', () => {
       expect(loadHistory(IDENTITY)).toEqual([]);
     });
 
-    it('discards valid legacy global history instead of assigning it', () => {
+    it('does not adopt or repeatedly delete legacy global history while loading', () => {
       localStorage.setItem(
         LEGACY_STORAGE_KEY_HISTORY,
         JSON.stringify([makeMessage({ content: 'wallet owner is unknown' })]),
       );
 
       expect(loadHistory(IDENTITY)).toEqual([]);
-      expect(localStorage.getItem(LEGACY_STORAGE_KEY_HISTORY)).toBeNull();
+      expect(localStorage.getItem(LEGACY_STORAGE_KEY_HISTORY)).not.toBeNull();
       expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
     });
 
@@ -138,6 +137,17 @@ describe('persistence actions', () => {
       expect(result).toEqual([]);
       expect(logError).toHaveBeenCalled();
       expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+    });
+
+    it('leaves future-version history intact while failing closed', () => {
+      const future = JSON.stringify({
+        v: 2,
+        data: { identity: IDENTITY, messages: [makeMessage({ id: 'future' })] },
+      });
+      localStorage.setItem(STORAGE_KEY_HISTORY, future);
+
+      expect(loadHistory(IDENTITY)).toEqual([]);
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBe(future);
     });
 
     it('rejects an envelope whose identity does not match its scoped key', () => {
@@ -189,13 +199,13 @@ describe('persistence actions', () => {
       const result = loadHistory(IDENTITY);
 
       expect(result[0]).toMatchObject({
-        content: 'Interrupted — confirmation was pending when the page reloaded.',
+        content: 'Interrupted — confirmation was pending when the session ended.',
         error: 'Interrupted',
         awaitingConfirmation: false,
       });
     });
 
-    it('rewrites an in-flight transaction with a broadcast-aware reload warning', () => {
+    it('rewrites an in-flight transaction with a session-neutral warning', () => {
       const msgs = [makeMessage({
         id: 'm1',
         role: 'tool',
@@ -206,7 +216,7 @@ describe('persistence actions', () => {
 
       const result = loadHistory(IDENTITY);
 
-      expect(result[0].content).toContain('page reloaded');
+      expect(result[0].content).toContain('session ended');
       expect(result[0].error).toContain('may already have been submitted');
       expect(result[0].transactionInFlight).toBe(false);
     });
@@ -303,10 +313,20 @@ describe('persistence actions', () => {
       expect(stored[0].toolCalls).toBeUndefined();
     });
 
-    it('removes localStorage key when saveHistory is false', () => {
+    it('leaves existing history intact when future saving is disabled', () => {
       localStorage.setItem(STORAGE_KEY_HISTORY, 'some data');
       saveHistory(IDENTITY, [], false);
-      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBe('some data');
+    });
+
+    it('does not overwrite a future-version envelope', () => {
+      const future = JSON.stringify({ v: 2, data: { newShape: true } });
+      localStorage.setItem(STORAGE_KEY_HISTORY, future);
+      expect(loadHistory(IDENTITY)).toEqual([]);
+
+      saveHistory(IDENTITY, [makeMessage()], true);
+
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBe(future);
     });
 
     it('removes the scoped key when no persistable messages remain', () => {
@@ -327,18 +347,6 @@ describe('persistence actions', () => {
       expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
     });
 
-    it('can clear every scoped wallet history without touching unrelated state', () => {
-      const otherIdentity = createWalletIdentity('manifest-other', 'manifest1bob')!;
-      saveHistory(IDENTITY, [makeMessage()], true);
-      saveHistory(otherIdentity, [makeMessage()], true);
-      localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(defaultSettings));
-
-      clearAllHistoryStorage();
-
-      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
-      expect(localStorage.getItem(historyStorageKey(otherIdentity))).toBeNull();
-      expect(localStorage.getItem(STORAGE_KEY_SETTINGS)).not.toBeNull();
-    });
   });
 
   // ---- setupPersistenceSubscriptions ----
@@ -366,7 +374,17 @@ describe('persistence actions', () => {
       unsub();
     });
 
-    it('turning history off while disconnected deletes every wallet transcript', () => {
+    it('runs the legacy-key migration once when subscriptions are installed', () => {
+      localStorage.setItem(LEGACY_STORAGE_KEY_HISTORY, 'unowned history');
+      const miniStore = createMiniStore();
+
+      const unsub = setupPersistenceSubscriptions(miniStore);
+
+      expect(localStorage.getItem(LEGACY_STORAGE_KEY_HISTORY)).toBeNull();
+      unsub();
+    });
+
+    it('turning history off preserves existing wallet transcripts', () => {
       const otherIdentity = createWalletIdentity('manifest-other', 'manifest1bob')!;
       saveHistory(IDENTITY, [makeMessage()], true);
       saveHistory(otherIdentity, [makeMessage()], true);
@@ -376,8 +394,8 @@ describe('persistence actions', () => {
 
       miniStore.setState({ settings: { ...defaultSettings, saveHistory: false } });
 
-      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
-      expect(localStorage.getItem(historyStorageKey(otherIdentity))).toBeNull();
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).not.toBeNull();
+      expect(localStorage.getItem(historyStorageKey(otherIdentity))).not.toBeNull();
 
       unsub();
     });

@@ -46,7 +46,7 @@ describe('persistence integration with real PersistedMessageSchema', () => {
     const result = loadHistory(IDENTITY);
     expect(result).toHaveLength(1);
     expect(result[0].error).toBe('Interrupted');
-    expect(result[0].content).toBe('Interrupted — confirmation was pending when the page reloaded.');
+    expect(result[0].content).toBe('Interrupted — confirmation was pending when the session ended.');
     expect(result[0].awaitingConfirmation).toBe(false);
   });
 
@@ -68,7 +68,7 @@ describe('persistence integration with real PersistedMessageSchema', () => {
     const result = loadHistory(IDENTITY);
     expect(result).toHaveLength(1);
     expect(result[0].error).toBe('Interrupted');
-    expect(result[0].content).toBe('Interrupted — confirmation was pending when the page reloaded.');
+    expect(result[0].content).toBe('Interrupted — confirmation was pending when the session ended.');
     expect(result[0].awaitingConfirmation).toBe(false);
   });
 
@@ -88,7 +88,7 @@ describe('persistence integration with real PersistedMessageSchema', () => {
     const result = loadHistory(IDENTITY);
 
     expect(result[0]).toMatchObject({
-      content: 'Interrupted — confirmation was pending when the page reloaded.',
+      content: 'Interrupted — confirmation was pending when the session ended.',
       error: 'Interrupted',
       awaitingConfirmation: false,
     });
@@ -129,7 +129,7 @@ describe('persistence integration with real PersistedMessageSchema', () => {
       awaitingConfirmation: false,
       isStreaming: false,
       error: expect.stringContaining('may already have been submitted'),
-      content: expect.stringContaining('page reloaded'),
+      content: expect.stringContaining('session ended'),
     });
   });
 
@@ -196,13 +196,15 @@ describe('wallet-scoped AI store history', () => {
       });
 
       selectWallet(store, 'chain-one', 'manifest1alice');
+      // Switching back uses the session cache, preserving live card state and
+      // avoiding a synchronous localStorage parse on the wallet-change path.
       expect(store.getState().messages).toEqual([
         expect.objectContaining({
           id: 'alice-manifest',
-          content: '[help displayed to user]',
+          content: '{"owner":"manifest1alice","manifest":"private"}',
+          card: { type: 'help', data: null },
         }),
       ]);
-      expect(store.getState().messages[0].card).toBeUndefined();
       expect(store.getState().messages.some((message) => message.id === 'bob-only')).toBe(false);
 
       selectWallet(store, 'chain-one', 'manifest1bob');
@@ -302,6 +304,28 @@ describe('wallet-scoped AI store history', () => {
       expect(store.getState().messages).toEqual([]);
       expect(localStorage.getItem(historyStorageKey(alice))).toBeNull();
       expect(localStorage.getItem(historyStorageKey(bob))).not.toBeNull();
+    } finally {
+      unsubscribe();
+      store.getState().destroy();
+    }
+  });
+
+  it('keeps unsaved session history isolated across wallet switches', () => {
+    const store = createAIStore();
+    const unsubscribe = setupPersistenceSubscriptions(store);
+    const alice = createWalletIdentity('chain-one', 'manifest1alice')!;
+
+    try {
+      selectWallet(store, alice.chainId, alice.address);
+      store.getState().updateSettings({ saveHistory: false });
+      addMessage(store, { id: 'alice-session', role: 'user', content: 'not persisted' });
+
+      selectWallet(store, 'chain-one', 'manifest1bob');
+      expect(store.getState().messages).toEqual([]);
+      expect(localStorage.getItem(historyStorageKey(alice))).toBeNull();
+
+      selectWallet(store, alice.chainId, alice.address);
+      expect(store.getState().messages.map((message) => message.id)).toEqual(['alice-session']);
     } finally {
       unsubscribe();
       store.getState().destroy();

@@ -143,7 +143,8 @@ describe('sendMessage', () => {
   describe('guard clauses', () => {
     it('returns early when input is empty', async () => {
       const store = setupStore();
-      await store.getState().sendMessage('');
+      const accepted = await store.getState().sendMessage('');
+      expect(accepted).toBe(false);
       expect(store.getState().isStreaming).toBe(false);
       expect(store.getState().messages).toHaveLength(0);
     });
@@ -157,7 +158,8 @@ describe('sendMessage', () => {
 
     it('returns early when not connected', async () => {
       const store = setupStore({ isConnected: false });
-      await store.getState().sendMessage('hello');
+      const accepted = await store.getState().sendMessage('hello');
+      expect(accepted).toBe(false);
       expect(store.getState().isStreaming).toBe(false);
       expect(store.getState().messages).toHaveLength(0);
     });
@@ -174,8 +176,9 @@ describe('sendMessage', () => {
         messages: [priorWalletMessage],
       });
 
-      await store.getState().sendMessage('hello from wallet B');
+      const accepted = await store.getState().sendMessage('hello from wallet B');
 
+      expect(accepted).toBe(false);
       expect(streamChat).not.toHaveBeenCalled();
       expect(store.getState().messages).toEqual([priorWalletMessage]);
       expect(store.getState().isStreaming).toBe(false);
@@ -294,15 +297,25 @@ describe('sendMessage', () => {
     it('returns early when already streaming', async () => {
       const store = setupStore({ isStreaming: true });
       const before = store.getState().messages.length;
-      await store.getState().sendMessage('hello');
+      const accepted = await store.getState().sendMessage('hello');
+      expect(accepted).toBe(false);
       expect(store.getState().messages).toHaveLength(before);
     });
 
     it('returns early within debounce window', async () => {
       const store = setupStore({ lastMessageTime: 900 });
       // now = 1000, last = 900, diff = 100 < 300 (AI_MESSAGE_DEBOUNCE_MS)
-      await store.getState().sendMessage('hello');
+      const accepted = await store.getState().sendMessage('hello');
+      expect(accepted).toBe(false);
       expect(store.getState().messages).toHaveLength(0);
+    });
+
+    it('returns true once a message has entered the transcript', async () => {
+      const store = setupStore();
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult());
+
+      await expect(store.getState().sendMessage('hello')).resolves.toBe(true);
+      expect(store.getState().messages.some((message) => message.role === 'user')).toBe(true);
     });
   });
 

@@ -27,6 +27,11 @@ export function walletIdentitiesEqual(
   return left.chainId === right.chainId && left.address === right.address;
 }
 
+/** Stable map/storage suffix for an already-normalized wallet identity. */
+export function walletIdentityKey(identity: WalletIdentity): string {
+  return `${encodeURIComponent(identity.chainId)}:${encodeURIComponent(identity.address)}`;
+}
+
 export function walletIdentityMatches(
   identity: WalletIdentity | null,
   chainId: string,

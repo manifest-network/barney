@@ -225,6 +225,32 @@ describe('aiStore', () => {
       expect(loadHistory).toHaveBeenCalledWith(store.getState().historyIdentity);
     });
 
+    it('keeps the identity reference stable across client or signer refreshes', () => {
+      updateWalletContext(store, { address: 'manifest1abc', chainId: 'chain-a' });
+      const identity = store.getState().historyIdentity;
+
+      updateWalletContext(store, {
+        clientManager: {} as AIStore['clientManager'],
+        signing: {} as AIStore['signing'],
+      });
+
+      expect(store.getState().historyIdentity).toBe(identity);
+    });
+
+    it('restores a wallet from the session cache without re-reading storage', () => {
+      updateWalletContext(store, { address: 'manifest1alice', chainId: 'chain-a' });
+      const aliceMessage = makeMessage({ id: 'alice-only' });
+      store.setState({ messages: [aliceMessage] });
+
+      updateWalletContext(store, { address: 'manifest1bob' });
+      expect(store.getState().messages).toEqual([]);
+      expect(saveHistory).not.toHaveBeenCalled();
+      updateWalletContext(store, { address: 'manifest1alice' });
+
+      expect(store.getState().messages).toEqual([aliceMessage]);
+      expect(loadHistory).toHaveBeenCalledTimes(2);
+    });
+
     it('clears tool cache and deployProgress on change', () => {
       store.getState().cacheToolResult('key1', { success: true, data: 'x' });
       store.setState({ deployProgress: { phase: 'ready' } as AIStore['deployProgress'] });

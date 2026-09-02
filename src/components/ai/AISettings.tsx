@@ -78,7 +78,7 @@ export function AISettings({ onClose }: AISettingsProps) {
               <p id="save-history-hint" className="ai-settings-hint">
                 {settings.saveHistory
                   ? 'History is saved separately for each wallet and network'
-                  : 'No wallet histories are retained'}
+                  : 'New messages stay in this tab; previously saved histories are kept'}
               </p>
             </div>
             <button

@@ -4,6 +4,7 @@ import type { PendingAction, ToolResult } from '../../ai/toolExecutor';
 import type { PendingConfirmation, ChatMessage } from '../../contexts/aiTypes';
 import { createAIStore, type AIStore } from '../aiStore';
 import { createWalletIdentity } from '../../utils/walletIdentity';
+import { historyStorageKey } from './persistence';
 
 // ---------------------------------------------------------------------------
 // Deterministic IDs
@@ -64,10 +65,10 @@ vi.mock('../../utils/errors', () => ({
 
 vi.mock('../../contexts/aiStoreContext', () => ({
   useAIStore: (selector: (state: {
-    sendMessage: () => Promise<void>;
+    sendMessage: () => Promise<boolean>;
     retrySkuTiers: () => Promise<void>;
   }) => unknown) => selector({
-    sendMessage: vi.fn(() => Promise.resolve()),
+    sendMessage: vi.fn(() => Promise.resolve(true)),
     retrySkuTiers: vi.fn(() => Promise.resolve()),
   }),
 }));
@@ -186,6 +187,7 @@ beforeEach(() => {
   vi.setSystemTime(1000);
   idCounter = 0;
   vi.clearAllMocks();
+  localStorage.clear();
   vi.stubGlobal('requestAnimationFrame', (cb: () => void) => { cb(); return 0; });
   vi.stubGlobal('cancelAnimationFrame', vi.fn());
 });
@@ -480,24 +482,24 @@ describe('confirmAction', () => {
       expect(assistantMsg!.isStreaming).toBe(false);
     });
 
-    it('does not send transaction history to the model without a selected identity', async () => {
+    it('does not execute or send transaction history without a selected identity', async () => {
       const pending = makePendingConfirmation();
       const store = setupStore({
         historyIdentity: null,
         pendingConfirmation: pending,
         messages: [makeToolMessage(pending.messageId)],
       });
-      mockExecuteConfirmedTool.mockResolvedValueOnce({ success: true, data: { deployed: true } });
 
       await store.getState().confirmAction();
 
+      expect(mockExecuteConfirmedTool).not.toHaveBeenCalled();
       expect(streamChat).not.toHaveBeenCalled();
       expect(mockProcessStream).not.toHaveBeenCalled();
       expect(store.getState().messages).toHaveLength(1);
-      expect(store.getState().messages[0].content).toContain('"success": true');
+      expect(store.getState().messages[0].content).toContain('cancelled and was not submitted');
     });
 
-    it('does not expose an in-flight tool row after the wallet changes', async () => {
+    it('resolves a late transaction only in its originating wallet transcript', async () => {
       let finishTransaction!: (result: ToolResult) => void;
       mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((resolve) => {
         finishTransaction = resolve;
@@ -507,6 +509,7 @@ describe('confirmAction', () => {
       const store = setupStore({
         pendingConfirmation: pending,
         messages: [makeToolMessage(pending.messageId)],
+        settings: { saveHistory: true },
       });
 
       const confirming = store.getState().confirmAction();
@@ -538,7 +541,31 @@ describe('confirmAction', () => {
       // the tool row, its address-bearing summary, or a local status card.
       expect(store.getState().messages).toEqual([]);
 
-      expect(store.getState().address).toBe('manifest1next');
+      const originIdentity = createWalletIdentity('manifest-test', 'manifest1test')!;
+      const persisted = localStorage.getItem(historyStorageKey(originIdentity));
+      expect(persisted).toContain('Deployment completed for the previous wallet.');
+
+      store.getState().setWalletContext({
+        clientManager: fakeClientManager,
+        address: 'manifest1test',
+        signing: undefined,
+        chainId: 'manifest-test',
+      });
+
+      const originTool = store.getState().messages.find((message) => message.id === pending.messageId);
+      expect(originTool).toMatchObject({
+        transactionInFlight: false,
+        awaitingConfirmation: false,
+        error: undefined,
+        content: expect.stringContaining('Deployment completed for the previous wallet.'),
+      });
+      expect(store.getState().messages).toContainEqual(expect.objectContaining({
+        role: 'assistant',
+        local: true,
+        content: expect.stringContaining('finished for the previous wallet'),
+      }));
+
+      expect(store.getState().address).toBe('manifest1test');
       expect(store.getState().activeTransactionMessageId).toBeNull();
       expect(mockProcessStream).not.toHaveBeenCalled();
     });

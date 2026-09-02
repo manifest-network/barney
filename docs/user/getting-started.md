@@ -47,11 +47,11 @@ Barney stores a small set of values in `localStorage`. Some are global to the br
 
 Each wallet/network transcript is retained in this browser profile until you
 connect that identity and run `/clear` (or use **Clear This Wallet's History**
-in AI Settings), turn off **Save Chat History**, or clear the site's browser
-data. Turning history saving off is a browser-global preference and deletes all
-saved wallet transcripts. Disconnecting hides the active transcript without
-assigning it to a later wallet; reconnecting the same wallet and network loads
-its own retained transcript.
+in AI Settings), or clear the site's browser data. Turning **Save Chat History**
+off stops future writes but does not delete any previously saved wallet
+transcript; new messages remain available only in the current tab. Disconnecting
+hides the active transcript without assigning it to a later wallet; reconnecting
+the same wallet and network selects its own isolated transcript.
 
 Nothing else leaves the browser unencrypted. The only outbound calls are to the configured Manifest RPC/REST node, the providers your apps run on, and Barney's authenticated Morpheus relay. On the first chat (and after session expiry/restart), your wallet signs a short-lived chain/address-bound challenge. The resulting session is an HttpOnly cookie; the browser never sees the operator API key.
 

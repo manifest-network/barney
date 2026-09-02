@@ -181,8 +181,8 @@ has a separate transcript, and entries are validated by `validateChatHistory`
 when that identity connects. History is absent or removed if:
 
 - You switched wallets or networks; reconnect the original wallet on the original network to see its transcript.
-- A persisted envelope fails JSON parsing, version, identity, or schema validation; that scoped key is removed and the wallet starts with empty history.
-- You turned off **Save Chat History**, which deletes all saved wallet transcripts in this browser profile.
+- A persisted envelope fails JSON parsing, identity, or schema validation; that scoped key is removed and the wallet starts with empty history. A future-version envelope is preserved but remains unreadable until the app is upgraded again.
+- **Save Chat History** was off when the messages were sent, and the tab was later closed. Turning it off does not delete transcripts that were already saved.
 - You switched browsers or cleared site data.
 - You ran `/clear` or selected **Clear This Wallet's History**, which deletes only the active wallet/network transcript.
 
