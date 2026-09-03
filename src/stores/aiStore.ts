@@ -464,12 +464,31 @@ export const createAIStore = () =>
     // --- History ---
     clearHistory: () => {
       const current = get();
+      // Clearing the visible transcript is also a cancellation boundary. If we
+      // leave any of this transient state behind, the confirmation/progress UI
+      // disappears with `messages` while its hidden action can still reject the
+      // next request. Bumping the epoch also makes late async completions inert
+      // so they cannot repopulate a transcript the user explicitly deleted.
+      current.abortController?.abort();
+      if (current._rafId !== null) cancelAnimationFrame(current._rafId);
       current._toolCache.clear();
       if (current.historyIdentity) {
         current._historyCache.set(walletIdentityKey(current.historyIdentity), []);
         clearHistoryStorage(current.historyIdentity);
       }
-      set({ messages: [] });
+      set({
+        messages: [],
+        pendingConfirmation: null,
+        activeTransactionMessageId: null,
+        pendingPayload: null,
+        deployProgress: null,
+        abortController: null,
+        isStreaming: false,
+        lastMessageTime: 0,
+        _pendingStreamUpdate: null,
+        _rafId: null,
+        authorizationEpoch: current.authorizationEpoch + 1,
+      });
     },
 
     // --- Streaming ---

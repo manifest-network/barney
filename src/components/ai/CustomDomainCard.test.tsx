@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 
@@ -25,11 +25,6 @@ function makeData(overrides: Partial<CustomDomainCardData> = {}): CustomDomainCa
   };
 }
 
-/** Let the awaited sendMessage settle AND React commit the resulting setState. */
-function flushMicrotasks(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
 /** React tracks its own input value separately, so direct .value assignment is ignored.
  *  Use the prototype setter to trigger React's onChange handler. */
 function setReactInputValue(input: HTMLInputElement, value: string) {
@@ -38,12 +33,26 @@ function setReactInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+async function actAsync(callback: () => void): Promise<void> {
+  const actEnvironment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previous = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+  actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+  try {
+    await act(async () => { callback(); });
+  } finally {
+    if (previous === undefined) delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+    else actEnvironment.IS_REACT_ACT_ENVIRONMENT = previous;
+  }
+}
+
 describe('CustomDomainCard', () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    sendMessage.mockReset();
+    sendMessage.mockResolvedValue(true);
     dnsStatuses = new Map();
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -188,6 +197,7 @@ describe('CustomDomainCard', () => {
     });
 
     it('clears the field once the message is accepted', async () => {
+      sendMessage.mockResolvedValueOnce(true);
       flushSync(() => {
         root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '', appName: 'my-api' }) }));
       });
@@ -195,8 +205,7 @@ describe('CustomDomainCard', () => {
       const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
       flushSync(() => { setReactInputValue(input, 'app.example.com'); });
 
-      flushSync(() => { setBtn.click(); });
-      await flushMicrotasks();
+      await actAsync(() => { setBtn.click(); });
 
       expect(input.value).toBe('');
     });
@@ -212,8 +221,7 @@ describe('CustomDomainCard', () => {
       const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
       flushSync(() => { setReactInputValue(input, 'app.example.com'); });
 
-      flushSync(() => { setBtn.click(); });
-      await flushMicrotasks();
+      await actAsync(() => { setBtn.click(); });
 
       expect(sendMessage).toHaveBeenCalled();
       expect(input.value).toBe('app.example.com');

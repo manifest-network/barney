@@ -430,6 +430,65 @@ describe('aiStore', () => {
       expect(store.getState()._toolCache.size).toBe(0);
       expect(clearHistoryStorage).toHaveBeenCalledWith(activeIdentity);
     });
+
+    it('cancels hidden confirmation, payload, progress, and streaming state', () => {
+      updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
+      const bound = store.getState();
+      const controller = new AbortController();
+      const abortSpy = vi.spyOn(controller, 'abort');
+      const cancelRafSpy = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+      store.setState({
+        messages: [makeMessage({
+          id: 'tool-1',
+          role: 'tool',
+          isStreaming: true,
+          awaitingConfirmation: true,
+          transactionInFlight: true,
+        })],
+        pendingConfirmation: {
+          id: 'pending-1',
+          messageId: 'tool-1',
+          action: {
+            originAddress: bound.address!,
+            chainId: bound.chainId,
+            clientGeneration: bound.clientGeneration,
+            signerGeneration: bound.signerGeneration,
+            id: 'action-1',
+            toolName: 'deploy_app',
+            args: { app_name: 'web' },
+            description: 'Deploy?',
+          },
+        },
+        activeTransactionMessageId: 'tool-1',
+        pendingPayload: { bytes: new Uint8Array([1]), size: 1, hash: 'a' },
+        deployProgress: { phase: 'creating_lease', operation: 'deploy' },
+        abortController: controller,
+        isStreaming: true,
+        lastMessageTime: Date.now(),
+        _pendingStreamUpdate: { messageId: 'tool-1', content: 'late update' },
+        _rafId: 17,
+      });
+
+      const beforeEpoch = store.getState().authorizationEpoch;
+      store.getState().clearHistory();
+
+      const state = store.getState();
+      expect(abortSpy).toHaveBeenCalledOnce();
+      expect(cancelRafSpy).toHaveBeenCalledWith(17);
+      expect(state.messages).toEqual([]);
+      expect(state.pendingConfirmation).toBeNull();
+      expect(state.activeTransactionMessageId).toBeNull();
+      expect(state.pendingPayload).toBeNull();
+      expect(state.deployProgress).toBeNull();
+      expect(state.abortController).toBeNull();
+      expect(state.isStreaming).toBe(false);
+      expect(state.lastMessageTime).toBe(0);
+      expect(state._pendingStreamUpdate).toBeNull();
+      expect(state._rafId).toBeNull();
+      expect(state.authorizationEpoch).toBe(beforeEpoch + 1);
+
+      cancelRafSpy.mockRestore();
+    });
   });
 
   // ---- attachPayload ----
