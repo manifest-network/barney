@@ -318,10 +318,10 @@ describe('aiStore', () => {
         const controller = new AbortController();
         const abortSpy = vi.spyOn(controller, 'abort');
         const cancelRafSpy = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
-      // Restore even if an assertion below throws: `vi.clearAllMocks()` does not
-      // undo a spy, so a leaked stub would silence cancelAnimationFrame for
-      // every later test in this file, including afterEach's destroy().
-      onTestFinished(() => { cancelRafSpy.mockRestore(); });
+        // Restore even if an assertion below throws: `vi.clearAllMocks()` does not
+        // undo a spy, so a leaked stub would silence cancelAnimationFrame for
+        // every later test in this file, including afterEach's destroy().
+        onTestFinished(() => { cancelRafSpy.mockRestore(); });
         store.setState({
           isStreaming: true,
           abortController: controller,
@@ -387,8 +387,6 @@ describe('aiStore', () => {
           expect(state.messages[0].awaitingConfirmation).toBe(false);
           expect(state.messages).toHaveLength(1);
         }
-
-        cancelRafSpy.mockRestore();
       },
     );
 
@@ -435,7 +433,7 @@ describe('aiStore', () => {
       expect(clearHistoryStorage).toHaveBeenCalledWith(activeIdentity);
     });
 
-    it('does not abort a transaction that has already broadcast', () => {
+    it('refuses to clear or detach a transaction that has already broadcast', () => {
       // During a confirmed transaction the store's controller IS that
       // transaction's, and `deployManifest` honours it. Aborting mid-provision
       // cancels a deploy the user never asked to cancel and strands a paid
@@ -443,36 +441,34 @@ describe('aiStore', () => {
       updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
       const controller = new AbortController();
       const abortSpy = vi.spyOn(controller, 'abort');
+      const messages = [makeMessage({ id: 'tool-1', role: 'tool', transactionInFlight: true })];
       store.setState({
-        messages: [makeMessage({ id: 'tool-1', role: 'tool', transactionInFlight: true })],
+        messages,
         activeTransactionMessageId: 'tool-1',
         abortController: controller,
         isStreaming: true,
       });
+      const beforeEpoch = store.getState().authorizationEpoch;
 
       store.getState().clearHistory();
 
       expect(abortSpy).not.toHaveBeenCalled();
-      // The transcript still goes, and the store returns to a usable state.
-      expect(store.getState().messages).toEqual([]);
-      expect(store.getState().abortController).toBeNull();
-      expect(store.getState().activeTransactionMessageId).toBeNull();
+      const state = store.getState();
+      expect(state.messages).toBe(messages);
+      expect(state.abortController).toBe(controller);
+      expect(state.activeTransactionMessageId).toBe('tool-1');
+      expect(state.isStreaming).toBe(true);
+      expect(state.authorizationEpoch).toBe(beforeEpoch);
+      expect(clearHistoryStorage).not.toHaveBeenCalled();
     });
 
-    it('cancels hidden confirmation, payload, progress, and streaming state', () => {
+    it('clears hidden confirmation, payload, and progress state while idle', () => {
       updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
       const bound = store.getState();
-      const controller = new AbortController();
-      const abortSpy = vi.spyOn(controller, 'abort');
-      const cancelRafSpy = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
       store.setState({
-        // A confirmation card the user never confirmed: nothing has broadcast,
-        // so this state is safe to cancel outright. The already-broadcast case
-        // is covered by the preceding test.
         messages: [makeMessage({
           id: 'tool-1',
           role: 'tool',
-          isStreaming: true,
           awaitingConfirmation: true,
         })],
         pendingConfirmation: {
@@ -491,19 +487,13 @@ describe('aiStore', () => {
         },
         pendingPayload: { bytes: new Uint8Array([1]), size: 1, hash: 'a' },
         deployProgress: { phase: 'creating_lease', operation: 'deploy' },
-        abortController: controller,
-        isStreaming: true,
         lastMessageTime: Date.now(),
-        _pendingStreamUpdate: { messageId: 'tool-1', content: 'late update' },
-        _rafId: 17,
       });
 
       const beforeEpoch = store.getState().authorizationEpoch;
       store.getState().clearHistory();
 
       const state = store.getState();
-      expect(abortSpy).toHaveBeenCalledOnce();
-      expect(cancelRafSpy).toHaveBeenCalledWith(17);
       expect(state.messages).toEqual([]);
       expect(state.pendingConfirmation).toBeNull();
       expect(state.activeTransactionMessageId).toBeNull();
@@ -515,6 +505,32 @@ describe('aiStore', () => {
       expect(state._pendingStreamUpdate).toBeNull();
       expect(state._rafId).toBeNull();
       expect(state.authorizationEpoch).toBe(beforeEpoch + 1);
+    });
+
+    it('cancels pre-broadcast streaming work and queued updates', () => {
+      updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
+      const controller = new AbortController();
+      const abortSpy = vi.spyOn(controller, 'abort');
+      const cancelRafSpy = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+      onTestFinished(() => { cancelRafSpy.mockRestore(); });
+      store.setState({
+        messages: [makeMessage({ id: 'assistant-1', role: 'assistant', isStreaming: true })],
+        abortController: controller,
+        isStreaming: true,
+        _pendingStreamUpdate: { messageId: 'assistant-1', content: 'late update' },
+        _rafId: 17,
+      });
+
+      store.getState().clearHistory();
+
+      const state = store.getState();
+      expect(abortSpy).toHaveBeenCalledOnce();
+      expect(cancelRafSpy).toHaveBeenCalledWith(17);
+      expect(state.messages).toEqual([]);
+      expect(state.abortController).toBeNull();
+      expect(state.isStreaming).toBe(false);
+      expect(state._pendingStreamUpdate).toBeNull();
+      expect(state._rafId).toBeNull();
     });
   });
 

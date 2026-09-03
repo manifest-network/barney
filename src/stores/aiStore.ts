@@ -464,19 +464,19 @@ export const createAIStore = () =>
     // --- History ---
     clearHistory: () => {
       const current = get();
+      // A confirmed transaction may already be on chain. Clearing only its
+      // transcript/controller would detach the still-running operation, hide
+      // any recovery guidance, and allow another transaction to start beside
+      // it. The UI gates both clear entry points while streaming; keep the
+      // broadcast seam as a hard store-level boundary too.
+      if (current.activeTransactionMessageId !== null) return;
+
       // Clearing the visible transcript is also a cancellation boundary. If we
       // leave any of this transient state behind, the confirmation/progress UI
       // disappears with `messages` while its hidden action can still reject the
       // next request. Bumping the epoch also makes late async completions inert
       // so they cannot repopulate a transcript the user explicitly deleted.
-      //
-      // The abort is deliberately NOT applied past the broadcast seam. During a
-      // confirmed transaction the store's controller IS that transaction's
-      // (`confirmActionFn`), and aborting it cancels a deploy mid-provision --
-      // leaving a paid lease the provider never received a manifest for, with
-      // the guidance to release it landing in the transcript we just deleted.
-      // Both entry points gate on `isStreaming`, so this is defence in depth.
-      if (current.activeTransactionMessageId === null) current.abortController?.abort();
+      current.abortController?.abort();
       if (current._rafId !== null) cancelAnimationFrame(current._rafId);
       current._toolCache.clear();
       if (current.historyIdentity) {

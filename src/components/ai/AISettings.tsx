@@ -111,6 +111,7 @@ export function AISettings({ onClose }: AISettingsProps) {
               <button
                 type="button"
                 onClick={handleClearHistory}
+                disabled={isStreaming}
                 className="btn btn-danger btn-sm"
               >
                 <Trash2 className="w-4 h-4" />

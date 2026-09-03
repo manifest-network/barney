@@ -47,6 +47,8 @@ describe('AISettings clear-history gate', () => {
   afterEach(() => {
     act(() => { root.unmount(); });
     container.remove();
+    delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
+      .IS_REACT_ACT_ENVIRONMENT;
   });
 
   function render(): void {
@@ -98,6 +100,20 @@ describe('AISettings clear-history gate', () => {
     act(() => { confirm?.click(); });
 
     expect(clearHistory).toHaveBeenCalledOnce();
+  });
+
+  it('disables an armed clear if work starts before confirmation', () => {
+    render();
+    act(() => { clearButton()?.click(); });
+
+    aiState.isStreaming = true;
+    render();
+    const confirm = Array.from(container.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Confirm')) as HTMLButtonElement | undefined;
+
+    expect(confirm?.disabled).toBe(true);
+    act(() => { confirm?.click(); });
+    expect(clearHistory).not.toHaveBeenCalled();
   });
 
   it('disables the clear action when there is nothing to clear', () => {

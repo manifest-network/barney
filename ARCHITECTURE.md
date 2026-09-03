@@ -297,7 +297,8 @@ session transcript and select the new one atomically; a first visit loads that
 identity's scoped storage, while switching back uses the in-memory copy.
 Disconnect selects no history. `/clear` removes only the active wallet/network
 key. Both clear paths are cancellation boundaries and are gated on `isStreaming`,
-so neither can cancel a transaction that has already broadcast. Disabling the browser-global `saveHistory` preference stops future writes
+so neither can cancel a transaction that has already broadcast; the store action
+also refuses to clear while an active transaction owns the transcript. Disabling the browser-global `saveHistory` preference stops future writes
 without deleting existing keys; new messages remain isolated in the current
 tab, and re-enabling it snapshots the selected wallet only when that transcript
 is non-empty, so the snapshot can never delete what another tab saved.
