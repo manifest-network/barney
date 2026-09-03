@@ -77,7 +77,12 @@ describe('AISettings clear-history gate', () => {
     expect(clearButton()?.disabled).toBe(true);
   });
 
-  it('does not clear even if the disabled control is activated', () => {
+  it('does not clear while the control is disabled', () => {
+    // The `disabled` attribute is the real gate: neither happy-dom nor a real
+    // browser dispatches a click from a disabled button, so `handleClearHistory`
+    // is genuinely unreachable here. Its own `isStreaming` early return is
+    // defence in depth for a future caller that drops the attribute, and by
+    // construction no test can reach it through the rendered control.
     aiState.isStreaming = true;
     render();
 
