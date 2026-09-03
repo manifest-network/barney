@@ -13,6 +13,12 @@ import type { DeployProgress } from '../ai/progress';
 import { validateFile, validateManifestContent } from '../utils/fileValidation';
 import { sha256, toHex } from '../utils/hash';
 import { logError } from '../utils/errors';
+import type { WalletIdentity } from '../utils/walletIdentity';
+import {
+  createWalletIdentity,
+  walletIdentitiesEqual,
+  walletIdentityKey,
+} from '../utils/walletIdentity';
 import {
   AI_TOOL_CACHE_TTL_MS,
   AI_TOOL_CACHE_MAX_SIZE,
@@ -44,7 +50,12 @@ export interface DnsStatusEntry {
 export const dnsStatusKey = (leaseUuid: string, customDomain: string) =>
   `${leaseUuid}::${customDomain}`;
 
-import { loadSettings, loadHistory, clearHistoryStorage } from './aiActions/persistence';
+import {
+  loadSettings,
+  loadHistory,
+  saveHistory,
+  clearHistoryStorage,
+} from './aiActions/persistence';
 import { scheduleStreamingUpdateFn, flushPendingUpdateFn } from './aiActions/streaming';
 import { sendMessageFn } from './aiActions/sendMessage';
 import { confirmActionFn, cancelActionFn, type ConfirmActionOverrides } from './aiActions/confirmAction';
@@ -93,6 +104,9 @@ export interface AIStore {
   address: string | undefined;
   signing: SigningContext | undefined;
   chainId: string;
+  /** Wallet identity whose transcript is currently selected. Null while
+   * disconnected so no prior transcript can be displayed or sent. */
+  historyIdentity: WalletIdentity | null;
   /** Monotonic identities for concrete SDK client/signer instances. */
   clientGeneration: number;
   signerGeneration: number;
@@ -104,6 +118,9 @@ export interface AIStore {
   activeTransactionMessageId: string | null;
   abortController: AbortController | null;
   lastMessageTime: number;
+  /** Session transcripts keyed by wallet identity. This keeps wallet switches
+   * lossless even when persistence is disabled or a browser write fails. */
+  _historyCache: Map<string, ChatMessage[]>;
   _toolCache: Map<string, { result: ToolResult; timestamp: number }>;
   _pendingStreamUpdate: { messageId: string; content: string; thinking?: string } | null;
   _rafId: number | null;
@@ -111,7 +128,8 @@ export interface AIStore {
 
   // --- Actions ---
   setIsOpen: (open: boolean) => void;
-  sendMessage: (content: string) => Promise<void>;
+  /** Resolves false only when preflight rejected the message before enqueue. */
+  sendMessage: (content: string) => Promise<boolean>;
   confirmAction: (overrides?: ConfirmActionOverrides) => Promise<void>;
   cancelAction: () => void;
   addMessage: (message: ChatMessage) => void;
@@ -128,7 +146,7 @@ export interface AIStore {
   setDnsStatuses: (statuses: ReadonlyMap<string, DnsStatusEntry>) => void;
   updateSettings: (settings: Partial<AISettings>) => void;
   clearHistory: () => void;
-  requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<void>;
+  requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<boolean>;
   requestStopApp: (appName: string) => void;
   loadSkuTiers: () => Promise<void>;
   retrySkuTiers: () => Promise<void>;
@@ -149,8 +167,10 @@ export interface AIStore {
 }
 
 function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
+  let changed = false;
   const messages = state.messages.map((message) => {
     if (state.pendingConfirmation?.messageId === message.id) {
+      changed = true;
       return {
         ...message,
         content: AUTHORIZATION_CANCELLED_MESSAGE,
@@ -162,6 +182,7 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
     }
 
     if (state.activeTransactionMessageId === message.id) {
+      changed = true;
       return {
         ...message,
         content: TRANSACTION_INTERRUPTED_MESSAGE,
@@ -173,6 +194,7 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
     }
 
     if (message.isStreaming) {
+      changed = true;
       if (message.role === 'tool') {
         return {
           ...message,
@@ -204,6 +226,7 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
   if (hadActiveWork
       && state.pendingConfirmation === null
       && state.activeTransactionMessageId === null) {
+    changed = true;
     messages.push({
       id: generateMessageId(),
       role: 'assistant',
@@ -213,14 +236,17 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
     });
   }
 
-  return trimMessages(messages);
+  return changed ? trimMessages(messages) : state.messages;
 }
 
 export const createAIStore = () =>
   createStore<AIStore>((set, get) => ({
     // --- Initial state ---
     isOpen: false,
-    messages: loadHistory(),
+    // History is selected only after AppShell publishes a concrete wallet
+    // identity. Starting empty prevents pre-connection model requests from
+    // inheriting whichever wallet used this browser most recently.
+    messages: [],
     isStreaming: false,
     isConnected: false,
     settings: loadSettings(),
@@ -234,12 +260,14 @@ export const createAIStore = () =>
     address: undefined,
     signing: undefined,
     chainId: CHAIN_ID,
+    historyIdentity: null,
     clientGeneration: 0,
     signerGeneration: 0,
     authorizationEpoch: 0,
     activeTransactionMessageId: null,
     abortController: null,
     lastMessageTime: 0,
+    _historyCache: new Map(),
     _toolCache: new Map(),
     _pendingStreamUpdate: null,
     _rafId: null,
@@ -304,6 +332,17 @@ export const createAIStore = () =>
       const chainChanged = context.chainId !== current.chainId;
       if (!clientChanged && !addressChanged && !signerChanged && !chainChanged) return;
 
+      const candidateHistoryIdentity = createWalletIdentity(context.chainId, context.address);
+      const historyIdentityChanged = !walletIdentitiesEqual(
+        current.historyIdentity,
+        candidateHistoryIdentity,
+      );
+      // Keep reference stability across signer/client refreshes for consumers
+      // that select the identity object itself.
+      const nextHistoryIdentity = historyIdentityChanged
+        ? candidateHistoryIdentity
+        : current.historyIdentity;
+
       // Abort first, then publish the new identity and the complete cleared
       // authorization state in one Zustand update. The epoch/generation checks
       // in async actions make any callbacks already queued by the old work inert.
@@ -311,8 +350,41 @@ export const createAIStore = () =>
       if (current._rafId !== null) cancelAnimationFrame(current._rafId);
       current._toolCache.clear();
 
+      const closedMessages = messagesAfterAuthorizationChange(current);
+
+      // Cache the old transcript before publishing the new identity. Ordinary
+      // completed messages were already persisted synchronously by the store
+      // subscription; write here only when this transition added closure state.
+      // This keeps the common wallet-switch path free of JSON serialization.
+      if (historyIdentityChanged && current.historyIdentity) {
+        current._historyCache.set(
+          walletIdentityKey(current.historyIdentity),
+          closedMessages,
+        );
+        if (closedMessages !== current.messages) {
+          saveHistory(
+            current.historyIdentity,
+            closedMessages,
+            current.settings.saveHistory,
+          );
+        }
+      }
+
+      let nextMessages = closedMessages;
+      if (historyIdentityChanged) {
+        if (nextHistoryIdentity) {
+          const cacheKey = walletIdentityKey(nextHistoryIdentity);
+          const cached = current._historyCache.get(cacheKey);
+          nextMessages = cached ?? loadHistory(nextHistoryIdentity);
+          if (cached === undefined) current._historyCache.set(cacheKey, nextMessages);
+        } else {
+          nextMessages = [];
+        }
+      }
+
       set({
         ...context,
+        historyIdentity: nextHistoryIdentity,
         clientGeneration: current.clientGeneration + (clientChanged ? 1 : 0),
         signerGeneration: current.signerGeneration + (signerChanged ? 1 : 0),
         authorizationEpoch: current.authorizationEpoch + 1,
@@ -325,7 +397,7 @@ export const createAIStore = () =>
         isStreaming: false,
         _pendingStreamUpdate: null,
         _rafId: null,
-        messages: messagesAfterAuthorizationChange(current),
+        messages: nextMessages,
       });
     },
 
@@ -391,9 +463,39 @@ export const createAIStore = () =>
 
     // --- History ---
     clearHistory: () => {
-      get()._toolCache.clear();
-      clearHistoryStorage();
-      set({ messages: [] });
+      const current = get();
+      // A confirmed transaction may already be on chain. Clearing only its
+      // transcript/controller would detach the still-running operation, hide
+      // any recovery guidance, and allow another transaction to start beside
+      // it. The UI gates both clear entry points while streaming; keep the
+      // broadcast seam as a hard store-level boundary too.
+      if (current.activeTransactionMessageId !== null) return;
+
+      // Clearing the visible transcript is also a cancellation boundary. If we
+      // leave any of this transient state behind, the confirmation/progress UI
+      // disappears with `messages` while its hidden action can still reject the
+      // next request. Bumping the epoch also makes late async completions inert
+      // so they cannot repopulate a transcript the user explicitly deleted.
+      current.abortController?.abort();
+      if (current._rafId !== null) cancelAnimationFrame(current._rafId);
+      current._toolCache.clear();
+      if (current.historyIdentity) {
+        current._historyCache.set(walletIdentityKey(current.historyIdentity), []);
+        clearHistoryStorage(current.historyIdentity);
+      }
+      set({
+        messages: [],
+        pendingConfirmation: null,
+        activeTransactionMessageId: null,
+        pendingPayload: null,
+        deployProgress: null,
+        abortController: null,
+        isStreaming: false,
+        lastMessageTime: 0,
+        _pendingStreamUpdate: null,
+        _rafId: null,
+        authorizationEpoch: current.authorizationEpoch + 1,
+      });
     },
 
     // --- Streaming ---
@@ -453,9 +555,10 @@ export const createAIStore = () =>
 
     // --- Lifecycle ---
     destroy: () => {
-      const { _rafId, abortController } = get();
+      const { _rafId, abortController, _historyCache } = get();
       if (_rafId) cancelAnimationFrame(_rafId);
       if (abortController) abortController.abort();
+      _historyCache.clear();
       set({ _rafId: null, abortController: null });
     },
   }));

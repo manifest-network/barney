@@ -21,7 +21,7 @@ export async function requestBatchDeployFn(
   set: Set,
   apps: Array<{ label: string; manifest: object }>,
   originalMessage?: string,
-): Promise<void> {
+): Promise<boolean> {
   const { isStreaming, isConnected, pendingConfirmation } = get();
   // Silent no-op while another confirmation card is open. Without this gate,
   // clicking an example-app Deploy button (which routes through this
@@ -31,11 +31,11 @@ export async function requestBatchDeployFn(
   // wedged). Matches the standard modal-overlay UX: background clicks are
   // inert. Parallel hazard to 7ae6958 (which closed the same gap for
   // `requestStopAppFn`); found by architect's cycle-4 pattern scan.
-  if (isStreaming || !isConnected || pendingConfirmation !== null) return;
+  if (isStreaming || !isConnected || pendingConfirmation !== null) return false;
 
   const authorizationEpoch = get().authorizationEpoch;
   const authorization = captureTransactionAuthorization(get());
-  if (!authorization) return;
+  if (!authorization) return false;
 
   // No catalog pre-gate: `executeBatchDeploy` resolves the cheapest tier (or
   // returns "Tier catalog unavailable" for an empty catalog), and that error
@@ -96,7 +96,7 @@ export async function requestBatchDeployFn(
     }));
 
     if (get().authorizationEpoch !== authorizationEpoch
-        || get().abortController !== abort) return;
+        || get().abortController !== abort) return true;
 
     const { clientManager, address, signing, skuTiers } = get();
 
@@ -116,10 +116,10 @@ export async function requestBatchDeployFn(
     });
 
     if (get().authorizationEpoch !== authorizationEpoch
-        || get().abortController !== abort) return;
+        || get().abortController !== abort) return true;
 
     if (result.requiresConfirmation) {
-      if (!authorization || !isTransactionAuthorizationCurrent(get(), authorization)) return;
+      if (!isTransactionAuthorizationCurrent(get(), authorization)) return true;
       set({
         pendingConfirmation: {
           id: generateMessageId(),
@@ -150,7 +150,7 @@ export async function requestBatchDeployFn(
     }
   } catch (error) {
     if (get().authorizationEpoch !== authorizationEpoch
-        || get().abortController !== abort) return;
+        || get().abortController !== abort) return true;
     logError('AIContext.requestBatchDeploy', error);
     if (toolMsgId) {
       const updated = get().messages.map((m) =>
@@ -172,4 +172,6 @@ export async function requestBatchDeployFn(
       set({ isStreaming: false, abortController: null });
     }
   }
+
+  return true;
 }

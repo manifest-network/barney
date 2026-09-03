@@ -10,8 +10,12 @@ export const ACTIVE_WORK_CANCELLED_MESSAGE =
 export const TRANSACTION_INTERRUPTED_MESSAGE =
   'Wallet or network changed while this transaction was in progress. It may already have been submitted; check its status before retrying.';
 
+/** Phrased relative to the EVENT, not to whoever is looking. The row this
+ * lands on lives in the originating wallet's own transcript, and the reader may
+ * well be that wallet again (switched back, or only the signer instance was
+ * refreshed) — so it must not assert that some other wallet is now active. */
 export const TRANSACTION_FINISHED_AFTER_CONTEXT_CHANGE_MESSAGE =
-  'This transaction finished for the previous wallet after the wallet or network changed.';
+  'This transaction finished after the wallet or network changed.';
 
 /** Minimal state needed to capture and validate a transaction authorization. */
 export interface AuthorizationState {

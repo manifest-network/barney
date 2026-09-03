@@ -54,7 +54,7 @@ await someAction(store.getState, store.setState);
 expect(store.getState().messages).toEqual([...]);
 ```
 
-The store's persistence subscriptions are not active in tests — they are wired up by `AIProvider`, not by `createAIStore`.
+The store's persistence *subscriptions* are not installed by `createAIStore` — `AIProvider` wires those up. The store is not storage-free, though: `setWalletContext` loads (and on a closure, saves) the wallet-scoped transcript, `clearHistory` removes it, and the stale-transaction finalizers in `confirmAction` read and write it, all directly against `barney-ai-history:v1:*` with `settings.saveHistory` defaulting to `true`. Tests that call those actions must `localStorage.clear()` in `beforeEach`, or mock `./aiActions/persistence`, otherwise transcripts leak between tests.
 
 ### Components
 

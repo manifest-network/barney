@@ -76,11 +76,14 @@ function NoDomainForm({ data }: { data: CustomDomainCardData }) {
   const stackNeedsService = showServicePicker && selectedService === '';
   const canSet = looksValid && !stackNeedsService;
 
-  const handleSet = useCallback(() => {
+  const handleSet = useCallback(async () => {
     if (!canSet) return;
     const svcSuffix = selectedService ? ` (service: ${selectedService})` : '';
-    void sendMessage(`Point ${trimmed} at ${data.appName}${svcSuffix}`);
-    setInput('');
+    // Clear the field only once the message is actually accepted. A preflight
+    // refusal (mid-stream, disconnected, wallet transition) would otherwise
+    // wipe the typed domain with nothing in chat to show for it.
+    const accepted = await sendMessage(`Point ${trimmed} at ${data.appName}${svcSuffix}`);
+    if (accepted) setInput('');
   }, [sendMessage, canSet, trimmed, data.appName, selectedService]);
 
   const handleAskBarney = useCallback(() => {
@@ -110,13 +113,13 @@ function NoDomainForm({ data }: { data: CustomDomainCardData }) {
           placeholder="app.example.com"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') handleSet(); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') void handleSet(); }}
           className="custom-domain-card__input"
           aria-label="Custom domain"
         />
         <button
           type="button"
-          onClick={handleSet}
+          onClick={() => void handleSet()}
           disabled={!canSet}
           className="btn btn-primary btn-sm"
         >

@@ -47,7 +47,7 @@ export function buildHelpText(slice: SkuTiersState): string {
 | Command | Description |
 |---------|-------------|
 | \`/help\` | Show this help message |
-| \`/clear\` | Clear chat history |
+| \`/clear\` | Clear this wallet's chat history |
 
 ### What I can do
 - **Deploy** apps from a manifest file or the built-in catalog

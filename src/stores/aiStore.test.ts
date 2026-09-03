@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import type { StoreApi } from 'zustand';
 
 // --- Mocks ---
@@ -69,7 +69,7 @@ vi.mock('./aiActions/batchDeploy', () => ({
 import { createAIStore, type AIStore } from './aiStore';
 import { logError } from '../utils/errors';
 import { validateFile } from '../utils/fileValidation';
-import { clearHistoryStorage } from './aiActions/persistence';
+import { clearHistoryStorage, loadHistory, saveHistory } from './aiActions/persistence';
 
 type Store = StoreApi<AIStore>;
 
@@ -209,6 +209,48 @@ describe('aiStore', () => {
   // ---- Wallet setters ----
 
   describe('setWalletContext', () => {
+    it('starts without loading any wallet history', () => {
+      expect(store.getState().historyIdentity).toBeNull();
+      expect(store.getState().messages).toEqual([]);
+      expect(loadHistory).not.toHaveBeenCalled();
+    });
+
+    it('selects history only after a normalized wallet identity is available', () => {
+      updateWalletContext(store, { address: '  MANIFEST1ABC  ', chainId: 'chain-a' });
+
+      expect(store.getState().historyIdentity).toEqual({
+        chainId: 'chain-a',
+        address: 'manifest1abc',
+      });
+      expect(loadHistory).toHaveBeenCalledWith(store.getState().historyIdentity);
+    });
+
+    it('keeps the identity reference stable across client or signer refreshes', () => {
+      updateWalletContext(store, { address: 'manifest1abc', chainId: 'chain-a' });
+      const identity = store.getState().historyIdentity;
+
+      updateWalletContext(store, {
+        clientManager: {} as AIStore['clientManager'],
+        signing: {} as AIStore['signing'],
+      });
+
+      expect(store.getState().historyIdentity).toBe(identity);
+    });
+
+    it('restores a wallet from the session cache without re-reading storage', () => {
+      updateWalletContext(store, { address: 'manifest1alice', chainId: 'chain-a' });
+      const aliceMessage = makeMessage({ id: 'alice-only' });
+      store.setState({ messages: [aliceMessage] });
+
+      updateWalletContext(store, { address: 'manifest1bob' });
+      expect(store.getState().messages).toEqual([]);
+      expect(saveHistory).not.toHaveBeenCalled();
+      updateWalletContext(store, { address: 'manifest1alice' });
+
+      expect(store.getState().messages).toEqual([aliceMessage]);
+      expect(loadHistory).toHaveBeenCalledTimes(2);
+    });
+
     it('clears tool cache and deployProgress on change', () => {
       store.getState().cacheToolResult('key1', { success: true, data: 'x' });
       store.setState({ deployProgress: { phase: 'ready' } as AIStore['deployProgress'] });
@@ -276,6 +318,10 @@ describe('aiStore', () => {
         const controller = new AbortController();
         const abortSpy = vi.spyOn(controller, 'abort');
         const cancelRafSpy = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+        // Restore even if an assertion below throws: `vi.clearAllMocks()` does not
+        // undo a spy, so a leaked stub would silence cancelAnimationFrame for
+        // every later test in this file, including afterEach's destroy().
+        onTestFinished(() => { cancelRafSpy.mockRestore(); });
         store.setState({
           isStreaming: true,
           abortController: controller,
@@ -322,13 +368,25 @@ describe('aiStore', () => {
         expect(state._pendingStreamUpdate).toBeNull();
         expect(state._rafId).toBeNull();
         expect(state.isStreaming).toBe(false);
-        expect(state.messages[0].content).toContain('cancelled and was not submitted');
-        expect(state.messages[0].error).toContain('cancelled and was not submitted');
-        expect(state.messages[0].error).not.toBe('authorization_context_changed');
-        expect(state.messages[0].awaitingConfirmation).toBe(false);
-        expect(state.messages).toHaveLength(1);
-
-        cancelRafSpy.mockRestore();
+        if (changedField === 'address' || changedField === 'chain') {
+          // The closure is persisted to A, but must never be painted as part of
+          // B's newly selected transcript.
+          expect(state.messages).toEqual([]);
+          expect(saveHistory).toHaveBeenLastCalledWith(
+            expect.objectContaining({ chainId: 'chain-a', address: 'manifest1a' }),
+            [expect.objectContaining({
+              content: expect.stringContaining('cancelled and was not submitted'),
+              awaitingConfirmation: false,
+            })],
+            true,
+          );
+        } else {
+          expect(state.messages[0].content).toContain('cancelled and was not submitted');
+          expect(state.messages[0].error).toContain('cancelled and was not submitted');
+          expect(state.messages[0].error).not.toBe('authorization_context_changed');
+          expect(state.messages[0].awaitingConfirmation).toBe(false);
+          expect(state.messages).toHaveLength(1);
+        }
       },
     );
 
@@ -364,13 +422,115 @@ describe('aiStore', () => {
   // ---- History ----
 
   describe('clearHistory', () => {
-    it('clears messages, tool cache, and localStorage', () => {
+    it('clears messages, tool cache, and only the active wallet storage', () => {
+      updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
+      const activeIdentity = store.getState().historyIdentity;
       store.getState().addMessage(makeMessage());
       store.getState().cacheToolResult('k', { success: true, data: 1 });
       store.getState().clearHistory();
       expect(store.getState().messages).toHaveLength(0);
       expect(store.getState()._toolCache.size).toBe(0);
-      expect(clearHistoryStorage).toHaveBeenCalled();
+      expect(clearHistoryStorage).toHaveBeenCalledWith(activeIdentity);
+    });
+
+    it('refuses to clear or detach a transaction that has already broadcast', () => {
+      // During a confirmed transaction the store's controller IS that
+      // transaction's, and `deployManifest` honours it. Aborting mid-provision
+      // cancels a deploy the user never asked to cancel and strands a paid
+      // lease the provider holds no manifest for.
+      updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
+      const controller = new AbortController();
+      const abortSpy = vi.spyOn(controller, 'abort');
+      const messages = [makeMessage({ id: 'tool-1', role: 'tool', transactionInFlight: true })];
+      store.setState({
+        messages,
+        activeTransactionMessageId: 'tool-1',
+        abortController: controller,
+        isStreaming: true,
+      });
+      const beforeEpoch = store.getState().authorizationEpoch;
+
+      store.getState().clearHistory();
+
+      expect(abortSpy).not.toHaveBeenCalled();
+      const state = store.getState();
+      expect(state.messages).toBe(messages);
+      expect(state.abortController).toBe(controller);
+      expect(state.activeTransactionMessageId).toBe('tool-1');
+      expect(state.isStreaming).toBe(true);
+      expect(state.authorizationEpoch).toBe(beforeEpoch);
+      expect(clearHistoryStorage).not.toHaveBeenCalled();
+    });
+
+    it('clears hidden confirmation, payload, and progress state while idle', () => {
+      updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
+      const bound = store.getState();
+      store.setState({
+        messages: [makeMessage({
+          id: 'tool-1',
+          role: 'tool',
+          awaitingConfirmation: true,
+        })],
+        pendingConfirmation: {
+          id: 'pending-1',
+          messageId: 'tool-1',
+          action: {
+            originAddress: bound.address!,
+            chainId: bound.chainId,
+            clientGeneration: bound.clientGeneration,
+            signerGeneration: bound.signerGeneration,
+            id: 'action-1',
+            toolName: 'deploy_app',
+            args: { app_name: 'web' },
+            description: 'Deploy?',
+          },
+        },
+        pendingPayload: { bytes: new Uint8Array([1]), size: 1, hash: 'a' },
+        deployProgress: { phase: 'creating_lease', operation: 'deploy' },
+        lastMessageTime: Date.now(),
+      });
+
+      const beforeEpoch = store.getState().authorizationEpoch;
+      store.getState().clearHistory();
+
+      const state = store.getState();
+      expect(state.messages).toEqual([]);
+      expect(state.pendingConfirmation).toBeNull();
+      expect(state.activeTransactionMessageId).toBeNull();
+      expect(state.pendingPayload).toBeNull();
+      expect(state.deployProgress).toBeNull();
+      expect(state.abortController).toBeNull();
+      expect(state.isStreaming).toBe(false);
+      expect(state.lastMessageTime).toBe(0);
+      expect(state._pendingStreamUpdate).toBeNull();
+      expect(state._rafId).toBeNull();
+      expect(state.authorizationEpoch).toBe(beforeEpoch + 1);
+    });
+
+    it('cancels pre-broadcast streaming work and queued updates', () => {
+      updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
+      const controller = new AbortController();
+      const abortSpy = vi.spyOn(controller, 'abort');
+      const cancelRafSpy = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+      onTestFinished(() => { cancelRafSpy.mockRestore(); });
+      store.setState({
+        messages: [makeMessage({ id: 'assistant-1', role: 'assistant', isStreaming: true })],
+        abortController: controller,
+        isStreaming: true,
+        _pendingStreamUpdate: { messageId: 'assistant-1', content: 'late update' },
+        _rafId: 17,
+      });
+
+      store.getState().clearHistory();
+
+      const state = store.getState();
+      expect(abortSpy).toHaveBeenCalledOnce();
+      expect(cancelRafSpy).toHaveBeenCalledWith(17);
+      expect(state.messages).toEqual([]);
+      expect(state.abortController).toBeNull();
+      expect(state.isStreaming).toBe(false);
+      expect(state._pendingStreamUpdate).toBeNull();
+      expect(state._rafId).toBeNull();
     });
   });
 

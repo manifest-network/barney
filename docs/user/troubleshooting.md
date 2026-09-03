@@ -175,11 +175,20 @@ The chat input enforces a hard 64 KB ceiling per message (`MAX_INPUT_LENGTH` in 
 
 ### Chat history disappears
 
-Chat history is stored in `barney-ai-history` in localStorage as plain JSON validated on load by `validateChatHistory`. It is wiped if:
+Chat history is stored in a versioned localStorage envelope under
+`barney-ai-history:v1:{chainId}:{normalizedAddress}`. Each wallet/network pair
+has a separate transcript, and entries are validated by `validateChatHistory`
+when that identity connects. History is absent or removed if:
 
-- A persisted entry fails JSON parsing or schema validation — the key is removed and the app starts with an empty history. (There is no version envelope or migration chain; corrupted entries are simply dropped.)
+- You switched wallets or networks; reconnect the original wallet on the original network to see its transcript.
+- A persisted envelope fails JSON parsing, identity, or schema validation; that scoped key is removed and the wallet starts with empty history. A future-version envelope is preserved but remains unreadable until the app is upgraded again.
+- **Save Chat History** was off when the messages were sent, and the tab was later closed. Turning it off does not delete transcripts that were already saved.
 - You switched browsers or cleared site data.
-- You ran `/clear`.
+- You ran `/clear` or selected **Clear This Wallet's History**, which deletes only the active wallet/network transcript.
+
+The former browser-global `barney-ai-history` value cannot be attributed to a
+wallet safely and is discarded during migration; it is never imported into the
+first wallet that connects.
 
 The on-chain state and your apps are unaffected.
 

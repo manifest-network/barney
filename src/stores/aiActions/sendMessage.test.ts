@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { StreamResult } from '../../ai/streamUtils';
 import { createAIStore } from '../aiStore';
+import { createWalletIdentity } from '../../utils/walletIdentity';
 
 // ---------------------------------------------------------------------------
 // Deterministic IDs
@@ -79,6 +80,7 @@ vi.mock('../../registry/appRegistry', () => ({
   updateApp: vi.fn(),
 }));
 
+import { streamChat } from '../../api/morpheus';
 import { logError } from '../../utils/errors';
 import { AI_STREAM_TIMEOUT_MS, AI_STREAM_TOTAL_TIMEOUT_MS } from '../../config/constants';
 
@@ -107,6 +109,8 @@ function setupStore(overrides: Record<string, unknown> = {}): Store {
       saveHistory: false,
     },
     address: 'manifest1test',
+    chainId: 'manifest-test',
+    historyIdentity: createWalletIdentity('manifest-test', 'manifest1test'),
     ...overrides,
   });
   return store;
@@ -139,7 +143,8 @@ describe('sendMessage', () => {
   describe('guard clauses', () => {
     it('returns early when input is empty', async () => {
       const store = setupStore();
-      await store.getState().sendMessage('');
+      const accepted = await store.getState().sendMessage('');
+      expect(accepted).toBe(false);
       expect(store.getState().isStreaming).toBe(false);
       expect(store.getState().messages).toHaveLength(0);
     });
@@ -153,9 +158,30 @@ describe('sendMessage', () => {
 
     it('returns early when not connected', async () => {
       const store = setupStore({ isConnected: false });
-      await store.getState().sendMessage('hello');
+      const accepted = await store.getState().sendMessage('hello');
+      expect(accepted).toBe(false);
       expect(store.getState().isStreaming).toBe(false);
       expect(store.getState().messages).toHaveLength(0);
+    });
+
+    it('does not send existing wallet messages before their identity is selected', async () => {
+      const priorWalletMessage = {
+        id: 'prior-wallet',
+        role: 'user' as const,
+        content: 'private wallet A context',
+        timestamp: 1,
+      };
+      const store = setupStore({
+        historyIdentity: null,
+        messages: [priorWalletMessage],
+      });
+
+      const accepted = await store.getState().sendMessage('hello from wallet B');
+
+      expect(accepted).toBe(false);
+      expect(streamChat).not.toHaveBeenCalled();
+      expect(store.getState().messages).toEqual([priorWalletMessage]);
+      expect(store.getState().isStreaming).toBe(false);
     });
 
     it('supersedes a stale pending confirmation instead of orphaning its tool message (ENG-573)', async () => {
@@ -271,15 +297,25 @@ describe('sendMessage', () => {
     it('returns early when already streaming', async () => {
       const store = setupStore({ isStreaming: true });
       const before = store.getState().messages.length;
-      await store.getState().sendMessage('hello');
+      const accepted = await store.getState().sendMessage('hello');
+      expect(accepted).toBe(false);
       expect(store.getState().messages).toHaveLength(before);
     });
 
     it('returns early within debounce window', async () => {
       const store = setupStore({ lastMessageTime: 900 });
       // now = 1000, last = 900, diff = 100 < 300 (AI_MESSAGE_DEBOUNCE_MS)
-      await store.getState().sendMessage('hello');
+      const accepted = await store.getState().sendMessage('hello');
+      expect(accepted).toBe(false);
       expect(store.getState().messages).toHaveLength(0);
+    });
+
+    it('returns true once a message has entered the transcript', async () => {
+      const store = setupStore();
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult());
+
+      await expect(store.getState().sendMessage('hello')).resolves.toBe(true);
+      expect(store.getState().messages.some((message) => message.role === 'user')).toBe(true);
     });
   });
 

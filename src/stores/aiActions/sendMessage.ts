@@ -7,6 +7,7 @@ import { buildAITools } from '../../ai/tools';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { validateUserInput } from '../../ai/validation';
 import { logError } from '../../utils/errors';
+import { walletIdentityMatches } from '../../utils/walletIdentity';
 import {
   AI_MAX_TOOL_ITERATIONS,
   AI_STREAM_TOTAL_TIMEOUT_MS,
@@ -24,8 +25,20 @@ import {
 type Get = () => AIStore;
 type Set = (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) => void;
 
-export async function sendMessageFn(get: Get, set: Set, content: string): Promise<void> {
-  const { pendingPayload, isConnected, isStreaming, lastMessageTime } = get();
+/** Returns false only when the message was rejected before it entered the
+ * transcript. Callers can then restore the user's draft instead of silently
+ * discarding it during a wallet-context transition. */
+export async function sendMessageFn(get: Get, set: Set, content: string): Promise<boolean> {
+  const initialState = get();
+  const {
+    pendingPayload,
+    isConnected,
+    isStreaming,
+    lastMessageTime,
+    historyIdentity,
+    chainId,
+    address,
+  } = initialState;
 
   let effectiveContent = content;
   if (pendingPayload) {
@@ -36,12 +49,16 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
   }
 
   const validatedInput = validateUserInput(effectiveContent);
-  if (!validatedInput) return;
-  if (!isConnected) return;
-  if (isStreaming) return;
+  if (!validatedInput) return false;
+  if (!isConnected) return false;
+  if (isStreaming) return false;
+  // A wallet address can be published a render before its scoped transcript is
+  // selected. Never build a model request from state unless those identities
+  // match exactly.
+  if (!walletIdentityMatches(historyIdentity, chainId, address)) return false;
 
   const now = Date.now();
-  if (now - lastMessageTime < AI_MESSAGE_DEBOUNCE_MS) return;
+  if (now - lastMessageTime < AI_MESSAGE_DEBOUNCE_MS) return false;
 
   const authorizationEpoch = get().authorizationEpoch;
   set({ lastMessageTime: now, isStreaming: true });
@@ -109,8 +126,12 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
     while (iteration < AI_MAX_TOOL_ITERATIONS) {
       iteration++;
 
-      const currentMessages = get().messages.filter((m) => m.id !== currentAssistantMessageId);
-      const { address, signing, skuTiers } = get();
+      const activeState = get();
+      if (activeState.authorizationEpoch !== authorizationEpoch
+          || activeState.abortController !== abort) return true;
+
+      const currentMessages = activeState.messages.filter((m) => m.id !== currentAssistantMessageId);
+      const { address, signing, skuTiers } = activeState;
       const apiMessages = toChatApiMessages(currentMessages, address, skuTiers.tiers);
       const tools = buildAITools(skuTiers.tiers);
 
@@ -144,7 +165,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
       ]);
 
       if (get().authorizationEpoch !== authorizationEpoch
-          || get().abortController !== abort) return;
+          || get().abortController !== abort) return true;
 
       get().flushPendingUpdate();
 
@@ -155,7 +176,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
             : m
         );
         set({ messages: updated });
-        return;
+        return true;
       }
 
       if (streamResult.toolCalls.length === 0) {
@@ -186,9 +207,9 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
       );
 
       if (get().authorizationEpoch !== authorizationEpoch
-          || get().abortController !== abort) return;
+          || get().abortController !== abort) return true;
 
-      if (!toolResult.shouldContinue) return;
+      if (!toolResult.shouldContinue) return true;
       currentAssistantMessageId = toolResult.nextAssistantMessageId;
     }
 
@@ -207,7 +228,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
     }
   } catch (error) {
     if (get().authorizationEpoch !== authorizationEpoch
-        || get().abortController !== abort) return;
+        || get().abortController !== abort) return true;
     logError('AIContext.sendMessage', error);
     const updated = get().messages.map((m) =>
       m.id === currentAssistantMessageId
@@ -230,4 +251,6 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
       set({ abortController: null });
     }
   }
+
+  return true;
 }

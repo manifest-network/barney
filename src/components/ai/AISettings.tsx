@@ -13,12 +13,18 @@ export function AISettings({ onClose }: AISettingsProps) {
     updateSettings,
     clearHistory,
     messages,
+    isStreaming,
   } = useAI();
 
   const { theme, setTheme } = useTheme();
   const [confirmingClear, setConfirmingClear] = useState(false);
 
   const handleClearHistory = () => {
+    // Clearing is a cancellation boundary, so it must not be reachable while
+    // work is in flight. `isStreaming` covers both a chat stream and a
+    // confirmed transaction that has crossed its broadcast seam, and it is the
+    // same gate ChatPanel already applies to `/clear`.
+    if (isStreaming) return;
     if (confirmingClear) {
       clearHistory();
       setConfirmingClear(false);
@@ -77,8 +83,8 @@ export function AISettings({ onClose }: AISettingsProps) {
               </label>
               <p id="save-history-hint" className="ai-settings-hint">
                 {settings.saveHistory
-                  ? 'Chat history will be saved across sessions'
-                  : 'Chat history will not be saved'}
+                  ? 'History is saved separately for each wallet and network'
+                  : 'New messages stay in this tab; previously saved histories are kept'}
               </p>
             </div>
             <button
@@ -105,6 +111,7 @@ export function AISettings({ onClose }: AISettingsProps) {
               <button
                 type="button"
                 onClick={handleClearHistory}
+                disabled={isStreaming}
                 className="btn btn-danger btn-sm"
               >
                 <Trash2 className="w-4 h-4" />
@@ -122,11 +129,11 @@ export function AISettings({ onClose }: AISettingsProps) {
             <button
               type="button"
               onClick={handleClearHistory}
-              disabled={messages.length === 0}
+              disabled={messages.length === 0 || isStreaming}
               className="btn btn-danger btn-sm"
             >
               <Trash2 className="w-4 h-4" />
-              Clear History ({messages.length} messages)
+                Clear This Wallet's History ({messages.length} messages)
             </button>
           )}
         </div>

@@ -169,7 +169,8 @@ describe('requestBatchDeploy', () => {
 
     it('no-ops when not connected', async () => {
       const store = setupStore({ isConnected: false });
-      await store.getState().requestBatchDeploy(makeApps());
+      const accepted = await store.getState().requestBatchDeploy(makeApps());
+      expect(accepted).toBe(false);
       expect(store.getState().messages).toHaveLength(0);
       expect(mockExecuteBatchDeploy).not.toHaveBeenCalled();
     });

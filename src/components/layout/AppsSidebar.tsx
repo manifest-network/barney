@@ -111,7 +111,7 @@ function currentWalletValue<T>(
 
 export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const { address, disconnect, wallet } = useChain(CHAIN_NAME);
-  const { sendMessage, attachPayload, dnsStatuses } = useAI();
+  const { sendMessage, attachPayload, clearPayload, dnsStatuses } = useAI();
   // Unlike an address string, this identity changes for A → B → A. Registry
   // and credit snapshots from an earlier visit to A therefore remain hidden
   // until the current A lifecycle successfully refreshes them.
@@ -611,7 +611,14 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                     }
                     // Re-deploy with the registry size hint (resolves, or falls
                     // back to cheapest in the executor); never blocked here.
-                    void sendMessage(`Deploy ${app.name}${app.size ? ` using ${app.size} tier` : ''}`);
+                    const accepted = await sendMessage(
+                      `Deploy ${app.name}${app.size ? ` using ${app.size} tier` : ''}`
+                    );
+                    // Preflight refused (mid-stream, disconnected, wallet
+                    // transition). Detach the manifest we just staged, or it
+                    // would be consumed by an unrelated in-flight turn and
+                    // override that tool call's own image/services.
+                    if (!accepted) clearPayload();
                     onClose?.();
                   }}
                   className="apps-sidebar__recent-redeploy"

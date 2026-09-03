@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 
-const sendMessage = vi.fn();
+const sendMessage = vi.fn<(content: string) => Promise<boolean>>(() => Promise.resolve(true));
 let dnsStatuses: Map<string, { kind: string; expectedCnameTarget?: string; detail?: string }> = new Map();
 
 vi.mock('../../hooks/useAI', () => ({
@@ -33,12 +33,26 @@ function setReactInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+async function actAsync(callback: () => void): Promise<void> {
+  const actEnvironment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previous = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+  actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+  try {
+    await act(async () => { callback(); });
+  } finally {
+    if (previous === undefined) delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+    else actEnvironment.IS_REACT_ACT_ENVIRONMENT = previous;
+  }
+}
+
 describe('CustomDomainCard', () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    sendMessage.mockReset();
+    sendMessage.mockResolvedValue(true);
     dnsStatuses = new Map();
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -180,6 +194,38 @@ describe('CustomDomainCard', () => {
 
       flushSync(() => { setBtn.click(); });
       expect(sendMessage).toHaveBeenCalledWith(expect.stringMatching(/Point app\.example\.com at my-api/i));
+    });
+
+    it('clears the field once the message is accepted', async () => {
+      // beforeEach already resolves true; an override here would only obscure
+      // which case each test actually pins.
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '', appName: 'my-api' }) }));
+      });
+      const input = container.querySelector('input') as HTMLInputElement;
+      const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
+      flushSync(() => { setReactInputValue(input, 'app.example.com'); });
+
+      await actAsync(() => { setBtn.click(); });
+
+      expect(input.value).toBe('');
+    });
+
+    it('keeps the typed domain when the send is refused', async () => {
+      // A refusal (mid-stream, disconnected, wallet transition) puts nothing in
+      // chat, so wiping the field would lose the input with no explanation.
+      sendMessage.mockResolvedValueOnce(false);
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '', appName: 'my-api' }) }));
+      });
+      const input = container.querySelector('input') as HTMLInputElement;
+      const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
+      flushSync(() => { setReactInputValue(input, 'app.example.com'); });
+
+      await actAsync(() => { setBtn.click(); });
+
+      expect(sendMessage).toHaveBeenCalled();
+      expect(input.value).toBe('app.example.com');
     });
 
     it('passes service_name suffix when set', () => {
