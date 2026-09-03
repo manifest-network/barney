@@ -562,12 +562,61 @@ describe('confirmAction', () => {
       expect(store.getState().messages).toContainEqual(expect.objectContaining({
         role: 'assistant',
         local: true,
-        content: expect.stringContaining('finished for the previous wallet'),
+        content: expect.stringContaining('finished after the wallet or network changed'),
       }));
 
       expect(store.getState().address).toBe('manifest1test');
       expect(store.getState().activeTransactionMessageId).toBeNull();
       expect(mockProcessStream).not.toHaveBeenCalled();
+    });
+
+    it('lands a late FAILURE in its originating wallet transcript', async () => {
+      let failTransaction!: (error: Error) => void;
+      mockExecuteConfirmedTool.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        failTransaction = reject;
+      }));
+
+      const pending = makePendingConfirmation();
+      const store = setupStore({
+        pendingConfirmation: pending,
+        messages: [makeToolMessage(pending.messageId)],
+        settings: { saveHistory: true },
+      });
+
+      const confirming = store.getState().confirmAction();
+      store.getState().setWalletContext({
+        clientManager: { fake: 'next' } as unknown as NonNullable<AIStore['clientManager']>,
+        address: 'manifest1next',
+        signing: undefined,
+        chainId: 'manifest-test',
+      });
+      expect(store.getState().messages).toEqual([]);
+
+      failTransaction(new Error('broadcast blew up'));
+      await confirming;
+
+      // B's transcript is untouched; A's persisted key carries the cause.
+      expect(store.getState().messages).toEqual([]);
+      const originIdentity = createWalletIdentity('manifest-test', 'manifest1test')!;
+      expect(localStorage.getItem(historyStorageKey(originIdentity)))
+        .toContain('broadcast blew up');
+
+      store.getState().setWalletContext({
+        clientManager: fakeClientManager,
+        address: 'manifest1test',
+        signing: undefined,
+        chainId: 'manifest-test',
+      });
+
+      const originTool = store.getState().messages.find((m) => m.id === pending.messageId);
+      // The throw escaped the executor's own catch, so the outcome is unknown:
+      // the row must keep the check-its-status guidance, not just the cause.
+      expect(originTool).toMatchObject({
+        transactionInFlight: false,
+        awaitingConfirmation: false,
+        content: expect.stringContaining('broadcast blew up'),
+        error: expect.stringContaining('may already have been submitted'),
+      });
     });
 
     it('surfaces a successful partial summary when Stop aborts the follow-up', async () => {

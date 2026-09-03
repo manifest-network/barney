@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   disconnect: vi.fn(),
   sendMessage: vi.fn(),
   attachPayload: vi.fn(),
+  clearPayload: vi.fn(),
   getApps: vi.fn(),
   subscribeToRegistry: vi.fn(),
   getCreditAccount: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock('../../hooks/useAI', () => ({
   useAI: () => ({
     sendMessage: mocks.sendMessage,
     attachPayload: mocks.attachPayload,
+    clearPayload: mocks.clearPayload,
     dnsStatuses: new Map(),
   }),
 }));
@@ -127,6 +129,7 @@ describe('AppsSidebar refresh lifecycle', () => {
     mocks.getCreditEstimate.mockResolvedValue(null);
     mocks.disconnect.mockResolvedValue(undefined);
     mocks.attachPayload.mockResolvedValue({});
+    mocks.sendMessage.mockResolvedValue(true);
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
       .IS_REACT_ACT_ENVIRONMENT = true;
     container = document.createElement('div');
@@ -153,6 +156,45 @@ describe('AppsSidebar refresh lifecycle', () => {
     expect(call).toBeDefined();
     return call![0];
   }
+
+  async function renderWithRedeployableApp(): Promise<HTMLButtonElement> {
+    mocks.getApps.mockReturnValue([
+      // Re-deploy lives in the Recent section, which lists stopped/failed apps.
+      {
+        ...registryApp('redis', 'lease-redis'),
+        status: 'stopped' as const,
+        manifest: '{"image":"redis:7"}',
+      },
+    ]);
+    await render();
+    await act(async () => { await latestRefresh()(); });
+    const button = Array.from(container.querySelectorAll('button'))
+      .find((b) => b.getAttribute('aria-label') === 'Re-deploy redis');
+    expect(button).toBeDefined();
+    return button as HTMLButtonElement;
+  }
+
+  it('detaches the staged manifest when a re-deploy is refused', async () => {
+    // The button is not gated on isStreaming, so a click during another turn
+    // stages a manifest for a message that never runs. Left attached it would
+    // be consumed by the in-flight turn's own deploy/update tool call.
+    mocks.sendMessage.mockResolvedValue(false);
+    const button = await renderWithRedeployableApp();
+
+    await act(async () => { button.click(); });
+
+    expect(mocks.attachPayload).toHaveBeenCalled();
+    expect(mocks.clearPayload).toHaveBeenCalled();
+  });
+
+  it('leaves the staged manifest in place when the re-deploy is accepted', async () => {
+    const button = await renderWithRedeployableApp();
+
+    await act(async () => { button.click(); });
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(expect.stringContaining('Deploy redis'));
+    expect(mocks.clearPayload).not.toHaveBeenCalled();
+  });
 
   it('routes initial and wallet-change refreshes through a restartable poller', async () => {
     await render();

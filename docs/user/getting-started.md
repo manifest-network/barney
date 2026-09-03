@@ -29,7 +29,7 @@ Sessions last 24 hours. Disconnecting clears the session locally; your on-chain 
 
 ### What lives in your browser
 
-Barney stores a small set of values in `localStorage`. Some are global to the browser profile; others are scoped per connected wallet address:
+Barney stores a small set of values in `localStorage`. Some are global to the browser profile, some are scoped to the connected wallet, and chat history is scoped to the wallet *and* the network:
 
 **Global (shared across wallets):**
 
@@ -38,7 +38,7 @@ Barney stores a small set of values in `localStorage`. Some are global to the br
 
 **Per wallet and network (keyed by chain ID plus normalized address):**
 
-- Chat history (`barney-ai-history:v1:{chainId}:{address}`)
+- Chat history (`barney-ai-history:v1:{chainId}:{normalizedAddress}`)
 
 **Per-wallet (keyed by connected address):**
 

@@ -284,9 +284,16 @@ export function ChatPanel() {
     try {
       // No size hint — example deploys land on the cheapest available tier
       // (executor's resolveSizeOrCheapest default).
-      return await sendMessage(`Deploy ${app.label}`);
+      const accepted = await sendMessage(`Deploy ${app.label}`);
+      // Preflight refused, so the manifest was attached for a turn that never
+      // ran. Detach it: left in place it rides whatever the user sends next
+      // and overrides that request's own image/services (compositeTransactions
+      // prefers an attached payload).
+      if (!accepted) clearPayload();
+      return accepted;
     } catch (error) {
       logError('ChatPanel.deployExample', error);
+      clearPayload();
       return false;
     }
   };

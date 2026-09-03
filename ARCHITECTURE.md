@@ -298,8 +298,20 @@ identity's scoped storage, while switching back uses the in-memory copy.
 Disconnect selects no history. `/clear` removes only the active wallet/network
 key. Disabling the browser-global `saveHistory` preference stops future writes
 without deleting existing keys; new messages remain isolated in the current
-tab. Histories otherwise remain until explicitly cleared or the site's browser
-data is cleared.
+tab, and re-enabling it snapshots the selected wallet only when that transcript
+is non-empty, so the snapshot can never delete what another tab saved.
+Histories otherwise remain until explicitly cleared or the site's browser data
+is cleared.
+
+Two rules keep the session cache and localStorage from diverging. Every
+automatic write re-reads the stored envelope first and refuses to touch one
+stamped by a newer build, so the preservation guarantee holds even for a key
+this tab last read as readable. And a `storage` event from a sibling tab evicts
+the affected identity from the session cache unless it is the visible one, so
+the next switch back to that wallet re-reads storage instead of painting — and
+then persisting — a copy that has since been superseded. The visible transcript
+is deliberately exempt: it holds live session state, so a wallet open in two
+tabs stays last-writer-wins.
 
 `src/utils/versionedStorage.ts` provides envelope-format storage with a chained migration pipeline; new schema versions plug in without forcing data loss.
 

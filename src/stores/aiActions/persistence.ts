@@ -23,7 +23,6 @@ const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const LEGACY_STORAGE_KEY_HISTORY = 'barney-ai-history';
 const STORAGE_KEY_HISTORY_PREFIX = 'barney-ai-history:v1:';
 const HISTORY_STORAGE_VERSION = 1;
-const futureHistoryKeys = new Set<string>();
 
 interface PersistedHistory {
   identity: WalletIdentity;
@@ -87,17 +86,29 @@ export function discardLegacyHistoryStorage(): void {
   historyStorage.clear(LEGACY_STORAGE_KEY_HISTORY);
 }
 
-/** `versionedStorage` deliberately treats a newer envelope as unreadable
- * without deleting it. Keep that distinction when deciding whether a failed
- * history load is safe to clean up or overwrite. */
-function hasFutureHistoryVersion(key: string): boolean {
+function readRawHistory(key: string): string | null {
   try {
-    const raw = localStorage.getItem(key);
-    if (raw === null) return false;
+    return localStorage.getItem(key);
+  } catch (error) {
+    logError('AIContext.readRawHistory', error);
+    return null;
+  }
+}
+
+/** True when `raw` is an envelope stamped by a NEWER build.
+ *
+ * `versionedStorage` deliberately treats such a value as unreadable without
+ * deleting it, so an older build must neither overwrite nor remove it. The
+ * `data` check keeps this a strict subset of `versionedStorage`'s own envelope
+ * test: `{"v":2}` with no payload is corrupt rather than future, and is cleaned
+ * up like any other unreadable shape instead of blocking writes forever. */
+function isFutureHistoryEnvelope(raw: string): boolean {
+  try {
     const parsed: unknown = JSON.parse(raw);
     return typeof parsed === 'object'
       && parsed !== null
       && 'v' in parsed
+      && 'data' in parsed
       && typeof parsed.v === 'number'
       && Number.isInteger(parsed.v)
       && parsed.v > HISTORY_STORAGE_VERSION;
@@ -106,27 +117,28 @@ function hasFutureHistoryVersion(key: string): boolean {
   }
 }
 
+/** Re-read storage on every call rather than caching the answer from load: a
+ * sibling tab running a newer build can stamp a future envelope at any time,
+ * and this tab must not clobber it just because the key looked readable when
+ * this tab first opened the wallet. */
+function hasFutureHistoryVersion(key: string): boolean {
+  const raw = readRawHistory(key);
+  return raw !== null && isFutureHistoryEnvelope(raw);
+}
+
 export function loadHistory(identity: WalletIdentity): ChatMessage[] {
   const key = historyStorageKey(identity);
   const saved = historyStorage.load(key);
-  if (!saved) {
-    // A future build's envelope must survive a temporary downgrade. Other
-    // unreadable shapes are untrusted and are cleared to avoid repeated work.
-    if (hasFutureHistoryVersion(key)) {
-      futureHistoryKeys.add(key);
-    } else {
-      futureHistoryKeys.delete(key);
-      historyStorage.clear(key);
-    }
-    return [];
-  }
-  futureHistoryKeys.delete(key);
-  if (!walletIdentitiesEqual(saved.identity, identity)) {
-    historyStorage.clear(key);
-    return [];
+  if (saved && walletIdentitiesEqual(saved.identity, identity)) {
+    return rehydrateChatHistory(saved.messages);
   }
 
-  return rehydrateChatHistory(saved.messages);
+  // Nothing usable. Clear the key so the next load stays cheap — but not when
+  // it is absent (nothing to remove) or owned by a newer build, whose envelope
+  // must survive a temporary downgrade.
+  const raw = readRawHistory(key);
+  if (raw !== null && !isFutureHistoryEnvelope(raw)) historyStorage.clear(key);
+  return [];
 }
 
 /**
@@ -200,16 +212,15 @@ export function saveHistory(
   messages: ChatMessage[],
   saveHistory: boolean,
 ): void {
-  // This preference controls future writes. Destruction remains an explicit,
-  // confirmed action so toggling a setting cannot erase another wallet's data.
+  // This preference controls future writes only. Destruction stays an explicit
+  // user action (`/clear`, or the confirmed Clear This Wallet's History
+  // button), so toggling a setting can never erase another wallet's data.
   if (!saveHistory) return;
 
   const key = historyStorageKey(identity);
-  // Do not let an older build overwrite data it cannot understand.
-  if (futureHistoryKeys.has(key)) {
-    if (hasFutureHistoryVersion(key)) return;
-    futureHistoryKeys.delete(key);
-  }
+  // Do not let an older build overwrite or delete data it cannot understand.
+  // This guards the clear-on-empty branch below as well as the write.
+  if (hasFutureHistoryVersion(key)) return;
 
   // Strip `card` and `toolCalls` from messages before persisting.
   //
@@ -244,10 +255,11 @@ export function saveHistory(
   historyStorage.save(key, { identity, messages: toSave });
 }
 
+/** Explicit, user-initiated deletion of one wallet/network transcript. Unlike
+ * every automatic write this DOES remove a future-version envelope: the user
+ * asked for this wallet's history to be gone. */
 export function clearHistoryStorage(identity: WalletIdentity): void {
-  const key = historyStorageKey(identity);
-  futureHistoryKeys.delete(key);
-  historyStorage.clear(key);
+  historyStorage.clear(historyStorageKey(identity));
 }
 
 /** Detect changes to the non-streaming subset without serializing on every
@@ -273,6 +285,33 @@ export function setupPersistenceSubscriptions(store: StoreApi<AIStore>): () => v
   // to establish which wallet owned it, so startup always discards it.
   discardLegacyHistoryStorage();
 
+  // A sibling tab writing a transcript we are holding in the session cache
+  // would otherwise be invisible: switching back to that wallet would paint
+  // this tab's older copy, and its next write would overwrite the other tab's
+  // messages. Drop the cached copy so the next switch-in re-reads storage.
+  //
+  // The VISIBLE transcript is deliberately left alone — it is live session
+  // state (in-flight rows, an open confirmation) that must not be replaced
+  // underneath the user. Last writer still wins for a wallet open in two tabs.
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === null) {
+      // Whole-origin clear (another tab called localStorage.clear()).
+      const { historyIdentity, _historyCache } = store.getState();
+      const visibleKey = historyIdentity ? walletIdentityKey(historyIdentity) : null;
+      for (const key of [..._historyCache.keys()]) {
+        if (key !== visibleKey) _historyCache.delete(key);
+      }
+      return;
+    }
+    if (!event.key.startsWith(STORAGE_KEY_HISTORY_PREFIX)) return;
+
+    const identityKey = event.key.slice(STORAGE_KEY_HISTORY_PREFIX.length);
+    const { historyIdentity, _historyCache } = store.getState();
+    if (historyIdentity && walletIdentityKey(historyIdentity) === identityKey) return;
+    _historyCache.delete(identityKey);
+  };
+  window.addEventListener('storage', handleStorage);
+
   const unsubSettings = store.subscribe(
     (state, prev) => {
       if (state.settings !== prev.settings) {
@@ -284,13 +323,15 @@ export function setupPersistenceSubscriptions(store: StoreApi<AIStore>): () => v
   const unsubHistory = store.subscribe(
     (state, prev) => {
       // The browser-global preference controls future writes only. Turning it
-      // back on snapshots the selected wallet; deletion stays behind the
-      // separately confirmed clear action.
+      // back on snapshots the selected wallet; no toggle direction ever deletes.
       if (state.settings.saveHistory !== prev.settings.saveHistory) {
-        if (state.settings.saveHistory) {
-          if (state.historyIdentity) {
-            saveHistory(state.historyIdentity, state.messages, true);
-          }
+        if (state.settings.saveHistory
+            && state.historyIdentity
+            // An empty transcript has nothing to snapshot, and routing it
+            // through the clear-on-empty branch would delete a transcript a
+            // sibling tab saved under the same key.
+            && state.messages.length > 0) {
+          saveHistory(state.historyIdentity, state.messages, true);
         }
         return;
       }
@@ -325,6 +366,7 @@ export function setupPersistenceSubscriptions(store: StoreApi<AIStore>): () => v
   );
 
   return () => {
+    window.removeEventListener('storage', handleStorage);
     unsubSettings();
     unsubHistory();
   };

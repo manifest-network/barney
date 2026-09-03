@@ -27,7 +27,7 @@ import type { ChatMessage } from '../../contexts/aiTypes';
 import type { AISettings } from '../../ai/validation';
 import type { StoreApi } from 'zustand';
 import type { AIStore } from '../aiStore';
-import { createWalletIdentity } from '../../utils/walletIdentity';
+import { createWalletIdentity, walletIdentityKey } from '../../utils/walletIdentity';
 
 const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const LEGACY_STORAGE_KEY_HISTORY = 'barney-ai-history';
@@ -148,6 +148,32 @@ describe('persistence actions', () => {
 
       expect(loadHistory(IDENTITY)).toEqual([]);
       expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBe(future);
+    });
+
+    it('clears a version-stamped envelope that carries no payload', () => {
+      // `{v:2}` has no `data`, so versionedStorage treats it as legacy v0 rather
+      // than as a future envelope. It must be cleaned up like any other corrupt
+      // shape, not preserved — otherwise it would block every future write.
+      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify({ v: 2 }));
+
+      expect(loadHistory(IDENTITY)).toEqual([]);
+
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+      saveHistory(IDENTITY, [makeMessage({ id: 'after' })], true);
+      expect(storedMessages().map((m) => m.id)).toEqual(['after']);
+    });
+
+    it('rejects an un-normalized identity stored under the correct key', () => {
+      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify({
+        v: 1,
+        data: {
+          identity: { chainId: 'manifest-test', address: 'MANIFEST1ALICE' },
+          messages: [makeMessage({ content: 'un-normalized owner' })],
+        },
+      }));
+
+      expect(loadHistory(IDENTITY)).toEqual([]);
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
     });
 
     it('rejects an envelope whose identity does not match its scoped key', () => {
@@ -329,6 +355,27 @@ describe('persistence actions', () => {
       expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBe(future);
     });
 
+    it('does not overwrite a future-version envelope this tab never loaded', () => {
+      // The sibling-tab case: another tab on a newer build stamps the key after
+      // this tab already read it as readable. The guard is a fresh read on every
+      // write, so there is nothing to prime here.
+      const future = JSON.stringify({ v: 2, data: { newShape: true } });
+      localStorage.setItem(STORAGE_KEY_HISTORY, future);
+
+      saveHistory(IDENTITY, [makeMessage()], true);
+
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBe(future);
+    });
+
+    it('does not delete a future-version envelope on the empty-transcript path', () => {
+      const future = JSON.stringify({ v: 2, data: { newShape: true } });
+      localStorage.setItem(STORAGE_KEY_HISTORY, future);
+
+      saveHistory(IDENTITY, [], true);
+
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBe(future);
+    });
+
     it('removes the scoped key when no persistable messages remain', () => {
       localStorage.setItem(STORAGE_KEY_HISTORY, 'some data');
 
@@ -347,6 +394,12 @@ describe('persistence actions', () => {
       expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
     });
 
+    it('removes even a future-version envelope — the user asked for deletion', () => {
+      localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify({ v: 2, data: {} }));
+      clearHistoryStorage(IDENTITY);
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+    });
+
   });
 
   // ---- setupPersistenceSubscriptions ----
@@ -358,6 +411,7 @@ describe('persistence actions', () => {
         messages: [] as ChatMessage[],
         isStreaming: false,
         historyIdentity: IDENTITY,
+        _historyCache: new Map<string, ChatMessage[]>(),
       })) as unknown as StoreApi<AIStore>;
     }
 
@@ -398,6 +452,124 @@ describe('persistence actions', () => {
       expect(localStorage.getItem(historyStorageKey(otherIdentity))).not.toBeNull();
 
       unsub();
+    });
+
+    it('does not wipe scoped transcripts when installed with saving already off', () => {
+      const otherIdentity = createWalletIdentity('manifest-other', 'manifest1bob')!;
+      saveHistory(IDENTITY, [makeMessage()], true);
+      saveHistory(otherIdentity, [makeMessage()], true);
+      localStorage.setItem(LEGACY_STORAGE_KEY_HISTORY, 'unowned history');
+      const miniStore = createMiniStore();
+      miniStore.setState({ settings: { ...defaultSettings, saveHistory: false } });
+
+      const unsub = setupPersistenceSubscriptions(miniStore);
+
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).not.toBeNull();
+      expect(localStorage.getItem(historyStorageKey(otherIdentity))).not.toBeNull();
+      // Only the unowned global key is a migration target.
+      expect(localStorage.getItem(LEGACY_STORAGE_KEY_HISTORY)).toBeNull();
+
+      unsub();
+    });
+
+    it('turning history back on snapshots the selected transcript', () => {
+      const miniStore = createMiniStore();
+      miniStore.setState({
+        settings: { ...defaultSettings, saveHistory: false },
+        messages: [makeMessage({ id: 'm1' })],
+      });
+      const unsub = setupPersistenceSubscriptions(miniStore);
+      expect(localStorage.getItem(STORAGE_KEY_HISTORY)).toBeNull();
+
+      miniStore.setState({ settings: { ...defaultSettings, saveHistory: true } });
+
+      expect(storedMessages().map((m) => m.id)).toEqual(['m1']);
+      unsub();
+    });
+
+    it('turning history back on with nothing to snapshot leaves storage alone', () => {
+      // The snapshot must not route an empty transcript through the
+      // clear-on-empty write: that would delete what a sibling tab saved.
+      storeHistory([makeMessage({ id: 'from-other-tab' })]);
+      const miniStore = createMiniStore();
+      miniStore.setState({
+        settings: { ...defaultSettings, saveHistory: false },
+        messages: [],
+      });
+      const unsub = setupPersistenceSubscriptions(miniStore);
+
+      miniStore.setState({ settings: { ...defaultSettings, saveHistory: true } });
+
+      expect(storedMessages().map((m) => m.id)).toEqual(['from-other-tab']);
+      unsub();
+    });
+
+    describe('cross-tab session cache invalidation', () => {
+      const otherIdentity = createWalletIdentity('manifest-other', 'manifest1bob')!;
+
+      function cachedStore() {
+        const cache = new Map<string, ChatMessage[]>([
+          [walletIdentityKey(IDENTITY), [makeMessage({ id: 'visible' })]],
+          [walletIdentityKey(otherIdentity), [makeMessage({ id: 'background' })]],
+        ]);
+        const miniStore = createMiniStore();
+        miniStore.setState({ _historyCache: cache } as unknown as Partial<AIStore>);
+        return { miniStore, cache };
+      }
+
+      it('evicts a background wallet a sibling tab rewrote', () => {
+        const { miniStore, cache } = cachedStore();
+        const unsub = setupPersistenceSubscriptions(miniStore);
+
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: historyStorageKey(otherIdentity),
+        }));
+
+        expect(cache.has(walletIdentityKey(otherIdentity))).toBe(false);
+        unsub();
+      });
+
+      it('keeps the visible wallet, whose cache entry is live session state', () => {
+        const { miniStore, cache } = cachedStore();
+        const unsub = setupPersistenceSubscriptions(miniStore);
+
+        window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEY_HISTORY }));
+
+        expect(cache.get(walletIdentityKey(IDENTITY))?.[0].id).toBe('visible');
+        unsub();
+      });
+
+      it('ignores keys outside the history namespace', () => {
+        const { miniStore, cache } = cachedStore();
+        const unsub = setupPersistenceSubscriptions(miniStore);
+
+        window.dispatchEvent(new StorageEvent('storage', { key: 'barney-theme' }));
+
+        expect(cache.size).toBe(2);
+        unsub();
+      });
+
+      it('drops every background wallet on a whole-origin clear', () => {
+        const { miniStore, cache } = cachedStore();
+        const unsub = setupPersistenceSubscriptions(miniStore);
+
+        window.dispatchEvent(new StorageEvent('storage', { key: null }));
+
+        expect(cache.has(walletIdentityKey(otherIdentity))).toBe(false);
+        expect(cache.has(walletIdentityKey(IDENTITY))).toBe(true);
+        unsub();
+      });
+
+      it('stops listening once unsubscribed', () => {
+        const { miniStore, cache } = cachedStore();
+        setupPersistenceSubscriptions(miniStore)();
+
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: historyStorageKey(otherIdentity),
+        }));
+
+        expect(cache.has(walletIdentityKey(otherIdentity))).toBe(true);
+      });
     });
 
     it('fires saveHistory on messages change', () => {

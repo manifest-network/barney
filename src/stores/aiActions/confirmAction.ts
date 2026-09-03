@@ -153,6 +153,11 @@ function finalizeStaleToolResult(
   );
 }
 
+/** Reaching here means the throw escaped `executeConfirmedTool`'s own catch, so
+ * the broadcast's fate is genuinely unknown. Keep the outcome-unknown guidance
+ * `setWalletContext` already wrote on the row and append the cause; replacing
+ * it with a bare error string would tell the user the transaction failed when
+ * it may well have landed. */
 function finalizeStaleToolError(
   get: Get,
   set: Set,
@@ -160,7 +165,10 @@ function finalizeStaleToolError(
   messageId: string,
   error: unknown,
 ): void {
-  const detail = error instanceof Error ? error.message : TRANSACTION_INTERRUPTED_MESSAGE;
+  const cause = error instanceof Error ? error.message : String(error);
+  const detail = cause
+    ? `${TRANSACTION_INTERRUPTED_MESSAGE} (${cause})`
+    : TRANSACTION_INTERRUPTED_MESSAGE;
   updateOriginatingTranscript(get, set, identity, messageId, (message) => ({
     ...message,
     content: detail,

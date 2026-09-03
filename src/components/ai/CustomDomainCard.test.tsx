@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 
-const sendMessage = vi.fn();
+const sendMessage = vi.fn<(content: string) => Promise<boolean>>(() => Promise.resolve(true));
 let dnsStatuses: Map<string, { kind: string; expectedCnameTarget?: string; detail?: string }> = new Map();
 
 vi.mock('../../hooks/useAI', () => ({
@@ -23,6 +23,11 @@ function makeData(overrides: Partial<CustomDomainCardData> = {}): CustomDomainCa
     expectedAddress: 'manifest1tenant',
     ...overrides,
   };
+}
+
+/** Let the awaited sendMessage settle AND React commit the resulting setState. */
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /** React tracks its own input value separately, so direct .value assignment is ignored.
@@ -180,6 +185,38 @@ describe('CustomDomainCard', () => {
 
       flushSync(() => { setBtn.click(); });
       expect(sendMessage).toHaveBeenCalledWith(expect.stringMatching(/Point app\.example\.com at my-api/i));
+    });
+
+    it('clears the field once the message is accepted', async () => {
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '', appName: 'my-api' }) }));
+      });
+      const input = container.querySelector('input') as HTMLInputElement;
+      const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
+      flushSync(() => { setReactInputValue(input, 'app.example.com'); });
+
+      flushSync(() => { setBtn.click(); });
+      await flushMicrotasks();
+
+      expect(input.value).toBe('');
+    });
+
+    it('keeps the typed domain when the send is refused', async () => {
+      // A refusal (mid-stream, disconnected, wallet transition) puts nothing in
+      // chat, so wiping the field would lose the input with no explanation.
+      sendMessage.mockResolvedValueOnce(false);
+      flushSync(() => {
+        root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '', appName: 'my-api' }) }));
+      });
+      const input = container.querySelector('input') as HTMLInputElement;
+      const setBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Set') as HTMLButtonElement;
+      flushSync(() => { setReactInputValue(input, 'app.example.com'); });
+
+      flushSync(() => { setBtn.click(); });
+      await flushMicrotasks();
+
+      expect(sendMessage).toHaveBeenCalled();
+      expect(input.value).toBe('app.example.com');
     });
 
     it('passes service_name suffix when set', () => {
