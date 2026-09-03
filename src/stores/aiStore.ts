@@ -469,7 +469,14 @@ export const createAIStore = () =>
       // disappears with `messages` while its hidden action can still reject the
       // next request. Bumping the epoch also makes late async completions inert
       // so they cannot repopulate a transcript the user explicitly deleted.
-      current.abortController?.abort();
+      //
+      // The abort is deliberately NOT applied past the broadcast seam. During a
+      // confirmed transaction the store's controller IS that transaction's
+      // (`confirmActionFn`), and aborting it cancels a deploy mid-provision --
+      // leaving a paid lease the provider never received a manifest for, with
+      // the guidance to release it landing in the transcript we just deleted.
+      // Both entry points gate on `isStreaming`, so this is defence in depth.
+      if (current.activeTransactionMessageId === null) current.abortController?.abort();
       if (current._rafId !== null) cancelAnimationFrame(current._rafId);
       current._toolCache.clear();
       if (current.historyIdentity) {

@@ -197,7 +197,8 @@ describe('CustomDomainCard', () => {
     });
 
     it('clears the field once the message is accepted', async () => {
-      sendMessage.mockResolvedValueOnce(true);
+      // beforeEach already resolves true; an override here would only obscure
+      // which case each test actually pins.
       flushSync(() => {
         root.render(createElement(CustomDomainCard, { data: makeData({ fqdn: '', appName: 'my-api' }) }));
       });

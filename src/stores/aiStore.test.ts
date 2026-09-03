@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import type { StoreApi } from 'zustand';
 
 // --- Mocks ---
@@ -318,6 +318,10 @@ describe('aiStore', () => {
         const controller = new AbortController();
         const abortSpy = vi.spyOn(controller, 'abort');
         const cancelRafSpy = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+      // Restore even if an assertion below throws: `vi.clearAllMocks()` does not
+      // undo a spy, so a leaked stub would silence cancelAnimationFrame for
+      // every later test in this file, including afterEach's destroy().
+      onTestFinished(() => { cancelRafSpy.mockRestore(); });
         store.setState({
           isStreaming: true,
           abortController: controller,
@@ -431,6 +435,30 @@ describe('aiStore', () => {
       expect(clearHistoryStorage).toHaveBeenCalledWith(activeIdentity);
     });
 
+    it('does not abort a transaction that has already broadcast', () => {
+      // During a confirmed transaction the store's controller IS that
+      // transaction's, and `deployManifest` honours it. Aborting mid-provision
+      // cancels a deploy the user never asked to cancel and strands a paid
+      // lease the provider holds no manifest for.
+      updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
+      const controller = new AbortController();
+      const abortSpy = vi.spyOn(controller, 'abort');
+      store.setState({
+        messages: [makeMessage({ id: 'tool-1', role: 'tool', transactionInFlight: true })],
+        activeTransactionMessageId: 'tool-1',
+        abortController: controller,
+        isStreaming: true,
+      });
+
+      store.getState().clearHistory();
+
+      expect(abortSpy).not.toHaveBeenCalled();
+      // The transcript still goes, and the store returns to a usable state.
+      expect(store.getState().messages).toEqual([]);
+      expect(store.getState().abortController).toBeNull();
+      expect(store.getState().activeTransactionMessageId).toBeNull();
+    });
+
     it('cancels hidden confirmation, payload, progress, and streaming state', () => {
       updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
       const bound = store.getState();
@@ -438,12 +466,14 @@ describe('aiStore', () => {
       const abortSpy = vi.spyOn(controller, 'abort');
       const cancelRafSpy = vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
       store.setState({
+        // A confirmation card the user never confirmed: nothing has broadcast,
+        // so this state is safe to cancel outright. The already-broadcast case
+        // is covered by the preceding test.
         messages: [makeMessage({
           id: 'tool-1',
           role: 'tool',
           isStreaming: true,
           awaitingConfirmation: true,
-          transactionInFlight: true,
         })],
         pendingConfirmation: {
           id: 'pending-1',
@@ -459,7 +489,6 @@ describe('aiStore', () => {
             description: 'Deploy?',
           },
         },
-        activeTransactionMessageId: 'tool-1',
         pendingPayload: { bytes: new Uint8Array([1]), size: 1, hash: 'a' },
         deployProgress: { phase: 'creating_lease', operation: 'deploy' },
         abortController: controller,
@@ -486,8 +515,6 @@ describe('aiStore', () => {
       expect(state._pendingStreamUpdate).toBeNull();
       expect(state._rafId).toBeNull();
       expect(state.authorizationEpoch).toBe(beforeEpoch + 1);
-
-      cancelRafSpy.mockRestore();
     });
   });
 

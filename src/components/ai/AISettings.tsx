@@ -13,12 +13,18 @@ export function AISettings({ onClose }: AISettingsProps) {
     updateSettings,
     clearHistory,
     messages,
+    isStreaming,
   } = useAI();
 
   const { theme, setTheme } = useTheme();
   const [confirmingClear, setConfirmingClear] = useState(false);
 
   const handleClearHistory = () => {
+    // Clearing is a cancellation boundary, so it must not be reachable while
+    // work is in flight. `isStreaming` covers both a chat stream and a
+    // confirmed transaction that has crossed its broadcast seam, and it is the
+    // same gate ChatPanel already applies to `/clear`.
+    if (isStreaming) return;
     if (confirmingClear) {
       clearHistory();
       setConfirmingClear(false);
@@ -122,7 +128,7 @@ export function AISettings({ onClose }: AISettingsProps) {
             <button
               type="button"
               onClick={handleClearHistory}
-              disabled={messages.length === 0}
+              disabled={messages.length === 0 || isStreaming}
               className="btn btn-danger btn-sm"
             >
               <Trash2 className="w-4 h-4" />
