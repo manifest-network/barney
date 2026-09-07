@@ -16,6 +16,7 @@ import { createAuthTokensAdapter } from './authTokensAdapter';
 import type { OfflineSigner } from '@cosmjs/proto-signing';
 import { RPC_ENDPOINT } from '../api/config';
 import { CHAIN_NAME, CHAIN_ID, GAS_PRICE } from '../config/chain';
+import { MAX_TRANSACTION_GAS } from '../config/constants';
 import { createSigningMutex } from '../ai/toolExecutor/batchRunner';
 import type { SigningContext } from '../ai/toolExecutor/types';
 import { logError } from '../utils/errors';
@@ -124,6 +125,7 @@ export function useManifestMCP(): UseManifestMCPResult {
           chainId: CHAIN_ID,
           rpcUrl: RPC_ENDPOINT,
           gasPrice: GAS_PRICE,
+          maxGas: MAX_TRANSACTION_GAS,
           addressPrefix: 'manifest',
         };
 

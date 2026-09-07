@@ -1,6 +1,6 @@
 # AI cookbook
 
-This cookbook documents the 17 tools the AI can call, what each does, and how to invoke them in natural language. The model performs intent classification; you do not need to know tool names. Behind every chat reply is one or more deterministic tool calls executed in your browser — the model never speaks directly to the chain.
+This cookbook documents the 16 tools the AI can call, what each does, and how to invoke them in natural language. The model performs intent classification; you do not need to know tool names. Behind every chat reply is one or more deterministic tool calls executed in your browser — the model never speaks directly to the chain.
 
 A confirmation step is required for transactions that move tokens or change on-chain state. Queries return immediately.
 
@@ -93,7 +93,7 @@ Add 50 credits
 Top up my credits with 100 PWR
 ```
 
-**Under the hood.** `fund_credits(amount)`. The amount is in display units (1 PWR = 1,000,000 `upwr`).
+**Under the hood.** `fund_credits(amount)`. The amount is in display units (1 PWR = 1,000,000 `upwr`), with at most six decimal places. The confirmation shows the PWR moved into your own credit account and the maximum network fee. The transaction uses the Manifest SDK’s typed credit-funding operation.
 
 ### `set_custom_domain`
 
@@ -236,9 +236,9 @@ I need testnet credits
 
 **Under the hood.** `request_faucet()`. Available only when the deployment is configured with a faucet (`PUBLIC_FAUCET_URL`).
 
-## Escape hatches (advanced)
+## Advanced chain queries
 
-These tools expose the raw chain. Use them when you need an operation that isn't covered by the higher-level tools.
+The raw query tool reads chain state. Barney supports state changes only through the app-management and credit tools above, with user confirmation. Bank transfers, staking, governance, and credit withdrawals are unavailable.
 
 ### `cosmos_query`
 
@@ -253,21 +253,6 @@ Show staking validators
 ```
 
 **Under the hood.** `cosmos_query(module, subcommand, args?)`. `module` is one of `bank`, `staking`, `gov`, `auth`, `billing`, `sku`, `provider`. `args` is a JSON-encoded array of strings.
-
-### `cosmos_tx`
-
-**What it does.** Builds, signs, and broadcasts a raw Cosmos SDK transaction. Requires confirmation.
-
-**Example prompts.**
-
-```
-Send 10 MFX to manifest1abc...
-Run cosmos_tx bank send with [...]
-```
-
-**Under the hood.** `cosmos_tx(module, subcommand, args)`.
-
-> Most users will never need the escape hatches. Reach for them only when the higher-level tools cannot express what you want.
 
 ## Tips for productive prompting
 

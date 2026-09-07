@@ -23,11 +23,11 @@ vi.mock('./compositeTransactions', () => ({
   executeConfirmedStopApp: vi.fn(),
   executeFundCredits: vi.fn(),
   executeConfirmedFundCredits: vi.fn(),
-  executeCosmosTransaction: vi.fn(),
-  executeConfirmedCosmosTx: vi.fn(),
   executeConfirmedBatchDeploy: vi.fn(),
   executeRestartApp: vi.fn(),
   executeConfirmedRestartApp: vi.fn(),
+  executeSetCustomDomain: vi.fn(),
+  executeConfirmedSetCustomDomain: vi.fn(),
   executeUpdateApp: vi.fn(),
   executeConfirmedUpdateApp: vi.fn(),
 }));
@@ -50,8 +50,6 @@ import {
   executeConfirmedFundCredits,
   executeStopApp,
   executeConfirmedStopApp,
-  executeCosmosTransaction,
-  executeConfirmedCosmosTx,
   executeConfirmedBatchDeploy,
   executeRestartApp,
   executeConfirmedRestartApp,
@@ -178,18 +176,6 @@ describe('executeTool', () => {
     expect(result.requiresConfirmation).toBe(true);
   });
 
-  it('routes cosmos_tx to executor', async () => {
-    const confirmResult: ToolResult = {
-      success: true,
-      requiresConfirmation: true,
-      confirmationMessage: 'Execute bank send?',
-      pendingAction: { toolName: 'cosmos_tx', args: {} },
-    };
-    vi.mocked(executeCosmosTransaction).mockReturnValue(confirmResult);
-
-    const result = await executeTool('cosmos_tx', { module: 'bank', subcommand: 'send', args: '[]' }, makeOptions());
-    expect(result.requiresConfirmation).toBe(true);
-  });
 
   it('routes restart_app to executor', async () => {
     const confirmResult: ToolResult = {
@@ -371,15 +357,6 @@ describe('executeConfirmedTool', () => {
     expect(result).toBe(txResult);
   });
 
-  it('routes cosmos_tx to confirmed executor', async () => {
-    const txResult: ToolResult = { success: true, data: { message: 'tx done' } };
-    vi.mocked(executeConfirmedCosmosTx).mockResolvedValue(txResult);
-
-    const options = makeOptions();
-    const result = await executeConfirmedTool('cosmos_tx', { module: 'bank', subcommand: 'send', args: '[]' }, options);
-
-    expect(result).toBe(txResult);
-  });
 
   it('routes restart_app to confirmed executor', async () => {
     const txResult: ToolResult = { success: true, data: { message: 'restarted' } };

@@ -198,7 +198,7 @@ describe('parseEditableManifest', () => {
     expect(parseEditableManifest(makeAction({ toolName: 'fund_credits' }))).toBeNull();
     expect(parseEditableManifest(makeAction({ toolName: 'stop_app' }))).toBeNull();
     expect(parseEditableManifest(makeAction({ toolName: 'restart_app' }))).toBeNull();
-    expect(parseEditableManifest(makeAction({ toolName: 'cosmos_tx' }))).toBeNull();
+    expect(parseEditableManifest(makeAction({ toolName: 'unregistered_tool' }))).toBeNull();
   });
 
   it('returns null when _generatedManifest is missing', () => {
@@ -825,7 +825,7 @@ describe('ConfirmationCard with stack manifest', () => {
       },
     });
     const action = makeAction({
-      toolName: 'cosmos_tx',
+      toolName: 'unregistered_tool',
       args: { module: 'billing', subcommand: 'create-lease', _generatedManifest: manifest },
       description: 'Execute transaction?',
     });

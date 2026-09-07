@@ -24,7 +24,7 @@ describe('getSystemPrompt', () => {
     expect(prompt).toContain('get_balance');
     expect(prompt).toContain('browse_catalog');
     expect(prompt).toContain('cosmos_query');
-    expect(prompt).toContain('cosmos_tx');
+    expect(prompt).toContain('arbitrary chain transactions are unsupported');
     expect(prompt).toContain('update_app');
     expect(prompt).toContain('restart_app');
     expect(prompt).toContain('app_diagnostics');

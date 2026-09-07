@@ -187,6 +187,7 @@ describe('useAccountSetup — happy path', () => {
     expect(fundCredits).toHaveBeenCalledWith(
       expect.objectContaining({ chain: mockClientManager }),
       { amount: '5000000factory/addr/upwr' },
+      { signal: expect.any(AbortSignal) },
     );
 
     // Went through complete phase and then dismissed

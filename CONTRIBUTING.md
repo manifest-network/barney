@@ -83,7 +83,7 @@ These are enforced by code review (and occasionally by lint). Specifics live in 
 ### TypeScript
 
 - Strict mode is on. Don't widen types to `any` to make a type error go away — fix the underlying mismatch.
-- Where manifestjs's generated `fromPartial` / `lcdConvert` types reject object literals, the project pattern is to use `any` *only* for that specific argument and keep the surrounding code typed. See `buildMsg` in `src/api/tx.ts` for the canonical example.
+- Transaction changes must use reviewed, typed high-level Manifest SDK operations. Define the semantic consent schema in `src/ai/toolExecutor/transactionPlans.ts` and use it in both planning and confirmed execution. See [the transaction boundary](docs/dev/transaction-boundary.md); raw transaction builders and broadcasts do not belong in Barney.
 - Use discriminated unions for tool / transaction results (`ToolResult`, `TxResult`). Narrow on the discriminator before accessing payload fields.
 - Re-export manifestjs types from the wrapping module (`src/api/billing.ts`, `src/api/sku.ts`) rather than importing from `@manifest-network/manifestjs/dist/codegen/...` in feature code.
 

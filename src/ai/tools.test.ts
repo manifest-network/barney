@@ -22,7 +22,6 @@ describe('requiresConfirmation', () => {
     expect(requiresConfirmation('fund_credits')).toBe(true);
     expect(requiresConfirmation('restart_app')).toBe(true);
     expect(requiresConfirmation('update_app')).toBe(true);
-    expect(requiresConfirmation('cosmos_tx')).toBe(true);
   });
 
   it('returns false for all query tools', () => {
@@ -150,8 +149,8 @@ describe('AI_TOOLS', () => {
     expect(toolNames).toContain('get_logs');
   });
 
-  it('has 17 tools total', () => {
-    expect(AI_TOOLS).toHaveLength(17);
+  it('has 16 tools total', () => {
+    expect(AI_TOOLS).toHaveLength(16);
   });
 
   it('includes set_custom_domain tool', () => {
@@ -235,8 +234,8 @@ describe('getToolCallDescription - new tools', () => {
 });
 
 describe('buildAITools', () => {
-  it('returns 17 tools', () => {
-    expect(buildAITools(SAMPLE_TIERS)).toHaveLength(17);
+  it('returns 16 tools', () => {
+    expect(buildAITools(SAMPLE_TIERS)).toHaveLength(16);
   });
 
   it('renders deploy_app.size.enum from tier list', () => {

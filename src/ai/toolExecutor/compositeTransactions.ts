@@ -12,14 +12,13 @@ import {
   noopLogger,
 } from '@manifest-network/manifest-sdk';
 import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
-import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
 import { ProviderApiError } from '../../api/provider-api';
 import { getLeaseProvision, type FredLeaseStatus } from '../../api/fred';
 import { DENOMS } from '../../api/config';
-import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
+import { fromBaseUnits, toBaseUnits } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
@@ -35,10 +34,11 @@ import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import type { SigningContext } from './types';
 import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
-import { deployManifest, stopApp, setItemCustomDomain as monoSetItemCustomDomain, waitForLeaseStatus, isLeaseFailureTerminal, restartApp, updateApp, describeFredFailure, isKnownFailureReason, type FredAuthCtx, type DeployCallOptions, type StopAppResult, type TerminalChainState } from '@manifest-network/manifest-sdk/deploy';
+import { deployManifest, stopApp, fundCredits, setItemCustomDomain as monoSetItemCustomDomain, waitForLeaseStatus, isLeaseFailureTerminal, restartApp, updateApp, describeFredFailure, isKnownFailureReason, type FredAuthCtx, type DeployCallOptions, type StopAppResult, type TerminalChainState } from '@manifest-network/manifest-sdk/deploy';
 import { nextStepFor } from './failureGuidance';
 import { isUnsettledProvisionStatus } from './provisionStatus';
 import { buildBarneyCtx } from './capabilityCtx';
+import { creditAmountSchema, parseTransactionPlan, transactionConfirmation } from './transactionPlans';
 import { browserEventTransport } from '../../api/eventTransport';
 import {
   buildImageManifestFromArgs,
@@ -332,7 +332,7 @@ export async function executeDeployApp(
           _batchDeployDraft: true,
           app_name: name,
           ...(typeof args.size === 'string' ? { size: args.size } : {}),
-          ...(args._generatedManifest ? { _generatedManifest: args._generatedManifest } : {}),
+          ...(typeof args._generatedManifest === 'string' ? { _generatedManifest: args._generatedManifest } : {}),
           ...(customDomain ? {
             customDomain,
             customDomainServiceName,
@@ -511,28 +511,20 @@ export async function executeDeployApp(
     }
   }
 
-  return {
-    success: true,
-    requiresConfirmation: true,
-    confirmationMessage: `Deploy "${name}"${stackInfo} on ${size} tier${priceInfo}?${creditWarning}`,
-    pendingAction: {
-      toolName: 'deploy_app',
-      args: {
-        app_name: name,
-        size,
-        skuUuid,
-        providerUuid: provider.uuid,
-        providerUrl: provider.apiUrl,
-        ...(args._generatedManifest ? { _generatedManifest: args._generatedManifest } : {}),
-        ...(serviceNames && serviceNames.length > 0 ? { _serviceNames: serviceNames } : {}),
-        ...(customDomain ? {
-          customDomain,
-          customDomainServiceName,
-          ...(customDomainWarning ? { customDomainWarning } : {}),
-        } : {}),
-      },
-    },
-  };
+  return transactionConfirmation('deploy_app', {
+    app_name: name,
+    size,
+    skuUuid,
+    providerUuid: provider.uuid,
+    providerUrl: provider.apiUrl,
+    ...(typeof args._generatedManifest === 'string' ? { _generatedManifest: args._generatedManifest } : {}),
+    ...(serviceNames && serviceNames.length > 0 ? { _serviceNames: serviceNames } : {}),
+    ...(customDomain ? {
+      customDomain,
+      customDomainServiceName,
+      ...(customDomainWarning ? { customDomainWarning } : {}),
+    } : {}),
+  }, `Deploy "${name}"${stackInfo} on ${size} tier${priceInfo}?${creditWarning}`);
 }
 
 /**
@@ -547,23 +539,26 @@ export async function executeConfirmedDeployApp(
   options: ToolExecutorOptions,
   payload?: PayloadAttachment
 ): Promise<ToolResult> {
+  const parsed = parseTransactionPlan('deploy_app', args);
+  if (!parsed.success) return parsed;
+  const plan = parsed.data;
   const { address, appRegistry, signing, onProgress, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
   // Reconstruct payload from stored manifest JSON (image/stack deploy). This
   // strips MANIFEST_NOTICE_KEY, so payload.bytes are the byte-exact upload body.
-  if (!payload && typeof args._generatedManifest === 'string') {
-    payload = await buildPayloadFromManifest(args._generatedManifest);
+  if (!payload && typeof plan._generatedManifest === 'string') {
+    payload = await buildPayloadFromManifest(plan._generatedManifest);
   }
   if (!payload) return { success: false, error: 'Payload missing' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
 
-  const name = args.app_name as string;
-  const size = args.size as string;
-  const skuUuid = args.skuUuid as string;
-  const providerUuid = args.providerUuid as string;
-  const providerUrl = args.providerUrl as string;
+  const name = plan.app_name;
+  const size = plan.size;
+  const skuUuid = plan.skuUuid;
+  const providerUuid = plan.providerUuid;
+  const providerUrl = plan.providerUrl;
 
   // The exact JSON deployManifest will JSON.parse + validateManifest + hash
   // (its meta_hash must match the uploaded body — buildPayloadFromManifest
@@ -573,8 +568,8 @@ export async function executeConfirmedDeployApp(
   // Custom domain: pre-validated in the plan phase. Attach IN-deploy via the
   // spec (deployManifest sets it before upload — Traefik-safe). barney no
   // longer calls monoSetItemCustomDomain itself (would double-set, §3.10).
-  const customDomainArg = typeof args.customDomain === 'string' ? args.customDomain : '';
-  const customDomainServiceName = typeof args.customDomainServiceName === 'string' ? args.customDomainServiceName : '';
+  const customDomainArg = typeof plan.customDomain === 'string' ? plan.customDomain : '';
+  const customDomainServiceName = typeof plan.customDomainServiceName === 'string' ? plan.customDomainServiceName : '';
 
   const spec: ManifestDeploySpec = {
     manifest: manifestJson,
@@ -718,7 +713,7 @@ export async function executeConfirmedDeployApp(
   const expectedCnameTarget = attachedDomain
     ? resolveExpectedCnameTarget(connection, attachedServiceName)
     : undefined;
-  const isApexAttached = typeof args.customDomainWarning === 'string' && args.customDomainWarning.length > 0;
+  const isApexAttached = typeof plan.customDomainWarning === 'string' && plan.customDomainWarning.length > 0;
   const recordKind = isApexAttached
     ? `an ${apexRecordKindLabel(true)} record (apex domains cannot use CNAME)`
     : `a ${apexRecordKindLabel(false)}`;
@@ -792,13 +787,7 @@ export async function executeBatchDeploy(
     };
   }
   return {
-    success: true,
-    requiresConfirmation: true,
-    confirmationMessage: result.confirmationMessage,
-    pendingAction: {
-      toolName: 'batch_deploy',
-      args: { plan: result.plan },
-    },
+    ...transactionConfirmation('batch_deploy', { plan: result.plan }, result.confirmationMessage),
     ...(result.rejectedEntries.length > 0
       ? { rejectedEntries: result.rejectedEntries }
       : {}),
@@ -821,12 +810,15 @@ export async function executeConfirmedBatchDeploy(
   clientManager: CosmosClientManager,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
+  const parsed = parseTransactionPlan('batch_deploy', args);
+  if (!parsed.success) return parsed;
+  const plan = parsed.data;
   const { address, appRegistry, signing, onProgress, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
 
-  const integrity = await verifyBatchDeployPlanIntegrity(args.plan);
+  const integrity = await verifyBatchDeployPlanIntegrity(plan.plan);
   if (!integrity.success) return { success: false, error: integrity.error };
 
   // Re-run the same planner with a fresh chain SKU catalog and aggregate
@@ -1078,15 +1070,7 @@ export async function executeStopApp(
     const names = multi.apps.map((a) => a.name);
     const entries = multi.apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid }));
     const skippedNote = multi.skipped ? ` (skipped: ${multi.skipped.join(', ')})` : '';
-    return {
-      success: true,
-      requiresConfirmation: true,
-      confirmationMessage: `Stop ${multi.apps.length} app${multi.apps.length > 1 ? 's' : ''} (${names.join(', ')})? This will terminate all deployments and stop billing.${skippedNote}`,
-      pendingAction: {
-        toolName: 'stop_app',
-        args: { app_name: name, entries },
-      },
-    };
+    return transactionConfirmation('stop_app', { app_name: name, entries }, `Stop ${multi.apps.length} app${multi.apps.length > 1 ? 's' : ''} (${names.join(', ')})? This will terminate all deployments and stop billing.${skippedNote}`);
   }
 
   // Single app — use normalized name from resolveMultiAppNames
@@ -1098,15 +1082,7 @@ export async function executeStopApp(
     return { success: false, error: `App "${app.name}" is already stopped.` };
   }
 
-  return {
-    success: true,
-    requiresConfirmation: true,
-    confirmationMessage: `Stop app "${app.name}"? This will terminate the deployment and stop billing.`,
-    pendingAction: {
-      toolName: 'stop_app',
-      args: { app_name: app.name, leaseUuid: app.leaseUuid },
-    },
-  };
+  return transactionConfirmation('stop_app', { app_name: app.name, leaseUuid: app.leaseUuid }, `Stop app "${app.name}"? This will terminate the deployment and stop billing.`);
 }
 
 /**
@@ -1118,6 +1094,9 @@ export async function executeConfirmedStopApp(
   clientManager: CosmosClientManager,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
+  const parsed = parseTransactionPlan('stop_app', args);
+  if (!parsed.success) return parsed;
+  const plan = parsed.data;
   const { address, appRegistry, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
@@ -1136,8 +1115,8 @@ export async function executeConfirmedStopApp(
   // later fails at execution still marks the registry 'stopped' — reconcile
   // fixes it. stopApp's pre-query short-circuits leases already terminal at
   // call time to outcome:'already_inactive' (no doomed broadcast).
-  const entries = args.entries as Array<{ app_name: string; leaseUuid: string }> | undefined;
-  if (entries && entries.length > 0) {
+  if ('entries' in plan) {
+    const entries = plan.entries;
     const stopped: string[] = [];
     const failed: string[] = [];
     const unconfirmed: string[] = [];
@@ -1215,8 +1194,8 @@ export async function executeConfirmedStopApp(
   // authoritative outcome. All non-throwing outcomes (stopped / cancelled /
   // already_inactive) map the registry to 'stopped'; a throw is a real
   // failure.
-  const name = args.app_name as string;
-  const leaseUuid = args.leaseUuid as string;
+  const name = plan.app_name;
+  const leaseUuid = plan.leaseUuid;
 
   options.assertAuthorization?.();
   try {
@@ -1248,17 +1227,7 @@ export async function executeConfirmedStopApp(
 // fund_credits
 // ============================================================================
 
-/**
- * Pre-validation for fund_credits. Returns confirmation result or error.
- *
- * The fund_credits TOOL deliberately stays on
- * `cosmosTx(clientManager, 'billing', 'fund-credit', [address, denomString], true)`
- * and is NOT routed through the SDK's `fundCredits` primitive (which account
- * setup DOES use — see `useAccountSetup`). Pure YAGNI: it's a working one-line
- * chain TX with no provider/upload/poll orchestration to delete, so the
- * migration goal ("delete the hand-rolled deploy spine") doesn't apply here;
- * routing it through `fundCredits` would add indirection for zero behavior change.
- */
+/** Plan a self-funding credit transfer; amounts are revalidated after approval. */
 export function executeFundCredits(
   args: Record<string, unknown>,
   options: ToolExecutorOptions
@@ -1266,143 +1235,56 @@ export function executeFundCredits(
   const { address } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
 
-  const amount = args.amount;
-  if (typeof amount !== 'number' || amount <= 0 || !Number.isFinite(amount)) {
-    return { success: false, error: 'Amount must be a positive number.' };
-  }
-
-  const microAmount = Math.floor(amount * 1_000_000);
-  const denomString = `${microAmount}${DENOMS.PWR}`;
-
-  return {
-    success: true,
-    requiresConfirmation: true,
-    confirmationMessage: `Add ${amount} credits to your account?`,
-    pendingAction: {
-      toolName: 'fund_credits',
-      args: { amount, microAmount, denomString, address },
-    },
-  };
+  const parsed = creditAmountSchema.safeParse(args.amount);
+  if (!parsed.success) return { success: false, error: parsed.error.issues[0].message };
+  const amount = parsed.data;
+  return transactionConfirmation('fund_credits', { amount, address },
+    `Move ${amount} PWR from your wallet into deployment credits?`);
 }
 
-/**
- * Execute fund_credits after user confirmation.
- */
+/** Execute only the validated self-funding operation after user confirmation. */
 export async function executeConfirmedFundCredits(
   args: Record<string, unknown>,
   clientManager: CosmosClientManager,
   options: ToolExecutorOptions,
 ): Promise<ToolResult> {
-  const address = args.address as string;
-  const denomString = args.denomString as string;
-  const amount = args.amount as number;
-
-  if (!address || address !== options.address) {
+  const parsed = parseTransactionPlan('fund_credits', args);
+  if (!parsed.success) return parsed;
+  const { address, amount } = parsed.data;
+  if (address !== options.address) {
     return { success: false, error: 'Transaction cancelled: credit target does not match the authorized wallet.' };
   }
 
   options.assertAuthorization?.();
-  const result = await cosmosTx(clientManager, 'billing', 'fund-credit', [address, denomString], true);
-
-  if (result.code !== 0) {
-    return { success: false, error: result.rawLog ?? 'Failed to fund credits' };
+  options.signal?.throwIfAborted();
+  try {
+    const result = await fundCredits(
+      { chain: clientManager, logger: noopLogger },
+      { amount: `${toBaseUnits(amount, DENOMS.PWR)}${DENOMS.PWR}` },
+      { waitForConfirmation: true, signal: options.signal },
+    );
+    if (result.code !== 0) {
+      return { success: false, error: result.rawLog || 'Failed to fund credits' };
+    }
+    return {
+      success: true,
+      data: {
+        message: `Added ${amount} PWR to your deployment credits.`,
+        amount,
+        transactionHash: result.transactionHash,
+      },
+    };
+  } catch (error) {
+    if (isTransactionCancellation(error)) {
+      return {
+        success: false,
+        error: cancelledTransactionWasSent(error) === false
+          ? 'Credit funding was cancelled before submission.'
+          : 'Credit funding may have been submitted. Check your credit balance before retrying.',
+      };
+    }
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to fund credits' };
   }
-
-  return {
-    success: true,
-    data: {
-      message: `Added ${amount} credits to your account.`,
-      amount,
-      transactionHash: result.transactionHash,
-    },
-  };
-}
-
-// ============================================================================
-// cosmos_tx (escape hatch)
-// ============================================================================
-
-/** Allowed module+subcommand pairs for the cosmos_tx escape hatch. */
-const ALLOWED_TX_COMMANDS: Record<string, Set<string>> = {
-  billing: new Set(['create-lease', 'close-lease', 'fund-credit', 'withdraw-credit']),
-  bank: new Set(['send']),
-  staking: new Set(['delegate', 'redelegate', 'unbond']),
-  gov: new Set(['vote', 'submit-proposal']),
-};
-
-/**
- * Pre-validation for cosmos_tx. Returns confirmation result or error.
- * Restricted to an allowlist of safe module+subcommand pairs.
- */
-export function executeCosmosTransaction(
-  args: Record<string, unknown>,
-  options: ToolExecutorOptions
-): ToolResult {
-  const { address } = options;
-  if (!address) return { success: false, error: 'Wallet not connected' };
-
-  const module = args.module as string;
-  const subcommand = args.subcommand as string;
-  if (!module) return { success: false, error: 'module is required' };
-  if (!subcommand) return { success: false, error: 'subcommand is required' };
-
-  const allowedSubs = ALLOWED_TX_COMMANDS[module];
-  if (!allowedSubs || !allowedSubs.has(subcommand)) {
-    const allowed = Object.entries(ALLOWED_TX_COMMANDS)
-      .map(([m, subs]) => `${m}: ${[...subs].join(', ')}`)
-      .join('; ');
-    return { success: false, error: `"${module} ${subcommand}" is not allowed. Allowed transactions: ${allowed}` };
-  }
-
-  const parseResult = parseJsonStringArray(args.args);
-  if (parseResult.error) {
-    return { success: false, error: parseResult.error };
-  }
-
-  // Safe: parseResult.error was checked above, so data is always defined here
-  const parsedArgs = parseResult.data!;
-  const argsSummary = parsedArgs.length > 0 ? ` with args: ${parsedArgs.join(', ')}` : '';
-  return {
-    success: true,
-    requiresConfirmation: true,
-    confirmationMessage: `Execute ${module} ${subcommand}${argsSummary}?`,
-    pendingAction: {
-      toolName: 'cosmos_tx',
-      args: { module, subcommand, parsedArgs, address },
-    },
-  };
-}
-
-/**
- * Execute cosmos_tx after user confirmation.
- */
-export async function executeConfirmedCosmosTx(
-  args: Record<string, unknown>,
-  clientManager: CosmosClientManager,
-  options: ToolExecutorOptions,
-): Promise<ToolResult> {
-  const module = args.module as string;
-  const subcommand = args.subcommand as string;
-  const parsedArgs = (args.parsedArgs as string[]) ?? [];
-
-  if (typeof args.address === 'string' && args.address !== options.address) {
-    return { success: false, error: 'Transaction cancelled: action address does not match the authorized wallet.' };
-  }
-
-  options.assertAuthorization?.();
-  const result = await cosmosTx(clientManager, module, subcommand, parsedArgs, true);
-
-  if (result.code !== 0) {
-    return { success: false, error: result.rawLog ?? 'Transaction failed' };
-  }
-
-  return {
-    success: true,
-    data: {
-      message: `Executed ${module} ${subcommand}.`,
-      transactionHash: result.transactionHash,
-    },
-  };
 }
 
 // ============================================================================
@@ -1436,15 +1318,7 @@ export async function executeRestartApp(
       providerUrl: a.providerUrl!,
     }));
     const skippedNote = multi.skipped ? ` (skipped: ${multi.skipped.join(', ')})` : '';
-    return {
-      success: true,
-      requiresConfirmation: true,
-      confirmationMessage: `Restart ${multi.apps.length} app${multi.apps.length > 1 ? 's' : ''} (${names.join(', ')})? All apps will be briefly unavailable during restart.${skippedNote}`,
-      pendingAction: {
-        toolName: 'restart_app',
-        args: { app_name: name, entries },
-      },
-    };
+    return transactionConfirmation('restart_app', { app_name: name, entries }, `Restart ${multi.apps.length} app${multi.apps.length > 1 ? 's' : ''} (${names.join(', ')})? All apps will be briefly unavailable during restart.${skippedNote}`);
   }
 
   // Single app — use normalized name from resolveMultiAppNames
@@ -1463,19 +1337,11 @@ export async function executeRestartApp(
     return { success: false, error: `App "${app.name}" has no provider URL.` };
   }
 
-  return {
-    success: true,
-    requiresConfirmation: true,
-    confirmationMessage: `Restart app "${app.name}"? The app will be briefly unavailable during restart.`,
-    pendingAction: {
-      toolName: 'restart_app',
-      args: {
-        app_name: app.name,
-        leaseUuid: app.leaseUuid,
-        providerUrl: app.providerUrl,
-      },
-    },
-  };
+  return transactionConfirmation('restart_app', {
+    app_name: app.name,
+    leaseUuid: app.leaseUuid,
+    providerUrl: app.providerUrl,
+  }, `Restart app "${app.name}"? The app will be briefly unavailable during restart.`);
 }
 
 /**
@@ -1507,14 +1373,17 @@ export async function executeConfirmedRestartApp(
   clientManager: CosmosClientManager,
   options: ToolExecutorOptions
 ): Promise<ToolResult> {
+  const parsed = parseTransactionPlan('restart_app', args);
+  if (!parsed.success) return parsed;
+  const plan = parsed.data;
   const { address, appRegistry, signing, onProgress, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
 
   // Batch restart
-  const entries = args.entries as Array<{ app_name: string; leaseUuid: string; providerUrl: string }> | undefined;
-  if (entries && entries.length > 0) {
+  if ('entries' in plan) {
+    const entries = plan.entries;
     return executeConfirmedBatchRestart(
       entries,
       address,
@@ -1535,9 +1404,9 @@ export async function executeConfirmedRestartApp(
   const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
 
   // Single restart
-  const name = args.app_name as string;
-  const leaseUuid = args.leaseUuid as string;
-  const providerUrl = args.providerUrl as string;
+  const name = plan.app_name;
+  const leaseUuid = plan.leaseUuid;
+  const providerUrl = plan.providerUrl;
 
   onProgress?.({ phase: 'restarting', detail: 'Restarting app...', operation: 'restart' });
 
@@ -1935,23 +1804,15 @@ export async function executeUpdateApp(
     stackServiceCount = serviceNamesResult.serviceNames.length;
   }
 
-  return {
-    success: true,
-    requiresConfirmation: true,
-    confirmationMessage: args._isStack
+  return transactionConfirmation('update_app', {
+    app_name: app.name,
+    leaseUuid: app.leaseUuid,
+    providerUrl: app.providerUrl,
+    ...(typeof args._generatedManifest === 'string' ? { _generatedManifest: args._generatedManifest } : {}),
+    ...(args._isStack ? { _isStack: true } : {}),
+  }, args._isStack
       ? `Update stack "${app.name}" with ${stackServiceCount} services (new manifest)?`
-      : `Update app "${app.name}" with ${args._generatedManifest ? `image ${args.image}` : 'new manifest'}?`,
-    pendingAction: {
-      toolName: 'update_app',
-      args: {
-        app_name: app.name,
-        leaseUuid: app.leaseUuid,
-        providerUrl: app.providerUrl,
-        ...(args._generatedManifest ? { _generatedManifest: args._generatedManifest } : {}),
-        ...(args._isStack ? { _isStack: true } : {}),
-      },
-    },
-  };
+      : `Update app "${app.name}" with ${args._generatedManifest ? `image ${args.image}` : 'new manifest'}?`);
 }
 
 /**
@@ -1997,21 +1858,24 @@ export async function executeConfirmedUpdateApp(
   options: ToolExecutorOptions,
   payload?: PayloadAttachment
 ): Promise<ToolResult> {
+  const parsed = parseTransactionPlan('update_app', args);
+  if (!parsed.success) return parsed;
+  const plan = parsed.data;
   const { address, appRegistry, signing, onProgress, signal } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
 
   // Reconstruct payload from stored manifest JSON (image-based update)
-  if (!payload && typeof args._generatedManifest === 'string') {
-    payload = await buildPayloadFromManifest(args._generatedManifest);
+  if (!payload && typeof plan._generatedManifest === 'string') {
+    payload = await buildPayloadFromManifest(plan._generatedManifest);
   }
 
   if (!payload) return { success: false, error: 'Payload missing' };
 
-  const name = args.app_name as string;
-  const leaseUuid = args.leaseUuid as string;
-  const providerUrl = args.providerUrl as string;
+  const name = plan.app_name;
+  const leaseUuid = plan.leaseUuid;
+  const providerUrl = plan.providerUrl;
 
   onProgress?.({ phase: 'updating', detail: 'Updating app with new manifest...', operation: 'update' });
 
@@ -2446,24 +2310,16 @@ export async function executeSetCustomDomain(
     confirmationMessage = `Change "${appName}" custom domain from "${currentDomain}" to "${customDomain}"?`;
   }
 
-  return {
-    success: true,
-    requiresConfirmation: true,
-    confirmationMessage,
-    pendingAction: {
-      toolName: 'set_custom_domain',
-      args: {
-        app_name: app.name,
-        leaseUuid: app.leaseUuid,
-        serviceName,
-        customDomain,
-        currentDomain,
-        expectedCnameTarget,
-        warning,
-        address,
-      },
-    },
-  };
+  return transactionConfirmation('set_custom_domain', {
+    app_name: app.name,
+    leaseUuid: app.leaseUuid,
+    serviceName,
+    customDomain,
+    currentDomain,
+    expectedCnameTarget,
+    warning,
+    address,
+  }, confirmationMessage);
 }
 
 /**
@@ -2480,21 +2336,24 @@ export async function executeConfirmedSetCustomDomain(
   clientManager: CosmosClientManager,
   options: ToolExecutorOptions,
 ): Promise<ToolResult> {
+  const parsed = parseTransactionPlan('set_custom_domain', args);
+  if (!parsed.success) return parsed;
+  const plan = parsed.data;
   const { address, appRegistry } = options;
   if (!address) return { success: false, error: 'Wallet not connected.' };
 
-  const appName = args.app_name as string;
-  const leaseUuid = args.leaseUuid as string;
-  const serviceName = typeof args.serviceName === 'string' ? args.serviceName : '';
-  if (typeof args.customDomain !== 'string') {
+  const appName = plan.app_name;
+  const leaseUuid = plan.leaseUuid;
+  const serviceName = typeof plan.serviceName === 'string' ? plan.serviceName : '';
+  if (typeof plan.customDomain !== 'string') {
     return { success: false, error: 'customDomain must be a string (use "" to clear).' };
   }
-  const customDomain = args.customDomain;
-  const expectedCnameTarget = typeof args.expectedCnameTarget === 'string' ? args.expectedCnameTarget : undefined;
-  const isApexWarning = typeof args.warning === 'string' && args.warning.length > 0;
+  const customDomain = plan.customDomain;
+  const expectedCnameTarget = typeof plan.expectedCnameTarget === 'string' ? plan.expectedCnameTarget : undefined;
+  const isApexWarning = typeof plan.warning === 'string' && plan.warning.length > 0;
   const clearing = customDomain === '';
 
-  if (typeof args.address === 'string' && args.address !== address) {
+  if (typeof plan.address === 'string' && plan.address !== address) {
     return { success: false, error: 'Transaction cancelled: domain action address does not match the authorized wallet.' };
   }
 

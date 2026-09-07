@@ -8,6 +8,10 @@
 
 import { getNumericConfig } from './runtimeConfig';
 
+/** Per-transaction gas ceiling enforced by the SDK before signing. Together
+ * with the configured gas price this bounds the network fee shown at consent. */
+export const MAX_TRANSACTION_GAS = 50_000_000;
+
 // ============================================
 // Time Constants
 // ============================================

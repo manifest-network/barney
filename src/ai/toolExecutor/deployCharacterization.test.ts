@@ -24,7 +24,7 @@ import { LeaseState } from '../../api/billing';
  * commit these MUST stay green, EXCEPT the annotated allowed-deltas below.
  *
  * They intentionally assert on OUTPUTS, not on internal call args
- * (cosmosTx/waitForLeaseReady are deleted in C2). C2/C3 keep this file green
+ * (the old deploy orchestration was deleted in C2). C2/C3 keep this file green
  * by re-pointing the mocks below to `deployManifest` while leaving the
  * assertions untouched — that is the behavior-preservation proof.
  *
@@ -72,10 +72,6 @@ vi.mock('../../api/fred', () => ({
   getLeaseProvision: vi.fn(),
   restartLease: vi.fn(),
   updateLease: vi.fn(),
-}));
-vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/chain')>()),
-  cosmosTx: vi.fn(),
 }));
 // ENG-483: deployManifest + TerminalChainStateError are imported from the SDK
 // deploy facade, so mock there. Spread the original facade; manifest.ts's

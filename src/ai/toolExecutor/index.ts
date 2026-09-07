@@ -22,8 +22,6 @@ import {
   executeConfirmedStopApp,
   executeFundCredits,
   executeConfirmedFundCredits,
-  executeCosmosTransaction,
-  executeConfirmedCosmosTx,
   executeConfirmedBatchDeploy,
   executeRestartApp,
   executeConfirmedRestartApp,
@@ -61,8 +59,8 @@ const TX_TOOLS = new Set([
   'set_custom_domain',
 ]);
 
-/** Public TX tools plus the UI-only batch pseudo-tool and raw escape hatch. */
-const CONFIRMED_TX_TOOLS = new Set([...TX_TOOLS, 'batch_deploy', 'cosmos_tx']);
+/** Public TX tools plus the UI-only batch pseudo-tool. */
+const CONFIRMED_TX_TOOLS = new Set([...TX_TOOLS, 'batch_deploy']);
 
 /**
  * Execute a tool call from the AI assistant.
@@ -147,11 +145,6 @@ export async function executeTool(
     }
   }
 
-  // --- cosmos_tx (requires confirmation) ---
-  if (toolName === 'cosmos_tx') {
-    return executeCosmosTransaction(args, options);
-  }
-
   return { success: false, error: `Unknown tool: ${toolName}` };
 }
 
@@ -194,8 +187,6 @@ export async function executeConfirmedTool(
         return await executeConfirmedStopApp(args, clientManager, options);
       case 'fund_credits':
         return await executeConfirmedFundCredits(args, clientManager, options);
-      case 'cosmos_tx':
-        return await executeConfirmedCosmosTx(args, clientManager, options);
       case 'restart_app':
         return await executeConfirmedRestartApp(args, clientManager, options);
       case 'update_app':

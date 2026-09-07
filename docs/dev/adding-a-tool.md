@@ -2,7 +2,7 @@
 
 This guide walks through adding a new AI tool end-to-end. The pattern is uniform whether the tool is a read-only query or a transaction that requires confirmation.
 
-We'll use a hypothetical `pause_app` tool as the running example — a tool that pauses a running app without closing the lease.
+We'll use a hypothetical `pause_app` tool as the running example — a tool that pauses a running app without closing the lease. First ensure the SDK exposes a reviewed, typed high-level operation for the action. If it does not, file/link a narrowly scoped SDK issue and leave the tool unavailable. Do not add a raw transaction or provider mutation fallback. The illustrative `pauseApp` below is not a currently supported SDK operation.
 
 ## Tool taxonomy
 
@@ -10,7 +10,7 @@ We'll use a hypothetical `pause_app` tool as the running example — a tool that
 |------|------------------------|----------------|
 | Query | No | `src/ai/toolExecutor/compositeQueries.ts` |
 | Transaction | Yes (two-phase) | `src/ai/toolExecutor/compositeTransactions.ts` |
-| Escape hatch | Special-cased | `src/ai/toolExecutor/index.ts` (don't add here) |
+| Advanced read-only query | No | `src/ai/toolExecutor/index.ts` (do not add mutation escape hatches) |
 
 Transactions follow a two-phase pattern:
 
@@ -53,7 +53,6 @@ export const CONFIRMATION_TOOLS = new Set([
   'restart_app',
   'update_app',
   'set_custom_domain',
-  'cosmos_tx',
   'pause_app',          // ← new
 ]);
 ```
@@ -75,81 +74,50 @@ This label appears in the streaming UI while the tool runs.
 
 For a transaction, implement two functions in `src/ai/toolExecutor/compositeTransactions.ts`.
 
-**The validation/build phase** returns confirmation metadata without touching the chain:
+Add a strict semantic plan schema to `transactionPlans.ts` first. For a single-app pause this would bind `app_name`, `leaseUuid`, and `providerUrl`. Planning resolves those once; confirmation parses the same schema instead of resolving a potentially different app by name. Bulk actions must bind every entry and show the full set for approval.
+
+**The validation/build phase** reads state and returns the shared typed confirmation:
 
 ```ts
 export async function executePauseApp(
   args: Record<string, unknown>,
-  options: ToolExecutorOptions
+  options: ToolExecutorOptions,
 ): Promise<ToolResult> {
   const { address, appRegistry } = options;
-  if (!address) return { success: false, error: 'Wallet not connected' };
-  if (!appRegistry) return { success: false, error: 'App registry not available' };
-
-  const resolved = resolveMultiAppNames(String(args.app_name ?? ''), address, appRegistry, (a) => a.status === 'running', 'pause');
-  if (resolved.mode === 'error') return { success: false, error: resolved.error };
-
-  // Single-app path
-  if (resolved.mode === 'single') {
-    const app = appRegistry.findApp(address, resolved.name);
-    if (!app) return { success: false, error: `App "${resolved.name}" not found.` };
-
-    return {
-      success: true,
-      requiresConfirmation: true,
-      confirmationMessage: `Pause "${app.name}"?`,
-      pendingAction: { toolName: 'pause_app', args: { app_name: app.name } },
-    };
-  }
-
-  // Multi-app path (comma-separated or "all")
-  // Same shape; the confirmed phase iterates the resolved apps.
-  return {
-    success: true,
-    requiresConfirmation: true,
-    confirmationMessage: `Pause ${resolved.apps.length} apps?`,
-    pendingAction: { toolName: 'pause_app', args: { app_name: args.app_name } },
-  };
+  if (!address || !appRegistry) return { success: false, error: 'Wallet not ready' };
+  const app = appRegistry.findApp(address, String(args.app_name ?? ''));
+  if (!app?.providerUrl) return { success: false, error: 'App/provider not found' };
+  return transactionConfirmation('pause_app', {
+    app_name: app.name,
+    leaseUuid: app.leaseUuid,
+    providerUrl: app.providerUrl,
+  }, `Pause "${app.name}"?`);
 }
 ```
 
-**The confirmed phase** does the actual chain/provider work:
+**The confirmed phase** repeats schema validation and calls only the reviewed SDK operation (illustrative):
 
 ```ts
 export async function executeConfirmedPauseApp(
   args: Record<string, unknown>,
   clientManager: CosmosClientManager,
-  options: ToolExecutorOptions
+  options: ToolExecutorOptions,
 ): Promise<ToolResult> {
-  const { address, appRegistry } = options;
-  if (!address) return { success: false, error: 'Wallet not connected' };
-  if (!appRegistry) return { success: false, error: 'App registry not available' };
-
-  const app = appRegistry.findApp(address, String(args.app_name));
-  if (!app) return { success: false, error: `App not found.` };
-
-  // Authenticate to the provider using ADR-036
-  const { signing } = options;
-  if (!signing) {
-    return { success: false, error: 'Wallet does not support message signing' };
-  }
-  const authToken = await signing.authTokens.getAuthToken(asLeaseUuid(app.leaseUuid));
-
-  // Call your provider HTTP function
-  await pauseLease(app.providerUrl, app.leaseUuid, authToken);
-
-  // Update local state
-  appRegistry.updateApp(address, app.leaseUuid, { status: 'paused' });
-
-  return {
-    success: true,
-    data: {
-      app_name: app.name,
-      status: 'paused',
-    },
-  };
+  const parsed = parseTransactionPlan('pause_app', args);
+  if (!parsed.success) return parsed;
+  const { address, signing, signal } = options;
+  if (!address || !signing) return { success: false, error: 'Wallet not ready' };
+  const ctx = await buildBarneyCtx(clientManager, signing);
+  options.assertAuthorization?.();
+  signal?.throwIfAborted();
+  const result = await pauseApp(ctx, {
+    address, leaseUuid: parsed.data.leaseUuid,
+  }, { providerUrl: parsed.data.providerUrl, signal });
+  return { success: true, data: result };
 }
 ```
+
+Use SDK result discriminants and normalized errors to distinguish rejected, cancelled, and uncertain outcomes. Preserve those distinctions in registry updates and user-facing copy. Chain operations inherit the wallet manager's gas ceiling; extend `transactionFees.ts` so the card shows the operation's maximum network fee. Never accept a model-supplied explicit fee or raw message.
 
 For a query tool (no confirmation), skip the two-phase split — the executor lives in `src/ai/toolExecutor/compositeQueries.ts` and looks like the confirmed half above, returning the data directly.
 
@@ -219,7 +187,7 @@ Mock conventions live in [testing.md](testing.md). The short version:
 
 Three doc surfaces benefit from updates:
 
-- **[CLAUDE.md](../../CLAUDE.md)** — add a row to the "17 Composite Tools" table (and adjust the count in the heading).
+- **[CLAUDE.md](../../CLAUDE.md)** — add a row to the "16 Composite Tools" table (and adjust the count in the heading).
 - **[ARCHITECTURE.md](../../ARCHITECTURE.md)** — usually no change unless the tool introduces a new layer.
 - **[docs/user/ai-cookbook.md](../user/ai-cookbook.md)** — add a section in the appropriate group with example prompts.
 

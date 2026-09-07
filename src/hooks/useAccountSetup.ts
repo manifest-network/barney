@@ -310,7 +310,7 @@ export function useAccountSetup({
             const clientManager = clientManagerRef.current;
             if (!clientManager) throw new Error('Signing client not ready');
             const ctx: TxCtx = { chain: clientManager, logger: noopLogger };
-            const result = await fundCredits(ctx, { amount: creditCoin });
+            const result = await fundCredits(ctx, { amount: creditCoin }, { signal });
             if (signal.aborted || addressRef.current !== targetAddress) return;
             fundSucceeded = result.code === 0;
             if (!fundSucceeded) {
@@ -351,7 +351,7 @@ export function useAccountSetup({
                 const clientManager = clientManagerRef.current;
                 if (!clientManager) throw new Error('Signing client not ready');
                 const ctx: TxCtx = { chain: clientManager, logger: noopLogger };
-                const retryResult = await fundCredits(ctx, { amount: creditCoin });
+                const retryResult = await fundCredits(ctx, { amount: creditCoin }, { signal });
                 if (signal.aborted || addressRef.current !== targetAddress) return;
                 if (retryResult.code !== 0) {
                   logError('useAccountSetup.fundCredits', new Error(`fund-credit failed (code ${retryResult.code})${retryResult.rawLog ? `: ${retryResult.rawLog}` : ''}`));
