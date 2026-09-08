@@ -2345,9 +2345,6 @@ export async function executeConfirmedSetCustomDomain(
   const appName = plan.app_name;
   const leaseUuid = plan.leaseUuid;
   const serviceName = typeof plan.serviceName === 'string' ? plan.serviceName : '';
-  if (typeof plan.customDomain !== 'string') {
-    return { success: false, error: 'customDomain must be a string (use "" to clear).' };
-  }
   const customDomain = plan.customDomain;
   const expectedCnameTarget = typeof plan.expectedCnameTarget === 'string' ? plan.expectedCnameTarget : undefined;
   const isApexWarning = typeof plan.warning === 'string' && plan.warning.length > 0;
