@@ -208,7 +208,11 @@ export function deriveUrlFromConnection(
   return undefined;
 }
 
-/** Keep stored access details when a provider read supplies no usable endpoint. */
+/**
+ * Keep stored access details when a provider read supplies no usable endpoint.
+ * Port mappings may stay stale until a later read yields a usable URL, but an
+ * incomplete read must not erase the existing access details.
+ */
 export function connectionPatch(
   { url, connection }: { url?: string; connection?: ConnectionDetails },
   previous?: Pick<AppEntry, 'url' | 'connection'> | null,
