@@ -4,7 +4,7 @@ Barney plans and previews product actions, obtains user confirmation, then calls
 
 ## Transaction inventory (ENG-830)
 
-Reviewed against the pinned `@manifest-network/manifest-sdk` 0.21.0. There are no direct `cosmosTx`, `executeTx`, signing-client, or low-level broadcast calls in Barney product code. `src/build/transactionBoundary.test.ts` guards this boundary.
+Reviewed against the pinned `@manifest-network/manifest-sdk` 0.22.0. There are no direct `cosmosTx`, `executeTx`, signing-client, or low-level broadcast calls in Barney product code. `src/build/transactionBoundary.test.ts` guards this boundary.
 
 | Product action / caller | SDK operation | Approval data | Fee and cancellation policy |
 | --- | --- | --- | --- |

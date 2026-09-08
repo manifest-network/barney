@@ -245,7 +245,7 @@ describe('extractUrlFromFredStatus', () => {
   it('extracts URL from instances ports + host', () => {
     expect(extractUrlFromFredStatus({
       state: LeaseState.LEASE_STATE_ACTIVE,
-      instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': 32456 } }],
+      instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }],
     }, '1.2.3.4')).toBe('1.2.3.4:32456');
   });
 
@@ -253,7 +253,7 @@ describe('extractUrlFromFredStatus', () => {
     expect(extractUrlFromFredStatus({
       state: LeaseState.LEASE_STATE_ACTIVE,
       endpoints: { '8080/tcp': 'http://1.2.3.4:11111' },
-      instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': 22222 } }],
+      instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 22222 } } }],
     }, '1.2.3.4')).toBe('1.2.3.4:11111');
   });
 
@@ -261,8 +261,8 @@ describe('extractUrlFromFredStatus', () => {
     expect(extractUrlFromFredStatus({
       state: LeaseState.LEASE_STATE_ACTIVE,
       services: {
-        db: { instances: [{ name: 'db-0', status: 'running', ports: { '5432/tcp': 32100 } }] },
-        web: { instances: [{ name: 'web-0', status: 'running', ports: { '80/tcp': 32200 } }] },
+        db: { instances: [{ name: 'db-0', status: 'running', ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32100 } } }] },
+        web: { instances: [{ name: 'web-0', status: 'running', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32200 } } }] },
       },
     }, '1.2.3.4')).toBe('1.2.3.4:32200');
   });
@@ -271,8 +271,8 @@ describe('extractUrlFromFredStatus', () => {
     expect(extractUrlFromFredStatus({
       state: LeaseState.LEASE_STATE_ACTIVE,
       services: {
-        db: { instances: [{ name: 'db-0', status: 'running', ports: { '5432/tcp': 32100 } }] },
-        api: { instances: [{ name: 'api-0', status: 'running', ports: { '3000/tcp': 32300 } }] },
+        db: { instances: [{ name: 'db-0', status: 'running', ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32100 } } }] },
+        api: { instances: [{ name: 'api-0', status: 'running', ports: { '3000/tcp': { host_ip: '0.0.0.0', host_port: 32300 } } }] },
       },
     }, '1.2.3.4')).toBe('1.2.3.4:32300');
   });
@@ -1890,7 +1890,7 @@ describe('executeConfirmedDeployApp', () => {
   });
 
   it('builds a kind:resolved spec with the _notice-stripped manifest', async () => {
-    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_port: 1 } } } });
+    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 1 } } } });
     const json = JSON.stringify({ image: 'nginx', port: '80', _notice: 'display-only' });
     await executeConfirmedDeployApp(
       { ...ARGS, _generatedManifest: json },
@@ -1912,7 +1912,7 @@ describe('executeConfirmedDeployApp', () => {
     // still legitimately working, and the SDK then reports readiness as never
     // confirmed — the highest-frequency producer of a "deploying, we never found
     // out" outcome. The SDK's own DEFAULT_POLL_TIMEOUT_MS is 600000 for this reason.
-    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_port: 1 } } } });
+    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 1 } } } });
     await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions(), makePayload());
 
     const [, , callOptions] = vi.mocked(deployManifest).mock.calls[0];
@@ -1923,7 +1923,7 @@ describe('executeConfirmedDeployApp', () => {
   });
 
   it('passes customDomain into the spec and omits empty serviceName', async () => {
-    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_port: 1 } } }, custom_domain: 'app.example.com' });
+    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 1 } } }, custom_domain: 'app.example.com' });
     await executeConfirmedDeployApp(
       { ...ARGS, customDomain: 'app.example.com', customDomainServiceName: '' },
       CLIENT_MANAGER,
@@ -1938,7 +1938,7 @@ describe('executeConfirmedDeployApp', () => {
   });
 
   it('includes serviceName only alongside a non-empty customDomain', async () => {
-    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_port: 1 } } }, custom_domain: 'app.example.com', service_name: 'web' });
+    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 1 } } }, custom_domain: 'app.example.com', service_name: 'web' });
     await executeConfirmedDeployApp(
       { ...ARGS, customDomain: 'app.example.com', customDomainServiceName: 'web' },
       CLIENT_MANAGER,

@@ -21,13 +21,13 @@ export const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mys
  *  2. First non-backend service with ports (skip db, postgres, redis, etc.)
  *  3. Any service with ports
  */
-export function extractPrimaryServicePorts(
-  services: Record<string, { ports?: Record<string, unknown>; instances?: readonly { ports?: Record<string, unknown> }[] }>
-): { serviceName: string; ports: Record<string, unknown> } | undefined {
+export function extractPrimaryServicePorts<Port>(
+  services: Record<string, { ports?: Record<string, Port>; instances?: readonly { ports?: Record<string, Port> }[] }>
+): { serviceName: string; ports: Record<string, Port> } | undefined {
   const entries = Object.entries(services);
   if (entries.length === 0) return undefined;
 
-  const getPorts = (svc: { ports?: Record<string, unknown>; instances?: readonly { ports?: Record<string, unknown> }[] }): Record<string, unknown> | undefined =>
+  const getPorts = (svc: { ports?: Record<string, Port>; instances?: readonly { ports?: Record<string, Port> }[] }): Record<string, Port> | undefined =>
     svc.ports ?? svc.instances?.[0]?.ports;
 
   // 1. Named primary service
@@ -177,8 +177,7 @@ export function formatConnectionUrl(
 export function deriveUrlFromConnection(
   connection: ConnectionDetails,
 ): { url?: string; connection: ConnectionDetails } | undefined {
-  let ports: Record<string, unknown> | undefined =
-    connection.ports ?? connection.instances?.[0]?.ports;
+  let ports = connection.ports ?? connection.instances?.[0]?.ports;
 
   let fqdn = connection.fqdn;
   if (!ports && connection.services) {

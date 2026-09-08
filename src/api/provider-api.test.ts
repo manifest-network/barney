@@ -54,6 +54,14 @@ describe('getProviderHealth', () => {
     expect(result).toBeNull();
   });
 
+  it('returns null for a malformed successful health response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ status: 'healthy' }), { status: 200 }),
+    );
+
+    expect(await getProviderHealth(PROVIDER_URL)).toBeNull();
+  });
+
   it('returns null when fetch throws', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network error'));
 
@@ -97,7 +105,12 @@ describe('allowLoopback forwarding (ENG-490)', () => {
   });
 
   it('lets getLeaseConnectionInfo reach a loopback provider in DEV', async () => {
-    const connection = { lease_uuid: LEASE_UUID, connection: { host: 'localhost' } };
+    const connection = {
+      lease_uuid: LEASE_UUID,
+      tenant: 'manifest1tenant',
+      provider_uuid: 'provider-local',
+      connection: { host: 'localhost' },
+    } satisfies Awaited<ReturnType<typeof getLeaseConnectionInfo>>;
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response(JSON.stringify(connection), { status: 200 }));

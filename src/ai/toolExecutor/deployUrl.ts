@@ -58,11 +58,11 @@ export function extractUrlFromFredStatus(
     if (firstKey && firstEndpoint) return rewriteFredEndpoint(firstEndpoint, firstKey);
   }
 
-  // instances: ports as Record<string, number> — just port numbers
+  // SDK-validated instance ports carry host_ip / host_port mappings.
   if (fredStatus.instances && host) {
     for (const instance of fredStatus.instances) {
       if (instance.ports) {
-        const firstPort = Object.values(instance.ports)[0];
+        const firstPort = Object.values(instance.ports)[0]?.host_port;
         if (typeof firstPort === 'number') {
           return `${host}:${firstPort}`;
         }
@@ -74,7 +74,7 @@ export function extractUrlFromFredStatus(
   if (fredStatus.services && host) {
     const primary = extractPrimaryServicePorts(fredStatus.services);
     if (primary) {
-      const firstPort = Object.values(primary.ports)[0];
+      const firstPort = Object.values(primary.ports)[0]?.host_port;
       if (typeof firstPort === 'number') {
         return `${host}:${firstPort}`;
       }
@@ -104,8 +104,7 @@ export async function resolveAppUrl(
       if (connResponse.connection) {
         const connection = connResponse.connection;
         // Ports may be at top level or nested inside instances[0].ports
-        let ports: Record<string, unknown> | undefined =
-          connection.ports ?? connection.instances?.[0]?.ports;
+        let ports = connection.ports ?? connection.instances?.[0]?.ports;
 
         // Stack deployments: ports nested under services.<name>.instances[0].ports
         let fqdn = connection.fqdn;
