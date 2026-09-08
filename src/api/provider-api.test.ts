@@ -21,7 +21,7 @@ vi.mock('../utils/errors', () => ({
 }));
 
 // Auth, connection, upload, and ProviderApiError tests are in mono's test suite.
-// Tests below cover Barney-specific behavior: null-return health check.
+// Tests below cover Barney's transport fallback and malformed-response diagnostics.
 
 // Public URL used in tests to pass SSRF validation
 const PROVIDER_URL = 'https://provider.example.com';
@@ -54,12 +54,16 @@ describe('getProviderHealth', () => {
     expect(result).toBeNull();
   });
 
-  it('returns null for a malformed successful health response', async () => {
+  it('preserves the SDK diagnostic for a malformed successful health response', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ status: 'healthy' }), { status: 200 }),
     );
 
-    expect(await getProviderHealth(PROVIDER_URL)).toBeNull();
+    await expect(getProviderHealth(PROVIDER_URL)).rejects.toMatchObject({
+      status: 200,
+      kind: 'invalid_response',
+      message: expect.stringContaining('provider_uuid'),
+    });
   });
 
   it('returns null when fetch throws', async () => {

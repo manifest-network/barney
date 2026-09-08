@@ -557,12 +557,12 @@ describe('formatConnectionUrl', () => {
     })).toBe('1.2.3.4:31234');
   });
 
-  it('returns https://fqdn when port mapping has no extractable value', () => {
+  it('does not invent an HTTPS endpoint for a TCP service without an assigned port', () => {
     expect(formatConnectionUrl('1.2.3.4', {
       host: '1.2.3.4',
       fqdn: 'pg.barney8.manifest0.net',
       ports: { '5432/tcp': {} },
-    })).toBe('https://pg.barney8.manifest0.net');
+    })).toBeUndefined();
   });
 
   it('strips protocol from metadata url fallback', () => {
@@ -1831,6 +1831,27 @@ describe('executeConfirmedDeployApp', () => {
 
   const ARGS = { app_name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' };
 
+  it.each(['throw', 'reject'])('finishes deployment when progress observers %s', async (failure) => {
+    const observerError = new Error('progress observer failed');
+    const onProgress = vi.fn(() => {
+      if (failure === 'throw') throw observerError;
+      return Promise.reject(observerError);
+    });
+    mockDeploySuccess(makeDeployResult());
+    const registry = makeRegistry();
+
+    const result = await executeConfirmedDeployApp(
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Exercise async failure despite the public synchronous observer type.
+      ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry, onProgress }), makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.status).toBe('running');
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'uploading' }));
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+    expect(logError).toHaveBeenCalledWith('progress.onProgress', observerError);
+  });
+
   it('blocks an A to B switch after async setup and immediately before deploy', async () => {
     let resolveReadClient!: (client: Awaited<ReturnType<typeof getReadClient>>) => void;
     vi.mocked(getReadClient).mockImplementationOnce(
@@ -1964,10 +1985,10 @@ describe('executeConfirmedDeployApp', () => {
     expect(getLeaseConnectionInfo).toHaveBeenCalled();
   });
 
-  it('routes a deployManifest throw through handleDeployManifestError (chain ACTIVE → running)', async () => {
+  it('routes a defensive throw without SDK discriminants through the chain fallback', async () => {
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
       await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
-      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true });
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'unclassified failure');
     });
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
     // C1: the running-on-throw branch resolves url/connection from the provider
@@ -2953,6 +2974,30 @@ describe('executeConfirmedBatchDeploy', () => {
     mockLiveBatchCatalog();
   });
 
+  it.each(['throw', 'reject'])('finishes a batch when progress observers %s', async (failure) => {
+    const observerError = new Error('batch progress observer failed');
+    const onProgress = vi.fn(() => {
+      if (failure === 'throw') throw observerError;
+      return Promise.reject(observerError);
+    });
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult();
+    });
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha')]);
+    const registry = makeRegistry();
+
+    const result = await executeConfirmedBatchDeploy(
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Exercise async failure despite the public synchronous observer type.
+      args, CLIENT_MANAGER, makeOptions({ appRegistry: registry, onProgress }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.status).toBe('running');
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+    expect(logError).toHaveBeenCalledWith('progress.onProgress', observerError);
+  });
+
   it('rejects a legacy/unplanned batch action', async () => {
     const result = await executeConfirmedBatchDeploy({ entries: [] }, CLIENT_MANAGER, makeOptions());
     expect(result.success).toBe(false);
@@ -3232,16 +3277,14 @@ describe('executeConfirmedBatchDeploy', () => {
     // if the code reverts to entry.providerUrl.
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
       await callOptions?.onLeaseCreated?.('lease-x', 'https://resolved.example.com');
-      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true });
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true, failedStep: 'poll' });
     });
-    // getLease → null so classifyLeaseChainState's verdict is 'failed', which
-    // is what routes handleDeployManifestError into fetchFailureLogs.
+    // A provider poll verdict routes directly to diagnostics without a chain read.
     // *Once: these mocks are shared across describes and vi.clearAllMocks()
     // doesn't clear a configured resolved value — a persisting mockResolvedValue
     // here would leak into later describes (e.g. executeConfirmedUpdateApp's
     // rollback-detection getLeaseProvision call) that rely on the default
     // (unconfigured) mock behavior.
-    vi.mocked(getLease).mockResolvedValueOnce(null as any);
     vi.mocked(getLeaseProvision).mockResolvedValueOnce({ status: 'failed', fail_count: 1, last_error: 'OOMKilled' } as any);
     vi.mocked(getLeaseLogs).mockResolvedValueOnce({ lease_uuid: 'lease-x', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
 
@@ -3263,9 +3306,8 @@ describe('executeConfirmedBatchDeploy', () => {
   it('surfaces the post-ENG-508 provision reason/message in a failed batch entry', async () => {
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
       await callOptions?.onLeaseCreated?.('lease-x', 'https://resolved.example.com');
-      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true });
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true, failedStep: 'poll' });
     });
-    vi.mocked(getLease).mockResolvedValueOnce(null as any);
     vi.mocked(getLeaseProvision).mockResolvedValueOnce({
       status: 'failed', fail_count: 2, reason: 'ImagePullFailed', message: 'pull access denied for ngnix',
     } as any);
@@ -5544,7 +5586,7 @@ describe('handleDeployManifestError', () => {
     expect(getLease).not.toHaveBeenCalled();
   });
 
-  it('case 2 running: chain ACTIVE → running + ready progress (not failed)', async () => {
+  it('case 2 without SDK discriminants: chain ACTIVE → running + ready progress', async () => {
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
     // C1: the running branch resolves url/connection from the provider.
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -5553,7 +5595,7 @@ describe('handleDeployManifestError', () => {
     } as any);
     const c = ctx();
     const result = await handleDeployManifestError(
-      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true }), c);
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'unclassified failure'), c);
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
     expect((result.data as any).url).toBe('5.6.7.8:32456');
@@ -5567,11 +5609,11 @@ describe('handleDeployManifestError', () => {
     expect(c.onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
   });
 
-  it('case 2 deploying: chain PENDING → non-failed still-provisioning result', async () => {
+  it('case 2 without SDK discriminants: chain PENDING → still-provisioning result', async () => {
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as any);
     const c = ctx();
     const result = await handleDeployManifestError(
-      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true }), c);
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'unclassified failure'), c);
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('deploying');
     expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'deploying' });
@@ -5582,13 +5624,13 @@ describe('handleDeployManifestError', () => {
     );
   });
 
-  it('case 2 failed: chain terminal → failed + fetchFailureLogs + barney copy', async () => {
+  it('case 2 without SDK discriminants: chain terminal → failed + diagnostics', async () => {
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_CLOSED } as any);
     vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 2, last_error: 'OOMKilled' } as any);
     vi.mocked(getLeaseLogs).mockResolvedValue({ lease_uuid: 'lease-1', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
     const c = ctx();
     const result = await handleDeployManifestError(
-      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true }), c);
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed'), c);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Deployment failed: provision failed');
     expect(result.error).toContain('OOMKilled');
@@ -5599,7 +5641,7 @@ describe('handleDeployManifestError', () => {
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_CLOSED } as any);
     const c = ctx();
     const result = await handleDeployManifestError(
-      new ManifestMCPError(ManifestMCPErrorCode.OPERATION_CANCELLED, 'aborted', { partial: true }), c);
+      new ManifestMCPError(ManifestMCPErrorCode.OPERATION_CANCELLED, 'aborted'), c);
     expect(result.success).toBe(false);
     expect(getLeaseProvision).not.toHaveBeenCalled();
     expect(getLeaseLogs).not.toHaveBeenCalled();

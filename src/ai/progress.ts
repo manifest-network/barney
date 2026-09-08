@@ -5,6 +5,7 @@
  */
 
 import type { FredLeaseStatus } from '../api/fred';
+import { logError } from '../utils/errors';
 
 export interface DeployProgress {
   phase:
@@ -25,4 +26,18 @@ export interface DeployProgress {
     phase: DeployProgress['phase'];
     detail?: string;
   }>;
+}
+
+/** Progress observers must not interrupt a paid deployment, even if they reject asynchronously. */
+export function createProgressReporter(onProgress?: (progress: DeployProgress) => void) {
+  return (progress: DeployProgress): void => {
+    if (!onProgress) return;
+    try {
+      void Promise.resolve(onProgress(progress)).catch((error) => {
+        logError('progress.onProgress', error);
+      });
+    } catch (error) {
+      logError('progress.onProgress', error);
+    }
+  };
 }

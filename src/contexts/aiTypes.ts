@@ -5,6 +5,7 @@
 
 import type { ToolCall } from '../api/morpheus';
 import type { PendingAction } from '../ai/toolExecutor';
+import type { PortMapping } from '@manifest-network/manifest-sdk/deploy';
 
 /** Data for a logs display card. */
 export interface LogsCardData {
@@ -43,10 +44,7 @@ export interface CustomDomainCardData {
 }
 
 /** Port mapping shape returned by the provider connection info. */
-export interface AppCardPortMapping {
-  host_ip: string;
-  host_port: number;
-}
+export type AppCardPortMapping = PortMapping;
 
 /** Per-service connection info for stack deployments. */
 export interface AppCardServiceInfo {

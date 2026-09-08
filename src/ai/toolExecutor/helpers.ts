@@ -57,34 +57,23 @@ export function extractPrimaryServicePorts<Port>(
 
 /**
  * Extract port number from a port mapping value.
- * Handles multiple formats the provider API may return:
+ * Keep older formats for persisted connection data; SDK 0.22 validates live mappings.
  *  - Our typed format:   { host_ip: "0.0.0.0", host_port: 12345 }
  *  - Docker PascalCase:  { HostIp: "0.0.0.0", HostPort: "12345" }
  *  - Docker array:       [{ HostIp: "0.0.0.0", HostPort: "12345" }]
  *  - Plain number:       12345
  */
-function extractPort(value: unknown): number | undefined {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'string') { const n = parseInt(value, 10); return isNaN(n) ? undefined : n; }
-
-  // Array — take first element
-  let obj = value;
-  if (Array.isArray(obj)) obj = obj[0];
-
-  if (obj && typeof obj === 'object') {
-    const rec = obj as Record<string, unknown>;
-    // snake_case (our interface)
-    if (rec.host_port != null) {
-      const n = typeof rec.host_port === 'number' ? rec.host_port : parseInt(String(rec.host_port), 10);
-      if (!isNaN(n)) return n;
-    }
-    // PascalCase (Docker native)
-    if (rec.HostPort != null) {
-      const n = typeof rec.HostPort === 'number' ? rec.HostPort : parseInt(String(rec.HostPort), 10);
-      if (!isNaN(n)) return n;
-    }
+export function extractPort(value: unknown): number | undefined {
+  let raw = Array.isArray(value) ? value[0] : value;
+  if (raw && typeof raw === 'object') {
+    const mapping = raw as Record<string, unknown>;
+    raw = mapping.host_port ?? mapping.HostPort;
   }
-  return undefined;
+  if (typeof raw !== 'number' && typeof raw !== 'string') return undefined;
+  if (typeof raw === 'string' && !/^\d+$/.test(raw.trim())) return undefined;
+  const port = Number(raw);
+  // Zero means unassigned; fractions and values outside the TCP/UDP range are unusable.
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined;
 }
 
 // TODO: Replace this hard-coded set with an automated signal from the provider
@@ -132,7 +121,7 @@ export function formatConnectionUrl(
       // Non-HTTP service: need direct host:port access
       if (containerPort != null && TCP_ONLY_PORTS.has(containerPort)) {
         const hostPort = extractPort(Object.values(connection.ports)[0]);
-        if (hostPort != null) return `${connection.fqdn}:${hostPort}`;
+        return hostPort !== undefined ? `${connection.fqdn}:${hostPort}` : undefined;
       }
     }
     // HTTP service (or no ports): https://fqdn — Traefik TLS on 443
@@ -163,6 +152,7 @@ export function formatConnectionUrl(
   }
 
   // Last resort: bare host
+  if (connection?.ports && Object.keys(connection.ports).length > 0) return undefined;
   if (!host) return undefined;
   return host.replace(/^https?:\/\//, '');
 }

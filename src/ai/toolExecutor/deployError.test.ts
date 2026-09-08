@@ -1,5 +1,5 @@
 /**
- * Deploy-throw classification — the SDK 0.21 structured discriminants.
+ * Deploy-throw classification — the SDK 0.22 structured discriminants.
  *
  * The chain-verdict half of `handleDeployManifestError` is covered by the
  * `handleDeployManifestError` / `classifyLeaseChainState` describes in
@@ -12,7 +12,7 @@
  *
  * Every error fixture below is shaped exactly as
  * node_modules/@manifest-network/manifest-mcp-fred/dist/tools/deployManifest.js
- * throws it (both `throw` sites read at the 0.21.0 pin), including the SDK's
+ * throws it (both `throw` sites read at the 0.22.0 pin), including the SDK's
  * real prose — which is what lets the tests assert that `close_lease` and
  * `wait_for_app_ready` never reach chat.
  */
@@ -54,7 +54,7 @@ const PROVIDER_URL = 'https://fred.example.com';
 
 /**
  * The literal message deployManifest builds for a partial throw. Copied from
- * the 0.21.0 dist so the "barney never echoes this" assertions test the real
+ * the 0.22.0 dist so the "barney never echoes this" assertions test the real
  * text, not a paraphrase of it.
  */
 const SDK_READINESS_PROSE =
@@ -139,7 +139,7 @@ function expectNoSdkProse(text: string) {
   expect(text).not.toContain('restore_app');
 }
 
-describe('handleDeployManifestError — readiness unconfirmed (SDK 0.21)', () => {
+describe('handleDeployManifestError — readiness unconfirmed (SDK 0.22)', () => {
   // resetAllMocks, not clearAllMocks: clearAllMocks keeps a configured
   // mockResolvedValue, so a `getLease` set by one test leaks into the next and
   // silently changes which branch it exercises.
@@ -338,8 +338,7 @@ describe('handleDeployManifestError — partial deploy, no manifest uploaded', (
   });
 
   it('reports a cancel in the instant after lease creation as a failure, not as live', async () => {
-    // deployManifest leaves `step` undefined only when its very first
-    // throwIfAborted() fires — before set_domain/upload. The chain lease is
+    // The post-creation throwIfAborted() runs before set_domain/upload. The chain lease is
     // ACTIVE, so without this arm the deploy reported "App is live!".
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as never);
     const c = ctx();
@@ -356,18 +355,39 @@ describe('handleDeployManifestError — partial deploy, no manifest uploaded', (
     expectNoSdkProse(result.error ?? '');
   });
 
-  it('leaves a NON-cancelled partial throw with no failedStep to the chain check', async () => {
-    // The step is only absent because of the abort guard, so inferring
-    // "nothing uploaded" from its absence alone would be guessing. Anything
-    // else falls through to chain truth rather than being called a failure.
-    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as never);
+  it('reports a callback failure before upload as failed even with an ACTIVE lease', async () => {
+    // SDK 0.22 catches onLeaseCreated before assigning a step.
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as never);
     const c = ctx();
 
     const result = await handleDeployManifestError(
-      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'something else', { partial: true }), c);
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, SDK_PARTIAL_PROSE, {
+        partial: true, lease_uuid: LEASE, provider_uuid: 'p1', provider_url: PROVIDER_URL,
+      }), c);
 
-    expect(getLease).toHaveBeenCalledWith(LEASE);
-    expect((result.data as { status: string }).status).toBe('deploying');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('stopped immediately after the lease was created');
+    expect(result.error).toContain('provider holds no manifest');
+    expect(c.appRegistry.getAppByLease(ADDRESS, LEASE)?.status).toBe('failed');
+    expect(c.onProgress).not.toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+    expect(getLease).not.toHaveBeenCalled();
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(getLeaseLogs).not.toHaveBeenCalled();
+    expectNoSdkProse(result.error ?? '');
+  });
+
+  it.each(['future_step', 42, null])('keeps an unknown partial step %s unconfirmed', async (failedStep) => {
+    vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as never);
+    const c = ctx();
+    const result = await handleDeployManifestError(new ManifestMCPError(
+      ManifestMCPErrorCode.QUERY_FAILED, SDK_PARTIAL_PROSE, { partial: true, failedStep },
+    ), c);
+
+    expect(result.data).toMatchObject({ status: 'deploying' });
+    expect(c.appRegistry.getAppByLease(ADDRESS, LEASE)?.provisionState).toBe('unconfirmed');
+    expect(getLease).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain('is live');
+    expectNoSdkProse(JSON.stringify(result));
   });
 });
 

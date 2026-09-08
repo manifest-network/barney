@@ -30,6 +30,7 @@ import { getDomainForService } from '../../api/leaseDomains';
 import { validateAll, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { validateAppName, sanitizeManifestForStorage, type AppEntry, type ProvisionState } from '../../registry/appRegistry';
 import { buildStackManifest, mergeManifest, resolveGeneratedPassword } from '../manifest';
+import { createProgressReporter } from '../progress';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import type { SigningContext } from './types';
@@ -542,7 +543,8 @@ export async function executeConfirmedDeployApp(
   const parsed = parseTransactionPlan('deploy_app', args);
   if (!parsed.success) return parsed;
   const plan = parsed.data;
-  const { address, appRegistry, signing, onProgress, signal } = options;
+  const { address, appRegistry, signing, signal } = options;
+  const onProgress = createProgressReporter(options.onProgress);
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -588,8 +590,8 @@ export async function executeConfirmedDeployApp(
 
   onProgress?.({ phase: 'creating_lease', detail: 'Creating lease on-chain...' });
 
-  // Captured from onLeaseCreated (runs OUTSIDE deployManifest's try/catch); the
-  // error handler + checkChainState both read these.
+  // Capture the paid lease before notifying observers. SDK 0.22 wraps callback
+  // failures as partial deploy errors with no failedStep, before upload starts.
   let capturedLeaseUuid: string | undefined;
   let capturedProviderUrl: string | undefined;
 
@@ -813,7 +815,8 @@ export async function executeConfirmedBatchDeploy(
   const parsed = parseTransactionPlan('batch_deploy', args);
   if (!parsed.success) return parsed;
   const plan = parsed.data;
-  const { address, appRegistry, signing, onProgress, signal } = options;
+  const { address, appRegistry, signing, signal } = options;
+  const onProgress = createProgressReporter(options.onProgress);
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };

@@ -103,7 +103,7 @@ import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { cosmosQuery } from '@manifest-network/manifest-sdk/chain';
-import { appStatus, FRED_REASON_GUIDANCE } from '@manifest-network/manifest-sdk/deploy';
+import { appStatus, FRED_REASON_GUIDANCE, ProviderApiError } from '@manifest-network/manifest-sdk/deploy';
 import { getReadClient } from '../../api/readClient';
 import { isFaucetEnabled } from '../../api/faucet';
 import { requestFaucet } from '@manifest-network/manifest-sdk/faucet';
@@ -722,6 +722,22 @@ describe('executeBrowseCatalog', () => {
       mockCatalog();
       vi.mocked(getProviderHealth).mockRejectedValue(new DOMException('aborted', 'AbortError'));
       await expect(executeBrowseCatalog()).rejects.toThrow('aborted');
+    });
+
+    it('distinguishes a malformed response from an unreachable provider and bounds its diagnostic', async () => {
+      mockCatalog();
+      vi.mocked(getProviderHealth).mockRejectedValue(new ProviderApiError(
+        200,
+        `Invalid response: provider_uuid missing\u202E ${'x'.repeat(5000)}`,
+        { kind: 'invalid_response' },
+      ));
+
+      const row = await providerRow();
+      expect(row.healthy).toBe(false);
+      expect(row.health_status).toBe('invalid_response');
+      expect(row.healthError).toContain('provider_uuid missing');
+      expect(row.healthError).not.toContain('\u202E');
+      expect(row.healthError.length).toBeLessThanOrEqual(1025);
     });
 
     it('passes an unrecognized tier through verbatim', async () => {

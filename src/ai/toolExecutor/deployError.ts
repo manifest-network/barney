@@ -107,7 +107,7 @@ export async function classifyLeaseChainState(leaseUuid: string): Promise<ChainD
 }
 
 // ---------------------------------------------------------------------------
-// Structured deploy-throw discriminants (SDK 0.21)
+// Structured deploy-throw discriminants (SDK 0.22)
 // ---------------------------------------------------------------------------
 
 /**
@@ -259,10 +259,10 @@ export async function handleDeployManifestError(
     const noManifestUploaded =
       partial &&
       ((failedStep !== undefined && NO_MANIFEST_STEPS.has(failedStep)) ||
-        // An absent step means the first `throwIfAborted()` fired, before the
-        // set_domain/upload assignments. Gated on `cancelled` so a build that
-        // omits the step for another reason falls through to the chain check.
-        (failedStep === undefined && cancelled));
+        // SDK 0.22 awaits onLeaseCreated inside its try/catch before assigning
+        // a step. Both a callback failure and the following abort guard leave
+        // the paid lease without a manifest, regardless of the error code.
+        details?.failedStep === undefined);
     if (noManifestUploaded) {
       logError('deployError.partialDeploy', error);
       // Durable, and true of the cancelled variant too: recording it stops the next reconcile calling this app 'running' off the ACTIVE lease.
@@ -282,9 +282,18 @@ export async function handleDeployManifestError(
       return { success: false, error: diagnostics ? `${lead}\n\n${diagnostics}` : lead };
     }
 
-    // 2d: no structured discriminant — fall back to chain truth. 2a/2b/2c claim
-    // every `partial: true` throw, which keeps `errMessage` below from relaying
-    // the SDK's prose; a new `failedStep` needs its own arm, not this branch.
+    // An unknown/malformed step from a future SDK carries no readiness verdict.
+    // Never turn an explicitly partial deploy into a success from chain state.
+    if (partial) {
+      logError('deployError.unknownPartialStep', error);
+      appRegistry.updateApp(address, leaseUuid, { provisionState: 'unconfirmed' });
+      const message = `Deployment of app "${name}" could not be confirmed. Check app_status("${name}") before retrying.`;
+      onProgress?.({ phase: 'failed', detail: message });
+      return { success: true, data: { message, name, status: 'deploying' } };
+    }
+
+    // 2d: no structured discriminant — fall back to chain truth. SDK 0.22's
+    // partial throws are all handled above without relaying its raw tool prose.
     const verdict = await classifyLeaseChainState(leaseUuid);
     if (verdict === 'running') {
       // The lease is active on-chain even though deployManifest threw AFTER
