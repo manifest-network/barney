@@ -617,7 +617,7 @@ describe('useAccountSetup — error handling', () => {
     await flush();
 
     expect(logError).toHaveBeenCalledWith('useAccountSetup.check', expect.any(Error));
-    expect(hadState((s) => s.isInitialSetup && s.phase === 'checking' && !!s.error && s.error.includes('balances'))).toBe(true);
+    await vi.waitFor(() => expect(hadState((s) => s.isInitialSetup && s.phase === 'checking' && !!s.error && s.error.includes('balances'))).toBe(true));
     expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(false);
   });
 

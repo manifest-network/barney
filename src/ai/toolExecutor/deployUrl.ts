@@ -36,8 +36,8 @@ function rewriteFredEndpoint(endpointUrl: string, portKey: string): string | und
     }
     if (parsed.port && extractPort(parsed.port) === undefined) return undefined;
     return parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
-  } catch { /* not a valid URL — return as-is */ }
-  return endpointUrl;
+  } catch { /* A malformed hint supplies no endpoint; try the remaining status data. */ }
+  return undefined;
 }
 
 function urlFromStatusPorts(

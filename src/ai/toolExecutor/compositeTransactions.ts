@@ -22,7 +22,7 @@ import { fromBaseUnits, toBaseUnits } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
-import { deriveUrlFromConnection, failureText } from './helpers';
+import { connectionPatch, deriveUrlFromConnection, failureText } from './helpers';
 import { normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
@@ -1385,7 +1385,8 @@ export async function executeConfirmedRestartApp(
   const parsed = parseTransactionPlan('restart_app', args);
   if (!parsed.success) return parsed;
   const plan = parsed.data;
-  const { address, appRegistry, signing, onProgress, signal } = options;
+  const { address, appRegistry, signing, signal } = options;
+  const onProgress = createProgressReporter(options.onProgress);
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
@@ -1486,12 +1487,12 @@ export async function executeConfirmedRestartApp(
         providerUrl, leaseUuid, fredStatus, address, signing,
         'compositeTransactions.executeConfirmedRestartApp'
       );
+      const previous = appRegistry.getAppByLease(address, leaseUuid);
 
       // Provider observation: the wait resolved non-terminal — the workload is up.
       appRegistry.updateApp(address, leaseUuid, {
         provisionState: 'confirmed',
-        url: connectionUrl,
-        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+        ...connectionPatch({ url: connectionUrl, connection }, previous),
       });
       onProgress?.({ phase: 'ready', operation: 'restart' });
 
@@ -1500,7 +1501,7 @@ export async function executeConfirmedRestartApp(
         data: {
           message: `App "${name}" has been restarted.`,
           name,
-          url: connectionUrl,
+          url: connectionUrl ?? previous?.url,
           status: 'running',
         },
       };
@@ -1619,14 +1620,14 @@ async function executeConfirmedBatchRestart(
             entry.providerUrl, entry.leaseUuid, fredStatus, address, signing,
             'executeConfirmedBatchRestart'
           );
+          const previous = appRegistry.getAppByLease(address, entry.leaseUuid);
 
           appRegistry.updateApp(address, entry.leaseUuid, {
             provisionState: 'confirmed',
-            url: connectionUrl,
-            connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+            ...connectionPatch({ url: connectionUrl, connection }, previous),
           });
           updateProgress('ready', 'App is live!');
-          return { name, url: connectionUrl };
+          return { name, url: connectionUrl ?? previous?.url };
         }
 
         appRegistry.updateApp(address, entry.leaseUuid, { provisionState: 'failed' });
@@ -1870,7 +1871,8 @@ export async function executeConfirmedUpdateApp(
   const parsed = parseTransactionPlan('update_app', args);
   if (!parsed.success) return parsed;
   const plan = parsed.data;
-  const { address, appRegistry, signing, onProgress, signal } = options;
+  const { address, appRegistry, signing, signal } = options;
+  const onProgress = createProgressReporter(options.onProgress);
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
@@ -2108,16 +2110,14 @@ export async function executeConfirmedUpdateApp(
         'compositeTransactions.executeConfirmedUpdateApp'
       );
 
-      // If resolved URL lost port info, fall back to the previous URL
-      const hasPort = connectionUrl != null && /:\d+/.test(connectionUrl.replace(/^https?:\/\//, ''));
-      const finalUrl = (hasPort ? connectionUrl : previousUrl) ?? connectionUrl;
+      // HTTP FQDNs intentionally omit the port. Prefer every fresh usable URL.
+      const finalUrl = connectionUrl ?? previousUrl;
 
       // Provider observation: the wait resolved non-terminal and the settled
       // /provision read above carried no failure signal.
       appRegistry.updateApp(address, leaseUuid, {
         provisionState: 'confirmed',
-        url: finalUrl,
-        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+        ...connectionPatch({ url: connectionUrl, connection }, existingApp),
       });
       onProgress?.({ phase: 'ready', operation: 'update' });
 

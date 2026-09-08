@@ -7,6 +7,7 @@ import { failureDetail, type ConnectionDetails, type FredFailureSource } from '@
 
 import { isValidFqdn } from '../../utils/connection';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
+import type { AppEntry } from '../../registry/appRegistry';
 
 /** Service names that indicate a primary (user-facing) service in a stack. */
 const PRIMARY_SERVICE_NAMES = new Set(['web', 'app', 'frontend', 'ui']);
@@ -118,8 +119,10 @@ export function formatConnectionUrl(
   // Accept any shape — the port values may not match our PortMapping interface
   connection?: { host: string; fqdn?: string; ports?: Record<string, unknown>; metadata?: Record<string, string> }
 ): string | undefined {
-  // FQDN present — Traefik routes HTTP services on 443 by subdomain
-  if (connection?.fqdn && isValidFqdn(connection.fqdn)) {
+  // An empty record has lost the container-port key, so it cannot establish
+  // that this FQDN serves HTTP. A missing record retains the provider's FQDN hint.
+  if (connection?.fqdn && isValidFqdn(connection.fqdn)
+    && (!connection.ports || Object.keys(connection.ports).length > 0)) {
     if (connection.ports) {
       const firstKey = Object.keys(connection.ports)[0];
       const containerPort = firstKey ? parseContainerPort(firstKey) : undefined;
@@ -149,10 +152,10 @@ export function formatConnectionUrl(
   if (connection?.metadata?.url) {
     try {
       const parsed = new URL(connection.metadata.url);
+      if (!parsed.hostname || (parsed.port && extractPort(parsed.port) === undefined)) return undefined;
       return parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
     } catch {
-      // Not a valid URL — strip scheme and return as-is
-      return connection.metadata.url.replace(/^https?:\/\//, '');
+      return undefined;
     }
   }
 
@@ -166,7 +169,7 @@ export function formatConnectionUrl(
 /**
  * Shape an app URL from a DeployResult.connection with no extra API call.
  * Selects non-empty top-level, instance, or primary-service ports and promotes
- * the instance/service FQDN when absent. Returns undefined without a usable URL
+ * an HTTP instance FQDN or primary-service FQDN when absent. Returns undefined without a usable URL
  * so callers can try other provider data while retaining the raw connection.
  */
 export function deriveUrlFromConnection(
@@ -174,7 +177,12 @@ export function deriveUrlFromConnection(
 ): { url?: string; connection: ConnectionDetails } | undefined {
   let ports = nonEmptyPorts(connection.ports) ?? nonEmptyPorts(connection.instances?.[0]?.ports);
 
-  let fqdn = connection.fqdn ?? connection.instances?.[0]?.fqdn;
+  const firstPortKey = ports ? Object.keys(ports)[0] : undefined;
+  const containerPort = firstPortKey ? parseContainerPort(firstPortKey) : undefined;
+  // Keep direct TCP traffic on the reported host. An instance's HTTP-routing
+  // FQDN is not evidence that its DNS address is the Docker host.
+  let fqdn = connection.fqdn
+    ?? (containerPort != null && TCP_ONLY_PORTS.has(containerPort) ? undefined : connection.instances?.[0]?.fqdn);
   if (!ports && connection.services) {
     const primary = extractPrimaryServicePorts(connection.services);
     if (primary) {
@@ -186,13 +194,35 @@ export function deriveUrlFromConnection(
     }
   }
 
-  // Preserve evidence that mappings were present even if validation emptied
-  // them. A stack/instance host by itself is not the selected workload's URL.
-  ports ??= connection.ports ?? (connection.instances || connection.services ? {} : undefined);
+  // Preserve actual empty records after filtering without inventing one when
+  // no ports were reported. These cases carry different evidence for HTTP FQDNs.
+  ports ??= connection.ports ?? connection.instances?.[0]?.ports
+    ?? Object.values(connection.services ?? {})
+      .map(service => service.ports ?? service.instances?.[0]?.ports)
+      .find(record => record !== undefined);
   const withPorts = { ...connection, ports, fqdn };
-  const url = formatConnectionUrl(connection.host, withPorts);
+  // A host attached to instances/services is not itself a workload endpoint.
+  const bareHost = ports === undefined && (connection.instances || connection.services) ? undefined : connection.host;
+  const url = formatConnectionUrl(bareHost, withPorts);
   if (url) return { url, connection: withPorts };
   return undefined;
+}
+
+/** Keep stored access details when a provider read supplies no usable endpoint. */
+export function connectionPatch(
+  { url, connection }: { url?: string; connection?: ConnectionDetails },
+  previous?: Pick<AppEntry, 'url' | 'connection'> | null,
+): Pick<AppEntry, 'url' | 'connection'> {
+  const patch: Pick<AppEntry, 'url' | 'connection'> = {};
+  if (url !== undefined) patch.url = url;
+  if (connection && (url !== undefined || !previous?.connection)) {
+    patch.connection = JSON.parse(JSON.stringify(connection));
+  } else if (url !== undefined && url !== previous?.url) {
+    // A new status endpoint supersedes old port mappings, even when the
+    // connection read failed. Keeping those mappings would override the new URL.
+    patch.connection = undefined;
+  }
+  return patch;
 }
 
 // Re-export from shared module so existing tool-executor consumers don't break.

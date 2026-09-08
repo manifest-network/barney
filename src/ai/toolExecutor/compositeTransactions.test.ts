@@ -6681,3 +6681,125 @@ describe('batch summary and progress agree on an unconfirmed batch', () => {
     expect(last.detail).toBe('All 2 apps deployed!');
   });
 });
+
+describe('lifecycle connection observations', () => {
+  const modes = ['restart', 'batch restart', 'update', 'deploy fallback'] as const;
+  type Mode = typeof modes[number];
+  const newFqdn = 'app-abc.barney8.manifest0.net';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getReadClient).mockResolvedValue({ query: {} } as Awaited<ReturnType<typeof getReadClient>>);
+    vi.mocked(restartApp).mockReset().mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(updateApp).mockReset().mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockReset().mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(false);
+    vi.mocked(getLeaseProvision).mockReset().mockResolvedValue({ status: 'ready', fail_count: 0 });
+    vi.mocked(getLease).mockReset().mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as Awaited<ReturnType<typeof getLease>>);
+    vi.mocked(getLeaseConnectionInfo).mockReset();
+  });
+
+  function previousApp() {
+    return makeApp({
+      url: '64.29.115.29:32768',
+      connection: { host: '64.29.115.29', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32768 } } },
+    });
+  }
+
+  function run(mode: Mode, app: AppEntry, registry: ReturnType<typeof makeRegistry>, onProgress?: ToolExecutorOptions['onProgress']) {
+    const options = makeOptions({ appRegistry: registry, onProgress });
+    const args = { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl };
+    if (mode === 'update') return executeConfirmedUpdateApp(args, CLIENT_MANAGER, options, makeJsonPayload());
+    if (mode === 'deploy fallback') return handleDeployManifestError(new Error('unstructured failure'), {
+      name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl,
+      address: ADDRESS, signing: options.signing!, appRegistry: registry,
+    });
+    return executeConfirmedRestartApp(mode === 'batch restart' ? { app_name: 'all', entries: [args] } : args, CLIENT_MANAGER, options);
+  }
+
+  describe.each(modes)('%s', (mode) => {
+    it.each(['unreachable', 'empty ports', 'filtered TCP FQDN'])('preserves stored access details when connection info is %s', async (read) => {
+      const app = previousApp();
+      const registry = makeRegistry([app]);
+      if (read === 'unreachable') {
+        vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('provider unavailable'));
+      } else {
+        vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+          lease_uuid: app.leaseUuid, tenant: ADDRESS, provider_uuid: 'p1',
+          connection: { host: '64.29.115.29', ports: {}, ...(read === 'filtered TCP FQDN' ? { fqdn: 'pg.provider.example.com' } : {}) },
+        });
+      }
+
+      const result = await run(mode, app, registry);
+
+      expect(result.success).toBe(true);
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ url: app.url, connection: app.connection });
+      if (mode === 'batch restart') expect(JSON.stringify(result.data)).toContain(app.url);
+      else expect((result.data as { url?: string }).url).toBe(app.url);
+    });
+  });
+
+  it('replaces a pre-update dynamic port with a fresh per-instance HTTP FQDN', async () => {
+    const app = previousApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: app.leaseUuid, tenant: ADDRESS, provider_uuid: 'p1',
+      connection: {
+        host: '64.29.115.29', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32799 } },
+        instances: [{ instance_index: 0, container_id: 'new', image: 'nginx', status: 'running', fqdn: newFqdn }],
+      },
+    });
+
+    const result = await run('update', app, registry);
+
+    expect(result.success).toBe(true);
+    expect((result.data as { url?: string }).url).toBe(`https://${newFqdn}`);
+    const updated = registry.getAppByLease(ADDRESS, app.leaseUuid)!;
+    expect(updated.url).toBe(`https://${newFqdn}`);
+    expect(formatConnectionUrl(updated.url, updated.connection)).toBe(`https://${newFqdn}`);
+  });
+
+  it.each(['restart', 'batch restart', 'update'] as const)('adopts a fresh status endpoint after %s without retaining stale port mappings', async (mode) => {
+    const app = previousApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('connection unavailable'));
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE, endpoints: { '80/tcp': `http://${newFqdn}:0` },
+    });
+
+    const result = await run(mode, app, registry);
+
+    expect(result.success).toBe(true);
+    expect(JSON.stringify(result.data)).toContain(`https://${newFqdn}`);
+    const updated = registry.getAppByLease(ADDRESS, app.leaseUuid)!;
+    expect(updated.url).toBe(`https://${newFqdn}`);
+    expect(updated.connection).toBeUndefined();
+  });
+
+  describe.each(['restart', 'batch restart', 'update'] as const)('%s observers', (mode) => {
+    it.each(['throw', 'reject'])('still completes when a ready observer can %s after the provider call', async (failure) => {
+      const app = previousApp();
+      const registry = makeRegistry([app]);
+      const observerError = new Error('progress observer failed after provider call');
+      const onProgress = vi.fn((progress: import('../progress').DeployProgress) => {
+        if (progress.phase === 'ready') {
+          if (failure === 'throw') throw observerError;
+          return Promise.reject(observerError);
+        }
+      });
+      vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+        lease_uuid: app.leaseUuid, tenant: ADDRESS, provider_uuid: 'p1',
+        connection: { host: '64.29.115.29', fqdn: newFqdn },
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Exercise async rejection despite the public synchronous observer type.
+      const result = await run(mode, app, registry, onProgress);
+
+      expect(result.success).toBe(true);
+      expect(mode === 'update' ? updateApp : restartApp).toHaveBeenCalledOnce();
+      expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('confirmed');
+      expect(logError).toHaveBeenCalledWith('progress.onProgress', observerError);
+    });
+  });
+});

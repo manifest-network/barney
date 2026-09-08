@@ -29,7 +29,7 @@ import {
 import { classifyProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
 import { buildBarneyCtx } from './capabilityCtx';
 import { nextStepFor } from './failureGuidance';
-import { formatConnectionUrl, deriveUrlFromConnection } from './helpers';
+import { connectionPatch, formatConnectionUrl, deriveUrlFromConnection } from './helpers';
 import { extractUrlFromFredStatus } from './deployUrl';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import { getDomainAssignments } from '../../api/leaseDomains';
@@ -242,10 +242,13 @@ export async function executeAppStatus(
         let connectionRefreshed = false;
         if (refreshedConnection) {
           const shaped = deriveUrlFromConnection(refreshedConnection);
-          const conn = shaped?.connection ?? refreshedConnection;
-          appConnection = JSON.parse(JSON.stringify(conn));
-          appUrl = shaped?.url ?? extractUrlFromFredStatus(fredStatus) ?? appUrl;
-          connectionRefreshed = true;
+          const patch = connectionPatch({
+            url: shaped?.url ?? extractUrlFromFredStatus(fredStatus),
+            connection: shaped?.connection ?? refreshedConnection,
+          }, { url: appUrl, connection: appConnection });
+          appUrl = patch.url ?? appUrl;
+          if ('connection' in patch) appConnection = patch.connection;
+          connectionRefreshed = Object.keys(patch).length > 0;
         }
         // TWO independent observations: the chain says the lease is ACTIVE, fred's
         // `provision_status` says whatever it says. Recording both is what makes

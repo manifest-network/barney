@@ -128,9 +128,70 @@ describe('provider status URL fallback', () => {
     const { result } = await resolveFromWireStatus({ endpoints: { [key]: endpoint } });
     expect(result).toEqual({});
   });
+
+  it.each(['1.2.3.4:0', '//other.host', 'http://[invalid', 'not a URL'])('ignores malformed endpoint %s', async (endpoint) => {
+    const { result } = await resolveFromWireStatus({ endpoints: { '8080/tcp': endpoint } });
+    expect(result.url).toBeUndefined();
+  });
+
+  it('uses instance data after a malformed endpoint', async () => {
+    const { result } = await resolveFromWireStatus({
+      endpoints: { '80/tcp': '//other.host' },
+      instances: [{ name: 'web', status: 'running', fqdn: FQDN, ports: {
+        '80/tcp': { host_ip: '0.0.0.0', host_port: 0 },
+      } }],
+    });
+    expect(result.url).toBe(`https://${FQDN}`);
+  });
 });
 
 describe('connection responses with filtered ports', () => {
+  it.each(['1.2.3.4:0', '//other.host', 'http://1.2.3.4:0', 'http://[invalid'])('rejects malformed metadata endpoint %s', async (url) => {
+    const { result } = await resolveFromWireStatus({}, {
+      host: '1.2.3.4', ports: {}, metadata: { url },
+    });
+    expect(result.url).toBeUndefined();
+  });
+
+  it.each(['top level', 'instance', 'service', 'service instance'])('does not invent HTTPS after %s TCP ports are dropped', async (shape) => {
+    const ports = { '5432/tcp': 32456 };
+    const instance = { instance_index: 0, fqdn: FQDN, ports };
+    const connection = { host: '1.2.3.4',
+      ...(shape === 'top level' ? { fqdn: FQDN, ports }
+        : shape === 'instance' ? { instances: [instance] }
+          : shape === 'service' ? { services: { db: { fqdn: FQDN, ports } } }
+            : { services: { db: { instances: [instance] } } }),
+    };
+    const response = await getLeaseConnectionInfo(PROVIDER_URL, LEASE_UUID, 'token',
+      vi.fn().mockResolvedValue(connectionResponse(connection)));
+    expect(deriveUrlFromConnection(response.connection)).toBeUndefined();
+
+    const { result } = await resolveFromWireStatus({}, connection);
+    expect(result.url).toBeUndefined();
+    const fallback = await resolveFromWireStatus({ endpoints: { '5432/tcp': 'http://1.2.3.4:32456' } }, connection);
+    expect(fallback.result.url).toBe('1.2.3.4:32456');
+  });
+
+  it.each(['top level', 'instance'])('distinguishes missing %s ports from an explicit empty record', async (shape) => {
+    const connection = (withEmptyPorts: boolean) => {
+      const details = { fqdn: FQDN, ...(withEmptyPorts ? { ports: {} } : {}) };
+      return { host: '1.2.3.4', ...(shape === 'top level' ? details : { instances: [{ instance_index: 0, ...details }] }) };
+    };
+    const missing = await resolveFromWireStatus({}, connection(false));
+    expect(missing.result.url).toBe(`https://${FQDN}`);
+    const empty = await resolveFromWireStatus({}, connection(true));
+    expect(empty.result.url).toBeUndefined();
+  });
+
+  it('keeps conforming instance TCP ports on the reported Docker host', async () => {
+    const { result } = await resolveFromWireStatus({}, {
+      host: '1.2.3.4', instances: [{ instance_index: 0, fqdn: FQDN, ports: {
+        '5432/tcp': { host_ip: '0.0.0.0', host_port: 32456 },
+      } }],
+    });
+    expect(result.url).toBe('1.2.3.4:32456');
+  });
+
   it.each(['top level', 'instance', 'stack'])('uses status endpoints after legacy %s ports are dropped', async (shape) => {
     const ports = { '8080/tcp': 32456 };
     const connection = {

@@ -160,7 +160,9 @@ function toFredOptions(opts: BuildManifestOptions): FredBuildManifestOptions {
     args: opts.args?.length ? opts.args : undefined,
     user: opts.user,
     health_check: opts.health_check,
-    stop_grace_period: opts.stop_grace_period,
+    // Retain the pre-0.22 default for omitted/empty values, including a numeric
+    // zero arriving from tool arguments despite this option's string type.
+    stop_grace_period: opts.stop_grace_period || undefined,
     init: opts.init,
     labels: nonEmpty(opts.labels),
     depends_on: nonEmpty(opts.depends_on),

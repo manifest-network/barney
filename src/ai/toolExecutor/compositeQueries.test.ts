@@ -517,6 +517,25 @@ describe('executeAppStatus', () => {
       expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.url).toBe(expectedUrl);
     });
 
+    it('keeps a stored connection when refreshed TCP port mappings have been filtered out', async () => {
+      const app = makeApp({
+        url: '1.2.3.4:32456',
+        connection: { host: '1.2.3.4', ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+      });
+      const registry = makeRegistry([app]);
+      vi.mocked(appStatus).mockResolvedValue({
+        lease_uuid: app.leaseUuid,
+        chainState: { state: 2, providerUuid: 'p1', createdAt: '', closedAt: undefined, items: [] },
+        fredStatus: { state: 2 },
+        connection: { host: '1.2.3.4', fqdn: 'pg.provider.example.com', ports: {} },
+      } as Awaited<ReturnType<typeof appStatus>>);
+
+      const result = await executeAppStatus({ app_name: app.name }, makeOptions({ appRegistry: registry, signing: mockSigning }));
+
+      expect((result.data as { url?: string }).url).toBe(app.url);
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ url: app.url, connection: app.connection });
+    });
+
     it('surfaces customDomains from appStatus chainState.items', async () => {
       const app = makeApp({ connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' } });
       const registry = makeRegistry([app]);

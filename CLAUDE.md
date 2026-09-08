@@ -129,7 +129,7 @@ Thin wrappers around the SDK deploy facade's manifest builders (`@manifest-netwo
 
 - `KNOWN_IMAGES` — Readonly array of known Docker image configs with default ports, env, user, tmpfs, health_check, etc.
 - `findKnownImage(imageRef)` — Lookup known image config by Docker image reference
-- `KNOWN_STACKS` — Readonly array of pre-built multi-service stack configs (WordPress, Ghost, Adminer-Postgres) with `depends_on` ordering and aliases (e.g., `wp`, `pgadmin`)
+- `KNOWN_STACKS` — Readonly array of pre-built multi-service stack configs (WordPress, Ghost, Adminer-Postgres) with `depends_on` ordering and aliases (e.g., `wp`, `pgadmin`). The stack parser matches service roles and injects `service_healthy` defaults only for targets with an active health check, preserving ordering for alternative database images. Explicit user dependencies are retained for SDK validation
 - `findKnownStack(name)` — Lookup known stack by name or alias
 - `generateImageReferenceForPrompt()` / `generateStackReferenceForPrompt()` — Generate reference text injected into the AI system prompt
 
@@ -226,7 +226,9 @@ The live lease-status WebSocket path is no longer barney-local (ENG-312 Phase 6)
 
 All mutations use typed SDK operations. `transactionPlans.ts` validates and freezes semantic confirmation data during planning and parses it again before execution. `MAX_TRANSACTION_GAS` (50,000,000) is passed to the wallet manager; `transactionFees.ts` derives the displayed maximum network fee from that ceiling and `GAS_PRICE`. Raw fee/transaction overrides are rejected. Web3Auth has no second approval dialog: the human consent boundary is `ConfirmationCard` plus the store/executor identity checks. See [transaction inventory](docs/dev/transaction-boundary.md) and [security](docs/dev/security.md#5-transaction-confirmation).
 
-SDK 0.22 validates domain syntax before creating a paid lease and validates the final update payload before provider authentication/POST. Its deploy catch now includes `onLeaseCreated`: a partial error without `failedStep` means the manifest was never uploaded, including non-cancellation callback failures. Single and batch deploy wrap progress observers with `createProgressReporter` so synchronous throws and asynchronous rejections cannot interrupt deployment. Unknown partial steps remain unconfirmed. See the transaction inventory for the exact preflight checks.
+SDK 0.22 validates domain syntax before creating a paid lease and validates the final update payload before provider authentication/POST. Its deploy catch now includes `onLeaseCreated`: a partial error without `failedStep` means the manifest was never uploaded, including non-cancellation callback failures. Deploy, restart (including batches), and update wrap progress observers with `createProgressReporter` so synchronous throws and asynchronous rejections cannot interrupt these operations. Unknown partial steps remain unconfirmed. See the transaction inventory for the exact preflight checks.
+
+URL shaping distinguishes missing port records from records emptied by SDK validation. An emptied record cannot establish HTTP routing from an FQDN; independent status endpoints remain usable. Instance HTTP FQDNs can route through Traefik without a published host port, while instance TCP mappings retain the reported Docker host. `connectionPatch` preserves stored URLs and connection details when a read provides no usable endpoint. A newly observed URL takes precedence, including a portless HTTPS FQDN after update; when no new connection accompanies a changed URL, stale port mappings are cleared so they cannot override it.
 
 The TX path splits by tool:
 

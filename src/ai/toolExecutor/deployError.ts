@@ -10,7 +10,7 @@ import { TerminalChainStateError, describeFredFailure } from '@manifest-network/
 import { logError } from '../../utils/errors';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { ToolResult, ToolExecutorOptions, SigningContext } from './types';
-import { failureText } from './helpers';
+import { connectionPatch, failureText } from './helpers';
 import { nextStepFor } from './failureGuidance';
 import { resolveAppUrl } from './deployUrl';
 
@@ -305,20 +305,21 @@ export async function handleDeployManifestError(
       const { url: connectionUrl, connection } = providerUrl
         ? await resolveAppUrl(providerUrl, leaseUuid, {} as FredLeaseStatus, address, signing, 'deployError.handleDeployManifestError')
         : { url: undefined, connection: undefined };
+      const previous = appRegistry.getAppByLease(address, leaseUuid);
+      const finalUrl = connectionUrl ?? previous?.url;
       // Chain observation only — no `provisionState`: the deploy THREW, so the
       // provider never confirmed readiness and a chain read may not claim it.
-      appRegistry.updateApp(address, leaseUuid, {
+      const updated = appRegistry.updateApp(address, leaseUuid, {
         chainState: 'active',
-        url: connectionUrl,
-        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+        ...connectionPatch({ url: connectionUrl, connection }, previous),
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
       return {
         success: true,
-        data: { message: `App "${name}" is live!`, name, url: connectionUrl, status: 'running' },
+        data: { message: `App "${name}" is live!`, name, url: finalUrl, status: 'running' },
         displayCard: {
           type: 'app' as const,
-          data: { name, url: connectionUrl, status: 'running', connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined },
+          data: { name, url: finalUrl, status: 'running', connection: updated?.connection ? JSON.parse(JSON.stringify(updated.connection)) : undefined },
         },
       };
     }
