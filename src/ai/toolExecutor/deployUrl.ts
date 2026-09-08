@@ -2,7 +2,8 @@
  * App-URL resolution after deploy/restart/update.
  *
  * Shares connection shaping with deploy results and app_status, then falls back
- * to provider status endpoints or instance FQDNs with assigned ports.
+ * to provider status endpoints or instance FQDNs. Direct TCP access requires
+ * an assigned host port; HTTP FQDNs route through Traefik on 443.
  */
 
 import { deriveUrlFromConnection, extractPort, extractPrimaryServicePorts, formatConnectionUrl, parseContainerPort, TCP_ONLY_PORTS } from './helpers';
@@ -28,17 +29,13 @@ function isDnsHostname(hostname: string): boolean {
 function rewriteFredEndpoint(endpointUrl: string, portKey: string): string | undefined {
   try {
     const parsed = new URL(endpointUrl);
-    if (parsed.port && extractPort(parsed.port) === undefined) return undefined;
-    const hostPort = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
-
-    if (!isDnsHostname(parsed.hostname)) return hostPort;
-
     const containerPort = parseContainerPort(portKey);
-    if (containerPort != null && TCP_ONLY_PORTS.has(containerPort)) {
-      return hostPort;
+    if (isDnsHostname(parsed.hostname) && !(containerPort != null && TCP_ONLY_PORTS.has(containerPort))) {
+      // HTTP ingress does not use Docker's published host port.
+      return `https://${parsed.hostname}`;
     }
-    // HTTP service: https://fqdn (Traefik on 443)
-    return `https://${parsed.hostname}`;
+    if (parsed.port && extractPort(parsed.port) === undefined) return undefined;
+    return parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
   } catch { /* not a valid URL — return as-is */ }
   return endpointUrl;
 }
@@ -48,7 +45,9 @@ function urlFromStatusPorts(
   fqdn?: string,
   host?: string,
 ): string | undefined {
-  if (extractPort(Object.values(ports)[0]) === undefined) return undefined;
+  // Keep the container port so formatConnectionUrl can distinguish HTTP ingress
+  // from direct TCP. A filtered-empty record no longer carries that information.
+  if (Object.keys(ports).length === 0) return undefined;
   const connectionHost = fqdn && isValidFqdn(fqdn) ? fqdn : host;
   if (!connectionHost) return undefined;
   return formatConnectionUrl(connectionHost, { host: connectionHost, fqdn, ports });
@@ -108,11 +107,13 @@ export async function resolveAppUrl(
   signing: SigningContext | undefined,
   logContext: string
 ): Promise<{ url?: string; connection?: ConnectionDetails }> {
+  let connection: ConnectionDetails | undefined;
   // 1. Try connection endpoint (has proper host + port mappings)
   if (signing) {
     try {
       const token = await signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
       const connResponse = await getLeaseConnectionInfo(providerUrl, leaseUuid, token);
+      connection = connResponse.connection;
       if (connResponse.connection) {
         const shaped = deriveUrlFromConnection(connResponse.connection);
         if (shaped) return shaped;
@@ -126,8 +127,8 @@ export async function resolveAppUrl(
   // extractUrlFromFredStatus already rewrites FQDN HTTP endpoints to https://fqdn
   const fredUrl = extractUrlFromFredStatus(fredStatus);
   if (fredUrl) {
-    return { url: fredUrl };
+    return { url: fredUrl, ...(connection ? { connection } : {}) };
   }
 
-  return {};
+  return connection ? { connection } : {};
 }

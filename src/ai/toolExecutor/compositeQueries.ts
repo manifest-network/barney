@@ -30,6 +30,7 @@ import { classifyProvisionStatus, isUnsettledProvisionStatus } from './provision
 import { buildBarneyCtx } from './capabilityCtx';
 import { nextStepFor } from './failureGuidance';
 import { formatConnectionUrl, deriveUrlFromConnection } from './helpers';
+import { extractUrlFromFredStatus } from './deployUrl';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import { getDomainAssignments } from '../../api/leaseDomains';
 import { requestFaucet } from '@manifest-network/manifest-sdk/faucet';
@@ -240,11 +241,10 @@ export async function executeAppStatus(
         // read (its own errors already swallowed → refreshedConnection undefined).
         let connectionRefreshed = false;
         if (refreshedConnection) {
-          const conn = deriveUrlFromConnection(refreshedConnection)?.connection ?? refreshedConnection;
+          const shaped = deriveUrlFromConnection(refreshedConnection);
+          const conn = shaped?.connection ?? refreshedConnection;
           appConnection = JSON.parse(JSON.stringify(conn));
-          if (conn.host) {
-            appUrl = conn.host;
-          }
+          appUrl = shaped?.url ?? extractUrlFromFredStatus(fredStatus) ?? appUrl;
           connectionRefreshed = true;
         }
         // TWO independent observations: the chain says the lease is ACTIVE, fred's

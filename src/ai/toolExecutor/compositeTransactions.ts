@@ -672,9 +672,9 @@ export async function executeConfirmedDeployApp(
 
   // URL shaping — never DeployResult.url (regresses stacks/FQDN, §3.6). Prefer
   // the no-round-trip shaper; fall back to resolveAppUrl only when connection
-  // is absent (the degraded branch).
+  // cannot supply a usable URL (the degraded branch).
   const shaped = result.connection ? deriveUrlFromConnection(result.connection) : undefined;
-  const { url: connectionUrl, connection } = shaped
+  const { url: connectionUrl, connection: resolvedConnection } = shaped
     ?? await resolveAppUrl(
       result.provider_url,
       leaseUuid,
@@ -683,6 +683,7 @@ export async function executeConfirmedDeployApp(
       signing,
       'compositeTransactions.executeConfirmedDeployApp',
     );
+  const connection = resolvedConnection ?? result.connection;
 
   // Custom-domain attach outcome comes from deployManifest's result (it set the
   // domain internally). Cache it so the DNS polling driver + sidebar dot see it.
@@ -980,7 +981,7 @@ export async function executeConfirmedBatchDeploy(
       }
 
       const shaped = result.connection ? deriveUrlFromConnection(result.connection) : undefined;
-      const { url: connectionUrl, connection } = shaped
+      const { url: connectionUrl, connection: resolvedConnection } = shaped
         ?? await resolveAppUrl(
           result.provider_url,
           result.lease_uuid,
@@ -989,6 +990,7 @@ export async function executeConfirmedBatchDeploy(
           signing,
           'executeConfirmedBatchDeploy',
         );
+      const connection = resolvedConnection ?? result.connection;
 
       // Same two observations as the single-deploy success path.
       appRegistry.updateApp(address, result.lease_uuid, {

@@ -203,9 +203,10 @@ interface DeployErrorContext {
 /**
  * Classify a deployManifest throw into barney's registry/progress/ToolResult.
  * Case 1 (no lease): create-lease rejected. Case 2 (leaseUuid present): the
- * error's structured discriminants decide, falling through to the getLease
- * chain-check only when it carries none — keyed off `leaseUuid`, not the error
- * type, so an unexpected throw with a lease still resolves via chain state.
+ * error's structured discriminants decide. Only throws without a readiness
+ * verdict or `partial: true` fall through to the getLease chain-check. Unknown
+ * partial steps stay unconfirmed; an unexpected unstructured throw with a
+ * captured lease still resolves via chain state.
  * Case 3 (TerminalChainStateError): straight failed, no chain-check.
  *
  * Discriminants come first because the chain lease is ACTIVE for the whole

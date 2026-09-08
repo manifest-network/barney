@@ -1985,6 +1985,25 @@ describe('executeConfirmedDeployApp', () => {
     expect(getLeaseConnectionInfo).toHaveBeenCalled();
   });
 
+  it.each([true, false])('retries a filtered-empty deploy connection; assigned port available=%s', async (assigned) => {
+    mockDeploySuccess({ connection: { host: '1.2.3.4', ports: {} } });
+    const connection: NonNullable<DeployResult['connection']> = { host: '1.2.3.4', ports: assigned
+      ? { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } : {} };
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValueOnce({
+      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1', connection,
+    });
+    const registry = makeRegistry();
+
+    const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry }), makePayload());
+
+    const expectedUrl = assigned ? '1.2.3.4:32456' : undefined;
+    expect(result.success).toBe(true);
+    expect((result.data as { url?: string }).url).toBe(expectedUrl);
+    expect(getLeaseConnectionInfo).toHaveBeenCalledOnce();
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.url).toBe(expectedUrl);
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.connection).toEqual(connection);
+  });
+
   it('routes a defensive throw without SDK discriminants through the chain fallback', async () => {
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
       await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
@@ -2974,6 +2993,25 @@ describe('executeConfirmedBatchDeploy', () => {
     mockLiveBatchCatalog();
   });
 
+  it('retries a filtered-empty connection before recording a batch app URL', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult({ connection: { host: '1.2.3.4', ports: {} } });
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValueOnce({
+      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '1.2.3.4', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    });
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha')]);
+    const registry = makeRegistry();
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions({ appRegistry: registry }));
+
+    expect(result.success).toBe(true);
+    expect(getLeaseConnectionInfo).toHaveBeenCalledOnce();
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.url).toBe('1.2.3.4:32456');
+  });
+
   it.each(['throw', 'reject'])('finishes a batch when progress observers %s', async (failure) => {
     const observerError = new Error('batch progress observer failed');
     const onProgress = vi.fn(() => {
@@ -3672,6 +3710,26 @@ describe('executeConfirmedRestartApp', () => {
     expect(restartLease).not.toHaveBeenCalled();
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'restarting' }));
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+  });
+
+  it('retains a working HTTP FQDN after restart when only status reports it', async () => {
+    vi.mocked(restartApp).mockResolvedValueOnce({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValueOnce({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      endpoints: { '80/tcp': 'http://app.example.com:0' },
+    });
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValueOnce(new Error('connection endpoint unavailable'));
+    const app = makeApp({ url: 'https://app.example.com' });
+    const registry = makeRegistry([app]);
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER, makeOptions({ appRegistry: registry }),
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as { url?: string }).url).toBe(app.url);
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.url).toBe(app.url);
   });
 
   it('handles 409 error from restart endpoint', async () => {

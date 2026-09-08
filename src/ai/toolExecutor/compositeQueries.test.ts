@@ -496,6 +496,27 @@ describe('executeAppStatus', () => {
       expect(logError).toHaveBeenCalled();
     });
 
+    it.each([
+      { previousUrl: undefined, endpoint: undefined, expectedUrl: undefined },
+      { previousUrl: '1.2.3.4:32456', endpoint: undefined, expectedUrl: '1.2.3.4:32456' },
+      { previousUrl: undefined, endpoint: 'http://app.example.com:0', expectedUrl: 'https://app.example.com' },
+    ])('does not replace an app endpoint with a filtered-empty connection host: %j', async ({ previousUrl, endpoint, expectedUrl }) => {
+      const app = makeApp({ url: previousUrl });
+      const registry = makeRegistry([app]);
+      vi.mocked(appStatus).mockResolvedValue({
+        lease_uuid: app.leaseUuid,
+        chainState: { state: 2, providerUuid: 'p1', createdAt: '', closedAt: undefined, items: [] },
+        fredStatus: { state: 2, endpoints: endpoint ? { '80/tcp': endpoint } : {} },
+        connection: { host: '1.2.3.4', ports: {} },
+      } as Awaited<ReturnType<typeof appStatus>>);
+
+      const result = await executeAppStatus({ app_name: app.name }, makeOptions({ appRegistry: registry, signing: mockSigning }));
+
+      expect(result.success).toBe(true);
+      expect((result.data as { url?: string }).url).toBe(expectedUrl);
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.url).toBe(expectedUrl);
+    });
+
     it('surfaces customDomains from appStatus chainState.items', async () => {
       const app = makeApp({ connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' } });
       const registry = makeRegistry([app]);

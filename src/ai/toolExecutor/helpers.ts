@@ -14,6 +14,11 @@ const PRIMARY_SERVICE_NAMES = new Set(['web', 'app', 'frontend', 'ui']);
 /** Service names that indicate backend infrastructure (not user-facing). */
 export const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mysql', 'redis', 'mongo']);
 
+/** Empty records can result from SDK filtering and must not hide another source. */
+function nonEmptyPorts<Port>(ports: Record<string, Port> | undefined): Record<string, Port> | undefined {
+  return ports && Object.keys(ports).length > 0 ? ports : undefined;
+}
+
 /**
  * Extract the "primary" service's ports from a stack services map.
  * Priority:
@@ -28,7 +33,7 @@ export function extractPrimaryServicePorts<Port>(
   if (entries.length === 0) return undefined;
 
   const getPorts = (svc: { ports?: Record<string, Port>; instances?: readonly { ports?: Record<string, Port> }[] }): Record<string, Port> | undefined =>
-    svc.ports ?? svc.instances?.[0]?.ports;
+    nonEmptyPorts(svc.ports) ?? nonEmptyPorts(svc.instances?.[0]?.ports);
 
   // 1. Named primary service
   for (const [name, svc] of entries) {
@@ -151,25 +156,25 @@ export function formatConnectionUrl(
     }
   }
 
-  // Last resort: bare host
-  if (connection?.ports && Object.keys(connection.ports).length > 0) return undefined;
+  // A present-but-empty port record may have lost every mapping to SDK
+  // validation. It supplies no evidence that the bare host is an app endpoint.
+  if (connection?.ports) return undefined;
   if (!host) return undefined;
   return host.replace(/^https?:\/\//, '');
 }
 
 /**
  * Shape an app URL from a DeployResult.connection with no extra API call.
- * Mirrors resolveAppUrl's connection block: ports = top-level ?? instances[0]
- * ?? primary-stack-service; FQDN promoted from the primary service when absent.
- * Returns undefined when neither a URL nor ports can be derived — caller then
- * falls back to resolveAppUrl (the network path).
+ * Selects non-empty top-level, instance, or primary-service ports and promotes
+ * the instance/service FQDN when absent. Returns undefined without a usable URL
+ * so callers can try other provider data while retaining the raw connection.
  */
 export function deriveUrlFromConnection(
   connection: ConnectionDetails,
 ): { url?: string; connection: ConnectionDetails } | undefined {
-  let ports = connection.ports ?? connection.instances?.[0]?.ports;
+  let ports = nonEmptyPorts(connection.ports) ?? nonEmptyPorts(connection.instances?.[0]?.ports);
 
-  let fqdn = connection.fqdn;
+  let fqdn = connection.fqdn ?? connection.instances?.[0]?.fqdn;
   if (!ports && connection.services) {
     const primary = extractPrimaryServicePorts(connection.services);
     if (primary) {
@@ -181,9 +186,12 @@ export function deriveUrlFromConnection(
     }
   }
 
+  // Preserve evidence that mappings were present even if validation emptied
+  // them. A stack/instance host by itself is not the selected workload's URL.
+  ports ??= connection.ports ?? (connection.instances || connection.services ? {} : undefined);
   const withPorts = { ...connection, ports, fqdn };
   const url = formatConnectionUrl(connection.host, withPorts);
-  if (url || withPorts.ports) return { url, connection: withPorts };
+  if (url) return { url, connection: withPorts };
   return undefined;
 }
 

@@ -36,8 +36,8 @@ const ALLOW_LOOPBACK = import.meta.env.DEV;
 
 /**
  * Checks the health status of a provider's API.
- * Returns null if the provider is unreachable (Barney convention).
- * Preserves invalid_response errors so callers can diagnose a malformed reply.
+ * Returns null on transport failure or invalid JSON (Barney convention).
+ * Preserves invalid_response errors for valid JSON with an off-contract shape.
  */
 export async function getProviderHealth(
   providerApiUrl: string,

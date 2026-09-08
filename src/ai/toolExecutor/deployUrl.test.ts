@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getLeaseStatus } from '@manifest-network/manifest-sdk/deploy';
-import { extractPort, formatConnectionUrl } from './helpers';
+import { getLeaseStatus, getLeaseConnectionInfo } from '@manifest-network/manifest-sdk/deploy';
+import { deriveUrlFromConnection, extractPort, formatConnectionUrl } from './helpers';
 import { resolveAppUrl } from './deployUrl';
 import type { SigningContext } from './types';
 
@@ -17,7 +17,13 @@ const signing: SigningContext = {
 
 afterEach(() => vi.restoreAllMocks());
 
-async function resolveFromWireStatus(body: Record<string, unknown>) {
+function connectionResponse(connection: Record<string, unknown>) {
+  return new Response(JSON.stringify({
+    lease_uuid: LEASE_UUID, tenant: 'manifest1tenant', provider_uuid: 'p1', connection,
+  }), { status: 200 });
+}
+
+async function resolveFromWireStatus(body: Record<string, unknown>, connection?: Record<string, unknown>) {
   // Exercise the published SDK's wire validation, then Barney's production
   // fallback with no caller-supplied host and an unavailable connection endpoint.
   const fetchStatus = vi.fn().mockResolvedValue(new Response(JSON.stringify({
@@ -25,7 +31,9 @@ async function resolveFromWireStatus(body: Record<string, unknown>) {
     ...body,
   }), { status: 200 }));
   const status = await getLeaseStatus(PROVIDER_URL, LEASE_UUID, 'token', fetchStatus);
-  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('Unavailable', { status: 503 }));
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async () => connection
+    ? connectionResponse(connection)
+    : new Response('Unavailable', { status: 503 }));
   const result = await resolveAppUrl(PROVIDER_URL, LEASE_UUID, status, 'manifest1tenant', signing, 'test');
   return { status, result };
 }
@@ -63,13 +71,23 @@ describe('provider status URL fallback', () => {
     expect(result).toEqual({ url: `${FQDN}:32456` });
   });
 
-  it.each(['instance', 'stack'])('omits an unassigned %s port', async (shape) => {
+  it.each(['instance', 'stack'])('keeps an HTTP FQDN with an unassigned %s port', async (shape) => {
     const instance = { name: 'web', status: 'running', fqdn: FQDN, ports: {
       '8080/tcp': { host_ip: '0.0.0.0', host_port: 0 },
     } };
     const { result } = await resolveFromWireStatus(shape === 'instance'
       ? { instances: [instance] }
       : { services: { web: { instances: [instance] } } });
+    expect(result).toEqual({ url: `https://${FQDN}` });
+  });
+
+  it.each(['instance', 'stack'])('omits a TCP FQDN with an unassigned %s port', async (shape) => {
+    const instance = { name: 'db', status: 'running', fqdn: FQDN, ports: {
+      '5432/tcp': { host_ip: '0.0.0.0', host_port: 0 },
+    } };
+    const { result } = await resolveFromWireStatus(shape === 'instance'
+      ? { instances: [instance] }
+      : { services: { db: { instances: [instance] } } });
     expect(result).toEqual({});
   });
 
@@ -98,9 +116,54 @@ describe('provider status URL fallback', () => {
     expect(result).toEqual({ url: `https://${FQDN}` });
   });
 
-  it('omits an endpoint with an unassigned port', async () => {
+  it('keeps an HTTP FQDN endpoint whose host port is unassigned', async () => {
     const { result } = await resolveFromWireStatus({ endpoints: { '8080/tcp': `http://${FQDN}:0` } });
+    expect(result).toEqual({ url: `https://${FQDN}` });
+  });
+
+  it.each([
+    ['8080/tcp', 'http://1.2.3.4:0'],
+    ['5432/tcp', `http://${FQDN}:0`],
+  ])('omits an unassigned direct endpoint %s=%s', async (key, endpoint) => {
+    const { result } = await resolveFromWireStatus({ endpoints: { [key]: endpoint } });
     expect(result).toEqual({});
+  });
+});
+
+describe('connection responses with filtered ports', () => {
+  it.each(['top level', 'instance', 'stack'])('uses status endpoints after legacy %s ports are dropped', async (shape) => {
+    const ports = { '8080/tcp': 32456 };
+    const connection = {
+      host: '1.2.3.4',
+      ...(shape === 'top level' ? { ports }
+        : shape === 'instance' ? { instances: [{ instance_index: 0, ports }] }
+          : { services: { web: { ports } } }),
+    };
+    const response = await getLeaseConnectionInfo(PROVIDER_URL, LEASE_UUID, 'token',
+      vi.fn().mockResolvedValue(connectionResponse(connection)));
+    expect(deriveUrlFromConnection(response.connection)).toBeUndefined();
+
+    const { result } = await resolveFromWireStatus({ endpoints: { '8080/tcp': 'http://1.2.3.4:32456' } }, connection);
+    expect(result.url).toBe('1.2.3.4:32456');
+  });
+
+  it.each([{}, { '8080/tcp': 32456 }])('omits a bare host when ports %j offer no usable URL', async (ports) => {
+    const { result } = await resolveFromWireStatus({}, { host: '1.2.3.4', ports });
+    expect(result.url).toBeUndefined();
+    // Keep provider details for diagnostics even when no endpoint can be derived.
+    expect(result.connection).toMatchObject({ host: '1.2.3.4', ports: {} });
+  });
+
+  it.each(['instance', 'stack'])('uses valid %s ports after top-level ports are dropped', async (shape) => {
+    const instance = { instance_index: 0, fqdn: FQDN, ports: {
+      '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 },
+    } };
+    const { result } = await resolveFromWireStatus({}, {
+      host: '1.2.3.4', ports: { '8080/tcp': 32456 },
+      ...(shape === 'instance' ? { instances: [instance] }
+        : { services: { web: { ports: {}, instances: [instance] } } }),
+    });
+    expect(result.url).toBe(`https://${FQDN}`);
   });
 });
 

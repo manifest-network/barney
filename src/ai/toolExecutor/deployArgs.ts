@@ -356,10 +356,13 @@ export function parseAndValidateStackServices(
     };
   }
 
-  // Apply known stack depends_on defaults
+  // Template dependencies apply only to the same services AND images. Names
+  // like web/db alone must not inject readiness requirements into other stacks.
   for (const ks of KNOWN_STACKS) {
     const ksNames = Object.keys(ks.services);
-    if (ksNames.length === serviceNames.length && ksNames.every(n => serviceNames.includes(n))) {
+    if (ksNames.length === serviceNames.length && ksNames.every(n =>
+      serviceNames.includes(n) && findKnownImage(stackServices[n].image)?.image === ks.services[n].image
+    )) {
       for (const [sName, sCfg] of Object.entries(ks.services)) {
         if (sCfg.depends_on && stackServices[sName] && !stackServices[sName].depends_on) {
           stackServices[sName].depends_on = sCfg.depends_on;
