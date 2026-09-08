@@ -42,6 +42,10 @@ const web3AuthWallets = makeWeb3AuthWallets({
     clientId: WEB3AUTH_CLIENT_ID,
     web3AuthNetwork: WEB3AUTH_NETWORK,
   },
+  // Web3Auth supplies no second approval dialog. Chat mutations are approved
+  // by ConfirmationCard and checked again by executeConfirmedTool; account
+  // setup has a fixed self-funding policy. ADR-036 provider/relay proofs carry
+  // no chain transaction. See docs/dev/security.md (Transaction confirmation).
   promptSign: async () => true,
   loginMethods: [
     {

@@ -17,6 +17,7 @@ This directory holds long-form documentation. The top-level [README.md](../READM
 - **[Testing](dev/testing.md)** — Vitest, mock patterns, coverage
 - **[Deployment](dev/deployment.md)** — Docker image, authenticated relay, env vars, quotas, prod operations
 - **[Security](dev/security.md)** — threat model, SSRF, CSP, secret handling
+- **[Transaction boundary](dev/transaction-boundary.md)** — SDK operation inventory, typed consent, fees, and cancellation
 
 ## For maintainers
 

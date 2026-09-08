@@ -30,10 +30,6 @@ vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   setItemCustomDomain: vi.fn(),
 }));
 
-vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/chain')>()),
-  cosmosTx: vi.fn(),
-}));
 
 vi.mock('../api/leaseItems', () => ({ getLeaseItemsForLease: vi.fn() }));
 vi.mock('../api/leaseByCustomDomain', () => ({ queryLeaseByCustomDomain: vi.fn() }));

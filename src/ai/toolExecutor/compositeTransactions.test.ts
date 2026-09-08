@@ -11,8 +11,6 @@ import {
   executeConfirmedStopApp,
   executeFundCredits,
   executeConfirmedFundCredits,
-  executeCosmosTransaction,
-  executeConfirmedCosmosTx,
   executeBatchDeploy,
   executeConfirmedBatchDeploy,
   executeRestartApp,
@@ -68,11 +66,6 @@ vi.mock('../../api/fred', () => ({
   updateLease: vi.fn(),
 }));
 
-vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/chain')>()),
-  cosmosTx: vi.fn(),
-}));
-
 // ENG-483: deployManifest + TerminalChainStateError are imported from the SDK
 // deploy facade, so mock there. Spread the original facade; manifest.ts's
 // buildManifest/mergeManifest/metaHashHex re-exports come from -fred (unmocked, real).
@@ -80,6 +73,7 @@ vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   ...(await importOriginal()),
   deployManifest: vi.fn(),
   stopApp: vi.fn(),
+  fundCredits: vi.fn(),
   setItemCustomDomain: vi.fn(),
   waitForLeaseStatus: vi.fn(),
   isLeaseFailureTerminal: vi.fn(),
@@ -121,10 +115,9 @@ import { getProviders, getSKUs, Unit } from '../../api/sku';
 import { DENOMS } from '../../api/config';
 import { getLeaseConnectionInfo } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, restartLease, updateLease } from '../../api/fred';
-import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
 import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
 import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
-import { TerminalChainStateError, deployManifest, stopApp, waitForLeaseStatus, isLeaseFailureTerminal, restartApp, updateApp, FRED_REASON_GUIDANCE } from '@manifest-network/manifest-sdk/deploy';
+import { TerminalChainStateError, deployManifest, stopApp, fundCredits, waitForLeaseStatus, isLeaseFailureTerminal, restartApp, updateApp, FRED_REASON_GUIDANCE } from '@manifest-network/manifest-sdk/deploy';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 import { getReadClient } from '../../api/readClient';
 
@@ -1878,7 +1871,7 @@ describe('executeConfirmedDeployApp', () => {
     expect((result.data as any).url).toBe('127.0.0.1:32456');
     // does NOT consume DeployResult.url
     expect(deployManifest).toHaveBeenCalledTimes(1);
-    expect(cosmosTx).not.toHaveBeenCalled();
+    expect(fundCredits).not.toHaveBeenCalled();
     expect(waitForLeaseStatus).not.toHaveBeenCalled();
     expect(setItemCustomDomain).not.toHaveBeenCalled();
     // registry addApp(deploying) fired in onLeaseCreated, then updateApp(running)
@@ -2232,7 +2225,7 @@ describe('executeConfirmedStopApp', () => {
     ];
 
     const result = await executeConfirmedStopApp(
-      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      { app_name: 'all', entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
       CLIENT_MANAGER,
       makeOptions({ appRegistry: makeRegistry(apps), assertAuthorization }),
     );
@@ -2255,7 +2248,7 @@ describe('executeConfirmedStopApp', () => {
     ];
 
     const result = await executeConfirmedStopApp(
-      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      { app_name: 'all', entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
       CLIENT_MANAGER,
       makeOptions({
         appRegistry: makeRegistry(apps),
@@ -2284,7 +2277,7 @@ describe('executeConfirmedStopApp', () => {
     ];
 
     const result = await executeConfirmedStopApp(
-      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      { app_name: 'all', entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
       CLIENT_MANAGER,
       makeOptions({ appRegistry: makeRegistry(apps) }),
     );
@@ -2314,7 +2307,7 @@ describe('executeConfirmedStopApp', () => {
     ];
 
     const result = await executeConfirmedStopApp(
-      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      { app_name: 'all', entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
       CLIENT_MANAGER,
       makeOptions({ appRegistry: makeRegistry(apps) }),
     );
@@ -2339,7 +2332,7 @@ describe('executeConfirmedStopApp', () => {
     ];
 
     const result = await executeConfirmedStopApp(
-      { entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
+      { app_name: 'all', entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) },
       CLIENT_MANAGER,
       makeOptions({ appRegistry: makeRegistry(apps) }),
     );
@@ -2395,11 +2388,11 @@ describe('executeFundCredits', () => {
     expect(result.error).toContain('positive');
   });
 
-  it('returns confirmation with correct micro amount', () => {
+  it('returns a semantic confirmation with no prebuilt coin string', () => {
     const result = executeFundCredits({ amount: 50 }, makeOptions());
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
-    expect(result.pendingAction?.args.microAmount).toBe(50_000_000);
+    expect(result.pendingAction?.args).toEqual({ amount: 50, address: ADDRESS });
   });
 });
 
@@ -2407,10 +2400,10 @@ describe('executeConfirmedFundCredits', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('funds credits successfully', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
+    vi.mocked(fundCredits).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
 
     const result = await executeConfirmedFundCredits(
-      { amount: 50, denomString: '50000000upwr', address: ADDRESS },
+      { amount: 50, address: ADDRESS },
       CLIENT_MANAGER,
       makeOptions(),
     );
@@ -2421,57 +2414,23 @@ describe('executeConfirmedFundCredits', () => {
 
   it('does not broadcast when the pending target belongs to another wallet', async () => {
     const result = await executeConfirmedFundCredits(
-      { amount: 50, denomString: '50000000upwr', address: 'manifest1walleta' },
+      { amount: 50, address: 'manifest1walleta' },
       CLIENT_MANAGER,
       makeOptions({ address: 'manifest1walletb' }),
     );
 
     expect(result.success).toBe(false);
-    expect(cosmosTx).not.toHaveBeenCalled();
+    expect(fundCredits).not.toHaveBeenCalled();
   });
 
   it('runs the live authorization guard immediately before broadcast', async () => {
     await expect(executeConfirmedFundCredits(
-      { amount: 50, denomString: '50000000upwr', address: ADDRESS },
+      { amount: 50, address: ADDRESS },
       CLIENT_MANAGER,
       makeOptions({ assertAuthorization: () => { throw new Error('identity changed'); } }),
     )).rejects.toThrow('identity changed');
 
-    expect(cosmosTx).not.toHaveBeenCalled();
-  });
-});
-
-describe('executeCosmosTransaction', () => {
-  it('returns error without module', () => {
-    const result = executeCosmosTransaction({ subcommand: 'x', args: '[]' }, makeOptions());
-    expect(result.success).toBe(false);
-  });
-
-  it('returns confirmation', () => {
-    const result = executeCosmosTransaction(
-      { module: 'bank', subcommand: 'send', args: '["addr", "100umfx"]' },
-      makeOptions()
-    );
-    expect(result.success).toBe(true);
-    expect(result.requiresConfirmation).toBe(true);
-    expect(result.pendingAction?.args.address).toBe(ADDRESS);
-  });
-});
-
-describe('executeConfirmedCosmosTx', () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it('executes transaction', async () => {
-    vi.mocked(cosmosTx).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
-
-    const result = await executeConfirmedCosmosTx(
-      { module: 'bank', subcommand: 'send', parsedArgs: ['addr', '100umfx'] },
-      CLIENT_MANAGER,
-      makeOptions(),
-    );
-
-    expect(result.success).toBe(true);
-    expect(cosmosTx).toHaveBeenCalledWith(CLIENT_MANAGER, 'bank', 'send', ['addr', '100umfx'], true);
+    expect(fundCredits).not.toHaveBeenCalled();
   });
 });
 

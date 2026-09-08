@@ -2,7 +2,9 @@ import { memo, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { AlertTriangle, Check, X, Paperclip, Copy, CheckCheck, Eye, EyeOff, Pencil, Trash2 } from 'lucide-react';
 import { FocusTrap } from 'focus-trap-react';
 import type { PendingAction } from '../../ai/toolExecutor';
-import { formatFileSize } from '../../utils/format';
+import { formatFileSize, fromBaseUnits } from '../../utils/format';
+import { getDenomMetadata } from '../../api/config';
+import { getTransactionFeeLimit } from '../../ai/transactionFees';
 import { logError } from '../../utils/errors';
 import { findExampleByAppName } from '../../config/exampleApps';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
@@ -278,6 +280,14 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   // "deploy redis with custom domain X" pre-fills the input. Empty input means
   // "no domain attached" — the deploy proceeds without firing the set-domain TX.
   const isDeployApp = action.toolName === 'deploy_app';
+  const { feeLimit, feeError } = useMemo(() => {
+    try {
+      return { feeLimit: getTransactionFeeLimit(action.toolName, action.args), feeError: null };
+    } catch (error) {
+      logError('ConfirmationCard.feeLimit', error);
+      return { feeLimit: null, feeError: 'Network fee unavailable. Please contact the site operator.' };
+    }
+  }, [action.toolName, action.args]);
 
   const { skuTiers } = useAI();
   const batchDraftPricing = useMemo(() => {
@@ -936,6 +946,17 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           )}
         </div>
       )}
+      {feeError && <p className="text-sm text-error" role="alert">{feeError}</p>}
+      {feeLimit && (
+        <div className="confirmation-details" data-testid="transaction-fee-limit">
+          <p className="confirmation-details-title">Maximum network fee</p>
+          <p>
+            {fromBaseUnits(feeLimit.amount, feeLimit.denom)} {getDenomMetadata(feeLimit.denom).symbol}
+            {feeLimit.maxTransactions > 1 && ` total for up to ${feeLimit.maxTransactions} transactions`}
+          </p>
+          <p className="text-xs text-muted">Actual fees are estimated before signing and must stay within this limit.</p>
+        </div>
+      )}
       <div className="confirmation-actions">
         <button
           ref={cancelRef}
@@ -952,6 +973,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           onClick={handleConfirm}
           disabled={
             isExecuting ||
+            feeError !== null ||
             invalidBatchPlan ||
             (batchPlan !== null && (!batchDraftPricing?.valid || batchDrafts.length === 0)) ||
             (isDeployApp && (

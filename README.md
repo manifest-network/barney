@@ -63,7 +63,7 @@ Image tags follow semver — `:latest`, `:1`, `:1.2`, `:1.2.3` — published by 
 
 ## What you can do
 
-The AI assistant exposes 17 tools that map to on-chain transactions and queries. All transaction tools require an explicit user confirmation step.
+The AI assistant exposes 16 tools that map to on-chain transactions and queries. All transaction tools require an explicit user confirmation step and use typed Manifest SDK operations. Arbitrary chain transactions, transfers, staking, governance, and credit withdrawals are unsupported.
 
 | Category | Tool | Action |
 |----------|------|--------|
@@ -72,7 +72,7 @@ The AI assistant exposes 17 tools that map to on-chain transactions and queries.
 | Funding | `fund_credits`, `request_faucet` | Top up credits or request testnet tokens |
 | Inspect | `list_apps`, `app_status`, `get_logs`, `app_diagnostics`, `app_releases` | App state, logs, error details, version history |
 | Discover | `browse_catalog`, `lease_history`, `get_balance` | Provider catalog, past leases, account state |
-| Escape hatch | `cosmos_query`, `cosmos_tx` | Raw chain operations (advanced) |
+| Advanced queries | `cosmos_query` | Read-only chain queries |
 
 See [docs/user/ai-cookbook.md](docs/user/ai-cookbook.md) for example prompts and what each tool does, and [CLAUDE.md](CLAUDE.md) for the full parameter reference.
 
@@ -159,7 +159,7 @@ npx vitest run -t "validateFile"
 ```
 src/
   ai/              # LLM integration: tools, system prompt, manifest builders, streaming
-    toolExecutor/  # Tool dispatch (queries, transactions, batch runner, escape hatches)
+    toolExecutor/  # Tool dispatch (queries, transactions, batch runner, typed consent plans)
   api/             # Chain + provider API clients (billing, bank, sku, fred, faucet, morpheus)
   components/
     ai/            # Chat UI: messages, cards, manifest editors, settings
@@ -191,7 +191,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for layered architecture and request flow
 2. **Account setup** — on first connect (and only when `PUBLIC_FAUCET_URL` is configured), the `useAccountSetup` hook runs a one-shot pipeline: requests PWR from the faucet (PWR covers both gas and credits after ENG-243) and funds credits. MFX is no longer part of the blocking flow — users who need MFX request it via the `request_faucet` chat tool.
 3. **Authorize AI** by signing a short-lived, chain/wallet-bound relay challenge; the opaque session stays in an HttpOnly cookie.
 4. **Chat** with the AI to deploy, manage, and monitor apps within identity and provider spend limits.
-5. The AI calls 17 composite tools that map to on-chain transactions and queries.
+5. The AI calls 16 composite tools that map to on-chain transactions and queries.
 6. Transaction tools require explicit user confirmation; the manifest can be edited inline before broadcast.
 7. Deploy progress is tracked in real time through provider WebSocket events with polling fallback.
 
@@ -202,7 +202,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for layered architecture and request flow
 - **Tailwind CSS v4** — utility-first styling with OKLCH theme tokens
 - **cosmos-kit** — Cosmos wallet abstraction (only `@cosmos-kit/web3auth` is registered in `main.tsx`; Leap, Cosmostation, and Ledger packages are installed but not enabled)
 - **manifestjs** — generated Manifest chain client
-- **`@manifest-network/manifest-sdk` / `manifest-mcp-core` / `mcp-fred` / `mcp-chain`** — shared SDK + MCP libraries: the sdk barrel provides CosmosClientManager, WalletProvider, the read client, and provider auth/deploy helpers (createAuthTokens, getLeaseLogs); core handles transaction signing (cosmosTx/cosmosQuery); fred provides provider HTTP/WebSocket; chain backs the faucet
+- **`@manifest-network/manifest-sdk` / `manifest-mcp-core` / `mcp-fred` / `mcp-chain`** — shared SDK + MCP libraries: the sdk barrel provides CosmosClientManager, WalletProvider, the read client, and provider auth/deploy helpers (createAuthTokens, getLeaseLogs); typed SDK operations own transaction building, signing, fee limits, and cancellation; fred provides provider HTTP/WebSocket; chain backs the faucet
 - **Morpheus API** — OpenAI-compatible LLM inference with tool calling
 - **Zustand** — vanilla store for AI chat state
 - **Vitest** + happy-dom — test runner

@@ -1,7 +1,7 @@
 /**
  * AI Tool Definitions
  *
- * 17 tools: 6 TX (require confirmation), 9 query, 2 escape hatch.
+ * 16 tools: 6 TX (require confirmation), 9 query, 1 read-only chain tool.
  * Model does intent classification; code does orchestration.
  *
  * `AI_TOOLS` is the static base list — it's the single source of truth for
@@ -120,13 +120,13 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'fund_credits',
-      description: 'Add credits to your account.',
+      description: 'Move PWR from your wallet into your own deployment credit account. Requires confirmation.',
       parameters: {
         type: 'object',
         properties: {
           amount: {
             type: 'number',
-            description: 'Amount of credits to add (e.g., 50).',
+            description: 'PWR amount to move into credits (e.g., 50). Must be positive with at most 6 decimal places.',
           },
         },
         required: ['amount'],
@@ -431,31 +431,6 @@ export const AI_TOOLS: ToolDefinition[] = [
       },
     },
   },
-  {
-    type: 'function',
-    function: {
-      name: 'cosmos_tx',
-      description: 'Execute a raw Cosmos SDK transaction.',
-      parameters: {
-        type: 'object',
-        properties: {
-          module: {
-            type: 'string',
-            description: 'The module name (bank, staking, gov, billing)',
-          },
-          subcommand: {
-            type: 'string',
-            description: 'The transaction subcommand',
-          },
-          args: {
-            type: 'string',
-            description: 'JSON array of string arguments',
-          },
-        },
-        required: ['module', 'subcommand', 'args'],
-      },
-    },
-  },
 ];
 
 /**
@@ -468,7 +443,6 @@ export const CONFIRMATION_TOOLS = new Set([
   'restart_app',
   'update_app',
   'set_custom_domain',
-  'cosmos_tx',
 ]);
 
 export function requiresConfirmation(toolName: string): boolean {
@@ -582,8 +556,6 @@ export function getToolCallDescription(
     }
     case 'cosmos_query':
       return `Querying ${args.module} ${args.subcommand}...`;
-    case 'cosmos_tx':
-      return `Executing ${args.module} ${args.subcommand} (requires confirmation)`;
     default:
       return `Executing ${toolName}...`;
   }

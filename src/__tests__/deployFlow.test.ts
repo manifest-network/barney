@@ -48,11 +48,6 @@ vi.mock('../api/fred', () => ({
   getLeaseProvision: vi.fn(),
 }));
 
-vi.mock('@manifest-network/manifest-sdk/chain', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/chain')>()),
-  cosmosTx: vi.fn(),
-  cosmosQuery: vi.fn(),
-}));
 
 // C2 (ENG-279): the confirmed deploy path delegates the create-lease → upload →
 // poll spine to deployManifest. ENG-483: it's imported from the SDK deploy
@@ -62,6 +57,7 @@ vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   ...(await importOriginal()),
   deployManifest: vi.fn(),
   stopApp: vi.fn(),
+  fundCredits: vi.fn(),
   appStatus: vi.fn(),
 }));
 
@@ -76,8 +72,7 @@ vi.mock('../utils/errors', () => ({
 import { getLeasesByTenant, getCreditEstimate } from '../api/billing';
 import { getProviders, getSKUs } from '../api/sku';
 import { getProviderHealth, getLeaseConnectionInfo } from '../api/provider-api';
-import { cosmosTx } from '@manifest-network/manifest-sdk/chain';
-import { deployManifest, stopApp, appStatus } from '@manifest-network/manifest-sdk/deploy';
+import { deployManifest, stopApp, fundCredits, appStatus } from '@manifest-network/manifest-sdk/deploy';
 import { getReadClient } from '../api/readClient';
 
 const ADDRESS = 'manifest1testaddr';
@@ -218,10 +213,6 @@ describe('Deploy Flow Integration', () => {
     });
     // Retained old-spine mock — still used by the stop step below, harmless
     // for deploy now that deployManifest owns the spine.
-    vi.mocked(cosmosTx).mockResolvedValue({
-      module: 'billing', subcommand: 'create-lease', height: '100',
-      code: 0, transactionHash: 'tx-hash-1', rawLog: '', events: [],
-    } as Awaited<ReturnType<typeof cosmosTx>>);
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
       lease_uuid: LEASE_UUID,
       tenant: ADDRESS,
@@ -305,10 +296,7 @@ describe('Deploy Flow Integration', () => {
     expect(fundResult.confirmationMessage).toContain('50');
 
     // Step 2: Confirm fund
-    vi.mocked(cosmosTx).mockResolvedValue({
-      module: 'billing', subcommand: 'fund-credit', height: '102',
-      code: 0, transactionHash: 'tx-hash-fund', rawLog: '', events: [],
-    } as Awaited<ReturnType<typeof cosmosTx>>);
+    vi.mocked(fundCredits).mockResolvedValue({ code: 0, transactionHash: 'fund-hash' } as any);
 
     const confirmedFund = await executeConfirmedTool(
       'fund_credits',

@@ -49,9 +49,7 @@ A Cosmos SDK transaction wraps one or more typed `Msg` objects. Each message nam
 }
 ```
 
-Barney builds messages via `manifestjs`'s generated code (`@manifest-network/manifestjs/dist/codegen/...`), signs with cosmjs's `SigningStargateClient`, and broadcasts via RPC. The signing client also handles fee estimation against the configured `GAS_PRICE`.
-
-> **Why `buildMsg` and `lcdConvert` use `any`.** manifestjs's codegen produces `fromPartial(value: I)` overloads where `I` is an intersection like `MsgFundCredit & Record<string|number|symbol, never>`. TypeScript treats that intersection as essentially "no properties", so the compiler rejects every plausible object literal you could pass. The accepted project pattern is to type the `fromPartial` parameter as `any` inside `buildMsg` (`src/api/tx.ts`) and `lcdConvert` (`src/api/queryClient.ts`) while keeping the surrounding code typed. Don't reach for `// @ts-ignore` — use the helpers.
+Barney calls typed Manifest SDK operations (`deployManifest`, `stopApp`, `fundCredits`, and `setItemCustomDomain`). The SDK builds messages using manifestjs, estimates fees at the configured gas price, enforces Barney's gas ceiling, and signs/broadcasts through cosmjs. Barney owns typed action planning, purpose-built previews, and explicit user confirmation; it has no raw transaction builder. See the [transaction boundary](transaction-boundary.md).
 
 ### ADR-036 (sign arbitrary)
 
@@ -133,7 +131,7 @@ Barney delegates the HTTP wrappers to `@manifest-network/manifest-mcp-fred`, inj
 The `@manifest-network/manifest-mcp-*` packages are shared libraries used by Barney *and* by the Manifest [MCP server](https://modelcontextprotocol.io) implementation. They consolidate the bits of code that would otherwise drift between the two:
 
 - `manifest-sdk` — the aggregating SDK: `CosmosClientManager`, `WalletProvider`, `ManifestMCPConfig`, `SignArbitraryResult`, the `createManifestReadClient` read client, and the `createAuthTokens` ADR-036 token factory (`@manifest-network/manifest-sdk/deploy`).
-- `manifest-mcp-core` — `cosmosTx` / `cosmosQuery` helpers for raw transactions and queries, `setItemCustomDomain`, and common types (`asLeaseUuid`, `asFqdn`).
+- `manifest-mcp-core` — SDK-internal chain operations, transaction validation/signing, gas ceilings, cancellation, and common types (`asLeaseUuid`, `asFqdn`). Barney imports high-level operations through the SDK facade.
 - `manifest-mcp-fred` — provider HTTP functions, manifest builders (`buildManifest`, `mergeManifest`, `validateServiceName`).
 - `manifest-mcp-chain` — faucet client, chain-side helpers (`requestFaucetCredit`).
 

@@ -5,6 +5,7 @@ import type { PendingConfirmation, ChatMessage } from '../../contexts/aiTypes';
 import { createAIStore, type AIStore } from '../aiStore';
 import { createWalletIdentity } from '../../utils/walletIdentity';
 import { historyStorageKey } from './persistence';
+import { parseTransactionPlan } from '../../ai/toolExecutor/transactionPlans';
 
 // ---------------------------------------------------------------------------
 // Deterministic IDs
@@ -380,12 +381,39 @@ describe('confirmAction', () => {
       expect(store.getState().isStreaming).toBe(false);
     });
 
-    it('keeps the edited confirmation mounted and retryable when re-planning fails', async () => {
+    it('keeps failed edits retryable and allows reverting to the original batch plan', async () => {
+      const manifest = '{"image":"alpha:v1"}';
+      const plan = {
+        version: 1,
+        entries: [{
+          draftIndex: 0,
+          app_name: 'alpha',
+          size: 'docker-micro',
+          skuUuid: 'sku-micro',
+          providerUuid: 'provider-1',
+          providerUrl: 'https://provider.example.com',
+          resources: { cores: 0.5, ramMB: 512, diskGB: 1 },
+          manifest,
+          manifestFilename: 'alpha.json',
+          manifestSize: manifest.length,
+          manifestHash: 'a'.repeat(64),
+          services: [{ name: '', image: 'alpha:v1', ports: [], environmentKeys: [] }],
+          serviceNames: [],
+          serviceCount: 1,
+          pricePerServiceHour: 0.1,
+          totalPricePerHour: 0.1,
+          denomSymbol: 'PWR',
+        }],
+        totalServiceCount: 1,
+        totalPricePerHour: 0.1,
+        denomSymbol: 'PWR',
+        planHash: 'b'.repeat(64),
+      };
       const pending = makePendingConfirmation({
         action: {
           toolName: 'batch_deploy',
-          args: { plan: { version: 1, planHash: 'old-plan' } },
-          description: 'Deploy 2 apps for 0.2000 PWR/hr total?',
+          args: { plan },
+          description: 'Deploy alpha for 0.1000 PWR/hr total?',
         },
       });
       const store = setupStore({
@@ -420,6 +448,24 @@ describe('confirmAction', () => {
       expect(state.abortController).toBeNull();
       expect(state.isStreaming).toBe(false);
       expect(mockExecuteConfirmedTool).not.toHaveBeenCalled();
+
+      mockExecuteConfirmedTool.mockImplementationOnce(async (_tool, args) => {
+        // Exercise the actual strict schema at the execution boundary.
+        const parsed = parseTransactionPlan('batch_deploy', args);
+        expect(parsed.success).toBe(true);
+        return parsed;
+      });
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult());
+
+      // Reverting tier/domain edits makes the card confirm without overrides.
+      await store.getState().confirmAction();
+
+      expect(mockExecuteConfirmedTool).toHaveBeenCalledWith(
+        'batch_deploy', { plan }, expect.any(Object), undefined,
+      );
+      expect(store.getState().messages[0].error).toBeUndefined();
+      expect(store.getState().pendingConfirmation).toBeNull();
+      expect(state.pendingConfirmation?.action.args._batchReplanError).toContain('Tier catalog unavailable');
     });
   });
 

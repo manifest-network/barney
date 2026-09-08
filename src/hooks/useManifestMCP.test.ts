@@ -3,6 +3,7 @@ import { createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { useManifestMCP, type UseManifestMCPResult } from './useManifestMCP';
+import { MAX_TRANSACTION_GAS } from '../config/constants';
 
 // --- Mocks ---
 //
@@ -111,6 +112,15 @@ afterEach(() => {
 });
 
 describe('useManifestMCP signing capability gate', () => {
+  it('enforces the gas ceiling used in the confirmation fee preview', () => {
+    render();
+    expect(mockGetInstance).toHaveBeenCalledWith(expect.objectContaining({
+      gasPrice: '0.025factory/test/upwr',
+      maxGas: MAX_TRANSACTION_GAS,
+    }), expect.anything());
+    expect(MAX_TRANSACTION_GAS).toBeGreaterThan(0);
+  });
+
   it('exposes a SigningContext whose authTokens delegate to a single createProviderAuth', async () => {
     render();
     expect(captured?.signing).toBeDefined();

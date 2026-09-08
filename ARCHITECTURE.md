@@ -113,11 +113,13 @@ The AI layer is intentionally narrow.
 executeTool(toolName, args, options, payload?)
 ├─ if toolName ∈ QUERY_TOOLS → executeListApps / executeAppStatus / …
 ├─ if toolName ∈ TX_TOOLS    → returns { requiresConfirmation: true, pendingAction }
-├─ if toolName === 'cosmos_query' → executeCosmosQuery
-└─ if toolName === 'cosmos_tx'    → returns { requiresConfirmation: true, … }
+├─ if toolName === 'cosmos_query' → executeCosmosQuery (read-only)
+└─ otherwise → unknown tool error
 
-executeConfirmedTool(toolName, args, clientManager, options, payload?)
-└─ executeConfirmedDeployApp / executeConfirmedStopApp / … / executeConfirmedBatchDeploy
+executeConfirmedTool(toolName, args, options, payload?)
+├─ allowlisted action + current wallet authorization + live abort signal
+├─ shared typed plan validation → executeConfirmedDeployApp / executeConfirmedStopApp / …
+└─ otherwise → error without signing
 ```
 
 - `compositeQueries.ts` — read-only operations that resolve immediately.
@@ -125,6 +127,14 @@ executeConfirmedTool(toolName, args, clientManager, options, payload?)
 - `deployManifest` (imported from the `@manifest-network/manifest-sdk/deploy` facade, which re-exports mono-fred's implementation) now owns create-lease → set-domain → upload → provision-poll; barney's old hand-rolled orchestration (`transactions.ts`, then `toolExecutor/utils.ts` with `uploadPayloadToProvider`/`computePayloadHash`) is **deleted**.
 - `batchRunner.ts` — concurrency-bounded batch execution with shared signing mutex; used by `requestBatchDeploy` and bulk restart. Batch deploy calls `deployManifest` directly (never wrapped in `withSign` — that deadlocks).
 - `helpers.ts`, `types.ts` — shared types (`ToolResult`, `ToolExecutorOptions`, `PayloadAttachment`, `SigningContext`) and URL/port shaping helpers. ADR-036 tokens are minted by the single `createProviderAuth` instance built in `src/hooks/useManifestMCP.ts`, exposed on `SigningContext` as `providerAuth` (address-param) plus the `authTokens` address-binding adapter.
+
+#### SDK transaction boundary
+
+Barney exposes six purpose-built mutation tools: deploy, stop, restart, update, credit funding, and custom domains. Each uses a typed high-level SDK operation after explicit user approval. Arbitrary chain transactions, bank transfers, staking, governance, and credit withdrawals are unavailable. A missing SDK capability requires a scoped SDK issue and review before a new tool can be registered; there is no raw fallback.
+
+`transactionPlans.ts` defines the typed semantic consent schemas shared by planning and execution. Unknown action fields (including raw transaction and fee overrides) fail closed. Plans are frozen before display; batches also rebuild their canonical manifest/price plan at confirmation. The connected wallet manager enforces `MAX_TRANSACTION_GAS` before signing. `transactionFees.ts` uses the same ceiling and configured gas price to show maximum network fees, including batch totals and an optional domain transaction on deploy. Restart/update are provider operations without chain fees.
+
+Web3Auth's `promptSign` automatically accepts SDK signature requests. Human approval therefore happens in Barney's confirmation flow; an unknown model tool cannot reach signing, and an approved action remains bound to its wallet, chain, and signer/client generations. ADR-036 authentication and fixed account-setup funding have separate policies described in [security](docs/dev/security.md#5-transaction-confirmation). See the [transaction inventory and SDK mapping](docs/dev/transaction-boundary.md).
 
 ### 4. Chain & provider clients (`src/api/`)
 
@@ -136,7 +146,7 @@ Thin wrappers over external libraries with Barney-specific behaviour kept local.
 | `billing.ts` | manifestjs `liftedinit.billing.v1` | LCD type conversions, lease state mapping, `getCreditAccount` |
 | `sku.ts` | SDK read client (`readClient.ts` `getReadClient`) + manifestjs `Unit` enum | `getProviders` / `getSKUs`; `Unit` enum and `Provider`/`SKU` type re-exports (enum fixups removed) |
 | `readClient.ts` | `@manifest-network/manifest-sdk` `createManifestReadClient` | Cached query-only SDK read client (`getReadClient` / `disposeReadClient`); backs `getSKUs`/`getProviders`/`getBillingParams` |
-| `tx.ts` | cosmjs Stargate signing client | `signAndBroadcast`, `buildMsg`, `fundCredit` |
+| `tx.ts` | — | `LeaseItemInput` type and `Unit` re-export; no transaction implementation |
 | `fred.ts` | `@manifest-network/manifest-mcp-fred` | WebSocket lease event streaming, polling fallback, browser-side connection |
 | `provider-api.ts` | `@manifest-network/manifest-mcp-fred` | `validateAuthTimestamp`, null-returning `getProviderHealth` |
 | `providerFetchAdapter.ts` | `fetch` | Dev CORS proxy injection (`X-Proxy-Target`) and prod SSRF validation |

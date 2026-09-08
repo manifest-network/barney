@@ -407,6 +407,12 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
 
   // Clone action to avoid mutating React state; apply user edits if present.
   let confirmedArgs = pendingConfirmation.action.args;
+  if (pendingConfirmation.action.toolName === 'batch_deploy') {
+    confirmedArgs = { ...confirmedArgs };
+    // A failed edit can be reverted to the original plan. This is card-only
+    // feedback and must not enter the strict transaction schema on Confirm.
+    delete confirmedArgs._batchReplanError;
+  }
   let confirmedPayload = pendingConfirmation.action.payload;
   if (overrides?.editedManifestJson && confirmedArgs._generatedManifest) {
     confirmedArgs = { ...confirmedArgs, _generatedManifest: overrides.editedManifestJson };

@@ -14,6 +14,7 @@
 
 import type { AIStore } from '../aiStore';
 import { captureTransactionAuthorization } from '../authorization';
+import { transactionConfirmation } from '../../ai/toolExecutor/transactionPlans';
 import { generateMessageId, trimMessages, getAppRegistryAccess } from './utils';
 
 type Get = () => AIStore;
@@ -40,6 +41,10 @@ export function requestStopAppFn(get: Get, set: Set, appName: string): void {
   const toolMsgId = generateMessageId();
   const confirmationMessage =
     `Stop app "${app.name}"? This will terminate the deployment and stop billing.`;
+  const plan = transactionConfirmation('stop_app', {
+    app_name: app.name, leaseUuid: app.leaseUuid,
+  }, confirmationMessage);
+  if (!plan.requiresConfirmation) return;
 
   const userMessage = {
     id: generateMessageId(),
@@ -83,7 +88,7 @@ export function requestStopAppFn(get: Get, set: Set, appName: string): void {
         ...authorization,
         id: syntheticToolCallId,
         toolName: 'stop_app',
-        args: { app_name: app.name, leaseUuid: app.leaseUuid },
+        args: plan.pendingAction.args,
         description: confirmationMessage,
       }),
       messageId: toolMsgId,
