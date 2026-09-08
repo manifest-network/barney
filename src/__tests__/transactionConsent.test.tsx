@@ -7,6 +7,7 @@ import { AIStoreContext } from '../contexts/aiStoreContext';
 import { useAI } from '../hooks/useAI';
 import { ConfirmationCard } from '../components/ai/ConfirmationCard';
 import { executeTool, executeConfirmedTool } from '../ai/toolExecutor';
+import { executeConfirmedFundCredits } from '../ai/toolExecutor/compositeTransactions';
 import { AI_TOOLS, isValidToolName, requiresConfirmation } from '../ai/tools';
 import { transactionConfirmation, type TransactionPlan, type TransactionToolName } from '../ai/toolExecutor/transactionPlans';
 import { DENOMS } from '../api/config';
@@ -163,13 +164,14 @@ describe('SDK transaction consent boundary', () => {
     },
   );
 
-  it('does not fund credits when confirmation is already cancelled', async () => {
+  it.each([undefined, 'User cancelled', new Error('Wallet closed')])('normalizes pre-flight funding cancellation (%s)', async (reason) => {
     const controller = new AbortController();
-    controller.abort();
-    const result = await executeConfirmedTool('fund_credits', { amount: 1, address: ADDRESS }, {
-      ...options(), signal: controller.signal,
-    });
-    expect(result.success).toBe(false);
+    controller.abort(reason);
+    const opts = { ...options(), signal: controller.signal };
+    const args = { amount: 1, address: ADDRESS };
+    const cancelled = { success: false, error: 'Credit funding was cancelled before submission.' };
+    expect(await executeConfirmedTool('fund_credits', args, opts)).toEqual(cancelled);
+    expect(await executeConfirmedFundCredits(args, CLIENT, opts)).toEqual(cancelled);
     expect(fundCredits).not.toHaveBeenCalled();
   });
 

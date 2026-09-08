@@ -1227,6 +1227,8 @@ export async function executeConfirmedStopApp(
 // fund_credits
 // ============================================================================
 
+export const CREDIT_FUNDING_CANCELLED_MESSAGE = 'Credit funding was cancelled before submission.';
+
 /** Plan a self-funding credit transfer; amounts are revalidated after approval. */
 export function executeFundCredits(
   args: Record<string, unknown>,
@@ -1256,7 +1258,9 @@ export async function executeConfirmedFundCredits(
   }
 
   options.assertAuthorization?.();
-  options.signal?.throwIfAborted();
+  if (options.signal?.aborted) {
+    return { success: false, error: CREDIT_FUNDING_CANCELLED_MESSAGE };
+  }
   try {
     const result = await fundCredits(
       { chain: clientManager, logger: noopLogger },
@@ -1279,7 +1283,7 @@ export async function executeConfirmedFundCredits(
       return {
         success: false,
         error: cancelledTransactionWasSent(error) === false
-          ? 'Credit funding was cancelled before submission.'
+          ? CREDIT_FUNDING_CANCELLED_MESSAGE
           : 'Credit funding may have been submitted. Check your credit balance before retrying.',
       };
     }

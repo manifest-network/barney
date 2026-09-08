@@ -542,6 +542,48 @@ describe('useAccountSetup — storage migration', () => {
 // ============================================
 
 describe('useAccountSetup — cleanup', () => {
+  it.each(['initial', 'retry'] as const)('ignores cancelled %s funding after a wallet switch', async (attempt) => {
+    vi.mocked(getBalance).mockResolvedValue({ denom: 'factory/addr/upwr', amount: '20000000' });
+    vi.mocked(getCreditAccount).mockResolvedValue({ balances: [] } as any);
+    if (attempt === 'retry') {
+      vi.mocked(fundCredits).mockRejectedValueOnce(new Error('Network unavailable'));
+    }
+    let rejectFunding!: (error: unknown) => void;
+    let fundingSignal: AbortSignal | undefined;
+    vi.mocked(fundCredits).mockImplementationOnce((_ctx, _input, options) => {
+      fundingSignal = options?.signal;
+      return new Promise((_resolve, reject) => { rejectFunding = reject; });
+    });
+
+    renderHook(defaultHookProps());
+    await flush();
+    const expectedAttempts = attempt === 'initial' ? 1 : 2;
+    expect(fundCredits).toHaveBeenCalledTimes(expectedAttempts);
+    expect(fundingSignal?.aborted).toBe(false);
+
+    saveSetupData('manifest1next', { setupCompleted: true });
+    flushSync(() => root.render(createElement(Wrapper, {
+      hookProps: defaultHookProps({ address: 'manifest1next' }),
+      onState: (state) => {
+        capturedState = state;
+        stateHistory.push({ ...state });
+      },
+    })));
+    await flush();
+    expect(fundingSignal?.aborted).toBe(true);
+    stateHistory = [];
+    vi.mocked(logError).mockClear();
+
+    rejectFunding({ code: 'OPERATION_CANCELLED', details: { sent: true } });
+    await flush();
+
+    expect(capturedState).toEqual({ isInitialSetup: false, phase: 'complete' });
+    expect(hadState((state) => state.isInitialSetup || !!state.error)).toBe(false);
+    expect(logError).not.toHaveBeenCalled();
+    expect(fundCredits).toHaveBeenCalledTimes(expectedAttempts);
+    expect(loadSetupData('manifest1abc')?.setupCompleted).not.toBe(true);
+  });
+
   it('aborts in-flight operations on unmount', async () => {
     // Set up a slow faucet that will be aborted
     mockZeroBalances();

@@ -4,6 +4,8 @@ This cookbook documents the 16 tools the AI can call, what each does, and how to
 
 A confirmation step is required for transactions that move tokens or change on-chain state. Queries return immediately.
 
+If a confirmation card shows “Network fee unavailable,” confirmation is disabled. You can cancel the action and contact the site operator to correct the fee configuration.
+
 ## Reading this guide
 
 For each tool you'll see:

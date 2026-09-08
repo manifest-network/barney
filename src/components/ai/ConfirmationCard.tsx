@@ -280,7 +280,14 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
   // "deploy redis with custom domain X" pre-fills the input. Empty input means
   // "no domain attached" — the deploy proceeds without firing the set-domain TX.
   const isDeployApp = action.toolName === 'deploy_app';
-  const feeLimit = getTransactionFeeLimit(action.toolName, action.args);
+  const { feeLimit, feeError } = useMemo(() => {
+    try {
+      return { feeLimit: getTransactionFeeLimit(action.toolName, action.args), feeError: null };
+    } catch (error) {
+      logError('ConfirmationCard.feeLimit', error);
+      return { feeLimit: null, feeError: 'Network fee unavailable. Please contact the site operator.' };
+    }
+  }, [action.toolName, action.args]);
 
   const { skuTiers } = useAI();
   const batchDraftPricing = useMemo(() => {
@@ -939,6 +946,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           )}
         </div>
       )}
+      {feeError && <p className="text-sm text-error" role="alert">{feeError}</p>}
       {feeLimit && (
         <div className="confirmation-details" data-testid="transaction-fee-limit">
           <p className="confirmation-details-title">Maximum network fee</p>
@@ -965,6 +973,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           onClick={handleConfirm}
           disabled={
             isExecuting ||
+            feeError !== null ||
             invalidBatchPlan ||
             (batchPlan !== null && (!batchDraftPricing?.valid || batchDrafts.length === 0)) ||
             (isDeployApp && (

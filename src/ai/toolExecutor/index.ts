@@ -22,6 +22,7 @@ import {
   executeConfirmedStopApp,
   executeFundCredits,
   executeConfirmedFundCredits,
+  CREDIT_FUNDING_CANCELLED_MESSAGE,
   executeConfirmedBatchDeploy,
   executeRestartApp,
   executeConfirmedRestartApp,
@@ -176,6 +177,9 @@ export async function executeConfirmedTool(
       return { success: false, error: 'Transaction cancelled: action target address does not match the authorized wallet.' };
     }
     assertAuthorization();
+    if (toolName === 'fund_credits' && options.signal?.aborted) {
+      return { success: false, error: CREDIT_FUNDING_CANCELLED_MESSAGE };
+    }
     options.signal?.throwIfAborted();
 
     switch (toolName) {

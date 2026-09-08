@@ -17,6 +17,7 @@ vi.mock('./compositeQueries', () => ({
 }));
 
 vi.mock('./compositeTransactions', () => ({
+  CREDIT_FUNDING_CANCELLED_MESSAGE: 'Credit funding was cancelled before submission.',
   executeDeployApp: vi.fn(),
   executeConfirmedDeployApp: vi.fn(),
   executeStopApp: vi.fn(),

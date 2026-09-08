@@ -1345,14 +1345,15 @@ describe('ConfirmationCard canonical batch plan', () => {
     }
   });
 
-  it('recalculates batch pricing and resources when an entry tier changes', () => {
+  it('recalculates tier edits and allows reverting after failed revalidation', () => {
     mockSkuTiers = {
       phase: 'ready',
       tiers: BATCH_EDIT_TIERS,
       denomSymbol: 'PWR',
       error: null,
     };
-    const { container, onConfirm, cleanup } = renderBatch();
+    const action = makePlannedBatchAction();
+    const { container, onConfirm, render, cleanup } = renderBatch(vi.fn(), action);
     try {
       const edit = container.querySelector('button[aria-label="Edit alpha"]') as HTMLButtonElement;
       flushSync(() => edit.click());
@@ -1384,6 +1385,17 @@ describe('ConfirmationCard canonical batch plan', () => {
           expect.objectContaining({ app_name: 'alpha', size: 'docker-small' }),
         ]),
       });
+
+      render({ ...action, args: { ...action.args, _batchReplanError: 'Tier catalog unavailable' } });
+      flushSync(() => {
+        select.value = 'docker-micro';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      const confirm = Array.from(container.querySelectorAll('button'))
+        .find((button) => button.textContent?.trim() === 'Confirm') as HTMLButtonElement;
+      expect(confirm.disabled).toBe(false);
+      flushSync(() => confirm.click());
+      expect(onConfirm).toHaveBeenLastCalledWith(undefined);
     } finally {
       cleanup();
     }

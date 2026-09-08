@@ -301,7 +301,7 @@ export function useAccountSetup({
           // fundCredits forwards `amount` verbatim into the billing fund-credit
           // TX, and downstream parseAmount requires a <number><denom> coin string
           // (a bare micro-digit string throws "Missing denomination"). Mirror the
-          // fund_credits tool's denomString. Self-fund: the SDK defaults the
+          // fund_credits tool's coin conversion. Self-fund: the SDK defaults the
           // recipient to the connected signer's own address (no `tenant`).
           const creditCoin = `${toBaseUnits(ACCOUNT_SETUP_CREDIT_AMOUNT, DENOMS.PWR)}${DENOMS.PWR}`;
 
@@ -317,10 +317,12 @@ export function useAccountSetup({
               logError('useAccountSetup.fundCredits', new Error(`fund-credit failed (code ${result.code})${result.rawLog ? `: ${result.rawLog}` : ''}`));
             }
           } catch (error) {
+            if (signal.aborted || addressRef.current !== targetAddress) return;
             logError('useAccountSetup.fundCredits', error);
           }
 
           if (!fundSucceeded) {
+            if (signal.aborted || addressRef.current !== targetAddress) return;
             // Retry once
             setSetupState({ isInitialSetup: true, phase: 'funding', error: 'Could not activate credits. Retrying...' });
             await new Promise((r) => setTimeout(r, ACCOUNT_SETUP_RETRY_DELAY_MS));
@@ -340,6 +342,7 @@ export function useAccountSetup({
                 fundSucceeded = true;
               }
             } catch (recheckError) {
+              if (signal.aborted || addressRef.current !== targetAddress) return;
               logError('useAccountSetup.fundCredits.recheck', recheckError);
               // recheck failed — fall through to retry (at worst behaves as today)
             }
@@ -361,6 +364,7 @@ export function useAccountSetup({
                   return;
                 }
               } catch (retryError) {
+                if (signal.aborted || addressRef.current !== targetAddress) return;
                 logError('useAccountSetup.fundCredits', retryError);
                 setupError = 'Could not activate credits. Please try again later.';
                 setSetupState({ isInitialSetup: true, phase: 'funding', error: setupError });
