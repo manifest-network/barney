@@ -22,7 +22,7 @@ import { fromBaseUnits, toBaseUnits } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
-import { deriveUrlFromConnection, failureText } from './helpers';
+import { connectionPatch, deriveUrlFromConnection, failureText } from './helpers';
 import { normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
@@ -30,6 +30,7 @@ import { getDomainForService } from '../../api/leaseDomains';
 import { validateAll, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { validateAppName, sanitizeManifestForStorage, type AppEntry, type ProvisionState } from '../../registry/appRegistry';
 import { buildStackManifest, mergeManifest, resolveGeneratedPassword } from '../manifest';
+import { createProgressReporter } from '../progress';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import type { SigningContext } from './types';
@@ -542,7 +543,8 @@ export async function executeConfirmedDeployApp(
   const parsed = parseTransactionPlan('deploy_app', args);
   if (!parsed.success) return parsed;
   const plan = parsed.data;
-  const { address, appRegistry, signing, onProgress, signal } = options;
+  const { address, appRegistry, signing, signal } = options;
+  const onProgress = createProgressReporter(options.onProgress);
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
@@ -588,8 +590,8 @@ export async function executeConfirmedDeployApp(
 
   onProgress?.({ phase: 'creating_lease', detail: 'Creating lease on-chain...' });
 
-  // Captured from onLeaseCreated (runs OUTSIDE deployManifest's try/catch); the
-  // error handler + checkChainState both read these.
+  // Capture the paid lease before notifying observers. SDK 0.22 wraps callback
+  // failures as partial deploy errors with no failedStep, before upload starts.
   let capturedLeaseUuid: string | undefined;
   let capturedProviderUrl: string | undefined;
 
@@ -670,9 +672,9 @@ export async function executeConfirmedDeployApp(
 
   // URL shaping — never DeployResult.url (regresses stacks/FQDN, §3.6). Prefer
   // the no-round-trip shaper; fall back to resolveAppUrl only when connection
-  // is absent (the degraded branch).
+  // cannot supply a usable URL (the degraded branch).
   const shaped = result.connection ? deriveUrlFromConnection(result.connection) : undefined;
-  const { url: connectionUrl, connection } = shaped
+  const { url: connectionUrl, connection: resolvedConnection } = shaped
     ?? await resolveAppUrl(
       result.provider_url,
       leaseUuid,
@@ -681,6 +683,7 @@ export async function executeConfirmedDeployApp(
       signing,
       'compositeTransactions.executeConfirmedDeployApp',
     );
+  const connection = resolvedConnection ?? result.connection;
 
   // Custom-domain attach outcome comes from deployManifest's result (it set the
   // domain internally). Cache it so the DNS polling driver + sidebar dot see it.
@@ -813,7 +816,8 @@ export async function executeConfirmedBatchDeploy(
   const parsed = parseTransactionPlan('batch_deploy', args);
   if (!parsed.success) return parsed;
   const plan = parsed.data;
-  const { address, appRegistry, signing, onProgress, signal } = options;
+  const { address, appRegistry, signing, signal } = options;
+  const onProgress = createProgressReporter(options.onProgress);
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
@@ -977,7 +981,7 @@ export async function executeConfirmedBatchDeploy(
       }
 
       const shaped = result.connection ? deriveUrlFromConnection(result.connection) : undefined;
-      const { url: connectionUrl, connection } = shaped
+      const { url: connectionUrl, connection: resolvedConnection } = shaped
         ?? await resolveAppUrl(
           result.provider_url,
           result.lease_uuid,
@@ -986,6 +990,7 @@ export async function executeConfirmedBatchDeploy(
           signing,
           'executeConfirmedBatchDeploy',
         );
+      const connection = resolvedConnection ?? result.connection;
 
       // Same two observations as the single-deploy success path.
       appRegistry.updateApp(address, result.lease_uuid, {
@@ -1380,7 +1385,8 @@ export async function executeConfirmedRestartApp(
   const parsed = parseTransactionPlan('restart_app', args);
   if (!parsed.success) return parsed;
   const plan = parsed.data;
-  const { address, appRegistry, signing, onProgress, signal } = options;
+  const { address, appRegistry, signing, signal } = options;
+  const onProgress = createProgressReporter(options.onProgress);
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
@@ -1481,12 +1487,12 @@ export async function executeConfirmedRestartApp(
         providerUrl, leaseUuid, fredStatus, address, signing,
         'compositeTransactions.executeConfirmedRestartApp'
       );
+      const previous = appRegistry.getAppByLease(address, leaseUuid);
 
       // Provider observation: the wait resolved non-terminal — the workload is up.
       appRegistry.updateApp(address, leaseUuid, {
         provisionState: 'confirmed',
-        url: connectionUrl,
-        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+        ...connectionPatch({ url: connectionUrl, connection }, previous),
       });
       onProgress?.({ phase: 'ready', operation: 'restart' });
 
@@ -1495,7 +1501,7 @@ export async function executeConfirmedRestartApp(
         data: {
           message: `App "${name}" has been restarted.`,
           name,
-          url: connectionUrl,
+          url: connectionUrl ?? previous?.url,
           status: 'running',
         },
       };
@@ -1614,14 +1620,14 @@ async function executeConfirmedBatchRestart(
             entry.providerUrl, entry.leaseUuid, fredStatus, address, signing,
             'executeConfirmedBatchRestart'
           );
+          const previous = appRegistry.getAppByLease(address, entry.leaseUuid);
 
           appRegistry.updateApp(address, entry.leaseUuid, {
             provisionState: 'confirmed',
-            url: connectionUrl,
-            connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+            ...connectionPatch({ url: connectionUrl, connection }, previous),
           });
           updateProgress('ready', 'App is live!');
-          return { name, url: connectionUrl };
+          return { name, url: connectionUrl ?? previous?.url };
         }
 
         appRegistry.updateApp(address, entry.leaseUuid, { provisionState: 'failed' });
@@ -1865,7 +1871,8 @@ export async function executeConfirmedUpdateApp(
   const parsed = parseTransactionPlan('update_app', args);
   if (!parsed.success) return parsed;
   const plan = parsed.data;
-  const { address, appRegistry, signing, onProgress, signal } = options;
+  const { address, appRegistry, signing, signal } = options;
+  const onProgress = createProgressReporter(options.onProgress);
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
@@ -2103,16 +2110,14 @@ export async function executeConfirmedUpdateApp(
         'compositeTransactions.executeConfirmedUpdateApp'
       );
 
-      // If resolved URL lost port info, fall back to the previous URL
-      const hasPort = connectionUrl != null && /:\d+/.test(connectionUrl.replace(/^https?:\/\//, ''));
-      const finalUrl = (hasPort ? connectionUrl : previousUrl) ?? connectionUrl;
+      // HTTP FQDNs intentionally omit the port. Prefer every fresh usable URL.
+      const finalUrl = connectionUrl ?? previousUrl;
 
       // Provider observation: the wait resolved non-terminal and the settled
       // /provision read above carried no failure signal.
       appRegistry.updateApp(address, leaseUuid, {
         provisionState: 'confirmed',
-        url: finalUrl,
-        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+        ...connectionPatch({ url: connectionUrl, connection }, existingApp),
       });
       onProgress?.({ phase: 'ready', operation: 'update' });
 

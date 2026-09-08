@@ -10,7 +10,7 @@ import { TerminalChainStateError, describeFredFailure } from '@manifest-network/
 import { logError } from '../../utils/errors';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { ToolResult, ToolExecutorOptions, SigningContext } from './types';
-import { failureText } from './helpers';
+import { connectionPatch, failureText } from './helpers';
 import { nextStepFor } from './failureGuidance';
 import { resolveAppUrl } from './deployUrl';
 
@@ -107,7 +107,7 @@ export async function classifyLeaseChainState(leaseUuid: string): Promise<ChainD
 }
 
 // ---------------------------------------------------------------------------
-// Structured deploy-throw discriminants (SDK 0.21)
+// Structured deploy-throw discriminants (SDK 0.22)
 // ---------------------------------------------------------------------------
 
 /**
@@ -203,9 +203,10 @@ interface DeployErrorContext {
 /**
  * Classify a deployManifest throw into barney's registry/progress/ToolResult.
  * Case 1 (no lease): create-lease rejected. Case 2 (leaseUuid present): the
- * error's structured discriminants decide, falling through to the getLease
- * chain-check only when it carries none — keyed off `leaseUuid`, not the error
- * type, so an unexpected throw with a lease still resolves via chain state.
+ * error's structured discriminants decide. Only throws without a readiness
+ * verdict or `partial: true` fall through to the getLease chain-check. Unknown
+ * partial steps stay unconfirmed; an unexpected unstructured throw with a
+ * captured lease still resolves via chain state.
  * Case 3 (TerminalChainStateError): straight failed, no chain-check.
  *
  * Discriminants come first because the chain lease is ACTIVE for the whole
@@ -259,10 +260,10 @@ export async function handleDeployManifestError(
     const noManifestUploaded =
       partial &&
       ((failedStep !== undefined && NO_MANIFEST_STEPS.has(failedStep)) ||
-        // An absent step means the first `throwIfAborted()` fired, before the
-        // set_domain/upload assignments. Gated on `cancelled` so a build that
-        // omits the step for another reason falls through to the chain check.
-        (failedStep === undefined && cancelled));
+        // SDK 0.22 awaits onLeaseCreated inside its try/catch before assigning
+        // a step. Both a callback failure and the following abort guard leave
+        // the paid lease without a manifest, regardless of the error code.
+        details?.failedStep === undefined);
     if (noManifestUploaded) {
       logError('deployError.partialDeploy', error);
       // Durable, and true of the cancelled variant too: recording it stops the next reconcile calling this app 'running' off the ACTIVE lease.
@@ -282,9 +283,18 @@ export async function handleDeployManifestError(
       return { success: false, error: diagnostics ? `${lead}\n\n${diagnostics}` : lead };
     }
 
-    // 2d: no structured discriminant — fall back to chain truth. 2a/2b/2c claim
-    // every `partial: true` throw, which keeps `errMessage` below from relaying
-    // the SDK's prose; a new `failedStep` needs its own arm, not this branch.
+    // An unknown/malformed step from a future SDK carries no readiness verdict.
+    // Never turn an explicitly partial deploy into a success from chain state.
+    if (partial) {
+      logError('deployError.unknownPartialStep', error);
+      appRegistry.updateApp(address, leaseUuid, { provisionState: 'unconfirmed' });
+      const message = `Deployment of app "${name}" could not be confirmed. Check app_status("${name}") before retrying.`;
+      onProgress?.({ phase: 'failed', detail: message });
+      return { success: true, data: { message, name, status: 'deploying' } };
+    }
+
+    // 2d: no structured discriminant — fall back to chain truth. SDK 0.22's
+    // partial throws are all handled above without relaying its raw tool prose.
     const verdict = await classifyLeaseChainState(leaseUuid);
     if (verdict === 'running') {
       // The lease is active on-chain even though deployManifest threw AFTER
@@ -295,20 +305,21 @@ export async function handleDeployManifestError(
       const { url: connectionUrl, connection } = providerUrl
         ? await resolveAppUrl(providerUrl, leaseUuid, {} as FredLeaseStatus, address, signing, 'deployError.handleDeployManifestError')
         : { url: undefined, connection: undefined };
+      const previous = appRegistry.getAppByLease(address, leaseUuid);
+      const finalUrl = connectionUrl ?? previous?.url;
       // Chain observation only — no `provisionState`: the deploy THREW, so the
       // provider never confirmed readiness and a chain read may not claim it.
-      appRegistry.updateApp(address, leaseUuid, {
+      const updated = appRegistry.updateApp(address, leaseUuid, {
         chainState: 'active',
-        url: connectionUrl,
-        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+        ...connectionPatch({ url: connectionUrl, connection }, previous),
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
       return {
         success: true,
-        data: { message: `App "${name}" is live!`, name, url: connectionUrl, status: 'running' },
+        data: { message: `App "${name}" is live!`, name, url: finalUrl, status: 'running' },
         displayCard: {
           type: 'app' as const,
-          data: { name, url: connectionUrl, status: 'running', connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined },
+          data: { name, url: finalUrl, status: 'running', connection: updated?.connection ? JSON.parse(JSON.stringify(updated.connection)) : undefined },
         },
       };
     }

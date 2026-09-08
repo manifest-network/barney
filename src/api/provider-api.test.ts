@@ -21,7 +21,7 @@ vi.mock('../utils/errors', () => ({
 }));
 
 // Auth, connection, upload, and ProviderApiError tests are in mono's test suite.
-// Tests below cover Barney-specific behavior: null-return health check.
+// Tests below cover Barney's transport fallback and malformed-response diagnostics.
 
 // Public URL used in tests to pass SSRF validation
 const PROVIDER_URL = 'https://provider.example.com';
@@ -52,6 +52,18 @@ describe('getProviderHealth', () => {
 
     const result = await getProviderHealth(PROVIDER_URL);
     expect(result).toBeNull();
+  });
+
+  it('preserves the SDK diagnostic for a malformed successful health response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ status: 'healthy' }), { status: 200 }),
+    );
+
+    await expect(getProviderHealth(PROVIDER_URL)).rejects.toMatchObject({
+      status: 200,
+      kind: 'invalid_response',
+      message: expect.stringContaining('provider_uuid'),
+    });
   });
 
   it('returns null when fetch throws', async () => {
@@ -97,7 +109,12 @@ describe('allowLoopback forwarding (ENG-490)', () => {
   });
 
   it('lets getLeaseConnectionInfo reach a loopback provider in DEV', async () => {
-    const connection = { lease_uuid: LEASE_UUID, connection: { host: 'localhost' } };
+    const connection = {
+      lease_uuid: LEASE_UUID,
+      tenant: 'manifest1tenant',
+      provider_uuid: 'provider-local',
+      connection: { host: 'localhost' },
+    } satisfies Awaited<ReturnType<typeof getLeaseConnectionInfo>>;
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response(JSON.stringify(connection), { status: 200 }));

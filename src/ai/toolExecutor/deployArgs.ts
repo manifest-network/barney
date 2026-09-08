@@ -298,7 +298,7 @@ export function parseAndValidateStackServices(
       }
       healthCheck = cfg.health_check as HealthCheckConfig;
     }
-    const stopGracePeriod = typeof cfg.stop_grace_period === 'string' ? cfg.stop_grace_period : undefined;
+    const stopGracePeriod = typeof cfg.stop_grace_period === 'string' ? cfg.stop_grace_period || undefined : undefined;
     const init = typeof cfg.init === 'boolean' ? cfg.init : undefined;
     const expose = typeof cfg.expose === 'string' ? cfg.expose : undefined;
     let labels: Record<string, string> | undefined;
@@ -356,13 +356,19 @@ export function parseAndValidateStackServices(
     };
   }
 
-  // Apply known stack depends_on defaults
+  // Preserve startup ordering for matching service roles, including alternative
+  // database images. SDK 0.22 requires an active check for service_healthy.
   for (const ks of KNOWN_STACKS) {
     const ksNames = Object.keys(ks.services);
     if (ksNames.length === serviceNames.length && ksNames.every(n => serviceNames.includes(n))) {
       for (const [sName, sCfg] of Object.entries(ks.services)) {
         if (sCfg.depends_on && stackServices[sName] && !stackServices[sName].depends_on) {
-          stackServices[sName].depends_on = sCfg.depends_on;
+          const dependencies = Object.entries(sCfg.depends_on).filter(([target, dependency]) => {
+            const test = stackServices[target]?.health_check?.test;
+            return dependency.condition !== 'service_healthy'
+              || (Array.isArray(test) && test.length > 0 && test[0] !== 'NONE');
+          });
+          if (dependencies.length > 0) stackServices[sName].depends_on = Object.fromEntries(dependencies);
         }
       }
       break;

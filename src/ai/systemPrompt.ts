@@ -104,7 +104,7 @@ Services support these Docker Compose features in both single-service and stack 
 - expose: Document inter-service ports without host bindings
 - labels: Custom container labels
 
-Known images include default health checks. For stacks, use depends_on with "service_healthy" condition when a service needs its database ready.
+Only images marked health_check=yes in the reference include a default health check. Use depends_on with "service_healthy" only when the dependency has an active health_check. Otherwise, supply a suitable health check or use "service_started", which waits for startup but does not guarantee readiness.
 
 ## Examples
 

@@ -117,7 +117,7 @@ it('keeps raw transaction building, signing and broadcast APIs out of Barney pro
     return rawTransactionUsages(file).map((name) => `${relative(src, path)}: ${name}`);
   });
   expect(violations, 'Use typed Manifest SDK operations. Test fixtures belong in TEST_ONLY_SOURCE_FILES; see docs/dev/transaction-boundary.md.').toEqual([]);
-});
+}, 15_000); // Parsing every source file needs headroom when the full suite shares the CPU.
 
 it('scans JavaScript and TypeScript variants while excluding declarations and test fixtures', () => {
   const root = mkdtempSync(join(tmpdir(), 'barney-transaction-boundary-'));

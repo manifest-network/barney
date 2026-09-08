@@ -245,7 +245,7 @@ describe('extractUrlFromFredStatus', () => {
   it('extracts URL from instances ports + host', () => {
     expect(extractUrlFromFredStatus({
       state: LeaseState.LEASE_STATE_ACTIVE,
-      instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': 32456 } }],
+      instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } }],
     }, '1.2.3.4')).toBe('1.2.3.4:32456');
   });
 
@@ -253,7 +253,7 @@ describe('extractUrlFromFredStatus', () => {
     expect(extractUrlFromFredStatus({
       state: LeaseState.LEASE_STATE_ACTIVE,
       endpoints: { '8080/tcp': 'http://1.2.3.4:11111' },
-      instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': 22222 } }],
+      instances: [{ name: 'web', status: 'running', ports: { '8080/tcp': { host_ip: '0.0.0.0', host_port: 22222 } } }],
     }, '1.2.3.4')).toBe('1.2.3.4:11111');
   });
 
@@ -261,8 +261,8 @@ describe('extractUrlFromFredStatus', () => {
     expect(extractUrlFromFredStatus({
       state: LeaseState.LEASE_STATE_ACTIVE,
       services: {
-        db: { instances: [{ name: 'db-0', status: 'running', ports: { '5432/tcp': 32100 } }] },
-        web: { instances: [{ name: 'web-0', status: 'running', ports: { '80/tcp': 32200 } }] },
+        db: { instances: [{ name: 'db-0', status: 'running', ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32100 } } }] },
+        web: { instances: [{ name: 'web-0', status: 'running', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32200 } } }] },
       },
     }, '1.2.3.4')).toBe('1.2.3.4:32200');
   });
@@ -271,8 +271,8 @@ describe('extractUrlFromFredStatus', () => {
     expect(extractUrlFromFredStatus({
       state: LeaseState.LEASE_STATE_ACTIVE,
       services: {
-        db: { instances: [{ name: 'db-0', status: 'running', ports: { '5432/tcp': 32100 } }] },
-        api: { instances: [{ name: 'api-0', status: 'running', ports: { '3000/tcp': 32300 } }] },
+        db: { instances: [{ name: 'db-0', status: 'running', ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32100 } } }] },
+        api: { instances: [{ name: 'api-0', status: 'running', ports: { '3000/tcp': { host_ip: '0.0.0.0', host_port: 32300 } } }] },
       },
     }, '1.2.3.4')).toBe('1.2.3.4:32300');
   });
@@ -557,12 +557,12 @@ describe('formatConnectionUrl', () => {
     })).toBe('1.2.3.4:31234');
   });
 
-  it('returns https://fqdn when port mapping has no extractable value', () => {
+  it('does not invent an HTTPS endpoint for a TCP service without an assigned port', () => {
     expect(formatConnectionUrl('1.2.3.4', {
       host: '1.2.3.4',
       fqdn: 'pg.barney8.manifest0.net',
       ports: { '5432/tcp': {} },
-    })).toBe('https://pg.barney8.manifest0.net');
+    })).toBeUndefined();
   });
 
   it('strips protocol from metadata url fallback', () => {
@@ -1831,6 +1831,27 @@ describe('executeConfirmedDeployApp', () => {
 
   const ARGS = { app_name: 'test-app', size: 'small', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com' };
 
+  it.each(['throw', 'reject'])('finishes deployment when progress observers %s', async (failure) => {
+    const observerError = new Error('progress observer failed');
+    const onProgress = vi.fn(() => {
+      if (failure === 'throw') throw observerError;
+      return Promise.reject(observerError);
+    });
+    mockDeploySuccess(makeDeployResult());
+    const registry = makeRegistry();
+
+    const result = await executeConfirmedDeployApp(
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Exercise async failure despite the public synchronous observer type.
+      ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry, onProgress }), makePayload(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.status).toBe('running');
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'uploading' }));
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+    expect(logError).toHaveBeenCalledWith('progress.onProgress', observerError);
+  });
+
   it('blocks an A to B switch after async setup and immediately before deploy', async () => {
     let resolveReadClient!: (client: Awaited<ReturnType<typeof getReadClient>>) => void;
     vi.mocked(getReadClient).mockImplementationOnce(
@@ -1890,7 +1911,7 @@ describe('executeConfirmedDeployApp', () => {
   });
 
   it('builds a kind:resolved spec with the _notice-stripped manifest', async () => {
-    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_port: 1 } } } });
+    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 1 } } } });
     const json = JSON.stringify({ image: 'nginx', port: '80', _notice: 'display-only' });
     await executeConfirmedDeployApp(
       { ...ARGS, _generatedManifest: json },
@@ -1912,7 +1933,7 @@ describe('executeConfirmedDeployApp', () => {
     // still legitimately working, and the SDK then reports readiness as never
     // confirmed — the highest-frequency producer of a "deploying, we never found
     // out" outcome. The SDK's own DEFAULT_POLL_TIMEOUT_MS is 600000 for this reason.
-    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_port: 1 } } } });
+    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 1 } } } });
     await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions(), makePayload());
 
     const [, , callOptions] = vi.mocked(deployManifest).mock.calls[0];
@@ -1923,7 +1944,7 @@ describe('executeConfirmedDeployApp', () => {
   });
 
   it('passes customDomain into the spec and omits empty serviceName', async () => {
-    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_port: 1 } } }, custom_domain: 'app.example.com' });
+    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 1 } } }, custom_domain: 'app.example.com' });
     await executeConfirmedDeployApp(
       { ...ARGS, customDomain: 'app.example.com', customDomainServiceName: '' },
       CLIENT_MANAGER,
@@ -1938,7 +1959,7 @@ describe('executeConfirmedDeployApp', () => {
   });
 
   it('includes serviceName only alongside a non-empty customDomain', async () => {
-    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_port: 1 } } }, custom_domain: 'app.example.com', service_name: 'web' });
+    mockDeploySuccess({ connection: { host: '127.0.0.1', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 1 } } }, custom_domain: 'app.example.com', service_name: 'web' });
     await executeConfirmedDeployApp(
       { ...ARGS, customDomain: 'app.example.com', customDomainServiceName: 'web' },
       CLIENT_MANAGER,
@@ -1964,10 +1985,29 @@ describe('executeConfirmedDeployApp', () => {
     expect(getLeaseConnectionInfo).toHaveBeenCalled();
   });
 
-  it('routes a deployManifest throw through handleDeployManifestError (chain ACTIVE → running)', async () => {
+  it.each([true, false])('retries a filtered-empty deploy connection; assigned port available=%s', async (assigned) => {
+    mockDeploySuccess({ connection: { host: '1.2.3.4', ports: {} } });
+    const connection: NonNullable<DeployResult['connection']> = { host: '1.2.3.4', ports: assigned
+      ? { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } : {} };
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValueOnce({
+      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1', connection,
+    });
+    const registry = makeRegistry();
+
+    const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry }), makePayload());
+
+    const expectedUrl = assigned ? '1.2.3.4:32456' : undefined;
+    expect(result.success).toBe(true);
+    expect((result.data as { url?: string }).url).toBe(expectedUrl);
+    expect(getLeaseConnectionInfo).toHaveBeenCalledOnce();
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.url).toBe(expectedUrl);
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.connection).toEqual(connection);
+  });
+
+  it('routes a defensive throw without SDK discriminants through the chain fallback', async () => {
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
       await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
-      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true });
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'unclassified failure');
     });
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
     // C1: the running-on-throw branch resolves url/connection from the provider
@@ -2953,6 +2993,49 @@ describe('executeConfirmedBatchDeploy', () => {
     mockLiveBatchCatalog();
   });
 
+  it('retries a filtered-empty connection before recording a batch app URL', async () => {
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult({ connection: { host: '1.2.3.4', ports: {} } });
+    });
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValueOnce({
+      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
+      connection: { host: '1.2.3.4', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
+    });
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha')]);
+    const registry = makeRegistry();
+
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions({ appRegistry: registry }));
+
+    expect(result.success).toBe(true);
+    expect(getLeaseConnectionInfo).toHaveBeenCalledOnce();
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.url).toBe('1.2.3.4:32456');
+  });
+
+  it.each(['throw', 'reject'])('finishes a batch when progress observers %s', async (failure) => {
+    const observerError = new Error('batch progress observer failed');
+    const onProgress = vi.fn(() => {
+      if (failure === 'throw') throw observerError;
+      return Promise.reject(observerError);
+    });
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      return makeDeployResult();
+    });
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha')]);
+    const registry = makeRegistry();
+
+    const result = await executeConfirmedBatchDeploy(
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Exercise async failure despite the public synchronous observer type.
+      args, CLIENT_MANAGER, makeOptions({ appRegistry: registry, onProgress }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.status).toBe('running');
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+    expect(logError).toHaveBeenCalledWith('progress.onProgress', observerError);
+  });
+
   it('rejects a legacy/unplanned batch action', async () => {
     const result = await executeConfirmedBatchDeploy({ entries: [] }, CLIENT_MANAGER, makeOptions());
     expect(result.success).toBe(false);
@@ -3232,16 +3315,14 @@ describe('executeConfirmedBatchDeploy', () => {
     // if the code reverts to entry.providerUrl.
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
       await callOptions?.onLeaseCreated?.('lease-x', 'https://resolved.example.com');
-      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true });
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true, failedStep: 'poll' });
     });
-    // getLease → null so classifyLeaseChainState's verdict is 'failed', which
-    // is what routes handleDeployManifestError into fetchFailureLogs.
+    // A provider poll verdict routes directly to diagnostics without a chain read.
     // *Once: these mocks are shared across describes and vi.clearAllMocks()
     // doesn't clear a configured resolved value — a persisting mockResolvedValue
     // here would leak into later describes (e.g. executeConfirmedUpdateApp's
     // rollback-detection getLeaseProvision call) that rely on the default
     // (unconfigured) mock behavior.
-    vi.mocked(getLease).mockResolvedValueOnce(null as any);
     vi.mocked(getLeaseProvision).mockResolvedValueOnce({ status: 'failed', fail_count: 1, last_error: 'OOMKilled' } as any);
     vi.mocked(getLeaseLogs).mockResolvedValueOnce({ lease_uuid: 'lease-x', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
 
@@ -3263,9 +3344,8 @@ describe('executeConfirmedBatchDeploy', () => {
   it('surfaces the post-ENG-508 provision reason/message in a failed batch entry', async () => {
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
       await callOptions?.onLeaseCreated?.('lease-x', 'https://resolved.example.com');
-      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true });
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true, failedStep: 'poll' });
     });
-    vi.mocked(getLease).mockResolvedValueOnce(null as any);
     vi.mocked(getLeaseProvision).mockResolvedValueOnce({
       status: 'failed', fail_count: 2, reason: 'ImagePullFailed', message: 'pull access denied for ngnix',
     } as any);
@@ -3630,6 +3710,26 @@ describe('executeConfirmedRestartApp', () => {
     expect(restartLease).not.toHaveBeenCalled();
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'restarting' }));
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+  });
+
+  it('retains a working HTTP FQDN after restart when only status reports it', async () => {
+    vi.mocked(restartApp).mockResolvedValueOnce({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(waitForLeaseStatus).mockResolvedValueOnce({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      endpoints: { '80/tcp': 'http://app.example.com:0' },
+    });
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValueOnce(new Error('connection endpoint unavailable'));
+    const app = makeApp({ url: 'https://app.example.com' });
+    const registry = makeRegistry([app]);
+
+    const result = await executeConfirmedRestartApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER, makeOptions({ appRegistry: registry }),
+    );
+
+    expect(result.success).toBe(true);
+    expect((result.data as { url?: string }).url).toBe(app.url);
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.url).toBe(app.url);
   });
 
   it('handles 409 error from restart endpoint', async () => {
@@ -5544,7 +5644,7 @@ describe('handleDeployManifestError', () => {
     expect(getLease).not.toHaveBeenCalled();
   });
 
-  it('case 2 running: chain ACTIVE → running + ready progress (not failed)', async () => {
+  it('case 2 without SDK discriminants: chain ACTIVE → running + ready progress', async () => {
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
     // C1: the running branch resolves url/connection from the provider.
     vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
@@ -5553,7 +5653,7 @@ describe('handleDeployManifestError', () => {
     } as any);
     const c = ctx();
     const result = await handleDeployManifestError(
-      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true }), c);
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'unclassified failure'), c);
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
     expect((result.data as any).url).toBe('5.6.7.8:32456');
@@ -5567,11 +5667,11 @@ describe('handleDeployManifestError', () => {
     expect(c.onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
   });
 
-  it('case 2 deploying: chain PENDING → non-failed still-provisioning result', async () => {
+  it('case 2 without SDK discriminants: chain PENDING → still-provisioning result', async () => {
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_PENDING } as any);
     const c = ctx();
     const result = await handleDeployManifestError(
-      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'poll timeout', { partial: true }), c);
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'unclassified failure'), c);
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('deploying');
     expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, 'lease-1', { status: 'deploying' });
@@ -5582,13 +5682,13 @@ describe('handleDeployManifestError', () => {
     );
   });
 
-  it('case 2 failed: chain terminal → failed + fetchFailureLogs + barney copy', async () => {
+  it('case 2 without SDK discriminants: chain terminal → failed + diagnostics', async () => {
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_CLOSED } as any);
     vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 2, last_error: 'OOMKilled' } as any);
     vi.mocked(getLeaseLogs).mockResolvedValue({ lease_uuid: 'lease-1', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
     const c = ctx();
     const result = await handleDeployManifestError(
-      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true }), c);
+      new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed'), c);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Deployment failed: provision failed');
     expect(result.error).toContain('OOMKilled');
@@ -5599,7 +5699,7 @@ describe('handleDeployManifestError', () => {
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_CLOSED } as any);
     const c = ctx();
     const result = await handleDeployManifestError(
-      new ManifestMCPError(ManifestMCPErrorCode.OPERATION_CANCELLED, 'aborted', { partial: true }), c);
+      new ManifestMCPError(ManifestMCPErrorCode.OPERATION_CANCELLED, 'aborted'), c);
     expect(result.success).toBe(false);
     expect(getLeaseProvision).not.toHaveBeenCalled();
     expect(getLeaseLogs).not.toHaveBeenCalled();
@@ -6579,5 +6679,127 @@ describe('batch summary and progress agree on an unconfirmed batch', () => {
     const last = onProgress.mock.calls.at(-1)![0] as { phase: string; detail?: string };
     expect(last.phase).toBe('ready');
     expect(last.detail).toBe('All 2 apps deployed!');
+  });
+});
+
+describe('lifecycle connection observations', () => {
+  const modes = ['restart', 'batch restart', 'update', 'deploy fallback'] as const;
+  type Mode = typeof modes[number];
+  const newFqdn = 'app-abc.barney8.manifest0.net';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getReadClient).mockResolvedValue({ query: {} } as Awaited<ReturnType<typeof getReadClient>>);
+    vi.mocked(restartApp).mockReset().mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(updateApp).mockReset().mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockReset().mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE });
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(false);
+    vi.mocked(getLeaseProvision).mockReset().mockResolvedValue({ status: 'ready', fail_count: 0 });
+    vi.mocked(getLease).mockReset().mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as Awaited<ReturnType<typeof getLease>>);
+    vi.mocked(getLeaseConnectionInfo).mockReset();
+  });
+
+  function previousApp() {
+    return makeApp({
+      url: '64.29.115.29:32768',
+      connection: { host: '64.29.115.29', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32768 } } },
+    });
+  }
+
+  function run(mode: Mode, app: AppEntry, registry: ReturnType<typeof makeRegistry>, onProgress?: ToolExecutorOptions['onProgress']) {
+    const options = makeOptions({ appRegistry: registry, onProgress });
+    const args = { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl };
+    if (mode === 'update') return executeConfirmedUpdateApp(args, CLIENT_MANAGER, options, makeJsonPayload());
+    if (mode === 'deploy fallback') return handleDeployManifestError(new Error('unstructured failure'), {
+      name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl,
+      address: ADDRESS, signing: options.signing!, appRegistry: registry,
+    });
+    return executeConfirmedRestartApp(mode === 'batch restart' ? { app_name: 'all', entries: [args] } : args, CLIENT_MANAGER, options);
+  }
+
+  describe.each(modes)('%s', (mode) => {
+    it.each(['unreachable', 'empty ports', 'filtered TCP FQDN'])('preserves stored access details when connection info is %s', async (read) => {
+      const app = previousApp();
+      const registry = makeRegistry([app]);
+      if (read === 'unreachable') {
+        vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('provider unavailable'));
+      } else {
+        vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+          lease_uuid: app.leaseUuid, tenant: ADDRESS, provider_uuid: 'p1',
+          connection: { host: '64.29.115.29', ports: {}, ...(read === 'filtered TCP FQDN' ? { fqdn: 'pg.provider.example.com' } : {}) },
+        });
+      }
+
+      const result = await run(mode, app, registry);
+
+      expect(result.success).toBe(true);
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ url: app.url, connection: app.connection });
+      if (mode === 'batch restart') expect(JSON.stringify(result.data)).toContain(app.url);
+      else expect((result.data as { url?: string }).url).toBe(app.url);
+    });
+  });
+
+  it('replaces a pre-update dynamic port with a fresh per-instance HTTP FQDN', async () => {
+    const app = previousApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+      lease_uuid: app.leaseUuid, tenant: ADDRESS, provider_uuid: 'p1',
+      connection: {
+        host: '64.29.115.29', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32799 } },
+        instances: [{ instance_index: 0, container_id: 'new', image: 'nginx', status: 'running', fqdn: newFqdn }],
+      },
+    });
+
+    const result = await run('update', app, registry);
+
+    expect(result.success).toBe(true);
+    expect((result.data as { url?: string }).url).toBe(`https://${newFqdn}`);
+    const updated = registry.getAppByLease(ADDRESS, app.leaseUuid)!;
+    expect(updated.url).toBe(`https://${newFqdn}`);
+    expect(formatConnectionUrl(updated.url, updated.connection)).toBe(`https://${newFqdn}`);
+  });
+
+  it.each(['restart', 'batch restart', 'update'] as const)('adopts a fresh status endpoint after %s without retaining stale port mappings', async (mode) => {
+    const app = previousApp();
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('connection unavailable'));
+    vi.mocked(waitForLeaseStatus).mockResolvedValue({
+      state: LeaseState.LEASE_STATE_ACTIVE, endpoints: { '80/tcp': `http://${newFqdn}:0` },
+    });
+
+    const result = await run(mode, app, registry);
+
+    expect(result.success).toBe(true);
+    expect(JSON.stringify(result.data)).toContain(`https://${newFqdn}`);
+    const updated = registry.getAppByLease(ADDRESS, app.leaseUuid)!;
+    expect(updated.url).toBe(`https://${newFqdn}`);
+    expect(updated.connection).toBeUndefined();
+  });
+
+  describe.each(['restart', 'batch restart', 'update'] as const)('%s observers', (mode) => {
+    it.each(['throw', 'reject'])('still completes when a ready observer can %s after the provider call', async (failure) => {
+      const app = previousApp();
+      const registry = makeRegistry([app]);
+      const observerError = new Error('progress observer failed after provider call');
+      const onProgress = vi.fn((progress: import('../progress').DeployProgress) => {
+        if (progress.phase === 'ready') {
+          if (failure === 'throw') throw observerError;
+          return Promise.reject(observerError);
+        }
+      });
+      vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+        lease_uuid: app.leaseUuid, tenant: ADDRESS, provider_uuid: 'p1',
+        connection: { host: '64.29.115.29', fqdn: newFqdn },
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Exercise async rejection despite the public synchronous observer type.
+      const result = await run(mode, app, registry, onProgress);
+
+      expect(result.success).toBe(true);
+      expect(mode === 'update' ? updateApp : restartApp).toHaveBeenCalledOnce();
+      expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready' }));
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('confirmed');
+      expect(logError).toHaveBeenCalledWith('progress.onProgress', observerError);
+    });
   });
 });

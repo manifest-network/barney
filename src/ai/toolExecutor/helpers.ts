@@ -7,12 +7,18 @@ import { failureDetail, type ConnectionDetails, type FredFailureSource } from '@
 
 import { isValidFqdn } from '../../utils/connection';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
+import type { AppEntry } from '../../registry/appRegistry';
 
 /** Service names that indicate a primary (user-facing) service in a stack. */
 const PRIMARY_SERVICE_NAMES = new Set(['web', 'app', 'frontend', 'ui']);
 
 /** Service names that indicate backend infrastructure (not user-facing). */
 export const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mysql', 'redis', 'mongo']);
+
+/** Empty records can result from SDK filtering and must not hide another source. */
+function nonEmptyPorts<Port>(ports: Record<string, Port> | undefined): Record<string, Port> | undefined {
+  return ports && Object.keys(ports).length > 0 ? ports : undefined;
+}
 
 /**
  * Extract the "primary" service's ports from a stack services map.
@@ -21,14 +27,14 @@ export const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mys
  *  2. First non-backend service with ports (skip db, postgres, redis, etc.)
  *  3. Any service with ports
  */
-export function extractPrimaryServicePorts(
-  services: Record<string, { ports?: Record<string, unknown>; instances?: readonly { ports?: Record<string, unknown> }[] }>
-): { serviceName: string; ports: Record<string, unknown> } | undefined {
+export function extractPrimaryServicePorts<Port>(
+  services: Record<string, { ports?: Record<string, Port>; instances?: readonly { ports?: Record<string, Port> }[] }>
+): { serviceName: string; ports: Record<string, Port> } | undefined {
   const entries = Object.entries(services);
   if (entries.length === 0) return undefined;
 
-  const getPorts = (svc: { ports?: Record<string, unknown>; instances?: readonly { ports?: Record<string, unknown> }[] }): Record<string, unknown> | undefined =>
-    svc.ports ?? svc.instances?.[0]?.ports;
+  const getPorts = (svc: { ports?: Record<string, Port>; instances?: readonly { ports?: Record<string, Port> }[] }): Record<string, Port> | undefined =>
+    nonEmptyPorts(svc.ports) ?? nonEmptyPorts(svc.instances?.[0]?.ports);
 
   // 1. Named primary service
   for (const [name, svc] of entries) {
@@ -57,34 +63,23 @@ export function extractPrimaryServicePorts(
 
 /**
  * Extract port number from a port mapping value.
- * Handles multiple formats the provider API may return:
+ * Keep older formats for persisted connection data; SDK 0.22 validates live mappings.
  *  - Our typed format:   { host_ip: "0.0.0.0", host_port: 12345 }
  *  - Docker PascalCase:  { HostIp: "0.0.0.0", HostPort: "12345" }
  *  - Docker array:       [{ HostIp: "0.0.0.0", HostPort: "12345" }]
  *  - Plain number:       12345
  */
-function extractPort(value: unknown): number | undefined {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'string') { const n = parseInt(value, 10); return isNaN(n) ? undefined : n; }
-
-  // Array — take first element
-  let obj = value;
-  if (Array.isArray(obj)) obj = obj[0];
-
-  if (obj && typeof obj === 'object') {
-    const rec = obj as Record<string, unknown>;
-    // snake_case (our interface)
-    if (rec.host_port != null) {
-      const n = typeof rec.host_port === 'number' ? rec.host_port : parseInt(String(rec.host_port), 10);
-      if (!isNaN(n)) return n;
-    }
-    // PascalCase (Docker native)
-    if (rec.HostPort != null) {
-      const n = typeof rec.HostPort === 'number' ? rec.HostPort : parseInt(String(rec.HostPort), 10);
-      if (!isNaN(n)) return n;
-    }
+export function extractPort(value: unknown): number | undefined {
+  let raw = Array.isArray(value) ? value[0] : value;
+  if (raw && typeof raw === 'object') {
+    const mapping = raw as Record<string, unknown>;
+    raw = mapping.host_port ?? mapping.HostPort;
   }
-  return undefined;
+  if (typeof raw !== 'number' && typeof raw !== 'string') return undefined;
+  if (typeof raw === 'string' && !/^\d+$/.test(raw.trim())) return undefined;
+  const port = Number(raw);
+  // Zero means unassigned; fractions and values outside the TCP/UDP range are unusable.
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined;
 }
 
 // TODO: Replace this hard-coded set with an automated signal from the provider
@@ -124,15 +119,17 @@ export function formatConnectionUrl(
   // Accept any shape — the port values may not match our PortMapping interface
   connection?: { host: string; fqdn?: string; ports?: Record<string, unknown>; metadata?: Record<string, string> }
 ): string | undefined {
-  // FQDN present — Traefik routes HTTP services on 443 by subdomain
-  if (connection?.fqdn && isValidFqdn(connection.fqdn)) {
+  // An empty record has lost the container-port key, so it cannot establish
+  // that this FQDN serves HTTP. A missing record retains the provider's FQDN hint.
+  if (connection?.fqdn && isValidFqdn(connection.fqdn)
+    && (!connection.ports || Object.keys(connection.ports).length > 0)) {
     if (connection.ports) {
       const firstKey = Object.keys(connection.ports)[0];
       const containerPort = firstKey ? parseContainerPort(firstKey) : undefined;
       // Non-HTTP service: need direct host:port access
       if (containerPort != null && TCP_ONLY_PORTS.has(containerPort)) {
         const hostPort = extractPort(Object.values(connection.ports)[0]);
-        if (hostPort != null) return `${connection.fqdn}:${hostPort}`;
+        return hostPort !== undefined ? `${connection.fqdn}:${hostPort}` : undefined;
       }
     }
     // HTTP service (or no ports): https://fqdn — Traefik TLS on 443
@@ -155,32 +152,37 @@ export function formatConnectionUrl(
   if (connection?.metadata?.url) {
     try {
       const parsed = new URL(connection.metadata.url);
+      if (!parsed.hostname || (parsed.port && extractPort(parsed.port) === undefined)) return undefined;
       return parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
     } catch {
-      // Not a valid URL — strip scheme and return as-is
-      return connection.metadata.url.replace(/^https?:\/\//, '');
+      return undefined;
     }
   }
 
-  // Last resort: bare host
+  // A present-but-empty port record may have lost every mapping to SDK
+  // validation. It supplies no evidence that the bare host is an app endpoint.
+  if (connection?.ports) return undefined;
   if (!host) return undefined;
   return host.replace(/^https?:\/\//, '');
 }
 
 /**
  * Shape an app URL from a DeployResult.connection with no extra API call.
- * Mirrors resolveAppUrl's connection block: ports = top-level ?? instances[0]
- * ?? primary-stack-service; FQDN promoted from the primary service when absent.
- * Returns undefined when neither a URL nor ports can be derived — caller then
- * falls back to resolveAppUrl (the network path).
+ * Selects non-empty top-level, instance, or primary-service ports and promotes
+ * an HTTP instance FQDN or primary-service FQDN when absent. Returns undefined without a usable URL
+ * so callers can try other provider data while retaining the raw connection.
  */
 export function deriveUrlFromConnection(
   connection: ConnectionDetails,
 ): { url?: string; connection: ConnectionDetails } | undefined {
-  let ports: Record<string, unknown> | undefined =
-    connection.ports ?? connection.instances?.[0]?.ports;
+  let ports = nonEmptyPorts(connection.ports) ?? nonEmptyPorts(connection.instances?.[0]?.ports);
 
-  let fqdn = connection.fqdn;
+  const firstPortKey = ports ? Object.keys(ports)[0] : undefined;
+  const containerPort = firstPortKey ? parseContainerPort(firstPortKey) : undefined;
+  // Keep direct TCP traffic on the reported host. An instance's HTTP-routing
+  // FQDN is not evidence that its DNS address is the Docker host.
+  let fqdn = connection.fqdn
+    ?? (containerPort != null && TCP_ONLY_PORTS.has(containerPort) ? undefined : connection.instances?.[0]?.fqdn);
   if (!ports && connection.services) {
     const primary = extractPrimaryServicePorts(connection.services);
     if (primary) {
@@ -192,10 +194,39 @@ export function deriveUrlFromConnection(
     }
   }
 
+  // Preserve actual empty records after filtering without inventing one when
+  // no ports were reported. These cases carry different evidence for HTTP FQDNs.
+  ports ??= connection.ports ?? connection.instances?.[0]?.ports
+    ?? Object.values(connection.services ?? {})
+      .map(service => service.ports ?? service.instances?.[0]?.ports)
+      .find(record => record !== undefined);
   const withPorts = { ...connection, ports, fqdn };
-  const url = formatConnectionUrl(connection.host, withPorts);
-  if (url || withPorts.ports) return { url, connection: withPorts };
+  // A host attached to instances/services is not itself a workload endpoint.
+  const bareHost = ports === undefined && (connection.instances || connection.services) ? undefined : connection.host;
+  const url = formatConnectionUrl(bareHost, withPorts);
+  if (url) return { url, connection: withPorts };
   return undefined;
+}
+
+/**
+ * Keep stored access details when a provider read supplies no usable endpoint.
+ * Port mappings may stay stale until a later read yields a usable URL, but an
+ * incomplete read must not erase the existing access details.
+ */
+export function connectionPatch(
+  { url, connection }: { url?: string; connection?: ConnectionDetails },
+  previous?: Pick<AppEntry, 'url' | 'connection'> | null,
+): Pick<AppEntry, 'url' | 'connection'> {
+  const patch: Pick<AppEntry, 'url' | 'connection'> = {};
+  if (url !== undefined) patch.url = url;
+  if (connection && (url !== undefined || !previous?.connection)) {
+    patch.connection = JSON.parse(JSON.stringify(connection));
+  } else if (url !== undefined && url !== previous?.url) {
+    // A new status endpoint supersedes old port mappings, even when the
+    // connection read failed. Keeping those mappings would override the new URL.
+    patch.connection = undefined;
+  }
+  return patch;
 }
 
 // Re-export from shared module so existing tool-executor consumers don't break.

@@ -21,25 +21,15 @@ import {
   metaHashHex,
 } from '@manifest-network/manifest-sdk/deploy';
 // BuildManifestOptions comes from the /deploy facade. Do NOT use the facade's
-// ServiceConfig — it's structurally divergent (ports optional, no `init`) and
-// breaks toFredOptions.
-import type { BuildManifestOptions as FredBuildManifestOptions } from '@manifest-network/manifest-sdk/deploy';
+// ServiceConfig — its ports are optional, whereas the builder requires them.
+import type { BuildManifestOptions as FredBuildManifestOptions, PortConfig } from '@manifest-network/manifest-sdk/deploy';
 import { generatePassword, validatePayloadSize } from '../utils/hash';
 import { logError } from '../utils/errors';
 import { GENERATED_PASSWORD_MARKER } from '../config/constants';
 import type { PayloadAttachment } from './toolExecutor/types';
 
-/**
- * Port options within a manifest port mapping.
- * The Go backend accepts an optional `ingress` field; fred's TS types
- * have not yet been updated to reflect this.
- */
-export interface PortOptions {
-  /** Marks this port as the preferred ingress port for FQDN routing.
-   *  By convention, at most one TCP port per service should set this;
-   *  the ManifestEditor enforces this constraint. */
-  ingress?: boolean;
-}
+/** SDK port options; the ManifestEditor limits ingress to one TCP port per service. */
+export type PortOptions = PortConfig;
 
 /**
  * Derive an app name from a Docker image reference.
@@ -64,10 +54,8 @@ export function deriveAppNameFromImage(image: string): string {
  * Accepts comma-separated ports with optional protocol suffix.
  *
  * Delegates to fred's normalizePorts (runtime-identical parse + identical error
- * messages). Two benign, non-migrated divergences: fred throws ManifestMCPError
- * rather than Error (Barney reads only error.message, so the text is the contract),
- * and fred types the value as Record<string, never>. Barney keeps the PortOptions
- * surface, so cast the value type — the same bridge toFredOptions already applies.
+ * messages). Fred throws ManifestMCPError rather than Error; Barney reads only
+ * error.message, so the text is the contract.
  *
  * Examples:
  *   "6379"           → { "6379/tcp": {} }
@@ -76,7 +64,7 @@ export function deriveAppNameFromImage(image: string): string {
  *   "8080/tcp,53/udp"→ { "8080/tcp": {}, "53/udp": {} }
  */
 export function normalizePorts(port: string): Record<string, PortOptions> {
-  return fredNormalizePorts(port) as Record<string, PortOptions>;
+  return fredNormalizePorts(port);
 }
 
 export interface BuildManifestResult {
@@ -164,9 +152,7 @@ function toFredOptions(opts: BuildManifestOptions): FredBuildManifestOptions {
   const env = nonEmpty(opts.env);
   return {
     image: opts.image,
-    // Cast: fred TS types still declare ports as Record<string, Record<string, never>>;
-    // the Go backend already accepts { ingress?: boolean }. Remove when fred exports PortOptions.
-    ports: (opts.port ? normalizePorts(opts.port) : {}) as FredBuildManifestOptions['ports'],
+    ports: opts.port ? normalizePorts(opts.port) : {},
     env: env ? processEnv(env) : undefined,
     tmpfs: opts.tmpfs ? splitCsv(opts.tmpfs) : undefined,
     expose: opts.expose ? splitCsv(opts.expose) : undefined,
@@ -174,7 +160,9 @@ function toFredOptions(opts: BuildManifestOptions): FredBuildManifestOptions {
     args: opts.args?.length ? opts.args : undefined,
     user: opts.user,
     health_check: opts.health_check,
-    stop_grace_period: opts.stop_grace_period,
+    // Retain the pre-0.22 default for omitted/empty values, including a numeric
+    // zero arriving from tool arguments despite this option's string type.
+    stop_grace_period: opts.stop_grace_period || undefined,
     init: opts.init,
     labels: nonEmpty(opts.labels),
     depends_on: nonEmpty(opts.depends_on),

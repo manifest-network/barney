@@ -4,16 +4,16 @@ Barney plans and previews product actions, obtains user confirmation, then calls
 
 ## Transaction inventory (ENG-830)
 
-Reviewed against the pinned `@manifest-network/manifest-sdk` 0.21.0. There are no direct `cosmosTx`, `executeTx`, signing-client, or low-level broadcast calls in Barney product code. `src/build/transactionBoundary.test.ts` guards this boundary.
+Reviewed against the pinned `@manifest-network/manifest-sdk` 0.22.0. There are no direct `cosmosTx`, `executeTx`, signing-client, or low-level broadcast calls in Barney product code. `src/build/transactionBoundary.test.ts` guards this boundary.
 
-| Product action / caller | SDK operation | Approval data | Fee and cancellation policy |
+| Product action / caller | SDK operation | Approval data | Validation, fees, and cancellation |
 | --- | --- | --- | --- |
-| Single and batch deploy (`compositeTransactions.ts`) | `deployManifest` | App, tier/provider, manifest, optional service/domain; batch also binds prices and hashes | Up to two chain transactions per app; `abortSignal` reaches the SDK |
+| Single and batch deploy (`compositeTransactions.ts`) | `deployManifest` | App, tier/provider, manifest, optional service/domain; batch also binds prices and hashes | Manifest and domain syntax validated before create-lease; up to two chain transactions per app; `abortSignal` reaches the SDK |
 | Single and bulk stop (`compositeTransactions.ts`, sidebar request in `stopApp.ts`) | `stopApp` | Explicit app names and lease IDs resolved before approval | At most one transaction per app; `signal`; bulk uses CheckTx and reconciles later |
 | Chat credit funding (`compositeTransactions.ts`) | `fundCredits` | Positive PWR amount and bound wallet address | One transaction; `signal`; no tenant or fee override |
 | First-connect account setup (`useAccountSetup.ts`) | `fundCredits` | Fixed application-policy amount, SDK defaults recipient to signer | One transaction per attempt; setup `signal` on initial call and retry; automatic faucet-enabled onboarding, outside chat consent |
 | Restart (`compositeTransactions.ts`) | `restartApp` | App names, lease IDs, provider URLs | Provider-only operation; `signal` |
-| Update (`compositeTransactions.ts`) | `updateApp` | App, lease/provider, final manifest | Provider-only operation; `signal`; existing indeterminate-update/rollback handling retained |
+| Update (`compositeTransactions.ts`) | `updateApp` | App, lease/provider, final manifest | Final manifest and encoded request size validated before provider authentication/POST; no chain transaction; `signal`; indeterminate-update/rollback handling retained |
 | Attach/change/clear domain (`compositeTransactions.ts`) | `setItemCustomDomain` | App/lease, service, previous and requested domain | One transaction; `signal` |
 | Provider/relay authentication (`useManifestMCP.ts`) | `createProviderAuth` / wallet ADR-036 proof | Wallet-bound off-chain authentication | No chain transaction or network fee |
 | `src/api/tx.ts` | None | Shared types and enum re-export | No signer or broadcast implementation |
@@ -21,6 +21,12 @@ Reviewed against the pinned `@manifest-network/manifest-sdk` 0.21.0. There are n
 The last direct product billing call, chat credit funding, now uses `fundCredits`. Lifecycle migration prerequisites are already delivered: [ENG-494](https://linear.app/liftedinit/issue/ENG-494) supplies asynchronous stop, and [ENG-488](https://linear.app/liftedinit/issue/ENG-488) supplies cached-provider restart/update. Every retained action has an SDK operation; no missing-operation issue or raw fallback is needed. Future missing capabilities require a narrowly scoped SDK issue before exposing a new Barney action.
 
 ## Planning and execution
+
+SDK 0.22 canonicalizes custom-domain whitespace and case with `parseFqdn` and rejects malformed domains before chain reads or the credit-reserving create-lease broadcast. Chain policy, including reserved suffixes and existing claims, remains authoritative at the later set-domain transaction.
+
+The SDK validates the final update payload before authenticating or calling the provider. This includes duplicate JSON keys, decimal/exponent spellings for Go integer fields, manifest admission rules, and the base64 request envelope size. A stack update must contain only the top-level `services` field. Barney retains its stricter 5 KB payload limit. These preflight failures do not submit an update; post-POST uncertainty and rollback handling remain separate.
+
+`deployManifest` now awaits `onLeaseCreated` inside its partial-deploy catch, before assigning a `failedStep`. A partial error without a step therefore means no manifest was uploaded, whether caused by cancellation or a callback failure. Barney captures the paid lease before notifying observers, isolates synchronous and asynchronous progress errors, and records the no-upload outcome as failed. An unrecognized partial step remains unconfirmed; an ACTIVE chain lease alone cannot turn it into a readiness verdict.
 
 `transactionPlans.ts` defines strict typed semantic schemas. `transactionConfirmation` parses and freezes each plan for display, and the confirmed executor parses that same schema again before any SDK mutation. The sidebar's direct stop action uses the same helper. Batch deploy retains its canonical planner and confirmation-time hash, catalog, and aggregate-balance checks. Intermediate model batch drafts are not directly confirmable. Failed batch-edit feedback is removed from the arguments before dispatch, so reverting edits can confirm the original plan without weakening the schema.
 
@@ -34,6 +40,7 @@ Web3Auth's `promptSign` automatically accepts SDK signature requests. It is not 
 
 - `transactionConsent.test.tsx` exercises real model dispatch and the rendered confirmation flow: unknown/removed/raw tool names, malformed amounts and raw overrides, automatic signature approval, cancellation, uncertain submission, and duplicate confirmation.
 - Existing executor/integration suites cover every retained operation, including single/bulk lifecycle actions, custom-domain attach/clear, batch deployment integrity, and account setup.
+- `sdkPreflight.test.ts` calls the published SDK directly to verify domain and update-payload rejection before wallet/provider access. Deploy regressions cover callback failures, partial errors without a step, and progress observers that throw or reject.
 - `transactionFees.test.ts` and `useManifestMCP.test.ts` connect the displayed fee ceiling to the wallet's configured gas limit.
 - `transactionBoundary.test.ts` rejects known raw transaction APIs in runtime identifiers, private members, and string/template literals, including constants and reflective access. It covers class bases and generic function references, CosmJS signing-client entry points, and wildcard re-exports from Manifest SDK/CosmJS modules. Runtime handler-map keys are subject to the same policy as locally implemented signing methods.
 

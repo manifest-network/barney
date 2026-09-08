@@ -192,7 +192,8 @@ describe('useAccountSetup — happy path', () => {
 
     // Went through complete phase and then dismissed
     expect(hadState((s) => s.isInitialSetup && s.phase === 'complete')).toBe(true);
-    expect(capturedState.isInitialSetup).toBe(false);
+    // React can commit the dismissal after timer flushing under concurrent suite load.
+    await vi.waitFor(() => expect(capturedState.isInitialSetup).toBe(false));
 
     // Storage saved as completed
     const stored = loadSetupData('manifest1abc');
@@ -616,7 +617,7 @@ describe('useAccountSetup — error handling', () => {
     await flush();
 
     expect(logError).toHaveBeenCalledWith('useAccountSetup.check', expect.any(Error));
-    expect(hadState((s) => s.isInitialSetup && s.phase === 'checking' && !!s.error && s.error.includes('balances'))).toBe(true);
+    await vi.waitFor(() => expect(hadState((s) => s.isInitialSetup && s.phase === 'checking' && !!s.error && s.error.includes('balances'))).toBe(true));
     expect(loadSetupData('manifest1abc')?.setupCompleted).toBe(false);
   });
 

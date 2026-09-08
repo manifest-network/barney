@@ -21,6 +21,7 @@ import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fre
 import {
   appStatus,
   describeFredFailure,
+  ProviderApiError,
   type FredLeaseStatus,
   type ConnectionDetails,
   type ProviderHealthResponse,
@@ -28,7 +29,8 @@ import {
 import { classifyProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
 import { buildBarneyCtx } from './capabilityCtx';
 import { nextStepFor } from './failureGuidance';
-import { formatConnectionUrl, extractPrimaryServicePorts } from './helpers';
+import { connectionPatch, formatConnectionUrl, deriveUrlFromConnection } from './helpers';
+import { extractUrlFromFredStatus } from './deployUrl';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import { getDomainAssignments } from '../../api/leaseDomains';
 import { requestFaucet } from '@manifest-network/manifest-sdk/faucet';
@@ -239,28 +241,14 @@ export async function executeAppStatus(
         // read (its own errors already swallowed → refreshedConnection undefined).
         let connectionRefreshed = false;
         if (refreshedConnection) {
-          const conn = refreshedConnection;
-          // Stack deployments: extract primary service ports/fqdn when no top-level values
-          if (!conn.ports && !conn.instances?.[0]?.ports && conn.services) {
-            const primary = extractPrimaryServicePorts(conn.services);
-            if (primary) {
-              // Promote primary service's FQDN to top-level for formatConnectionUrl
-              let fqdn = conn.fqdn;
-              if (!fqdn) {
-                const svc = conn.services[primary.serviceName];
-                fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
-              }
-              appConnection = JSON.parse(JSON.stringify({ ...conn, ports: primary.ports, fqdn }));
-            } else {
-              appConnection = JSON.parse(JSON.stringify(conn));
-            }
-          } else {
-            appConnection = JSON.parse(JSON.stringify(conn));
-          }
-          if (conn.host) {
-            appUrl = conn.host;
-          }
-          connectionRefreshed = true;
+          const shaped = deriveUrlFromConnection(refreshedConnection);
+          const patch = connectionPatch({
+            url: shaped?.url ?? extractUrlFromFredStatus(fredStatus),
+            connection: shaped?.connection ?? refreshedConnection,
+          }, { url: appUrl, connection: appConnection });
+          appUrl = patch.url ?? appUrl;
+          if ('connection' in patch) appConnection = patch.connection;
+          connectionRefreshed = Object.keys(patch).length > 0;
         }
         // TWO independent observations: the chain says the lease is ACTIVE, fred's
         // `provision_status` says whatever it says. Recording both is what makes
@@ -595,6 +583,10 @@ export async function executeBrowseCatalog(
           }
         } catch (error) {
           if (error instanceof DOMException && error.name === 'AbortError') throw error;
+          if (ProviderApiError.isProviderApiError(error) && error.kind === 'invalid_response') {
+            healthStatus = 'invalid_response';
+            healthError = sanitizeForDisplay(error.message, MAX_HEALTH_ERROR_CHARS);
+          }
           logError(`compositeQueries.executeBrowseCatalog.healthCheck[${p.uuid}]`, error);
         }
       }

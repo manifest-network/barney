@@ -9,6 +9,7 @@
 import {
   getProviderHealth as fredGetProviderHealth,
   getLeaseConnectionInfo as fredGetLeaseConnectionInfo,
+  ProviderApiError,
   type ProviderHealthResponse,
   type LeaseConnectionResponse,
 } from '@manifest-network/manifest-sdk/deploy';
@@ -35,8 +36,8 @@ const ALLOW_LOOPBACK = import.meta.env.DEV;
 
 /**
  * Checks the health status of a provider's API.
- * Returns null if the provider is unreachable (Barney convention).
- * Wraps mono's throwing version with try/catch fallback.
+ * Returns null on transport failure or invalid JSON (Barney convention).
+ * Preserves invalid_response errors for valid JSON with an off-contract shape.
  */
 export async function getProviderHealth(
   providerApiUrl: string,
@@ -47,6 +48,7 @@ export async function getProviderHealth(
   try {
     return await fredGetProviderHealth(providerApiUrl, timeoutMs, providerFetch, ALLOW_LOOPBACK);
   } catch (error) {
+    if (ProviderApiError.isProviderApiError(error) && error.kind === 'invalid_response') throw error;
     logError('provider-api.getProviderHealth', error);
     return null;
   }

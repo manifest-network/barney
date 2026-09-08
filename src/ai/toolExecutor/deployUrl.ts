@@ -1,11 +1,12 @@
 /**
  * App-URL resolution after deploy/restart/update.
  *
- * Extracted verbatim from compositeTransactions.ts (ENG-576 refactor split).
- * Pure code motion — shapes the app URL from provider connection info + fred status.
+ * Shares connection shaping with deploy results and app_status, then falls back
+ * to provider status endpoints or instance FQDNs. Direct TCP access requires
+ * an assigned host port; HTTP FQDNs route through Traefik on 443.
  */
 
-import { extractPrimaryServicePorts, formatConnectionUrl, parseContainerPort, TCP_ONLY_PORTS } from './helpers';
+import { deriveUrlFromConnection, extractPort, extractPrimaryServicePorts, formatConnectionUrl, parseContainerPort, TCP_ONLY_PORTS } from './helpers';
 import { isValidFqdn } from '../../utils/connection';
 import type { FredLeaseStatus } from '../../api/fred';
 import { getLeaseConnectionInfo, type ConnectionDetails } from '../../api/provider-api';
@@ -25,27 +26,38 @@ function isDnsHostname(hostname: string): boolean {
  * - FQDN + TCP port   → `fqdn:port`    (direct TCP, no protocol)
  * - IP (any port)      → `ip:port`      (bare, no protocol)
  */
-function rewriteFredEndpoint(endpointUrl: string, portKey: string): string {
+function rewriteFredEndpoint(endpointUrl: string, portKey: string): string | undefined {
   try {
     const parsed = new URL(endpointUrl);
-    const hostPort = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
-
-    if (!isDnsHostname(parsed.hostname)) return hostPort;
-
     const containerPort = parseContainerPort(portKey);
-    if (containerPort != null && TCP_ONLY_PORTS.has(containerPort)) {
-      return hostPort;
+    if (isDnsHostname(parsed.hostname) && !(containerPort != null && TCP_ONLY_PORTS.has(containerPort))) {
+      // HTTP ingress does not use Docker's published host port.
+      return `https://${parsed.hostname}`;
     }
-    // HTTP service: https://fqdn (Traefik on 443)
-    return `https://${parsed.hostname}`;
-  } catch { /* not a valid URL — return as-is */ }
-  return endpointUrl;
+    if (parsed.port && extractPort(parsed.port) === undefined) return undefined;
+    return parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+  } catch { /* A malformed hint supplies no endpoint; try the remaining status data. */ }
+  return undefined;
+}
+
+function urlFromStatusPorts(
+  ports: Record<string, unknown>,
+  fqdn?: string,
+  host?: string,
+): string | undefined {
+  // Keep the container port so formatConnectionUrl can distinguish HTTP ingress
+  // from direct TCP. A filtered-empty record no longer carries that information.
+  if (Object.keys(ports).length === 0) return undefined;
+  const connectionHost = fqdn && isValidFqdn(fqdn) ? fqdn : host;
+  if (!connectionHost) return undefined;
+  return formatConnectionUrl(connectionHost, { host: connectionHost, fqdn, ports });
 }
 
 /**
  * Extract URL from fred status data (endpoints or instances).
  * This data is already available from polling — no extra API call needed.
- * Returns the first endpoint URL, or constructs one from instance ports + host.
+ * Uses provider-reported instance FQDNs when no host is supplied. The provider's
+ * API hostname and wildcard host_ip bind address are not workload addresses.
  */
 export function extractUrlFromFredStatus(
   fredStatus: FredLeaseStatus,
@@ -55,29 +67,28 @@ export function extractUrlFromFredStatus(
   if (fredStatus.endpoints) {
     const firstKey = Object.keys(fredStatus.endpoints)[0];
     const firstEndpoint = firstKey ? fredStatus.endpoints[firstKey] : undefined;
-    if (firstKey && firstEndpoint) return rewriteFredEndpoint(firstEndpoint, firstKey);
+    if (firstKey && firstEndpoint) {
+      const url = rewriteFredEndpoint(firstEndpoint, firstKey);
+      if (url) return url;
+    }
   }
 
-  // instances: ports as Record<string, number> — just port numbers
-  if (fredStatus.instances && host) {
+  // SDK-validated instance ports carry host_ip / host_port mappings.
+  if (fredStatus.instances) {
     for (const instance of fredStatus.instances) {
       if (instance.ports) {
-        const firstPort = Object.values(instance.ports)[0];
-        if (typeof firstPort === 'number') {
-          return `${host}:${firstPort}`;
-        }
+        const url = urlFromStatusPorts(instance.ports, instance.fqdn, host);
+        if (url) return url;
       }
     }
   }
 
   // Stack services: extract primary service port
-  if (fredStatus.services && host) {
+  if (fredStatus.services) {
     const primary = extractPrimaryServicePorts(fredStatus.services);
     if (primary) {
-      const firstPort = Object.values(primary.ports)[0];
-      if (typeof firstPort === 'number') {
-        return `${host}:${firstPort}`;
-      }
+      const service = fredStatus.services[primary.serviceName];
+      return urlFromStatusPorts(primary.ports, service?.instances?.[0]?.fqdn, host);
     }
   }
 
@@ -96,34 +107,16 @@ export async function resolveAppUrl(
   signing: SigningContext | undefined,
   logContext: string
 ): Promise<{ url?: string; connection?: ConnectionDetails }> {
+  let connection: ConnectionDetails | undefined;
   // 1. Try connection endpoint (has proper host + port mappings)
   if (signing) {
     try {
       const token = await signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
       const connResponse = await getLeaseConnectionInfo(providerUrl, leaseUuid, token);
+      connection = connResponse.connection;
       if (connResponse.connection) {
-        const connection = connResponse.connection;
-        // Ports may be at top level or nested inside instances[0].ports
-        let ports: Record<string, unknown> | undefined =
-          connection.ports ?? connection.instances?.[0]?.ports;
-
-        // Stack deployments: ports nested under services.<name>.instances[0].ports
-        let fqdn = connection.fqdn;
-        if (!ports && connection.services) {
-          const primary = extractPrimaryServicePorts(connection.services);
-          if (primary) {
-            ports = primary.ports;
-            // Promote primary service's FQDN to top-level for formatConnectionUrl
-            if (!fqdn) {
-              const svc = connection.services[primary.serviceName];
-              fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
-            }
-          }
-        }
-
-        const withPorts = { ...connection, ports, fqdn };
-        const url = formatConnectionUrl(connection.host, withPorts);
-        if (url || withPorts.ports) return { url, connection: withPorts };
+        const shaped = deriveUrlFromConnection(connResponse.connection);
+        if (shaped) return shaped;
       }
     } catch (error) {
       logError(`${logContext}.connection`, error);
@@ -134,8 +127,8 @@ export async function resolveAppUrl(
   // extractUrlFromFredStatus already rewrites FQDN HTTP endpoints to https://fqdn
   const fredUrl = extractUrlFromFredStatus(fredStatus);
   if (fredUrl) {
-    return { url: fredUrl };
+    return { url: fredUrl, ...(connection ? { connection } : {}) };
   }
 
-  return {};
+  return connection ? { connection } : {};
 }
