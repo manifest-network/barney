@@ -166,7 +166,9 @@ The dependency-free Node relay owns the only paid route. `auth.mjs` verifies one
 
 ### 6. App registry (`src/registry/appRegistry.ts`)
 
-A localStorage-backed mapping of `name → lease` scoped per wallet address (`barney-apps-{address}`). Provides a friendly identifier layer on top of raw lease UUIDs. Manifests stored in the registry are sanitized — secret-shaped env var values are scrubbed before write, and empty values trigger auto-generation on re-deploy. Per-wallet registry keys persist until browser data is cleared. A wallet change clears registry-derived in-memory state such as the tool cache and `deployProgress`; the chat store separately switches to the new chain/address-scoped transcript.
+A wallet-scoped app cache (`barney-apps-{address}`) provides friendly names for lease UUIDs. `useRegistryReconciliation` and `list_apps` discover missing active/pending leases from complete paginated tenant reads. `src/api/appDiscovery.ts` resolves provider URLs and SKU names, then uses authenticated provider reads to recover readiness and connection details. Catalog or provider failures leave the discovered lease visible with incomplete metadata; later refreshes retry. An active chain lease alone never confirms a recovered workload is running.
+
+localStorage is optional: failed reads/writes fall back to live per-wallet memory. Existing aliases and sanitized manifests are preserved when available. Fresh browsers use stable lease-derived names; the current chain/provider APIs do not expose the original friendly name or manifest body. Image-based partial updates therefore require a cached manifest; otherwise the user supplies a complete replacement manifest. Closed leases remain available through `lease_history`, while local stopped-app entries are retained only in the cache. A wallet change clears registry-derived tool state and `deployProgress`; chat history remains separately scoped to wallet and chain.
 
 ## Request flows
 

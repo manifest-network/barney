@@ -10,7 +10,7 @@
  * whitelist it in `PersistedMessageSchema` and add a row here so the
  * round-trip stays covered.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   historyStorageKey,
   loadHistory,
@@ -31,6 +31,26 @@ function storeHistory(messages: unknown[]): void {
 
 describe('persistence integration with real PersistedMessageSchema', () => {
   beforeEach(() => { localStorage.clear(); });
+
+  it('starts the real store and persistence subscriptions when browser storage is blocked', () => {
+    const fail = () => { throw new DOMException('Storage disabled', 'SecurityError'); };
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(fail);
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(fail);
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(fail);
+    let unsubscribe: (() => void) | undefined;
+    try {
+      const store = createAIStore();
+      unsubscribe = setupPersistenceSubscriptions(store);
+      expect(store.getState().settings).toEqual({ saveHistory: true });
+      store.getState().updateSettings({ saveHistory: false });
+      expect(store.getState().settings.saveHistory).toBe(false);
+    } finally {
+      unsubscribe?.();
+      getItem.mockRestore();
+      setItem.mockRestore();
+      removeItem.mockRestore();
+    }
+  });
 
   it('round-trips awaitingConfirmation through schema and into rehydrate marker', () => {
     const persisted = [{

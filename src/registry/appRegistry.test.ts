@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   getApps,
+  discoverAppsFromChain,
   getApp,
   findApp,
   getAppByLease,
@@ -14,6 +15,7 @@ import {
   subscribeToRegistry,
   deriveAppStatus,
   type AppEntry,
+  type ChainAppSnapshot,
   type AppStatus,
   type ChainState,
   type ProvisionState,
@@ -40,9 +42,137 @@ function makeApp(overrides: Partial<AppEntry> = {}): AppEntry {
   };
 }
 
+function makeChainApp(overrides: Partial<ChainAppSnapshot> = {}): ChainAppSnapshot {
+  return {
+    leaseUuid: '019825fe-9131-7420-8a53-518a681d4900',
+    providerUuid: 'provider-1',
+    providerUrl: 'https://provider.example.com',
+    createdAt: Date.UTC(2026, 8, 1),
+    chainState: 'active',
+    size: 'small',
+    customDomains: [{ serviceName: 'web', customDomain: 'app.example.com' }],
+    ...overrides,
+  };
+}
+
 describe('appRegistry', () => {
   beforeEach(() => {
     localStorage.clear();
+  });
+
+  describe('chain discovery', () => {
+    it('recovers live leases on a fresh browser without claiming provider readiness', () => {
+      const active = makeChainApp();
+      const pending = makeChainApp({ leaseUuid: 'lease-pending', chainState: 'pending' });
+
+      const imported = discoverAppsFromChain(ADDR_A, [active, pending]);
+
+      expect(imported).toHaveLength(2);
+      expect(getAppByLease(ADDR_A, active.leaseUuid)).toMatchObject({
+        providerUuid: active.providerUuid,
+        providerUrl: active.providerUrl,
+        createdAt: active.createdAt,
+        size: active.size,
+        customDomains: active.customDomains,
+        chainState: 'active',
+        provisionState: 'unconfirmed',
+        status: 'deploying',
+      });
+      expect(getAppByLease(ADDR_A, pending.leaseUuid)).toMatchObject({
+        chainState: 'pending', status: 'deploying',
+      });
+      expect(getApps(ADDR_B)).toEqual([]);
+
+      reconcileWithChain(ADDR_A, new Map([[active.leaseUuid, 'active'], [pending.leaseUuid, 'pending']]));
+      expect(getAppByLease(ADDR_A, active.leaseUuid)?.status).toBe('deploying');
+      updateApp(ADDR_A, active.leaseUuid, { provisionState: 'confirmed' });
+      expect(getAppByLease(ADDR_A, active.leaseUuid)?.status).toBe('running');
+    });
+
+    it('preserves local names, manifests, and provider failures during repeated discovery', () => {
+      const lease = makeChainApp();
+      const app = makeApp({
+        leaseUuid: lease.leaseUuid,
+        name: 'production-api',
+        manifest: '{"image":"private/api:1"}',
+        provisionState: 'failed',
+        status: 'failed',
+      });
+      addApp(ADDR_A, app);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      const setItem = vi.spyOn(localStorage, 'setItem');
+      try {
+        expect(discoverAppsFromChain(ADDR_A, [lease, lease])).toEqual([]);
+        expect(discoverAppsFromChain(ADDR_A, [lease])).toEqual([]);
+        expect(getApps(ADDR_A)).toEqual([app]);
+        expect(listener).not.toHaveBeenCalled();
+        expect(setItem).not.toHaveBeenCalled();
+      } finally { setItem.mockRestore(); unsub(); }
+    });
+
+    it('gives recovered leases stable unique names without displacing existing aliases', () => {
+      const leases = [makeChainApp(), makeChainApp({ leaseUuid: '019825ff-9131-7420-8a53-518a681d4900' })];
+      const imported = discoverAppsFromChain(ADDR_A, leases);
+      const reversed = discoverAppsFromChain(ADDR_B, [...leases].reverse());
+      expect(imported.map((app) => app.name)).toEqual(reversed.map((app) => app.name));
+      expect(new Set(imported.map((app) => app.name)).size).toBe(2);
+      for (const app of imported) {
+        expect(app.name).toMatch(/^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$/);
+        expect(app.name.length).toBeLessThanOrEqual(32);
+      }
+
+      const aliasAddress = 'manifest1alias';
+      addApp(aliasAddress, makeApp({ name: imported[0].name, leaseUuid: 'existing-alias' }));
+      const [recovered] = discoverAppsFromChain(aliasAddress, [leases[0]]);
+      expect(recovered.name).not.toBe(imported[0].name);
+      expect(getAppByLease(aliasAddress, 'existing-alias')?.name).toBe(imported[0].name);
+    });
+
+    it('merges an authorized deployment callback with an already-discovered lease', () => {
+      const lease = makeChainApp();
+      discoverAppsFromChain(ADDR_A, [lease, lease]);
+      addApp(ADDR_A, makeApp({
+        leaseUuid: lease.leaseUuid,
+        name: 'chosen-name',
+        manifest: '{"image":"redis:8"}',
+        status: 'deploying',
+      }));
+
+      expect(getApps(ADDR_A)).toHaveLength(1);
+      expect(getAppByLease(ADDR_A, lease.leaseUuid)).toMatchObject({
+        name: 'chosen-name',
+        manifest: '{"image":"redis:8"}',
+        chainState: 'active',
+        provisionState: 'unconfirmed',
+        customDomains: lease.customDomains,
+      });
+    });
+
+    it('supports discovery and management when browser storage is blocked', () => {
+      const address = 'manifest1blocked';
+      const blocked = () => { throw new DOMException('Storage disabled', 'SecurityError'); };
+      const getItem = vi.spyOn(localStorage, 'getItem').mockImplementation(blocked);
+      const setItem = vi.spyOn(localStorage, 'setItem').mockImplementation(blocked);
+      const removeItem = vi.spyOn(localStorage, 'removeItem').mockImplementation(blocked);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      const lease = makeChainApp();
+      try {
+        discoverAppsFromChain(address, [lease]);
+        expect(getApps(address)).toHaveLength(1);
+        updateApp(address, lease.leaseUuid, { provisionState: 'confirmed' });
+        expect(getAppByLease(address, lease.leaseUuid)?.status).toBe('running');
+        expect(listener).toHaveBeenCalledTimes(2);
+        expect(removeApp(address, lease.leaseUuid)).toBe(true);
+        expect(getApps(address)).toEqual([]);
+      } finally {
+        getItem.mockRestore(); setItem.mockRestore(); removeItem.mockRestore(); unsub();
+      }
+      // A successful subsequent write makes persistence available again.
+      addApp(address, makeApp({ leaseUuid: lease.leaseUuid }));
+      removeApp(address, lease.leaseUuid);
+    });
   });
 
   // --- CRUD ---
@@ -1008,10 +1138,7 @@ describe('appRegistry', () => {
       } finally { unsub(); }
     });
 
-    it('a save failure still suppresses notify', () => {
-      // Pre-existing behaviour, re-pinned because the notify call moved behind
-      // a predicate: subscribers re-read from localStorage, so notifying after
-      // a failed write would mask the failure with a stale no-op refresh.
+    it('keeps updates visible and notifies subscribers when the cache is full', () => {
       const app = makeApp({ status: 'running', chainState: 'active' });
       addApp(ADDR_A, app);
       const listener = vi.fn();
@@ -1020,17 +1147,17 @@ describe('appRegistry', () => {
         throw new Error('QuotaExceededError');
       });
       try {
-        // A change that WOULD be visible, so only the save failure can be
-        // what suppresses the notify.
         const updated = updateApp(ADDR_A, app.leaseUuid, { provisionState: 'failed' });
 
         expect(setItem).toHaveBeenCalled();
-        expect(listener).not.toHaveBeenCalled();
-        // Caller still gets the would-be entry back.
+        expect(listener).toHaveBeenCalledWith(ADDR_A);
         expect(updated?.status).toBe('failed');
       } finally { setItem.mockRestore(); unsub(); }
-      // ...and nothing was persisted.
-      expect(getApp(ADDR_A, app.name)?.status).toBe('running');
+      expect(getApp(ADDR_A, app.name)?.status).toBe('failed');
+      expect(JSON.parse(localStorage.getItem(`barney-apps-${ADDR_A}`)!)[0].status).toBe('running');
+      // The next successful write persists the accumulated in-memory update.
+      updateApp(ADDR_A, app.leaseUuid, { url: 'https://new.example.com' });
+      expect(JSON.parse(localStorage.getItem(`barney-apps-${ADDR_A}`)!)[0].status).toBe('failed');
     });
   });
 

@@ -17,6 +17,13 @@ import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
 
 // Mock external modules
+vi.mock('../../api/appDiscovery', () => ({
+  discoverTenantApps: vi.fn().mockResolvedValue([]),
+  hydrateDiscoveredApps: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { discoverTenantApps, hydrateDiscoveredApps } from '../../api/appDiscovery';
+
 vi.mock('../../api/billing', () => ({
   getLeasesByTenant: vi.fn(),
   getLeasesByTenantPaginated: vi.fn(),
@@ -152,6 +159,24 @@ describe('executeListApps', () => {
     const result = await executeListApps({}, makeOptions());
     expect(result.success).toBe(true);
     expect((result.data as any).count).toBe(0);
+  });
+
+  it('includes a discovered app in the first list response on a fresh browser', async () => {
+    const registry = makeRegistry();
+    const recovered = makeApp({ name: 'app-recovered', status: 'deploying', provisionState: 'unconfirmed' });
+    vi.mocked(getLeasesByTenant).mockImplementation(async (_address, state) =>
+      state === 2 ? [{ uuid: recovered.leaseUuid } as never] : [],
+    );
+    vi.mocked(discoverTenantApps).mockImplementationOnce(async () => [registry.addApp('wallet', recovered)]);
+
+    const result = await executeListApps({ state: 'all' }, makeOptions({ appRegistry: registry }));
+
+    expect(result.success).toBe(true);
+    expect((result.data as any).apps).toEqual([expect.objectContaining({ name: 'app-recovered', status: 'deploying' })]);
+    expect(discoverTenantApps).toHaveBeenCalledWith(
+      expect.any(String), [{ uuid: recovered.leaseUuid }], expect.objectContaining({ registry }),
+    );
+    expect(hydrateDiscoveredApps).not.toHaveBeenCalled();
   });
 
   it('returns apps filtered by state', async () => {

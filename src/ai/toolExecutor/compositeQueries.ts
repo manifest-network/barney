@@ -7,6 +7,7 @@ import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import { cosmosQuery } from '@manifest-network/manifest-sdk/chain';
 import type { ManifestReadClient } from '@manifest-network/manifest-sdk';
 import { getReadClient } from '../../api/readClient';
+import { discoverTenantApps, hydrateDiscoveredApps } from '../../api/appDiscovery';
 import {
   getLeasesByTenant,
   getLeasesByTenantPaginated,
@@ -54,7 +55,7 @@ import type { MessageCard } from '../../contexts/aiTypes';
 import type { AppEntry } from '../../registry/appRegistry';
 
 /**
- * Execute list_apps: Get apps from registry, reconcile with chain.
+ * Execute list_apps: Discover wallet leases and refresh the app cache.
  */
 export async function executeListApps(
   args: Record<string, unknown>,
@@ -81,9 +82,11 @@ export async function executeListApps(
   // 'running'. 'active' is written last so it wins a uuid in both sets — the same
   // precedence `AppsSidebar.refresh` uses for `reconcileWithChain`.
   try {
-    const activeLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE), undefined, 'Fetch active leases', signal);
+    const [activeLeases, pendingLeases] = await withTimeout(Promise.all([
+      getLeasesByTenant(address, LeaseState.LEASE_STATE_ACTIVE),
+      getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING),
+    ]), undefined, 'Fetch wallet leases', signal);
     throwIfAborted(signal, 'list_apps');
-    const pendingLeases = await withTimeout(getLeasesByTenant(address, LeaseState.LEASE_STATE_PENDING), undefined, 'Fetch pending leases', signal);
     const leaseStates = new Map<string, 'active' | 'pending'>();
     for (const l of pendingLeases) leaseStates.set(l.uuid, 'pending');
     for (const l of activeLeases) leaseStates.set(l.uuid, 'active');
@@ -95,9 +98,20 @@ export async function executeListApps(
       // matches what was persisted — including when a provider `failed` verdict
       // outranks the chain observation.
       const chainState = leaseStates.get(app.leaseUuid) ?? 'absent';
+      if (appRegistry.getAppByLease(address, app.leaseUuid)?.chainState !== app.chainState) continue;
       const updated = appRegistry.updateApp(address, app.leaseUuid, { chainState });
       if (updated) app.status = updated.status;
     }
+    const liveLeases = new Map([...pendingLeases, ...activeLeases].map((lease) => [lease.uuid, lease]));
+    await discoverTenantApps(address, [...liveLeases.values()], { signal, registry: appRegistry });
+    if (options.signing) {
+      const incomplete = appRegistry.getApps(address).filter((app) =>
+        liveLeases.has(app.leaseUuid)
+        && (app.provisionState === 'unconfirmed' || !app.connection || !app.url),
+      );
+      await hydrateDiscoveredApps(address, incomplete, options.signing, { signal, registry: appRegistry });
+    }
+    apps = appRegistry.getApps(address);
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     logError('compositeQueries.executeListApps.reconcile', error);

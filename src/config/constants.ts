@@ -34,6 +34,7 @@ export const MS_PER_SECOND = 1000;
 
 /** Auto-refresh interval for data polling (milliseconds) */
 export const AUTO_REFRESH_INTERVAL_MS = 15_000;
+export const APP_DISCOVERY_CONCURRENCY = 3;
 
 /** Health check timeout */
 export const HEALTH_CHECK_TIMEOUT_MS = 5000;

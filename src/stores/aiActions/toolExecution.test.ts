@@ -42,6 +42,7 @@ vi.mock('../../registry/appRegistry', () => ({
   getApp: vi.fn().mockReturnValue(null),
   findApp: vi.fn().mockReturnValue(null),
   getAppByLease: vi.fn().mockReturnValue(null),
+  discoverAppsFromChain: vi.fn(() => []),
   addApp: vi.fn(),
   updateApp: vi.fn(),
   validateAppName: vi.fn().mockReturnValue(null),

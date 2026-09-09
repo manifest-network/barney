@@ -5,6 +5,7 @@ import {
   leaseStateFromString,
   LEASE_STATE_MAP,
   LEASE_STATE_FILTERS,
+  getLeasesByTenant,
   getLeasesByTenantPaginated,
   getBillingParams,
   getLease,
@@ -121,6 +122,105 @@ describe('LEASE_STATE_FILTERS', () => {
 
   it('has 6 entries (all + 5 states)', () => {
     expect(LEASE_STATE_FILTERS).toHaveLength(6);
+  });
+});
+
+describe('getLeasesByTenant', () => {
+  beforeEach(() => {
+    mockGetLeasesByTenant.mockReset();
+  });
+
+  it('returns the complete inventory beyond the former 1000-lease cap', async () => {
+    const leases = Array.from({ length: 1001 }, (_, index) => ({ uuid: `lease-${index}` }));
+    mockGetLeasesByTenant.mockImplementation(({ offset, limit }) => Promise.resolve({
+      leases: leases.slice(Number(offset), Number(offset + limit)),
+      total: 1001n,
+    }));
+
+    expect(await getLeasesByTenant('addr1')).toEqual(leases);
+    expect(mockGetLeasesByTenant).toHaveBeenCalledTimes(11);
+    expect(mockGetLeasesByTenant).toHaveBeenLastCalledWith({
+      tenant: 'addr1',
+      stateFilter: LeaseState.LEASE_STATE_UNSPECIFIED,
+      limit: 100n,
+      offset: 1000n,
+    });
+  });
+
+  it('advances by the returned count when the provider caps pages below the requested limit', async () => {
+    const first = [{ uuid: 'lease-1' }, { uuid: 'lease-2' }];
+    const last = [{ uuid: 'lease-3' }];
+    mockGetLeasesByTenant
+      .mockResolvedValueOnce({ leases: first, total: 3n })
+      .mockResolvedValueOnce({ leases: last, total: 3n });
+
+    expect(await getLeasesByTenant('addr1', LeaseState.LEASE_STATE_ACTIVE)).toEqual([...first, ...last]);
+    expect(mockGetLeasesByTenant).toHaveBeenNthCalledWith(2, {
+      tenant: 'addr1',
+      stateFilter: LeaseState.LEASE_STATE_ACTIVE,
+      limit: 100n,
+      offset: 2n,
+    });
+  });
+
+  it('returns an empty inventory when no leases exist', async () => {
+    mockGetLeasesByTenant.mockResolvedValue({ leases: [], total: 0n });
+    expect(await getLeasesByTenant('addr1')).toEqual([]);
+    expect(mockGetLeasesByTenant).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues through short pages until empty when pagination totals are unavailable', async () => {
+    mockGetLeasesByTenant
+      .mockResolvedValueOnce({ leases: [{ uuid: 'lease-1' }], total: 0n })
+      .mockResolvedValueOnce({ leases: [{ uuid: 'lease-2' }], total: 0n })
+      .mockResolvedValueOnce({ leases: [], total: 0n });
+
+    expect(await getLeasesByTenant('addr1')).toEqual([{ uuid: 'lease-1' }, { uuid: 'lease-2' }]);
+    expect(mockGetLeasesByTenant.mock.calls.map(([params]) => params.offset)).toEqual([0n, 1n, 2n]);
+  });
+
+  it('fails instead of looping or returning a partial inventory when the provider repeats a page', async () => {
+    mockGetLeasesByTenant.mockResolvedValue({ leases: [{ uuid: 'lease-1' }], total: 0n });
+
+    await expect(getLeasesByTenant('addr1')).rejects.toThrow('duplicate lease');
+    expect(mockGetLeasesByTenant).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects an empty page before the reported total is reached', async () => {
+    mockGetLeasesByTenant
+      .mockResolvedValueOnce({ leases: [{ uuid: 'lease-1' }], total: 2n })
+      .mockResolvedValueOnce({ leases: [], total: 2n });
+
+    await expect(getLeasesByTenant('addr1')).rejects.toThrow('before all leases were returned');
+  });
+
+  it('rejects changing totals instead of accepting an inconsistent inventory', async () => {
+    mockGetLeasesByTenant
+      .mockResolvedValueOnce({ leases: [{ uuid: 'lease-1' }], total: 2n })
+      .mockResolvedValueOnce({ leases: [{ uuid: 'lease-2' }], total: 3n });
+
+    await expect(getLeasesByTenant('addr1')).rejects.toThrow('total changed');
+  });
+
+  it.each([-1n, undefined, 1])('rejects an invalid total (%s)', async (total) => {
+    mockGetLeasesByTenant.mockResolvedValue({ leases: [], total });
+    await expect(getLeasesByTenant('addr1')).rejects.toThrow('invalid pagination total');
+  });
+
+  it('rejects a page containing more leases than its reported total', async () => {
+    mockGetLeasesByTenant.mockResolvedValue({
+      leases: [{ uuid: 'lease-1' }, { uuid: 'lease-2' }],
+      total: 1n,
+    });
+    await expect(getLeasesByTenant('addr1')).rejects.toThrow('more leases than its total');
+  });
+
+  it('propagates later page failures instead of returning a partial inventory', async () => {
+    mockGetLeasesByTenant
+      .mockResolvedValueOnce({ leases: [{ uuid: 'lease-1' }], total: 2n })
+      .mockRejectedValueOnce(new Error('network unavailable'));
+
+    await expect(getLeasesByTenant('addr1')).rejects.toThrow('network unavailable');
   });
 });
 

@@ -135,7 +135,9 @@ Thin wrappers around the SDK deploy facade's manifest builders (`@manifest-netwo
 
 ### App Registry
 
-`src/registry/appRegistry.ts` — localStorage-backed name→lease mapping, scoped per wallet address.
+`src/registry/appRegistry.ts` — wallet-scoped app cache with optional localStorage persistence and an in-memory fallback. `discoverAppsFromChain` imports missing active/pending leases with stable lease-derived names and unconfirmed readiness, preserving existing aliases and manifests. `src/api/appDiscovery.ts` resolves missing catalog metadata and reads authenticated provider status/connection details with bounded concurrency and deadlines. Sidebar reconciliation and `list_apps` both recover inventory after clearing browser storage. Complete paginated tenant reads prevent a truncated page from marking leases absent. Discovery/deploy races merge by lease UUID; stale provider reads cannot overwrite a newer registry snapshot.
+
+Original friendly names and manifest bodies are unavailable through the current chain/provider APIs. They remain optional local metadata. Image-based partial updates require a cached manifest; a complete attached manifest or full services replacement can update a recovered app.
 
 ```
 Key: barney-apps-{address}
@@ -174,12 +176,11 @@ points, by field:
 |-------|----------------|---------|
 | `chainState` | `reconcileWithChain` (`useRegistryReconciliation`), `list_apps`, `app_status` | 15s timer + on tool call |
 | `customDomains` | `reconcileCustomDomainsWithChain` (`useRegistryReconciliation`), `app_status` | 15s timer + on tool call |
-| `provisionState` | `app_status` only | on tool call |
+| `provisionState` | `app_status`, discovery hydration for unconfirmed apps or missing connections | on tool call + recovery polling |
 
-`provisionState` having exactly one re-observation point is the model's remaining asymmetry: a user
-who never runs `app_status` can sit on a stale `unconfirmed`. `app_status` is therefore the
-**sanctioned refresh point** — the guard messages on `restart_app` / `update_app` name it explicitly,
-and it clears a stale `unconfirmed`/`failed` the moment fred reports ready again.
+Recovery polling retries unconfirmed workloads and missing connections. `app_status` remains the
+explicit refresh point for complete cached entries, including provider failures. Wallet-context
+changes abort recovery reads so an old signer cannot continue a background hydration pass.
 
 **`updateApp` splits PERSIST from NOTIFY**, which is what makes re-observation affordable at all.
 `dirty` (any real value change) decides whether to write; `visible` decides whether to `notify`.
@@ -201,7 +202,7 @@ precisely how the latch arose. Two rules for anyone extending `AppEntry`:
   cancel the very probe that would have answered. Any future field a repeatable writer rebuilds
   belongs in this set.
 
-Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `reconcileCustomDomainsWithChain`, `deriveAppStatus`, `validateAppName`, `sanitizeManifestForStorage`.
+Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `discoverAppsFromChain`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `reconcileCustomDomainsWithChain`, `deriveAppStatus`, `validateAppName`, `sanitizeManifestForStorage`.
 
 Name rules: lowercase, alphanumeric + hyphens, 1-32 chars, unique per wallet.
 
@@ -363,6 +364,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `DNS_POLL_INTERVAL_MS` | 30s | Polling interval for browser-side DNS / HTTPS probes (`useDnsStatusPolling`) |
 | `DNS_STUCK_THRESHOLD_MS` | 5min | Show "verify with dig locally" hint after sustained `pending_dns` (only when slice has no `detail`) |
 | `AUTO_REFRESH_INTERVAL_MS` | 15s | Auto-refresh interval for sidebar data polling |
+| `APP_DISCOVERY_CONCURRENCY` | 3 | Apps refreshed concurrently during recovery |
 | `HEALTH_CHECK_TIMEOUT_MS` | 5s | Timeout for individual health-check requests |
 | `POST_TX_REFETCH_DELAY_MS` | 1s | Delay before refetching state after a transaction |
 | `COPY_FEEDBACK_DURATION_MS` | 2s | "Copied" feedback display duration |

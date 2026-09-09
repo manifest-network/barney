@@ -42,8 +42,16 @@ Barney stores a small set of values in `localStorage`. Some are global to the br
 
 **Per-wallet (keyed by connected address):**
 
-- Your registered apps and their manifests, with secret-shaped env values scrubbed (`barney-apps-{address}`)
+- Optional app cache: friendly names, connection details, and manifests with secret-shaped env values scrubbed (`barney-apps-{address}`)
 - One-shot account-setup flag (`barney-refill-{address}`)
+
+Connecting the same wallet in a fresh browser recovers its active and pending apps
+from the network. Provider checks restore their status and connection links.
+Apps remain manageable when browser storage is unavailable. Original friendly
+names and saved manifests are local to the browser: recovered apps use names
+based on their lease IDs, and updating their configuration requires a complete
+manifest if the original is no longer cached. Past leases can be queried with
+`lease_history`; chat history and local preferences do not transfer between devices.
 
 Each wallet/network transcript is retained in this browser profile until you
 connect that identity and run `/clear` (or use **Clear This Wallet's History**

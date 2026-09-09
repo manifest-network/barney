@@ -2,9 +2,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createElement, type FC } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { createStore, type StoreApi } from 'zustand/vanilla';
+import { AIStoreContext } from '../contexts/aiStoreContext';
+import type { AIStore } from '../stores/aiStore';
 
 vi.mock('./useVisibilityPolling', () => ({
   useVisibilityPolling: vi.fn(),
+}));
+
+vi.mock('../api/appDiscovery', () => ({
+  discoverTenantApps: vi.fn().mockResolvedValue([]),
+  hydrateDiscoveredApps: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../api/billing', () => ({
@@ -26,6 +34,7 @@ vi.mock('../utils/errors', () => ({
 }));
 
 import { useRegistryReconciliation } from './useRegistryReconciliation';
+import { discoverTenantApps, hydrateDiscoveredApps } from '../api/appDiscovery';
 import { useVisibilityPolling } from './useVisibilityPolling';
 import { getLeasesByTenant, LeaseState } from '../api/billing';
 import {
@@ -87,9 +96,10 @@ describe('useRegistryReconciliation', () => {
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
   });
 
-  async function render(address: string | undefined): Promise<void> {
+  async function render(address: string | undefined, store?: StoreApi<AIStore>): Promise<void> {
     await act(async () => {
-      root.render(createElement(Wrapper, { address }));
+      const child = createElement(Wrapper, { address });
+      root.render(store ? createElement(AIStoreContext.Provider, { value: store }, child) : child);
     });
   }
 
@@ -263,6 +273,68 @@ describe('useRegistryReconciliation', () => {
     expect(observations.size).toBe(6);
     expect(observations.get('lease-5')?.customDomains).toEqual([
       { serviceName: 'app-5', customDomain: 'app-5.example.com' },
+    ]);
+  });
+
+  it('discovers wallet leases when the browser registry is empty', async () => {
+    vi.mocked(getApps).mockReturnValue([]);
+    await render(ADDRESS);
+    await latestRefresh()();
+
+    expect(discoverTenantApps).toHaveBeenCalledWith(
+      ADDRESS,
+      [{ uuid: 'lease-web', items: [] }],
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(hydrateDiscoveredApps).not.toHaveBeenCalled();
+  });
+
+  it('discards a lease read that finishes after switching wallets', async () => {
+    const leases = deferred<never[]>();
+    vi.mocked(getLeasesByTenant).mockReturnValue(leases.promise);
+    await render(ADDRESS);
+    const refreshing = latestRefresh()();
+    await render('manifest1different');
+    leases.resolve([{ uuid: 'old-wallet-lease' } as never]);
+    await refreshing;
+
+    expect(discoverTenantApps).not.toHaveBeenCalled();
+    expect(reconcileWithChain).not.toHaveBeenCalled();
+  });
+
+  it('hydrates recovered apps with the current signer and cancels on a wallet change', async () => {
+    const signing = { authTokens: {} } as AIStore['signing'];
+    const store = createStore<AIStore>(() => ({ address: ADDRESS, signing, authorizationEpoch: 1 }) as AIStore);
+    vi.mocked(getApps).mockReturnValue([makeApp({ provisionState: 'unconfirmed' })]);
+    await render(ADDRESS, store);
+    await latestRefresh()();
+
+    expect(hydrateDiscoveredApps).toHaveBeenCalledWith(
+      ADDRESS, expect.any(Array), signing, { signal: expect.any(AbortSignal) },
+    );
+    const signal = vi.mocked(hydrateDiscoveredApps).mock.calls[0][3]!.signal!;
+    expect(signal.aborted).toBe(false);
+    store.setState({ address: undefined, authorizationEpoch: 2 });
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('retries a confirmed app whose provider has not supplied a usable endpoint yet', async () => {
+    const signing = { authTokens: {} } as AIStore['signing'];
+    const store = createStore<AIStore>(() => ({ address: ADDRESS, signing, authorizationEpoch: 1 }) as AIStore);
+    const recovered = makeApp({ provisionState: 'unconfirmed' });
+    vi.mocked(getApps).mockReturnValue([recovered]);
+    vi.mocked(hydrateDiscoveredApps).mockImplementationOnce(async () => {
+      vi.mocked(getApps).mockReturnValue([{
+        ...recovered, status: 'running', provisionState: 'confirmed', connection: { host: '', ports: {} },
+      }]);
+    });
+    await render(ADDRESS, store);
+    await latestRefresh()();
+    await latestRefresh()();
+
+    expect(hydrateDiscoveredApps).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(hydrateDiscoveredApps).mock.calls[1][1]).toEqual([
+      expect.objectContaining({ provisionState: 'confirmed', connection: { host: '', ports: {} } }),
     ]);
   });
 });

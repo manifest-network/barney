@@ -7,10 +7,12 @@
  * list read has a deadline so one stalled RPC cannot pin the polling loop.
  */
 
-import { useCallback } from 'react';
+import { useCallback, useContext, useEffect, useRef } from 'react';
 import { getLeasesByTenant, LeaseState } from '../api/billing';
+import { discoverTenantApps, hydrateDiscoveredApps } from '../api/appDiscovery';
 import { getDomainAssignments } from '../api/leaseDomains';
-import { withTimeout } from '../api/utils';
+import { throwIfAborted, withTimeout } from '../api/utils';
+import { AIStoreContext } from '../contexts/aiStoreContext';
 import {
   getApps,
   reconcileCustomDomainsWithChain,
@@ -24,8 +26,24 @@ import { useVisibilityPolling } from './useVisibilityPolling';
 export function useRegistryReconciliation(
   address: string | undefined,
 ): void {
+  const store = useContext(AIStoreContext);
+  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const unsubscribe = store?.subscribe((next, previous) => {
+      if (next.authorizationEpoch !== previous.authorizationEpoch) abortRef.current?.abort();
+    });
+    return () => {
+      abortRef.current?.abort();
+      unsubscribe?.();
+    };
+  }, [address, store]);
+
   const refresh = useCallback(async (): Promise<boolean | void> => {
     if (!address) return;
+    abortRef.current?.abort();
+    const abort = new AbortController();
+    abortRef.current = abort;
+    const { signal } = abort;
 
     try {
       // Capture both optimistic-concurrency baselines before any chain read.
@@ -47,7 +65,9 @@ export function useRegistryReconciliation(
         ]),
         AI_TOOL_API_TIMEOUT_MS,
         'Registry lease-state refresh',
+        signal,
       );
+      throwIfAborted(signal, 'Registry refresh');
 
       const leaseStates = new Map<string, 'active' | 'pending'>();
       for (const lease of pendingLeases) leaseStates.set(lease.uuid, 'pending');
@@ -70,11 +90,22 @@ export function useRegistryReconciliation(
         });
       }
       reconcileCustomDomainsWithChain(address, observations);
+      await discoverTenantApps(address, [...liveLeases.values()], { signal });
+      throwIfAborted(signal, 'Registry discovery');
+      const wallet = store?.getState();
+      if (wallet?.address === address && wallet.signing) {
+        const incomplete = getApps(address).filter((app) =>
+          liveLeases.has(app.leaseUuid)
+          && (app.provisionState === 'unconfirmed' || !app.connection || !app.url),
+        );
+        await hydrateDiscoveredApps(address, incomplete, wallet.signing, { signal });
+      }
     } catch (error) {
+      if (signal.aborted) return;
       logError('useRegistryReconciliation', error);
       return false;
     }
-  }, [address]);
+  }, [address, store]);
 
   useVisibilityPolling(refresh, AUTO_REFRESH_INTERVAL_MS, {
     enabled: !!address,

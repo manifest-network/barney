@@ -1,8 +1,8 @@
 /**
- * App Registry — localStorage-backed name→lease mapping, scoped per wallet address.
+ * App Registry — wallet-scoped app cache reconstructed from chain/provider data.
  *
  * Provides a friendly "app name" layer on top of raw lease UUIDs. Each wallet
- * address gets its own isolated registry keyed as `barney-apps-{address}`.
+ * address gets its own optional local cache keyed as `barney-apps-{address}`.
  */
 
 import { z } from 'zod';
@@ -16,8 +16,8 @@ export const CHAIN_STATES = ['active', 'pending', 'absent'] as const;
 export type ChainState = (typeof CHAIN_STATES)[number];
 
 /**
- * Provider provisioning observation. `'unconfirmed'` is the honest middle value:
- * accepted, but no readiness verdict ever arrived. NOT "failed", NOT "running".
+ * Provider readiness. `'unconfirmed'` means no readiness verdict is available,
+ * including a recovered lease that has not been queried at its provider yet.
  */
 export const PROVISION_STATES = ['confirmed', 'unconfirmed', 'failed'] as const;
 export type ProvisionState = (typeof PROVISION_STATES)[number];
@@ -60,6 +60,17 @@ export const AppEntrySchema = z.object({
 
 export type AppEntry = z.infer<typeof AppEntrySchema>;
 export type CustomDomainAssignment = NonNullable<AppEntry['customDomains']>[number];
+
+/** Authoritative lease fields used to recover apps on a fresh browser. */
+export interface ChainAppSnapshot {
+  leaseUuid: string;
+  providerUuid: string;
+  createdAt: number;
+  chainState: 'active' | 'pending';
+  size?: string;
+  providerUrl?: string;
+  customDomains?: readonly CustomDomainAssignment[];
+}
 
 /** One chain observation plus the local value captured before its RPC began.
  * The expected value is an optimistic-concurrency guard: a transaction result
@@ -183,6 +194,15 @@ function storageKey(address: string): string {
   return `barney-apps-${address}`;
 }
 
+// A blocked/full localStorage must not prevent managing an on-chain lease.
+// Keep unsaved writes authoritative within this tab until a later write succeeds.
+const memoryApps = new Map<string, AppEntry[]>();
+const unsavedAddresses = new Set<string>();
+
+function copyApps(apps: readonly AppEntry[]): AppEntry[] {
+  return structuredClone(apps) as AppEntry[];
+}
+
 /**
  * In-tab change notifications.
  *
@@ -244,6 +264,8 @@ function handleStorageEvent(event: StorageEvent): void {
   if (!key.startsWith(STORAGE_KEY_PREFIX)) return;
   const address = key.slice(STORAGE_KEY_PREFIX.length);
   if (!address) return;
+  memoryApps.delete(address);
+  unsavedAddresses.delete(address);
   notify(address);
 }
 
@@ -252,17 +274,26 @@ if (typeof window !== 'undefined') {
 }
 
 /**
- * Load apps from localStorage for a wallet address.
+ * Read the wallet's optional cache, falling back to live in-memory state.
  * Returns empty array on corruption (clears bad data).
  */
 function loadApps(address: string): AppEntry[] {
+  if (unsavedAddresses.has(address)) return copyApps(memoryApps.get(address) ?? []);
+  let raw: string | null;
   try {
-    const raw = localStorage.getItem(storageKey(address));
-    if (!raw) return [];
+    raw = localStorage.getItem(storageKey(address));
+  } catch (error) {
+    logError('appRegistry.loadApps', error);
+    return copyApps(memoryApps.get(address) ?? []);
+  }
+  if (!raw) {
+    memoryApps.delete(address);
+    return [];
+  }
+  try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
-      localStorage.removeItem(storageKey(address));
-      return [];
+      throw new Error('Invalid app registry cache');
     }
     // Sanitize: keep only entries that pass schema validation
     const valid = parsed
@@ -271,25 +302,30 @@ function loadApps(address: string): AppEntry[] {
       .map((r) => r.data);
     // If we dropped entries, persist the cleaned list
     if (valid.length !== parsed.length) {
-      if (!saveApps(address, valid)) {
-        logError('appRegistry.loadApps', new Error(`Failed to persist cleaned registry (dropped ${parsed.length - valid.length} invalid entries)`));
-      }
+      saveApps(address, valid);
     }
+    memoryApps.set(address, copyApps(valid));
     return valid;
   } catch (error) {
     logError('appRegistry.loadApps', error);
-    localStorage.removeItem(storageKey(address));
+    memoryApps.delete(address);
+    try {
+      localStorage.removeItem(storageKey(address));
+    } catch {
+      // Cache cleanup is optional, just like cache reads and writes.
+    }
     return [];
   }
 }
 
-function saveApps(address: string, apps: AppEntry[]): boolean {
+function saveApps(address: string, apps: AppEntry[]): void {
+  memoryApps.set(address, copyApps(apps));
   try {
     localStorage.setItem(storageKey(address), JSON.stringify(apps));
-    return true;
+    unsavedAddresses.delete(address);
   } catch (error) {
+    unsavedAddresses.add(address);
     logError('appRegistry.saveApps', error);
-    return false;
   }
 }
 
@@ -330,6 +366,55 @@ export function validateAppName(
 /** Get all apps for a wallet address. */
 export function getApps(address: string): AppEntry[] {
   return loadApps(address);
+}
+
+/**
+ * Import missing live leases without replacing local aliases or observations.
+ * Chain activity alone cannot establish that a provider's workload is ready.
+ * Provider hydration replaces the unconfirmed marker after an actual observation.
+ */
+export function discoverAppsFromChain(
+  address: string,
+  leases: readonly ChainAppSnapshot[],
+): AppEntry[] {
+  const apps = loadApps(address);
+  const knownLeases = new Set(apps.map((app) => app.leaseUuid));
+  const names = new Set(apps.map((app) => app.name));
+  const imported: AppEntry[] = [];
+
+  // Stable ordering makes fallback-name collisions independent of RPC ordering.
+  for (const lease of [...leases].sort((a, b) => a.leaseUuid.localeCompare(b.leaseUuid))) {
+    if (knownLeases.has(lease.leaseUuid)) continue;
+    const suffix = lease.leaseUuid.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-24) || 'lease';
+    const baseName = `app-${suffix}`;
+    let name = baseName;
+    for (let n = 2; names.has(name); n++) {
+      const counter = `-${n}`;
+      name = `${baseName.slice(0, 32 - counter.length)}${counter}`;
+    }
+    const app: AppEntry = {
+      name,
+      leaseUuid: lease.leaseUuid,
+      size: lease.size ?? 'unknown',
+      providerUuid: lease.providerUuid,
+      providerUrl: lease.providerUrl ?? '',
+      createdAt: lease.createdAt,
+      chainState: lease.chainState,
+      provisionState: 'unconfirmed',
+      status: 'deploying',
+      customDomains: lease.customDomains?.map((domain) => ({ ...domain })),
+    };
+    apps.push(app);
+    imported.push(app);
+    knownLeases.add(app.leaseUuid);
+    names.add(name);
+  }
+
+  if (imported.length > 0) {
+    saveApps(address, apps);
+    notify(address);
+  }
+  return copyApps(imported);
 }
 
 /** Get a single app by exact name. Returns null if not found. */
@@ -393,22 +478,25 @@ export function getAppByLease(address: string, leaseUuid: string): AppEntry | nu
 /**
  * Add a new app entry. Returns the added entry.
  * Removes any existing stopped/failed app with the same name (allows name reuse).
- * Throws if localStorage write fails (callers should surface this to the user).
+ * A chain discovery may have observed this lease before the deploy callback.
+ * Replace that entry by UUID while preserving observations omitted by the caller.
  */
 export function addApp(address: string, entry: AppEntry): AppEntry {
   let apps = loadApps(address);
+  const existing = apps.find((app) => app.leaseUuid === entry.leaseUuid);
+  const merged = { ...existing, ...entry };
   // Derived, never taken on trust: with no observations it is rule 5's verbatim fallback.
-  const stored: AppEntry = { ...entry, status: deriveAppStatus(entry) };
+  const stored: AppEntry = { ...merged, status: deriveAppStatus(merged) };
   // Remove old stopped/failed entries with the same name
   apps = apps.filter(
     (a) =>
-      a.name !== stored.name ||
-      (a.status !== 'stopped' && a.status !== 'failed')
+      a.leaseUuid !== stored.leaseUuid && (
+        a.name !== stored.name ||
+        (a.status !== 'stopped' && a.status !== 'failed')
+      )
   );
   apps.push(stored);
-  if (!saveApps(address, apps)) {
-    throw new Error('Failed to save app to local registry (localStorage may be full). The lease was created on-chain but may not appear in the sidebar.');
-  }
+  saveApps(address, apps);
   notify(address);
   return stored;
 }
@@ -502,12 +590,7 @@ export function updateApp(
   // Nothing moved — no write, no notify: re-observing is free in steady state.
   if (!dirty) return next;
 
-  if (!saveApps(address, apps)) {
-    logError('appRegistry.updateApp', new Error('localStorage write failed — update may not persist across page reload'));
-    // Don't notify on save failure: subscribers re-read from localStorage and
-    // would see stale state, masking the failure with a no-op refresh.
-    return next;
-  }
+  saveApps(address, apps);
   if (visible) notify(address);
   return next;
 }
@@ -517,11 +600,7 @@ export function removeApp(address: string, leaseUuid: string): boolean {
   const apps = loadApps(address);
   const filtered = apps.filter((a) => a.leaseUuid !== leaseUuid);
   if (filtered.length === apps.length) return false;
-  if (!saveApps(address, filtered)) {
-    logError('appRegistry.removeApp', new Error('localStorage write failed — removal may not persist across page reload'));
-    // See updateApp note: skip notify on save failure to avoid stale-read masking.
-    return true;
-  }
+  saveApps(address, filtered);
   notify(address);
   return true;
 }
@@ -576,11 +655,7 @@ export function reconcileWithChain(
   }
 
   if (dirty) {
-    if (!saveApps(address, apps)) {
-      logError('appRegistry.reconcileWithChain', new Error('localStorage write failed — reconciliation may not persist across page reload'));
-      // See updateApp note: skip notify on save failure to avoid stale-read masking.
-      return;
-    }
+    saveApps(address, apps);
     if (statusChanged) notify(address);
   }
 }
@@ -618,9 +693,6 @@ export function reconcileCustomDomainsWithChain(
   }
 
   if (!dirty) return;
-  if (!saveApps(address, apps)) {
-    logError('appRegistry.reconcileCustomDomainsWithChain', new Error('localStorage write failed — domain reconciliation may not persist across page reload'));
-    return;
-  }
+  saveApps(address, apps);
   notify(address);
 }

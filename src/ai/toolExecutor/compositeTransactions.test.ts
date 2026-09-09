@@ -190,6 +190,7 @@ function makeApp(overrides: Partial<AppEntry> = {}): AppEntry {
     providerUrl: 'https://fred.example.com',
     createdAt: Date.now(),
     status: 'running',
+    manifest: JSON.stringify({ image: 'nginx:1.24' }),
     ...overrides,
   };
 }
@@ -4476,7 +4477,7 @@ describe('executeUpdateApp', () => {
   });
 
   it('applies known image defaults for port/user/tmpfs in update (not env)', async () => {
-    const app = makeApp({ manifest: undefined });
+    const app = makeApp();
     const result = await executeUpdateApp(
       { app_name: 'my-app', image: 'postgres:19' },
       makeOptions({ appRegistry: makeRegistry([app]) })
@@ -4492,21 +4493,50 @@ describe('executeUpdateApp', () => {
     expect(manifest.env).toBeUndefined();
   });
 
-  it('skips merge when app has no old manifest', async () => {
-    const app = makeApp({ manifest: undefined });
+  it.each([undefined, ''])('refuses an image update when the original manifest is unavailable (%s)', async (manifest) => {
+    const app = makeApp({ manifest });
+    const registry = makeRegistry([app]);
     const result = await executeUpdateApp(
       { app_name: 'my-app', image: 'redis:8', port: '6379' },
-      makeOptions({ appRegistry: makeRegistry([app]) })
+      makeOptions({ appRegistry: registry })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Attach a complete manifest');
+    expect(result.error).toContain('existing configuration is unavailable');
+    expect(result.pendingAction).toBeUndefined();
+    expect(result.requiresConfirmation).not.toBe(true);
+    expect(updateApp).not.toHaveBeenCalled();
+    expect(registry.updateApp).not.toHaveBeenCalled();
+  });
+
+  it('allows a complete attached manifest when the original configuration is unavailable', async () => {
+    const app = makeApp({ manifest: undefined });
+    const registry = makeRegistry([app]);
+    const manifest = {
+      image: 'redis:8',
+      ports: { '6379/tcp': {} },
+      env: { REDIS_MODE: 'standalone' },
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(manifest));
+    const payload: PayloadAttachment = {
+      bytes, filename: 'manifest.json', size: bytes.length, hash: 'd'.repeat(64),
+    };
+    const result = await executeUpdateApp(
+      { app_name: app.name, image: 'redis:8' },
+      makeOptions({ appRegistry: registry }),
+      payload,
     );
 
     expect(result.success).toBe(true);
-    const manifest = JSON.parse(result.pendingAction!.args._generatedManifest as string);
-    expect(manifest.image).toBe('redis:8');
-    expect(manifest.env).toBeUndefined();
+    expect(result.requiresConfirmation).toBe(true);
+    expect(JSON.parse(result.pendingAction!.args._generatedManifest as string)).toEqual(manifest);
+    expect(updateApp).not.toHaveBeenCalled();
+    expect(registry.updateApp).not.toHaveBeenCalled();
   });
 
-  it('returns confirmation for stack update with services param', async () => {
-    const app = makeApp();
+  it('returns confirmation for a complete services replacement without the original manifest', async () => {
+    const app = makeApp({ manifest: undefined });
     const services = JSON.stringify({
       web: { image: 'nginx:2', port: '80' },
       db: { image: 'postgres:19', port: '5432' },
@@ -5006,6 +5036,31 @@ describe('executeConfirmedUpdateApp', () => {
     expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, expect.objectContaining({
       manifest: PREVIOUS_MANIFEST,
     }));
+  });
+
+  it.each([
+    { status: 'ready', reason: 'UpdateFailed', message: 'update failed; rolled back to previous version' },
+    { status: 'failed', reason: 'ImagePullFailed', message: 'image pull failed' },
+  ])('keeps recovered configuration unknown after a $reason update failure', async (provision) => {
+    mockUpdateReachingProvision(provision);
+    const app = makeApp({ manifest: undefined });
+    const registry = makeRegistry([app]);
+    const options = makeOptions({ appRegistry: registry });
+    const plan = await executeUpdateApp({ app_name: app.name }, options, makeJsonPayload());
+
+    expect(plan.requiresConfirmation).toBe(true);
+    const result = await executeConfirmedUpdateApp(plan.pendingAction!.args, CLIENT_MANAGER, options);
+
+    expect(result.success).toBe(false);
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.manifest).toBeUndefined();
+
+    // The failed replacement must not become the basis for a later partial
+    // update: it says nothing about the original configuration still deployed.
+    const retry = await executeUpdateApp({ app_name: app.name, image: 'nginx:latest' }, options);
+    expect(retry.success).toBe(false);
+    expect(retry.error).toContain('Attach a complete manifest');
+    expect(retry.pendingAction).toBeUndefined();
+    expect(updateApp).toHaveBeenCalledTimes(1);
   });
 
   it('reports a failed rollback with the post-ENG-508 reason/message', async () => {

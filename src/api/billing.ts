@@ -42,10 +42,9 @@ export const LEASE_STATE_MAP: Record<string, LeaseState> = {
 
 export const LEASE_STATE_FILTERS = ['all', ...Object.keys(LEASE_STATE_MAP)] as const;
 
-// The typed read defaults limit to 50; barney's un-paginated "list a tenant's
-// leases" must not silently truncate (list_apps reconcile). A wallet realistically
-// holds far fewer than this cap.
-const LEASES_LIST_LIMIT = 1000n;
+// Inventory reconstruction needs every lease, including tenants with more leases
+// than fit in one response. Providers can also cap pages below the requested limit.
+const LEASES_PAGE_LIMIT = 100n;
 
 // ENG-536/537: all reads go through the SDK read client. Typed methods (getLease,
 // getLeasesByTenant, getBillingParams) return branded, numeric-enum-decoded data;
@@ -105,12 +104,51 @@ export async function getBillingParams(): Promise<BillingParams> {
 
 export async function getLeasesByTenant(tenant: string, stateFilter?: LeaseState): Promise<Lease[]> {
   const client = await getReadClient();
-  const { leases } = await client.getLeasesByTenant({
-    tenant,
-    stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
-    limit: LEASES_LIST_LIMIT,
-  });
-  return leases;
+  const leases: Lease[] = [];
+  const seen = new Set<string>();
+  let offset = 0n;
+  let expectedTotal: bigint | undefined;
+
+  for (;;) {
+    const page = await client.getLeasesByTenant({
+      tenant,
+      stateFilter: stateFilter ?? LeaseState.LEASE_STATE_UNSPECIFIED,
+      limit: LEASES_PAGE_LIMIT,
+      offset,
+    });
+    if (typeof page.total !== 'bigint' || page.total < 0n) {
+      throw new Error('Cannot list all leases: invalid pagination total.');
+    }
+    if (expectedTotal !== undefined && page.total !== expectedTotal) {
+      throw new Error('Cannot list all leases: pagination total changed while loading.');
+    }
+    expectedTotal = page.total;
+
+    if (page.leases.length === 0) {
+      if (offset < page.total) {
+        throw new Error('Cannot list all leases: pagination ended before all leases were returned.');
+      }
+      return leases;
+    }
+    for (const lease of page.leases) {
+      // A repeated page (e.g. a provider ignoring offset) must fail instead of
+      // looping forever or replacing inventory with an incomplete result.
+      if (seen.has(lease.uuid)) {
+        throw new Error('Cannot list all leases: pagination returned a duplicate lease.');
+      }
+      seen.add(lease.uuid);
+      leases.push(lease);
+    }
+    offset += BigInt(page.leases.length);
+    if (page.total > 0n) {
+      if (offset > page.total) {
+        throw new Error('Cannot list all leases: pagination returned more leases than its total.');
+      }
+      if (offset === page.total) return leases;
+    }
+    // The SDK maps absent pagination metadata to total=0. In that case keep
+    // requesting pages until an empty response, even if a page was short.
+  }
 }
 
 export async function getLeasesByTenantPaginated(

@@ -185,6 +185,7 @@ interface ToolResultConfirmation {
 export type ToolResult = ToolResultSuccess | ToolResultFailure | ToolResultConfirmation;
 
 export interface AppRegistryAccess {
+  discoverAppsFromChain: typeof import('../../registry/appRegistry').discoverAppsFromChain;
   getApps: (address: string) => AppEntry[];
   getApp: (address: string, name: string) => AppEntry | null;
   findApp: (address: string, name: string) => AppEntry | null;
