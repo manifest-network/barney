@@ -302,39 +302,36 @@ describe('useRegistryReconciliation', () => {
     expect(reconcileWithChain).not.toHaveBeenCalled();
   });
 
-  it('hydrates recovered apps with the current signer and cancels on a wallet change', async () => {
+  it('keeps chain refreshes independent of provider recovery even with a signer', async () => {
     const signing = { authTokens: {} } as AIStore['signing'];
     const store = createStore<AIStore>(() => ({ address: ADDRESS, signing, authorizationEpoch: 1 }) as AIStore);
     vi.mocked(getApps).mockReturnValue([makeApp({ provisionState: 'unconfirmed' })]);
     await render(ADDRESS, store);
     await latestRefresh()();
+    await latestRefresh()();
 
-    expect(hydrateDiscoveredApps).toHaveBeenCalledWith(
-      ADDRESS, expect.any(Array), signing, { signal: expect.any(AbortSignal) },
-    );
-    const signal = vi.mocked(hydrateDiscoveredApps).mock.calls[0][3]!.signal!;
-    expect(signal.aborted).toBe(false);
-    store.setState({ address: undefined, authorizationEpoch: 2 });
-    expect(signal.aborted).toBe(true);
+    expect(reconcileWithChain).toHaveBeenCalledTimes(2);
+    expect(hydrateDiscoveredApps).not.toHaveBeenCalled();
   });
 
-  it('retries a confirmed app whose provider has not supplied a usable endpoint yet', async () => {
-    const signing = { authTokens: {} } as AIStore['signing'];
-    const store = createStore<AIStore>(() => ({ address: ADDRESS, signing, authorizationEpoch: 1 }) as AIStore);
-    const recovered = makeApp({ provisionState: 'unconfirmed' });
-    vi.mocked(getApps).mockReturnValue([recovered]);
-    vi.mocked(hydrateDiscoveredApps).mockImplementationOnce(async () => {
-      vi.mocked(getApps).mockReturnValue([{
-        ...recovered, status: 'running', provisionState: 'confirmed', connection: { host: '', ports: {} },
-      }]);
-    });
-    await render(ADDRESS, store);
-    await latestRefresh()();
-    await latestRefresh()();
+  it('bounds chain and catalog reads together and allows the next refresh to run', async () => {
+    vi.useFakeTimers();
+    const chain = deferred<never[]>();
+    vi.mocked(getLeasesByTenant).mockReturnValue(chain.promise);
+    vi.mocked(discoverTenantApps).mockImplementationOnce(() => new Promise(() => undefined));
+    await render(ADDRESS);
 
-    expect(hydrateDiscoveredApps).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(hydrateDiscoveredApps).mock.calls[1][1]).toEqual([
-      expect.objectContaining({ provisionState: 'confirmed', connection: { host: '', ports: {} } }),
-    ]);
+    const refreshing = latestRefresh()();
+    await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS / 2);
+    chain.resolve([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(discoverTenantApps).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS / 2 + 1);
+    await expect(refreshing).resolves.toBe(false);
+    expect(vi.mocked(discoverTenantApps).mock.calls[0][2]!.signal!.aborted).toBe(true);
+
+    vi.mocked(getLeasesByTenant).mockResolvedValue([]);
+    await expect(latestRefresh()()).resolves.toBeUndefined();
+    expect(reconcileWithChain).toHaveBeenCalledTimes(2);
   });
 });

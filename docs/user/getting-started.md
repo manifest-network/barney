@@ -46,7 +46,9 @@ Barney stores a small set of values in `localStorage`. Some are global to the br
 - One-shot account-setup flag (`barney-refill-{address}`)
 
 Connecting the same wallet in a fresh browser recovers its active and pending apps
-from the network. Provider checks restore their status and connection links.
+from the network. Provider checks restore their status and connection links in
+the background while chat is idle. If an app remains unconfirmed, ask Barney to
+check its status for a fresh provider read.
 Apps remain manageable when browser storage is unavailable. Original friendly
 names and saved manifests are local to the browser: recovered apps use names
 based on their lease IDs, and updating their configuration requires a complete

@@ -3,13 +3,14 @@
  *
  * Mounted by MainLayout outside the sidebar ErrorBoundary so registry repair
  * survives a sidebar render failure. The tenant lease-list responses provide
- * both the live state set and each lease's items/custom domains. The paired
- * list read has a deadline so one stalled RPC cannot pin the polling loop.
+ * both the live state set and each lease's items/custom domains. One deadline
+ * covers the entire chain/catalog pass. Provider recovery has its own driver
+ * so slow provider reads cannot delay chain or domain observations.
  */
 
 import { useCallback, useContext, useEffect, useRef } from 'react';
 import { getLeasesByTenant, LeaseState } from '../api/billing';
-import { discoverTenantApps, hydrateDiscoveredApps } from '../api/appDiscovery';
+import { discoverTenantApps } from '../api/appDiscovery';
 import { getDomainAssignments } from '../api/leaseDomains';
 import { throwIfAborted, withTimeout } from '../api/utils';
 import { AIStoreContext } from '../contexts/aiStoreContext';
@@ -45,7 +46,7 @@ export function useRegistryReconciliation(
     abortRef.current = abort;
     const { signal } = abort;
 
-    try {
+    const reconcile = async () => {
       // Capture both optimistic-concurrency baselines before any chain read.
       // If a confirmed transaction updates the registry while these RPCs are
       // in flight, the reconcilers reject the older snapshot.
@@ -92,20 +93,18 @@ export function useRegistryReconciliation(
       reconcileCustomDomainsWithChain(address, observations);
       await discoverTenantApps(address, [...liveLeases.values()], { signal });
       throwIfAborted(signal, 'Registry discovery');
-      const wallet = store?.getState();
-      if (wallet?.address === address && wallet.signing) {
-        const incomplete = getApps(address).filter((app) =>
-          liveLeases.has(app.leaseUuid)
-          && (app.provisionState === 'unconfirmed' || !app.connection || !app.url),
-        );
-        await hydrateDiscoveredApps(address, incomplete, wallet.signing, { signal });
-      }
+    };
+
+    try {
+      await withTimeout(reconcile(), AI_TOOL_API_TIMEOUT_MS, 'Registry refresh', signal);
     } catch (error) {
-      if (signal.aborted) return;
+      if (error instanceof Error && error.name === 'AbortError') return;
       logError('useRegistryReconciliation', error);
       return false;
+    } finally {
+      abort.abort();
     }
-  }, [address, store]);
+  }, [address]);
 
   useVisibilityPolling(refresh, AUTO_REFRESH_INTERVAL_MS, {
     enabled: !!address,

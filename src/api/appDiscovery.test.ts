@@ -5,7 +5,7 @@ import { getProviders, getSKUs, type Provider, type SKU } from './sku';
 import { LeaseState, type Lease } from './billing';
 import * as registry from '../registry/appRegistry';
 import type { AppEntry } from '../registry/appRegistry';
-import { AI_TOOL_API_TIMEOUT_MS, APP_DISCOVERY_CONCURRENCY } from '../config/constants';
+import { AI_TOOL_API_TIMEOUT_MS, APP_RECOVERY_TIMEOUT_MS } from '../config/constants';
 
 vi.mock('./sku', () => ({ getProviders: vi.fn(), getSKUs: vi.fn() }));
 vi.mock('../utils/errors', () => ({ logError: vi.fn() }));
@@ -225,12 +225,12 @@ describe('hydrateDiscoveredApps', () => {
   it('bounds signing/provider work and cancels without letting late signatures start requests', async () => {
     const pending = deferred<string>();
     signing.authTokens.getAuthToken.mockReturnValue(pending.promise);
-    const apps = Array.from({ length: APP_DISCOVERY_CONCURRENCY + 2 }, (_, index) => app({
+    const apps = Array.from({ length: 3 }, (_, index) => app({
       name: `app-${index}`, leaseUuid: `550e8400-e29b-41d4-a716-44665544000${index}`,
     }));
     const abort = new AbortController();
     const work = hydrateDiscoveredApps(address, apps, signing, { signal: abort.signal });
-    expect(signing.authTokens.getAuthToken).toHaveBeenCalledTimes(APP_DISCOVERY_CONCURRENCY);
+    expect(signing.authTokens.getAuthToken).toHaveBeenCalledTimes(1);
     abort.abort();
     await expect(work).rejects.toMatchObject({ name: 'AbortError' });
     pending.resolve('late-token');
@@ -253,6 +253,35 @@ describe('hydrateDiscoveredApps', () => {
     expect(getLeaseStatus).not.toHaveBeenCalled();
     await hydrateDiscoveredApps(address, registry.getApps(address), signing);
     expect(registry.getAppByLease(address, LEASE_UUID)?.status).toBe('running');
+  });
+
+  it('bounds the entire round across signatures and provider waits while retaining completed evidence', async () => {
+    vi.useFakeTimers();
+    signing.authTokens.getAuthToken.mockImplementation(() => new Promise(resolve => {
+      setTimeout(() => resolve('token'), APP_RECOVERY_TIMEOUT_MS / 3);
+    }));
+    vi.mocked(getLeaseConnectionInfo).mockReturnValueOnce(new Promise(() => {}));
+    const first = app();
+    const second = app({ name: 'second', leaseUuid: '550e8400-e29b-41d4-a716-446655440002' });
+    const work = hydrateDiscoveredApps(address, [first, second], signing);
+    await vi.advanceTimersByTimeAsync(APP_RECOVERY_TIMEOUT_MS);
+    const observations = await work;
+    expect(signing.authTokens.getAuthToken).toHaveBeenCalledTimes(2);
+    expect(getLeaseStatus).toHaveBeenCalledTimes(1);
+    expect(observations).toMatchObject([{ app: { leaseUuid: first.leaseUuid, provisionState: 'confirmed' }, complete: false }]);
+    expect(registry.getAppByLease(address, second.leaseUuid)?.provisionState).toBe('unconfirmed');
+  });
+
+  it('distinguishes explicit empty port inventories from missing nested endpoint metadata', async () => {
+    const first = app();
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValueOnce(connectionResult({
+      host: '', ports: {}, services: { worker: { ports: {} } },
+    }));
+    expect(await hydrateDiscoveredApps(address, [first], signing)).toMatchObject([{ complete: true }]);
+    vi.mocked(getLeaseConnectionInfo).mockResolvedValueOnce(connectionResult({
+      host: '', ports: {}, services: { worker: {} },
+    }));
+    expect(await hydrateDiscoveredApps(address, registry.getApps(address), signing)).toMatchObject([{ complete: false }]);
   });
 
 });

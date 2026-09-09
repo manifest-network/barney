@@ -392,6 +392,11 @@ export function discoverAppsFromChain(
       const counter = `-${n}`;
       name = `${baseName.slice(0, 32 - counter.length)}${counter}`;
     }
+    const observations: AppStatusInputs = {
+      chainState: lease.chainState,
+      provisionState: 'unconfirmed',
+      status: 'deploying',
+    };
     const app: AppEntry = {
       name,
       leaseUuid: lease.leaseUuid,
@@ -399,9 +404,8 @@ export function discoverAppsFromChain(
       providerUuid: lease.providerUuid,
       providerUrl: lease.providerUrl ?? '',
       createdAt: lease.createdAt,
-      chainState: lease.chainState,
-      provisionState: 'unconfirmed',
-      status: 'deploying',
+      ...observations,
+      status: deriveAppStatus(observations),
       customDomains: lease.customDomains?.map((domain) => ({ ...domain })),
     };
     apps.push(app);

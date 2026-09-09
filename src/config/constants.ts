@@ -34,7 +34,8 @@ export const MS_PER_SECOND = 1000;
 
 /** Auto-refresh interval for data polling (milliseconds) */
 export const AUTO_REFRESH_INTERVAL_MS = 15_000;
-export const APP_DISCOVERY_CONCURRENCY = 3;
+export const APP_RECOVERY_POLL_INTERVAL_MS = 1_000;
+export const APP_RECOVERY_MAX_ATTEMPTS = 4;
 
 /** Health check timeout */
 export const HEALTH_CHECK_TIMEOUT_MS = 5000;
@@ -118,6 +119,8 @@ export const AI_TOOL_CACHE_MAX_SIZE = 50;
 
 /** Timeout for blockchain API calls during tool execution (milliseconds) (runtime-configurable) */
 export const AI_TOOL_API_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_TOOL_API_TIMEOUT_MS', 15000);
+/** One provider-recovery round, including every signature and endpoint read. */
+export const APP_RECOVERY_TIMEOUT_MS = AI_TOOL_API_TIMEOUT_MS;
 
 /** Timeout for deploy provisioning polling before giving up (milliseconds) - 10 minutes (runtime-configurable).
  *

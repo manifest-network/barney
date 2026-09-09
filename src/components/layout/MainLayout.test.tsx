@@ -6,10 +6,12 @@ import { createRoot, type Root } from 'react-dom/client';
 const {
   apps,
   useRegistryReconciliation,
+  useAppRecovery,
   useDnsStatusPolling,
 } = vi.hoisted(() => ({
   apps: [{ leaseUuid: 'lease-1' }],
   useRegistryReconciliation: vi.fn(),
+  useAppRecovery: vi.fn(),
   useDnsStatusPolling: vi.fn(),
 }));
 
@@ -22,6 +24,7 @@ vi.mock('../../hooks/useRegistryApps', () => ({
 vi.mock('../../hooks/useRegistryReconciliation', () => ({
   useRegistryReconciliation,
 }));
+vi.mock('../../hooks/useAppRecovery', () => ({ useAppRecovery }));
 vi.mock('../../hooks/useDnsStatusPolling', () => ({
   useDnsStatusPolling,
 }));
@@ -56,6 +59,7 @@ describe('MainLayout registry drivers', () => {
     act(() => root.render(createElement(MainLayout)));
 
     expect(useRegistryReconciliation).toHaveBeenCalledWith('manifest1layout');
+    expect(useAppRecovery).toHaveBeenCalledWith('manifest1layout');
     expect(useDnsStatusPolling).toHaveBeenCalledWith(apps);
   });
 });

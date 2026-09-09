@@ -7,7 +7,7 @@ import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import { cosmosQuery } from '@manifest-network/manifest-sdk/chain';
 import type { ManifestReadClient } from '@manifest-network/manifest-sdk';
 import { getReadClient } from '../../api/readClient';
-import { discoverTenantApps, hydrateDiscoveredApps } from '../../api/appDiscovery';
+import { discoverTenantApps } from '../../api/appDiscovery';
 import {
   getLeasesByTenant,
   getLeasesByTenantPaginated,
@@ -66,7 +66,7 @@ export async function executeListApps(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
-  const stateFilter = (args.state as string | undefined)?.toLowerCase() || 'running';
+  const stateFilter = (args.state as string | undefined)?.toLowerCase();
 
   // Get apps from registry
   let apps = appRegistry.getApps(address);
@@ -104,21 +104,17 @@ export async function executeListApps(
     }
     const liveLeases = new Map([...pendingLeases, ...activeLeases].map((lease) => [lease.uuid, lease]));
     await discoverTenantApps(address, [...liveLeases.values()], { signal, registry: appRegistry });
-    if (options.signing) {
-      const incomplete = appRegistry.getApps(address).filter((app) =>
-        liveLeases.has(app.leaseUuid)
-        && (app.provisionState === 'unconfirmed' || !app.connection || !app.url),
-      );
-      await hydrateDiscoveredApps(address, incomplete, options.signing, { signal, registry: appRegistry });
-    }
     apps = appRegistry.getApps(address);
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     logError('compositeQueries.executeListApps.reconcile', error);
   }
 
-  // Filter by state
-  if (stateFilter !== 'all') {
+  // Recovered apps remain unconfirmed until a provider read establishes
+  // readiness. Keep them visible by default, matching the sidebar inventory.
+  if (!stateFilter) {
+    apps = apps.filter((a) => a.status === 'running' || a.status === 'deploying');
+  } else if (stateFilter !== 'all') {
     apps = apps.filter((a) => a.status === stateFilter);
   }
 

@@ -79,14 +79,28 @@ describe('appRegistry', () => {
         status: 'deploying',
       });
       expect(getAppByLease(ADDR_A, pending.leaseUuid)).toMatchObject({
-        chainState: 'pending', status: 'deploying',
+        chainState: 'pending', provisionState: 'unconfirmed', status: 'deploying',
       });
       expect(getApps(ADDR_B)).toEqual([]);
 
       reconcileWithChain(ADDR_A, new Map([[active.leaseUuid, 'active'], [pending.leaseUuid, 'pending']]));
       expect(getAppByLease(ADDR_A, active.leaseUuid)?.status).toBe('deploying');
+
+      // Activation and repeated discovery still say nothing about workload readiness.
+      const activated = { ...pending, chainState: 'active' as const };
+      discoverAppsFromChain(ADDR_A, [active, activated]);
+      reconcileWithChain(ADDR_A, new Map([[active.leaseUuid, 'active'], [pending.leaseUuid, 'active']]));
+      for (const lease of [active, pending]) {
+        expect(getAppByLease(ADDR_A, lease.leaseUuid)).toMatchObject({
+          chainState: 'active', provisionState: 'unconfirmed', status: 'deploying',
+        });
+      }
+
       updateApp(ADDR_A, active.leaseUuid, { provisionState: 'confirmed' });
       expect(getAppByLease(ADDR_A, active.leaseUuid)?.status).toBe('running');
+      updateApp(ADDR_A, pending.leaseUuid, { provisionState: 'failed' });
+      reconcileWithChain(ADDR_A, new Map([[active.leaseUuid, 'active'], [pending.leaseUuid, 'active']]));
+      expect(getAppByLease(ADDR_A, pending.leaseUuid)?.status).toBe('failed');
     });
 
     it('preserves local names, manifests, and provider failures during repeated discovery', () => {

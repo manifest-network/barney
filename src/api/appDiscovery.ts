@@ -1,5 +1,5 @@
 import { asLeaseUuid } from '@manifest-network/manifest-sdk';
-import { getLeaseConnectionInfo, getLeaseStatus } from '@manifest-network/manifest-sdk/deploy';
+import { getLeaseConnectionInfo, getLeaseStatus, type ConnectionDetails } from '@manifest-network/manifest-sdk/deploy';
 import { type Lease, LeaseState } from './billing';
 import { getProviders, getSKUs } from './sku';
 import { getDomainAssignments } from './leaseDomains';
@@ -11,7 +11,7 @@ import type { AppRegistryAccess, SigningContext } from '../ai/toolExecutor/types
 import { connectionPatch, deriveUrlFromConnection } from '../ai/toolExecutor/helpers';
 import { extractUrlFromFredStatus } from '../ai/toolExecutor/deployUrl';
 import { classifyProvisionStatus, isUnsettledProvisionStatus } from '../ai/toolExecutor/provisionStatus';
-import { AI_TOOL_API_TIMEOUT_MS, APP_DISCOVERY_CONCURRENCY } from '../config/constants';
+import { AI_TOOL_API_TIMEOUT_MS, APP_RECOVERY_TIMEOUT_MS } from '../config/constants';
 import { logError } from '../utils/errors';
 
 interface DiscoveryOptions {
@@ -20,14 +20,15 @@ interface DiscoveryOptions {
 }
 
 const missingSize = (app: AppEntry): boolean => !app.size || app.size === 'unknown';
-// Parsed cache entries and fresh transaction results need not have the same
-// object-key insertion order. Compare their values, including nested metadata.
-const snapshotKey = (app: AppEntry): string => JSON.stringify(app, (_key, value: unknown) =>
+// Persistence strips unsupported provider fields (for example protocol), while
+// the memory fallback retains them. Normalize both sides to the registry schema
+// and sort nested keys so our own provider writes never reset the retry budget.
+export const recoverySnapshotKey = (app: AppEntry): string => JSON.stringify(appRegistry.AppEntrySchema.parse(app), (_key, value: unknown) =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)))
     : value);
 const unchanged = (current: AppEntry | null, snapshot: AppEntry): boolean =>
-  current !== null && snapshotKey(current) === snapshotKey(snapshot);
+  current !== null && recoverySnapshotKey(current) === recoverySnapshotKey(snapshot);
 
 /** Recover live leases independently of browser storage or catalog availability. */
 export async function discoverTenantApps(
@@ -90,49 +91,93 @@ export async function discoverTenantApps(
   return registry.discoverAppsFromChain(address, snapshots);
 }
 
-/** Read provider observations; no manifest synthesis or chain transactions. */
+export interface AppRecoveryObservation {
+  /** The actual post-write snapshot, so the driver does not reset its own budget. */
+  app: AppEntry;
+  complete: boolean;
+}
+
+// The SDK serializes signing globally and cannot cancel an already-enqueued
+// mint. A timed-out round must not enqueue another mint behind that same one.
+const pendingAuthentications = new WeakSet<SigningContext['authTokens']>();
+export function hasPendingRecoveryAuthentication(authTokens: SigningContext['authTokens']): boolean {
+  return pendingAuthentications.has(authTokens);
+}
+
+function recoveryAuthToken(signing: Pick<SigningContext, 'authTokens'>, leaseUuid: string): Promise<string> {
+  if (pendingAuthentications.has(signing.authTokens)) {
+    return Promise.reject(new Error('Previous app recovery authentication is still pending'));
+  }
+  pendingAuthentications.add(signing.authTokens);
+  try {
+    return signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid))
+      .finally(() => pendingAuthentications.delete(signing.authTokens));
+  } catch (error) {
+    pendingAuthentications.delete(signing.authTokens);
+    return Promise.reject(error);
+  }
+}
+
+/** Missing port fields can be provisional; explicit empty inventories are evidence. */
+function hasEmptyEndpointInventory(connection: ConnectionDetails): boolean {
+  const endpoints = connection.services && Object.keys(connection.services).length > 0
+    ? Object.values(connection.services).flatMap<Pick<ConnectionDetails, 'ports'>>(
+      service => service.instances?.length ? service.instances : [service],
+    )
+    : connection.instances?.length ? connection.instances : [connection];
+  return endpoints.every(endpoint => endpoint.ports !== undefined && Object.keys(endpoint.ports).length === 0);
+}
+
+/**
+ * Read provider observations, with one lease/signature at a time and one total
+ * deadline. The background driver supplies one app per round; explicit status
+ * commands remain independent of its session retry budget.
+ */
 export async function hydrateDiscoveredApps(
   address: string,
   apps: readonly AppEntry[],
   signing: Pick<SigningContext, 'authTokens'>,
   { signal, registry = appRegistry }: DiscoveryOptions = {},
-): Promise<void> {
+): Promise<AppRecoveryObservation[]> {
   signal?.throwIfAborted();
   const queue = apps.filter(app => app.providerUrl && app.chainState !== 'absent');
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < queue.length) {
+  const results: AppRecoveryObservation[] = [];
+  const round = new AbortController();
+  const roundSignal = signal ? AbortSignal.any([signal, round.signal]) : round.signal;
+  const deadline = setTimeout(() => round.abort(), APP_RECOVERY_TIMEOUT_MS);
+  try {
+    for (const snapshot of queue) {
       signal?.throwIfAborted();
-      const snapshot = queue[next++];
+      if (round.signal.aborted) break;
       if (!unchanged(registry.getAppByLease(address, snapshot.leaseUuid), snapshot)) continue;
       const abort = new AbortController();
       const fetchWithAbort: typeof fetch = (input, init) => providerFetch(input, {
         ...init,
-        signal: init?.signal ? AbortSignal.any([init.signal, abort.signal]) : abort.signal,
+        signal: AbortSignal.any([roundSignal, abort.signal, ...(init?.signal ? [init.signal] : [])]),
       });
       try {
         const statusToken = await withTimeout(
-          signing.authTokens.getAuthToken(asLeaseUuid(snapshot.leaseUuid)),
-          AI_TOOL_API_TIMEOUT_MS, 'App discovery authentication', signal,
+          recoveryAuthToken(signing, snapshot.leaseUuid),
+          AI_TOOL_API_TIMEOUT_MS, 'App discovery authentication', roundSignal,
         );
-        signal?.throwIfAborted();
+        roundSignal.throwIfAborted();
         // Provider tokens are one-time credentials. Mint through the same
         // shared tracker for each request, matching the SDK's appStatus flow.
         const connectionToken = await withTimeout(
-          signing.authTokens.getAuthToken(asLeaseUuid(snapshot.leaseUuid)),
-          AI_TOOL_API_TIMEOUT_MS, 'App discovery connection authentication', signal,
+          recoveryAuthToken(signing, snapshot.leaseUuid),
+          AI_TOOL_API_TIMEOUT_MS, 'App discovery connection authentication', roundSignal,
         );
-        signal?.throwIfAborted();
+        roundSignal.throwIfAborted();
         // Each endpoint contributes independent evidence. A stalled connection
         // read must not discard a completed readiness/failure observation.
         const observations = await Promise.allSettled([
           withTimeout(
-            getLeaseStatus(snapshot.providerUrl, snapshot.leaseUuid, statusToken, fetchWithAbort, abort.signal, import.meta.env.DEV),
-            AI_TOOL_API_TIMEOUT_MS, 'App discovery status', signal,
+            getLeaseStatus(snapshot.providerUrl, snapshot.leaseUuid, statusToken, fetchWithAbort, roundSignal, import.meta.env.DEV),
+            AI_TOOL_API_TIMEOUT_MS, 'App discovery status', roundSignal,
           ),
           withTimeout(
             getLeaseConnectionInfo(snapshot.providerUrl, snapshot.leaseUuid, connectionToken, fetchWithAbort, import.meta.env.DEV),
-            AI_TOOL_API_TIMEOUT_MS, 'App discovery connection', signal,
+            AI_TOOL_API_TIMEOUT_MS, 'App discovery connection', roundSignal,
           ),
         ]);
         signal?.throwIfAborted();
@@ -161,7 +206,15 @@ export async function hydrateDiscoveredApps(
             patch.provisionState = observed;
           }
         }
-        if (Object.keys(patch).length > 0) registry.updateApp(address, snapshot.leaseUuid, patch);
+        const updated = Object.keys(patch).length > 0
+          ? registry.updateApp(address, snapshot.leaseUuid, patch)
+          : snapshot;
+        if (updated) results.push({
+          app: updated,
+          complete: updated.provisionState === 'failed'
+            || (updated.provisionState === 'confirmed' && !!connection
+              && (!!updated.url || hasEmptyEndpointInventory(connection))),
+        });
       } catch (error) {
         signal?.throwIfAborted();
         // Unreachable providers and refused/timed-out signing are not evidence
@@ -171,6 +224,9 @@ export async function hydrateDiscoveredApps(
         abort.abort();
       }
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(APP_DISCOVERY_CONCURRENCY, queue.length) }, worker));
+  } finally {
+    clearTimeout(deadline);
+    round.abort();
+  }
+  return results;
 }
