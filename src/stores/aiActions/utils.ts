@@ -99,6 +99,7 @@ export function toChatApiMessages(
 export function getAppRegistryAccess(): AppRegistryAccess {
   return {
     getApps: appRegistry.getApps,
+    discoverAppsFromChain: appRegistry.discoverAppsFromChain,
     getApp: appRegistry.getApp,
     findApp: appRegistry.findApp,
     getAppByLease: appRegistry.getAppByLease,

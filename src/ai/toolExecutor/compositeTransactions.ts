@@ -1688,6 +1688,7 @@ export async function executeUpdateApp(
   const { address, appRegistry } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
+  let isImageUpdate = false;
 
   // Stack-based update: build stack manifest from services param
   if (!payload && typeof args.services === 'string' && args.services) {
@@ -1729,6 +1730,7 @@ export async function executeUpdateApp(
   // applyHealthCheckDefault=false) — the old-manifest merge carries those
   // forward — and app-name is not derived (the app already exists).
   if (!payload && args.image) {
+    isImageUpdate = true;
     const built = await buildImageManifestFromArgs(args, {
       applyEnvDefaults: false,
       applyHealthCheckDefault: false,
@@ -1775,6 +1777,15 @@ export async function executeUpdateApp(
 
   if (!app.providerUrl) {
     return { success: false, error: `App "${app.name}" has no provider URL.` };
+  }
+
+  // Recovered leases can lack their original manifest. An image update relies
+  // on merging that configuration; without it, omitted settings would be lost.
+  if (isImageUpdate && !app.manifest) {
+    return {
+      success: false,
+      error: `Attach a complete manifest or provide a complete services definition to update "${app.name}". Its existing configuration is unavailable, so an image-based update cannot preserve its other settings.`,
+    };
   }
 
   // Merge old manifest values (env, ports, user, tmpfs) as defaults
@@ -2066,7 +2077,9 @@ export async function executeConfirmedUpdateApp(
             // are still up but the desired state was never achieved. The
             // registry mirrors fred; the chat COPY is what bends to match.
             provisionState: rollbackOk ? 'confirmed' : 'failed',
-            ...(previousManifest ? { manifest: previousManifest } : {}),
+            // Unknown original configuration stays unknown after a failed
+            // replacement; the attempted manifest cannot supply its defaults.
+            manifest: previousManifest,
           });
           onProgress?.({
             phase: 'failed',

@@ -95,6 +95,7 @@ function makeInMemoryRegistry(): AppRegistryAccess & { _store: AppEntry[] } {
       return _store.find((a) => a.name.endsWith(`-${lower}`)) ?? _store.find((a) => a.name.includes(lower)) ?? null;
     },
     getAppByLease: (_addr: string, uuid: string) => _store.find((a) => a.leaseUuid === uuid) ?? null,
+    discoverAppsFromChain: vi.fn(() => []),
     // Mirrors production: `status` is DERIVED on every mutation, never taken on
     // trust. Writers record observations (`chainState` / `provisionState`), so a
     // mock that merely merged the update object would not exercise the real

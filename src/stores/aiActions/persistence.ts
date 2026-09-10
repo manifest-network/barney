@@ -69,7 +69,11 @@ export function loadSettings(): AISettings {
     }
   } catch (error) {
     logError('AIContext.loadSettings', error);
-    localStorage.removeItem(STORAGE_KEY_SETTINGS);
+    try {
+      localStorage.removeItem(STORAGE_KEY_SETTINGS);
+    } catch (cleanupError) {
+      logError('AIContext.loadSettings.cleanup', cleanupError);
+    }
   }
   return defaultSettings;
 }

@@ -126,7 +126,7 @@ Show stopped apps
 What's deploying?
 ```
 
-**Under the hood.** `list_apps(state?)`. Defaults to `running`. Other values: `all`, `stopped`, `failed`, `deploying`.
+**Under the hood.** `list_apps(state?)`. With no filter, includes both running and deploying apps, including recovered apps awaiting provider confirmation. Pass `running`, `stopped`, `failed`, or `deploying` to select an exact state, or `all` to include every state.
 
 ### `app_status`
 

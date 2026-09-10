@@ -252,13 +252,13 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'list_apps',
-      description: 'List deployed apps, optionally filtered by state.',
+      description: 'List deployed apps. Includes running and deploying apps by default, including recovered apps whose readiness is not yet confirmed.',
       parameters: {
         type: 'object',
         properties: {
           state: {
             type: 'string',
-            description: 'Filter: all, running, stopped, failed, deploying. Default: running.',
+            description: 'Filter by exact state, or all states. Omit to include both running and deploying apps.',
             enum: ['all', 'running', 'stopped', 'failed', 'deploying'],
           },
         },
@@ -521,7 +521,7 @@ export function getToolCallDescription(
     case 'fund_credits':
       return `Funding credits with ${args.amount} PWR...`;
     case 'list_apps':
-      return args.state ? `Listing ${args.state} apps...` : 'Listing running apps...';
+      return args.state ? `Listing ${args.state} apps...` : 'Listing apps...';
     case 'app_status':
       return `Checking status of "${args.app_name}"...`;
     case 'get_logs':

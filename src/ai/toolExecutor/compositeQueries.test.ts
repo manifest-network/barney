@@ -17,6 +17,13 @@ import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
 
 // Mock external modules
+vi.mock('../../api/appDiscovery', () => ({
+  discoverTenantApps: vi.fn().mockResolvedValue([]),
+  hydrateDiscoveredApp: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { discoverTenantApps, hydrateDiscoveredApp } from '../../api/appDiscovery';
+
 vi.mock('../../api/billing', () => ({
   getLeasesByTenant: vi.fn(),
   getLeasesByTenantPaginated: vi.fn(),
@@ -152,6 +159,97 @@ describe('executeListApps', () => {
     const result = await executeListApps({}, makeOptions());
     expect(result.success).toBe(true);
     expect((result.data as any).count).toBe(0);
+  });
+
+  it('lists recovered apps by default on a fresh browser without a signer or catalog access', async () => {
+    const registry = await import('../../registry/appRegistry');
+    const discovery = await vi.importActual<typeof import('../../api/appDiscovery')>('../../api/appDiscovery');
+    const address = 'manifest1freshlist';
+    const recovered = makeApp();
+    const lease = {
+      uuid: recovered.leaseUuid,
+      tenant: address,
+      providerUuid: recovered.providerUuid,
+      state: 2,
+      createdAt: new Date(recovered.createdAt),
+      lastSettledAt: new Date(recovered.createdAt),
+      rejectionReason: '',
+      closureReason: '',
+      metaHash: new Uint8Array(),
+      minLeaseDurationAtCreation: 0n,
+      items: [],
+    } satisfies Awaited<ReturnType<typeof getLeasesByTenant>>[number];
+    vi.mocked(getLeasesByTenant).mockImplementation(async (_address, state) =>
+      state === 2 ? [lease] : [],
+    );
+    vi.mocked(getProviders).mockRejectedValueOnce(new Error('Provider catalog unavailable'));
+    vi.mocked(getSKUs).mockRejectedValueOnce(new Error('SKU catalog unavailable'));
+    vi.mocked(discoverTenantApps).mockImplementationOnce(discovery.discoverTenantApps);
+    expect(registry.getApps(address)).toEqual([]);
+
+    const result = await executeListApps({}, makeOptions({ address, appRegistry: registry }));
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      count: 1,
+      apps: [{ name: expect.stringMatching(/^app-/), status: 'deploying', size: 'unknown' }],
+    });
+    expect(registry.getAppByLease(address, recovered.leaseUuid)).toMatchObject({
+      chainState: 'active', provisionState: 'unconfirmed',
+    });
+    expect(discoverTenantApps).toHaveBeenCalledWith(
+      address, [lease], expect.objectContaining({ registry }),
+    );
+    expect(hydrateDiscoveredApp).not.toHaveBeenCalled();
+  });
+
+  it('returns a cold inventory without waiting for provider authentication', async () => {
+    const apps = Array.from({ length: 10 }, (_, index) => makeApp({
+      name: `app-${index}`, leaseUuid: `lease-${index}`, chainState: 'active',
+      provisionState: 'unconfirmed', status: 'deploying',
+    }));
+    vi.mocked(getLeasesByTenant).mockImplementation(async (_address, state) =>
+      state === 2 ? apps.map(app => ({ uuid: app.leaseUuid }) as never) : [],
+    );
+    const signing = { authTokens: { getAuthToken: vi.fn(() => new Promise(() => undefined)) } } as unknown as ToolExecutorOptions['signing'];
+    vi.mocked(hydrateDiscoveredApp).mockImplementationOnce(() => new Promise(() => undefined));
+    const listing = executeListApps({}, makeOptions({ appRegistry: makeRegistry(apps), signing }));
+    let result: Awaited<typeof listing> | undefined;
+    void listing.then(value => { result = value; });
+
+    await vi.waitFor(() => expect(result).toBeDefined());
+    expect(result?.data).toMatchObject({ count: 10 });
+    expect(signing!.authTokens.getAuthToken).not.toHaveBeenCalled();
+    expect(hydrateDiscoveredApp).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { state: undefined, expected: ['running-app', 'recovered-app', 'pending-app'] },
+    { state: 'running', expected: ['running-app'] },
+    { state: 'all', expected: ['running-app', 'recovered-app', 'pending-app', 'failed-app', 'stopped-app'] },
+  ])('filters $state while retaining each app readiness status', async ({ state, expected }) => {
+    const running = makeApp({ name: 'running-app', leaseUuid: 'running', chainState: 'active', provisionState: 'confirmed' });
+    const recovered = makeApp({ name: 'recovered-app', leaseUuid: 'recovered', status: 'deploying', chainState: 'active', provisionState: 'unconfirmed' });
+    const pending = makeApp({ name: 'pending-app', leaseUuid: 'pending', status: 'deploying', chainState: 'pending', provisionState: 'unconfirmed' });
+    const failed = makeApp({ name: 'failed-app', leaseUuid: 'failed', status: 'failed', chainState: 'active', provisionState: 'failed' });
+    const stopped = makeApp({ name: 'stopped-app', leaseUuid: 'stopped', status: 'stopped', chainState: 'absent' });
+    const registry = makeRegistry([running, recovered, pending, failed, stopped]);
+    vi.mocked(getLeasesByTenant).mockImplementation(async (_address, leaseState) =>
+      (leaseState === 2 ? [running, recovered, failed] : [pending])
+        .map((app) => ({ uuid: app.leaseUuid }) as never),
+    );
+
+    const result = await executeListApps(state ? { state } : {}, makeOptions({ appRegistry: registry }));
+
+    expect(result.success).toBe(true);
+    if (!result.success || result.requiresConfirmation) throw new Error('Expected list response');
+    const data = result.data as { count: number; apps: { name: string; status: string }[] };
+    expect(data.count).toBe(expected.length);
+    expect(data.apps.map((app) => app.name)).toEqual(expected);
+    for (const app of data.apps) {
+      expect(app.status).toBe(registry.getApp(ADDRESS, app.name)?.status);
+    }
+    expect(registry.getAppByLease(ADDRESS, recovered.leaseUuid)?.provisionState).toBe('unconfirmed');
   });
 
   it('returns apps filtered by state', async () => {

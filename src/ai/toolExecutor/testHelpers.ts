@@ -17,6 +17,7 @@ import { deriveAppStatus, type AppEntry } from '../../registry/appRegistry';
 export function makeRegistry(apps: AppEntry[] = []): AppRegistryAccess {
   const store = [...apps];
   return {
+    discoverAppsFromChain: vi.fn(() => []),
     getApps: () => [...store],
     getApp: (_addr: string, name: string) => store.find((a) => a.name === name) ?? null,
     findApp: (_addr: string, name: string) => {
