@@ -356,7 +356,7 @@ Numeric values are clamped (`getNumericConfig` → `parsePositiveInt`). A single
 
 The release artifact is a Docker image (`ghcr.io/manifest-network/barney`; single-platform, currently `linux/amd64` because that's what `ubuntu-latest` provides):
 
-1. **Stage 1** — `node:22.19.0-alpine3.21` builds the SPA (`npm ci && npm run build-release`). Normal installation applies the wallet-signing and image-parser source patches. Version is stamped from `RELEASE_VERSION` (set by CI from a git tag) or, when unset, the script strips any prerelease suffix from `package.json`'s `version` and appends the short git commit hash (e.g. `0.1.0` → `0.1.0-a1b2c3d`).
+1. **Stage 1** — `node:22.19.0-alpine3.21` builds the SPA (`npm ci && npm run build-release`). Normal installation applies the wallet-signing source patch. Version is stamped from `RELEASE_VERSION` (set by CI from a git tag) or, when unset, the script strips any prerelease suffix from `package.json`'s `version` and appends the short git commit hash (e.g. `0.1.0` → `0.1.0-a1b2c3d`).
 2. **Stage 2** — `nginx:1.30-alpine` source-builds the Brotli dynamic modules against the matching nginx version (Alpine's prebuilt `nginx-mod-http-brotli` targets a different ABI).
 3. **Stage 3** — `nginx:1.30-alpine` runtime: installs Node, copies `dist/`, `server/`, the Brotli modules, and `docker/{env.sh,nginx.conf.template,config.js.template}`. `env.sh` is the entrypoint.
 

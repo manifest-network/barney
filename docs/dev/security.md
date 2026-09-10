@@ -54,9 +54,9 @@ Barney makes outbound requests to provider URLs supplied by the on-chain catalog
 
 Defense is layered. Each layer makes independent checks because each protects against a different failure mode.
 
-#### Layer A: Rsbuild dev proxy (`isValidProxyTarget`)
+#### Layer A: Rsbuild dev/preview proxy (`isValidProxyTarget`)
 
-The dev proxy at `/proxy-provider` validates the routing target before forwarding. Blocks:
+Rsbuild installs `/proxy-provider` in both its dev and preview servers. The proxy validates the caller-selected routing target before forwarding. Blocks:
 
 - Non-HTTP(S) protocols.
 - URLs with embedded credentials.
@@ -64,13 +64,17 @@ The dev proxy at `/proxy-provider` validates the routing target before forwardin
 - DNS-to-IP wildcard services (`*.nip.io`, `*.xip.io`, `*.sslip.io`) — these can map any DNS name to any IP, defeating IP-literal checks.
 - IP literals in dangerous `ipaddr.js` ranges: `linkLocal`, `ipv4Mapped`, `unspecified`, `multicast`, `reserved`, `benchmarking`, `6to4`, `teredo`, `uniqueLocal`.
 
-Localhost and private IPv4 ranges remain *allowed* in dev so you can test against a local provider. This is a deliberate dev-vs-prod asymmetry; production never goes through this proxy.
+Localhost and private IPv4 ranges remain *allowed* through this proxy so you can test against a local provider. The validator checks IP literals and the hostname patterns above; it does **not** resolve DNS. An arbitrary hostname resolving to a blocked address can therefore pass validation.
+
+The trust assumption is local developer-controlled callers while the dev/preview server uses its default `127.0.0.1` bind. `BARNEY_DEV_HOST=0.0.0.0` or an explicit `--host` flag can expose the proxy to remote clients, who can supply their own `X-Proxy-Target` header or WebSocket `target` query parameter. This exposes both permitted local/private targets and the DNS-validation gap. Use an external bind only on a trusted network or through a private port forward.
+
+Production-built browser code makes direct, validated provider requests through `src/api/providerFetchAdapter.ts`; changing the server's bind address does not change that build-time routing decision. The production nginx deployment does not install the Rsbuild proxy. A locally run preview server still has the proxy route, even though the production bundle it serves does not select it.
 
 #### Layer B: Runtime URL validation (`parseHttpUrl` + `isUrlSsrfSafe`)
 
-Used at runtime by `src/api/providerFetch.ts` for every provider URL handed off to fetch. `parseHttpUrl` rejects non-HTTP(S) URLs; `isUrlSsrfSafe` rejects private hosts via `isPrivateHost`.
+Used by the production path in `src/api/providerFetchAdapter.ts` before direct provider fetches. `parseHttpUrl` rejects non-HTTP(S) URLs; `isUrlSsrfSafe` rejects private hosts via `isPrivateHost`.
 
-In dev, `localhost` / `127.0.0.1` / `::1` are explicitly allow-listed (`DEV_ALLOWED_HOSTS`). Other private hosts remain blocked even in dev — the dev allowlist is small and deliberate.
+When `isUrlSsrfSafe` is called in dev, `localhost` / `127.0.0.1` / `::1` are explicitly allow-listed (`DEV_ALLOWED_HOSTS`); other private hosts remain blocked by that validator. The DEV provider adapter instead routes through the Layer A proxy before reaching this check, so its caller-selected targets follow the proxy's broader local/private IPv4 policy.
 
 #### Layer C: Hostname classification (`isPrivateHost` in `ai/validation.ts`)
 

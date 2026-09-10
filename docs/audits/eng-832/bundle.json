@@ -1,0 +1,579 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-09-10",
+  "sourceCommit": "e4501d1592f42691bdb595a2936fc4d3f64d8ec9",
+  "baselineCommit": "19f321568c461ddb9415b28ef1e59ac068a3c815",
+  "lockfileSha256": "f592a157a57a9c4dbf3569cfb0587f105a0c18c76f4a4a6edd64e72dc0db9cb0",
+  "rsbuildConfigSha256": "52d3ad44e896625b3e228e52de2f693c5c3be98b4d3ecd22acebd5deaca4992a",
+  "entryHtmlSha256": "ac708859a607db3e218287e338c3525637d6008337e64a3e2c966a4df3a9fb28",
+  "measurement": {
+    "input": "Existing dist output from the verified production build of sourceCommit. No baseline build was performed.",
+    "compression": "Sum of independently gzip-compressed asset bytes; gzip level 9, mtime 0, no filename header. This is an estimate, not observed HTTP transfer size.",
+    "pythonVersion": "3.14.7",
+    "zlibVersion": "1.3.1.zlib-ng",
+    "scope": "Every dist/**/*.js and dist/**/*.css file; JavaScript includes config.js and asynchronous chunks. Excludes HTML, license files, fonts, images and the module inventory. Initial assets are local script/stylesheet URLs referenced by dist/index.html, not a measured request waterfall.",
+    "noMeasuredBaselineByteDelta": true
+  },
+  "totals": {
+    "allJavaScript": {
+      "files": 40,
+      "bytes": 16279995,
+      "gzipBytes": 3520986
+    },
+    "allCss": {
+      "files": 2,
+      "bytes": 647546,
+      "gzipBytes": 91629
+    },
+    "entryHtmlJavaScript": {
+      "files": 10,
+      "bytes": 13663008,
+      "gzipBytes": 2752214
+    },
+    "entryHtmlCss": {
+      "files": 2,
+      "bytes": 647546,
+      "gzipBytes": 91629
+    }
+  },
+  "assets": [
+    {
+      "path": "config.js",
+      "bytes": 32,
+      "gzipBytes": 52,
+      "sha256": "ccd2eb603fc8c46c493b30007d5a91ac101996a6eb0376d3731b1a9108d7f9f1",
+      "referencedByEntryHtml": true
+    },
+    {
+      "path": "static/css/index.3637e421.css",
+      "bytes": 302339,
+      "gzipBytes": 51927,
+      "sha256": "134e02dcc7d5a2cb5c592a243680a6e3de1b95649a20895b7f82fa627a00516c",
+      "referencedByEntryHtml": true
+    },
+    {
+      "path": "static/css/vendor-cosmos.de5c78d3.css",
+      "bytes": 345207,
+      "gzipBytes": 39702,
+      "sha256": "be13ea094cbd74916eccc8a9a989fa1707ceee7e3e86aec28b3d354e90a9ea9d",
+      "referencedByEntryHtml": true
+    },
+    {
+      "path": "static/js/372.fc1967a5.js",
+      "bytes": 3065580,
+      "gzipBytes": 688458,
+      "sha256": "73fa20a69366ae3bd2a059a702d4a9fda49efe57964574843727fce669b7a8d5",
+      "referencedByEntryHtml": true
+    },
+    {
+      "path": "static/js/488.adf028a0.js",
+      "bytes": 2943924,
+      "gzipBytes": 824860,
+      "sha256": "ca84c5348c5efc62001282db6992427b37f4616dc989e70a6555dca8deb49358",
+      "referencedByEntryHtml": true
+    },
+    {
+      "path": "static/js/794.f7224944.js",
+      "bytes": 80035,
+      "gzipBytes": 28600,
+      "sha256": "88e4c0ebd93a5ae1ad17cd4d52c316a885e808f662f439f268dee07711af2b8c",
+      "referencedByEntryHtml": true
+    },
+    {
+      "path": "static/js/async/145.95c4cf9c.js",
+      "bytes": 3675,
+      "gzipBytes": 1564,
+      "sha256": "d496eb09de8c2cab845225f47ed138a5555d6a4a5a5d29886f25782475d68a24",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/198.0c1ef0f7.js",
+      "bytes": 808,
+      "gzipBytes": 475,
+      "sha256": "588a7c5dbea6aa4de3f7d3de3ea5c17218c1a10be314e89e7acd1a0241be2ca7",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/21.6cc876f9.js",
+      "bytes": 379074,
+      "gzipBytes": 113063,
+      "sha256": "e2cb05a6d52ed0ee03e27b1027cd629d1c44df8cd8e7d1a2dddcc4ec6a5ee1d9",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/224.50614a51.js",
+      "bytes": 311622,
+      "gzipBytes": 91061,
+      "sha256": "cf600bda497e25f0c993771220d41995d931da7626cfe165d8a05b7df2d714d5",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/298.639487a5.js",
+      "bytes": 10740,
+      "gzipBytes": 4525,
+      "sha256": "621802243b2eedffc97923ce905c52236d0bdc33e3b3289cb079dbbe2ddcb272",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/299.a06cbfca.js",
+      "bytes": 4170,
+      "gzipBytes": 1772,
+      "sha256": "010c65529be0647a12452b448abea82df5c07b333c8605ec8a6c8a293e655357",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/314.b3428bbd.js",
+      "bytes": 248555,
+      "gzipBytes": 90672,
+      "sha256": "14ab41f4a9070d17109d19a69a99cdcbe3c35ed5ca978365d25ac5335a540298",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/341.c141919b.js",
+      "bytes": 107504,
+      "gzipBytes": 29681,
+      "sha256": "b0ae00bac94cd9a77676af6743f6fffbf25757129b6e37b800b4e5d8236b8edd",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/344.dcd56d7d.js",
+      "bytes": 23615,
+      "gzipBytes": 8297,
+      "sha256": "662abbca3986f458943704e9b9b75d046a59d964aaa0204fa1927854a518d346",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/357.d9c6b3e5.js",
+      "bytes": 5648,
+      "gzipBytes": 2051,
+      "sha256": "6cb4ef9d10b74bb551f5bebbffd875d6214727bb69e61344c30e693ed1d60765",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/376.6dd2958c.js",
+      "bytes": 14501,
+      "gzipBytes": 6029,
+      "sha256": "54ffeafe7827fbb5f236a5a6b6132fec0f82ba238d8301842b73818e8c41c7b2",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/408.ce120374.js",
+      "bytes": 844218,
+      "gzipBytes": 176556,
+      "sha256": "0e975f3904566ff679e47193194ae77a5e908619240286b39a31359d3cce2d8e",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/428.d0c5f601.js",
+      "bytes": 5717,
+      "gzipBytes": 2693,
+      "sha256": "bdf8dc654c4d0bc2349f6ff452b9b467f14dc10e90a073ce139af5c264d019a8",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/48.fd97e1b3.js",
+      "bytes": 3347,
+      "gzipBytes": 1253,
+      "sha256": "80dbad23047590e0aa303d4307c96dfa932c1e87cadcb7ec036a2dc931d658f3",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/505.9853736c.js",
+      "bytes": 27925,
+      "gzipBytes": 10593,
+      "sha256": "df6523c4906bd8123e4b8ac1f33b612782ba5e222f01483991b165f37b4a9e69",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/508.75d88ff7.js",
+      "bytes": 38133,
+      "gzipBytes": 10141,
+      "sha256": "3dc88431948001f938ac8ac02ce407a3a6a5c0f547accccb4277c678394b933a",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/528.9541c5c3.js",
+      "bytes": 3057,
+      "gzipBytes": 1437,
+      "sha256": "e4bb35dccd80ed464da5e38fe6dc5d70ec4d6af3de0745843c612cf24fe03475",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/564.c6ded9d4.js",
+      "bytes": 68263,
+      "gzipBytes": 19894,
+      "sha256": "76c45a0889cc860e734e309e247b6f1ad6609a61836b63377217f504aa64dacc",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/619.468891f9.js",
+      "bytes": 452936,
+      "gzipBytes": 174647,
+      "sha256": "385944a51d854c7cf9c159fda03d7427d01526cb623a813d1da6bd8ba513cfee",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/748.423e9815.js",
+      "bytes": 15132,
+      "gzipBytes": 5526,
+      "sha256": "bb822af63b4f963580582c0cd4d3964b4865dd181b7b5c6a6015714a3897d1b0",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/800.3f3cae62.js",
+      "bytes": 497,
+      "gzipBytes": 329,
+      "sha256": "79ee40c44ad1f1e31555357a3dd60dd631de7a1649a085dcd517160559d96783",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/805.9619e68a.js",
+      "bytes": 12120,
+      "gzipBytes": 3378,
+      "sha256": "bb1ba2da6d3d05163a5d05752c0ed6f45ba34ee0da1e32eecc3624d9224dde1b",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/92.01c3eb95.js",
+      "bytes": 4139,
+      "gzipBytes": 1654,
+      "sha256": "8b2a921cd77b0d6c35a3a6630712c1e4411c8234401e2a71c4923fa07faa4515",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/ajs-destination.e3a0fcf7.js",
+      "bytes": 8920,
+      "gzipBytes": 2989,
+      "sha256": "9985666dc34edcf8bda1b5ee934aa3920b1b066c781759da13c56d74e414708c",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/auto-track.985f01b0.js",
+      "bytes": 1441,
+      "gzipBytes": 685,
+      "sha256": "f079bd5f580bbbd1a567864740371848936fa6c72e028fb5e4c0526a245ca051",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/legacyVideos.5958e0f2.js",
+      "bytes": 357,
+      "gzipBytes": 265,
+      "sha256": "6734c513312e7d4f609002cdcd4913773f92ba007540aba397d29c59747ffffb",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/queryString.800853ee.js",
+      "bytes": 959,
+      "gzipBytes": 541,
+      "sha256": "bd0ad94afc38789d6aa5c94d15e458894c93a27d8a55363d0e1989797b432061",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/remoteMiddleware.ae75b1ef.js",
+      "bytes": 1044,
+      "gzipBytes": 557,
+      "sha256": "c3f12a6841e9647c7b33295b6ed82b06f41609a11f0bd4a9db88a870c2cfdaa2",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/schemaFilter.eef08b55.js",
+      "bytes": 1334,
+      "gzipBytes": 668,
+      "sha256": "60d5db7ebbc7846cf62a3d54f4b6cf21d0ea0c503e6ecea9d53c5c06fe87252c",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/async/tsub-middleware.ea24153d.js",
+      "bytes": 17536,
+      "gzipBytes": 5776,
+      "sha256": "80078bd5aef54ecc5072a3559a806e85bba7bc8221c78fb52aa29ce2da92864b",
+      "referencedByEntryHtml": false
+    },
+    {
+      "path": "static/js/index.487b1763.js",
+      "bytes": 245798,
+      "gzipBytes": 74194,
+      "sha256": "58a15427a10bca7e819aad3c051c3aab072fba8f855768872103e30fc5141473",
+      "referencedByEntryHtml": true
+    },
+    {
+      "path": "static/js/lib-axios.eef6a597.js",
+      "bytes": 99208,
+      "gzipBytes": 35703,
+      "sha256": "be9845ca5d4e7021e0b51a5fae85544a0620634746f0007c2afa8720aad11484",
+      "referencedByEntryHtml": true
+    },
+    {
+      "path": "static/js/lib-react.23c38ec5.js",
+      "bytes": 189064,
+      "gzipBytes": 59874,
+      "sha256": "2c60a4a9041094e84e93c8200ac06943637d8392c1639ec01e7f59ed52a006fa",
+      "referencedByEntryHtml": true
+    },
+    {
+      "path": "static/js/vendor-cosmos.7d0017c4.js",
+      "bytes": 1658498,
+      "gzipBytes": 266119,
+      "sha256": "a7ab5db12366544445c14a9c4dce4bae904247b1ddacf1204ffefa0c46f4fc8c",
+      "referencedByEntryHtml": true
+    },
+    {
+      "path": "static/js/vendor-manifest.b892635b.js",
+      "bytes": 4822970,
+      "gzipBytes": 632220,
+      "sha256": "9f4372bf8ca5b1bb1acbdb653998c0943435331b8f1613008b3fd9cd1c2be670",
+      "referencedByEntryHtml": true
+    },
+    {
+      "path": "static/js/vendor-web3auth.b487072e.js",
+      "bytes": 557899,
+      "gzipBytes": 142134,
+      "sha256": "a837077c77365c639da4e5adccca4f755d309afe1ef90dc90b3037058f052357",
+      "referencedByEntryHtml": true
+    }
+  ],
+  "web3authResolution": {
+    "baseline": {
+      "web3auth": {
+        "path": "node_modules/@cosmos-kit/web3auth",
+        "version": "2.16.6-ll.1",
+        "cosmosPeerRange": ">= 0.10"
+      },
+      "cosmos": {
+        "path": "node_modules/@keplr-wallet/cosmos",
+        "version": "0.12.28",
+        "cryptoDependency": "0.12.28"
+      },
+      "crypto": {
+        "path": "node_modules/@keplr-wallet/crypto",
+        "version": "0.12.28",
+        "peerDependencies": {}
+      },
+      "allCosmosAndCryptoCopies": [
+        {
+          "path": "node_modules/@keplr-wallet/cosmos",
+          "version": "0.12.28"
+        },
+        {
+          "path": "node_modules/@keplr-wallet/crypto",
+          "version": "0.12.28"
+        }
+      ]
+    },
+    "current": {
+      "web3auth": {
+        "path": "node_modules/@cosmos-kit/web3auth",
+        "version": "2.16.6-ll.1",
+        "cosmosPeerRange": ">= 0.10"
+      },
+      "cosmos": {
+        "path": "node_modules/@keplr-wallet/cosmos",
+        "version": "0.13.41",
+        "cryptoDependency": "0.13.41"
+      },
+      "crypto": {
+        "path": "node_modules/@keplr-wallet/cosmos/node_modules/@keplr-wallet/crypto",
+        "version": "0.13.41",
+        "peerDependencies": {
+          "bitcoinjs-lib": "^6",
+          "starknet": "^8"
+        }
+      },
+      "allCosmosAndCryptoCopies": [
+        {
+          "path": "node_modules/@chain-registry/keplr/node_modules/@keplr-wallet/cosmos",
+          "version": "0.12.28"
+        },
+        {
+          "path": "node_modules/@keplr-wallet/common/node_modules/@keplr-wallet/crypto",
+          "version": "0.13.41"
+        },
+        {
+          "path": "node_modules/@keplr-wallet/cosmos",
+          "version": "0.13.41"
+        },
+        {
+          "path": "node_modules/@keplr-wallet/cosmos/node_modules/@keplr-wallet/crypto",
+          "version": "0.13.41"
+        },
+        {
+          "path": "node_modules/@keplr-wallet/crypto",
+          "version": "0.12.28"
+        }
+      ]
+    }
+  },
+  "emittedCodeEvidence": {
+    "chunk": "static/js/372.fc1967a5.js",
+    "referencedByEntryHtml": true,
+    "wholeChunkBytesAreNotAttributableToThesePackages": true,
+    "markers": [
+      {
+        "marker": "OP_CHECKSIG",
+        "occurrences": 7
+      },
+      {
+        "marker": "getSelectorFromName",
+        "occurrences": 2
+      },
+      {
+        "marker": "initEccLib",
+        "occurrences": 8
+      },
+      {
+        "marker": "Starknet library not found",
+        "occurrences": 2
+      },
+      {
+        "marker": "ECPairFactory",
+        "occurrences": 8
+      },
+      {
+        "marker": "bip32",
+        "occurrences": 39
+      }
+    ],
+    "moduleMarkers": [
+      {
+        "moduleId": "71165",
+        "markers": [
+          "initEccLib",
+          "Starknet library not found",
+          "ECPairFactory"
+        ]
+      },
+      {
+        "moduleId": "52616",
+        "markers": [
+          "initEccLib",
+          "Starknet library not found",
+          "ECPairFactory"
+        ]
+      },
+      {
+        "moduleId": "22706",
+        "markers": [
+          "bip32"
+        ]
+      },
+      {
+        "moduleId": "97545",
+        "markers": [
+          "bip32"
+        ]
+      },
+      {
+        "moduleId": "76263",
+        "markers": [
+          "bip32"
+        ]
+      },
+      {
+        "moduleId": "99080",
+        "markers": [
+          "bip32"
+        ]
+      },
+      {
+        "moduleId": "94642",
+        "markers": [
+          "bip32"
+        ]
+      },
+      {
+        "moduleId": "60916",
+        "markers": [
+          "initEccLib"
+        ]
+      },
+      {
+        "moduleId": "21757",
+        "markers": [
+          "initEccLib"
+        ]
+      },
+      {
+        "moduleId": "50622",
+        "markers": [
+          "bip32"
+        ]
+      },
+      {
+        "moduleId": "68417",
+        "markers": [
+          "OP_CHECKSIG"
+        ]
+      },
+      {
+        "moduleId": "4930",
+        "markers": [
+          "OP_CHECKSIG"
+        ]
+      },
+      {
+        "moduleId": "23504",
+        "markers": [
+          "OP_CHECKSIG"
+        ]
+      },
+      {
+        "moduleId": "59646",
+        "markers": [
+          "bip32"
+        ]
+      },
+      {
+        "moduleId": "60477",
+        "markers": [
+          "bip32"
+        ]
+      },
+      {
+        "moduleId": "25170",
+        "markers": [
+          "ECPairFactory"
+        ]
+      },
+      {
+        "moduleId": "38700",
+        "markers": [
+          "ECPairFactory"
+        ]
+      },
+      {
+        "moduleId": "95249",
+        "markers": [
+          "bip32"
+        ]
+      },
+      {
+        "moduleId": "90953",
+        "markers": [
+          "bip32"
+        ]
+      },
+      {
+        "moduleId": "69226",
+        "markers": [
+          "getSelectorFromName"
+        ]
+      }
+    ],
+    "moduleMarkerMethod": "Parse the existing Rspack chunk with Acorn and associate literal marker occurrences with enclosing emitted module IDs. These are code membership observations; they do not establish that an application invokes each method.",
+    "sourcePaths": [
+      "node_modules/@cosmos-kit/web3auth/esm/extension/client.js",
+      "node_modules/@keplr-wallet/cosmos/build/adr-36/amino.js",
+      "node_modules/@keplr-wallet/cosmos/node_modules/@keplr-wallet/crypto/build/index.js",
+      "node_modules/@keplr-wallet/cosmos/node_modules/@keplr-wallet/crypto/build/key.js",
+      "node_modules/@keplr-wallet/common/node_modules/@keplr-wallet/crypto/build/key.js"
+    ],
+    "execution": "Web3Auth imports makeADR36AminoSignDoc from the Cosmos barrel. The crypto key module immediately imports bitcoinjs-lib/ecpair and initializes ECC. Starknet has a statically bundled require inside a conditional address-calculation helper; bundled presence does not imply Starknet address calculation is used by Barney."
+  },
+  "directSubpathAssessment": {
+    "suggestedEntry": "@keplr-wallet/cosmos/build/adr-36/amino",
+    "removesCryptoBarrel": false,
+    "reason": "The ADR-036 module itself unconditionally requires @keplr-wallet/crypto. Its CommonJS index unconditionally re-exports key.js, which contains the Bitcoin imports/ECC initialization and Starknet require. Selecting the ADR-036 subpath alone does not sever this dependency edge.",
+    "baselineDifference": "The baseline Web3Auth consumer resolved Cosmos 0.12.28 and root crypto 0.12.28. The older crypto key module uses elliptic and crypto-js without the newer Bitcoin/Starknet paths. Remaining root crypto 0.12.28 in the current lock is not the Web3Auth Cosmos consumer copy.",
+    "nextWork": "ENG-835: measure bundle budgets and wallet/provider lazy loading, or obtain an upstream modular ADR-036 entry. ENG-929: retain advisory review ownership. No dependency downgrade, alternate signer implementation or unmeasured byte-saving claim is proposed."
+  }
+}

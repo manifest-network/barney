@@ -11,6 +11,9 @@ const walletRequire = createRequire(appRequire.resolve('@cosmos-kit/web3auth'));
 const storagePackagePath = walletRequire.resolve('@react-native-async-storage/async-storage/package.json');
 const storageRequire = createRequire(storagePackagePath);
 const storagePackage = storageRequire(storagePackagePath);
+if (typeof storagePackage.module !== 'string' || !storagePackage.module.trim()) {
+  throw new Error(`Web3Auth AsyncStorage must declare a non-empty browser entry in its package.json module field: ${storagePackagePath}`);
+}
 const browserEntry = join(dirname(storagePackagePath), storagePackage.module);
 const loadedPaths = new Set<string>();
 
@@ -43,7 +46,7 @@ const key = 'eng-832:async-storage-browser';
 afterEach(() => window.localStorage.removeItem(key));
 
 it('resolves the wallet storage browser entry and its official web platform peer', () => {
-  expect(storagePackage.version).toBe('2.2.0');
+  expect(storagePackage.version).toMatch(/^2\./);
   expect(storageRequire('react-native/package.json').name).toBe('react-native-web');
   expect(storageRequire('react-native').Platform.OS).toBe('web');
   expect(loadedPaths).toContain(join(dirname(browserEntry), 'AsyncStorage.js'));

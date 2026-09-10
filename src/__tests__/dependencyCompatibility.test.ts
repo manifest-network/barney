@@ -130,6 +130,20 @@ describe('dependency compatibility for generated protobuf codecs', () => {
 });
 
 describe('installed Web3Auth signer compatibility', () => {
+  it.each([
+    ['wallet Amino signer', workerRequire, '@cosmjs/amino'],
+    ['Amino signer crypto', aminoRequire, '@cosmjs/crypto'],
+    ['wallet direct signer', workerRequire, '@cosmjs/proto-signing'],
+    ['direct signer crypto', protoSigningRequire, '@cosmjs/crypto'],
+  ] as const)('keeps the %s at the audited CosmJS compatibility boundary', (_name, consumerRequire, packageName) => {
+    const packagePath = consumerRequire.resolve(`${packageName}/package.json`);
+    const installed = consumerRequire(packagePath);
+    expect(installed.name, packagePath).toBe(packageName);
+    // The ENG-832 elliptic disposition and signing evidence cover CosmJS
+    // 0.32.4. A different installed version requires a fresh compatibility review.
+    expect(installed.version, packagePath).toBe('0.32.4');
+  });
+
   it('accepts empty-chain ADR-036 and returns a verifiable signature for the deterministic account', async () => {
     const { signer, account, transport, promptSign } = await signerFixture();
     expect(account.address).toBe('manifest10xcqpzrky6eff2g52qdye53xkk9jxkvrqzct5t');

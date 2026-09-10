@@ -89,13 +89,47 @@ Other peers introduced by normal resolution belong to different execution paths:
 
 | Peer group | Path and concrete usage |
 | --- | --- |
-| bitcoinjs-lib 6.1.8 / ecpair 2.1.0 | Web3Auth client → Keplr cosmos/common 0.13.41 → Keplr crypto 0.13.41. The crypto key module imports Bitcoin helpers and initializes ECC immediately. This is browser wallet code. |
-| Starknet 8.9.2 and its ABI/CLI helpers | Keplr crypto requires Starknet conditionally when calculating a Starknet address; Keplr types also references its types. A conditional call does not prove absence from the browser bundle. |
+| bitcoinjs-lib 6.1.8 / ecpair 2.1.0 | Web3Auth client → Keplr cosmos/common 0.13.41 → Keplr crypto 0.13.41. The crypto key module imports Bitcoin helpers and initializes ECC immediately. These modules are present in the initial browser bundle. |
+| Starknet 8.9.2 | Keplr crypto's literal Starknet require is bundled even though address calculation calls it conditionally; Keplr types also references its types. Bundled presence does not establish that Barney calculates Starknet addresses. |
 | Terser 5.51.2 and source-map helpers | Vite's optional minifier peer, in build/test tooling. |
 
 Solana, ox, and utf-8-validate already existed in the baseline. None of the wallet
 peer groups above should be classified as native-only merely because Barney does
 not import those package names directly.
+
+### Measured browser bundle
+
+[bundle.json](bundle.json) records the emitted assets from `e4501d1`, including
+their hashes, raw sizes, gzip sizes, initial HTML references, and observed module
+markers. Compression sums each file independently at gzip level 9; this is a
+reproducible size estimate rather than a measured HTTP transfer. All-JavaScript
+totals include `config.js` and asynchronous chunks; initial totals count only
+scripts directly referenced by the HTML.
+
+| Scope | Files | Raw bytes | Gzip bytes |
+| --- | ---: | ---: | ---: |
+| All JavaScript | 40 | 16,279,995 | 3,520,986 |
+| Initial HTML JavaScript | 10 | 13,663,008 | 2,752,214 |
+| All CSS (also referenced by initial HTML) | 2 | 647,546 | 91,629 |
+| Initial chunk `372.fc1967a5.js` | 1 | 3,065,580 | 688,458 |
+
+The initial chunk contains Bitcoin and Starknet code, including `OP_CHECKSIG`,
+`initEccLib`, `ECPairFactory`, and `getSelectorFromName`. It also contains other
+libraries, so its full size cannot be attributed to those peers. No baseline
+build was measured, and these figures do not claim a byte delta from `main`.
+
+On the baseline lockfile, Web3Auth's ADR-036 path resolved root Keplr cosmos
+**0.12.28 → root crypto 0.12.28**. It now resolves root cosmos **0.13.41 → its
+nested crypto 0.13.41**, which adds these Bitcoin/Starknet paths. The remaining
+root crypto 0.12.28 serves other consumers. Importing
+`@keplr-wallet/cosmos/build/adr-36/amino` directly does not remove this edge:
+that module itself unconditionally requires the crypto barrel, which loads the
+key module containing these imports.
+
+[ENG-835](https://linear.app/liftedinit/issue/ENG-835) owns initial/total bundle
+budgets, wallet lazy loading, and narrower upstream module entry points. This
+snapshot supplies concrete bundle evidence for that work and the dated
+[ENG-929](https://linear.app/liftedinit/issue/ENG-929) dependency review.
 
 ## Scoped residual dispositions
 
@@ -146,8 +180,8 @@ Run from the repository root using Node 22.19.0 (the CI pin):
 ```sh
 npm ci
 npm ls --all
-npm audit --package-lock-only --json
-npm audit --package-lock-only --omit=dev --json
+npm audit --package-lock-only --json --registry=https://registry.npmjs.org
+npm audit --package-lock-only --omit=dev --json --registry=https://registry.npmjs.org
 npm run lint
 npm run test:coverage
 npm run build
@@ -156,13 +190,15 @@ npm run check:bundle
 
 Audit exits can remain nonzero for the exact dispositions above. Do not replace
 raw audit evidence with a severity filter or omit peers to make totals disappear.
+The original `before.json` records its historical commands without a registry
+override; the commands above reproduce `after.json` with the public registry explicit.
 
 Validation on Node 22.19.0 / npm 10.9.3:
 
 - A clean `npm ci --no-audit --no-fund` completed on the final lockfile with
   lifecycle scripts enabled and the required Web3Auth patch applied. The installed
   graph passed `npm ls --all`; notification/audit flags do not bypass peer resolution.
-- `npm run test:coverage -- --maxWorkers=4`: **2,625 tests in 112 files passed**.
+- `npm run test:coverage -- --maxWorkers=4`: **2,631 tests in 113 files passed**.
   Coverage: statements 82.55%, branches 78.02%, functions 78.75%, lines 84.86%.
 - Existing deployment, consent, authentication, and relay tests passed. New
   compatibility tests exercise the installed wallet signer with real cryptography,
@@ -170,11 +206,14 @@ Validation on Node 22.19.0 / npm 10.9.3:
   and foreign-chain/corrupted-worker rejection. Worker transport is deterministic.
   The installed Async Storage browser entry exercises real localStorage operations;
   a malformed Web3Auth patch fixture verifies postinstall fails outside CI.
+  Consumer-resolved CosmJS version checks enforce the documented 0.32.4 boundary,
+  and the dev wrapper regression verifies CLI forwarding and secret filtering.
 - The production TypeScript/Rsbuild build and `npm run check:bundle` passed.
   The bundle check confirms the existing MCP exclusions and single core/manifestjs
   installation; build-time guards also reject stream-json.
 - Plain `npm run lint`, the production build, and the bundle check passed again
-  on the final browser peer graph. The rebuilt entry HTML has the same SHA-256
+  on the final browser peer graph. All 42 emitted JS/CSS files match the recorded
+  bundle snapshot byte-for-byte. The rebuilt entry HTML has the same SHA-256
   as the browser smoke artifact:
   `ac708859a607db3e218287e338c3525637d6008337e64a3e2c966a4df3a9fb28`.
 - Chromium 152.0.7977.82 smoke passed at 1440×1000 and 390×844: landing render,

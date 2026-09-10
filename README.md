@@ -107,8 +107,15 @@ BARNEY_DEV_HOST=0.0.0.0 npm run dev
 BARNEY_DEV_HOST=0.0.0.0 npm run preview
 ```
 
-`0.0.0.0` exposes the asset server and its proxies on all IPv4 interfaces; use it
-with a trusted network or private port forward. Set the existing
+Rsbuild options are forwarded after npm's `--`, for example
+`npm run dev -- --host 0.0.0.0 --port 3000`. The CLI `--host` option takes
+precedence over `BARNEY_DEV_HOST`.
+
+`0.0.0.0` exposes the asset server and its proxies on all IPv4 interfaces.
+`/proxy-provider` accepts caller-selected targets, including local/private hosts,
+and its validator does not resolve DNS. Enable remote access only on a trusted
+network or through a private port forward; see [the proxy trust assumptions](docs/dev/security.md).
+Set the existing
 `MORPHEUS_RELAY_ALLOWED_ORIGINS` and `MORPHEUS_RELAY_AUDIENCE` for the browser URL
 you use. Keep the relay's own listener on loopback.
 
