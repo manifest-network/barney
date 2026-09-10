@@ -27,6 +27,24 @@ describe('forbiddenNodeOnlyImport', () => {
       expect(forbiddenNodeOnlyImport(req, appIssuer)).toMatch(/sdk node subpath/);
       expect(forbiddenNodeOnlyImport(req, nodeIssuer)).toMatch(/sdk node subpath/);
     });
+
+    it.each(['image-size', 'stream-json'])('flags the audited %s parser from any issuer', (pkg) => {
+      for (const req of [
+        pkg,
+        `${pkg}?raw`,
+        `${pkg}#fragment`,
+        `!!raw-loader!${pkg}?raw`,
+        `${pkg}/dist/index.js`,
+        `/app/node_modules/${pkg}`,
+        `/app/node_modules/${pkg}?raw`,
+        `/app/node_modules/${pkg}/dist/index.js`,
+        `/app/node_modules/parent/node_modules/${pkg}/index.js`,
+        `C:\\app\\node_modules\\${pkg}\\index.js`,
+      ]) {
+        expect(forbiddenNodeOnlyImport(req, appIssuer)).toContain(`${pkg} node parser (ENG-832)`);
+        expect(forbiddenNodeOnlyImport(req, nodeIssuer)).toContain(`${pkg} node parser (ENG-832)`);
+      }
+    });
   });
 
   describe('node builtins gated by issuer', () => {
@@ -58,6 +76,21 @@ describe('forbiddenNodeOnlyImport', () => {
     it('does not flag a normal app import', () => {
       expect(forbiddenNodeOnlyImport('react', '/app/src/main.tsx')).toBeNull();
       expect(forbiddenNodeOnlyImport('./helpers', '/app/src/ai/toolExecutor/index.ts')).toBeNull();
+    });
+
+    it.each(['image-size', 'stream-json'])('does not confuse other modules with the %s package', (pkg) => {
+      for (const req of [
+        `${pkg}-helper`,
+        `${pkg}-helper?raw`,
+        `raw-loader!${pkg}-helper`,
+        `/app/node_modules/${pkg}-helper/index.js`,
+        `@app/${pkg}`,
+        `/app/node_modules/@app/${pkg}/index.js`,
+        `./${pkg}`,
+        `/app/src/${pkg}/index.js`,
+      ]) {
+        expect(forbiddenNodeOnlyImport(req, '/app/src/main.tsx')).toBeNull();
+      }
     });
 
     it('handles undefined request/issuer without throwing', () => {

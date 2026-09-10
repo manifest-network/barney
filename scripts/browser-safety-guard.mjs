@@ -8,6 +8,10 @@ export function forbiddenNodeOnlyImport(request, issuer) {
     // Anchored to a path segment so a browser-safe "observer.js"/"nameserver.js" can't false-trip.
     { name: 'fred node server barrel', re: /manifest-mcp-fred[\\/](?:.*[\\/])?server(?:[\\/]|\.[mc]?js|$)/ },
     { name: 'sdk node subpath', re: /manifest-sdk[\\/](dist[\\/])?node(\.[mc]?js)?$/ },
+    // ENG-832: parser advisory exceptions rely on these packages staying in Node tooling.
+    // Match exact package names, whether bare imports or resolved node_modules paths.
+    { name: 'image-size node parser (ENG-832)', re: /(?:^|!|[\\/]node_modules[\\/])image-size(?:[\\/?#]|$)/ },
+    { name: 'stream-json node parser (ENG-832)', re: /(?:^|!|[\\/]node_modules[\\/])stream-json(?:[\\/?#]|$)/ },
   ];
   for (const { name, re } of always) {
     if (re.test(req)) return `forbidden node-only import "${req}" (${name}) from ${iss || 'entry'}`;

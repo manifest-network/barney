@@ -32,7 +32,7 @@ For local development or self-hosting, see [Quick start](#quick-start) and [Depl
 ```bash
 git clone https://github.com/manifest-network/barney.git
 cd barney
-npm install --legacy-peer-deps
+npm ci
 cp .env.example .env.local
 # edit .env.local to set MORPHEUS_API_KEY and review the relay quota/pricing policy
 npm run dev
@@ -40,7 +40,8 @@ npm run dev
 
 The dev server starts at <http://localhost:3000>.
 
-> **Why `--legacy-peer-deps`?** The pinned `@cosmos-kit/react` and `@interchain-ui/react` versions declare incompatible peer ranges for React 19. The flag is required for installs to succeed and is already used by the production Docker build.
+The lockfile installs with normal peer resolution. `postinstall` applies the
+wallet-signing and image-parser patches described in [CONTRIBUTING.md](CONTRIBUTING.md#patches).
 
 ## Running with Docker
 

@@ -163,6 +163,19 @@ Barney uses ADR-036 for two distinct trust boundaries. The paid Morpheus relay u
 
 The signature is over a deterministic payload — the provider can verify the user's wallet ownership without involving the chain.
 
+## Dependency advisories
+
+The [ENG-832 audit](../audits/eng-832/README.md) records locked-graph findings,
+browser/build/relay reachability, dependency overrides, and scoped residual
+dispositions with an owner and expiry. Keep the image-size source patch and its
+malformed-input tests when updating the native peer graph. The browser build
+rejects image-size and stream-json imports; neither package belongs on an app path.
+
+The remaining elliptic advisory is reachable through wallet cryptography and
+requires a coordinated Manifest SDK and Torus migration. Signature compatibility
+tests do not eliminate that upstream risk. Run full and production-only audits
+after dependency changes and review new findings individually.
+
 ## Reporting vulnerabilities
 
 Use GitHub's private vulnerability reporting (the **Security** tab → **Report a vulnerability**) on the repository. Do not open public GitHub issues for security reports.

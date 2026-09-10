@@ -17,31 +17,27 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "postinstall": "patch-package"
-  },
-  "resolutions": {
-    "**/@cosmjs/stargate": "npm:@manifest-network/stargate@0.32.4-ll.3",
-    "**/@cosmjs/proto-signing": "0.32.4",
-    "**/@cosmjs/amino": "0.32.4",
-    "**/@cosmjs/encoding": "0.32.4",
-    "**/@cosmjs/math": "0.32.4",
-    "**/@cosmjs/crypto": "0.32.4",
-    "**/@cosmjs/utils": "0.32.4",
-    "**/axios": "1.13.2"
+    "postinstall": "patch-package --error-on-fail"
   },
   "overrides": {
-    "axios": "1.13.2"
+    "axios": "$axios",
+    "image-size": "1.2.1",
+    "postcss": "$postcss",
+    "protobufjs": "7.6.6",
+    "uuid": "11.1.1",
+    "ws@^7": "7.5.13",
+    "ws@^8": "8.21.3"
   },
   "dependencies": {
+    "@chain-registry/types": "0.50.297",
     "@cosmjs/proto-signing": "0.32.4",
     "@cosmjs/stargate": "npm:@manifest-network/stargate@0.32.4-ll.3",
     "@cosmos-kit/react": "2.22.3",
     "@cosmos-kit/web3auth": "npm:@manifest-network/web3auth@2.16.6-ll.1",
-    "@interchain-ui/react": "1.26.2",
+    "@interchain-ui/react": "1.26.3",
     "@manifest-network/manifest-sdk": "0.22.0",
     "@manifest-network/manifestjs": "3.0.0",
-    "axios": "1.13.2",
-    "chain-registry": "2.0.140",
+    "axios": "1.20.0",
     "clsx": "2.1.1",
     "focus-trap-react": "12.0.0",
     "ipaddr.js": "2.3.0",
@@ -53,26 +49,32 @@
     "zod": "4.3.6",
     "zustand": "5.0.11"
   },
+  "optionalDependencies": {
+    "@react-native-async-storage/async-storage": "1.24.0",
+    "ox": "0.11.3",
+    "utf-8-validate": "5.0.10"
+  },
   "devDependencies": {
     "@eslint/js": "9.39.2",
-    "@rsbuild/core": "1.7.2",
-    "@rsbuild/plugin-node-polyfill": "1.4.3",
-    "@rsbuild/plugin-react": "1.4.3",
+    "@rsbuild/core": "1.7.6",
+    "@rsbuild/plugin-node-polyfill": "1.4.6",
+    "@rsbuild/plugin-react": "1.4.6",
     "@tailwindcss/postcss": "4.1.18",
     "@types/node": "22.19.7",
-    "@types/react": "19.2.8",
-    "@types/react-dom": "19.2.3",
-    "@vitest/coverage-v8": "4.0.18",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitest/coverage-v8": "4.1.11",
     "eslint": "9.39.2",
     "eslint-plugin-react-hooks": "7.0.1",
     "eslint-plugin-react-refresh": "0.4.26",
     "globals": "17.0.0",
-    "happy-dom": "20.5.0",
+    "happy-dom": "20.14.3",
     "patch-package": "8.0.1",
-    "postcss": "8.5.6",
+    "postcss": "8.5.28",
     "tailwindcss": "4.1.18",
     "typescript": "5.9.3",
     "typescript-eslint": "8.53.1",
-    "vitest": "4.0.18"
+    "vite": "7.3.6",
+    "vitest": "4.1.11"
   }
 }
