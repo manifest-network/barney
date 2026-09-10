@@ -1599,7 +1599,7 @@ describe('appRegistry', () => {
   // consumers (`useRegistryApps`, `AppsSidebar`) get cross-tab updates for
   // free without subscribing to `storage` themselves.
   describe('cross-tab storage event sync', () => {
-    it.each(['update', 'remove', 'clear'] as const)(
+    it.each(['update', 'remove'] as const)(
       'preserves unsaved local changes after a remote %s until a local save succeeds',
       (operation) => {
         const address = `manifest1unsaved-${operation}`;
@@ -1621,15 +1621,14 @@ describe('appRegistry', () => {
           const remoteValue = operation === 'update'
             ? JSON.stringify([{ ...original, name: 'remote-name' }])
             : null;
-          if (operation === 'clear') localStorage.clear();
-          else if (remoteValue === null) localStorage.removeItem(key);
+          if (remoteValue === null) localStorage.removeItem(key);
           else localStorage.setItem(key, remoteValue);
           const listener = vi.fn();
           unsub = subscribeToRegistry(listener);
           window.dispatchEvent(new StorageEvent('storage', {
-            key: operation === 'clear' ? null : key,
+            key,
             newValue: remoteValue,
-            oldValue: operation === 'clear' ? null : JSON.stringify([original]),
+            oldValue: JSON.stringify([original]),
             storageArea: localStorage,
           }));
 
@@ -1664,6 +1663,40 @@ describe('appRegistry', () => {
         }
       },
     );
+
+    it('retains unsaved changes when a global storage clear is ignored without a wallet key', () => {
+      const address = 'manifest1unsaved-clear';
+      const key = `barney-apps-${address}`;
+      const original = addApp(address, makeApp());
+      const setItem = vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
+        throw new DOMException('Storage quota exceeded', 'QuotaExceededError');
+      });
+      let unsub: (() => void) | undefined;
+      try {
+        const unsaved = updateApp(address, original.leaseUuid, { name: 'local-name' });
+        const listener = vi.fn();
+        unsub = subscribeToRegistry(listener);
+        localStorage.clear();
+        // The existing null-key early return precedes the dirty-address guard.
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: null,
+          newValue: null,
+          oldValue: null,
+          storageArea: localStorage,
+        }));
+
+        expect(getApps(address)).toEqual([unsaved]);
+        expect(listener).not.toHaveBeenCalled();
+        const saved = updateApp(address, original.leaseUuid, { size: 'medium' });
+        expect(saved).toEqual({ ...unsaved, size: 'medium' });
+        expect(JSON.parse(localStorage.getItem(key)!)).toEqual([saved]);
+      } finally {
+        setItem.mockRestore();
+        unsub?.();
+        addApp(address, original);
+        removeApp(address, original.leaseUuid);
+      }
+    });
 
     it('preserves an unsaved local removal when another tab updates the same cache', () => {
       const address = 'manifest1unsaved-removal';
