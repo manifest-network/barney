@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { getLeaseConnectionInfo, getLeaseStatus, type ConnectionDetails } from '@manifest-network/manifest-sdk/deploy';
-import { discoverTenantApps, hydrateDiscoveredApp } from './appDiscovery';
+import { discoverTenantApps, hasPendingRecoveryAuthentication, hydrateDiscoveredApp } from './appDiscovery';
 import { getProviders, getSKUs, type Provider, type SKU } from './sku';
 import { LeaseState, type Lease } from './billing';
 import * as registry from '../registry/appRegistry';
@@ -169,6 +169,64 @@ describe('hydrateDiscoveredApp', () => {
     vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'failing' });
     await hydrateDiscoveredApp(address, registry.getApps(address)[0], signing);
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'failed', status: 'failed' });
+  });
+
+  it.each([
+    { verdict: 'ready', provisionState: 'confirmed', status: 'running', complete: false },
+    { verdict: 'failing', provisionState: 'failed', status: 'failed', complete: true },
+  ])('preserves $verdict when connection authentication rejects', async ({ verdict, provisionState, status, complete }) => {
+    signing.authTokens.getAuthToken.mockResolvedValueOnce('status-token').mockRejectedValueOnce(new Error('signing rejected'));
+    vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: verdict });
+
+    expect(await hydrateDiscoveredApp(address, app(), signing)).toMatchObject({ complete });
+    expect(getLeaseStatus).toHaveBeenCalledWith(PROVIDER_URL, LEASE_UUID, 'status-token', expect.any(Function), expect.any(AbortSignal), true);
+    expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState, status });
+    expect(hasPendingRecoveryAuthentication(signing.authTokens)).toBe(false);
+  });
+
+  it.each([
+    { verdict: 'ready', provisionState: 'confirmed', status: 'running', complete: false },
+    { verdict: 'failing', provisionState: 'failed', status: 'failed', complete: true },
+  ])('preserves $verdict at the deadline while connection authentication is still pending', async ({ verdict, provisionState, status, complete }) => {
+    vi.useFakeTimers();
+    const connectionToken = deferred<string>();
+    signing.authTokens.getAuthToken.mockResolvedValueOnce('status-token').mockReturnValueOnce(connectionToken.promise);
+    vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: verdict });
+    const work = hydrateDiscoveredApp(address, app(), signing);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getLeaseStatus).toHaveBeenCalledOnce();
+    expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(APP_RECOVERY_TIMEOUT_MS);
+    expect(await work).toMatchObject({ complete });
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState, status });
+    expect(hasPendingRecoveryAuthentication(signing.authTokens)).toBe(true);
+
+    connectionToken.resolve('late-connection-token');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
+    expect(hasPendingRecoveryAuthentication(signing.authTokens)).toBe(false);
+  });
+
+  it('discards completed status on cancellation while connection authentication is pending', async () => {
+    vi.useFakeTimers();
+    const connectionToken = deferred<string>();
+    signing.authTokens.getAuthToken.mockResolvedValueOnce('status-token').mockReturnValueOnce(connectionToken.promise);
+    const previous = app();
+    const abort = new AbortController();
+    const work = hydrateDiscoveredApp(address, previous, signing, { signal: abort.signal });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getLeaseStatus).toHaveBeenCalledOnce();
+
+    const cancelled = expect(work).rejects.toMatchObject({ name: 'AbortError' });
+    abort.abort();
+    await cancelled;
+    connectionToken.resolve('late-connection-token');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
+    expect(registry.getAppByLease(address, LEASE_UUID)).toEqual(previous);
+    expect(hasPendingRecoveryAuthentication(signing.authTokens)).toBe(false);
   });
 
   it('does not change a workload verdict or access details when both reads fail', async () => {

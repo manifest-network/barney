@@ -246,10 +246,11 @@ function notify(address: string): void {
  * filter by their own address (`mutated === address`), so cross-wallet
  * traffic from another tab on a different wallet is harmless.
  *
- * `newValue === null` (the other tab cleared its registry / disconnected)
- * is intentionally NOT special-cased: subscribers re-read via `getApps`,
- * which returns `[]` on missing key. The notify-then-reread pattern stays
- * uniform.
+ * Unsaved local state ignores remote changes until a local save succeeds.
+ * For clean caches, `newValue === null` (the other tab cleared its registry /
+ * disconnected) is intentionally NOT special-cased: subscribers re-read via
+ * `getApps`, which returns `[]` on a missing key. The notify-then-reread pattern
+ * stays uniform.
  *
  * `event.key === null` (devtools `localStorage.clear()`) is skipped — no
  * address info to route with, and subscribers will re-read on their next
@@ -264,8 +265,10 @@ function handleStorageEvent(event: StorageEvent): void {
   if (!key.startsWith(STORAGE_KEY_PREFIX)) return;
   const address = key.slice(STORAGE_KEY_PREFIX.length);
   if (!address) return;
+  // Unsaved local writes remain authoritative until persistence succeeds.
+  // A remote cache update must not discard their only surviving copy.
+  if (unsavedAddresses.has(address)) return;
   memoryApps.delete(address);
-  unsavedAddresses.delete(address);
   notify(address);
 }
 

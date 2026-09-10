@@ -155,24 +155,26 @@ export async function hydrateDiscoveredApp(
       AI_TOOL_API_TIMEOUT_MS, 'App discovery authentication', roundSignal,
     );
     roundSignal.throwIfAborted();
-    // Provider tokens are one-time credentials. Mint through the same
-    // shared tracker for each request, matching the SDK's appStatus flow.
-    const connectionToken = await withTimeout(
-      recoveryAuthToken(signing, snapshot.leaseUuid),
-      AI_TOOL_API_TIMEOUT_MS, 'App discovery connection authentication', roundSignal,
-    );
-    roundSignal.throwIfAborted();
-    // Each endpoint contributes independent evidence. A stalled connection
-    // read must not discard a completed readiness/failure observation.
+    const readConnection = async () => {
+      // Each request needs its own one-time credential from the shared tracker.
+      const connectionToken = await withTimeout(
+        recoveryAuthToken(signing, snapshot.leaseUuid),
+        AI_TOOL_API_TIMEOUT_MS, 'App discovery connection authentication', roundSignal,
+      );
+      roundSignal.throwIfAborted();
+      return withTimeout(
+        getLeaseConnectionInfo(snapshot.providerUrl, snapshot.leaseUuid, connectionToken, fetchWithAbort, import.meta.env.DEV),
+        AI_TOOL_API_TIMEOUT_MS, 'App discovery connection', roundSignal,
+      );
+    };
+    // Start status immediately: stalled connection authentication or I/O must
+    // not discard a completed readiness/failure observation.
     const observations = await Promise.allSettled([
       withTimeout(
         getLeaseStatus(snapshot.providerUrl, snapshot.leaseUuid, statusToken, fetchWithAbort, roundSignal, import.meta.env.DEV),
         AI_TOOL_API_TIMEOUT_MS, 'App discovery status', roundSignal,
       ),
-      withTimeout(
-        getLeaseConnectionInfo(snapshot.providerUrl, snapshot.leaseUuid, connectionToken, fetchWithAbort, import.meta.env.DEV),
-        AI_TOOL_API_TIMEOUT_MS, 'App discovery connection', roundSignal,
-      ),
+      readConnection(),
     ]);
     signal?.throwIfAborted();
     if (!unchanged(registry.getAppByLease(address, snapshot.leaseUuid), snapshot)) return;

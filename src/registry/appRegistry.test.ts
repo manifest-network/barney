@@ -1599,6 +1599,103 @@ describe('appRegistry', () => {
   // consumers (`useRegistryApps`, `AppsSidebar`) get cross-tab updates for
   // free without subscribing to `storage` themselves.
   describe('cross-tab storage event sync', () => {
+    it.each(['update', 'remove', 'clear'] as const)(
+      'preserves unsaved local changes after a remote %s until a local save succeeds',
+      (operation) => {
+        const address = `manifest1unsaved-${operation}`;
+        const key = `barney-apps-${address}`;
+        const original = addApp(address, makeApp({ chainState: 'active', provisionState: 'confirmed' }));
+        const setItem = vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
+          throw new DOMException('Storage quota exceeded', 'QuotaExceededError');
+        });
+        let unsub: (() => void) | undefined;
+        try {
+          const unsaved = updateApp(address, original.leaseUuid, {
+            name: 'local-name',
+            manifest: '{"image":"local/app:2"}',
+            provisionState: 'failed',
+          });
+          expect(unsaved?.status).toBe('failed');
+          expect(JSON.parse(localStorage.getItem(key)!)).toEqual([original]);
+
+          const remoteValue = operation === 'update'
+            ? JSON.stringify([{ ...original, name: 'remote-name' }])
+            : null;
+          if (operation === 'clear') localStorage.clear();
+          else if (remoteValue === null) localStorage.removeItem(key);
+          else localStorage.setItem(key, remoteValue);
+          const listener = vi.fn();
+          unsub = subscribeToRegistry(listener);
+          window.dispatchEvent(new StorageEvent('storage', {
+            key: operation === 'clear' ? null : key,
+            newValue: remoteValue,
+            oldValue: operation === 'clear' ? null : JSON.stringify([original]),
+            storageArea: localStorage,
+          }));
+
+          expect(getApps(address)).toEqual([unsaved]);
+          expect(listener).not.toHaveBeenCalled();
+
+          // Once storage accepts a local write, it must include the retained
+          // changes and resume normal synchronization with other tabs.
+          const saved = updateApp(address, original.leaseUuid, { size: 'medium' });
+          expect(saved).toEqual({ ...unsaved, size: 'medium' });
+          expect(JSON.parse(localStorage.getItem(key)!)).toEqual([saved]);
+          expect(listener).toHaveBeenCalledOnce();
+          listener.mockClear();
+          const remoteAfterSave = { ...saved, name: 'remote-after-save' };
+          localStorage.setItem(key, JSON.stringify([remoteAfterSave]));
+          window.dispatchEvent(new StorageEvent('storage', {
+            key,
+            newValue: JSON.stringify([remoteAfterSave]),
+            oldValue: JSON.stringify([saved]),
+            storageArea: localStorage,
+          }));
+
+          expect(listener).toHaveBeenCalledOnce();
+          expect(listener).toHaveBeenCalledWith(address);
+          expect(getApps(address)).toEqual([remoteAfterSave]);
+        } finally {
+          setItem.mockRestore();
+          unsub?.();
+          // Clear a dirty fallback too if an earlier assertion failed.
+          addApp(address, original);
+          removeApp(address, original.leaseUuid);
+        }
+      },
+    );
+
+    it('preserves an unsaved local removal when another tab updates the same cache', () => {
+      const address = 'manifest1unsaved-removal';
+      const key = `barney-apps-${address}`;
+      const original = addApp(address, makeApp());
+      const setItem = vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
+        throw new DOMException('Storage quota exceeded', 'QuotaExceededError');
+      });
+      try {
+        expect(removeApp(address, original.leaseUuid)).toBe(true);
+        expect(getApps(address)).toEqual([]);
+        const remote = { ...original, name: 'remote-name' };
+        localStorage.setItem(key, JSON.stringify([remote]));
+        window.dispatchEvent(new StorageEvent('storage', {
+          key,
+          newValue: JSON.stringify([remote]),
+          oldValue: JSON.stringify([original]),
+          storageArea: localStorage,
+        }));
+
+        expect(getApps(address)).toEqual([]);
+        const replacement = makeApp({ name: 'replacement', leaseUuid: 'replacement-lease' });
+        addApp(address, replacement);
+        expect(JSON.parse(localStorage.getItem(key)!)).toEqual([replacement]);
+      } finally {
+        setItem.mockRestore();
+        addApp(address, original);
+        removeApp(address, original.leaseUuid);
+        removeApp(address, 'replacement-lease');
+      }
+    });
+
     it('notifies subscribers when another tab writes the wallet registry key', () => {
       const listener = vi.fn();
       const unsub = subscribeToRegistry(listener);
