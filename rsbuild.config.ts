@@ -164,7 +164,7 @@ export default defineConfig({
   },
   server: {
     // Dev and preview share this server config; keep their proxies local by default.
-    host: '127.0.0.1',
+    host: process.env.BARNEY_DEV_HOST?.trim() || '127.0.0.1',
     proxy: {
       '/api/morpheus': (() => {
         // server/dev.mjs starts the same authenticated/accounted relay used in
@@ -224,7 +224,7 @@ export default defineConfig({
       override: {
         cacheGroups: {
           cosmos: {
-            test: /[\\/]node_modules[\\/](@cosmos-kit|@interchain-ui|chain-registry)[\\/]/,
+            test: /[\\/]node_modules[\\/](@cosmos-kit|@interchain-ui)[\\/]/,
             name: 'vendor-cosmos',
             priority: 20,
           },

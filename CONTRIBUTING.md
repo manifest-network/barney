@@ -38,13 +38,12 @@ The `patches/` directory contains `patch-package` patches applied automatically 
 Docker installations.
 
 - **`@cosmos-kit+web3auth+2.16.6-ll.1.patch`** — relaxes `Web3AuthSigner.signAmino`'s chain-ID check to allow an empty `chain_id` in the sign doc. This is required for ADR-036 off-chain signatures (provider auth tokens), which use `chain_id: ''` by convention. Without the patch every provider HTTP call would fail with "Chain ID mismatch".
-- **`image-size+1.2.1.patch`** — rejects non-progressing ICNS entries and JXL/HEIF boxes in the native peer dependency graph. No patched upstream version is available. Keep this patch and `server/image-size.test.mjs` while the pinned package remains installed.
 
 If a patched dependency is bumped, re-apply the patch logic against the new version
 and regenerate the file with `npx patch-package <package-name>`. For the wallet
 patch, run `src/__tests__/dependencyCompatibility.test.ts` and verify ADR-036
-provider auth with a testnet deployment. For image-size, run its malformed-input
-and valid-image regressions. Do not skip `postinstall` in normal development or CI.
+provider auth with a testnet deployment. Do not skip `postinstall` in normal
+development or CI.
 
 ## Daily workflow
 

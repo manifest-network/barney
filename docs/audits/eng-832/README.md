@@ -18,26 +18,26 @@ classification does not establish that a package executes in production.
 
 | Updated locked graph | Critical | High | Moderate | Low | Total |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Full | 0 | 7 | 3 | 42 | 52 |
-| `--omit=dev` | 0 | 7 | 3 | 38 | 48 |
+| Full | 0 | 0 | 3 | 42 | 45 |
+| `--omit=dev` | 0 | 0 | 3 | 38 | 41 |
 
-The remaining records derive from four advisory URLs across three packages:
-locally patched image-size (two high advisories), stream-json (one moderate), and
-elliptic (one low). Native peers now installed by normal npm resolution add
-affected parent-package records. The table preserves those counts instead of
-presenting the patched graph as an audit with zero high findings.
+The remaining records derive from two advisory URLs across two packages:
+stream-json (one moderate) and elliptic (one low). Normal peer resolution adds
+affected wallet parent-package records. No high or critical advisory remains,
+and the final lockfile contains neither Metro nor image-size.
 
 The runtime image copies the built SPA and `server/`, without `node_modules`.
-The Node relay imports local files and Node builtins only. Browser dependencies,
-build/test tooling, and optional native peers are evaluated separately in
-[reachability.md](reachability.md).
+The Node relay imports local files and Node builtins only. [reachability.md](reachability.md)
+records browser and build/test reachability for the original lockfile. The newly
+installed peer graph is reviewed below; it was absent from that baseline.
 
 ## Dependency decisions
 
 - Vitest and coverage move together to 4.1.11; Vite stays explicitly on the patched
   7.3.6 line. Happy DOM moves to 20.14.3.
 - Rsbuild moves to 1.7.6 and its React/Node-polyfill plugins to 1.4.6. PostCSS moves
-  to 8.5.28. Explicit `127.0.0.1` binding covers both development and preview.
+  to 8.5.28. Development and preview bind to `127.0.0.1` by default; an explicit
+  `BARNEY_DEV_HOST` supports remote workspaces and devcontainers.
 - Interchain UI 1.26.3 supports React 19 and satisfies Cosmos Kit's peer range.
   React type packages satisfy Cosmos Kit's published `latest` peer requirements.
 - The imported chain-registry types are explicitly pinned to the compatible
@@ -48,7 +48,9 @@ build/test tooling, and optional native peers are evaluated separately in
 - Protobufjs 7.6.6 backports security fixes while retaining the existing minimal
   reader/writer API. The override replaces 6.x in generated Keplr/ICS23 consumers;
   exact wire bytes, maximum uint64 values, proof verification, and real wallet
-  signatures are covered by `dependencyCompatibility.test.ts`.
+  signatures are covered by `dependencyCompatibility.test.ts`. Tests resolve
+  dependencies from the installed consumers so a different hoisted copy cannot
+  stand in for the application path.
 - UUID 11.1.1 retains CommonJS support. Existing consumers use v1, v4, parse, or validate;
   moving to a newer ESM-only major would change their import contract.
 - WebSocket overrides retain each consumer's major: 7.5.13 and 8.21.3.
@@ -56,8 +58,44 @@ build/test tooling, and optional native peers are evaluated separately in
   utf-8-validate 5.0.10. npm can then nest Web3Auth's required Async Storage 2.x,
   WalletConnect's ox 0.9.x, and rpc-websockets' utf-8-validate 6.x under their
   respective consumers. These are real packages satisfying declared ranges.
+- Async Storage's React Native peer is scoped to `react-native-web@0.21.2`, with
+  the same alias declared as a root optional dependency. This selects a real
+  browser implementation and avoids installing the native React Native/Metro
+  toolchain. Its React and ReactDOM peer ranges include the pinned React 19.
 - npm ignores the old Yarn `resolutions` block, so it is removed. Supported
   Manifest SDK/CosmJS forks remain pinned; there is no blanket CosmJS migration.
+
+## Newly resolved peers and browser reachability
+
+Both the root Async Storage 1.24.0 and Web3Auth's required Async Storage 2.2.0
+declare a required React Native peer. Removing the root pin alone does not remove
+that edge. The scoped override follows React Native Web's documented
+[browser alias pattern](https://necolas.github.io/react-native-web/docs/setup/).
+Async Storage's default web implementation uses `window.localStorage` without
+importing React Native; the browser storage regression exercises the installed
+Web3Auth consumer's entry directly. A root alias makes the intended peer choice
+explicit and allows normal npm resolution to replace the old native peer cycle.
+
+This is a browser platform choice. React Native Web does not implement Async
+Storage's native bridge; remove/reassess this override before adding a native
+application target. The Node relay uses neither implementation. Replacing the
+native tree removed 128 installed packages and added eight browser helpers, and
+reduced lock entries from 1,363 in the initial remediation to 1,243. The image-size
+source patch, its parser tests, and its advisory disposition are no longer needed.
+`--omit=peer` would only omit files from disk while retaining the locked peer graph;
+it would not resolve the locked-graph findings.
+
+Other peers introduced by normal resolution belong to different execution paths:
+
+| Peer group | Path and concrete usage |
+| --- | --- |
+| bitcoinjs-lib 6.1.8 / ecpair 2.1.0 | Web3Auth client → Keplr cosmos/common 0.13.41 → Keplr crypto 0.13.41. The crypto key module imports Bitcoin helpers and initializes ECC immediately. This is browser wallet code. |
+| Starknet 8.9.2 and its ABI/CLI helpers | Keplr crypto requires Starknet conditionally when calculating a Starknet address; Keplr types also references its types. A conditional call does not prove absence from the browser bundle. |
+| Terser 5.51.2 and source-map helpers | Vite's optional minifier peer, in build/test tooling. |
+
+Solana, ox, and utf-8-validate already existed in the baseline. None of the wallet
+peer groups above should be classified as native-only merely because Barney does
+not import those package names directly.
 
 ## Scoped residual dispositions
 
@@ -65,31 +103,9 @@ These decisions apply only to the named advisory, version, and usage below.
 They do not accept future advisories or other call paths. Review expires
 **2026-10-10**; the owner must remove the dependency, land an upstream fix, or
 renew the decision with fresh evidence. Raw npm audit results remain visible.
-
-### image-size 1.2.1: locally patched
-
-Advisories: [ICNS non-progressing entries](https://github.com/advisories/GHSA-w3rx-r6r6-pgpr)
-and [JXL/HEIF non-progressing boxes](https://github.com/advisories/GHSA-5p2g-fcmc-qvqq).
-No fixed upstream version was available on the review date.
-
-Normal peer installation brings this package through Async Storage's required
-React Native peer, the React Native CLI, and Metro. Barney invokes Rsbuild rather
-than Metro, and does not copy these Node packages into its runtime image.
-
-The pinned [source patch](../../../patches/image-size+1.2.1.patch), applied by
-`patch-package --error-on-fail` during `postinstall`, rejects short ICNS entry headers and entry
-lengths below eight bytes, and rejects short/non-progressing shared box headers.
-It preserves the v1 buffer, filename, and callback APIs used by Metro. Tests run
-the installed parser in bounded child processes, covering the malicious inputs
-and valid image/API fixtures. The browser resolution guard rejects `image-size`
-imports, including imports reached through the otherwise permitted MCP issuer.
-Installation uses `--error-on-fail`; a regression fixture verifies an incompatible
-required patch stops installation outside CI and test environments as well.
-
-Disposition: retain the patched package until the native peer requirement can be
-removed upstream or a maintained compatible replacement is available. npm audits
-identify versions rather than local patch contents, so these high findings remain
-reported. The patch and regression tests are required whenever this pin changes.
+The dated review is tracked by [ENG-929](https://linear.app/liftedinit/issue/ENG-929),
+assigned to Felix Morency and due **2026-10-09**. [ENG-837](https://linear.app/liftedinit/issue/ENG-837)
+owns the required dependency audit gate and enforcement of exception expiry.
 
 ### stream-json 1.9.1: affected filters are outside the consumed API
 
@@ -143,21 +159,22 @@ raw audit evidence with a severity filter or omit peers to make totals disappear
 
 Validation on Node 22.19.0 / npm 10.9.3:
 
-- Normal `npm ci` completed with both required patches. The final explicit chain
-  type pin was installed normally, followed by a successful `npm ls --all` and
-  an offline `npm ci --dry-run --ignore-scripts` lock-consistency check.
-- `npm run test:coverage -- --maxWorkers=4`: **2,629 tests in 112 files passed**.
-  Coverage: statements 82.56%, branches 78.02%, functions 78.75%, lines 84.86%.
-  The final browser-guard query/fragment/loader cases passed in a focused rerun.
+- A clean `npm ci --no-audit --no-fund` completed on the final lockfile with
+  lifecycle scripts enabled and the required Web3Auth patch applied. The installed
+  graph passed `npm ls --all`; notification/audit flags do not bypass peer resolution.
+- `npm run test:coverage -- --maxWorkers=4`: **2,625 tests in 112 files passed**.
+  Coverage: statements 82.55%, branches 78.02%, functions 78.75%, lines 84.86%.
 - Existing deployment, consent, authentication, and relay tests passed. New
   compatibility tests exercise the installed wallet signer with real cryptography,
   ADR-036, direct/Amino signing, maximum uint64 wire encoding, ICS23 verification,
   and foreign-chain/corrupted-worker rejection. Worker transport is deterministic.
+  The installed Async Storage browser entry exercises real localStorage operations;
+  a malformed Web3Auth patch fixture verifies postinstall fails outside CI.
 - The production TypeScript/Rsbuild build and `npm run check:bundle` passed.
   The bundle check confirms the existing MCP exclusions and single core/manifestjs
-  installation; build-time guards also reject the two Node parsers.
+  installation; build-time guards also reject stream-json.
 - Plain `npm run lint`, the production build, and the bundle check passed again
-  after the final guard adjustment. The rebuilt entry HTML has the same SHA-256
+  on the final browser peer graph. The rebuilt entry HTML has the same SHA-256
   as the browser smoke artifact:
   `ac708859a607db3e218287e338c3525637d6008337e64a3e2c966a4df3a9fb28`.
 - Chromium 152.0.7977.82 smoke passed at 1440×1000 and 390×844: landing render,

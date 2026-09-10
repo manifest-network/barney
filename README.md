@@ -38,10 +38,11 @@ cp .env.example .env.local
 npm run dev
 ```
 
-The dev server starts at <http://localhost:3000>.
+The dev server starts at <http://localhost:3000> and binds to loopback by default.
+See [Development](#development) for remote workspace and devcontainer access.
 
 The lockfile installs with normal peer resolution. `postinstall` applies the
-wallet-signing and image-parser patches described in [CONTRIBUTING.md](CONTRIBUTING.md#patches).
+wallet-signing patch described in [CONTRIBUTING.md](CONTRIBUTING.md#patches).
 
 ## Running with Docker
 
@@ -96,6 +97,20 @@ cp .env.example .env.local
 # Set MORPHEUS_API_KEY and PUBLIC_WEB3AUTH_CLIENT_ID, then review the policy.
 npm run dev
 ```
+
+`npm run dev` and `npm run preview` bind to `127.0.0.1` by default. For a remote
+workspace or devcontainer that needs another listening interface, set
+`BARNEY_DEV_HOST` in `.env.local` or on the command line:
+
+```bash
+BARNEY_DEV_HOST=0.0.0.0 npm run dev
+BARNEY_DEV_HOST=0.0.0.0 npm run preview
+```
+
+`0.0.0.0` exposes the asset server and its proxies on all IPv4 interfaces; use it
+with a trusted network or private port forward. Set the existing
+`MORPHEUS_RELAY_ALLOWED_ORIGINS` and `MORPHEUS_RELAY_AUDIENCE` for the browser URL
+you use. Keep the relay's own listener on loopback.
 
 ### Production
 

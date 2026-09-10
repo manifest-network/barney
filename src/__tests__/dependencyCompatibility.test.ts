@@ -2,30 +2,48 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { compileFunction } from 'node:vm';
-import { ics23, calculateExistenceRoot, tendermintSpec, verifyMembership } from '@confio/ics23';
-import { Secp256k1Wallet, serializeSignDoc } from '@cosmjs/amino';
-import { Secp256k1, Secp256k1Signature, sha256 } from '@cosmjs/crypto';
-import { fromBase64 } from '@cosmjs/encoding';
-import { DirectSecp256k1Wallet, makeSignBytes } from '@cosmjs/proto-signing';
 import type { Web3AuthSigner } from '@cosmos-kit/web3auth/esm/extension/signer.js';
 import type { FromWorkerMessage } from '@cosmos-kit/web3auth/esm/extension/types.js';
-import { makeADR36AminoSignDoc, verifyADR36Amino } from '@keplr-wallet/cosmos';
-import { SignDoc as KeplrSignDoc } from '@keplr-wallet/proto-types/cosmos/tx/v1beta1/tx';
-import * as eccrypto from '@toruslabs/eccrypto';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
 const CHAIN_ID = 'manifest-test-1';
 const PREFIX = 'manifest';
 const fixtureKey = (byte: number) => Buffer.alloc(32, byte);
-const require = createRequire(import.meta.url);
+const appRequire = createRequire(import.meta.url);
 type SignerUtils = typeof import('@cosmos-kit/web3auth/esm/extension/utils.js');
+
+// Follow each installed consumer's resolution context. Root-level transitive
+// imports could silently exercise another CosmJS/Keplr version after a hoist.
+const clientRequire = createRequire(appRequire.resolve('@cosmos-kit/web3auth/esm/extension/client.js'));
+const signerPath = clientRequire.resolve('./signer.js');
+const utilsPath = clientRequire.resolve('./utils.js');
+const workerRequire = createRequire(clientRequire.resolve('./web3auth.worker.js'));
+const aminoPath = workerRequire.resolve('@cosmjs/amino');
+const aminoRequire = createRequire(aminoPath);
+const protoSigningPath = workerRequire.resolve('@cosmjs/proto-signing');
+const protoSigningRequire = createRequire(protoSigningPath);
+const { Secp256k1Wallet, serializeSignDoc } = workerRequire(aminoPath);
+const { DirectSecp256k1Wallet, makeSignBytes } = workerRequire(protoSigningPath);
+const aminoCrypto = aminoRequire('@cosmjs/crypto');
+const directCrypto = protoSigningRequire('@cosmjs/crypto');
+const { fromBase64 } = aminoRequire('@cosmjs/encoding');
+const eccrypto = workerRequire('@toruslabs/eccrypto');
+const keplrPath = clientRequire.resolve('@keplr-wallet/cosmos');
+const keplrRequire = createRequire(keplrPath);
+const { makeADR36AminoSignDoc, verifyADR36Amino } = clientRequire(keplrPath);
+const keplrCodecPath = keplrRequire.resolve('@keplr-wallet/proto-types/cosmos/tx/v1beta1/tx');
+const { SignDoc: KeplrSignDoc } = keplrRequire(keplrCodecPath);
+const stargateRequire = createRequire(appRequire.resolve('@cosmjs/stargate'));
+const ics23Path = stargateRequire.resolve('@confio/ics23');
+const ics23Require = createRequire(ics23Path);
+const { ics23, calculateExistenceRoot, tendermintSpec, verifyMembership } = stargateRequire(ics23Path);
+const ics23CodecPath = ics23Require.resolve('./generated/codecimpl.js');
 
 // The published connector uses extensionless ESM imports, which Node cannot
 // resolve. Transform the actual installed module without copying its behavior.
 // Only worker transport and unused login UI are substituted; crypto stays real.
-function loadInstalledModule<T>(specifier: string, imports: Record<string, unknown>): T {
-  const filename = require.resolve(specifier);
+function loadInstalledModule<T>(filename: string, imports: Record<string, unknown>): T {
   const moduleRequire = createRequire(filename);
   const source = ts.transpileModule(readFileSync(filename, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -37,7 +55,7 @@ function loadInstalledModule<T>(specifier: string, imports: Record<string, unkno
 }
 
 const utils = loadInstalledModule<SignerUtils>(
-  '@cosmos-kit/web3auth/esm/extension/utils.js',
+  utilsPath,
   { '@web3auth/modal': {} },
 );
 
@@ -61,7 +79,7 @@ async function signerFixture(tamperResponse = false) {
     expect(await callback({ type: 'sign', payload, signature })).toBe(true);
   });
   const { Web3AuthSigner: Signer } = loadInstalledModule<{ Web3AuthSigner: typeof Web3AuthSigner }>(
-    '@cosmos-kit/web3auth/esm/extension/signer.js',
+    signerPath,
     { './utils': { ...utils, sendAndListenOnce: transport } },
   );
   const promptSign = vi.fn(async () => true);
@@ -71,6 +89,19 @@ async function signerFixture(tamperResponse = false) {
 }
 
 describe('dependency compatibility for generated protobuf codecs', () => {
+  it.each([
+    ['Keplr transaction codec', keplrCodecPath],
+    ['Stargate ICS23 codec', ics23CodecPath],
+  ])('%s resolves the patched protobuf runtime', (_name, codecPath) => {
+    const codecRequire = createRequire(codecPath);
+    const runtimePath = codecRequire.resolve('protobufjs/minimal');
+    const runtimeRequire = createRequire(runtimePath);
+    const installed = runtimeRequire('./package.json');
+    const app = appRequire('../../package.json');
+    expect(installed.name).toBe('protobufjs');
+    expect(installed.version, runtimePath).toBe(app.overrides.protobufjs);
+  });
+
   it('preserves exact sign bytes and the maximum uint64 through the Keplr generated codec', () => {
     const doc = KeplrSignDoc.fromPartial({
       bodyBytes: Uint8Array.from([1, 2, 3]),
@@ -117,9 +148,9 @@ describe('installed Web3Auth signer compatibility', () => {
     const { signer, account } = await signerFixture();
     const doc = { ...makeADR36AminoSignDoc(account.address, 'fixture'), chain_id: CHAIN_ID };
     const result = await signer.signAmino(account.address, doc);
-    expect(await Secp256k1.verifySignature(
-      Secp256k1Signature.fromFixedLength(fromBase64(result.signature.signature)),
-      sha256(serializeSignDoc(doc)),
+    expect(await aminoCrypto.Secp256k1.verifySignature(
+      aminoCrypto.Secp256k1Signature.fromFixedLength(fromBase64(result.signature.signature)),
+      aminoCrypto.sha256(serializeSignDoc(doc)),
       account.pubkey,
     )).toBe(true);
   });
@@ -129,9 +160,9 @@ describe('installed Web3Auth signer compatibility', () => {
     const doc = { bodyBytes: new Uint8Array([1, 2]), authInfoBytes: new Uint8Array([3, 4]), chainId: CHAIN_ID, accountNumber: 9007199254740993n };
     const result = await signer.signDirect(account.address, doc);
     expect(result.signed.accountNumber).toBe(doc.accountNumber);
-    expect(await Secp256k1.verifySignature(
-      Secp256k1Signature.fromFixedLength(fromBase64(result.signature.signature)),
-      sha256(makeSignBytes(doc)),
+    expect(await directCrypto.Secp256k1.verifySignature(
+      directCrypto.Secp256k1Signature.fromFixedLength(fromBase64(result.signature.signature)),
+      directCrypto.sha256(makeSignBytes(doc)),
       account.pubkey,
     )).toBe(true);
   });

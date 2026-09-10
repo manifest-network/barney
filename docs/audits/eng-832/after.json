@@ -1,9 +1,9 @@
 {
   "capturedAt": "2026-09-10",
-  "lockfileSha256": "56d752fb5a7ecda5b0ba425a18d1f25f804814d35830c1e3cd1bbfedfdb6984a",
+  "lockfileSha256": "f592a157a57a9c4dbf3569cfb0587f105a0c18c76f4a4a6edd64e72dc0db9cb0",
   "commands": [
-    "npm audit --package-lock-only --json",
-    "npm audit --package-lock-only --omit=dev --json"
+    "npm audit --package-lock-only --json --registry=https://registry.npmjs.org",
+    "npm audit --package-lock-only --omit=dev --json --registry=https://registry.npmjs.org"
   ],
   "scopes": {
     "full": {
@@ -11,9 +11,9 @@
         "info": 0,
         "low": 42,
         "moderate": 3,
-        "high": 7,
+        "high": 0,
         "critical": 0,
-        "total": 52
+        "total": 45
       },
       "packages": {
         "@chain-registry/keplr": {
@@ -38,7 +38,9 @@
             "@cosmjs/crypto"
           ],
           "effects": [
-            "@cosmjs/proto-signing"
+            "@cosmjs/proto-signing",
+            "@dao-dao/cosmiframe",
+            "@manifest-network/manifest-mcp-core"
           ],
           "range": "<=0.33.1",
           "nodes": [
@@ -69,11 +71,7 @@
             "@cosmjs/crypto"
           ],
           "effects": [
-            "@dao-dao/cosmiframe",
-            "@manifest-network/manifest-mcp-core",
-            "@manifest-network/manifest-sdk",
-            "@manifest-network/manifestjs",
-            "@manifest-network/stargate"
+            "@manifest-network/manifest-sdk"
           ],
           "range": "0.25.0-alpha.0 - 0.33.1",
           "nodes": [
@@ -86,7 +84,10 @@
           "via": [
             "@cosmjs/crypto"
           ],
-          "effects": [],
+          "effects": [
+            "@manifest-network/manifestjs",
+            "@manifest-network/stargate"
+          ],
           "range": "<=0.33.1",
           "nodes": [
             "node_modules/@cosmjs/tendermint-rpc"
@@ -222,8 +223,7 @@
           "via": [
             "@cosmjs/amino",
             "@cosmjs/proto-signing",
-            "@manifest-network/manifestjs",
-            "@manifest-network/stargate"
+            "@manifest-network/manifestjs"
           ],
           "effects": [
             "@manifest-network/manifest-agent-core",
@@ -289,7 +289,6 @@
             "@cosmjs/tendermint-rpc"
           ],
           "effects": [
-            "@manifest-network/manifest-mcp-core",
             "@manifest-network/manifestjs"
           ],
           "range": "*",
@@ -313,34 +312,6 @@
           "range": "*",
           "nodes": [
             "node_modules/@cosmos-kit/web3auth"
-          ]
-        },
-        "@react-native/community-cli-plugin": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            "metro"
-          ],
-          "effects": [
-            "react-native"
-          ],
-          "range": "<=0.81.0-rc.5 || 0.82.0-nightly-20250710-586f5ba89 - 0.82.0-rc.5 || >=0.87.0-nightly-20260507-ba204faa7",
-          "nodes": [
-            "node_modules/@react-native/community-cli-plugin"
-          ]
-        },
-        "@react-native/virtualized-lists": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            "react-native"
-          ],
-          "effects": [
-            "react-native"
-          ],
-          "range": "0.86.1 || >=0.87.0-nightly-20260507-ba204faa7",
-          "nodes": [
-            "node_modules/@react-native/virtualized-lists"
           ]
         },
         "@rsbuild/plugin-node-polyfill": {
@@ -533,6 +504,7 @@
           "effects": [
             "@toruslabs/base-controllers",
             "@toruslabs/ethereum-controllers",
+            "@web3auth/modal",
             "@web3auth/no-modal",
             "@web3auth/ws-embed"
           ],
@@ -550,7 +522,7 @@
             "@web3auth/no-modal"
           ],
           "effects": [],
-          "range": "10.0.0-alpha.0 - 10.16.0",
+          "range": ">=10.0.0-alpha.0",
           "nodes": [
             "node_modules/@web3auth/modal"
           ]
@@ -685,51 +657,6 @@
             "node_modules/elliptic"
           ]
         },
-        "image-size": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            {
-              "source": 1138808,
-              "name": "image-size",
-              "dependency": "image-size",
-              "title": "image-size: ICNS parser allows denial of service through an infinite loop",
-              "url": "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr",
-              "severity": "high",
-              "cwe": [
-                "CWE-835"
-              ],
-              "cvss": {
-                "score": 7.5,
-                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-              },
-              "range": "<=2.0.2"
-            },
-            {
-              "source": 1138809,
-              "name": "image-size",
-              "dependency": "image-size",
-              "title": "image-size: JXL and HEIF parsers allow denial of service through infinite loops",
-              "url": "https://github.com/advisories/GHSA-5p2g-fcmc-qvqq",
-              "severity": "high",
-              "cwe": [
-                "CWE-835"
-              ],
-              "cvss": {
-                "score": 7.5,
-                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-              },
-              "range": "<=2.0.2"
-            }
-          ],
-          "effects": [
-            "metro"
-          ],
-          "range": "*",
-          "nodes": [
-            "node_modules/image-size"
-          ]
-        },
         "jayson": {
           "severity": "moderate",
           "isDirect": false,
@@ -742,67 +669,6 @@
           "range": ">=4.2.0",
           "nodes": [
             "node_modules/jayson"
-          ]
-        },
-        "metro": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            "image-size",
-            "metro-config",
-            "metro-transform-worker"
-          ],
-          "effects": [
-            "@react-native/community-cli-plugin",
-            "metro-config",
-            "metro-transform-worker"
-          ],
-          "range": "0.22.1 - 0.83.7 || 0.84.0 - 0.84.4 || >=0.85.0",
-          "nodes": [
-            "node_modules/metro"
-          ]
-        },
-        "metro-config": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            "metro"
-          ],
-          "effects": [
-            "metro"
-          ],
-          "range": "<=0.83.7 || 0.84.0 - 0.84.4 || >=0.85.0",
-          "nodes": [
-            "node_modules/metro-config"
-          ]
-        },
-        "metro-transform-worker": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            "metro"
-          ],
-          "effects": [
-            "metro"
-          ],
-          "range": "0.60.0 - 0.83.7 || 0.84.0 - 0.84.4 || >=0.85.0",
-          "nodes": [
-            "node_modules/metro-transform-worker"
-          ]
-        },
-        "react-native": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            "@react-native/community-cli-plugin",
-            "@react-native/virtualized-lists"
-          ],
-          "effects": [
-            "@react-native/virtualized-lists"
-          ],
-          "range": "0.73.0-nightly-20230506-1af868c52 - 0.81.0-rc.5 || 0.82.0-nightly-20250710-586f5ba89 - 0.82.0-rc.5 || >=0.87.0-nightly-20260507-ba204faa7",
-          "nodes": [
-            "node_modules/react-native"
           ]
         },
         "ripple-keypairs": {
@@ -883,9 +749,9 @@
         "info": 0,
         "low": 38,
         "moderate": 3,
-        "high": 7,
+        "high": 0,
         "critical": 0,
-        "total": 48
+        "total": 41
       },
       "packages": {
         "@chain-registry/keplr": {
@@ -1187,34 +1053,6 @@
             "node_modules/@cosmos-kit/web3auth"
           ]
         },
-        "@react-native/community-cli-plugin": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            "metro"
-          ],
-          "effects": [
-            "react-native"
-          ],
-          "range": "<=0.81.0-rc.5 || 0.82.0-nightly-20250710-586f5ba89 - 0.82.0-rc.5 || >=0.87.0-nightly-20260507-ba204faa7",
-          "nodes": [
-            "node_modules/@react-native/community-cli-plugin"
-          ]
-        },
-        "@react-native/virtualized-lists": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            "react-native"
-          ],
-          "effects": [
-            "react-native"
-          ],
-          "range": "0.86.1 || >=0.87.0-nightly-20260507-ba204faa7",
-          "nodes": [
-            "node_modules/@react-native/virtualized-lists"
-          ]
-        },
         "@solana/web3.js": {
           "severity": "moderate",
           "isDirect": false,
@@ -1500,51 +1338,6 @@
             "node_modules/elliptic"
           ]
         },
-        "image-size": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            {
-              "source": 1138808,
-              "name": "image-size",
-              "dependency": "image-size",
-              "title": "image-size: ICNS parser allows denial of service through an infinite loop",
-              "url": "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr",
-              "severity": "high",
-              "cwe": [
-                "CWE-835"
-              ],
-              "cvss": {
-                "score": 7.5,
-                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-              },
-              "range": "<=2.0.2"
-            },
-            {
-              "source": 1138809,
-              "name": "image-size",
-              "dependency": "image-size",
-              "title": "image-size: JXL and HEIF parsers allow denial of service through infinite loops",
-              "url": "https://github.com/advisories/GHSA-5p2g-fcmc-qvqq",
-              "severity": "high",
-              "cwe": [
-                "CWE-835"
-              ],
-              "cvss": {
-                "score": 7.5,
-                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-              },
-              "range": "<=2.0.2"
-            }
-          ],
-          "effects": [
-            "metro"
-          ],
-          "range": "*",
-          "nodes": [
-            "node_modules/image-size"
-          ]
-        },
         "jayson": {
           "severity": "moderate",
           "isDirect": false,
@@ -1557,67 +1350,6 @@
           "range": ">=4.2.0",
           "nodes": [
             "node_modules/jayson"
-          ]
-        },
-        "metro": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            "image-size",
-            "metro-config",
-            "metro-transform-worker"
-          ],
-          "effects": [
-            "@react-native/community-cli-plugin",
-            "metro-config",
-            "metro-transform-worker"
-          ],
-          "range": "0.22.1 - 0.83.7 || 0.84.0 - 0.84.4 || >=0.85.0",
-          "nodes": [
-            "node_modules/metro"
-          ]
-        },
-        "metro-config": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            "metro"
-          ],
-          "effects": [
-            "metro"
-          ],
-          "range": "<=0.83.7 || 0.84.0 - 0.84.4 || >=0.85.0",
-          "nodes": [
-            "node_modules/metro-config"
-          ]
-        },
-        "metro-transform-worker": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            "metro"
-          ],
-          "effects": [
-            "metro"
-          ],
-          "range": "0.60.0 - 0.83.7 || 0.84.0 - 0.84.4 || >=0.85.0",
-          "nodes": [
-            "node_modules/metro-transform-worker"
-          ]
-        },
-        "react-native": {
-          "severity": "high",
-          "isDirect": false,
-          "via": [
-            "@react-native/community-cli-plugin",
-            "@react-native/virtualized-lists"
-          ],
-          "effects": [
-            "@react-native/virtualized-lists"
-          ],
-          "range": "0.73.0-nightly-20230506-1af868c52 - 0.81.0-rc.5 || 0.82.0-nightly-20250710-586f5ba89 - 0.82.0-rc.5 || >=0.87.0-nightly-20260507-ba204faa7",
-          "nodes": [
-            "node_modules/react-native"
           ]
         },
         "ripple-keypairs": {

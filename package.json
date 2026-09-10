@@ -20,8 +20,10 @@
     "postinstall": "patch-package --error-on-fail"
   },
   "overrides": {
+    "@react-native-async-storage/async-storage": {
+      "react-native": "npm:react-native-web@0.21.2"
+    },
     "axios": "$axios",
-    "image-size": "1.2.1",
     "postcss": "$postcss",
     "protobufjs": "7.6.6",
     "uuid": "11.1.1",
@@ -52,6 +54,7 @@
   "optionalDependencies": {
     "@react-native-async-storage/async-storage": "1.24.0",
     "ox": "0.11.3",
+    "react-native": "npm:react-native-web@0.21.2",
     "utf-8-validate": "5.0.10"
   },
   "devDependencies": {

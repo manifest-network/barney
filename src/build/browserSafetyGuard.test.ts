@@ -28,7 +28,7 @@ describe('forbiddenNodeOnlyImport', () => {
       expect(forbiddenNodeOnlyImport(req, nodeIssuer)).toMatch(/sdk node subpath/);
     });
 
-    it.each(['image-size', 'stream-json'])('flags the audited %s parser from any issuer', (pkg) => {
+    it.each(['stream-json'])('flags the audited %s parser from any issuer', (pkg) => {
       for (const req of [
         pkg,
         `${pkg}?raw`,
@@ -78,7 +78,7 @@ describe('forbiddenNodeOnlyImport', () => {
       expect(forbiddenNodeOnlyImport('./helpers', '/app/src/ai/toolExecutor/index.ts')).toBeNull();
     });
 
-    it.each(['image-size', 'stream-json'])('does not confuse other modules with the %s package', (pkg) => {
+    it.each(['stream-json'])('does not confuse other modules with the %s package', (pkg) => {
       for (const req of [
         `${pkg}-helper`,
         `${pkg}-helper?raw`,

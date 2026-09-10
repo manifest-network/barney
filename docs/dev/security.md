@@ -167,9 +167,10 @@ The signature is over a deterministic payload — the provider can verify the us
 
 The [ENG-832 audit](../audits/eng-832/README.md) records locked-graph findings,
 browser/build/relay reachability, dependency overrides, and scoped residual
-dispositions with an owner and expiry. Keep the image-size source patch and its
-malformed-input tests when updating the native peer graph. The browser build
-rejects image-size and stream-json imports; neither package belongs on an app path.
+dispositions with an owner and expiry. Async Storage's React Native peer uses
+React Native Web for this browser application, avoiding the native Metro/image-size
+toolchain. Reassess that override before adding any native application target.
+The browser build rejects stream-json imports; it does not belong on an app path.
 
 The remaining elliptic advisory is reachable through wallet cryptography and
 requires a coordinated Manifest SDK and Torus migration. Signature compatibility
