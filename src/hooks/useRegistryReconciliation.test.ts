@@ -13,7 +13,7 @@ vi.mock('./useVisibilityPolling', () => ({
 vi.mock('../api/appDiscovery', async original => ({
   ...await original<typeof import('../api/appDiscovery')>(),
   discoverTenantApps: vi.fn().mockResolvedValue([]),
-  hydrateDiscoveredApps: vi.fn().mockResolvedValue(undefined),
+  hydrateDiscoveredApp: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../api/sku', () => ({ getProviders: vi.fn(), getSKUs: vi.fn() }));
@@ -38,7 +38,7 @@ vi.mock('../utils/errors', () => ({
 }));
 
 import { useRegistryReconciliation } from './useRegistryReconciliation';
-import { discoverTenantApps, hydrateDiscoveredApps } from '../api/appDiscovery';
+import { discoverTenantApps, hydrateDiscoveredApp } from '../api/appDiscovery';
 import { useVisibilityPolling } from './useVisibilityPolling';
 import { getLeasesByTenant, LeaseState, type Lease } from '../api/billing';
 import { getProviders, getSKUs, type Provider, type SKU } from '../api/sku';
@@ -313,7 +313,7 @@ describe('useRegistryReconciliation', () => {
       [{ uuid: 'lease-web', items: [] }],
       { signal: expect.any(AbortSignal) },
     );
-    expect(hydrateDiscoveredApps).not.toHaveBeenCalled();
+    expect(hydrateDiscoveredApp).not.toHaveBeenCalled();
   });
 
   it('discards a lease read that finishes after switching wallets', async () => {
@@ -338,7 +338,7 @@ describe('useRegistryReconciliation', () => {
     await latestRefresh()();
 
     expect(reconcileWithChain).toHaveBeenCalledTimes(2);
-    expect(hydrateDiscoveredApps).not.toHaveBeenCalled();
+    expect(hydrateDiscoveredApp).not.toHaveBeenCalled();
   });
 
   it('imports apps when successful sequential lease and catalog stages exceed one API interval', async () => {

@@ -19,10 +19,10 @@ import { makeRegistry } from './testHelpers';
 // Mock external modules
 vi.mock('../../api/appDiscovery', () => ({
   discoverTenantApps: vi.fn().mockResolvedValue([]),
-  hydrateDiscoveredApps: vi.fn().mockResolvedValue(undefined),
+  hydrateDiscoveredApp: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { discoverTenantApps, hydrateDiscoveredApps } from '../../api/appDiscovery';
+import { discoverTenantApps, hydrateDiscoveredApp } from '../../api/appDiscovery';
 
 vi.mock('../../api/billing', () => ({
   getLeasesByTenant: vi.fn(),
@@ -200,7 +200,7 @@ describe('executeListApps', () => {
     expect(discoverTenantApps).toHaveBeenCalledWith(
       address, [lease], expect.objectContaining({ registry }),
     );
-    expect(hydrateDiscoveredApps).not.toHaveBeenCalled();
+    expect(hydrateDiscoveredApp).not.toHaveBeenCalled();
   });
 
   it('returns a cold inventory without waiting for provider authentication', async () => {
@@ -212,7 +212,7 @@ describe('executeListApps', () => {
       state === 2 ? apps.map(app => ({ uuid: app.leaseUuid }) as never) : [],
     );
     const signing = { authTokens: { getAuthToken: vi.fn(() => new Promise(() => undefined)) } } as unknown as ToolExecutorOptions['signing'];
-    vi.mocked(hydrateDiscoveredApps).mockImplementationOnce(() => new Promise(() => undefined));
+    vi.mocked(hydrateDiscoveredApp).mockImplementationOnce(() => new Promise(() => undefined));
     const listing = executeListApps({}, makeOptions({ appRegistry: makeRegistry(apps), signing }));
     let result: Awaited<typeof listing> | undefined;
     void listing.then(value => { result = value; });
@@ -220,7 +220,7 @@ describe('executeListApps', () => {
     await vi.waitFor(() => expect(result).toBeDefined());
     expect(result?.data).toMatchObject({ count: 10 });
     expect(signing!.authTokens.getAuthToken).not.toHaveBeenCalled();
-    expect(hydrateDiscoveredApps).not.toHaveBeenCalled();
+    expect(hydrateDiscoveredApp).not.toHaveBeenCalled();
   });
 
   it.each([

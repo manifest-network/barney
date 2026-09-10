@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { getLeaseConnectionInfo, getLeaseStatus, type ConnectionDetails } from '@manifest-network/manifest-sdk/deploy';
-import { discoverTenantApps, hydrateDiscoveredApps } from './appDiscovery';
+import { discoverTenantApps, hydrateDiscoveredApp } from './appDiscovery';
 import { getProviders, getSKUs, type Provider, type SKU } from './sku';
 import { LeaseState, type Lease } from './billing';
 import * as registry from '../registry/appRegistry';
@@ -86,7 +86,7 @@ describe('discoverTenantApps', () => {
     expect(result[0].name).not.toBe('web');
     expect(getProviders).toHaveBeenCalledWith(false);
     expect(getSKUs).toHaveBeenCalledWith(false);
-    await hydrateDiscoveredApps(address, result, signing);
+    await hydrateDiscoveredApp(address, result[0], signing);
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({
       status: 'running', provisionState: 'confirmed', url: 'https://app.example.com',
     });
@@ -147,10 +147,10 @@ describe('discoverTenantApps', () => {
   });
 });
 
-describe('hydrateDiscoveredApps', () => {
+describe('hydrateDiscoveredApp', () => {
   it('recovers readiness and provider-reported access details with read-only wallet authentication', async () => {
     signing.authTokens.getAuthToken.mockResolvedValueOnce('status-token').mockResolvedValueOnce('connection-token');
-    await hydrateDiscoveredApps(address, [app()], signing);
+    await hydrateDiscoveredApp(address, app(), signing);
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({
       status: 'running', provisionState: 'confirmed', url: 'https://app.example.com',
       connection: { host: 'host.example.com', fqdn: 'app.example.com' },
@@ -164,10 +164,10 @@ describe('hydrateDiscoveredApps', () => {
   it('preserves a confirmation during provider progress, but records a failure verdict', async () => {
     const previous = app({ provisionState: 'confirmed' });
     vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'restarting' });
-    await hydrateDiscoveredApps(address, [previous], signing);
+    await hydrateDiscoveredApp(address, previous, signing);
     expect(registry.getAppByLease(address, LEASE_UUID)?.provisionState).toBe('confirmed');
     vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'failing' });
-    await hydrateDiscoveredApps(address, registry.getApps(address), signing);
+    await hydrateDiscoveredApp(address, registry.getApps(address)[0], signing);
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'failed', status: 'failed' });
   });
 
@@ -175,14 +175,14 @@ describe('hydrateDiscoveredApps', () => {
     const previous = app({ provisionState: 'confirmed', url: 'https://saved.example.com' });
     vi.mocked(getLeaseStatus).mockRejectedValueOnce(new Error('offline'));
     vi.mocked(getLeaseConnectionInfo).mockRejectedValueOnce(new Error('offline'));
-    await hydrateDiscoveredApps(address, [previous], signing);
+    await hydrateDiscoveredApp(address, previous, signing);
     expect(registry.getAppByLease(address, LEASE_UUID)).toEqual(previous);
   });
 
   it('keeps a completed status observation when the connection endpoint never resolves', async () => {
     vi.useFakeTimers();
     vi.mocked(getLeaseConnectionInfo).mockReturnValueOnce(new Promise(() => {}));
-    const work = hydrateDiscoveredApps(address, [app()], signing);
+    const work = hydrateDiscoveredApp(address, app(), signing);
     await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS);
     await work;
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ status: 'running', provisionState: 'confirmed' });
@@ -192,7 +192,7 @@ describe('hydrateDiscoveredApps', () => {
   it('keeps valid connection details when the status endpoint never resolves', async () => {
     vi.useFakeTimers();
     vi.mocked(getLeaseStatus).mockReturnValueOnce(new Promise(() => {}));
-    const work = hydrateDiscoveredApps(address, [app()], signing);
+    const work = hydrateDiscoveredApp(address, app(), signing);
     await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS);
     await work;
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({
@@ -204,7 +204,7 @@ describe('hydrateDiscoveredApps', () => {
     vi.mocked(getLeaseConnectionInfo).mockResolvedValueOnce({
       ...connectionResult({ host: 'wrong.example.com' }), lease_uuid: 'another-lease',
     });
-    await hydrateDiscoveredApps(address, [app()], signing);
+    await hydrateDiscoveredApp(address, app(), signing);
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'confirmed' });
     expect(registry.getAppByLease(address, LEASE_UUID)?.url).toBeUndefined();
   });
@@ -213,7 +213,7 @@ describe('hydrateDiscoveredApps', () => {
     const previous = app();
     const pending = deferred<Awaited<ReturnType<typeof getLeaseStatus>>>();
     vi.mocked(getLeaseStatus).mockReturnValueOnce(pending.promise);
-    const work = hydrateDiscoveredApps(address, [previous], signing);
+    const work = hydrateDiscoveredApp(address, previous, signing);
     await vi.waitFor(() => expect(getLeaseStatus).toHaveBeenCalled());
     registry.updateApp(address, LEASE_UUID, { chainState: 'absent' });
     pending.resolve({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'ready' });
@@ -229,7 +229,7 @@ describe('hydrateDiscoveredApps', () => {
       name: `app-${index}`, leaseUuid: `550e8400-e29b-41d4-a716-44665544000${index}`,
     }));
     const abort = new AbortController();
-    const work = hydrateDiscoveredApps(address, apps, signing, { signal: abort.signal });
+    const work = hydrateDiscoveredApp(address, apps[0], signing, { signal: abort.signal });
     expect(signing.authTokens.getAuthToken).toHaveBeenCalledTimes(1);
     abort.abort();
     await expect(work).rejects.toMatchObject({ name: 'AbortError' });
@@ -244,14 +244,14 @@ describe('hydrateDiscoveredApps', () => {
     const pending = deferred<string>();
     signing.authTokens.getAuthToken.mockReturnValueOnce(pending.promise);
     const previous = app();
-    const work = hydrateDiscoveredApps(address, [previous], signing);
+    const work = hydrateDiscoveredApp(address, previous, signing);
     await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS);
     await work;
     expect(registry.getAppByLease(address, LEASE_UUID)).toEqual(previous);
     pending.resolve('too-late');
     await Promise.resolve();
     expect(getLeaseStatus).not.toHaveBeenCalled();
-    await hydrateDiscoveredApps(address, registry.getApps(address), signing);
+    await hydrateDiscoveredApp(address, registry.getApps(address)[0], signing);
     expect(registry.getAppByLease(address, LEASE_UUID)?.status).toBe('running');
   });
 
@@ -263,12 +263,12 @@ describe('hydrateDiscoveredApps', () => {
     vi.mocked(getLeaseConnectionInfo).mockReturnValueOnce(new Promise(() => {}));
     const first = app();
     const second = app({ name: 'second', leaseUuid: '550e8400-e29b-41d4-a716-446655440002' });
-    const work = hydrateDiscoveredApps(address, [first, second], signing);
+    const work = hydrateDiscoveredApp(address, first, signing);
     await vi.advanceTimersByTimeAsync(APP_RECOVERY_TIMEOUT_MS);
-    const observations = await work;
+    const observation = await work;
     expect(signing.authTokens.getAuthToken).toHaveBeenCalledTimes(2);
     expect(getLeaseStatus).toHaveBeenCalledTimes(1);
-    expect(observations).toMatchObject([{ app: { leaseUuid: first.leaseUuid, provisionState: 'confirmed' }, complete: false }]);
+    expect(observation).toMatchObject({ app: { leaseUuid: first.leaseUuid, provisionState: 'confirmed' }, complete: false });
     expect(registry.getAppByLease(address, second.leaseUuid)?.provisionState).toBe('unconfirmed');
   });
 
@@ -277,11 +277,11 @@ describe('hydrateDiscoveredApps', () => {
     vi.mocked(getLeaseConnectionInfo).mockResolvedValueOnce(connectionResult({
       host: '', ports: {}, services: { worker: { ports: {} } },
     }));
-    expect(await hydrateDiscoveredApps(address, [first], signing)).toMatchObject([{ complete: true }]);
+    expect(await hydrateDiscoveredApp(address, first, signing)).toMatchObject({ complete: true });
     vi.mocked(getLeaseConnectionInfo).mockResolvedValueOnce(connectionResult({
       host: '', ports: {}, services: { worker: {} },
     }));
-    expect(await hydrateDiscoveredApps(address, registry.getApps(address), signing)).toMatchObject([{ complete: false }]);
+    expect(await hydrateDiscoveredApp(address, registry.getApps(address)[0], signing)).toMatchObject({ complete: false });
   });
 
 });

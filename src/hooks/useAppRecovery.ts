@@ -1,6 +1,6 @@
 /** Provider recovery runs independently of chain reconciliation and chat tools. */
 import { useCallback, useContext, useEffect, useRef } from 'react';
-import { hasPendingRecoveryAuthentication, hydrateDiscoveredApps, recoverySnapshotKey } from '../api/appDiscovery';
+import { hasPendingRecoveryAuthentication, hydrateDiscoveredApp, recoverySnapshotKey } from '../api/appDiscovery';
 import { AIStoreContext } from '../contexts/aiStoreContext';
 import { getAppByLease, getApps } from '../registry/appRegistry';
 import type { AIStore } from '../stores/aiStore';
@@ -81,9 +81,8 @@ export function useAppRecovery(address: string | undefined): void {
     abortRef.current = abort;
     attempt.attempts++;
     try {
-      const observations = await hydrateDiscoveredApps(address, [app], wallet.signing, { signal: abort.signal });
+      const observation = await hydrateDiscoveredApp(address, app, wallet.signing, { signal: abort.signal });
       if (abort.signal.aborted) return;
-      const observation = observations[0];
       const current = getAppByLease(address, app.leaseUuid);
       if (observation && current && recoverySnapshotKey(current) === recoverySnapshotKey(observation.app)) {
         attempt.snapshot = recoverySnapshotKey(current);

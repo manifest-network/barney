@@ -129,104 +129,93 @@ function hasEmptyEndpointInventory(connection: ConnectionDetails): boolean {
 }
 
 /**
- * Read provider observations, with one lease/signature at a time and one total
- * deadline. The background driver supplies one app per round; explicit status
- * commands remain independent of its session retry budget.
+ * Read one app's provider observations with a single deadline across signatures
+ * and endpoint reads. Scheduling and retries belong to the background driver;
+ * explicit status commands remain independent of its session retry budget.
  */
-export async function hydrateDiscoveredApps(
+export async function hydrateDiscoveredApp(
   address: string,
-  apps: readonly AppEntry[],
+  snapshot: AppEntry,
   signing: Pick<SigningContext, 'authTokens'>,
   { signal, registry = appRegistry }: DiscoveryOptions = {},
-): Promise<AppRecoveryObservation[]> {
+): Promise<AppRecoveryObservation | undefined> {
   signal?.throwIfAborted();
-  const queue = apps.filter(app => app.providerUrl && app.chainState !== 'absent');
-  const results: AppRecoveryObservation[] = [];
+  if (!snapshot.providerUrl || snapshot.chainState === 'absent'
+    || !unchanged(registry.getAppByLease(address, snapshot.leaseUuid), snapshot)) return;
   const round = new AbortController();
   const roundSignal = signal ? AbortSignal.any([signal, round.signal]) : round.signal;
   const deadline = setTimeout(() => round.abort(), APP_RECOVERY_TIMEOUT_MS);
+  const fetchWithAbort: typeof fetch = (input, init) => providerFetch(input, {
+    ...init,
+    signal: AbortSignal.any([roundSignal, ...(init?.signal ? [init.signal] : [])]),
+  });
   try {
-    for (const snapshot of queue) {
-      signal?.throwIfAborted();
-      if (round.signal.aborted) break;
-      if (!unchanged(registry.getAppByLease(address, snapshot.leaseUuid), snapshot)) continue;
-      const abort = new AbortController();
-      const fetchWithAbort: typeof fetch = (input, init) => providerFetch(input, {
-        ...init,
-        signal: AbortSignal.any([roundSignal, abort.signal, ...(init?.signal ? [init.signal] : [])]),
-      });
-      try {
-        const statusToken = await withTimeout(
-          recoveryAuthToken(signing, snapshot.leaseUuid),
-          AI_TOOL_API_TIMEOUT_MS, 'App discovery authentication', roundSignal,
-        );
-        roundSignal.throwIfAborted();
-        // Provider tokens are one-time credentials. Mint through the same
-        // shared tracker for each request, matching the SDK's appStatus flow.
-        const connectionToken = await withTimeout(
-          recoveryAuthToken(signing, snapshot.leaseUuid),
-          AI_TOOL_API_TIMEOUT_MS, 'App discovery connection authentication', roundSignal,
-        );
-        roundSignal.throwIfAborted();
-        // Each endpoint contributes independent evidence. A stalled connection
-        // read must not discard a completed readiness/failure observation.
-        const observations = await Promise.allSettled([
-          withTimeout(
-            getLeaseStatus(snapshot.providerUrl, snapshot.leaseUuid, statusToken, fetchWithAbort, roundSignal, import.meta.env.DEV),
-            AI_TOOL_API_TIMEOUT_MS, 'App discovery status', roundSignal,
-          ),
-          withTimeout(
-            getLeaseConnectionInfo(snapshot.providerUrl, snapshot.leaseUuid, connectionToken, fetchWithAbort, import.meta.env.DEV),
-            AI_TOOL_API_TIMEOUT_MS, 'App discovery connection', roundSignal,
-          ),
-        ]);
-        signal?.throwIfAborted();
-        if (!unchanged(registry.getAppByLease(address, snapshot.leaseUuid), snapshot)) continue;
-        const [statusResult, connectionResult] = observations;
-        if (statusResult.status === 'rejected') logError('appDiscovery.status', statusResult.reason);
-        if (connectionResult.status === 'rejected') logError('appDiscovery.connection', connectionResult.reason);
-        const status = statusResult.status === 'fulfilled' ? statusResult.value : undefined;
-        const response = connectionResult.status === 'fulfilled' ? connectionResult.value : undefined;
-        const connection = response?.lease_uuid === snapshot.leaseUuid
-          && response.tenant === address && response.provider_uuid === snapshot.providerUuid
-          ? response.connection : undefined;
-        const shaped = connection ? deriveUrlFromConnection(connection) : undefined;
-        const patch: Partial<AppEntry> = connectionPatch({
-          url: shaped?.url ?? (status ? extractUrlFromFredStatus(status) : undefined),
-          connection: shaped?.connection ?? connection,
-        }, snapshot);
-        if (status) {
-          const observed = classifyProvisionStatus(status.provision_status);
-          const terminal = status.state === LeaseState.LEASE_STATE_CLOSED
-            || status.state === LeaseState.LEASE_STATE_REJECTED
-            || status.state === LeaseState.LEASE_STATE_EXPIRED;
-          if (terminal) patch.provisionState = 'failed';
-          else if (observed !== undefined
-            && !(snapshot.provisionState === 'confirmed' && isUnsettledProvisionStatus(status.provision_status))) {
-            patch.provisionState = observed;
-          }
-        }
-        const updated = Object.keys(patch).length > 0
-          ? registry.updateApp(address, snapshot.leaseUuid, patch)
-          : snapshot;
-        if (updated) results.push({
-          app: updated,
-          complete: updated.provisionState === 'failed'
-            || (updated.provisionState === 'confirmed' && !!connection
-              && (!!updated.url || hasEmptyEndpointInventory(connection))),
-        });
-      } catch (error) {
-        signal?.throwIfAborted();
-        // Unreachable providers and refused/timed-out signing are not evidence
-        // about whether the workload is running. A later pass can retry.
-        logError('appDiscovery.provider', error);
-      } finally {
-        abort.abort();
+    const statusToken = await withTimeout(
+      recoveryAuthToken(signing, snapshot.leaseUuid),
+      AI_TOOL_API_TIMEOUT_MS, 'App discovery authentication', roundSignal,
+    );
+    roundSignal.throwIfAborted();
+    // Provider tokens are one-time credentials. Mint through the same
+    // shared tracker for each request, matching the SDK's appStatus flow.
+    const connectionToken = await withTimeout(
+      recoveryAuthToken(signing, snapshot.leaseUuid),
+      AI_TOOL_API_TIMEOUT_MS, 'App discovery connection authentication', roundSignal,
+    );
+    roundSignal.throwIfAborted();
+    // Each endpoint contributes independent evidence. A stalled connection
+    // read must not discard a completed readiness/failure observation.
+    const observations = await Promise.allSettled([
+      withTimeout(
+        getLeaseStatus(snapshot.providerUrl, snapshot.leaseUuid, statusToken, fetchWithAbort, roundSignal, import.meta.env.DEV),
+        AI_TOOL_API_TIMEOUT_MS, 'App discovery status', roundSignal,
+      ),
+      withTimeout(
+        getLeaseConnectionInfo(snapshot.providerUrl, snapshot.leaseUuid, connectionToken, fetchWithAbort, import.meta.env.DEV),
+        AI_TOOL_API_TIMEOUT_MS, 'App discovery connection', roundSignal,
+      ),
+    ]);
+    signal?.throwIfAborted();
+    if (!unchanged(registry.getAppByLease(address, snapshot.leaseUuid), snapshot)) return;
+    const [statusResult, connectionResult] = observations;
+    if (statusResult.status === 'rejected') logError('appDiscovery.status', statusResult.reason);
+    if (connectionResult.status === 'rejected') logError('appDiscovery.connection', connectionResult.reason);
+    const status = statusResult.status === 'fulfilled' ? statusResult.value : undefined;
+    const response = connectionResult.status === 'fulfilled' ? connectionResult.value : undefined;
+    const connection = response?.lease_uuid === snapshot.leaseUuid
+      && response.tenant === address && response.provider_uuid === snapshot.providerUuid
+      ? response.connection : undefined;
+    const shaped = connection ? deriveUrlFromConnection(connection) : undefined;
+    const patch: Partial<AppEntry> = connectionPatch({
+      url: shaped?.url ?? (status ? extractUrlFromFredStatus(status) : undefined),
+      connection: shaped?.connection ?? connection,
+    }, snapshot);
+    if (status) {
+      const observed = classifyProvisionStatus(status.provision_status);
+      const terminal = status.state === LeaseState.LEASE_STATE_CLOSED
+        || status.state === LeaseState.LEASE_STATE_REJECTED
+        || status.state === LeaseState.LEASE_STATE_EXPIRED;
+      if (terminal) patch.provisionState = 'failed';
+      else if (observed !== undefined
+        && !(snapshot.provisionState === 'confirmed' && isUnsettledProvisionStatus(status.provision_status))) {
+        patch.provisionState = observed;
       }
     }
+    const updated = Object.keys(patch).length > 0
+      ? registry.updateApp(address, snapshot.leaseUuid, patch)
+      : snapshot;
+    if (updated) return {
+      app: updated,
+      complete: updated.provisionState === 'failed'
+        || (updated.provisionState === 'confirmed' && !!connection
+          && (!!updated.url || hasEmptyEndpointInventory(connection))),
+    };
+  } catch (error) {
+    signal?.throwIfAborted();
+    // Unreachable providers and refused/timed-out signing are not evidence
+    // about whether the workload is running. A later pass can retry.
+    logError('appDiscovery.provider', error);
   } finally {
     clearTimeout(deadline);
     round.abort();
   }
-  return results;
 }
