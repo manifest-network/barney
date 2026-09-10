@@ -96,8 +96,12 @@ export function useAppRecovery(address: string | undefined): void {
         attempt.nextAttemptAt = Date.now() + AUTO_REFRESH_INTERVAL_MS * 2 ** (attempt.attempts - 1);
       }
     } finally {
-      // Foreground work/cancellation is not a failed provider observation.
-      if (abort.signal.aborted) attempt.attempts--;
+      // Foreground cancellation refunds the retry budget, but the interrupted
+      // app still took a turn. Put it behind untouched/older eligible peers.
+      if (abort.signal.aborted) {
+        attempt.attempts--;
+        attempt.nextAttemptAt = Date.now();
+      }
       abort.abort();
       if (abortRef.current === abort) abortRef.current = null;
     }

@@ -119,6 +119,8 @@ export const AI_TOOL_CACHE_MAX_SIZE = 50;
 
 /** Timeout for blockchain API calls during tool execution (milliseconds) (runtime-configurable) */
 export const AI_TOOL_API_TIMEOUT_MS = getNumericConfig('PUBLIC_AI_TOOL_API_TIMEOUT_MS', 15000);
+/** Sequential lease and catalog stages each retain their full API allowance. */
+export const REGISTRY_RECONCILIATION_TIMEOUT_MS = AI_TOOL_API_TIMEOUT_MS * 2;
 /** One provider-recovery round, including every signature and endpoint read. */
 export const APP_RECOVERY_TIMEOUT_MS = AI_TOOL_API_TIMEOUT_MS;
 

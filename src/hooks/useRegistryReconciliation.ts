@@ -3,9 +3,10 @@
  *
  * Mounted by MainLayout outside the sidebar ErrorBoundary so registry repair
  * survives a sidebar render failure. The tenant lease-list responses provide
- * both the live state set and each lease's items/custom domains. One deadline
- * covers the entire chain/catalog pass. Provider recovery has its own driver
- * so slow provider reads cannot delay chain or domain observations.
+ * both the live state set and each lease's items/custom domains. The aggregate
+ * deadline allows a full API interval for each sequential lease/catalog stage.
+ * Provider recovery runs separately so slow provider reads cannot delay chain
+ * or domain observations.
  */
 
 import { useCallback, useContext, useEffect, useRef } from 'react';
@@ -20,7 +21,11 @@ import {
   reconcileWithChain,
   type CustomDomainChainObservation,
 } from '../registry/appRegistry';
-import { AI_TOOL_API_TIMEOUT_MS, AUTO_REFRESH_INTERVAL_MS } from '../config/constants';
+import {
+  AI_TOOL_API_TIMEOUT_MS,
+  AUTO_REFRESH_INTERVAL_MS,
+  REGISTRY_RECONCILIATION_TIMEOUT_MS,
+} from '../config/constants';
 import { logError } from '../utils/errors';
 import { useVisibilityPolling } from './useVisibilityPolling';
 
@@ -96,7 +101,7 @@ export function useRegistryReconciliation(
     };
 
     try {
-      await withTimeout(reconcile(), AI_TOOL_API_TIMEOUT_MS, 'Registry refresh', signal);
+      await withTimeout(reconcile(), REGISTRY_RECONCILIATION_TIMEOUT_MS, 'Registry refresh', signal);
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') return;
       logError('useRegistryReconciliation', error);

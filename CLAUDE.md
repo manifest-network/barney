@@ -46,6 +46,7 @@ ErrorBoundary
                   │   ├─ LandingPage (when not connected)
                   │   └─ MainLayout (when connected)
                   │       ├─ useRegistryReconciliation (mounted here, OUTSIDE the sidebar's ErrorBoundary)
+                  │       ├─ useAppRecovery (mounted here, OUTSIDE the sidebar's ErrorBoundary)
                   │       ├─ useDnsStatusPolling (mounted here, OUTSIDE the sidebar's ErrorBoundary)
                   │       ├─ ErrorBoundary (sidebar isolation)
                   │       │   └─ AppsSidebar (wallet, credits, running apps)
@@ -314,8 +315,8 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `useCopyToClipboard` | Clipboard copy with feedback state |
 | `useAccountSetup` | One-shot sequential account setup pipeline — requests PWR from the faucet (PWR pays both gas and credits after ENG-243) and funds credits on first connect. Returns `AccountSetupState` (`isInitialSetup` + `phase`) for the `AccountSetupOverlay`. Setup data persisted to localStorage via `versionedStorage`. MFX is no longer part of the blocking flow; users who need MFX can request it via the `request_faucet` chat tool |
 | `useDnsStatusPolling` | Single polling driver for custom-domain DNS state. Mounted in `MainLayout` (outside the sidebar's `ErrorBoundary`, so a sidebar render error doesn't take DNS state down with it). Iterates running apps with `customDomains` and writes per-domain `DnsStatusEntry` rows into `aiStore.dnsStatuses`. All custom-domain surfaces (sidebar dot, single-domain card, multi-domain card, AppCard's deploy-success row) read from this slice — no per-component poll loops |
-| `useRegistryReconciliation` | Recurring chain-to-registry repair driver, mounted in `MainLayout` outside the sidebar boundary. Refreshes live lease state and custom domains from complete active/pending tenant-list payloads, then resolves missing catalog metadata. One aggregate deadline covers the entire pass, and the next poll is scheduled after 15s. Pre-RPC baselines prevent stale lease/domain observations from overwriting transaction results. Provider recovery runs separately |
-| `useAppRecovery` | Single background provider-recovery driver in `MainLayout`, outside the sidebar boundary. Fairly selects one eligible app per idle tick, applies per-app backoff and retirement, and cancels on foreground activity or wallet changes |
+| `useRegistryReconciliation` | Recurring chain-to-registry repair driver, mounted in `MainLayout` outside the sidebar boundary. Refreshes live lease state and custom domains from complete active/pending tenant-list payloads, then resolves missing catalog metadata. The aggregate deadline allows a full API timeout for each sequential stage, and the next poll is scheduled after 15s. Pre-RPC baselines prevent stale lease/domain observations from overwriting transaction results. Provider recovery runs separately |
+| `useAppRecovery` | Single background provider-recovery driver in `MainLayout`, outside the sidebar boundary. Fairly selects one eligible app per idle tick, applies per-app backoff and retirement, and cancels on foreground activity or wallet changes. Cancelled work yields its place to peers without spending its attempt budget |
 | `useRegistryApps` | `useSyncExternalStore` view of the wallet's app registry, kept live via `subscribeToRegistry`. Used by `MainLayout` to feed the DNS polling driver |
 | `useVisibilityPolling` | Visibility-aware polling with optional exponential backoff and a `restartKey` for context changes such as wallet switches. Pauses on tab hidden, resumes on focus, and serializes each lifecycle's ticks. Used by `AIProvider` (health check), `useRegistryReconciliation`, `useDnsStatusPolling`, and `AppsSidebar`; the sidebar bounds both billing reads, backs off failures, scopes rendered registry/credit snapshots plus async writes to the current wallet lifecycle, reference-counts active credit passes per lifecycle and releases unclaimed retry reservations when their owner lifecycle ends, keeps inline Retry disabled with origin-neutral `Refreshing…` copy and only the failure copy assertive, and restores keyboard focus after a failed pass only when disabling Retry left focus on the document body |
 
@@ -371,6 +372,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `APP_RECOVERY_POLL_INTERVAL_MS` | 1s | Idle checks for the next eligible app |
 | `APP_RECOVERY_MAX_ATTEMPTS` | 4 | Automatic attempts per unchanged app snapshot |
 | `APP_RECOVERY_TIMEOUT_MS` | `AI_TOOL_API_TIMEOUT_MS` | Aggregate provider-recovery deadline |
+| `REGISTRY_RECONCILIATION_TIMEOUT_MS` | `2 * AI_TOOL_API_TIMEOUT_MS` | Aggregate deadline for sequential lease and catalog reads |
 | `HEALTH_CHECK_TIMEOUT_MS` | 5s | Timeout for individual health-check requests |
 | `POST_TX_REFETCH_DELAY_MS` | 1s | Delay before refetching state after a transaction |
 | `COPY_FEEDBACK_DURATION_MS` | 2s | "Copied" feedback display duration |

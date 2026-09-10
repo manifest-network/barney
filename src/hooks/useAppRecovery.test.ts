@@ -9,7 +9,7 @@ import type { SigningContext } from '../ai/toolExecutor/types';
 import { LeaseState } from '../api/billing';
 import * as registry from '../registry/appRegistry';
 import type { AppEntry } from '../registry/appRegistry';
-import { APP_RECOVERY_MAX_ATTEMPTS, APP_RECOVERY_TIMEOUT_MS, AUTO_REFRESH_INTERVAL_MS } from '../config/constants';
+import { APP_RECOVERY_MAX_ATTEMPTS, APP_RECOVERY_POLL_INTERVAL_MS, APP_RECOVERY_TIMEOUT_MS, AUTO_REFRESH_INTERVAL_MS } from '../config/constants';
 import { useAppRecovery } from './useAppRecovery';
 
 vi.mock('../utils/errors', () => ({ logError: vi.fn() }));
@@ -226,6 +226,42 @@ describe('useAppRecovery', () => {
     expect(getAuthToken).toHaveBeenCalledTimes(1);
     expect(getLeaseStatus).not.toHaveBeenCalled();
     expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
+  });
+
+  it('shares recovery turns across repeated foreground interruptions without consuming retry budgets', async () => {
+    const leaseUuids = [LEASE_UUID, '550e8400-e29b-41d4-a716-446655440002', '550e8400-e29b-41d4-a716-446655440003'];
+    leaseUuids.forEach((leaseUuid, index) => addApp({
+      leaseUuid, name: `app-${index}`, providerUrl: `https://provider-${index}.example.com`,
+    }));
+    vi.mocked(getLeaseStatus).mockReturnValue(new Promise(() => {}));
+    vi.mocked(getLeaseConnectionInfo).mockReturnValue(new Promise(() => {}));
+    await render();
+
+    // Cancel every app more often than its failure budget permits. Each one
+    // must still get a turn and remain eligible when the providers recover.
+    const interruptions = leaseUuids.length * (APP_RECOVERY_MAX_ATTEMPTS + 1);
+    for (let turn = 0; turn < interruptions; turn++) {
+      expect(getLeaseStatus).toHaveBeenCalledTimes(turn + 1);
+      expect(vi.mocked(getLeaseStatus).mock.calls[turn][1]).toBe(leaseUuids[turn % leaseUuids.length]);
+      await act(async () => { store.setState({ isStreaming: true }); });
+      await advance(APP_RECOVERY_POLL_INTERVAL_MS);
+      expect(vi.mocked(getLeaseStatus).mock.calls[turn][4]?.aborted).toBe(true);
+      expect(getAuthToken).toHaveBeenCalledTimes((turn + 1) * 2);
+
+      if (turn === interruptions - 1) {
+        vi.mocked(getLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'ready' });
+        vi.mocked(getLeaseConnectionInfo).mockImplementation(async (_url, leaseUuid) => ({
+          lease_uuid: leaseUuid, tenant: address, provider_uuid: PROVIDER_UUID,
+          connection: { host: '', fqdn: 'recovered.example.com' },
+        }));
+      }
+      await act(async () => { store.setState({ isStreaming: false }); });
+      await advance(APP_RECOVERY_POLL_INTERVAL_MS);
+    }
+
+    await advance(APP_RECOVERY_POLL_INTERVAL_MS * (leaseUuids.length - 1));
+    expect(registry.getApps(address).every(app => app.status === 'running')).toBe(true);
+    expect(getLeaseStatus).toHaveBeenCalledTimes(interruptions + leaseUuids.length);
   });
 
   it('drops observations after a same-address authorization change and starts a fresh recovery budget', async () => {

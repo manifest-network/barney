@@ -10,10 +10,13 @@ vi.mock('./useVisibilityPolling', () => ({
   useVisibilityPolling: vi.fn(),
 }));
 
-vi.mock('../api/appDiscovery', () => ({
+vi.mock('../api/appDiscovery', async original => ({
+  ...await original<typeof import('../api/appDiscovery')>(),
   discoverTenantApps: vi.fn().mockResolvedValue([]),
   hydrateDiscoveredApps: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock('../api/sku', () => ({ getProviders: vi.fn(), getSKUs: vi.fn() }));
 
 vi.mock('../api/billing', () => ({
   LeaseState: {
@@ -23,7 +26,8 @@ vi.mock('../api/billing', () => ({
   getLeasesByTenant: vi.fn(),
 }));
 
-vi.mock('../registry/appRegistry', () => ({
+vi.mock('../registry/appRegistry', async original => ({
+  ...await original<typeof import('../registry/appRegistry')>(),
   getApps: vi.fn(),
   reconcileWithChain: vi.fn(),
   reconcileCustomDomainsWithChain: vi.fn(),
@@ -36,14 +40,15 @@ vi.mock('../utils/errors', () => ({
 import { useRegistryReconciliation } from './useRegistryReconciliation';
 import { discoverTenantApps, hydrateDiscoveredApps } from '../api/appDiscovery';
 import { useVisibilityPolling } from './useVisibilityPolling';
-import { getLeasesByTenant, LeaseState } from '../api/billing';
+import { getLeasesByTenant, LeaseState, type Lease } from '../api/billing';
+import { getProviders, getSKUs, type Provider, type SKU } from '../api/sku';
 import {
   getApps,
   reconcileCustomDomainsWithChain,
   reconcileWithChain,
   type AppEntry,
 } from '../registry/appRegistry';
-import { AI_TOOL_API_TIMEOUT_MS } from '../config/constants';
+import { AI_TOOL_API_TIMEOUT_MS, REGISTRY_RECONCILIATION_TIMEOUT_MS } from '../config/constants';
 
 const ADDRESS = 'manifest1registry';
 
@@ -77,6 +82,7 @@ describe('useRegistryReconciliation', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -107,6 +113,27 @@ describe('useRegistryReconciliation', () => {
     const call = vi.mocked(useVisibilityPolling).mock.calls.at(-1);
     expect(call).toBeDefined();
     return call![0];
+  }
+
+  async function configureRealDiscovery() {
+    const discovery = await vi.importActual<typeof import('../api/appDiscovery')>('../api/appDiscovery');
+    const registry = await vi.importActual<typeof import('../registry/appRegistry')>('../registry/appRegistry');
+    vi.mocked(getApps).mockImplementation(registry.getApps);
+    vi.mocked(discoverTenantApps).mockImplementationOnce((address, leases, options) =>
+      discovery.discoverTenantApps(address, leases, { ...options, registry }),
+    );
+    return registry;
+  }
+
+  function discoveredLease(): Lease {
+    return {
+      uuid: 'lease-web',
+      tenant: ADDRESS,
+      providerUuid: 'provider-1',
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      createdAt: new Date('2026-09-01T12:00:00Z'),
+      items: [{ skuUuid: 'sku-1', serviceName: 'web', customDomain: 'web.example.com' }],
+    } as Lease;
   }
 
   it('routes immediate repair through the poller and consumes lease-list items', async () => {
@@ -314,6 +341,97 @@ describe('useRegistryReconciliation', () => {
     expect(hydrateDiscoveredApps).not.toHaveBeenCalled();
   });
 
+  it('imports apps when successful sequential lease and catalog stages exceed one API interval', async () => {
+    const registry = await configureRealDiscovery();
+    vi.useFakeTimers();
+    const chain = deferred<Lease[]>();
+    const providers = deferred<Provider[]>();
+    const skus = deferred<SKU[]>();
+    vi.mocked(getLeasesByTenant).mockReturnValue(chain.promise);
+    vi.mocked(getProviders).mockReturnValueOnce(providers.promise);
+    vi.mocked(getSKUs).mockReturnValueOnce(skus.promise);
+    await render(ADDRESS);
+
+    const refreshing = latestRefresh()();
+    // With the default configuration, tenant reads take 10s and catalogs 6s.
+    await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS * 2 / 3);
+    chain.resolve([discoveredLease()]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getProviders).toHaveBeenCalledWith(false);
+    expect(getSKUs).toHaveBeenCalledWith(false);
+    expect(reconcileWithChain).toHaveBeenCalledOnce();
+    expect(reconcileCustomDomainsWithChain).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS * 2 / 5);
+    providers.resolve([{ uuid: 'provider-1', apiUrl: 'https://fred.example.com' } as Provider]);
+    skus.resolve([{ uuid: 'sku-1', providerUuid: 'provider-1', name: 'small' } as SKU]);
+
+    await expect(refreshing).resolves.toBeUndefined();
+    expect(registry.getAppByLease(ADDRESS, 'lease-web')).toMatchObject({
+      providerUrl: 'https://fred.example.com',
+      size: 'small',
+      chainState: 'active',
+      provisionState: 'unconfirmed',
+      status: 'deploying',
+      customDomains: [{ serviceName: 'web', customDomain: 'web.example.com' }],
+    });
+  });
+
+  it('imports fallback inventory after stalled catalogs exhaust their own allowance and ignores late results', async () => {
+    const registry = await configureRealDiscovery();
+    vi.useFakeTimers();
+    const chain = deferred<Lease[]>();
+    const providers = deferred<Provider[]>();
+    const skus = deferred<SKU[]>();
+    vi.mocked(getLeasesByTenant).mockReturnValue(chain.promise);
+    vi.mocked(getProviders).mockReturnValueOnce(providers.promise);
+    vi.mocked(getSKUs).mockReturnValueOnce(skus.promise);
+    await render(ADDRESS);
+
+    const refreshing = latestRefresh()();
+    await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS * 2 / 3);
+    chain.resolve([discoveredLease()]);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS - 1);
+    expect(registry.getApps(ADDRESS)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2);
+
+    await expect(refreshing).resolves.toBeUndefined();
+    const recovered = registry.getAppByLease(ADDRESS, 'lease-web');
+    expect(recovered).toMatchObject({
+      providerUrl: '',
+      size: 'unknown',
+      chainState: 'active',
+      provisionState: 'unconfirmed',
+      status: 'deploying',
+      customDomains: [{ serviceName: 'web', customDomain: 'web.example.com' }],
+    });
+    providers.resolve([{ uuid: 'provider-1', apiUrl: 'https://late.example.com' } as Provider]);
+    skus.resolve([{ uuid: 'sku-1', providerUuid: 'provider-1', name: 'late-size' } as SKU]);
+    await vi.advanceTimersByTimeAsync(REGISTRY_RECONCILIATION_TIMEOUT_MS);
+    expect(registry.getAppByLease(ADDRESS, 'lease-web')).toEqual(recovered);
+  });
+
+  it('discards catalog results that finish after switching wallets', async () => {
+    const registry = await configureRealDiscovery();
+    const providers = deferred<Provider[]>();
+    const skus = deferred<SKU[]>();
+    vi.mocked(getLeasesByTenant).mockResolvedValue([discoveredLease()]);
+    vi.mocked(getProviders).mockReturnValueOnce(providers.promise);
+    vi.mocked(getSKUs).mockReturnValueOnce(skus.promise);
+    await render(ADDRESS);
+
+    const refreshing = latestRefresh()();
+    await vi.waitFor(() => expect(getProviders).toHaveBeenCalledOnce());
+    await render('manifest1different');
+    await expect(refreshing).resolves.toBeUndefined();
+    providers.resolve([{ uuid: 'provider-1', apiUrl: 'https://old-wallet.example.com' } as Provider]);
+    skus.resolve([{ uuid: 'sku-1', providerUuid: 'provider-1', name: 'small' } as SKU]);
+    await Promise.resolve();
+
+    expect(registry.getApps(ADDRESS)).toEqual([]);
+    expect(registry.getApps('manifest1different')).toEqual([]);
+  });
+
   it('bounds chain and catalog reads together and allows the next refresh to run', async () => {
     vi.useFakeTimers();
     const chain = deferred<never[]>();
@@ -326,7 +444,7 @@ describe('useRegistryReconciliation', () => {
     chain.resolve([]);
     await vi.advanceTimersByTimeAsync(0);
     expect(discoverTenantApps).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS / 2 + 1);
+    await vi.advanceTimersByTimeAsync(REGISTRY_RECONCILIATION_TIMEOUT_MS - AI_TOOL_API_TIMEOUT_MS / 2 + 1);
     await expect(refreshing).resolves.toBe(false);
     expect(vi.mocked(discoverTenantApps).mock.calls[0][2]!.signal!.aborted).toBe(true);
 
