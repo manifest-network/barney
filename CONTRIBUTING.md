@@ -16,7 +16,7 @@ For an overview of the codebase, read [ARCHITECTURE.md](ARCHITECTURE.md). For un
 ```bash
 git clone https://github.com/manifest-network/barney.git
 cd barney
-npm install --legacy-peer-deps
+npm ci
 cp .env.example .env.local
 # Edit .env.local — at minimum set MORPHEUS_API_KEY
 npm run dev
@@ -24,17 +24,26 @@ npm run dev
 
 The dev server starts at <http://localhost:3000>.
 
-### Why `--legacy-peer-deps`?
-
-`@cosmos-kit/react` and `@interchain-ui/react` declare incompatible peer ranges for React 19. The flag is required for installs to succeed and is used by both local development and the production Docker build. If you forget it, `npm install` will fail with a peer-dependency error.
+Use `npm ci` for a checkout and `npm install` when intentionally updating the
+dependency graph. Normal peer resolution is supported; the root optional peers
+allow incompatible wallet dependency versions to remain nested under their
+consumers. See the [dependency audit](docs/audits/eng-832/README.md) for the exact
+constraints and residual advisory dispositions.
 
 ### Patches
 
-The `patches/` directory contains `patch-package` patches applied automatically via the `postinstall` script. There is currently one patch:
+The `patches/` directory contains `patch-package` patches applied automatically via the `postinstall` script:
+
+`postinstall` uses `--error-on-fail`: a required patch failure stops local, CI, and
+Docker installations.
 
 - **`@cosmos-kit+web3auth+2.16.6-ll.1.patch`** — relaxes `Web3AuthSigner.signAmino`'s chain-ID check to allow an empty `chain_id` in the sign doc. This is required for ADR-036 off-chain signatures (provider auth tokens), which use `chain_id: ''` by convention. Without the patch every provider HTTP call would fail with "Chain ID mismatch".
 
-If a patched dependency is bumped, re-apply the patch logic against the new version and regenerate the file with `npx patch-package @cosmos-kit/web3auth`. Verify ADR-036 provider auth still works (deploy an app — the manifest upload step exercises it).
+If a patched dependency is bumped, re-apply the patch logic against the new version
+and regenerate the file with `npx patch-package <package-name>`. For the wallet
+patch, run `src/__tests__/dependencyCompatibility.test.ts` and verify ADR-036
+provider auth with a testnet deployment. Do not skip `postinstall` in normal
+development or CI.
 
 ## Daily workflow
 

@@ -32,15 +32,17 @@ For local development or self-hosting, see [Quick start](#quick-start) and [Depl
 ```bash
 git clone https://github.com/manifest-network/barney.git
 cd barney
-npm install --legacy-peer-deps
+npm ci
 cp .env.example .env.local
 # edit .env.local to set MORPHEUS_API_KEY and review the relay quota/pricing policy
 npm run dev
 ```
 
-The dev server starts at <http://localhost:3000>.
+The dev server starts at <http://localhost:3000> and binds to loopback by default.
+See [Development](#development) for remote workspace and devcontainer access.
 
-> **Why `--legacy-peer-deps`?** The pinned `@cosmos-kit/react` and `@interchain-ui/react` versions declare incompatible peer ranges for React 19. The flag is required for installs to succeed and is already used by the production Docker build.
+The lockfile installs with normal peer resolution. `postinstall` applies the
+wallet-signing patch described in [CONTRIBUTING.md](CONTRIBUTING.md#patches).
 
 ## Running with Docker
 
@@ -95,6 +97,27 @@ cp .env.example .env.local
 # Set MORPHEUS_API_KEY and PUBLIC_WEB3AUTH_CLIENT_ID, then review the policy.
 npm run dev
 ```
+
+`npm run dev` and `npm run preview` bind to `127.0.0.1` by default. For a remote
+workspace or devcontainer that needs another listening interface, set
+`BARNEY_DEV_HOST` in `.env.local` or on the command line:
+
+```bash
+BARNEY_DEV_HOST=0.0.0.0 npm run dev
+BARNEY_DEV_HOST=0.0.0.0 npm run preview
+```
+
+Rsbuild options are forwarded after npm's `--`, for example
+`npm run dev -- --host 0.0.0.0 --port 3000`. The CLI `--host` option takes
+precedence over `BARNEY_DEV_HOST`.
+
+`0.0.0.0` exposes the asset server and its proxies on all IPv4 interfaces.
+`/proxy-provider` accepts caller-selected targets, including local/private hosts,
+and its validator does not resolve DNS. Enable remote access only on a trusted
+network or through a private port forward; see [the proxy trust assumptions](docs/dev/security.md).
+Set the existing
+`MORPHEUS_RELAY_ALLOWED_ORIGINS` and `MORPHEUS_RELAY_AUDIENCE` for the browser URL
+you use. Keep the relay's own listener on loopback.
 
 ### Production
 

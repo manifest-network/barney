@@ -25,11 +25,8 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      # Barney has a pre-existing peer conflict (@cosmos-kit/react wants
-      # @interchain-ui/react@^1.26.3, repo pins 1.26.2); the Dockerfile installs
-      # with --legacy-peer-deps, so CI matches that convention.
       - name: Install dependencies
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: Lint
         run: npm run lint

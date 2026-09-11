@@ -12,7 +12,7 @@ async function main() {
   delete rsbuildEnv.MORPHEUS_RELAY_IDENTITY_HMAC_KEY;
   const rsbuild = spawn(
     process.execPath,
-    ['node_modules/@rsbuild/core/bin/rsbuild.js', 'dev'],
+    ['node_modules/@rsbuild/core/bin/rsbuild.js', 'dev', ...process.argv.slice(2)],
     { stdio: 'inherit', env: rsbuildEnv },
   );
   let shuttingDown = false;

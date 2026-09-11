@@ -5,7 +5,7 @@ ARG RELEASE_VERSION=""
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY patches/ patches/
-RUN npm ci --legacy-peer-deps
+RUN npm ci
 COPY . .
 RUN RELEASE_VERSION=${RELEASE_VERSION} GIT_COMMIT=${GIT_COMMIT} npm run build-release
 

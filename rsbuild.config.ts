@@ -35,14 +35,15 @@ function isValidProxyTarget(target: string): boolean {
       return false;
     }
 
-    // NOTE (dev-only limitation): this checks IP *literals* only — it does NOT
-    // resolve DNS, so a hostname whose A/AAAA record points at a blocked range
-    // (e.g. 169.254.169.254 cloud metadata) is NOT caught here. The nip.io/
-    // xip.io/sslip.io blocks above stop only the well-known convenience resolvers,
-    // not arbitrary attacker-controlled DNS. Acceptable because this proxy runs
-    // ONLY in the rsbuild dev server (never in prod — nginx + isUrlSsrfSafe guard
-    // provider traffic there) and the target comes from the developer's own session
-    // (X-Proxy-Target header / WS `target` param), not an untrusted remote.
+    // This checks IP literals, not DNS: an arbitrary hostname can resolve to a
+    // blocked IP despite the known rebinding suffixes blocked above. The trust
+    // assumption is local developer-controlled callers under the default
+    // loopback bind. Rsbuild installs this proxy in both dev and preview;
+    // BARNEY_DEV_HOST=0.0.0.0 or --host can expose caller-selected targets
+    // (X-Proxy-Target / WS `target`) and this DNS gap to remote clients. Restrict
+    // external binds to trusted networks or private port forwards. Production
+    // browser provider requests use the direct, validated adapter, and the nginx
+    // deployment does not install this Rsbuild proxy.
     // Strip brackets for IPv6 literals (new URL() returns [::1] for IPv6).
     const cleanHostname = hostname.replace(/^\[|\]$/g, '');
     if (ipaddr.isValid(cleanHostname)) {
@@ -163,6 +164,8 @@ export default defineConfig({
     },
   },
   server: {
+    // Dev and preview share this server config; keep their proxies local by default.
+    host: process.env.BARNEY_DEV_HOST?.trim() || '127.0.0.1',
     proxy: {
       '/api/morpheus': (() => {
         // server/dev.mjs starts the same authenticated/accounted relay used in
@@ -222,7 +225,7 @@ export default defineConfig({
       override: {
         cacheGroups: {
           cosmos: {
-            test: /[\\/]node_modules[\\/](@cosmos-kit|@interchain-ui|chain-registry)[\\/]/,
+            test: /[\\/]node_modules[\\/](@cosmos-kit|@interchain-ui)[\\/]/,
             name: 'vendor-cosmos',
             priority: 20,
           },
