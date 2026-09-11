@@ -231,6 +231,12 @@ export async function executeAppStatus(
   let appUrl = app.url;
   let appConnection = app.connection;
   let endpointRefreshed = false;
+  let connectionRefreshed = false;
+  let statusUnavailable = true;
+  let endpointInactive = false;
+  const terminalStates: readonly LeaseState[] = [
+    LeaseState.LEASE_STATE_CLOSED, LeaseState.LEASE_STATE_REJECTED, LeaseState.LEASE_STATE_EXPIRED,
+  ];
 
   /** Write an observation and adopt the status the registry derives from it. */
   const recordObservation = (updates: Partial<Omit<AppEntry, 'leaseUuid'>>): void => {
@@ -240,27 +246,25 @@ export async function executeAppStatus(
 
   // Chain says closed/rejected/expired: the lease is gone. A pure CHAIN
   // observation — it says nothing about why, so it leaves `provisionState` alone.
-  if (leaseState === LeaseState.LEASE_STATE_CLOSED || leaseState === LeaseState.LEASE_STATE_REJECTED || leaseState === LeaseState.LEASE_STATE_EXPIRED) {
+  if (leaseState !== null && terminalStates.includes(leaseState)) {
+    statusUnavailable = false;
+    endpointInactive = true;
     if (app.chainState !== 'absent') {
       recordObservation({ chainState: 'absent' });
     }
   }
   // If chain says active, reconcile with fred (or trust chain if fred unavailable)
   else if (leaseState === LeaseState.LEASE_STATE_ACTIVE) {
-    let connectionRefreshed = false;
+    let accessChanged = false;
     if (!fredStatus || fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
       const shaped = refreshedConnection ? deriveUrlFromConnection(refreshedConnection) : undefined;
       const refreshedUrl = shaped?.url ?? (fredStatus ? extractUrlFromFredStatus(fredStatus) : undefined);
-      if (refreshedConnection || refreshedUrl) {
-        const patch = connectionPatch({
-          url: refreshedUrl,
-          connection: shaped?.connection ?? refreshedConnection,
-        }, { url: appUrl, connection: appConnection });
-        appUrl = patch.url ?? appUrl;
-        if ('connection' in patch) appConnection = patch.connection;
-        connectionRefreshed = Object.keys(patch).length > 0;
-        endpointRefreshed = refreshedUrl !== undefined;
-      }
+      const patch = connectionPatch({ url: refreshedUrl, connection: shaped?.connection ?? refreshedConnection }, app);
+      appUrl = patch.url ?? appUrl;
+      appConnection = patch.connection ?? appConnection;
+      accessChanged = Object.keys(patch).length > 0;
+      endpointRefreshed = refreshedUrl !== undefined;
+      connectionRefreshed = patch.connection !== undefined;
     }
     if (fredStatus) {
       if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
@@ -275,17 +279,20 @@ export async function executeAppStatus(
         // (container died) lands on a confirmed app.
         const unsettled = isUnsettledProvisionStatus(fredStatus.provision_status);
         const provisionState = unsettled && app.provisionState === 'confirmed' ? undefined : observed;
+        statusUnavailable = provisionState === undefined || fredStatus.provision_status === 'unknown';
         const observationChanged =
           app.chainState !== 'active' ||
           (provisionState !== undefined && app.provisionState !== provisionState);
-        if (observationChanged || connectionRefreshed) {
+        if (observationChanged || accessChanged) {
           recordObservation({
             chainState: 'active',
             ...(provisionState !== undefined ? { provisionState } : {}),
-            ...(connectionRefreshed ? { url: appUrl, connection: appConnection } : {}),
+            ...(accessChanged ? { url: appUrl, connection: appConnection } : {}),
           });
         }
-      } else if (fredStatus.state === LeaseState.LEASE_STATE_CLOSED || fredStatus.state === LeaseState.LEASE_STATE_REJECTED || fredStatus.state === LeaseState.LEASE_STATE_EXPIRED) {
+      } else if (terminalStates.includes(fredStatus.state)) {
+        statusUnavailable = false;
+        endpointInactive = true;
         // The chain says ACTIVE but the PROVIDER says this lease is terminal —
         // fred v0.13.0's explicitly-modelled anomaly (an ACTIVE lease whose
         // workload is gone). A provider statement about a provider-side lease is
@@ -295,14 +302,14 @@ export async function executeAppStatus(
           recordObservation({ provisionState: 'failed' });
         }
       }
-    } else if (app.chainState !== 'active' || connectionRefreshed) {
+    } else if (app.chainState !== 'active' || accessChanged) {
       // Fred unavailable but chain says active — trust the chain, and ONLY the
       // chain: no provider evidence here, so `provisionState` is untouched. A
       // flat `status: 'running'` would silently erase a provider `failed` verdict
       // every time fred happened to be unreachable.
       recordObservation({
         chainState: 'active',
-        ...(connectionRefreshed ? { url: appUrl, connection: appConnection } : {}),
+        ...(accessChanged ? { url: appUrl, connection: appConnection } : {}),
       });
     }
   }
@@ -312,13 +319,14 @@ export async function executeAppStatus(
   // PENDING. Both the signer and chain-only reads land on `leaseState`, so this
   // one branch covers both.
   else if (leaseState === LeaseState.LEASE_STATE_PENDING) {
+    statusUnavailable = false;
     if (app.chainState !== 'pending') {
       recordObservation({ chainState: 'pending' });
     }
   }
 
   // Keep the deployed endpoint intact, including its scheme, port, and path.
-  const connectionUrl = appUrl || formatConnectionUrl(undefined, appConnection);
+  const connectionUrl = endpointInactive ? undefined : appUrl || formatConnectionUrl(undefined, appConnection);
 
   // Extract image from stored manifest (single-service or stack)
   let image: string | undefined;
@@ -346,7 +354,7 @@ export async function executeAppStatus(
   // without an extra chain round-trip per render.
   const customDomains = getDomainAssignments(leaseItems);
   if (haveChainData) {
-    appRegistry.updateApp(address, app.leaseUuid, { customDomains });
+    recordObservation({ customDomains });
   }
 
   // Stack service names — drive the empty-form service picker on stacks where no
@@ -414,22 +422,15 @@ export async function executeAppStatus(
     }
   }
 
-  const terminalStates: readonly LeaseState[] = [
-    LeaseState.LEASE_STATE_CLOSED, LeaseState.LEASE_STATE_REJECTED, LeaseState.LEASE_STATE_EXPIRED,
-  ];
-  const chainStatusKnown = leaseState !== null
-    && (terminalStates.includes(leaseState) || leaseState === LeaseState.LEASE_STATE_PENDING);
-  const providerStatusKnown = fredStatus && (terminalStates.includes(fredStatus.state)
-    || (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE
-      && fredStatus.provision_status !== 'unknown'
-      && classifyProvisionStatus(fredStatus.provision_status) !== undefined));
-  const statusUnavailable = !(chainStatusKnown || (leaseState === LeaseState.LEASE_STATE_ACTIVE && providerStatusKnown));
   const endpointStale = !endpointRefreshed && !!connectionUrl;
+  const connectionStale = !endpointInactive && !connectionRefreshed && !!appConnection;
   const data: ToolData<'app_status'> = {
     name: app.name,
     status: currentStatus,
     statusUnavailable,
     endpointStale,
+    connectionStale,
+    endpointInactive,
     size: app.size,
     image,
     ...(serviceImages ? { serviceImages } : {}),
@@ -441,20 +442,23 @@ export async function executeAppStatus(
   return {
     success: true,
     data,
+    continueConversation: true,
     displayCard: {
       type: 'app',
       data: {
         name: app.name,
-        status: statusUnavailable ? app.status : currentStatus,
+        status: currentStatus,
         statusUnavailable,
         url: data.url,
         endpointStale,
-        connection: appCardConnection(appConnection),
+        connectionStale,
+        endpointInactive,
+        connection: endpointInactive ? undefined : appCardConnection(appConnection),
         serviceNames: [...new Set([
           ...stackServiceNames,
           ...(leaseItems.length > 1 ? leaseItems.map((item) => item.serviceName).filter(Boolean) : []),
         ])],
-        domainManagement,
+        domainManagement: endpointInactive ? undefined : domainManagement,
       },
     },
   };

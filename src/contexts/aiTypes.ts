@@ -79,9 +79,11 @@ export interface AppCardData {
   url?: string;
   connection?: AppCardConnection;
   status: string;
-  /** The status is cached because this request could not establish current state. */
+  /** The recorded status could not be confirmed against the current workload. */
   statusUnavailable?: boolean;
   endpointStale?: boolean;
+  connectionStale?: boolean;
+  endpointInactive?: boolean;
   serviceNames?: readonly string[];
   domainManagement?: CustomDomainCardData;
   customDomain?: AppCardCustomDomain;

@@ -115,7 +115,7 @@ creating_lease  →  uploading  →  provisioning  →  ready
 
 When provisioning completes, a success card shows the deployment endpoint. Use **Copy endpoint** to copy exactly the displayed value. Port rows show published endpoints and are grouped by service for stacks; **Endpoint unavailable** means no usable host or port was reported. The same app shows up in the sidebar, where you can re-open it, view logs, restart, stop, or update.
 
-Select an app in the sidebar to check its status and deployment endpoint. The overview shows service endpoints for stacks and keeps custom domains behind **Set custom domain** or **Manage custom domains**. If current status cannot be confirmed, the card shows **Status unavailable** and the last known status. Access details that could not be refreshed are labeled **Last known endpoint**; missing endpoints are shown as **Endpoint unavailable**.
+Select an app in the sidebar to check its status and deployment endpoint. The overview shows service endpoints for stacks and keeps custom domains behind **Set custom domain** or **Manage custom domains**. Expand **Details** for size, image, and creation time. If current status cannot be confirmed, the card shows **Status unavailable** and the recorded status. Access details that could not be refreshed are labeled **Last known endpoint** or **Last known service details**; missing endpoints are shown as **Endpoint unavailable**. Closed deployments show an inactive endpoint. **Stop** remains available for failed workloads with an active lease.
 
 ### Deploying from a Docker image
 

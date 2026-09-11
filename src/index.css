@@ -10818,6 +10818,14 @@ code.lease-card-mono {
   letter-spacing: 0.04em;
 }
 
+.app-card__service-endpoint {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
 .app-card__actions {
   display: flex;
   flex-wrap: wrap;

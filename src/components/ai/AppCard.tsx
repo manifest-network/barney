@@ -23,7 +23,10 @@ interface AppCardProps {
 }
 
 export const AppCard = memo(function AppCard({ data }: AppCardProps) {
-  const { name, url, connection, status, customDomain, statusUnavailable, endpointStale, domainManagement } = data;
+  const { name, status, customDomain, statusUnavailable, endpointStale, connectionStale, endpointInactive } = data;
+  const url = endpointInactive ? undefined : data.url;
+  const connection = endpointInactive ? undefined : data.connection;
+  const domainManagement = endpointInactive ? undefined : data.domainManagement;
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const { requestStopApp, dnsStatuses } = useAI();
   const [showDomains, setShowDomains] = useState(false);
@@ -34,11 +37,14 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
 
   // URL shaping hoists primary-service ports; prefer the full service inventory.
   const servicePortGroups: { serviceName: string; fqdn?: string; ports: [string, { host_ip: string; host_port: number }][] }[] = [];
-  const serviceNames = new Set([...Object.keys(connection?.services ?? {}), ...(data.serviceNames ?? [])]);
+  const serviceNames = new Set(endpointInactive ? [] : [...Object.keys(connection?.services ?? {}), ...(data.serviceNames ?? [])]);
   for (const serviceName of serviceNames) {
     const svc = connection?.services?.[serviceName];
-    const svcPorts = nonEmptyPorts(svc?.ports) ?? nonEmptyPorts(svc?.instances?.[0]?.ports);
-    const fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
+    // A single workload can report flat connection data under a named manifest.
+    const flat = serviceNames.size === 1 ? connection : undefined;
+    const svcPorts = nonEmptyPorts(svc?.ports) ?? nonEmptyPorts(svc?.instances?.[0]?.ports)
+      ?? nonEmptyPorts(flat?.ports) ?? nonEmptyPorts(flat?.instances?.[0]?.ports);
+    const fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn ?? flat?.fqdn ?? flat?.instances?.[0]?.fqdn;
     if (svcPorts || fqdn || data.serviceNames?.includes(serviceName)) {
       servicePortGroups.push({ serviceName, ports: Object.entries(svcPorts ?? {}), fqdn: fqdn && isValidFqdn(fqdn) ? fqdn : undefined });
     }
@@ -66,9 +72,12 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
         <span className="app-card__status">{statusUnavailable ? 'Status unavailable' : status}</span>
       </div>
 
-      {statusUnavailable && <p className="app-card__detail">Last known status: {status}. Current status could not be confirmed.</p>}
-      {endpointStale && <p className="app-card__detail">Last known endpoint — access details could not be refreshed.</p>}
-      {!url && <p className="app-card__detail">Endpoint unavailable</p>}
+      {statusUnavailable && <p className="app-card__detail">Recorded status: {status}. Current workload status could not be confirmed.</p>}
+      {endpointInactive ? <p className="app-card__detail">Deployment endpoint is no longer active.</p> : <>
+        {endpointStale && <p className="app-card__detail">Last known endpoint — access details could not be refreshed.</p>}
+        {connectionStale && <p className="app-card__detail">Last known service details — connection data could not be refreshed.</p>}
+        {!url && <p className="app-card__detail">Endpoint unavailable</p>}
+      </>}
 
       {url && (
         <div className="app-card__url">
@@ -126,7 +135,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
         </div>
       )}
 
-      {customDomain && (
+      {customDomain && !endpointInactive && (
         <div className="app-card__domain">
           <DomainRow
             fqdn={customDomain.fqdn}
@@ -145,7 +154,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
       )}
 
       <div className="app-card__actions">
-        {(status === 'running' || status === 'deploying') && (
+        {status !== 'stopped' && (
           <button
             type="button"
             onClick={handleStop}

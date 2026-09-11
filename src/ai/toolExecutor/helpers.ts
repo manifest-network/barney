@@ -205,8 +205,8 @@ export function deriveUrlFromConnection(
 
 /**
  * Keep stored access details when a provider read supplies no usable endpoint.
- * Port mappings may stay stale until a later read yields a usable URL, but an
- * incomplete read must not erase the existing access details.
+ * Port mappings may stay stale until a usable connection read arrives. A new
+ * primary URL alone must not erase the service inventory or DNS targets.
  */
 export function connectionPatch(
   { url, connection }: { url?: string; connection?: ConnectionDetails },
@@ -216,10 +216,6 @@ export function connectionPatch(
   if (url !== undefined) patch.url = url;
   if (connection && (url !== undefined || !previous?.connection)) {
     patch.connection = JSON.parse(JSON.stringify(connection));
-  } else if (url !== undefined && url !== previous?.url) {
-    // A new status endpoint supersedes old port mappings, even when the
-    // connection read failed. Keeping those mappings would override the new URL.
-    patch.connection = undefined;
   }
   return patch;
 }

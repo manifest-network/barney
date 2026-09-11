@@ -85,6 +85,8 @@ export interface ToolDataMap {
     status: string;
     statusUnavailable?: boolean;
     endpointStale?: boolean;
+    connectionStale?: boolean;
+    endpointInactive?: boolean;
     size: string;
     image?: string;
     serviceImages?: Record<string, string>;
@@ -146,6 +148,8 @@ interface ToolResultSuccess {
   requiresConfirmation?: false;
   data: unknown;
   displayCard?: MessageCard;
+  /** Continue the tool workflow after rendering this card (e.g. status before a retry). */
+  continueConversation?: boolean;
   error?: never;
   confirmationMessage?: never;
   pendingAction?: never;

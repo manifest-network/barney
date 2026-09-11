@@ -130,7 +130,7 @@ What's deploying?
 
 ### `app_status`
 
-**What it does.** Shows an app overview with its name, status, deployment endpoint, and service endpoints for stacks. Selecting an app in the sidebar opens the same view. Custom-domain setup and management are secondary buttons within the overview. Missing status and endpoints are explicitly marked unavailable; cached details are labeled when a refresh cannot confirm them.
+**What it does.** Shows an app overview with its name, status, deployment endpoint, and service endpoints for stacks. Selecting an app in the sidebar opens the same view. Custom-domain setup and management are secondary buttons within the overview; **Details** includes size, image, and creation time. Missing status and endpoints are explicitly marked unavailable; cached details are labeled when a refresh cannot confirm them. Terminal deployments show an inactive endpoint. A restart or update can continue after the status check confirms readiness.
 
 **Example prompts.**
 

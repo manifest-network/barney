@@ -536,6 +536,7 @@ export async function processToolCallsFn(
   set({ messages: updated1 });
 
   let hasDisplayCard = false;
+  let continueConversation = false;
   const collectedConfirmations: CollectedConfirmation[] = [];
   const prepareBatchDeployDrafts = toolCalls.filter(
     (toolCall) => toolCall.function.name === 'deploy_app',
@@ -583,6 +584,7 @@ export async function processToolCallsFn(
 
     if (result.success && result.displayCard) {
       hasDisplayCard = true;
+      continueConversation ||= result.continueConversation === true;
       const updated = get().messages.map((m) =>
         m.id === toolMessageId
           ? { ...m, content: JSON.stringify(result.data, bigIntReplacer, 2), card: result.displayCard, isStreaming: false }
@@ -608,7 +610,7 @@ export async function processToolCallsFn(
     return await coalesceConfirmations(get, set, collectedConfirmations, authorizationEpoch);
   }
 
-  if (hasDisplayCard) {
+  if (hasDisplayCard && !continueConversation) {
     return { shouldContinue: false };
   }
 

@@ -230,7 +230,7 @@ describe('AppCard', () => {
       });
     });
 
-    it('retains top-level ports when services have no usable port mappings', () => {
+    it('assigns top-level ports to the sole service when nested mappings are empty', () => {
       render(makeData({
         connection: {
           host: '203.0.113.10',
@@ -241,7 +241,7 @@ describe('AppCard', () => {
 
       expect(container.querySelectorAll('.app-card__port')).toHaveLength(1);
       expect(container.querySelector('.app-card__port')?.textContent).toBe('80/tcp → 203.0.113.11:32000');
-      expect(container.querySelector('.app-card__service-ports')).toBeNull();
+      expect(container.querySelector('.app-card__service-ports')?.textContent).toContain('web');
     });
 
     it('marks wildcard port endpoints unavailable without a reported host', () => {
