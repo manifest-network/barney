@@ -43,19 +43,9 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
     }
   }
 
-  let copyTarget: string | undefined;
-  if (portEntries.length > 0) {
-    copyTarget = `${portEntries[0][1].host_ip}:${portEntries[0][1].host_port}`;
-  } else if (servicePortGroups.length > 0) {
-    const first = servicePortGroups[0].ports[0][1];
-    copyTarget = `${first.host_ip}:${first.host_port}`;
-  } else {
-    copyTarget = url;
-  }
-
-  const copied = copyTarget ? isCopied(copyTarget) : false;
+  const copied = url ? isCopied(url) : false;
   const handleCopy = () => {
-    if (copyTarget) void copyToClipboard(copyTarget);
+    if (url) void copyToClipboard(url);
   };
 
   const handleStop = () => {

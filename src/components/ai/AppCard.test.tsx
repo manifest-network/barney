@@ -40,6 +40,7 @@ beforeEach(() => {
 afterEach(() => {
   flushSync(() => { root?.unmount(); });
   container?.remove();
+  vi.restoreAllMocks();
 });
 
 describe('AppCard', () => {
@@ -59,6 +60,95 @@ describe('AppCard', () => {
       },
     }));
     expect(container.textContent).toContain('https://example.com');
+  });
+
+  describe('URL-row copy', () => {
+    it.each<{
+      scenario: string;
+      url: string;
+      connection?: AppCardData['connection'];
+    }>([
+      {
+        scenario: 'top-level bind ports',
+        url: 'https://app.example.com:8443/app/start?mode=demo#ready',
+        connection: {
+          host: '203.0.113.10',
+          ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } },
+        },
+      },
+      {
+        scenario: 'multi-service bind ports',
+        url: 'https://web.example.com:8443/dashboard?tab=apps#status',
+        connection: {
+          host: '203.0.113.10',
+          services: {
+            db: { ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32001 } } },
+            web: { ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } } },
+          },
+        },
+      },
+      {
+        scenario: 'service instance bind ports',
+        url: 'https://web.example.com:8443/app',
+        connection: {
+          host: '203.0.113.10',
+          services: {
+            web: {
+              instances: [{ ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } } }],
+            },
+          },
+        },
+      },
+      {
+        scenario: 'an endpoint without a scheme',
+        url: 'db.example.com:32001',
+        connection: {
+          host: '203.0.113.10',
+          ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32001 } },
+        },
+      },
+      {
+        scenario: 'a non-HTTP scheme',
+        url: 'redis://cache.example.com:32002/0',
+        connection: {
+          host: '203.0.113.10',
+          services: {
+            cache: { ports: { '6379/tcp': { host_ip: '0.0.0.0', host_port: 32002 } } },
+          },
+        },
+      },
+      {
+        scenario: 'no connection metadata',
+        url: 'http://app.example.com:8080/health',
+      },
+    ])('copies the exact displayed endpoint and shows success with $scenario', async ({ url, connection }) => {
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      render(makeData({ url, connection }));
+      const displayedEndpoint = container.querySelector('.app-card__url .app-card__link');
+      const copyButton = container.querySelector<HTMLButtonElement>('.app-card__url button[aria-label="Copy endpoint"]');
+      expect(displayedEndpoint?.textContent).toBe(url);
+      expect(copyButton).not.toBeNull();
+
+      flushSync(() => { copyButton!.click(); });
+
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith(displayedEndpoint!.textContent);
+      await vi.waitFor(() => {
+        expect(copyButton!.getAttribute('aria-label')).toBe('Copied');
+      });
+    });
+
+    it('omits the URL row and copy button when no endpoint is displayed', () => {
+      render(makeData({
+        connection: {
+          host: '203.0.113.10',
+          ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } },
+        },
+      }));
+
+      expect(container.querySelector('.app-card__url')).toBeNull();
+      expect(container.querySelector('button[aria-label="Copy endpoint"]')).toBeNull();
+    });
   });
 
   it('renders instance endpoints as plain text for multi-instance FQDNs', () => {
