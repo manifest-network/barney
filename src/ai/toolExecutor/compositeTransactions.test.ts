@@ -6814,7 +6814,7 @@ describe('lifecycle connection observations', () => {
     expect(formatConnectionUrl(updated.url, updated.connection)).toBe(`https://${newFqdn}`);
   });
 
-  it.each(['restart', 'batch restart', 'update'] as const)('adopts a fresh status endpoint after %s without retaining stale port mappings', async (mode) => {
+  it.each(['restart', 'batch restart', 'update'] as const)('adopts a fresh status endpoint after %s while preserving the last known connection inventory', async (mode) => {
     const app = previousApp();
     const registry = makeRegistry([app]);
     vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('connection unavailable'));
@@ -6828,7 +6828,7 @@ describe('lifecycle connection observations', () => {
     expect(JSON.stringify(result.data)).toContain(`https://${newFqdn}`);
     const updated = registry.getAppByLease(ADDRESS, app.leaseUuid)!;
     expect(updated.url).toBe(`https://${newFqdn}`);
-    expect(updated.connection).toBeUndefined();
+    expect(updated.connection).toEqual(app.connection);
   });
 
   describe.each(['restart', 'batch restart', 'update'] as const)('%s observers', (mode) => {

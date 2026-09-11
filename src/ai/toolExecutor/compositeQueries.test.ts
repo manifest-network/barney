@@ -94,17 +94,6 @@ vi.mock('../../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
-vi.mock('../../utils/leaseState', () => ({
-  LEASE_STATE_LABELS: {
-    0: 'Unspecified',
-    1: 'Pending',
-    2: 'Active',
-    3: 'Closed',
-    4: 'Rejected',
-    5: 'Expired',
-  },
-}));
-
 import { getLeasesByTenant, getLeasesByTenantPaginated, getLease } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';
@@ -320,7 +309,7 @@ describe('executeAppStatus', () => {
     }
   });
 
-  it('emits CustomDomainCard displayCard when exactly one custom domain is set', async () => {
+  it('embeds single-domain management in the app overview', async () => {
     const app = makeApp({ connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' } });
     vi.mocked(getLease).mockResolvedValue({
       state: 2,
@@ -332,15 +321,15 @@ describe('executeAppStatus', () => {
     const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
     expect(result.success).toBe(true);
     if (result.success && !result.requiresConfirmation) {
-      expect(result.displayCard?.type).toBe('custom_domain');
-      if (result.displayCard?.type === 'custom_domain') {
-        expect(result.displayCard.data.fqdn).toBe('app.example.com');
-        expect(result.displayCard.data.expectedCnameTarget).toBe('auto.barney0.manifest0.net');
+      expect(result.displayCard?.type).toBe('app');
+      if (result.displayCard?.type === 'app') {
+        expect(result.displayCard.data.domainManagement?.fqdn).toBe('app.example.com');
+        expect(result.displayCard.data.domainManagement?.expectedCnameTarget).toBe('auto.barney0.manifest0.net');
       }
     }
   });
 
-  it('emits a consolidated multi-domain CustomDomainCard when multiple custom domains are set', async () => {
+  it('embeds consolidated multi-domain management in the app overview', async () => {
     const app = makeApp({
       manifest: JSON.stringify({ services: { web: { image: 'nginx' }, api: { image: 'node' } } }),
       connection: {
@@ -362,15 +351,15 @@ describe('executeAppStatus', () => {
     const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
     expect(result.success).toBe(true);
     if (result.success && !result.requiresConfirmation) {
-      expect(result.displayCard?.type).toBe('custom_domain');
-      if (result.displayCard?.type === 'custom_domain') {
-        expect(result.displayCard.data.fqdn).toBe('');
-        expect(result.displayCard.data.domains).toHaveLength(2);
-        expect(result.displayCard.data.domains).toEqual([
+      expect(result.displayCard?.type).toBe('app');
+      if (result.displayCard?.type === 'app') {
+        expect(result.displayCard.data.domainManagement?.fqdn).toBe('');
+        expect(result.displayCard.data.domainManagement?.domains).toHaveLength(2);
+        expect(result.displayCard.data.domainManagement?.domains).toEqual([
           { serviceName: 'web', customDomain: 'web.example.com', expectedCnameTarget: 'web.auto.barney0.manifest0.net' },
           { serviceName: 'api', customDomain: 'api.example.com', expectedCnameTarget: 'api.auto.barney0.manifest0.net' },
         ]);
-        expect(result.displayCard.data.serviceNames).toEqual(['web', 'api']);
+        expect(result.displayCard.data.domainManagement?.serviceNames).toEqual(['web', 'api']);
       }
       expect((result.data as any).customDomains).toHaveLength(2);
     }
@@ -392,7 +381,7 @@ describe('executeAppStatus', () => {
     }
   });
 
-  it('emits a no-domain CustomDomainCard for a single-item lease without a custom domain', async () => {
+  it('embeds domain setup in the overview for a single-item lease without a custom domain', async () => {
     const app = makeApp({ status: 'running', connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' } });
     vi.mocked(getLease).mockResolvedValue({
       state: 2,
@@ -404,16 +393,16 @@ describe('executeAppStatus', () => {
     const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
     expect(result.success).toBe(true);
     if (result.success && !result.requiresConfirmation) {
-      expect(result.displayCard?.type).toBe('custom_domain');
-      if (result.displayCard?.type === 'custom_domain') {
-        expect(result.displayCard.data.fqdn).toBe('');
-        expect(result.displayCard.data.serviceName).toBe('');
-        expect(result.displayCard.data.expectedCnameTarget).toBe('auto.barney0.manifest0.net');
+      expect(result.displayCard?.type).toBe('app');
+      if (result.displayCard?.type === 'app') {
+        expect(result.displayCard.data.domainManagement?.fqdn).toBe('');
+        expect(result.displayCard.data.domainManagement?.serviceName).toBe('');
+        expect(result.displayCard.data.domainManagement?.expectedCnameTarget).toBe('auto.barney0.manifest0.net');
       }
     }
   });
 
-  it('emits a no-domain card with serviceNames picker for a stack with no domains', async () => {
+  it('embeds domain setup with a service picker in the stack overview', async () => {
     const app = makeApp({
       status: 'running',
       manifest: JSON.stringify({ services: { web: { image: 'nginx' }, api: { image: 'node' } } }),
@@ -430,17 +419,17 @@ describe('executeAppStatus', () => {
     const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
     expect(result.success).toBe(true);
     if (result.success && !result.requiresConfirmation) {
-      expect(result.displayCard?.type).toBe('custom_domain');
-      if (result.displayCard?.type === 'custom_domain') {
-        expect(result.displayCard.data.fqdn).toBe('');
-        expect(result.displayCard.data.serviceName).toBe('');
-        expect(result.displayCard.data.serviceNames).toEqual(['web', 'api']);
-        expect(result.displayCard.data.domains).toBeUndefined();
+      expect(result.displayCard?.type).toBe('app');
+      if (result.displayCard?.type === 'app') {
+        expect(result.displayCard.data.domainManagement?.fqdn).toBe('');
+        expect(result.displayCard.data.domainManagement?.serviceName).toBe('');
+        expect(result.displayCard.data.domainManagement?.serviceNames).toEqual(['web', 'api']);
+        expect(result.displayCard.data.domainManagement?.domains).toBeUndefined();
       }
     }
   });
 
-  it('does NOT emit no-domain card for legacy multi-item leases with all-unnamed items', async () => {
+  it('keeps the overview without domain setup for legacy multi-item leases with all-unnamed items', async () => {
     // Pre-ENG-56 stacks: chain LeaseItems lack service names. The stored
     // manifest still claims named services, but `executeSetCustomDomain`
     // rejects these with "predates per-service domains and has multiple
@@ -463,11 +452,12 @@ describe('executeAppStatus', () => {
     const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
     expect(result.success).toBe(true);
     if (result.success && !result.requiresConfirmation) {
-      expect(result.displayCard).toBeUndefined();
+      expect(result.displayCard?.type).toBe('app');
+      if (result.displayCard?.type === 'app') expect(result.displayCard.data.domainManagement).toBeUndefined();
     }
   });
 
-  it('emits no-domain card with chain-derived picker for modern multi-item named stacks', async () => {
+  it('embeds domain setup with a chain-derived picker for modern multi-item named stacks', async () => {
     // Happy path for modern stacks: chain has named items, attach is allowed,
     // picker offers the chain-derived service names.
     const app = makeApp({
@@ -485,10 +475,10 @@ describe('executeAppStatus', () => {
     const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
     expect(result.success).toBe(true);
     if (result.success && !result.requiresConfirmation) {
-      expect(result.displayCard?.type).toBe('custom_domain');
-      if (result.displayCard?.type === 'custom_domain') {
-        expect(result.displayCard.data.fqdn).toBe('');
-        expect(result.displayCard.data.serviceNames).toEqual(['web', 'db']);
+      expect(result.displayCard?.type).toBe('app');
+      if (result.displayCard?.type === 'app') {
+        expect(result.displayCard.data.domainManagement?.fqdn).toBe('');
+        expect(result.displayCard.data.domainManagement?.serviceNames).toEqual(['web', 'db']);
       }
     }
   });
@@ -515,14 +505,14 @@ describe('executeAppStatus', () => {
     const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
     expect(result.success).toBe(true);
     if (result.success && !result.requiresConfirmation) {
-      expect(result.displayCard?.type).toBe('custom_domain');
-      if (result.displayCard?.type === 'custom_domain') {
-        expect(result.displayCard.data.serviceNames).toEqual(['web']);
+      expect(result.displayCard?.type).toBe('app');
+      if (result.displayCard?.type === 'app') {
+        expect(result.displayCard.data.domainManagement?.serviceNames).toEqual(['web']);
       }
     }
   });
 
-  it('does NOT emit no-domain card for stopped apps', async () => {
+  it('keeps the overview without domain setup for stopped apps', async () => {
     const app = makeApp({ status: 'stopped', connection: { host: 'fred.example.com', fqdn: 'auto.barney0.manifest0.net' } });
     vi.mocked(getLease).mockResolvedValue({
       state: 3, // CLOSED
@@ -534,7 +524,8 @@ describe('executeAppStatus', () => {
     const result = await executeAppStatus({ app_name: 'my-app' }, makeOptions({ appRegistry: registry }));
     expect(result.success).toBe(true);
     if (result.success && !result.requiresConfirmation) {
-      expect(result.displayCard).toBeUndefined();
+      expect(result.displayCard?.type).toBe('app');
+      if (result.displayCard?.type === 'app') expect(result.displayCard.data.domainManagement).toBeUndefined();
     }
   });
 

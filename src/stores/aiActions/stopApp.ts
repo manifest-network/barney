@@ -35,7 +35,7 @@ export function requestStopAppFn(get: Get, set: Set, appName: string): void {
   if (!authorization) return;
   const app = registry.findApp(address, appName);
   if (!app) return;                          // unknown app — silent no-op
-  if (app.status === 'stopped') return;      // already stopped — silent no-op
+  if (app.status === 'stopped' || app.chainState === 'absent') return;
 
   const syntheticToolCallId = generateMessageId();
   const toolMsgId = generateMessageId();

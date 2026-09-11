@@ -5,7 +5,6 @@
 
 import type { ToolCall } from '../api/morpheus';
 import type { PendingAction } from '../ai/toolExecutor';
-import type { PortMapping } from '@manifest-network/manifest-sdk/deploy';
 
 /** Data for a logs display card. */
 export interface LogsCardData {
@@ -44,10 +43,14 @@ export interface CustomDomainCardData {
 }
 
 /** Port mapping shape returned by the provider connection info. */
-export type AppCardPortMapping = PortMapping;
+export interface AppCardPortMapping {
+  host_ip?: string;
+  host_port: number;
+}
 
 /** Per-service connection info for stack deployments. */
 export interface AppCardServiceInfo {
+  fqdn?: string;
   ports?: Record<string, AppCardPortMapping>;
   instances?: { fqdn?: string; ports?: Record<string, AppCardPortMapping> }[];
 }
@@ -72,12 +75,22 @@ export interface AppCardCustomDomain {
   isApex: boolean;
 }
 
-/** Data for the `app` deploy-success card. */
+/** Data for the `app` overview and deploy-success card. */
 export interface AppCardData {
   name: string;
   url?: string;
   connection?: AppCardConnection;
   status: string;
+  /** Current provider reading, independent of the registry's durable summary. */
+  providerStatus?: string;
+  canStop?: boolean;
+  /** The recorded status could not be confirmed against the current workload. */
+  statusUnavailable?: boolean;
+  endpointStale?: boolean;
+  connectionStale?: boolean;
+  endpointInactive?: boolean;
+  serviceNames?: readonly string[];
+  domainManagement?: CustomDomainCardData;
   customDomain?: AppCardCustomDomain;
 }
 

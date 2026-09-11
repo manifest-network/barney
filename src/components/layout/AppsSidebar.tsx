@@ -111,7 +111,7 @@ function currentWalletValue<T>(
 
 export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const { address, disconnect, wallet } = useChain(CHAIN_NAME);
-  const { sendMessage, attachPayload, clearPayload, dnsStatuses } = useAI();
+  const { sendMessage, requestAppStatus, attachPayload, clearPayload, dnsStatuses } = useAI();
   // Unlike an address string, this identity changes for A → B → A. Registry
   // and credit snapshots from an earlier visit to A therefore remain hidden
   // until the current A lifecycle successfully refreshes them.
@@ -536,7 +536,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                   key={app.leaseUuid}
                   type="button"
                   onClick={() => {
-                    void sendMessage(`What's the status of ${app.name}?`);
+                    void requestAppStatus(app.name);
                     onClose?.();
                   }}
                   className="apps-sidebar__app-item"

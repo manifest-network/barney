@@ -13,6 +13,7 @@ import type { ToolResult, ToolExecutorOptions, SigningContext } from './types';
 import { connectionPatch, failureText } from './helpers';
 import { nextStepFor } from './failureGuidance';
 import { resolveAppUrl } from './deployUrl';
+import { isTerminalLeaseState } from '../../utils/leaseState';
 
 /**
  * Best-effort fetch of provider logs and provision status for failed deploys.
@@ -92,11 +93,7 @@ export async function classifyLeaseChainState(leaseUuid: string): Promise<ChainD
     const lease = await getLease(leaseUuid);
     if (!lease) return 'failed';
     if (lease.state === LeaseState.LEASE_STATE_ACTIVE) return 'running';
-    if (
-      lease.state === LeaseState.LEASE_STATE_CLOSED ||
-      lease.state === LeaseState.LEASE_STATE_REJECTED ||
-      lease.state === LeaseState.LEASE_STATE_EXPIRED
-    ) {
+    if (isTerminalLeaseState(lease.state)) {
       return 'failed';
     }
     return 'deploying';

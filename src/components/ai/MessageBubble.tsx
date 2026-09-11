@@ -144,7 +144,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
         )}
       </div>
       <div className="message-content">
-        {/* Tool results: LogCard for logs, CustomDomainCard for custom domains, collapsible block for others */}
+        {/* Display cards keep the primary result visible without expanding raw tool data. */}
         {isTool && message.card?.type === 'logs' && (
           <LogCard
             appName={message.card.data.app_name}
@@ -158,27 +158,32 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
         {isTool && message.card?.type === 'app' && (
           <AppCard data={message.card.data} />
         )}
-        {isTool && !message.card && (
+        {isTool && (
           <div className="message-tool-block">
-            <button
-              type="button"
-              onClick={() => setIsToolExpanded(!isToolExpanded)}
-              className="message-tool-toggle"
-              aria-expanded={isToolExpanded}
-              aria-label={`${isToolExpanded ? 'Collapse' : 'Expand'} tool result for ${toolName || 'tool'}`}
-            >
-              {isToolExpanded ? (
-                <ChevronDown className="w-3 h-3" aria-hidden="true" />
-              ) : (
-                <ChevronRight className="w-3 h-3" aria-hidden="true" />
-              )}
-              <Wrench className="w-3 h-3" aria-hidden="true" />
-              <span>{toolDescription || toolName || 'Tool result'}</span>
-            </button>
-            {isToolExpanded && content && (
-              <div className="message-tool-content">
-                {formatContent(content, false)}
-              </div>
+            {isStreaming && <p role="status">{toolDescription || `Running ${toolName || 'tool'}…`}</p>}
+            {!isStreaming && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setIsToolExpanded(!isToolExpanded)}
+                  className="message-tool-toggle"
+                  aria-expanded={isToolExpanded}
+                  aria-label={`${isToolExpanded ? 'Collapse' : 'Expand'} tool result for ${toolName || 'tool'}`}
+                >
+                  {isToolExpanded ? (
+                    <ChevronDown className="w-3 h-3" aria-hidden="true" />
+                  ) : (
+                    <ChevronRight className="w-3 h-3" aria-hidden="true" />
+                  )}
+                  <Wrench className="w-3 h-3" aria-hidden="true" />
+                  <span>{message.card ? 'Details' : toolDescription || toolName || 'Tool result'}</span>
+                </button>
+                {isToolExpanded && content && (
+                  <div className="message-tool-content">
+                    {formatContent(content, false)}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

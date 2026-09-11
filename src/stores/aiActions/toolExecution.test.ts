@@ -302,6 +302,59 @@ describe('processToolCallsFn', () => {
     expect(toolMsg!.error).toBe('Wallet not connected');
   });
 
+  it.each([false, true])('continues after a status card, including a cached result (%s)', async (cached) => {
+    const toolCall = makeToolCall({ function: { name: 'app_status', arguments: { app_name: 'test' } } });
+    const toolResult: ToolResult = {
+      success: true, data: { name: 'test', status: 'running' }, continueConversation: true,
+      displayCard: { type: 'app', data: { name: 'test', status: 'running' } },
+    };
+    if (cached) state._toolCache.set(get().getToolCacheKey('app_status', toolCall.function.arguments), { result: toolResult, timestamp: Date.now() });
+    else vi.mocked(executeTool).mockResolvedValueOnce(toolResult);
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const result = await processToolCallsFn(get, set, [toolCall], 'asst_1', { content: '', thinking: '', toolCalls: [toolCall] });
+    expect(result.shouldContinue).toBe(true);
+    expect(state.messages.find((message) => message.role === 'tool')?.card).toEqual(toolResult.displayCard);
+    expect(state.messages.at(-1)?.id).toBe(result.shouldContinue && result.nextAssistantMessageId);
+    if (cached) expect(executeTool).not.toHaveBeenCalled();
+  });
+
+  it('waits for transaction confirmation even when a status card requests continuation', async () => {
+    const toolCalls = [
+      makeToolCall({ function: { name: 'app_status', arguments: { app_name: 'test' } } }),
+      makeToolCall({ id: 'tc_2', function: { name: 'stop_app', arguments: { app_name: 'test' } } }),
+    ];
+    vi.mocked(executeTool).mockResolvedValueOnce({
+      success: true, data: { status: 'running' }, continueConversation: true,
+      displayCard: { type: 'app', data: { name: 'test', status: 'running' } },
+    }).mockResolvedValueOnce({
+      success: true, requiresConfirmation: true, confirmationMessage: 'Stop test?',
+      pendingAction: { toolName: 'stop_app', args: { app_name: 'test' } },
+    });
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const result = await processToolCallsFn(get, set, toolCalls, 'asst_1', { content: '', thinking: '', toolCalls });
+    expect(result.shouldContinue).toBe(false);
+    expect(state.pendingConfirmation?.action.toolName).toBe('stop_app');
+    expect(state.messages.find((message) => message.toolName === 'app_status')?.card?.type).toBe('app');
+  });
+
+  it.each([['app_status', 'get_logs'], ['get_logs', 'app_status']])('preserves a turn-ending card alongside an opt-in status card (%s then %s)', async (first, second) => {
+    const toolCalls = [first, second].map((name, index) => makeToolCall({ id: `tc_${index}`, function: { name, arguments: { app_name: 'test' } } }));
+    for (const name of [first, second]) {
+      vi.mocked(executeTool).mockResolvedValueOnce(name === 'app_status' ? {
+        success: true, data: { status: 'running' }, continueConversation: true,
+        displayCard: { type: 'app', data: { name: 'test', status: 'running' } },
+      } : {
+        success: true, data: { logs: 'private log data' },
+        displayCard: { type: 'logs', data: { app_name: 'test', logs: { web: 'private log data' }, truncated: false } },
+      });
+    }
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const result = await processToolCallsFn(get, set, toolCalls, 'asst_1', { content: '', thinking: '', toolCalls });
+    expect(result.shouldContinue).toBe(false);
+    expect(state.messages.filter((message) => message.card)).toHaveLength(2);
+    expect(state.messages.at(-1)?.role).toBe('tool');
+  });
+
   it('processes all tool calls even when first requires confirmation', async () => {
     vi.mocked(executeTool)
       .mockResolvedValueOnce({

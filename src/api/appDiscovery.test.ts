@@ -148,6 +148,28 @@ describe('discoverTenantApps', () => {
 });
 
 describe('hydrateDiscoveredApp', () => {
+  it('preserves the established URL and service inventory when the connection read fails', async () => {
+    const previous = app({
+      url: 'https://web.provider.example',
+      connection: {
+        host: '203.0.113.10',
+        services: {
+          web: { fqdn: 'web.provider.example', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } } },
+          db: { fqdn: 'db.provider.example', ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32001 } } },
+        },
+      },
+    });
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValueOnce(new Error('connection unavailable'));
+    vi.mocked(getLeaseStatus).mockResolvedValueOnce({
+      state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'ready',
+      endpoints: { '80/tcp': 'http://203.0.113.10:32002' },
+    });
+    await hydrateDiscoveredApp(address, previous, signing);
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({
+      status: 'running', url: previous.url, connection: previous.connection,
+    });
+  });
+
   it('recovers readiness and provider-reported access details with read-only wallet authentication', async () => {
     signing.authTokens.getAuthToken.mockResolvedValueOnce('status-token').mockResolvedValueOnce('connection-token');
     await hydrateDiscoveredApp(address, app(), signing);

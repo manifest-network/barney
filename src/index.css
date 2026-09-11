@@ -10663,8 +10663,12 @@ code.lease-card-mono {
   margin: 0.75rem 1rem;
   padding: 1rem;
   background: var(--color-surface-800);
-  border: 1px solid var(--color-success-600);
+  border: 1px solid var(--panel-border);
   border-radius: var(--radius-lg);
+}
+
+.app-card[data-status="running"] {
+  border-color: var(--color-success-600);
 }
 
 .app-card__header {
@@ -10683,8 +10687,26 @@ code.lease-card-mono {
 .app-card__status {
   margin-left: auto;
   font-size: 0.75rem;
-  color: var(--color-success-400);
+  color: var(--text-secondary);
   font-weight: 500;
+}
+
+.app-card[data-status="running"] .app-card__status {
+  color: var(--color-success-400);
+}
+
+.app-card[data-status="failed"] .app-card__status {
+  color: var(--color-error-400);
+}
+
+.app-card__detail {
+  margin-bottom: 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.app-card__domain-management .custom-domain-card {
+  margin: 0.75rem 0 0;
 }
 
 .app-card__url {
@@ -10796,8 +10818,17 @@ code.lease-card-mono {
   letter-spacing: 0.04em;
 }
 
+.app-card__service-endpoint {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
 .app-card__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
