@@ -12,6 +12,7 @@ import { refreshAppConnection } from '../ai/toolExecutor/deployUrl';
 import { classifyProvisionStatus, isUnsettledProvisionStatus } from '../ai/toolExecutor/provisionStatus';
 import { AI_TOOL_API_TIMEOUT_MS, APP_RECOVERY_TIMEOUT_MS } from '../config/constants';
 import { logError } from '../utils/errors';
+import { isTerminalLeaseState } from '../utils/leaseState';
 
 interface DiscoveryOptions {
   signal?: AbortSignal;
@@ -188,10 +189,7 @@ export async function hydrateDiscoveredApp(
     const patch: Partial<AppEntry> = refreshAppConnection(status, connection, snapshot).patch;
     if (status) {
       const observed = classifyProvisionStatus(status.provision_status);
-      const terminal = status.state === LeaseState.LEASE_STATE_CLOSED
-        || status.state === LeaseState.LEASE_STATE_REJECTED
-        || status.state === LeaseState.LEASE_STATE_EXPIRED;
-      if (terminal) patch.provisionState = 'failed';
+      if (isTerminalLeaseState(status.state)) patch.provisionState = 'failed';
       else if (observed !== undefined
         && !(snapshot.provisionState === 'confirmed' && isUnsettledProvisionStatus(status.provision_status))) {
         patch.provisionState = observed;
