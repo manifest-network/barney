@@ -8,8 +8,7 @@ import { withTimeout } from './utils';
 import * as appRegistry from '../registry/appRegistry';
 import type { AppEntry, ChainAppSnapshot } from '../registry/appRegistry';
 import type { AppRegistryAccess, SigningContext } from '../ai/toolExecutor/types';
-import { connectionPatch, deriveUrlFromConnection } from '../ai/toolExecutor/helpers';
-import { extractUrlFromFredStatus } from '../ai/toolExecutor/deployUrl';
+import { refreshAppConnection } from '../ai/toolExecutor/deployUrl';
 import { classifyProvisionStatus, isUnsettledProvisionStatus } from '../ai/toolExecutor/provisionStatus';
 import { AI_TOOL_API_TIMEOUT_MS, APP_RECOVERY_TIMEOUT_MS } from '../config/constants';
 import { logError } from '../utils/errors';
@@ -186,11 +185,7 @@ export async function hydrateDiscoveredApp(
     const connection = response?.lease_uuid === snapshot.leaseUuid
       && response.tenant === address && response.provider_uuid === snapshot.providerUuid
       ? response.connection : undefined;
-    const shaped = connection ? deriveUrlFromConnection(connection) : undefined;
-    const patch: Partial<AppEntry> = connectionPatch({
-      url: shaped?.url ?? (status ? extractUrlFromFredStatus(status) : undefined),
-      connection: shaped?.connection ?? connection,
-    }, snapshot);
+    const patch: Partial<AppEntry> = refreshAppConnection(status, connection, snapshot).patch;
     if (status) {
       const observed = classifyProvisionStatus(status.provision_status);
       const terminal = status.state === LeaseState.LEASE_STATE_CLOSED

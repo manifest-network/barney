@@ -6,13 +6,26 @@
  * an assigned host port; HTTP FQDNs route through Traefik on 443.
  */
 
-import { deriveUrlFromConnection, extractPort, extractPrimaryServicePorts, formatConnectionUrl, parseContainerPort, TCP_ONLY_PORTS } from './helpers';
+import { connectionPatch, deriveUrlFromConnection, extractPort, extractPrimaryServicePorts, formatConnectionUrl, parseContainerPort, TCP_ONLY_PORTS } from './helpers';
 import { isValidFqdn } from '../../utils/connection';
 import type { FredLeaseStatus } from '../../api/fred';
 import { getLeaseConnectionInfo, type ConnectionDetails } from '../../api/provider-api';
 import { asLeaseUuid } from '@manifest-network/manifest-sdk';
 import { logError } from '../../utils/errors';
 import type { SigningContext } from './types';
+import type { AppEntry } from '../../registry/appRegistry';
+
+/** Refresh the primary endpoint independently of the saved service inventory. */
+export function refreshAppConnection(
+  status: FredLeaseStatus | undefined,
+  connection: ConnectionDetails | undefined,
+  previous: Pick<AppEntry, 'url' | 'connection'>,
+) {
+  const shaped = connection ? deriveUrlFromConnection(connection) : undefined;
+  const url = shaped?.url ?? (status ? extractUrlFromFredStatus(status) : undefined);
+  const patch = connectionPatch({ url, connection: shaped?.connection ?? connection }, previous);
+  return { patch, endpointRefreshed: url !== undefined, connectionRefreshed: patch.connection !== undefined };
+}
 
 /** True if the hostname looks like a DNS name (not a bare IPv4 address). */
 function isDnsHostname(hostname: string): boolean {

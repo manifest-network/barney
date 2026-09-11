@@ -31,8 +31,8 @@ import { classifyProvisionStatus, isUnsettledProvisionStatus } from './provision
 import { appCardConnection } from './appCardConnection';
 import { buildBarneyCtx } from './capabilityCtx';
 import { nextStepFor } from './failureGuidance';
-import { connectionPatch, formatConnectionUrl, deriveUrlFromConnection } from './helpers';
-import { extractUrlFromFredStatus } from './deployUrl';
+import { formatConnectionUrl } from './helpers';
+import { refreshAppConnection } from './deployUrl';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import { getDomainAssignments } from '../../api/leaseDomains';
 import { requestFaucet } from '@manifest-network/manifest-sdk/faucet';
@@ -257,14 +257,12 @@ export async function executeAppStatus(
   else if (leaseState === LeaseState.LEASE_STATE_ACTIVE) {
     let accessChanged = false;
     if (!fredStatus || fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
-      const shaped = refreshedConnection ? deriveUrlFromConnection(refreshedConnection) : undefined;
-      const refreshedUrl = shaped?.url ?? (fredStatus ? extractUrlFromFredStatus(fredStatus) : undefined);
-      const patch = connectionPatch({ url: refreshedUrl, connection: shaped?.connection ?? refreshedConnection }, app);
-      appUrl = patch.url ?? appUrl;
-      appConnection = patch.connection ?? appConnection;
-      accessChanged = Object.keys(patch).length > 0;
-      endpointRefreshed = refreshedUrl !== undefined;
-      connectionRefreshed = patch.connection !== undefined;
+      const refresh = refreshAppConnection(fredStatus ?? undefined, refreshedConnection, app);
+      appUrl = refresh.patch.url ?? appUrl;
+      appConnection = refresh.patch.connection ?? appConnection;
+      accessChanged = Object.keys(refresh.patch).length > 0;
+      endpointRefreshed = refresh.endpointRefreshed;
+      connectionRefreshed = refresh.connectionRefreshed;
     }
     if (fredStatus) {
       if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
