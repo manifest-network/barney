@@ -83,6 +83,8 @@ export interface ToolDataMap {
   app_status: {
     name: string;
     status: string;
+    statusUnavailable?: boolean;
+    endpointStale?: boolean;
     size: string;
     image?: string;
     serviceImages?: Record<string, string>;

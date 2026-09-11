@@ -1,5 +1,5 @@
 /**
- * AppCard — rendered on successful deploy_app.
+ * AppCard — app overview from app_status or a successful deploy_app.
  *
  * Shows app name, URL, port mappings, optional custom-domain row, and a Stop
  * affordance routed through the AI flow. When a custom domain was attached
@@ -8,13 +8,14 @@
  * surface (no per-component polling).
  */
 
-import { memo } from 'react';
-import { Copy, Square, CheckCircle } from 'lucide-react';
+import { memo, useId, useState } from 'react';
+import { Circle, Copy, Globe, Square, CheckCircle } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useAI } from '../../hooks/useAI';
-import { collectInstanceUrls, formatPortEndpoint, nonEmptyPorts } from '../../utils/connection';
+import { collectInstanceUrls, formatPortEndpoint, isValidFqdn, nonEmptyPorts } from '../../utils/connection';
 import { dnsStatusKey } from '../../stores/aiStore';
 import { DomainRow } from './DomainRow';
+import { CustomDomainCard } from './CustomDomainCard';
 import type { AppCardData } from '../../contexts/aiTypes';
 
 interface AppCardProps {
@@ -22,22 +23,24 @@ interface AppCardProps {
 }
 
 export const AppCard = memo(function AppCard({ data }: AppCardProps) {
-  const { name, url, connection, status, customDomain } = data;
+  const { name, url, connection, status, customDomain, statusUnavailable, endpointStale, domainManagement } = data;
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const { requestStopApp, dnsStatuses } = useAI();
+  const [showDomains, setShowDomains] = useState(false);
+  const domainsId = useId();
 
   const instanceUrls = collectInstanceUrls(connection);
   const portEntries = connection?.ports ? Object.entries(connection.ports) : [];
 
   // URL shaping hoists primary-service ports; prefer the full service inventory.
-  const servicePortGroups: { serviceName: string; ports: [string, { host_ip: string; host_port: number }][] }[] = [];
-  if (connection?.services) {
-    for (const [svcName, svc] of Object.entries(connection.services)) {
-      const svcPorts = nonEmptyPorts(svc.ports) ?? nonEmptyPorts(svc.instances?.[0]?.ports);
-      if (svcPorts) {
-        const entries = Object.entries(svcPorts);
-        servicePortGroups.push({ serviceName: svcName, ports: entries });
-      }
+  const servicePortGroups: { serviceName: string; fqdn?: string; ports: [string, { host_ip: string; host_port: number }][] }[] = [];
+  const serviceNames = new Set([...Object.keys(connection?.services ?? {}), ...(data.serviceNames ?? [])]);
+  for (const serviceName of serviceNames) {
+    const svc = connection?.services?.[serviceName];
+    const svcPorts = nonEmptyPorts(svc?.ports) ?? nonEmptyPorts(svc?.instances?.[0]?.ports);
+    const fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
+    if (svcPorts || fqdn || data.serviceNames?.includes(serviceName)) {
+      servicePortGroups.push({ serviceName, ports: Object.entries(svcPorts ?? {}), fqdn: fqdn && isValidFqdn(fqdn) ? fqdn : undefined });
     }
   }
 
@@ -54,12 +57,18 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
     : undefined;
 
   return (
-    <div className="app-card" role="article" aria-label={`App: ${name}`}>
+    <div className="app-card" data-status={statusUnavailable ? 'unavailable' : status} role="article" aria-label={`App: ${name}`}>
       <div className="app-card__header">
-        <CheckCircle className="w-5 h-5 text-success-400" aria-hidden="true" />
+        {status === 'running' && !statusUnavailable
+          ? <CheckCircle className="w-5 h-5 text-success-400" aria-hidden="true" />
+          : <Circle className="w-5 h-5 text-surface-400" aria-hidden="true" />}
         <span className="app-card__name">{name}</span>
-        <span className="app-card__status">{status}</span>
+        <span className="app-card__status">{statusUnavailable ? 'Status unavailable' : status}</span>
       </div>
+
+      {statusUnavailable && <p className="app-card__detail">Last known status: {status}. Current status could not be confirmed.</p>}
+      {endpointStale && <p className="app-card__detail">Last known endpoint — access details could not be refreshed.</p>}
+      {!url && <p className="app-card__detail">Endpoint unavailable</p>}
 
       {url && (
         <div className="app-card__url">
@@ -90,7 +99,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
         </div>
       )}
 
-      {servicePortGroups.length === 0 && portEntries.length > 0 && (
+      {!servicePortGroups.some((group) => group.ports.length > 0) && portEntries.length > 0 && (
         <div className="app-card__ports">
           {portEntries.map(([containerPort, mapping]) => (
             <span key={containerPort} className="app-card__port">
@@ -102,9 +111,11 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
 
       {servicePortGroups.length > 0 && (
         <div className="app-card__ports">
-          {servicePortGroups.map(({ serviceName, ports }) => (
+          {servicePortGroups.map(({ serviceName, ports, fqdn }) => (
             <div key={serviceName} className="app-card__service-ports">
               <span className="app-card__service-name">{serviceName}</span>
+              {fqdn && <span className="app-card__service-endpoint">{fqdn}</span>}
+              {!fqdn && ports.length === 0 && <span className="app-card__port">Endpoint unavailable</span>}
               {ports.map(([containerPort, mapping]) => (
                 <span key={`${serviceName}-${containerPort}`} className="app-card__port">
                   {containerPort} &rarr; {formatPortEndpoint(mapping, connection?.host) ?? 'Endpoint unavailable'}
@@ -134,15 +145,34 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
       )}
 
       <div className="app-card__actions">
-        <button
-          type="button"
-          onClick={handleStop}
-          className="btn btn-ghost btn-sm"
-        >
-          <Square className="w-3.5 h-3.5" aria-hidden="true" />
-          Stop
-        </button>
+        {(status === 'running' || status === 'deploying') && (
+          <button
+            type="button"
+            onClick={handleStop}
+            className="btn btn-ghost btn-sm"
+          >
+            <Square className="w-3.5 h-3.5" aria-hidden="true" />
+            Stop
+          </button>
+        )}
+        {domainManagement && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            aria-expanded={showDomains}
+            aria-controls={domainsId}
+            onClick={() => setShowDomains(!showDomains)}
+          >
+            <Globe className="w-3.5 h-3.5" aria-hidden="true" />
+            {domainManagement.fqdn || domainManagement.domains?.length ? 'Manage custom domains' : 'Set custom domain'}
+          </button>
+        )}
       </div>
+      {domainManagement && showDomains && (
+        <div id={domainsId} className="app-card__domain-management">
+          <CustomDomainCard data={domainManagement} />
+        </div>
+      )}
     </div>
   );
 });

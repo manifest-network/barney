@@ -28,6 +28,7 @@ import {
   type ProviderHealthResponse,
 } from '@manifest-network/manifest-sdk/deploy';
 import { classifyProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
+import { appCardConnection } from './appCardConnection';
 import { buildBarneyCtx } from './capabilityCtx';
 import { nextStepFor } from './failureGuidance';
 import { connectionPatch, formatConnectionUrl, deriveUrlFromConnection } from './helpers';
@@ -51,7 +52,7 @@ import {
 import { withRetry, withTimeout, throwIfAborted } from '../../api/utils';
 import { asLeaseUuid } from '@manifest-network/manifest-sdk';
 import type { ToolResult, ToolExecutorOptions, ToolData } from './types';
-import type { MessageCard } from '../../contexts/aiTypes';
+import type { CustomDomainCardData } from '../../contexts/aiTypes';
 import type { AppEntry } from '../../registry/appRegistry';
 
 /**
@@ -229,6 +230,7 @@ export async function executeAppStatus(
   let currentStatus = app.status;
   let appUrl = app.url;
   let appConnection = app.connection;
+  let endpointRefreshed = false;
 
   /** Write an observation and adopt the status the registry derives from it. */
   const recordObservation = (updates: Partial<Omit<AppEntry, 'leaseUuid'>>): void => {
@@ -245,21 +247,23 @@ export async function executeAppStatus(
   }
   // If chain says active, reconcile with fred (or trust chain if fred unavailable)
   else if (leaseState === LeaseState.LEASE_STATE_ACTIVE) {
+    let connectionRefreshed = false;
+    if (!fredStatus || fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+      const shaped = refreshedConnection ? deriveUrlFromConnection(refreshedConnection) : undefined;
+      const refreshedUrl = shaped?.url ?? (fredStatus ? extractUrlFromFredStatus(fredStatus) : undefined);
+      if (refreshedConnection || refreshedUrl) {
+        const patch = connectionPatch({
+          url: refreshedUrl,
+          connection: shaped?.connection ?? refreshedConnection,
+        }, { url: appUrl, connection: appConnection });
+        appUrl = patch.url ?? appUrl;
+        if ('connection' in patch) appConnection = patch.connection;
+        connectionRefreshed = Object.keys(patch).length > 0;
+        endpointRefreshed = refreshedUrl !== undefined;
+      }
+    }
     if (fredStatus) {
       if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
-        // Connection details were fetched by appStatus alongside the status
-        // read (its own errors already swallowed → refreshedConnection undefined).
-        let connectionRefreshed = false;
-        if (refreshedConnection) {
-          const shaped = deriveUrlFromConnection(refreshedConnection);
-          const patch = connectionPatch({
-            url: shaped?.url ?? extractUrlFromFredStatus(fredStatus),
-            connection: shaped?.connection ?? refreshedConnection,
-          }, { url: appUrl, connection: appConnection });
-          appUrl = patch.url ?? appUrl;
-          if ('connection' in patch) appConnection = patch.connection;
-          connectionRefreshed = Object.keys(patch).length > 0;
-        }
         // TWO independent observations: the chain says the lease is ACTIVE, fred's
         // `provision_status` says whatever it says. Recording both is what makes
         // "the lease exists" and "the workload is up" separately expressible.
@@ -291,12 +295,15 @@ export async function executeAppStatus(
           recordObservation({ provisionState: 'failed' });
         }
       }
-    } else if (app.chainState !== 'active') {
+    } else if (app.chainState !== 'active' || connectionRefreshed) {
       // Fred unavailable but chain says active — trust the chain, and ONLY the
       // chain: no provider evidence here, so `provisionState` is untouched. A
       // flat `status: 'running'` would silently erase a provider `failed` verdict
       // every time fred happened to be unreachable.
-      recordObservation({ chainState: 'active' });
+      recordObservation({
+        chainState: 'active',
+        ...(connectionRefreshed ? { url: appUrl, connection: appConnection } : {}),
+      });
     }
   }
   // Chain says PENDING: the lease exists but carries no workload yet. Recorded
@@ -310,8 +317,8 @@ export async function executeAppStatus(
     }
   }
 
-  // Build a bare connection endpoint from host + port mappings
-  const connectionUrl = formatConnectionUrl(appUrl, appConnection);
+  // Keep the deployed endpoint intact, including its scheme, port, and path.
+  const connectionUrl = appUrl || formatConnectionUrl(undefined, appConnection);
 
   // Extract image from stored manifest (single-service or stack)
   let image: string | undefined;
@@ -347,42 +354,36 @@ export async function executeAppStatus(
   // domains are attached.
   const stackServiceNames: string[] = serviceImages ? Object.keys(serviceImages) : [];
 
-  // Compute displayCard:
+  // Domain management is secondary to the app overview:
   //  - >=2 custom domains: consolidated multi-domain view
   //  - exactly one custom domain: single-domain status view
   //  - no domain on a running app: "no domain" form (with picker on stacks)
   //  - stopped apps with no domains: skip (not actionable)
-  let displayCard: MessageCard | undefined;
+  let domainManagement: CustomDomainCardData | undefined;
   if (customDomains.length >= 2) {
-    displayCard = {
-      type: 'custom_domain',
-      data: {
-        appName: app.name,
-        fqdn: '',
-        leaseUuid: app.leaseUuid,
-        serviceName: '',
-        expectedAddress: address,
-        domains: customDomains.map(({ serviceName, customDomain }) => ({
-          serviceName,
-          customDomain,
-          expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
-        })),
-        ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
-      },
+    domainManagement = {
+      appName: app.name,
+      fqdn: '',
+      leaseUuid: app.leaseUuid,
+      serviceName: '',
+      expectedAddress: address,
+      domains: customDomains.map(({ serviceName, customDomain }) => ({
+        serviceName,
+        customDomain,
+        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
+      })),
+      ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
     };
   } else if (customDomains.length === 1) {
     const { serviceName, customDomain } = customDomains[0];
-    displayCard = {
-      type: 'custom_domain',
-      data: {
-        appName: app.name,
-        fqdn: customDomain,
-        leaseUuid: app.leaseUuid,
-        serviceName,
-        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
-        expectedAddress: address,
-        ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
-      },
+    domainManagement = {
+      appName: app.name,
+      fqdn: customDomain,
+      leaseUuid: app.leaseUuid,
+      serviceName,
+      expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
+      expectedAddress: address,
+      ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
     };
   } else if (customDomains.length === 0 && currentStatus === 'running') {
     // Gate on chain LeaseItem service names, not the stored manifest. The
@@ -401,28 +402,38 @@ export async function executeAppStatus(
     const canAttachDomain = leaseItems.length === 1 || namedServiceNames.length > 0;
     if (canAttachDomain) {
       const serviceName = leaseItems.length === 1 ? leaseItems[0].serviceName : '';
-      displayCard = {
-        type: 'custom_domain',
-        data: {
-          appName: app.name,
-          fqdn: '',
-          leaseUuid: app.leaseUuid,
-          serviceName,
-          expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
-          expectedAddress: address,
-          ...(namedServiceNames.length > 0 ? { serviceNames: namedServiceNames } : {}),
-        },
+      domainManagement = {
+        appName: app.name,
+        fqdn: '',
+        leaseUuid: app.leaseUuid,
+        serviceName,
+        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
+        expectedAddress: address,
+        ...(namedServiceNames.length > 0 ? { serviceNames: namedServiceNames } : {}),
       };
     }
   }
 
+  const terminalStates: readonly LeaseState[] = [
+    LeaseState.LEASE_STATE_CLOSED, LeaseState.LEASE_STATE_REJECTED, LeaseState.LEASE_STATE_EXPIRED,
+  ];
+  const chainStatusKnown = leaseState !== null
+    && (terminalStates.includes(leaseState) || leaseState === LeaseState.LEASE_STATE_PENDING);
+  const providerStatusKnown = fredStatus && (terminalStates.includes(fredStatus.state)
+    || (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE
+      && fredStatus.provision_status !== 'unknown'
+      && classifyProvisionStatus(fredStatus.provision_status) !== undefined));
+  const statusUnavailable = !(chainStatusKnown || (leaseState === LeaseState.LEASE_STATE_ACTIVE && providerStatusKnown));
+  const endpointStale = !endpointRefreshed && !!connectionUrl;
   const data: ToolData<'app_status'> = {
     name: app.name,
     status: currentStatus,
+    statusUnavailable,
+    endpointStale,
     size: app.size,
     image,
     ...(serviceImages ? { serviceImages } : {}),
-    url: connectionUrl || appUrl,
+    url: connectionUrl,
     chainState,
     created: new Date(app.createdAt).toISOString(),
     ...(customDomains.length > 0 ? { customDomains } : {}),
@@ -430,7 +441,22 @@ export async function executeAppStatus(
   return {
     success: true,
     data,
-    ...(displayCard ? { displayCard } : {}),
+    displayCard: {
+      type: 'app',
+      data: {
+        name: app.name,
+        status: statusUnavailable ? app.status : currentStatus,
+        statusUnavailable,
+        url: data.url,
+        endpointStale,
+        connection: appCardConnection(appConnection),
+        serviceNames: [...new Set([
+          ...stackServiceNames,
+          ...(leaseItems.length > 1 ? leaseItems.map((item) => item.serviceName).filter(Boolean) : []),
+        ])],
+        domainManagement,
+      },
+    },
   };
 }
 

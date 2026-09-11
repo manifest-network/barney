@@ -130,7 +130,7 @@ What's deploying?
 
 ### `app_status`
 
-**What it does.** Returns a unified status view combining the registry, the chain, and the provider (Fred).
+**What it does.** Shows an app overview with its name, status, deployment endpoint, and service endpoints for stacks. Selecting an app in the sidebar opens the same view. Custom-domain setup and management are secondary buttons within the overview. Missing status and endpoints are explicitly marked unavailable; cached details are labeled when a refresh cannot confirm them.
 
 **Example prompts.**
 

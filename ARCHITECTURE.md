@@ -128,6 +128,8 @@ executeConfirmedTool(toolName, args, options, payload?)
 - `batchRunner.ts` — concurrency-bounded batch execution with shared signing mutex; used by `requestBatchDeploy` and bulk restart. Batch deploy calls `deployManifest` directly (never wrapped in `withSign` — that deadlocks).
 - `helpers.ts`, `types.ts` — shared types (`ToolResult`, `ToolExecutorOptions`, `PayloadAttachment`, `SigningContext`) and URL/port shaping helpers. ADR-036 tokens are minted by the single `createProviderAuth` instance built in `src/hooks/useManifestMCP.ts`, exposed on `SigningContext` as `providerAuth` (address-param) plus the `authTokens` address-binding adapter.
 
+`app_status` always returns the `app` display card for a resolved registry entry. `MessageBubble` renders `AppCard` with the observed status, endpoint, and stack service connections; domain controls are embedded as a collapsed secondary action. Status and endpoint refreshes have independent availability flags, so a provider outage cannot present cached data as current or replace the overview with a domain form. `appCardConnection.ts` validates permissively stored connection fields before passing them to the rendered card. Cards remain transient and are rebuilt by a new status request after history reload.
+
 #### SDK transaction boundary
 
 Barney exposes six purpose-built mutation tools: deploy, stop, restart, update, credit funding, and custom domains. Each uses a typed high-level SDK operation after explicit user approval. Arbitrary chain transactions, bank transfers, staking, governance, and credit withdrawals are unavailable. A missing SDK capability requires a scoped SDK issue and review before a new tool can be registered; there is no raw fallback.

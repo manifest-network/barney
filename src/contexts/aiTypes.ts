@@ -48,6 +48,7 @@ export type AppCardPortMapping = PortMapping;
 
 /** Per-service connection info for stack deployments. */
 export interface AppCardServiceInfo {
+  fqdn?: string;
   ports?: Record<string, AppCardPortMapping>;
   instances?: { fqdn?: string; ports?: Record<string, AppCardPortMapping> }[];
 }
@@ -72,12 +73,17 @@ export interface AppCardCustomDomain {
   isApex: boolean;
 }
 
-/** Data for the `app` deploy-success card. */
+/** Data for the `app` overview and deploy-success card. */
 export interface AppCardData {
   name: string;
   url?: string;
   connection?: AppCardConnection;
   status: string;
+  /** The status is cached because this request could not establish current state. */
+  statusUnavailable?: boolean;
+  endpointStale?: boolean;
+  serviceNames?: readonly string[];
+  domainManagement?: CustomDomainCardData;
   customDomain?: AppCardCustomDomain;
 }
 

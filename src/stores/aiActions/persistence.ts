@@ -238,10 +238,8 @@ export function saveHistory(
   //   - The sidebar custom-domain dot stays live because
   //     `useDnsStatusPolling` iterates the wallet's app registry,
   //     not chat history.
-  //   - The inline `CustomDomainCard` re-emits when the user runs
-  //     `app_status` — `compositeQueries.executeAppStatus` already
-  //     attaches `displayCard: { type: 'custom_domain' }` for
-  //     single-domain leases.
+  //   - Running `app_status` rebuilds the app overview, whose secondary
+  //     domain-management action opens the inline `CustomDomainCard`.
   //
   // Belt-and-suspenders: PersistedMessageSchema doesn't whitelist
   // `card` either, so anything that leaks through this filter is

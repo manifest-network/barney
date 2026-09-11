@@ -144,7 +144,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
         )}
       </div>
       <div className="message-content">
-        {/* Tool results: LogCard for logs, CustomDomainCard for custom domains, collapsible block for others */}
+        {/* Display cards keep the primary result visible without expanding raw tool data. */}
         {isTool && message.card?.type === 'logs' && (
           <LogCard
             appName={message.card.data.app_name}
@@ -160,6 +160,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
         )}
         {isTool && !message.card && (
           <div className="message-tool-block">
+            {isStreaming && toolName === 'app_status' && <p role="status">Loading app status…</p>}
             <button
               type="button"
               onClick={() => setIsToolExpanded(!isToolExpanded)}
