@@ -12,6 +12,7 @@ vi.mock('../../hooks/useAI', () => ({
 }));
 
 import { AppCard } from './AppCard';
+import { deriveUrlFromConnection } from '../../ai/toolExecutor/helpers';
 import type { AppCardData } from '../../contexts/aiTypes';
 
 let container: HTMLDivElement;
@@ -40,6 +41,7 @@ beforeEach(() => {
 afterEach(() => {
   flushSync(() => { root?.unmount(); });
   container?.remove();
+  vi.restoreAllMocks();
 });
 
 describe('AppCard', () => {
@@ -59,6 +61,201 @@ describe('AppCard', () => {
       },
     }));
     expect(container.textContent).toContain('https://example.com');
+  });
+
+  describe('URL-row copy', () => {
+    it.each<{
+      scenario: string;
+      url: string;
+      connection?: AppCardData['connection'];
+    }>([
+      {
+        scenario: 'top-level bind ports',
+        url: 'https://app.example.com:8443/app/start?mode=demo#ready',
+        connection: {
+          host: '203.0.113.10',
+          ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } },
+        },
+      },
+      {
+        scenario: 'multi-service bind ports',
+        url: 'https://web.example.com:8443/dashboard?tab=apps#status',
+        connection: {
+          host: '203.0.113.10',
+          ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } },
+          services: {
+            db: { ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32001 } } },
+            web: { ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } } },
+          },
+        },
+      },
+      {
+        scenario: 'service instance bind ports',
+        url: 'https://web.example.com:8443/app',
+        connection: {
+          host: '203.0.113.10',
+          ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } },
+          services: {
+            web: {
+              instances: [{ ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } } }],
+            },
+          },
+        },
+      },
+      {
+        scenario: 'an endpoint without a scheme',
+        url: 'db.example.com:32001',
+        connection: {
+          host: '203.0.113.10',
+          ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32001 } },
+        },
+      },
+      {
+        scenario: 'a non-HTTP scheme',
+        url: 'redis://cache.example.com:32002/0',
+        connection: {
+          host: '203.0.113.10',
+          services: {
+            cache: { ports: { '6379/tcp': { host_ip: '0.0.0.0', host_port: 32002 } } },
+          },
+        },
+      },
+      {
+        scenario: 'no connection metadata',
+        url: 'http://app.example.com:8080/health',
+      },
+    ])('copies the exact displayed endpoint and shows success with $scenario', async ({ url, connection }) => {
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      render(makeData({ url, connection }));
+      const displayedEndpoint = container.querySelector('.app-card__url .app-card__link');
+      const copyButton = container.querySelector<HTMLButtonElement>('.app-card__url button[aria-label="Copy endpoint"]');
+      expect(displayedEndpoint?.textContent).toBe(url);
+      expect(copyButton).not.toBeNull();
+
+      flushSync(() => { copyButton!.click(); });
+
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith(displayedEndpoint!.textContent);
+      await vi.waitFor(() => {
+        expect(copyButton!.getAttribute('aria-label')).toBe('Copied');
+      });
+    });
+
+    it('omits the URL row and copy button when no endpoint is displayed', () => {
+      render(makeData({
+        connection: {
+          host: '203.0.113.10',
+          ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } },
+        },
+      }));
+
+      expect(container.querySelector('.app-card__url')).toBeNull();
+      expect(container.querySelector('button[aria-label="Copy endpoint"]')).toBeNull();
+    });
+  });
+
+  describe('port rows', () => {
+    it.each(['0.0.0.0', '::'])('uses the reported connection host for top-level %s bindings', (hostIp) => {
+      render(makeData({
+        connection: {
+          host: '203.0.113.10',
+          ports: { '80/tcp': { host_ip: hostIp, host_port: 32000 } },
+        },
+      }));
+
+      expect(container.querySelector('.app-card__port')?.textContent).toBe('80/tcp → 203.0.113.10:32000');
+    });
+
+    it.each(['0.0.0.0', '::'])('uses the reported connection host for service %s bindings', (hostIp) => {
+      render(makeData({
+        connection: {
+          host: '2001:db8::10',
+          services: {
+            db: { ports: { '5432/tcp': { host_ip: hostIp, host_port: 32001 } } },
+          },
+        },
+      }));
+
+      expect(container.querySelector('.app-card__service-name')?.textContent).toBe('db');
+      expect(container.querySelector('.app-card__port')?.textContent).toBe('5432/tcp → [2001:db8::10]:32001');
+    });
+
+    it('falls back to instance ports when the service port map is empty', () => {
+      render(makeData({
+        connection: {
+          host: '203.0.113.10',
+          services: {
+            web: {
+              ports: {},
+              instances: [{ ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } } }],
+            },
+          },
+        },
+      }));
+
+      expect(container.querySelectorAll('.app-card__port')).toHaveLength(1);
+      expect(container.querySelector('.app-card__service-name')?.textContent).toBe('web');
+      expect(container.querySelector('.app-card__port')?.textContent).toBe('80/tcp → 203.0.113.10:32000');
+    });
+
+    it('renders every service once after deploy URL shaping promotes the primary ports', async () => {
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+      const webPorts = { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } };
+      const shaped = deriveUrlFromConnection({
+        host: '203.0.113.10',
+        services: {
+          web: { fqdn: 'web.example.com', ports: webPorts },
+          db: { ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32001 } } },
+        },
+      });
+      expect(shaped?.connection.ports).toEqual(webPorts);
+      // Deploy-success cards snapshot the SDK's readonly connection as JSON.
+      const cardData: Partial<AppCardData> = JSON.parse(JSON.stringify(shaped));
+      render(makeData(cardData));
+
+      const groups = container.querySelectorAll('.app-card__service-ports');
+      expect(groups).toHaveLength(2);
+      expect(groups[0].querySelector('.app-card__service-name')?.textContent).toBe('web');
+      expect(groups[0].querySelector('.app-card__port')?.textContent).toBe('80/tcp → 203.0.113.10:32000');
+      expect(groups[1].querySelector('.app-card__service-name')?.textContent).toBe('db');
+      expect(groups[1].querySelector('.app-card__port')?.textContent).toBe('5432/tcp → 203.0.113.10:32001');
+      expect(container.querySelectorAll('.app-card__port')).toHaveLength(2);
+      expect(container.querySelector('.app-card__url .app-card__link')?.textContent).toBe('https://web.example.com');
+
+      const copyButton = container.querySelector<HTMLButtonElement>('.app-card__url button');
+      flushSync(() => { copyButton!.click(); });
+      expect(writeText).toHaveBeenCalledWith('https://web.example.com');
+      await vi.waitFor(() => {
+        expect(copyButton!.getAttribute('aria-label')).toBe('Copied');
+      });
+    });
+
+    it('retains top-level ports when services have no usable port mappings', () => {
+      render(makeData({
+        connection: {
+          host: '203.0.113.10',
+          ports: { '80/tcp': { host_ip: '203.0.113.11', host_port: 32000 } },
+          services: { web: { ports: {}, instances: [{ ports: {} }] } },
+        },
+      }));
+
+      expect(container.querySelectorAll('.app-card__port')).toHaveLength(1);
+      expect(container.querySelector('.app-card__port')?.textContent).toBe('80/tcp → 203.0.113.11:32000');
+      expect(container.querySelector('.app-card__service-ports')).toBeNull();
+    });
+
+    it('marks wildcard port endpoints unavailable without a reported host', () => {
+      render(makeData({
+        url: 'https://web.example.com',
+        connection: {
+          host: '',
+          fqdn: 'web.example.com',
+          ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } },
+        },
+      }));
+
+      expect(container.querySelector('.app-card__port')?.textContent).toBe('80/tcp → Endpoint unavailable');
+    });
   });
 
   it('renders instance endpoints as plain text for multi-instance FQDNs', () => {
