@@ -113,7 +113,7 @@ After acceptance, the progress card shows:
 creating_lease  →  uploading  →  provisioning  →  ready
 ```
 
-When provisioning completes, a clickable URL appears in the chat. The same app shows up in the sidebar, where you can re-open it, view logs, restart, stop, or update.
+When provisioning completes, a success card shows the deployment endpoint. Use **Copy endpoint** to copy exactly the displayed value. Port rows show published endpoints and are grouped by service for stacks; **Endpoint unavailable** means no usable host or port was reported. The same app shows up in the sidebar, where you can re-open it, view logs, restart, stop, or update.
 
 ### Deploying from a Docker image
 

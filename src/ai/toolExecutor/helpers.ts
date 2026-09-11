@@ -5,7 +5,7 @@
 
 import { failureDetail, type ConnectionDetails, type FredFailureSource } from '@manifest-network/manifest-sdk/deploy';
 
-import { isValidFqdn } from '../../utils/connection';
+import { isValidFqdn, nonEmptyPorts } from '../../utils/connection';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { AppEntry } from '../../registry/appRegistry';
 
@@ -14,11 +14,6 @@ const PRIMARY_SERVICE_NAMES = new Set(['web', 'app', 'frontend', 'ui']);
 
 /** Service names that indicate backend infrastructure (not user-facing). */
 export const BACKEND_SERVICE_NAMES = new Set(['db', 'database', 'postgres', 'mysql', 'redis', 'mongo']);
-
-/** Empty records can result from SDK filtering and must not hide another source. */
-function nonEmptyPorts<Port>(ports: Record<string, Port> | undefined): Record<string, Port> | undefined {
-  return ports && Object.keys(ports).length > 0 ? ports : undefined;
-}
 
 /**
  * Extract the "primary" service's ports from a stack services map.

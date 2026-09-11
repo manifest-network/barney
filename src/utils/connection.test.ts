@@ -1,5 +1,41 @@
 import { describe, it, expect } from 'vitest';
-import { collectInstanceUrls, isValidFqdn, normalizeFqdn, resolveExpectedCnameTarget } from './connection';
+import { collectInstanceUrls, formatPortEndpoint, isValidFqdn, normalizeFqdn, resolveExpectedCnameTarget } from './connection';
+
+describe('formatPortEndpoint', () => {
+  it.each(['0.0.0.0', '::', '[::]', '0:0:0:0:0:0:0:0', '::ffff:0.0.0.0'])(
+    'replaces wildcard binding %s with the reported connection host', (hostIp) => {
+      expect(formatPortEndpoint({ host_ip: hostIp, host_port: 32000 }, 'docker.example.com'))
+        .toBe('docker.example.com:32000');
+    },
+  );
+
+  it('preserves a concrete mapping address when the connection host differs', () => {
+    expect(formatPortEndpoint({ host_ip: '203.0.113.11', host_port: 32000 }, '203.0.113.10'))
+      .toBe('203.0.113.11:32000');
+  });
+
+  it.each(['2001:db8::10', '[2001:db8::10]'])('brackets IPv6 mapping and fallback host %s exactly once', (host) => {
+    expect(formatPortEndpoint({ host_ip: host, host_port: 32000 }))
+      .toBe('[2001:db8::10]:32000');
+    expect(formatPortEndpoint({ host_ip: '::', host_port: 32000 }, host))
+      .toBe('[2001:db8::10]:32000');
+  });
+
+  it('brackets a concrete IPv4-mapped IPv6 address', () => {
+    expect(formatPortEndpoint({ host_ip: '::ffff:203.0.113.10', host_port: 32000 }))
+      .toBe('[::ffff:203.0.113.10]:32000');
+  });
+
+  it.each([undefined, '', '0.0.0.0', '::', '[::]', '::ffff:0.0.0.0', 'https://provider.example.com/api'])(
+    'omits a wildcard endpoint without a usable connection host (%s)', (host) => {
+      expect(formatPortEndpoint({ host_ip: '0.0.0.0', host_port: 32000 }, host)).toBeUndefined();
+    },
+  );
+
+  it.each([0, -1, 1.5, 65536, NaN, Infinity])('omits an unassigned or invalid mapped port (%s)', (port) => {
+    expect(formatPortEndpoint({ host_ip: '203.0.113.10', host_port: port })).toBeUndefined();
+  });
+});
 
 describe('isValidFqdn', () => {
   it('accepts valid hostnames', () => {

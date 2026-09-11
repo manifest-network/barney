@@ -4,6 +4,13 @@
  * components to AI tool-executor internals.
  */
 
+import * as ipaddr from 'ipaddr.js';
+
+/** Empty records can result from SDK filtering and must not hide another source. */
+export function nonEmptyPorts<Port>(ports: Record<string, Port> | undefined): Record<string, Port> | undefined {
+  return ports && Object.keys(ports).length > 0 ? ports : undefined;
+}
+
 /** RFC 952 / RFC 1123 hostname pattern: labels of alphanumeric + hyphens, dot-separated. */
 const HOSTNAME_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
 
@@ -20,6 +27,26 @@ export function isValidFqdn(value: string): boolean {
  */
 export function normalizeFqdn(value: string): string {
   return value.trim().replace(/\.$/, '').toLowerCase();
+}
+
+function formatEndpointHost(value?: string): string | undefined {
+  if (!value) return undefined;
+  const host = value.replace(/^\[|\]$/g, '');
+  if (ipaddr.isValid(host)) {
+    if (ipaddr.process(host).range() === 'unspecified') return undefined;
+    return host.includes(':') ? `[${host}]` : host;
+  }
+  return isValidFqdn(value) ? value : undefined;
+}
+
+/** Wildcard binds need the reported Docker host, not an HTTP-routing FQDN. */
+export function formatPortEndpoint(
+  mapping: { host_ip: string; host_port: number },
+  connectionHost?: string,
+): string | undefined {
+  if (!Number.isInteger(mapping.host_port) || mapping.host_port <= 0 || mapping.host_port > 65535) return undefined;
+  const host = formatEndpointHost(mapping.host_ip) ?? formatEndpointHost(connectionHost);
+  return host ? `${host}:${mapping.host_port}` : undefined;
 }
 
 /**

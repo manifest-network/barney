@@ -335,7 +335,7 @@ All AI chat state lives in a single Zustand store. Actions that are large async 
 | `leaseState.ts` | Lease state display helpers — badge classes, labels, colors, filter mapping |
 | `address.ts` | Bech32 address validation (`isValidBech32Address`) and truncation (`truncateAddress`) |
 | `url.ts` | URL validation with SSRF protection (`parseHttpUrl`, `isUrlSsrfSafe`) |
-| `connection.ts` | `collectInstanceUrls` — per-instance FQDN URL collection with hostname validation (`isValidFqdn`) |
+| `connection.ts` | FQDN validation/normalization, instance URL collection, CNAME-target resolution; `nonEmptyPorts` shared by deploy URL shaping and AppCard; `formatPortEndpoint` substitutes the reported Docker host for wildcard binds and brackets IPv6 addresses |
 | `tx.ts` | Transaction event parsing utilities (extract attribute values from TX events) |
 | `versionedStorage.ts` | Versioned localStorage with schema migrations (envelope format, upgrade chain) |
 | `customDomainStatus.ts` | Custom-domain status computation (`computeStatus` → `CustomDomainStatusReport`; `CustomDomainStatusKind`, DNS/HTTPS probe result types) |

@@ -12,7 +12,7 @@ import { memo } from 'react';
 import { Copy, Square, CheckCircle } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useAI } from '../../hooks/useAI';
-import { collectInstanceUrls } from '../../utils/connection';
+import { collectInstanceUrls, formatPortEndpoint, nonEmptyPorts } from '../../utils/connection';
 import { dnsStatusKey } from '../../stores/aiStore';
 import { DomainRow } from './DomainRow';
 import type { AppCardData } from '../../contexts/aiTypes';
@@ -29,24 +29,17 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
   const instanceUrls = collectInstanceUrls(connection);
   const portEntries = connection?.ports ? Object.entries(connection.ports) : [];
 
-  // Stack deployments: build service-grouped port list when no top-level ports
+  // URL shaping hoists primary-service ports; prefer the full service inventory.
   const servicePortGroups: { serviceName: string; ports: [string, { host_ip: string; host_port: number }][] }[] = [];
-  if (portEntries.length === 0 && connection?.services) {
+  if (connection?.services) {
     for (const [svcName, svc] of Object.entries(connection.services)) {
-      const svcPorts = svc.ports ?? svc.instances?.[0]?.ports;
+      const svcPorts = nonEmptyPorts(svc.ports) ?? nonEmptyPorts(svc.instances?.[0]?.ports);
       if (svcPorts) {
         const entries = Object.entries(svcPorts);
-        if (entries.length > 0) {
-          servicePortGroups.push({ serviceName: svcName, ports: entries });
-        }
+        servicePortGroups.push({ serviceName: svcName, ports: entries });
       }
     }
   }
-
-  const copied = url ? isCopied(url) : false;
-  const handleCopy = () => {
-    if (url) void copyToClipboard(url);
-  };
 
   const handleStop = () => {
     // Route directly to the store action — bypassing the natural-language
@@ -73,11 +66,11 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
           <span className="app-card__link">{url}</span>
           <button
             type="button"
-            onClick={handleCopy}
+            onClick={() => void copyToClipboard(url)}
             className="app-card__copy"
-            aria-label={copied ? 'Copied' : 'Copy endpoint'}
+            aria-label={isCopied(url) ? 'Copied' : 'Copy endpoint'}
           >
-            {copied ? (
+            {isCopied(url) ? (
               <CheckCircle className="w-3.5 h-3.5 text-success-400" />
             ) : (
               <Copy className="w-3.5 h-3.5" />
@@ -97,11 +90,11 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
         </div>
       )}
 
-      {portEntries.length > 0 && (
+      {servicePortGroups.length === 0 && portEntries.length > 0 && (
         <div className="app-card__ports">
           {portEntries.map(([containerPort, mapping]) => (
             <span key={containerPort} className="app-card__port">
-              {containerPort} &rarr; {mapping.host_ip}:{mapping.host_port}
+              {containerPort} &rarr; {formatPortEndpoint(mapping, connection?.host) ?? 'Endpoint unavailable'}
             </span>
           ))}
         </div>
@@ -114,7 +107,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
               <span className="app-card__service-name">{serviceName}</span>
               {ports.map(([containerPort, mapping]) => (
                 <span key={`${serviceName}-${containerPort}`} className="app-card__port">
-                  {containerPort} &rarr; {mapping.host_ip}:{mapping.host_port}
+                  {containerPort} &rarr; {formatPortEndpoint(mapping, connection?.host) ?? 'Endpoint unavailable'}
                 </span>
               ))}
             </div>
