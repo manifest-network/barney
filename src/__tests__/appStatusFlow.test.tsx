@@ -24,9 +24,10 @@ import { streamChat } from '../api/morpheus';
 import { AIStoreContext, useAIStore } from '../contexts/aiStoreContext';
 import { AppsSidebar } from '../components/layout/AppsSidebar';
 import { MessageBubble } from '../components/ai/MessageBubble';
-import { addApp, getAppByLease, type AppEntry } from '../registry/appRegistry';
+import { addApp, getAppByLease, subscribeToRegistry, type AppEntry } from '../registry/appRegistry';
 import { createAIStore } from '../stores/aiStore';
 import { createWalletIdentity } from '../utils/walletIdentity';
+import { AI_TOOL_API_TIMEOUT_MS } from '../config/constants';
 
 const ADDRESS = 'manifest1tenant';
 const LEASE_UUID = '550e8400-e29b-41d4-a716-446655440000';
@@ -150,7 +151,7 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     expect(card.querySelector('.app-card__status')?.textContent).toBe('running');
     expect(card.querySelector('.app-card__link')?.textContent).toBe('https://deployed.provider.example');
     expect(card.querySelector('.custom-domain-card')).toBeNull();
-    expect(streamChat).toHaveBeenCalledTimes(2);
+    expect(streamChat).not.toHaveBeenCalled();
 
     const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
     await act(async () => { card.querySelector<HTMLButtonElement>('[aria-label="Copy endpoint"]')!.click(); });
@@ -235,6 +236,7 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     vi.mocked(appStatus).mockReturnValue(new Promise((done) => { resolve = done; }));
     await selectApp({}, false);
     expect(container.querySelector('[role="status"]')?.textContent).toBe('Checking status of "my-app"...');
+    expect(container.textContent?.split('Checking status of "my-app"...')).toHaveLength(2);
     expect(container.querySelector('.app-card')).toBeNull();
 
     await act(async () => {
@@ -285,11 +287,11 @@ describe('sidebar selection → app_status → rendered conversation', () => {
   it('shows unavailable endpoints for stack services with no access data', async () => {
     vi.mocked(appStatus).mockResolvedValue(statusResult({ connection: undefined }));
     await selectApp({ manifest: JSON.stringify({ services: { web: { image: 'nginx' }, db: { image: 'postgres' } } }) });
-    const groups = Array.from(overview().querySelectorAll('.app-card__service-ports'));
-    expect(groups.map((group) => group.textContent)).toEqual(['webEndpoint unavailable', 'dbEndpoint unavailable']);
+    expect(overview().textContent).toContain('Service details unavailable for: web, db.');
+    expect(overview().textContent).toContain('Endpoint unavailable');
   });
 
-  it('preserves stack endpoints and DNS targets when only the primary URL refreshes', async () => {
+  it('preserves the canonical URL, stack inventory, and DNS subscriptions during a connection outage', async () => {
     const result = statusResult({
       connection: undefined,
       fredStatus: { state: 2, provision_status: 'ready', endpoints: { '80/tcp': 'http://203.0.113.10:32002' } } as StatusResult['fredStatus'],
@@ -305,15 +307,23 @@ describe('sidebar selection → app_status → rendered conversation', () => {
         db: { fqdn: 'db.provider.example', ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32001 } } },
       },
     };
-    await selectApp({ connection, url: 'https://web.provider.example' });
-    expect(overview().querySelector('.app-card__link')?.textContent).toBe('203.0.113.10:32002');
-    expect(overview().textContent).not.toContain('Last known endpoint');
+    await renderApp({ connection, url: 'https://web.provider.example', customDomains: result.chainState.items.map(({ serviceName, customDomain }) => ({ serviceName, customDomain })) });
+    const onRegistryChange = vi.fn();
+    const unsubscribe = subscribeToRegistry(onRegistryChange);
+    try {
+      await act(async () => { await store.getState().requestAppStatus('my-app'); });
+      expect(onRegistryChange).not.toHaveBeenCalled();
+    } finally { unsubscribe(); }
+    expect(overview().querySelector('.app-card__link')?.textContent).toBe('https://web.provider.example');
+    expect(overview().textContent).toContain('Last known endpoint');
     expect(overview().textContent).toContain('Last known service details');
     const groups = Array.from(overview().querySelectorAll('.app-card__service-ports'));
     expect(groups).toHaveLength(2);
     expect(groups[0].textContent).toContain('203.0.113.10:32000');
     expect(groups[1].textContent).toContain('203.0.113.10:32001');
     expect(getAppByLease(ADDRESS, LEASE_UUID)?.connection).toEqual(connection);
+    expect(getAppByLease(ADDRESS, LEASE_UUID)?.url).toBe('https://web.provider.example');
+    expect(JSON.parse(store.getState().messages.find((message) => message.toolName === 'app_status')!.content).url).toBe('https://web.provider.example');
     await act(async () => { domainAction().click(); });
     expect(overview().querySelector('.custom-domain-card')?.textContent).toContain('web.provider.example');
     expect(overview().querySelector('.custom-domain-card')?.textContent).toContain('db.provider.example');
@@ -359,6 +369,132 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     await act(async () => { stop!.click(); });
     expect(store.getState().pendingConfirmation?.action.toolName).toBe('stop_app');
     expect(store.getState().pendingConfirmation?.action.args.app_name).toBe('my-app');
+  });
+
+  it('hides Stop when a legacy failed app has a terminal chain lease', async () => {
+    const result = statusResult();
+    result.chainState.state = 3;
+    vi.mocked(appStatus).mockResolvedValue(result);
+    await renderApp({ status: 'failed', provisionState: undefined, chainState: undefined });
+    await act(async () => { await store.getState().requestAppStatus('my-app'); });
+    expect(overview().querySelector('.app-card__status')?.textContent).toBe('failed');
+    expect(overview().textContent).toContain('Deployment endpoint is no longer active.');
+    expect(Array.from(overview().querySelectorAll('button')).find((button) => button.textContent === 'Stop')).toBeUndefined();
+    await act(async () => { store.getState().requestStopApp('my-app'); });
+    expect(store.getState().pendingConfirmation).toBeNull();
+  });
+
+  it.each(['restarting', 'updating', 'provisioning'])('shows provider %s without retracting confirmed readiness', async (provisionStatus) => {
+    vi.mocked(appStatus).mockResolvedValue(statusResult({
+      fredStatus: { state: 2, provision_status: provisionStatus } as StatusResult['fredStatus'],
+    }));
+    await selectApp();
+    expect(overview().textContent).toContain(`Provider status: ${provisionStatus}`);
+    expect(overview().textContent).not.toContain('Status unavailable');
+    expect(getAppByLease(ADDRESS, LEASE_UUID)).toMatchObject({ status: 'running', provisionState: 'confirmed' });
+    const data = JSON.parse(store.getState().messages.find((message) => message.toolName === 'app_status')!.content);
+    expect(data).toMatchObject({ status: 'running', provision_status: provisionStatus, statusUnavailable: false });
+  });
+
+  it('keeps flat multi-service access data at deployment level without assigning endpoints to services', async () => {
+    await selectApp({ manifest: JSON.stringify({ services: { web: { image: 'nginx' }, db: { image: 'postgres' } } }) });
+    expect(overview().textContent).toContain('Deployment ports');
+    expect(overview().textContent).toContain('Service details unavailable for: web, db.');
+    expect(overview().querySelector('.app-card__service-ports')).toBeNull();
+    expect(overview().querySelectorAll('.app-card__port')).toHaveLength(1);
+    expect(overview().textContent).not.toContain('Endpoint unavailable');
+  });
+
+  it('labels an unconfirmed cached endpoint without calling an empty successful connection read a failure', async () => {
+    vi.mocked(appStatus).mockResolvedValue(statusResult({ connection: { host: '203.0.113.10', ports: {} } }));
+    await selectApp({ url: 'https://known.provider.example' });
+    expect(overview().textContent).toContain('Last known endpoint — this read did not confirm a current endpoint.');
+    expect(overview().textContent).not.toContain('could not be refreshed');
+    expect(overview().textContent).not.toContain('Last known service details');
+  });
+
+  it('renders cached port mappings without host_ip using the reported connection host', async () => {
+    vi.mocked(appStatus).mockResolvedValue(statusResult({ connection: undefined }));
+    await selectApp({
+      connection: { host: '203.0.113.10', ports: { '5432/tcp': { host_port: 32001 } } },
+    });
+    expect(overview().querySelector('.app-card__port')?.textContent).toBe('5432/tcp → 203.0.113.10:32001');
+  });
+
+  it('refreshes directly on every sidebar selection even when a tool result is cached', async () => {
+    await selectApp();
+    vi.mocked(appStatus).mockResolvedValue(statusResult({ connection: { host: '203.0.113.10', fqdn: 'fresh.provider.example' } }));
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.apps-sidebar__app-item')!.click();
+      await vi.waitFor(() => expect(store.getState().isStreaming).toBe(false));
+    });
+    expect(appStatus).toHaveBeenCalledTimes(2);
+    expect(streamChat).not.toHaveBeenCalled();
+    const cards = container.querySelectorAll('[aria-label="App: my-app"]');
+    expect(cards).toHaveLength(2);
+    expect(cards[1].textContent).toContain('https://fresh.provider.example');
+    const cached = store.getState().getCachedToolResult(store.getState().getToolCacheKey('app_status', { app_name: 'my-app' }));
+    expect(cached?.data).toMatchObject({ url: 'https://fresh.provider.example' });
+  });
+
+  it.each(['streaming', 'confirmation', 'disconnected', 'wallet transition', 'unknown app'])('does not start a direct status request during %s', async (scenario) => {
+    await renderApp();
+    act(() => {
+      if (scenario === 'streaming') store.setState({ isStreaming: true });
+      if (scenario === 'confirmation') store.setState({ pendingConfirmation: { id: 'existing' } as any });
+      if (scenario === 'disconnected') store.setState({ isConnected: false });
+      if (scenario === 'wallet transition') store.setState({ historyIdentity: createWalletIdentity('manifest-test', 'manifest1other') });
+    });
+    const messages = store.getState().messages;
+    await act(async () => {
+      expect(await store.getState().requestAppStatus(scenario === 'unknown app' ? 'missing' : 'my-app')).toBe(false);
+    });
+    expect(store.getState().messages).toBe(messages);
+    expect(appStatus).not.toHaveBeenCalled();
+    expect(streamChat).not.toHaveBeenCalled();
+  });
+
+  it.each(['stop', 'clear history', 'wallet change'])('discards late direct status results after %s', async (scenario) => {
+    let resolve!: (result: StatusResult) => void;
+    vi.mocked(appStatus).mockReturnValue(new Promise((done) => { resolve = done; }));
+    await selectApp({}, false);
+    await act(async () => {
+      if (scenario === 'stop') store.getState().stopStreaming();
+      if (scenario === 'clear history') store.getState().clearHistory();
+      if (scenario === 'wallet change') store.getState().setWalletContext({
+        clientManager: store.getState().clientManager, signing: store.getState().signing,
+        address: 'manifest1other', chainId: 'manifest-test',
+      });
+      await vi.waitFor(() => expect(store.getState().isStreaming).toBe(false));
+      resolve(statusResult({ fredStatus: { state: 2, provision_status: 'failed' } as StatusResult['fredStatus'] }));
+    });
+    expect(container.querySelector('.app-card')).toBeNull();
+    expect(getAppByLease(ADDRESS, LEASE_UUID)?.status).toBe('running');
+    if (scenario === 'stop') expect(store.getState().messages.at(-1)?.content).toBe('Status check cancelled.');
+    else expect(store.getState().messages).toEqual([]);
+  });
+
+  it('releases the UI when a direct status request times out and ignores its late result', async () => {
+    vi.useFakeTimers();
+    let resolve!: (result: StatusResult) => void;
+    vi.mocked(appStatus).mockReturnValue(new Promise((done) => { resolve = done; }));
+    try {
+      await renderApp();
+      const payload = { bytes: new Uint8Array([123, 125]), filename: 'manifest.json', size: 2, hash: 'test-hash' };
+      act(() => { store.setState({ pendingPayload: payload }); });
+      await act(async () => {
+        const request = store.getState().requestAppStatus('my-app');
+        await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS + 1);
+        expect(await request).toBe(true);
+        resolve(statusResult({ fredStatus: { state: 2, provision_status: 'failed' } as StatusResult['fredStatus'] }));
+      });
+      expect(store.getState().isStreaming).toBe(false);
+      expect(store.getState().abortController).toBeNull();
+      expect(store.getState().pendingPayload).toBe(payload);
+      expect(store.getState().messages.at(-1)?.error).toContain('Unable to check app status');
+      expect(container.querySelector('.app-card')).toBeNull();
+      expect(getAppByLease(ADDRESS, LEASE_UUID)?.status).toBe('running');
+    } finally { vi.useRealTimers(); }
   });
 
   it('shows flat endpoint metadata once under a single named service', async () => {

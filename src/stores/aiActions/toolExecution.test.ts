@@ -337,6 +337,24 @@ describe('processToolCallsFn', () => {
     expect(state.messages.find((message) => message.toolName === 'app_status')?.card?.type).toBe('app');
   });
 
+  it.each([['app_status', 'get_logs'], ['get_logs', 'app_status']])('preserves a turn-ending card alongside an opt-in status card (%s then %s)', async (first, second) => {
+    const toolCalls = [first, second].map((name, index) => makeToolCall({ id: `tc_${index}`, function: { name, arguments: { app_name: 'test' } } }));
+    for (const name of [first, second]) {
+      vi.mocked(executeTool).mockResolvedValueOnce(name === 'app_status' ? {
+        success: true, data: { status: 'running' }, continueConversation: true,
+        displayCard: { type: 'app', data: { name: 'test', status: 'running' } },
+      } : {
+        success: true, data: { logs: 'private log data' },
+        displayCard: { type: 'logs', data: { app_name: 'test', logs: { web: 'private log data' }, truncated: false } },
+      });
+    }
+    state.messages = [makeMessage({ id: 'asst_1' })];
+    const result = await processToolCallsFn(get, set, toolCalls, 'asst_1', { content: '', thinking: '', toolCalls });
+    expect(result.shouldContinue).toBe(false);
+    expect(state.messages.filter((message) => message.card)).toHaveLength(2);
+    expect(state.messages.at(-1)?.role).toBe('tool');
+  });
+
   it('processes all tool calls even when first requires confirmation', async () => {
     vi.mocked(executeTool)
       .mockResolvedValueOnce({

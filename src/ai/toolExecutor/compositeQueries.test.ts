@@ -94,17 +94,6 @@ vi.mock('../../utils/errors', () => ({
   logError: vi.fn(),
 }));
 
-vi.mock('../../utils/leaseState', () => ({
-  LEASE_STATE_LABELS: {
-    0: 'Unspecified',
-    1: 'Pending',
-    2: 'Active',
-    3: 'Closed',
-    4: 'Rejected',
-    5: 'Expired',
-  },
-}));
-
 import { getLeasesByTenant, getLeasesByTenantPaginated, getLease } from '../../api/billing';
 import { getProviders, getSKUs } from '../../api/sku';
 import { getProviderHealth } from '../../api/provider-api';

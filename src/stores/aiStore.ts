@@ -61,6 +61,7 @@ import { sendMessageFn } from './aiActions/sendMessage';
 import { confirmActionFn, cancelActionFn, type ConfirmActionOverrides } from './aiActions/confirmAction';
 import { requestBatchDeployFn } from './aiActions/batchDeploy';
 import { requestStopAppFn } from './aiActions/stopApp';
+import { requestAppStatusFn } from './aiActions/appStatus';
 import {
   loadSkuTiersFn,
   retrySkuTiersFn,
@@ -148,6 +149,7 @@ export interface AIStore {
   clearHistory: () => void;
   requestBatchDeploy: (apps: Array<{ label: string; manifest: object }>, userMessage?: string) => Promise<boolean>;
   requestStopApp: (appName: string) => void;
+  requestAppStatus: (appName: string) => Promise<boolean>;
   loadSkuTiers: () => Promise<void>;
   retrySkuTiers: () => Promise<void>;
   addLocalMessage: (content: string, card?: MessageCard) => void;
@@ -513,6 +515,7 @@ export const createAIStore = () =>
     cancelAction: () => cancelActionFn(get, set),
     requestBatchDeploy: (apps, userMessage) => requestBatchDeployFn(get, set, apps, userMessage),
     requestStopApp: (appName) => requestStopAppFn(get, set, appName),
+    requestAppStatus: (appName) => requestAppStatusFn(get, set, appName),
     loadSkuTiers: () => loadSkuTiersFn(get, set),
     retrySkuTiers: () => retrySkuTiersFn(get, set),
 

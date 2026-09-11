@@ -148,7 +148,7 @@ describe('discoverTenantApps', () => {
 });
 
 describe('hydrateDiscoveredApp', () => {
-  it('preserves saved service inventory when only a status endpoint refreshes', async () => {
+  it('preserves the established URL and service inventory when the connection read fails', async () => {
     const previous = app({
       url: 'https://web.provider.example',
       connection: {
@@ -166,7 +166,7 @@ describe('hydrateDiscoveredApp', () => {
     });
     await hydrateDiscoveredApp(address, previous, signing);
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({
-      status: 'running', url: '203.0.113.10:32002', connection: previous.connection,
+      status: 'running', url: previous.url, connection: previous.connection,
     });
   });
 

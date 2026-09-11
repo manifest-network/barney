@@ -22,7 +22,10 @@ export function refreshAppConnection(
   previous: Pick<AppEntry, 'url' | 'connection'>,
 ) {
   const shaped = connection ? deriveUrlFromConnection(connection) : undefined;
-  const url = shaped?.url ?? (status ? extractUrlFromFredStatus(status) : undefined);
+  // Status endpoints can be a lower-level IP:port hint. A failed connection
+  // read must not replace an established deployment URL with that fallback.
+  const previousUrl = previous.url || formatConnectionUrl(undefined, previous.connection);
+  const url = shaped?.url ?? (status && (connection || !previousUrl) ? extractUrlFromFredStatus(status) : undefined);
   const patch = connectionPatch({ url, connection: shaped?.connection ?? connection }, previous);
   return { patch, endpointRefreshed: url !== undefined, connectionRefreshed: patch.connection !== undefined };
 }

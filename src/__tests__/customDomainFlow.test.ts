@@ -10,20 +10,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createElement } from 'react';
+import { createElement, Profiler } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 
 // --- Mocks --------------------------------------------------------------
-
-const sendMessage = vi.fn();
-// Mutable so the UI portion of the test can swap entries between renders to
-// exercise pending_dns → issuing_cert → active. Reset in beforeEach.
-let dnsStatuses: Map<string, { kind: string; expectedCnameTarget?: string; detail?: string }> = new Map();
-
-vi.mock('../hooks/useAI', () => ({
-  useAI: () => ({ sendMessage, dnsStatuses }),
-}));
 
 vi.mock('@manifest-network/manifest-sdk/deploy', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@manifest-network/manifest-sdk/deploy')>()),
@@ -45,7 +36,9 @@ import { setItemCustomDomain } from '@manifest-network/manifest-sdk/deploy';
 import { getLeaseItemsForLease } from '../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../api/leaseByCustomDomain';
 import { CustomDomainCard } from '../components/ai/CustomDomainCard';
-import { dnsStatusKey } from '../stores/aiStore';
+import { AppCard } from '../components/ai/AppCard';
+import { AIStoreContext } from '../contexts/aiStoreContext';
+import { createAIStore, dnsStatusKey } from '../stores/aiStore';
 import type { AppEntry } from '../registry/appRegistry';
 import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import type { CustomDomainCardData } from '../contexts/aiTypes';
@@ -77,7 +70,7 @@ function makeApp(overrides: Partial<AppEntry> = {}): AppEntry {
 describe('customDomainFlow integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    dnsStatuses = new Map();
+    localStorage.clear();
   });
 
   it('executor path: tool call → confirmation → confirmed call updates registry and emits displayCard', async () => {
@@ -154,7 +147,7 @@ describe('customDomainFlow integration', () => {
     ]);
   });
 
-  it('UI path: CustomDomainCard reflects pending_dns → issuing_cert → active as dnsStatuses slice mutates', () => {
+  it('UI path: cards track DNS changes without rerendering on chat tokens', () => {
     // Use the exact displayCard.data shape the executor returns above so any
     // drift between the two halves breaks loudly.
     const data: CustomDomainCardData = {
@@ -166,6 +159,8 @@ describe('customDomainFlow integration', () => {
       expectedAddress: ADDR,
     };
     const key = dnsStatusKey(LEASE_UUID, FQDN);
+    const store = createAIStore();
+    const onRender = vi.fn();
 
     let container: HTMLDivElement | null = null;
     let root: Root | null = null;
@@ -174,31 +169,31 @@ describe('customDomainFlow integration', () => {
       document.body.appendChild(container);
       root = createRoot(container);
 
-      // CustomDomainCard is memo()-wrapped; a same-reference `data` prop
-      // would short-circuit re-renders. Spread it each render so React
-      // sees a fresh prop reference and re-reads the (mocked) useAI slice.
-
       // Initial: empty slice. Card defaults to pending_dns per the
       // `report?.kind ?? 'pending_dns'` fallback in ActiveDomainView.
-      flushSync(() => { root!.render(createElement(CustomDomainCard, { data: { ...data } })); });
+      flushSync(() => {
+        root!.render(createElement(AIStoreContext.Provider, { value: store },
+          createElement(Profiler, { id: 'cards', onRender },
+            createElement(AppCard, { data: { name: 'my-app', status: 'running' } }),
+            createElement(CustomDomainCard, { data }),
+          ),
+        ));
+      });
       expect(container.textContent).toContain('Pending DNS');
 
-      // Transition: issuing_cert.
-      dnsStatuses = new Map([[key, { kind: 'issuing_cert', expectedCnameTarget: EXPECTED_CNAME }]]);
-      flushSync(() => { root!.render(createElement(CustomDomainCard, { data: { ...data } })); });
-      expect(container.textContent).toContain('Issuing certificate');
+      onRender.mockClear();
+      flushSync(() => { store.setState({ messages: [{ id: 'reply', role: 'assistant', content: 'Another token', timestamp: 1, isStreaming: true }] }); });
+      expect(onRender).not.toHaveBeenCalled();
 
-      // Transition: active.
-      dnsStatuses = new Map([[key, { kind: 'active', expectedCnameTarget: EXPECTED_CNAME }]]);
-      flushSync(() => { root!.render(createElement(CustomDomainCard, { data: { ...data } })); });
-      expect(container.textContent).toContain('Active');
-
-      // Transition: failed (covers the fourth status branch end-to-end).
-      dnsStatuses = new Map([[key, { kind: 'failed', expectedCnameTarget: EXPECTED_CNAME }]]);
-      flushSync(() => { root!.render(createElement(CustomDomainCard, { data: { ...data } })); });
-      expect(container.textContent).toContain('Failed');
+      for (const [kind, label] of [['issuing_cert', 'Issuing certificate'], ['active', 'Active'], ['failed', 'Failed']] as const) {
+        flushSync(() => { store.getState().setDnsStatuses(new Map([[key, {
+          kind, leaseUuid: LEASE_UUID, customDomain: FQDN, serviceName: '', expectedCnameTarget: EXPECTED_CNAME,
+        }]])); });
+        expect(container.textContent).toContain(label);
+      }
     } finally {
       if (root) flushSync(() => { root!.unmount(); });
+      store.getState().destroy();
       if (container) container.remove();
     }
   });

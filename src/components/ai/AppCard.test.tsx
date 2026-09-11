@@ -7,8 +7,8 @@ const sendMessage = vi.fn();
 const requestStopApp = vi.fn();
 let dnsStatuses: Map<string, { kind: string; expectedCnameTarget?: string; detail?: string }> = new Map();
 
-vi.mock('../../hooks/useAI', () => ({
-  useAI: () => ({ sendMessage, dnsStatuses, requestStopApp }),
+vi.mock('../../contexts/aiStoreContext', () => ({
+  useAIStore: (selector: (state: unknown) => unknown) => selector({ sendMessage, dnsStatuses, requestStopApp }),
 }));
 
 import { AppCard } from './AppCard';
@@ -49,6 +49,18 @@ describe('AppCard', () => {
     render(makeData());
     expect(container.textContent).toContain('my-app');
     expect(container.textContent).toContain('running');
+  });
+
+  it('does not attach the deployment HTTP hostname to a service with its own TCP mappings', () => {
+    render(makeData({
+      connection: {
+        host: '203.0.113.10', fqdn: 'lease.example',
+        services: { db: { ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32001 } } } },
+      },
+    }));
+    const service = container.querySelector('.app-card__service-ports');
+    expect(service?.textContent).toContain('5432/tcp → 203.0.113.10:32001');
+    expect(service?.textContent).not.toContain('lease.example');
   });
 
   it('accepts url and connection props', () => {
@@ -230,7 +242,7 @@ describe('AppCard', () => {
       });
     });
 
-    it('assigns top-level ports to the sole service when nested mappings are empty', () => {
+    it('keeps flat deployment ports separate when a named service has its own empty record', () => {
       render(makeData({
         connection: {
           host: '203.0.113.10',
@@ -241,7 +253,9 @@ describe('AppCard', () => {
 
       expect(container.querySelectorAll('.app-card__port')).toHaveLength(1);
       expect(container.querySelector('.app-card__port')?.textContent).toBe('80/tcp → 203.0.113.11:32000');
-      expect(container.querySelector('.app-card__service-ports')?.textContent).toContain('web');
+      expect(container.querySelector('.app-card__service-ports')).toBeNull();
+      expect(container.textContent).toContain('Deployment ports');
+      expect(container.textContent).toContain('Service details unavailable for: web.');
     });
 
     it('marks wildcard port endpoints unavailable without a reported host', () => {

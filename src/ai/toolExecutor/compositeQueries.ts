@@ -27,7 +27,7 @@ import {
   type ConnectionDetails,
   type ProviderHealthResponse,
 } from '@manifest-network/manifest-sdk/deploy';
-import { classifyProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
+import { classifyProvisionStatus, displayProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
 import { appCardConnection } from './appCardConnection';
 import { buildBarneyCtx } from './capabilityCtx';
 import { nextStepFor } from './failureGuidance';
@@ -38,7 +38,7 @@ import { getDomainAssignments } from '../../api/leaseDomains';
 import { requestFaucet } from '@manifest-network/manifest-sdk/faucet';
 import { isFaucetEnabled, getFaucetBaseUrl, FAUCET_COOLDOWN_HOURS } from '../../api/faucet';
 import { DENOMS, getDenomMetadata, UNIT_LABELS } from '../../api/config';
-import { LEASE_STATE_LABELS } from '../../utils/leaseState';
+import { isTerminalLeaseState, LEASE_STATE_LABELS } from '../../utils/leaseState';
 import { fromBaseUnits, parseJsonStringArray } from '../../utils/format';
 import { logError } from '../../utils/errors';
 import {
@@ -233,10 +233,8 @@ export async function executeAppStatus(
   let endpointRefreshed = false;
   let connectionRefreshed = false;
   let statusUnavailable = true;
+  let providerStatus: string | undefined;
   let endpointInactive = false;
-  const terminalStates: readonly LeaseState[] = [
-    LeaseState.LEASE_STATE_CLOSED, LeaseState.LEASE_STATE_REJECTED, LeaseState.LEASE_STATE_EXPIRED,
-  ];
 
   /** Write an observation and adopt the status the registry derives from it. */
   const recordObservation = (updates: Partial<Omit<AppEntry, 'leaseUuid'>>): void => {
@@ -246,7 +244,7 @@ export async function executeAppStatus(
 
   // Chain says closed/rejected/expired: the lease is gone. A pure CHAIN
   // observation — it says nothing about why, so it leaves `provisionState` alone.
-  if (leaseState !== null && terminalStates.includes(leaseState)) {
+  if (isTerminalLeaseState(leaseState)) {
     statusUnavailable = false;
     endpointInactive = true;
     if (app.chainState !== 'absent') {
@@ -277,7 +275,8 @@ export async function executeAppStatus(
         // (container died) lands on a confirmed app.
         const unsettled = isUnsettledProvisionStatus(fredStatus.provision_status);
         const provisionState = unsettled && app.provisionState === 'confirmed' ? undefined : observed;
-        statusUnavailable = provisionState === undefined || fredStatus.provision_status === 'unknown';
+        providerStatus = displayProvisionStatus(fredStatus.provision_status);
+        statusUnavailable = providerStatus === undefined;
         const observationChanged =
           app.chainState !== 'active' ||
           (provisionState !== undefined && app.provisionState !== provisionState);
@@ -288,7 +287,7 @@ export async function executeAppStatus(
             ...(accessChanged ? { url: appUrl, connection: appConnection } : {}),
           });
         }
-      } else if (terminalStates.includes(fredStatus.state)) {
+      } else if (isTerminalLeaseState(fredStatus.state)) {
         statusUnavailable = false;
         endpointInactive = true;
         // The chain says ACTIVE but the PROVIDER says this lease is terminal —
@@ -425,6 +424,7 @@ export async function executeAppStatus(
   const data: ToolData<'app_status'> = {
     name: app.name,
     status: currentStatus,
+    provision_status: providerStatus,
     statusUnavailable,
     endpointStale,
     connectionStale,
@@ -446,13 +446,15 @@ export async function executeAppStatus(
       data: {
         name: app.name,
         status: currentStatus,
+        providerStatus,
+        canStop: currentStatus !== 'stopped' && (leaseState === null ? app.chainState !== 'absent' : !isTerminalLeaseState(leaseState)),
         statusUnavailable,
         url: data.url,
         endpointStale,
         connectionStale,
         endpointInactive,
         connection: endpointInactive ? undefined : appCardConnection(appConnection),
-        serviceNames: [...new Set([
+        serviceNames: endpointInactive ? [] : [...new Set([
           ...stackServiceNames,
           ...(leaseItems.length > 1 ? leaseItems.map((item) => item.serviceName).filter(Boolean) : []),
         ])],

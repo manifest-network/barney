@@ -1,6 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { PROVISION_IN_PROGRESS } from '@manifest-network/manifest-sdk/deploy';
-import { classifyProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
+import { classifyProvisionStatus, displayProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
+
+describe('displayProvisionStatus', () => {
+  it('withholds only absent and explicitly unknown readings', () => {
+    for (const status of [undefined, '', 'unknown']) expect(displayProvisionStatus(status)).toBeUndefined();
+    for (const status of ['ready', 'restarting', 'updating', 'provisioning', 'failed', 'quiescing']) {
+      expect(displayProvisionStatus(status)).toBe(status);
+    }
+  });
+});
 
 describe('classifyProvisionStatus', () => {
   it('reads fred’s verdicts', () => {

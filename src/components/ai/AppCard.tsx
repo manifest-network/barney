@@ -11,24 +11,22 @@
 import { memo, useId, useState } from 'react';
 import { Circle, Copy, Globe, Square, CheckCircle } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { useAI } from '../../hooks/useAI';
+import { useAIStore } from '../../contexts/aiStoreContext';
 import { collectInstanceUrls, formatPortEndpoint, isValidFqdn, nonEmptyPorts } from '../../utils/connection';
 import { dnsStatusKey } from '../../stores/aiStore';
 import { DomainRow } from './DomainRow';
 import { CustomDomainCard } from './CustomDomainCard';
-import type { AppCardData } from '../../contexts/aiTypes';
+import type { AppCardData, AppCardPortMapping } from '../../contexts/aiTypes';
 
 interface AppCardProps {
   data: AppCardData;
 }
 
 export const AppCard = memo(function AppCard({ data }: AppCardProps) {
-  const { name, status, customDomain, statusUnavailable, endpointStale, connectionStale, endpointInactive } = data;
-  const url = endpointInactive ? undefined : data.url;
-  const connection = endpointInactive ? undefined : data.connection;
-  const domainManagement = endpointInactive ? undefined : data.domainManagement;
+  const { name, status, providerStatus, customDomain, statusUnavailable, endpointStale, connectionStale, endpointInactive, url, connection, domainManagement } = data;
   const { copyToClipboard, isCopied } = useCopyToClipboard();
-  const { requestStopApp, dnsStatuses } = useAI();
+  const requestStopApp = useAIStore((state) => state.requestStopApp);
+  const dnsStatuses = useAIStore((state) => state.dnsStatuses);
   const [showDomains, setShowDomains] = useState(false);
   const domainsId = useId();
 
@@ -36,17 +34,20 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
   const portEntries = connection?.ports ? Object.entries(connection.ports) : [];
 
   // URL shaping hoists primary-service ports; prefer the full service inventory.
-  const servicePortGroups: { serviceName: string; fqdn?: string; ports: [string, { host_ip: string; host_port: number }][] }[] = [];
-  const serviceNames = new Set(endpointInactive ? [] : [...Object.keys(connection?.services ?? {}), ...(data.serviceNames ?? [])]);
+  const servicePortGroups: { serviceName: string; fqdn?: string; ports: [string, AppCardPortMapping][] }[] = [];
+  const serviceNames = new Set([...Object.keys(connection?.services ?? {}), ...(data.serviceNames ?? [])]);
+  const missingServices: string[] = [];
+  const flat = serviceNames.size === 1 ? connection : undefined;
   for (const serviceName of serviceNames) {
-    const svc = connection?.services?.[serviceName];
-    // A single workload can report flat connection data under a named manifest.
-    const flat = serviceNames.size === 1 ? connection : undefined;
-    const svcPorts = nonEmptyPorts(svc?.ports) ?? nonEmptyPorts(svc?.instances?.[0]?.ports)
-      ?? nonEmptyPorts(flat?.ports) ?? nonEmptyPorts(flat?.instances?.[0]?.ports);
-    const fqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn ?? flat?.fqdn ?? flat?.instances?.[0]?.fqdn;
-    if (svcPorts || fqdn || data.serviceNames?.includes(serviceName)) {
-      servicePortGroups.push({ serviceName, ports: Object.entries(svcPorts ?? {}), fqdn: fqdn && isValidFqdn(fqdn) ? fqdn : undefined });
+    // Flat metadata belongs to the sole service only when it has no own record.
+    const svc = connection?.services?.[serviceName] ?? flat;
+    const svcPorts = nonEmptyPorts(svc?.ports) ?? nonEmptyPorts(svc?.instances?.[0]?.ports);
+    const reportedFqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
+    const fqdn = reportedFqdn && isValidFqdn(reportedFqdn) ? reportedFqdn : undefined;
+    if (svcPorts || fqdn) {
+      servicePortGroups.push({ serviceName, ports: Object.entries(svcPorts ?? {}), fqdn });
+    } else {
+      missingServices.push(serviceName);
     }
   }
 
@@ -73,8 +74,9 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
       </div>
 
       {statusUnavailable && <p className="app-card__detail">Recorded status: {status}. Current workload status could not be confirmed.</p>}
+      {providerStatus && <p className="app-card__detail">Provider status: {providerStatus}</p>}
       {endpointInactive ? <p className="app-card__detail">Deployment endpoint is no longer active.</p> : <>
-        {endpointStale && <p className="app-card__detail">Last known endpoint — access details could not be refreshed.</p>}
+        {endpointStale && <p className="app-card__detail">Last known endpoint — this read did not confirm a current endpoint.</p>}
         {connectionStale && <p className="app-card__detail">Last known service details — connection data could not be refreshed.</p>}
         {!url && <p className="app-card__detail">Endpoint unavailable</p>}
       </>}
@@ -110,6 +112,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
 
       {!servicePortGroups.some((group) => group.ports.length > 0) && portEntries.length > 0 && (
         <div className="app-card__ports">
+          {serviceNames.size > 0 && <span className="app-card__service-name">Deployment ports</span>}
           {portEntries.map(([containerPort, mapping]) => (
             <span key={containerPort} className="app-card__port">
               {containerPort} &rarr; {formatPortEndpoint(mapping, connection?.host) ?? 'Endpoint unavailable'}
@@ -124,7 +127,6 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
             <div key={serviceName} className="app-card__service-ports">
               <span className="app-card__service-name">{serviceName}</span>
               {fqdn && <span className="app-card__service-endpoint">{fqdn}</span>}
-              {!fqdn && ports.length === 0 && <span className="app-card__port">Endpoint unavailable</span>}
               {ports.map(([containerPort, mapping]) => (
                 <span key={`${serviceName}-${containerPort}`} className="app-card__port">
                   {containerPort} &rarr; {formatPortEndpoint(mapping, connection?.host) ?? 'Endpoint unavailable'}
@@ -135,7 +137,9 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
         </div>
       )}
 
-      {customDomain && !endpointInactive && (
+      {missingServices.length > 0 && <p className="app-card__detail">Service details unavailable for: {missingServices.join(', ')}.</p>}
+
+      {customDomain && (
         <div className="app-card__domain">
           <DomainRow
             fqdn={customDomain.fqdn}
@@ -154,7 +158,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
       )}
 
       <div className="app-card__actions">
-        {status !== 'stopped' && (
+        {(data.canStop ?? status !== 'stopped') && (
           <button
             type="button"
             onClick={handleStop}

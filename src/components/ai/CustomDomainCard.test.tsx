@@ -6,8 +6,8 @@ import { createRoot } from 'react-dom/client';
 const sendMessage = vi.fn<(content: string) => Promise<boolean>>(() => Promise.resolve(true));
 let dnsStatuses: Map<string, { kind: string; expectedCnameTarget?: string; detail?: string }> = new Map();
 
-vi.mock('../../hooks/useAI', () => ({
-  useAI: () => ({ sendMessage, dnsStatuses }),
+vi.mock('../../contexts/aiStoreContext', () => ({
+  useAIStore: (selector: (state: unknown) => unknown) => selector({ sendMessage, dnsStatuses }),
 }));
 
 import { CustomDomainCard } from './CustomDomainCard';

@@ -31,6 +31,13 @@ const PROVISION_RETAINED = 'retained';
  */
 const PROVISION_VERDICT_FAILED: ReadonlySet<string> = new Set([...PROVISION_FAILED, 'failing']);
 
+/** Display provider progress even when it cannot retract a registry verdict.
+ * Only absent/unknown readings lack display information; future values remain
+ * visible verbatim without inventing a registry classification. */
+export function displayProvisionStatus(status: string | undefined): string | undefined {
+  return status === undefined || status === '' || status === 'unknown' ? undefined : status;
+}
+
 /**
  * True when the status carries NO verdict about the workload — the only reason
  * a caller may ignore what fred reported alongside it.

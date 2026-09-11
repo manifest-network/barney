@@ -83,6 +83,7 @@ export interface ToolDataMap {
   app_status: {
     name: string;
     status: string;
+    provision_status?: string;
     statusUnavailable?: boolean;
     endpointStale?: boolean;
     connectionStale?: boolean;

@@ -4,7 +4,7 @@ import type { AppEntry } from '../../registry/appRegistry';
 import { logError } from '../../utils/errors';
 
 const portMapping = z.object({
-  host_ip: z.string(),
+  host_ip: z.string().optional(),
   host_port: z.number().int().min(1).max(65535),
 });
 const ports = z.record(z.string(), z.unknown()).transform((value) =>

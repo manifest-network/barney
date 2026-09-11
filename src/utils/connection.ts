@@ -41,7 +41,7 @@ function formatEndpointHost(value?: string): string | undefined {
 
 /** Wildcard binds need the reported Docker host, not an HTTP-routing FQDN. */
 export function formatPortEndpoint(
-  mapping: { host_ip: string; host_port: number },
+  mapping: { host_ip?: string; host_port: number },
   connectionHost?: string,
 ): string | undefined {
   if (!Number.isInteger(mapping.host_port) || mapping.host_port <= 0 || mapping.host_port > 65535) return undefined;

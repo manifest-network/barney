@@ -4,6 +4,13 @@
 
 import { LeaseState } from '../api/billing';
 
+/** A terminal lease cannot host a workload or keep accruing lease charges. */
+export function isTerminalLeaseState(state: LeaseState | null | undefined): boolean {
+  return state === LeaseState.LEASE_STATE_CLOSED
+    || state === LeaseState.LEASE_STATE_REJECTED
+    || state === LeaseState.LEASE_STATE_EXPIRED;
+}
+
 /**
  * Badge CSS classes for each lease state.
  * TypeScript enforces completeness - adding a new state to manifestjs will cause a compile error.
