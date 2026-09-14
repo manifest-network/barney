@@ -10,7 +10,7 @@ import { TerminalChainStateError, describeFredFailure } from '@manifest-network/
 import { logError } from '../../utils/errors';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { ToolResult, ToolExecutorOptions, SigningContext } from './types';
-import { connectionPatch, failureText, resolveAppEndpoint } from './helpers';
+import { connectionPatch, failureText } from './helpers';
 import { nextStepFor } from './failureGuidance';
 import { resolveAppUrl } from './deployUrl';
 import { isTerminalLeaseState } from '../../utils/leaseState';
@@ -303,25 +303,21 @@ export async function handleDeployManifestError(
       const { url: connectionUrl, connection } = providerUrl
         ? await resolveAppUrl(providerUrl, leaseUuid, {} as FredLeaseStatus, address, signing, 'deployError.handleDeployManifestError')
         : { url: undefined, connection: undefined };
-      const previous = appRegistry.getAppByLease(address, leaseUuid);
-      const finalUrl = connectionUrl ?? (previous ? resolveAppEndpoint(previous) : undefined);
       // Chain observation only — no `provisionState`: the deploy THREW, so the
       // provider never confirmed readiness and a chain read may not claim it.
-      const updated = appRegistry.updateApp(address, leaseUuid, {
+      appRegistry.updateApp(address, leaseUuid, {
         chainState: 'active',
-        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }, previous),
+        ...connectionPatch({ url: connectionUrl, connection }),
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
       return {
         success: true,
-        data: { message: `App "${name}" is live!`, name, url: finalUrl, status: 'running' },
+        data: { message: `App "${name}" is live!`, name, url: connectionUrl, status: 'running' },
         displayCard: {
           type: 'app' as const,
           data: {
-            name, url: finalUrl, status: 'running',
-            connection: appCardConnection(updated?.connection),
-            connectionStale: !connection && !!updated?.connection,
-            endpointStale: !connectionUrl && !!finalUrl,
+            name, url: connectionUrl, status: 'running',
+            connection: appCardConnection(connection),
           },
         },
       };

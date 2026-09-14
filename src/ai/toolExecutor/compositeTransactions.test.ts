@@ -2025,7 +2025,7 @@ describe('executeConfirmedDeployApp', () => {
     expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.connection).toEqual(connection);
   });
 
-  it('routes a defensive throw without SDK discriminants through the chain fallback', async () => {
+  it.each(['published ports', 'empty ports', 'unavailable'])('routes a new deployment throw through the chain fallback with %s', async (read) => {
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, opts) => {
       await opts?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
       throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'unclassified failure');
@@ -2033,22 +2033,35 @@ describe('executeConfirmedDeployApp', () => {
     vi.mocked(getLease).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE } as any);
     // C1: the running-on-throw branch resolves url/connection from the provider
     // so the app shows a link instead of a bare running status.
-    vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
-      lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1',
-      connection: { host: '5.6.7.8', ports: { '80/tcp': { host_port: 32456 } } },
-    } as any);
+    const connection = read === 'unavailable' ? undefined : {
+      host: '5.6.7.8', ports: read === 'published ports' ? { '80/tcp': { host_port: 32456 } } : {},
+    };
+    if (connection) {
+      vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+        lease_uuid: 'new-lease-uuid', tenant: ADDRESS, provider_uuid: 'p1', connection,
+      } as any);
+    } else {
+      vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Provider unavailable'));
+    }
     const registry = makeRegistry();
     const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry }), makePayload());
     expect(result.success).toBe(true);
     expect((result.data as any).status).toBe('running');
-    expect((result.data as any).url).toBe('5.6.7.8:32456');
+    const url = read === 'published ports' ? '5.6.7.8:32456' : undefined;
+    expect((result.data as any).url).toBe(url);
+    expect(result.success && !result.requiresConfirmation && result.displayCard).toMatchObject({
+      type: 'app', data: { url, connection },
+    });
     // The 2d chain-truth arm observed the CHAIN only — no provider readiness
     // verdict was ever given — so it records `chainState` and nothing else.
     expect(registry.updateApp).toHaveBeenCalledWith(
       ADDRESS, 'new-lease-uuid',
-      expect.objectContaining({ chainState: 'active', url: '5.6.7.8:32456', connection: expect.objectContaining({ host: '5.6.7.8' }) }),
+      expect.objectContaining({ chainState: 'active' }),
     );
-    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.provisionState).toBeUndefined();
+    const app = registry.getAppByLease(ADDRESS, 'new-lease-uuid')!;
+    expect(app.url).toBe(url);
+    expect(app.connection).toEqual(connection);
+    expect(app.provisionState).toBeUndefined();
   });
 
   // W5 end-to-end: the readiness-unconfirmed arm of handleDeployManifestError
@@ -6776,7 +6789,7 @@ describe('batch summary and progress agree on an unconfirmed batch', () => {
 });
 
 describe('lifecycle connection observations', () => {
-  const modes = ['restart', 'batch restart', 'update', 'deploy fallback'] as const;
+  const modes = ['restart', 'batch restart', 'update'] as const;
   type Mode = typeof modes[number];
   const newFqdn = 'app-abc.barney8.manifest0.net';
 
@@ -6803,10 +6816,6 @@ describe('lifecycle connection observations', () => {
     const options = makeOptions({ appRegistry: registry, onProgress });
     const args = { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl };
     if (mode === 'update') return executeConfirmedUpdateApp(args, CLIENT_MANAGER, options, makeJsonPayload());
-    if (mode === 'deploy fallback') return handleDeployManifestError(new Error('unstructured failure'), {
-      name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl,
-      address: ADDRESS, signing: options.signing!, appRegistry: registry,
-    });
     return executeConfirmedRestartApp(mode === 'batch restart' ? { app_name: 'all', entries: [args] } : args, CLIENT_MANAGER, options);
   }
 
@@ -6852,10 +6861,6 @@ describe('lifecycle connection observations', () => {
       expect(result.success).toBe(true);
       expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ url: app.url, connection: read === 'unreachable' ? app.connection : freshConnection });
       expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.connectionStale).toBe(read === 'unreachable');
-      if (mode === 'deploy fallback' && result.success && !result.requiresConfirmation) {
-        expect(result.displayCard?.type).toBe('app');
-        if (result.displayCard?.type === 'app') expect(result.displayCard.data.connectionStale).toBe(read === 'unreachable');
-      }
       if (mode === 'batch restart') expect(JSON.stringify(result.data)).toContain(app.url);
       else expect((result.data as { url?: string }).url).toBe(app.url);
     });
