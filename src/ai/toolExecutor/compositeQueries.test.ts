@@ -606,7 +606,7 @@ describe('executeAppStatus', () => {
       expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.url).toBe(expectedUrl);
     });
 
-    it('keeps a stored connection when refreshed TCP port mappings have been filtered out', async () => {
+    it('replaces stored ports with the successfully read empty inventory while retaining the last known URL', async () => {
       const app = makeApp({
         url: '1.2.3.4:32456',
         connection: { host: '1.2.3.4', ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32456 } } },
@@ -622,7 +622,7 @@ describe('executeAppStatus', () => {
       const result = await executeAppStatus({ app_name: app.name }, makeOptions({ appRegistry: registry, signing: mockSigning }));
 
       expect((result.data as { url?: string }).url).toBe(app.url);
-      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ url: app.url, connection: app.connection });
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ url: app.url, connection: { host: '1.2.3.4', fqdn: 'pg.provider.example.com', ports: {} } });
     });
 
     it('surfaces customDomains from appStatus chainState.items', async () => {

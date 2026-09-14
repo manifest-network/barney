@@ -51,6 +51,19 @@ describe('AppCard', () => {
     expect(container.textContent).toContain('running');
   });
 
+  it('renders a deployment port once when the named service supplies only an HTTP hostname', () => {
+    render(makeData({ connection: {
+      host: '203.0.113.10', ports: { '80/tcp': { host_port: 32000 } },
+      services: { web: { fqdn: 'web.example.com' }, db: {} },
+    } }));
+    expect(container.querySelectorAll('.app-card__port')).toHaveLength(1);
+    expect(container.querySelector('.app-card__service-ports .app-card__port')).toBeNull();
+    expect(container.textContent).toContain('Deployment ports');
+    expect(container.textContent).toContain('web.example.com');
+    expect(container.textContent).toContain('db: No published ports.');
+    expect(container.textContent).not.toContain('Service details unavailable');
+  });
+
   it('does not attach the deployment HTTP hostname to a service with its own TCP mappings', () => {
     render(makeData({
       connection: {

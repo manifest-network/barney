@@ -140,6 +140,13 @@ describe('throwIfAborted', () => {
 });
 
 describe('withAbort', () => {
+  it('treats a signal without a reason as user cancellation', async () => {
+    const controller = new AbortController();
+    vi.spyOn(controller.signal, 'reason', 'get').mockReturnValue(undefined);
+    const work = withAbort(new Promise(() => {}), controller.signal);
+    controller.abort();
+    await expect(work).rejects.toMatchObject({ name: 'AbortError' });
+  });
   it('preserves the work result and detaches its listener', async () => {
     const controller = new AbortController();
     const remove = vi.spyOn(controller.signal, 'removeEventListener');

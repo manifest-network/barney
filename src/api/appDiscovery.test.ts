@@ -193,6 +193,13 @@ describe('hydrateDiscoveredApp', () => {
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'failed', status: 'failed' });
   });
 
+  it('records explicitly unknown readiness for a legacy entry with no provider observation', async () => {
+    const previous = app({ provisionState: undefined });
+    vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'unknown' });
+    await hydrateDiscoveredApp(address, previous, signing);
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'unconfirmed', status: 'deploying' });
+  });
+
   it.each([
     { verdict: 'ready', provisionState: 'confirmed', status: 'running', complete: false },
     { verdict: 'failing', provisionState: 'failed', status: 'failed', complete: true },

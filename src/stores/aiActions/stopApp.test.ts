@@ -139,23 +139,23 @@ describe('requestStopApp', () => {
     expect(store.getState().pendingConfirmation!.messageId).toBe(msgs[2].id);
   });
 
-  it('is a silent no-op when the app is unknown to the registry', () => {
+  it('explains when a historical card no longer has an app in the registry', () => {
     findApp.mockReturnValue(null);
     const store = setupStore();
 
     store.getState().requestStopApp('does-not-exist');
 
-    expect(store.getState().messages).toHaveLength(0);
+    expect(store.getState().messages.at(-1)?.content).toContain('no longer in this wallet');
     expect(store.getState().pendingConfirmation).toBeNull();
   });
 
-  it('is a silent no-op when the app is already stopped', () => {
+  it('explains when a historical card refers to an already stopped lease', () => {
     findApp.mockReturnValue(makeApp({ status: 'stopped' }));
     const store = setupStore();
 
     store.getState().requestStopApp('all');
 
-    expect(store.getState().messages).toHaveLength(0);
+    expect(store.getState().messages.at(-1)?.content).toContain('no active lease to stop');
     expect(store.getState().pendingConfirmation).toBeNull();
   });
 
@@ -205,13 +205,13 @@ describe('requestStopApp', () => {
     expect(findApp).not.toHaveBeenCalled();  // bail-out before registry lookup
   });
 
-  it('is a silent no-op when not connected or address is missing', () => {
+  it('works without the relay but refuses a missing wallet address', () => {
     findApp.mockReturnValue(makeApp());
 
     const disconnected = setupStore({ isConnected: false });
     disconnected.getState().requestStopApp('all');
-    expect(disconnected.getState().messages).toHaveLength(0);
-    expect(disconnected.getState().pendingConfirmation).toBeNull();
+    expect(disconnected.getState().pendingConfirmation?.action.toolName).toBe('stop_app');
+    findApp.mockClear();
 
     const noAddress = setupStore({ address: undefined });
     noAddress.getState().requestStopApp('all');

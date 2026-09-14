@@ -84,8 +84,11 @@ export interface AppCardData {
   /** Current provider reading, independent of the registry's durable summary. */
   providerStatus?: string;
   canStop?: boolean;
-  /** The recorded status could not be confirmed against the current workload. */
+  /** No current lease observation is available. */
   statusUnavailable?: boolean;
+  workloadStatusUnavailable?: boolean;
+  chainState?: string;
+  providerQuerySkipped?: boolean;
   endpointStale?: boolean;
   providerEndpoint?: string;
   connectionStale?: boolean;

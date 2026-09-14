@@ -111,11 +111,13 @@ function currentWalletValue<T>(
 
 export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const { address, disconnect, wallet } = useChain(CHAIN_NAME);
-  const { sendMessage, requestAppStatus, attachPayload, clearPayload, dnsStatuses } = useAI();
+  const { sendMessage, requestAppStatus, attachPayload, clearPayload, dnsStatuses, isStreaming, pendingConfirmation } = useAI();
   // Unlike an address string, this identity changes for A → B → A. Registry
   // and credit snapshots from an earlier visit to A therefore remain hidden
   // until the current A lifecycle successfully refreshes them.
   const walletContext = useMemo(() => ({ address }), [address]);
+  const [statusSelection, setStatusSelection] = useState<WalletSnapshot<string> | null>(null);
+  const [statusSelectionError, setStatusSelectionError] = useState<WalletSnapshot<string> | null>(null);
   const [appsSnapshot, setAppsSnapshot] =
     useState<WalletSnapshot<AppEntry[]> | null>(null);
   const [creditBalanceSnapshot, setCreditBalanceSnapshot] =
@@ -402,6 +404,10 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     [apps]
   );
 
+  const selectedStatusApp = currentWalletValue(statusSelection, walletContext);
+  const statusError = currentWalletValue(statusSelectionError, walletContext);
+  const selectionBlocked = !!selectedStatusApp || isStreaming || !!pendingConfirmation;
+
   return (
     <div className="apps-sidebar">
       {/* Wallet pill */}
@@ -492,6 +498,12 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
           <span ref={badgeRef} className="apps-sidebar__apps-count">{runningApps.length}</span>
         </div>
         <div className="apps-sidebar__apps-list">
+          {statusError && <p className="apps-sidebar__apps-empty" role="alert">{statusError}</p>}
+          {selectionBlocked && <p className="apps-sidebar__apps-empty" role="status">
+            {selectedStatusApp
+              ? `Checking status of ${selectedStatusApp}…`
+              : pendingConfirmation ? 'Confirm or cancel the pending action to select an app.' : 'Finish or cancel the current request to select an app.'}
+          </p>}
           {runningApps.length === 0 ? (
             <p className="apps-sidebar__apps-empty">No running apps</p>
           ) : (
@@ -535,9 +547,22 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                 <button
                   key={app.leaseUuid}
                   type="button"
-                  onClick={() => {
-                    void requestAppStatus(app.name);
-                    onClose?.();
+                  disabled={selectionBlocked}
+                  onClick={async () => {
+                    const context = walletContext;
+                    setStatusSelection({ context, value: app.name });
+                    setStatusSelectionError(null);
+                    try {
+                      const accepted = await requestAppStatus(app.name);
+                      if (currentWalletContextRef.current !== context) return;
+                      if (accepted) onClose?.();
+                      else setStatusSelectionError({ context, value: 'Could not start the status check. Try selecting the app again.' });
+                    } catch (error) {
+                      logError('AppsSidebar.appStatus', error);
+                      if (currentWalletContextRef.current === context) setStatusSelectionError({ context, value: 'Could not check app status. Please try again.' });
+                    } finally {
+                      if (currentWalletContextRef.current === context) setStatusSelection(null);
+                    }
                   }}
                   className="apps-sidebar__app-item"
                 >

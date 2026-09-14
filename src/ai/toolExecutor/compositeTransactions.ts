@@ -23,6 +23,7 @@ import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { isAbortError, withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
 import { connectionPatch, deriveUrlFromConnection, failureText } from './helpers';
+import { appCardConnection } from './appCardConnection';
 import { normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
@@ -717,7 +718,7 @@ export async function executeConfirmedDeployApp(
       name,
       url: connectionUrl,
       status: 'running',
-      connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+      connection: appCardConnection(connection ? JSON.parse(JSON.stringify(connection)) : undefined),
       ...(attachedDomain
         ? {
             customDomain: {
@@ -1478,7 +1479,7 @@ export async function executeConfirmedRestartApp(
       // Provider observation: the wait resolved non-terminal — the workload is up.
       appRegistry.updateApp(address, leaseUuid, {
         provisionState: 'confirmed',
-        ...connectionPatch({ url: connectionUrl, connection }, previous),
+        ...connectionPatch({ url: connectionUrl, connection }),
       });
       onProgress?.({ phase: 'ready', operation: 'restart' });
 
@@ -1610,7 +1611,7 @@ async function executeConfirmedBatchRestart(
 
           appRegistry.updateApp(address, entry.leaseUuid, {
             provisionState: 'confirmed',
-            ...connectionPatch({ url: connectionUrl, connection }, previous),
+            ...connectionPatch({ url: connectionUrl, connection }),
           });
           updateProgress('ready', 'App is live!');
           return { name, url: connectionUrl ?? previous?.url };
@@ -2116,7 +2117,7 @@ export async function executeConfirmedUpdateApp(
       // /provision read above carried no failure signal.
       appRegistry.updateApp(address, leaseUuid, {
         provisionState: 'confirmed',
-        ...connectionPatch({ url: connectionUrl, connection }, existingApp),
+        ...connectionPatch({ url: connectionUrl, connection }),
       });
       onProgress?.({ phase: 'ready', operation: 'update' });
 

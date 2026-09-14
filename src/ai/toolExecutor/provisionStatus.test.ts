@@ -3,9 +3,9 @@ import { PROVISION_IN_PROGRESS } from '@manifest-network/manifest-sdk/deploy';
 import { classifyProvisionStatus, displayProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
 
 describe('displayProvisionStatus', () => {
-  it('withholds only absent and explicitly unknown readings', () => {
-    for (const status of [undefined, '', 'unknown']) expect(displayProvisionStatus(status)).toBeUndefined();
-    for (const status of ['ready', 'restarting', 'updating', 'provisioning', 'failed', 'quiescing']) {
+  it('displays unknown readiness while withholding absent readings', () => {
+    for (const status of [undefined, '']) expect(displayProvisionStatus(status)).toBeUndefined();
+    for (const status of ['unknown', 'ready', 'restarting', 'updating', 'provisioning', 'failed', 'quiescing']) {
       expect(displayProvisionStatus(status)).toBe(status);
     }
   });
@@ -28,10 +28,10 @@ describe('classifyProvisionStatus', () => {
     expect(classifyProvisionStatus('failing')).toBe('failed');
   });
 
-  it('claims nothing for an absent, unknown, or unmodelled status', () => {
+  it('records unknown readiness without inventing a verdict for absent or unmodelled values', () => {
     expect(classifyProvisionStatus(undefined)).toBeUndefined();
     expect(classifyProvisionStatus('')).toBeUndefined();
-    expect(classifyProvisionStatus('unknown')).toBeUndefined();
+    expect(classifyProvisionStatus('unknown')).toBe('unconfirmed');
     expect(classifyProvisionStatus('quiescing')).toBeUndefined();
   });
 });

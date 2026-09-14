@@ -192,7 +192,7 @@ html[data-theme="light"] body {
   background: oklch(0.90 0.01 260);
 }
 
-[data-theme="light"] .apps-sidebar__app-item:hover {
+[data-theme="light"] .apps-sidebar__app-item:hover:not(:disabled) {
   background: oklch(0.93 0.01 260);
 }
 
@@ -343,7 +343,7 @@ html[data-theme="retro"] body {
   background: oklch(0.16 0.06 290);
 }
 
-[data-theme="retro"] .apps-sidebar__app-item:hover {
+[data-theme="retro"] .apps-sidebar__app-item:hover:not(:disabled) {
   background: oklch(0.18 0.06 290);
 }
 
@@ -1002,7 +1002,7 @@ html[data-theme="nord"] body {
   background: #434C5E;
 }
 
-[data-theme="nord"] .apps-sidebar__app-item:hover {
+[data-theme="nord"] .apps-sidebar__app-item:hover:not(:disabled) {
   background: #434C5E;
 }
 
@@ -1122,7 +1122,7 @@ html[data-theme="dracula"] body {
   background: #44475A;
 }
 
-[data-theme="dracula"] .apps-sidebar__app-item:hover {
+[data-theme="dracula"] .apps-sidebar__app-item:hover:not(:disabled) {
   background: #44475A;
 }
 
@@ -1242,7 +1242,7 @@ html[data-theme="catppuccin"] body {
   background: #313244;
 }
 
-[data-theme="catppuccin"] .apps-sidebar__app-item:hover {
+[data-theme="catppuccin"] .apps-sidebar__app-item:hover:not(:disabled) {
   background: #45475A;
 }
 
@@ -1431,7 +1431,7 @@ html[data-theme="matrix"] body {
   background: oklch(0.12 0.05 145);
 }
 
-[data-theme="matrix"] .apps-sidebar__app-item:hover {
+[data-theme="matrix"] .apps-sidebar__app-item:hover:not(:disabled) {
   background: oklch(0.14 0.06 145);
 }
 
@@ -10264,8 +10264,13 @@ code.lease-card-mono {
   transition: background-color 0.1s;
 }
 
-.apps-sidebar__app-item:hover {
+.apps-sidebar__app-item:hover:not(:disabled) {
   background: var(--color-surface-700);
+}
+
+.apps-sidebar__app-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .apps-sidebar__app-name {

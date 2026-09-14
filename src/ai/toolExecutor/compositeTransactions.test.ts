@@ -6773,22 +6773,27 @@ describe('lifecycle connection observations', () => {
   }
 
   describe.each(modes)('%s', (mode) => {
-    it.each(['unreachable', 'empty ports', 'filtered TCP FQDN'])('preserves stored access details when connection info is %s', async (read) => {
+    it.each(['unreachable', 'empty ports', 'filtered TCP FQDN'])('keeps the saved URL while adopting any returned connection inventory (%s)', async (read) => {
       const app = previousApp();
       const registry = makeRegistry([app]);
+      const freshConnection = { host: '64.29.115.29', ports: {}, ...(read === 'filtered TCP FQDN' ? { fqdn: 'pg.provider.example.com' } : {}) };
       if (read === 'unreachable') {
         vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('provider unavailable'));
       } else {
         vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
           lease_uuid: app.leaseUuid, tenant: ADDRESS, provider_uuid: 'p1',
-          connection: { host: '64.29.115.29', ports: {}, ...(read === 'filtered TCP FQDN' ? { fqdn: 'pg.provider.example.com' } : {}) },
+          connection: freshConnection,
         });
       }
 
       const result = await run(mode, app, registry);
 
       expect(result.success).toBe(true);
-      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ url: app.url, connection: app.connection });
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ url: app.url, connection: read === 'unreachable' ? app.connection : freshConnection });
+      if (mode === 'deploy fallback' && result.success && !result.requiresConfirmation) {
+        expect(result.displayCard?.type).toBe('app');
+        if (result.displayCard?.type === 'app') expect(result.displayCard.data.connectionStale).toBe(read === 'unreachable');
+      }
       if (mode === 'batch restart') expect(JSON.stringify(result.data)).toContain(app.url);
       else expect((result.data as { url?: string }).url).toBe(app.url);
     });

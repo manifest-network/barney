@@ -204,17 +204,16 @@ export function deriveUrlFromConnection(
 }
 
 /**
- * Keep stored access details when a provider read supplies no usable endpoint.
- * Port mappings may stay stale until a usable connection read arrives. A new
- * primary URL alone must not erase the service inventory or DNS targets.
+ * A returned connection is an independent observation, including an empty or
+ * unassigned inventory. Preserve old inventory only when no connection was read.
+ * A new primary URL alone must not erase service names or DNS targets.
  */
 export function connectionPatch(
   { url, connection }: { url?: string; connection?: ConnectionDetails },
-  previous?: Pick<AppEntry, 'url' | 'connection'> | null,
 ): Pick<AppEntry, 'url' | 'connection'> {
   const patch: Pick<AppEntry, 'url' | 'connection'> = {};
   if (url !== undefined) patch.url = url;
-  if (connection && (url !== undefined || !previous?.connection)) {
+  if (connection) {
     patch.connection = JSON.parse(JSON.stringify(connection));
   }
   return patch;

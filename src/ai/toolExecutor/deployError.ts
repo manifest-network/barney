@@ -14,6 +14,7 @@ import { connectionPatch, failureText } from './helpers';
 import { nextStepFor } from './failureGuidance';
 import { resolveAppUrl } from './deployUrl';
 import { isTerminalLeaseState } from '../../utils/leaseState';
+import { appCardConnection } from './appCardConnection';
 
 /**
  * Best-effort fetch of provider logs and provision status for failed deploys.
@@ -308,7 +309,7 @@ export async function handleDeployManifestError(
       // provider never confirmed readiness and a chain read may not claim it.
       const updated = appRegistry.updateApp(address, leaseUuid, {
         chainState: 'active',
-        ...connectionPatch({ url: connectionUrl, connection }, previous),
+        ...connectionPatch({ url: connectionUrl, connection }),
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
       return {
@@ -316,7 +317,12 @@ export async function handleDeployManifestError(
         data: { message: `App "${name}" is live!`, name, url: finalUrl, status: 'running' },
         displayCard: {
           type: 'app' as const,
-          data: { name, url: finalUrl, status: 'running', connection: updated?.connection ? JSON.parse(JSON.stringify(updated.connection)) : undefined },
+          data: {
+            name, url: finalUrl, status: 'running',
+            connection: appCardConnection(updated?.connection),
+            connectionStale: !connection && !!updated?.connection,
+            endpointStale: !connectionUrl && !!finalUrl,
+          },
         },
       };
     }

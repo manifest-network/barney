@@ -32,6 +32,7 @@ import {
   executeConfirmedSetCustomDomain,
 } from './compositeTransactions';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
+import { isAbortError } from '../../api/utils';
 
 // Re-export types
 export type { ToolResult, ToolExecutorOptions, PendingAction, SignResult, PayloadAttachment, AuthTokens, SigningContext, TransactionAuthorization } from './types';
@@ -100,6 +101,7 @@ export async function executeTool(
           return { success: false, error: `Unknown query tool: ${toolName}` };
       }
     } catch (error) {
+      if (isAbortError(error)) throw error;
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',

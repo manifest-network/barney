@@ -32,10 +32,10 @@ const PROVISION_RETAINED = 'retained';
 const PROVISION_VERDICT_FAILED: ReadonlySet<string> = new Set([...PROVISION_FAILED, 'failing']);
 
 /** Display provider progress even when it cannot retract a registry verdict.
- * Only absent/unknown readings lack display information; future values remain
+ * Only absent readings lack display information; unknown and future values remain
  * visible verbatim without inventing a registry classification. */
 export function displayProvisionStatus(status: string | undefined): string | undefined {
-  return status === undefined || status === '' || status === 'unknown' ? undefined : status;
+  return status === undefined || status === '' ? undefined : status;
 }
 
 /**
@@ -60,7 +60,8 @@ export function isUnsettledProvisionStatus(status: string | undefined): boolean 
  * OBSERVATION.
  *
  * Visible progress records 'unconfirmed'; the caller keeps it from retracting
- * an earlier confirmation. Absent/unknown values carry no observation, as do
+ * an earlier confirmation. `unknown` explicitly reports unconfirmed readiness.
+ * Absent values carry no observation, as do
  * future values this client does not model.
  */
 export function classifyProvisionStatus(status: string | undefined): ProvisionState | undefined {

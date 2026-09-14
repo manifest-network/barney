@@ -49,7 +49,7 @@ import {
   HEALTH_STATUS_CHARS,
   MAX_REPORTED_CHECKS,
 } from '../../utils/sanitizeText';
-import { withRetry, withTimeout, throwIfAborted } from '../../api/utils';
+import { isAbortError, withRetry, withTimeout, throwIfAborted } from '../../api/utils';
 import { asLeaseUuid } from '@manifest-network/manifest-sdk';
 import type { ToolResult, ToolExecutorOptions, ToolData } from './types';
 import type { CustomDomainCardData } from '../../contexts/aiTypes';
@@ -107,7 +107,7 @@ export async function executeListApps(
     await discoverTenantApps(address, [...liveLeases.values()], { signal, registry: appRegistry });
     apps = appRegistry.getApps(address);
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    if (isAbortError(error)) throw error;
     logError('compositeQueries.executeListApps.reconcile', error);
   }
 
@@ -198,7 +198,7 @@ export async function executeAppStatus(
       fredStatus = st.fredStatus ?? null;
       refreshedConnection = st.connection;
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      if (isAbortError(error)) throw error;
       // appStatus throws (QUERY_FAILED) when the lease is absent on chain, and
       // on transient query failures; either way leave chainState 'unknown' so
       // no reconcile fires — matching the prior getLease-returned-null path.
@@ -216,7 +216,7 @@ export async function executeAppStatus(
         haveChainData = true;
       }
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      if (isAbortError(error)) throw error;
       logError('compositeQueries.executeAppStatus.chainState', error);
     }
   }
@@ -234,6 +234,7 @@ export async function executeAppStatus(
   let providerEndpoint: string | undefined;
   let connectionRefreshed = false;
   let statusUnavailable = true;
+  let workloadStatusUnavailable = false;
   let providerStatus: string | undefined;
   let endpointInactive = false;
 
@@ -254,6 +255,8 @@ export async function executeAppStatus(
   }
   // If chain says active, reconcile with fred (or trust chain if fred unavailable)
   else if (leaseState === LeaseState.LEASE_STATE_ACTIVE) {
+    statusUnavailable = false;
+    workloadStatusUnavailable = true;
     let accessChanged = false;
     if (!fredStatus || fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
       const refresh = refreshAppConnection(fredStatus ?? undefined, refreshedConnection, app);
@@ -278,7 +281,7 @@ export async function executeAppStatus(
         const unsettled = isUnsettledProvisionStatus(fredStatus.provision_status);
         const provisionState = unsettled && app.provisionState === 'confirmed' ? undefined : observed;
         providerStatus = displayProvisionStatus(fredStatus.provision_status);
-        statusUnavailable = providerStatus === undefined;
+        workloadStatusUnavailable = providerStatus === undefined;
         const observationChanged =
           app.chainState !== 'active' ||
           (provisionState !== undefined && app.provisionState !== provisionState);
@@ -291,6 +294,7 @@ export async function executeAppStatus(
         }
       } else if (isTerminalLeaseState(fredStatus.state)) {
         statusUnavailable = false;
+        workloadStatusUnavailable = false;
         endpointInactive = true;
         // The chain says ACTIVE but the PROVIDER says this lease is terminal —
         // fred v0.13.0's explicitly-modelled anomaly (an ACTIVE lease whose
@@ -430,6 +434,8 @@ export async function executeAppStatus(
     status: currentStatus,
     provision_status: providerStatus,
     statusUnavailable,
+    workloadStatusUnavailable,
+    providerQuerySkipped: !signing || !options.clientManager,
     endpointStale,
     providerEndpoint,
     connectionStale,
@@ -454,6 +460,9 @@ export async function executeAppStatus(
         providerStatus,
         canStop: currentStatus !== 'stopped' && (leaseState === null ? app.chainState !== 'absent' : !isTerminalLeaseState(leaseState)),
         statusUnavailable,
+        workloadStatusUnavailable,
+        chainState,
+        providerQuerySkipped: data.providerQuerySkipped,
         url: data.url,
         endpointStale,
         providerEndpoint,
@@ -625,7 +634,7 @@ export async function executeBrowseCatalog(
             if (!healthy) healthError = summarizeFailedChecks(health);
           }
         } catch (error) {
-          if (error instanceof DOMException && error.name === 'AbortError') throw error;
+          if (isAbortError(error)) throw error;
           if (ProviderApiError.isProviderApiError(error) && error.kind === 'invalid_response') {
             healthStatus = 'invalid_response';
             healthError = sanitizeForDisplay(error.message, MAX_HEALTH_ERROR_CHARS);

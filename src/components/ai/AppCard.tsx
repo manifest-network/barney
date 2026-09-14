@@ -26,6 +26,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
   const { name, status, providerStatus, customDomain, statusUnavailable, endpointStale, providerEndpoint, connectionStale, endpointInactive, url, connection, domainManagement } = data;
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const requestStopApp = useAIStore((state) => state.requestStopApp);
+  const actionPending = useAIStore((state) => state.isStreaming || !!state.pendingConfirmation);
   const domainReport = useAIStore((state) => customDomain
     ? state.dnsStatuses.get(dnsStatusKey(customDomain.leaseUuid, customDomain.fqdn))
     : undefined);
@@ -47,7 +48,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
     const fqdn = reportedFqdn && isValidFqdn(reportedFqdn) ? reportedFqdn : undefined;
     if (svcPorts || fqdn) {
       servicePortGroups.push({ serviceName, ports: Object.entries(svcPorts ?? {}), fqdn });
-    } else if (svc?.ports || svc?.instances?.length) {
+    } else if (svc && (Object.keys(svc).length === 0 || svc.ports || svc.instances?.length)) {
       internalServices.push(serviceName);
     } else {
       missingServices.push(serviceName);
@@ -62,51 +63,8 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
     requestStopApp(name);
   };
 
-  return (
-    <div className="app-card" data-status={statusUnavailable ? 'unavailable' : status} role="article" aria-label={`App: ${name}`}>
-      <div className="app-card__header">
-        {status === 'running' && !statusUnavailable
-          ? <CheckCircle className="w-5 h-5 text-success-400" aria-hidden="true" />
-          : <Circle className="w-5 h-5 text-surface-400" aria-hidden="true" />}
-        <span className="app-card__name">{name}</span>
-        <span className="app-card__status">{statusUnavailable ? 'Status unavailable' : status}</span>
-      </div>
-
-      {statusUnavailable && <p className="app-card__detail">Recorded status: {status}. Current workload status could not be confirmed.</p>}
-      {providerStatus && <p className="app-card__detail">Provider status: {providerStatus}</p>}
-      {endpointInactive ? <p className="app-card__detail">Deployment endpoint is no longer active.</p> : <>
-        {endpointStale && <p className="app-card__detail">Last known endpoint — this read did not confirm a current endpoint.</p>}
-        {connectionStale && <p className="app-card__detail">Last known service details — this read did not confirm updated connection data.</p>}
-        {!url && <p className="app-card__detail">Endpoint unavailable</p>}
-      </>}
-
-      {url && (
-        <div className="app-card__url">
-          <span className="app-card__link">{url}</span>
-          <button
-            type="button"
-            onClick={() => void copyToClipboard(url)}
-            className="app-card__copy"
-            aria-label={isCopied(url) ? 'Copied' : 'Copy endpoint'}
-          >
-            {isCopied(url) ? (
-              <CheckCircle className="w-3.5 h-3.5 text-success-400" />
-            ) : (
-              <Copy className="w-3.5 h-3.5" />
-            )}
-          </button>
-        </div>
-      )}
-
-      {providerEndpoint && <div className="app-card__url">
-        <span className="app-card__detail">Provider-reported endpoint</span>
-        <span className="app-card__link">{providerEndpoint}</span>
-        <button type="button" onClick={() => void copyToClipboard(providerEndpoint)} className="app-card__copy"
-          aria-label={isCopied(providerEndpoint) ? 'Copied provider-reported endpoint' : 'Copy provider-reported endpoint'}>
-          {isCopied(providerEndpoint) ? <CheckCircle className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-        </button>
-      </div>}
-
+  const serviceDetails = (
+    <>
       {instanceUrls.length > 0 && (
         <div className="app-card__instances">
           <span className="app-card__instances-label">Instances</span>
@@ -147,6 +105,62 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
 
       {missingServices.length > 0 && <p className="app-card__detail">Service details unavailable for: {missingServices.join(', ')}.</p>}
       {internalServices.map((serviceName) => <p key={serviceName} className="app-card__detail">{serviceName}: No published ports.</p>)}
+    </>
+  );
+
+  return (
+    <div className="app-card" data-status={statusUnavailable ? 'unavailable' : status} role="article" aria-label={`App: ${name}`}>
+      <div className="app-card__header">
+        {status === 'running' && !statusUnavailable
+          ? <CheckCircle className="w-5 h-5 text-success-400" aria-hidden="true" />
+          : <Circle className="w-5 h-5 text-surface-400" aria-hidden="true" />}
+        <span className="app-card__name">{name}</span>
+        <span className="app-card__status">{statusUnavailable ? 'Status unavailable' : status}</span>
+      </div>
+
+      {statusUnavailable && <p className="app-card__detail">Recorded status: {status}. Current lease status could not be confirmed.</p>}
+      {data.chainState && data.chainState !== 'unknown' && <p className="app-card__detail">Lease status: {data.chainState}</p>}
+      {data.workloadStatusUnavailable && <p className="app-card__detail">Workload status unavailable.</p>}
+      {providerStatus && <p className="app-card__detail">Provider status: {providerStatus}</p>}
+      {endpointInactive ? <p className="app-card__detail">Deployment endpoint is no longer active.</p> : <>
+        {endpointStale && <p className="app-card__detail">{data.providerQuerySkipped ? 'Saved endpoint' : 'Last known endpoint — this read did not confirm a current endpoint.'}</p>}
+        {!url && <p className="app-card__detail">Endpoint unavailable</p>}
+      </>}
+
+      {url && (
+        <div className="app-card__url">
+          <span className="app-card__link">{url}</span>
+          <button
+            type="button"
+            onClick={() => void copyToClipboard(url)}
+            className="app-card__copy"
+            aria-label={isCopied(url) ? 'Copied' : 'Copy endpoint'}
+          >
+            {isCopied(url) ? (
+              <CheckCircle className="w-3.5 h-3.5 text-success-400" />
+            ) : (
+              <Copy className="w-3.5 h-3.5" />
+            )}
+          </button>
+        </div>
+      )}
+
+      {providerEndpoint && <div className="app-card__url">
+        <span className="app-card__detail">Provider-reported endpoint</span>
+        <span className="app-card__link">{providerEndpoint}</span>
+        <button type="button" onClick={() => void copyToClipboard(providerEndpoint)} className="app-card__copy"
+          aria-label={isCopied(providerEndpoint) ? 'Copied provider-reported endpoint' : 'Copy provider-reported endpoint'}>
+          {isCopied(providerEndpoint) ? <CheckCircle className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+        </button>
+      </div>}
+
+      {connectionStale ? (
+        <details className="app-card__saved-connections">
+          <summary>{data.providerQuerySkipped ? 'Saved service details' : 'Last known service details'}</summary>
+          {!data.providerQuerySkipped && <p className="app-card__detail">Current service access details could not be confirmed.</p>}
+          {serviceDetails}
+        </details>
+      ) : serviceDetails}
 
       {customDomain && (
         <div className="app-card__domain">
@@ -171,6 +185,8 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
           <button
             type="button"
             onClick={handleStop}
+            disabled={actionPending}
+            title={actionPending ? 'Finish or cancel the current request first.' : undefined}
             className="btn btn-ghost btn-sm"
           >
             <Square className="w-3.5 h-3.5" aria-hidden="true" />

@@ -125,7 +125,7 @@ export async function withTimeout<T>(
 export async function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   let onAbort: (() => void) | undefined;
   const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => reject(signal.reason);
+    onAbort = () => reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
     if (signal.aborted) onAbort();
     else signal.addEventListener('abort', onAbort);
   });

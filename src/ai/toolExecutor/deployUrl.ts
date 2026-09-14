@@ -27,9 +27,9 @@ export function refreshAppConnection(
   const previousUrl = previous.url || formatConnectionUrl(undefined, previous.connection);
   const statusUrl = status ? extractUrlFromFredStatus(status) : undefined;
   const url = shaped?.url ?? (connection || !previousUrl ? statusUrl : undefined);
-  const patch = connectionPatch({ url, connection: shaped?.connection ?? connection }, previous);
+  const patch = connectionPatch({ url, connection: shaped?.connection ?? connection });
   const providerEndpoint = !url && statusUrl !== previousUrl ? statusUrl : undefined;
-  return { patch, providerEndpoint, endpointRefreshed: url !== undefined, connectionRefreshed: patch.connection !== undefined };
+  return { patch, providerEndpoint, endpointRefreshed: url !== undefined, connectionRefreshed: connection !== undefined };
 }
 
 /** True if the hostname looks like a DNS name (not a bare IPv4 address). */
