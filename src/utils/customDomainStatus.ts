@@ -248,6 +248,8 @@ export interface ComputeStatusInput {
   isApex?: boolean;
 }
 
+export const PROVIDER_INFO_PENDING_DETAIL = 'Waiting for provider info…';
+
 /**
  * Pure status reducer:
  *   - DNS not present       → pending_dns
@@ -260,8 +262,6 @@ export interface ComputeStatusInput {
  * surface a hint after a long stall. The `detail` field is left blank by the
  * client-side compute and is the slot a future fred-backed reducer will fill.
  */
-export const PROVIDER_INFO_PENDING_DETAIL = 'Waiting for provider info…';
-
 export function computeStatus(input: ComputeStatusInput): CustomDomainStatusReport {
   const { dns, https, expectedCname, isApex } = input;
 

@@ -142,7 +142,7 @@ Original friendly names and manifest bodies are unavailable through the current 
 
 ```
 Key: barney-apps-{address}
-AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, connection?, manifest?,
+AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, connection?, connectionStale?, manifest?, customDomains?,
            status, chainState?, provisionState? }
   connection? { host, fqdn?, ports?, instances?: { fqdn?, ports? }[], metadata?, services? }
 AppStatus:      'deploying' | 'running' | 'stopped' | 'failed'   (DERIVED — never written directly)
@@ -205,6 +205,9 @@ precisely how the latch arose. Two rules for anyone extending `AppEntry`:
   every in-flight DoH/HTTPS probe**. Re-running `app_status` to check on a pending domain used to
   cancel the very probe that would have answered. Any future field a repeatable writer rebuilds
   belongs in this set.
+
+`connectionStale` is a notifying scalar: changing it invalidates or restores the DNS evidence
+rendered by subscribers. `customDomains` and `connection` are notifying structural fields.
 
 Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `discoverAppsFromChain`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `reconcileCustomDomainsWithChain`, `deriveAppStatus`, `validateAppName`, `sanitizeManifestForStorage`.
 

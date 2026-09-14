@@ -14,8 +14,8 @@ vi.mock('./useAI', () => ({
   useAI: () => ({ dnsStatuses, setDnsStatuses }),
 }));
 
-vi.mock('../utils/customDomainStatus', () => ({
-  PROVIDER_INFO_PENDING_DETAIL: 'Waiting for provider info…',
+vi.mock('../utils/customDomainStatus', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../utils/customDomainStatus')>(),
   resolveDnsViaDoh: vi.fn(),
   probeHttps: vi.fn(),
   computeStatus: vi.fn(),

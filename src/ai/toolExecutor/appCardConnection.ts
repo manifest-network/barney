@@ -8,12 +8,12 @@ import { normalizePortMapping } from './helpers';
 const ports = z.record(z.string(), z.unknown()).transform((value) => {
   let malformed = false;
   const normalized = Object.fromEntries(Object.entries(value).flatMap(([key, mapping]) => {
-    const normalized = normalizePortMapping(mapping);
-    if (!normalized) {
-      if (normalized === undefined) malformed = true;
+    const port = normalizePortMapping(mapping);
+    if (!port) {
+      if (port === undefined) malformed = true;
       return [];
     }
-    return [[key, normalized]];
+    return [[key, port]];
   }));
   // A malformed inventory is not evidence of an internal-only service.
   return malformed && Object.keys(normalized).length === 0 ? undefined : normalized;
