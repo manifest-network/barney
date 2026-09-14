@@ -163,6 +163,35 @@ describe('useAppRecovery', () => {
     expect(registry.getAppByLease(address, LEASE_UUID)?.provisionState).toBe('confirmed');
   });
 
+  it.each(['unshapeable connection', 'retained status'])('keeps the original retry allowance and cadence after a partial %s observation', async (partial) => {
+    addApp({ provisionState: 'confirmed', connectionStale: true, connection: { host: '' } });
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Connection unavailable'));
+    await render();
+    for (let attempt = 0; attempt < APP_RECOVERY_MAX_ATTEMPTS - 1; attempt++) {
+      await advance(AUTO_REFRESH_INTERVAL_MS * 2 ** attempt);
+    }
+    if (partial === 'unshapeable connection') {
+      vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+        lease_uuid: LEASE_UUID, tenant: address, provider_uuid: PROVIDER_UUID, connection: { host: '' },
+      });
+    } else {
+      vi.mocked(getLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'retained' });
+    }
+    for (let attempt = APP_RECOVERY_MAX_ATTEMPTS; attempt < APP_CONNECTION_RECOVERY_MAX_ATTEMPTS; attempt++) {
+      await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS - APP_RECOVERY_POLL_INTERVAL_MS);
+      expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(attempt);
+      await advance(APP_RECOVERY_POLL_INTERVAL_MS);
+      expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(attempt + 1);
+    }
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({
+      provisionState: partial === 'retained status' ? 'unconfirmed' : 'confirmed',
+      connectionStale: partial === 'retained status',
+    });
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getAuthToken).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS * 2);
+  });
+
   it.each([
     { state: LeaseState.LEASE_STATE_CLOSED },
     { state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'failed' },

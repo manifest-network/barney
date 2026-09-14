@@ -340,7 +340,8 @@ export async function executeAppStatus(
   // domains are attached.
   const stackServiceNames: string[] = serviceImages ? Object.keys(serviceImages) : [];
 
-  // Domain changes require an ACTIVE chain lease, independently of provider readiness.
+  // Deployment can attach domains while PENDING; only terminal chain leases
+  // hide their management controls, independently of provider readiness.
   // Domain management is secondary to the app overview:
   //  - >=2 custom domains: consolidated multi-domain view
   //  - exactly one custom domain: single-domain status view
@@ -401,6 +402,7 @@ export async function executeAppStatus(
   }
 
   const endpointStale = !endpointRefreshed && !!connectionUrl;
+  const leaseInactive = leaseState === null ? app.chainState === 'absent' : isTerminalLeaseState(leaseState);
   const connectionStale = !endpointInactive && !connectionRefreshed && !!appConnection;
   const namedLeaseServices = leaseItems.map((item) => item.serviceName).filter(Boolean);
   const serviceNames = [...new Set(namedLeaseServices.length > 0 ? namedLeaseServices : stackServiceNames)];
@@ -438,7 +440,7 @@ export async function executeAppStatus(
         name: app.name,
         status: currentStatus,
         providerStatus,
-        canStop: currentStatus !== 'stopped' && (leaseState === null ? app.chainState !== 'absent' : !isTerminalLeaseState(leaseState)),
+        canStop: currentStatus !== 'stopped' && !leaseInactive,
         statusUnavailable,
         workloadStatusUnavailable,
         chainState,
@@ -450,7 +452,7 @@ export async function executeAppStatus(
         endpointInactive,
         connection: endpointInactive ? undefined : appCardConnection(appConnection, serviceNames, flatServiceName),
         serviceNames: endpointInactive ? [] : serviceNames,
-        domainManagement: leaseState === LeaseState.LEASE_STATE_ACTIVE ? domainManagement : undefined,
+        domainManagement: leaseInactive ? undefined : domainManagement,
       },
     },
   };

@@ -411,9 +411,11 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
 
   const selectedStatusApp = currentWalletValue(statusSelection, walletContext);
   const statusFeedback = currentWalletValue(statusSelectionError, walletContext);
-  const statusError = (statusFeedback?.blockedBy === 'request' && !isStreaming)
-    || (statusFeedback?.blockedBy === 'confirmation' && !pendingConfirmation)
-    ? undefined : statusFeedback?.message;
+  if ((statusFeedback?.blockedBy === 'request' && !isStreaming)
+    || (statusFeedback?.blockedBy === 'confirmation' && !pendingConfirmation)) {
+    setStatusSelectionError(null);
+  }
+  const statusError = statusFeedback?.message;
   const selectionBlocked = !!selectedStatusApp;
 
   return (

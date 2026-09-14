@@ -17,6 +17,7 @@ import { useVisibilityPolling } from './useVisibilityPolling';
 interface RecoveryAttempt {
   snapshot: string;
   attempts: number;
+  maxAttempts: number;
   nextAttemptAt: number;
   retired: boolean;
 }
@@ -68,23 +69,25 @@ export function useAppRecovery(address: string | undefined): void {
       const snapshot = recoverySnapshotKey(app);
       let attempt = attemptsRef.current.get(app.leaseUuid);
       if (!attempt || attempt.snapshot !== snapshot) {
-        attempt = { snapshot, attempts: 0, nextAttemptAt: 0, retired: false };
+        const staleInventory = app.provisionState === 'confirmed' && !!app.connectionStale && !!app.connection;
+        attempt = {
+          snapshot, attempts: 0, nextAttemptAt: 0, retired: false,
+          maxAttempts: staleInventory ? APP_CONNECTION_RECOVERY_MAX_ATTEMPTS : APP_RECOVERY_MAX_ATTEMPTS,
+        };
         attemptsRef.current.set(app.leaseUuid, attempt);
       }
-      const staleInventory = app.provisionState === 'confirmed' && !!app.connectionStale && !!app.connection;
-      const maxAttempts = staleInventory ? APP_CONNECTION_RECOVERY_MAX_ATTEMPTS : APP_RECOVERY_MAX_ATTEMPTS;
-      if (attempt.retired || attempt.attempts >= maxAttempts
+      if (attempt.retired || attempt.attempts >= attempt.maxAttempts
         || attempt.nextAttemptAt > Date.now()) return [];
-      return [{ app, attempt, staleInventory }];
+      return [{ app, attempt }];
     }).sort((left, right) => left.attempt.nextAttemptAt - right.attempt.nextAttemptAt);
     const candidate = candidates[0];
     if (!candidate) return;
 
-    const { app, attempt, staleInventory } = candidate;
+    const { app, attempt } = candidate;
     const abort = new AbortController();
     abortRef.current = abort;
     attempt.attempts++;
-    const retryDelay = staleInventory && attempt.attempts >= APP_RECOVERY_MAX_ATTEMPTS
+    const retryDelay = attempt.attempts >= APP_RECOVERY_MAX_ATTEMPTS
       ? APP_CONNECTION_RECOVERY_INTERVAL_MS
       : AUTO_REFRESH_INTERVAL_MS * 2 ** (attempt.attempts - 1);
     try {

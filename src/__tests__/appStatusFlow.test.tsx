@@ -198,6 +198,10 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     expect(container.textContent).toContain(mode === 'streaming' ? 'Finish or cancel the current request' : 'Confirm or cancel the pending action');
     act(() => { store.setState({ isStreaming: false, pendingConfirmation: null }); });
     expect(container.querySelector('.apps-sidebar__apps [role="alert"]')).toBeNull();
+    act(() => { store.setState(mode === 'streaming' ? { isStreaming: true } : { pendingConfirmation: { id: 'later' } as any }); });
+    expect(container.querySelector('.apps-sidebar__apps [role="alert"]')).toBeNull();
+    await act(async () => { button.click(); });
+    expect(container.querySelector('.apps-sidebar__apps [role="alert"]')).not.toBeNull();
   });
 
   it('keeps the sidebar open and explains a status request rejected during a wallet transition', async () => {
@@ -531,6 +535,24 @@ describe('sidebar selection → app_status → rendered conversation', () => {
   function domainActionIfPresent() {
     return Array.from(overview().querySelectorAll('button')).find((node) => /custom domain/.test(node.textContent ?? ''));
   }
+
+  it.each([false, true])('preserves attached-domain controls on a pending lease, provider target known=%s', async (knownTarget) => {
+    const result = statusResult({ connection: undefined, fredStatus: undefined });
+    result.chainState.state = 1;
+    result.chainState.items[0].serviceName = '';
+    result.chainState.items[0].customDomain = 'blog.example.com';
+    vi.mocked(appStatus).mockResolvedValue(result);
+    await selectApp({ chainState: 'pending', provisionState: 'unconfirmed',
+      connection: knownTarget ? { host: '', fqdn: 'blog.provider.example' } : undefined,
+    });
+    expect(overview().querySelector('.app-card__status')?.textContent).toBe('deploying');
+    await act(async () => { domainAction().click(); });
+    const domainCard = overview().querySelector('.custom-domain-card')!;
+    expect(domainCard.textContent).toContain('blog.example.com');
+    expect(domainCard.textContent).toContain('Change');
+    expect(domainCard.textContent).toContain('Remove');
+    expect(domainCard.textContent).toContain(knownTarget ? 'blog.provider.example' : 'Pending DNS');
+  });
 
   it('shows reported connection data even when the provider status read is unavailable', async () => {
     vi.mocked(appStatus).mockResolvedValue(statusResult({ fredStatus: undefined }));
