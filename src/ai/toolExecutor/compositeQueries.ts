@@ -302,6 +302,7 @@ export async function executeAppStatus(
     }
   }
 
+  const domainTargetsStale = !!app.connectionStale && !connectionRefreshed;
   // Keep the deployed endpoint intact, including its scheme, port, and path.
   const connectionUrl = endpointInactive ? undefined : appUrl || formatConnectionUrl(undefined, appConnection);
 
@@ -355,7 +356,7 @@ export async function executeAppStatus(
       domains: customDomains.map(({ serviceName, customDomain }) => ({
         serviceName,
         customDomain,
-        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName, app.connectionStale && !connectionRefreshed),
+        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName, domainTargetsStale),
       })),
       ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
     };
@@ -366,7 +367,7 @@ export async function executeAppStatus(
       fqdn: customDomain,
       leaseUuid: app.leaseUuid,
       serviceName,
-      expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName, app.connectionStale && !connectionRefreshed),
+      expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName, domainTargetsStale),
       expectedAddress: address,
       ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
     };
@@ -392,7 +393,7 @@ export async function executeAppStatus(
         fqdn: '',
         leaseUuid: app.leaseUuid,
         serviceName,
-        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName, app.connectionStale && !connectionRefreshed),
+        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName, domainTargetsStale),
         expectedAddress: address,
         ...(namedServiceNames.length > 0 ? { serviceNames: namedServiceNames } : {}),
       };

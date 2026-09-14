@@ -65,16 +65,22 @@ export function extractPrimaryServicePorts<Port>(
  *  - Plain number:       12345
  */
 export function extractPort(value: unknown): number | undefined {
-  let raw = Array.isArray(value) ? value[0] : value;
-  if (raw && typeof raw === 'object') {
-    const mapping = raw as Record<string, unknown>;
-    raw = mapping.host_port ?? mapping.HostPort;
-  }
+  return normalizePortMapping(value)?.host_port;
+}
+
+/** Normalize legacy and current mappings together. Null means unassigned;
+ * undefined means malformed, which is not evidence of an empty inventory. */
+export function normalizePortMapping(value: unknown): { host_port: number; host_ip?: string } | null | undefined {
+  const unwrapped = Array.isArray(value) ? value[0] : value;
+  const mapping = unwrapped && typeof unwrapped === 'object' ? unwrapped as Record<string, unknown> : undefined;
+  const raw = mapping ? mapping.host_port ?? mapping.HostPort : unwrapped;
+  if (raw === 0 || raw === '0') return null;
   if (typeof raw !== 'number' && typeof raw !== 'string') return undefined;
   if (typeof raw === 'string' && !/^\d+$/.test(raw.trim())) return undefined;
   const port = Number(raw);
-  // Zero means unassigned; fractions and values outside the TCP/UDP range are unusable.
-  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return undefined;
+  const host = mapping?.host_ip ?? mapping?.HostIp;
+  return { host_port: port, ...(typeof host === 'string' ? { host_ip: host } : {}) };
 }
 
 // TODO: Replace this hard-coded set with an automated signal from the provider

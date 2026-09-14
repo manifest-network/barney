@@ -139,7 +139,6 @@ export async function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Pr
 /** Classify the thrown error, not an ambient signal that may have changed
  * after a real failure. Native guards raise DOMException; polyfills may use Error. */
 export function isAbortError(error: unknown): boolean {
-  if (error instanceof DOMException && error.name === 'AbortError') return true;
   return error instanceof Error && error.name === 'AbortError';
 }
 

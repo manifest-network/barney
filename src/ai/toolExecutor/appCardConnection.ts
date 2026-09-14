@@ -3,20 +3,17 @@ import type { AppCardConnection } from '../../contexts/aiTypes';
 import type { AppEntry } from '../../registry/appRegistry';
 import type { ConnectionDetails } from '../../api/provider-api';
 import { logError } from '../../utils/errors';
-import { extractPort } from './helpers';
+import { normalizePortMapping } from './helpers';
 
 const ports = z.record(z.string(), z.unknown()).transform((value) => {
   let malformed = false;
   const normalized = Object.fromEntries(Object.entries(value).flatMap(([key, mapping]) => {
-    const raw = Array.isArray(mapping) ? mapping[0] : mapping;
-    const host_port = extractPort(mapping);
-    if (host_port === undefined) {
-      const port = raw && typeof raw === 'object' ? raw.host_port ?? raw.HostPort : raw;
-      if (port !== 0 && port !== '0') malformed = true;
+    const normalized = normalizePortMapping(mapping);
+    if (!normalized) {
+      if (normalized === undefined) malformed = true;
       return [];
     }
-    const host = raw && typeof raw === 'object' ? raw.host_ip ?? raw.HostIp : undefined;
-    return [[key, { host_port, ...(typeof host === 'string' ? { host_ip: host } : {}) }]];
+    return [[key, normalized]];
   }));
   // A malformed inventory is not evidence of an internal-only service.
   return malformed && Object.keys(normalized).length === 0 ? undefined : normalized;

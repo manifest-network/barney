@@ -67,10 +67,9 @@ export function isUnsettledProvisionStatus(status: string | undefined): boolean 
  */
 export function classifyProvisionStatus(status: string | undefined): ProvisionState | undefined {
   // Sanitization is only for display. Match the provider's raw vocabulary.
-  const reading = status;
-  if (reading === undefined) return undefined;
-  if (PROVISION_SUCCESS.has(reading)) return 'confirmed';
-  if (PROVISION_VERDICT_FAILED.has(reading)) return 'failed';
-  if (PROVISION_IN_PROGRESS.has(reading) || reading === PROVISION_RETAINED) return 'unconfirmed';
+  if (status === undefined || status === '') return undefined;
+  if (PROVISION_SUCCESS.has(status)) return 'confirmed';
+  if (PROVISION_VERDICT_FAILED.has(status)) return 'failed';
+  if (PROVISION_IN_PROGRESS.has(status) || status === PROVISION_RETAINED) return 'unconfirmed';
   return undefined;
 }
