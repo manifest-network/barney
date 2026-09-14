@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { AppCardConnection } from '../../contexts/aiTypes';
 import type { AppEntry } from '../../registry/appRegistry';
+import type { ConnectionDetails } from '../../api/provider-api';
 import { logError } from '../../utils/errors';
 import { extractPort } from './helpers';
 
@@ -22,10 +23,13 @@ const ports = z.record(z.string(), z.unknown()).transform((value) => {
 }).optional().catch(undefined);
 const instance = z.object({ fqdn: z.string().optional().catch(undefined), ports });
 const service = instance.extend({
-  instances: z.array(z.unknown()).transform((values) => values.flatMap((value) => {
-    const parsed = instance.safeParse(value);
-    return parsed.success ? [parsed.data] : [];
-  })).optional().catch(undefined),
+  instances: z.array(z.unknown()).transform((values) => {
+    const normalized = values.flatMap((value) => {
+      const parsed = instance.safeParse(value);
+      return parsed.success ? [parsed.data] : [];
+    });
+    return values.length > 0 && normalized.length === 0 ? undefined : normalized;
+  }).optional().catch(undefined),
 });
 const connectionSchema = service.extend({
   host: z.string().optional().catch(undefined),
@@ -39,7 +43,7 @@ const connectionSchema = service.extend({
 
 /** Registry connections can contain older provider shapes; only render validated fields. */
 export function appCardConnection(
-  connection: AppEntry['connection'],
+  connection: AppEntry['connection'] | ConnectionDetails,
   serviceNames?: readonly string[],
 ): AppCardConnection | undefined {
   if (!connection) return undefined;
@@ -52,12 +56,11 @@ export function appCardConnection(
   if (!serviceNames?.length) return normalized;
   const reportedNames = Object.keys(normalized.services ?? {});
   if (reportedNames.length > 0) {
-    const services = Object.fromEntries(Object.entries(normalized.services!).filter(([name]) => serviceNames.includes(name)));
-    // Hoisted flat fields may belong to an old service after a rename. Retain
-    // only the named records that still match the current lease/manifest.
+    // Lease items can be only partially named. Preserve the provider's named
+    // records, but do not attribute ambiguous hoisted fields after a rename.
     return reportedNames.some((name) => !serviceNames.includes(name))
-      ? { host: normalized.host, services }
-      : { ...normalized, services };
+      ? { host: normalized.host, services: normalized.services }
+      : normalized;
   }
   if (serviceNames.length === 1 && connection.services === undefined) {
     const { host, ...flat } = normalized;

@@ -51,6 +51,20 @@ describe('AppCard', () => {
     expect(container.textContent).toContain('running');
   });
 
+  it('distinguishes an empty instance inventory from a malformed endpoint', () => {
+    render(makeData({ connection: { services: {
+      cache: { instances: [] }, invalid: { fqdn: 'not_a_valid_host!' },
+    } } }));
+    expect(container.textContent).toContain('cache: No published ports.');
+    expect(container.textContent).toContain('Service details unavailable for: invalid.');
+  });
+
+  it('clears a saved custom-domain target when the live report no longer confirms it', () => {
+    dnsStatuses.set('lease-1::app.example.com', { kind: 'pending_dns', expectedCnameTarget: undefined });
+    render(makeData({ customDomain: { fqdn: 'app.example.com', leaseUuid: 'lease-1', serviceName: '', isApex: false, expectedCnameTarget: 'old.provider.example' } }));
+    expect(container.textContent).not.toContain('old.provider.example');
+  });
+
   it('renders a deployment port once when the named service supplies only an HTTP hostname', () => {
     render(makeData({ connection: {
       host: '203.0.113.10', ports: { '80/tcp': { host_port: 32000 } },

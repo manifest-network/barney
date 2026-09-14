@@ -62,7 +62,7 @@ export function useAppRecovery(address: string | undefined): void {
     const candidates = apps.flatMap(app => {
       if (!app.providerUrl || !app.chainState || app.chainState === 'absent'
         || app.provisionState === 'failed'
-        || (app.provisionState === 'confirmed' && app.url && app.connection)) return [];
+        || (app.provisionState === 'confirmed' && app.url && app.connection && !app.connectionStale)) return [];
       const snapshot = recoverySnapshotKey(app);
       let attempt = attemptsRef.current.get(app.leaseUuid);
       if (!attempt || attempt.snapshot !== snapshot) {

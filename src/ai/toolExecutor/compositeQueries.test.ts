@@ -1911,7 +1911,7 @@ describe('F4 — app_status records fred’s provision verdict', () => {
 
     const result = await run(registry);
 
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'failed' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active', provisionState: 'failed' });
     expect((result.data as any).status).toBe('failed');
   });
 

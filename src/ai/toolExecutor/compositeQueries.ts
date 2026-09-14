@@ -257,63 +257,37 @@ export async function executeAppStatus(
   else if (leaseState === LeaseState.LEASE_STATE_ACTIVE) {
     statusUnavailable = false;
     workloadStatusUnavailable = true;
-    let accessChanged = false;
-    if (!fredStatus || fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
+    if (fredStatus && isTerminalLeaseState(fredStatus.state)) {
+      workloadStatusUnavailable = false;
+      endpointInactive = true;
+      // A terminal provider-side lease is a workload verdict even when the
+      // chain still reports an active lease.
+      if (app.chainState !== 'active' || app.provisionState !== 'failed') {
+        recordObservation({ chainState: 'active', provisionState: 'failed' });
+      }
+    } else {
       const refresh = refreshAppConnection(fredStatus ?? undefined, refreshedConnection, app);
       appUrl = refresh.patch.url ?? appUrl;
       appConnection = refresh.patch.connection ?? appConnection;
-      accessChanged = Object.keys(refresh.patch).length > 0;
       endpointRefreshed = refresh.endpointRefreshed;
       providerEndpoint = refresh.providerEndpoint;
       connectionRefreshed = refresh.connectionRefreshed;
-    }
-    if (fredStatus) {
-      if (fredStatus.state === LeaseState.LEASE_STATE_ACTIVE) {
-        // TWO independent observations: the chain says the lease is ACTIVE, fred's
-        // `provision_status` says whatever it says. Recording both is what makes
-        // "the lease exists" and "the workload is up" separately expressible.
-        const observed = classifyProvisionStatus(fredStatus.provision_status);
-        // A reading with NO verdict fills a gap but must not RETRACT a
-        // confirmation: 'restarting' on a healthy app would drop it out of every
-        // tool that refuses a 'deploying' entry. A failure verdict is never
-        // suppressed — the predicate excludes them, which is why `failing`
-        // (container died) lands on a confirmed app.
-        const unsettled = isUnsettledProvisionStatus(fredStatus.provision_status);
-        const provisionState = unsettled && app.provisionState === 'confirmed' ? undefined : observed;
-        providerStatus = displayProvisionStatus(fredStatus.provision_status);
-        workloadStatusUnavailable = providerStatus === undefined;
-        const observationChanged =
-          app.chainState !== 'active' ||
-          (provisionState !== undefined && app.provisionState !== provisionState);
-        if (observationChanged || accessChanged) {
-          recordObservation({
-            chainState: 'active',
-            ...(provisionState !== undefined ? { provisionState } : {}),
-            ...(accessChanged ? { url: appUrl, connection: appConnection } : {}),
-          });
-        }
-      } else if (isTerminalLeaseState(fredStatus.state)) {
-        statusUnavailable = false;
-        workloadStatusUnavailable = false;
-        endpointInactive = true;
-        // The chain says ACTIVE but the PROVIDER says this lease is terminal —
-        // fred v0.13.0's explicitly-modelled anomaly (an ACTIVE lease whose
-        // workload is gone). A provider statement about a provider-side lease is
-        // a provisioning verdict, so it lands in `provisionState`, where it
-        // survives the next reconcile pass.
-        if (app.provisionState !== 'failed') {
-          recordObservation({ provisionState: 'failed' });
-        }
+      const accessChanged = Object.keys(refresh.patch).length > 0;
+      const observed = classifyProvisionStatus(fredStatus?.provision_status);
+      // Progress can fill a gap, but cannot retract a previous confirmation.
+      const unsettled = isUnsettledProvisionStatus(fredStatus?.provision_status);
+      const provisionState = unsettled && app.provisionState === 'confirmed' ? undefined : observed;
+      providerStatus = displayProvisionStatus(fredStatus?.provision_status);
+      workloadStatusUnavailable = providerStatus === undefined;
+      if (app.chainState !== 'active'
+          || (provisionState !== undefined && app.provisionState !== provisionState)
+          || accessChanged) {
+        recordObservation({
+          chainState: 'active',
+          ...(provisionState !== undefined ? { provisionState } : {}),
+          ...refresh.patch,
+        });
       }
-    } else if (app.chainState !== 'active' || accessChanged) {
-      // Fred unavailable but chain says active — trust the chain, and ONLY the
-      // chain: no provider evidence here, so `provisionState` is untouched. A
-      // flat `status: 'running'` would silently erase a provider `failed` verdict
-      // every time fred happened to be unreachable.
-      recordObservation({
-        chainState: 'active',
-        ...(accessChanged ? { url: appUrl, connection: appConnection } : {}),
-      });
     }
   }
   // Chain says PENDING: the lease exists but carries no workload yet. Recorded
@@ -381,7 +355,7 @@ export async function executeAppStatus(
       domains: customDomains.map(({ serviceName, customDomain }) => ({
         serviceName,
         customDomain,
-        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
+        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName, app.connectionStale && !connectionRefreshed),
       })),
       ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
     };
@@ -392,7 +366,7 @@ export async function executeAppStatus(
       fqdn: customDomain,
       leaseUuid: app.leaseUuid,
       serviceName,
-      expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
+      expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName, app.connectionStale && !connectionRefreshed),
       expectedAddress: address,
       ...(stackServiceNames.length > 0 ? { serviceNames: stackServiceNames } : {}),
     };
@@ -418,7 +392,7 @@ export async function executeAppStatus(
         fqdn: '',
         leaseUuid: app.leaseUuid,
         serviceName,
-        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName),
+        expectedCnameTarget: resolveExpectedCnameTarget(appConnection, serviceName, app.connectionStale && !connectionRefreshed),
         expectedAddress: address,
         ...(namedServiceNames.length > 0 ? { serviceNames: namedServiceNames } : {}),
       };

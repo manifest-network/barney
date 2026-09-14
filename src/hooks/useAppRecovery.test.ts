@@ -107,6 +107,16 @@ describe('useAppRecovery', () => {
     expect(registry.getApps(address).every(app => app.status === 'running')).toBe(true);
   });
 
+  it('refreshes invalidated connection metadata even for a confirmed app with a saved URL', async () => {
+    addApp({ provisionState: 'confirmed', url: 'https://new.example.com',
+      connection: { host: '', fqdn: 'old.example.com' }, connectionStale: true });
+    await render();
+    expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(1);
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({
+      connectionStale: false, connection: { fqdn: 'app.example.com' },
+    });
+  });
+
   it.each([false, true])('retires ready empty endpoint inventories, including blocked storage: %s', async blockedStorage => {
     if (blockedStorage) vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
     addApp();

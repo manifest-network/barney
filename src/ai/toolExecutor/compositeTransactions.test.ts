@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { formatConnectionUrl, extractPrimaryServicePorts, deriveUrlFromConnection } from './helpers';
+import { resolveExpectedCnameTarget } from '../../utils/connection';
 import {
   deriveAppName,
   extractUrlFromFredStatus,
@@ -6790,6 +6791,7 @@ describe('lifecycle connection observations', () => {
 
       expect(result.success).toBe(true);
       expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ url: app.url, connection: read === 'unreachable' ? app.connection : freshConnection });
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.connectionStale).toBe(read === 'unreachable');
       if (mode === 'deploy fallback' && result.success && !result.requiresConfirmation) {
         expect(result.displayCard?.type).toBe('app');
         if (result.displayCard?.type === 'app') expect(result.displayCard.data.connectionStale).toBe(read === 'unreachable');
@@ -6821,6 +6823,8 @@ describe('lifecycle connection observations', () => {
 
   it.each(['restart', 'batch restart', 'update'] as const)('adopts a fresh status endpoint after %s while preserving the last known connection inventory', async (mode) => {
     const app = previousApp();
+    app.connection!.fqdn = 'old.provider.example';
+    app.connection!.services = { web: { fqdn: 'old.provider.example' }, db: { fqdn: 'db.old.provider.example' } };
     const registry = makeRegistry([app]);
     vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('connection unavailable'));
     vi.mocked(waitForLeaseStatus).mockResolvedValue({
@@ -6834,6 +6838,10 @@ describe('lifecycle connection observations', () => {
     const updated = registry.getAppByLease(ADDRESS, app.leaseUuid)!;
     expect(updated.url).toBe(`https://${newFqdn}`);
     expect(updated.connection).toEqual(app.connection);
+    expect(updated.connectionStale).toBe(true);
+    expect(resolveExpectedCnameTarget(updated.connection, 'web', updated.connectionStale)).toBeUndefined();
+    expect(resolveExpectedCnameTarget(updated.connection, 'db', updated.connectionStale)).toBeUndefined();
+    expect(resolveExpectedCnameTarget(updated.connection, '', updated.connectionStale)).toBeUndefined();
   });
 
   describe.each(['restart', 'batch restart', 'update'] as const)('%s observers', (mode) => {

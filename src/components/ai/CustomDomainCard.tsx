@@ -162,7 +162,7 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
   const report = dnsStatuses.get(dnsStatusKey(data.leaseUuid, data.fqdn));
   const kind = report?.kind ?? 'pending_dns';
   const detail = report?.detail;
-  const target = report?.expectedCnameTarget ?? data.expectedCnameTarget;
+  const target = report ? report.expectedCnameTarget : data.expectedCnameTarget;
 
   // The stuck hint is purely a UI-side derivation: how long has this domain
   // been showing as pending_dns *since this card mounted*. The slice itself
@@ -304,7 +304,7 @@ function MultiDomainView({ data }: { data: CustomDomainCardData }) {
             <DomainRow
               key={d.customDomain}
               fqdn={d.customDomain}
-              expectedCnameTarget={report?.expectedCnameTarget ?? d.expectedCnameTarget}
+              expectedCnameTarget={report ? report.expectedCnameTarget : d.expectedCnameTarget}
               status={report?.kind ?? 'pending_dns'}
               detail={report?.detail}
               serviceName={d.serviceName !== '' ? d.serviceName : undefined}

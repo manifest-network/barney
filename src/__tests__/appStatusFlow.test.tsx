@@ -163,8 +163,10 @@ describe('sidebar selection → app_status → rendered conversation', () => {
 
     const toggle = domainAction();
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.hasAttribute('aria-controls')).toBe(false);
     await act(async () => { toggle.click(); });
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).not.toBeNull();
     if (domain) {
       expect(card.querySelector('.custom-domain-card')?.textContent).toContain(domain);
       expect(card.querySelector('.custom-domain-card')?.textContent).toContain('Remove');
@@ -183,15 +185,19 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     expect(streamChat).not.toHaveBeenCalled();
   });
 
-  it.each(['streaming', 'confirmation'])('disables sidebar selection with visible guidance during %s', async (mode) => {
+  it.each(['streaming', 'confirmation'])('explains a busy sidebar selection only after a click during %s', async (mode) => {
     await renderApp();
     act(() => { store.setState(mode === 'streaming' ? { isStreaming: true } : { pendingConfirmation: { id: 'pending' } as any }); });
     const button = container.querySelector<HTMLButtonElement>('.apps-sidebar__app-item')!;
-    expect(button.disabled).toBe(true);
+    expect(button.disabled).toBe(false);
+    expect(container.querySelector('.apps-sidebar__apps [role="status"]')).toBeNull();
+    expect(container.querySelector('.apps-sidebar__apps [role="alert"]')).toBeNull();
     await act(async () => { button.click(); });
     expect(onClose).not.toHaveBeenCalled();
     expect(appStatus).not.toHaveBeenCalled();
     expect(container.textContent).toContain(mode === 'streaming' ? 'Finish or cancel the current request' : 'Confirm or cancel the pending action');
+    act(() => { store.setState({ isStreaming: false, pendingConfirmation: null }); });
+    expect(container.querySelector('.apps-sidebar__apps [role="alert"]')).toBeNull();
   });
 
   it('keeps the sidebar open and explains a status request rejected during a wallet transition', async () => {
@@ -224,6 +230,108 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     expect(store.getState().messages.at(-1)?.error).toBeUndefined();
     expect(getAppByLease(ADDRESS, LEASE_UUID)?.provisionState).toBe('confirmed');
     expect(logError).not.toHaveBeenCalled();
+  });
+
+  it.each(['user cancellation', 'SDK abort'])('finishes every model tool reply after %s and sends valid history on the next turn', async (mode) => {
+    const calls = ['first', 'second', 'third'].map((id) => ({
+      id, type: 'function' as const, function: { name: 'app_status', arguments: { app_name: 'my-app' } },
+    }));
+    vi.mocked(streamChat).mockReset().mockImplementation(async function* () {
+      yield { type: 'content', content: 'Next reply.' };
+    }).mockImplementationOnce(async function* () {
+      for (const toolCall of calls) yield { type: 'tool_call', toolCall };
+    });
+    let resolve!: (result: StatusResult) => void;
+    if (mode === 'SDK abort') vi.mocked(appStatus).mockRejectedValue(Object.assign(new Error('Cancelled'), { name: 'AbortError' }));
+    else vi.mocked(appStatus).mockReturnValue(new Promise((done) => { resolve = done; }));
+    await renderApp();
+    let request!: Promise<boolean>;
+    await act(async () => {
+      request = store.getState().sendMessage('Check the app');
+      await vi.waitFor(() => expect(appStatus).toHaveBeenCalledTimes(1));
+      if (mode === 'user cancellation') store.getState().stopStreaming();
+      await request;
+    });
+    expect(store.getState().isStreaming).toBe(false);
+    expect(store.getState().messages.some((message) => message.isStreaming)).toBe(false);
+    expect(store.getState().messages.filter((message) => message.role === 'tool')).toEqual(calls.map((call) => expect.objectContaining({
+      toolCallId: call.id, content: 'Tool call cancelled.', isStreaming: false, error: undefined,
+    })));
+    expect(container.querySelector('.message-tool [role="status"]')).toBeNull();
+    expect(streamChat).toHaveBeenCalledTimes(1);
+    expect(logError).not.toHaveBeenCalled();
+    if (mode === 'user cancellation') await act(async () => { resolve(statusResult()); });
+    expect(store.getState()._toolCache.size).toBe(0);
+
+    await act(async () => {
+      store.setState({ lastMessageTime: 0 });
+      await store.getState().sendMessage('Continue');
+    });
+    const history = vi.mocked(streamChat).mock.calls[1][0].messages;
+    const assistantIndex = history.findIndex((message) => message.tool_calls?.length === 3);
+    expect(assistantIndex).toBeGreaterThan(0);
+    expect(history.slice(assistantIndex + 1, assistantIndex + 4)).toEqual(calls.map((call) => ({
+      role: 'tool', tool_call_id: call.id, content: 'Tool call cancelled.',
+    })));
+  });
+
+  it('keeps keyboard focus on the selected app while ignoring duplicate clicks', async () => {
+    let resolve!: (result: StatusResult) => void;
+    vi.mocked(appStatus).mockReturnValue(new Promise((done) => { resolve = done; }));
+    await renderApp();
+    const button = container.querySelector<HTMLButtonElement>('.apps-sidebar__app-item')!;
+    button.focus();
+    await act(async () => { button.click(); });
+    expect(document.activeElement).toBe(button);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    await act(async () => { button.click(); });
+    expect(appStatus).toHaveBeenCalledTimes(1);
+    await act(async () => { resolve(statusResult()); });
+    expect(document.activeElement).toBe(button);
+    expect(button.hasAttribute('aria-disabled')).toBe(false);
+  });
+
+  it('uses provider progress and fresh connections even when its lease view still says pending', async () => {
+    vi.mocked(appStatus).mockResolvedValue(statusResult({ fredStatus: { state: 1, provision_status: 'provisioning' } as StatusResult['fredStatus'] }));
+    await selectApp({ chainState: 'pending', provisionState: 'unconfirmed' });
+    expect(overview().textContent).toContain('Provider status: provisioning');
+    expect(overview().textContent).not.toContain('Workload status unavailable');
+    expect(overview().textContent).not.toContain('Last known');
+    expect(overview().querySelector('.app-card__link')?.textContent).toBe('https://deployed.provider.example');
+    expect(getAppByLease(ADDRESS, LEASE_UUID)?.chainState).toBe('active');
+  });
+
+  it('recognizes a status endpoint that corroborates the saved URL while keeping service details stale', async () => {
+    vi.mocked(appStatus).mockResolvedValue(statusResult({ connection: undefined,
+      fredStatus: { state: 2, provision_status: 'ready', endpoints: { '80/tcp': 'http://saved.example.com:32000' } } as StatusResult['fredStatus'],
+    }));
+    await selectApp({ url: 'https://saved.example.com', connection: { host: '203.0.113.10', ports: { '80/tcp': { host_port: 32000 } } } });
+    expect(overview().textContent).not.toContain('Last known endpoint');
+    expect(overview().textContent).toContain('Last known service details');
+    expect(overview().querySelector('.app-card__link')?.textContent).toBe('https://saved.example.com');
+  });
+
+  it('retains all provider service records when chain items are only partly named', async () => {
+    const result = statusResult({ connection: { host: '203.0.113.10', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } }, services: {
+      web: { fqdn: 'web.provider.example' }, db: { ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32001 } } },
+    } } });
+    result.chainState.items = ['web', ''].map((serviceName) => ({ ...result.chainState.items[0], serviceName }));
+    vi.mocked(appStatus).mockResolvedValue(result);
+    await selectApp();
+    const groups = Array.from(overview().querySelectorAll('.app-card__service-ports'));
+    expect(groups.map((group) => group.querySelector('.app-card__service-name')?.textContent)).toEqual(['web', 'db']);
+    expect(groups[1].textContent).toContain('5432/tcp → 203.0.113.10:32001');
+  });
+
+  it('bounds and sanitizes provider status in both the card and the model tool result', async () => {
+    const raw = `future\u202E\u0000${'status '.repeat(1000)}`;
+    vi.mocked(appStatus).mockResolvedValue(statusResult({ fredStatus: { state: 2, provision_status: raw } as StatusResult['fredStatus'] }));
+    await selectApp();
+    const reading = JSON.parse(store.getState().messages.at(-1)!.content).provision_status;
+    expect(reading.length).toBeLessThanOrEqual(65);
+    expect(reading).not.toContain('\u202E');
+    expect(reading).not.toContain('\u0000');
+    expect(overview().textContent).toContain(`Provider status: ${reading}`);
   });
 
   it('explains a Stop click on a deploy-success card after the lease has closed', async () => {
@@ -636,7 +744,7 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     expect(overview().textContent).toContain('203.0.113.10:32000');
   });
 
-  it.each(['web', 'app'])('uses current lease service names with a %s manifest and stale connection inventory', async (manifestName) => {
+  it.each(['web', 'app'])('distinguishes current lease services from saved named records with a %s manifest', async (manifestName) => {
     const result = statusResult({ connection: undefined });
     result.chainState.items[0].serviceName = 'app';
     vi.mocked(appStatus).mockResolvedValue(result);
@@ -648,8 +756,9 @@ describe('sidebar selection → app_status → rendered conversation', () => {
       } },
     });
     expect(overview().textContent).toContain('Service details unavailable for: app.');
-    expect(overview().querySelector('.app-card__service-ports')).toBeNull();
-    expect(overview().textContent).not.toContain('32000');
+    expect(overview().querySelector('.app-card__service-ports .app-card__service-name')?.textContent).toBe('web');
+    expect(overview().querySelector<HTMLDetailsElement>('.app-card__saved-connections')?.open).toBe(false);
+    expect(overview().querySelectorAll('.app-card__port')).toHaveLength(1);
   });
 
   it.each([{ HostIp: '0.0.0.0', HostPort: '32000' }, [{ HostIp: '0.0.0.0', HostPort: '32000' }], 32000])('renders legacy saved mappings consistently with the derived URL (%j)', async (mapping) => {

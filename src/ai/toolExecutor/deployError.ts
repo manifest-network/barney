@@ -309,7 +309,7 @@ export async function handleDeployManifestError(
       // provider never confirmed readiness and a chain read may not claim it.
       const updated = appRegistry.updateApp(address, leaseUuid, {
         chainState: 'active',
-        ...connectionPatch({ url: connectionUrl, connection }),
+        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }),
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
       return {

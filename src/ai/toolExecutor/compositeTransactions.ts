@@ -1479,7 +1479,7 @@ export async function executeConfirmedRestartApp(
       // Provider observation: the wait resolved non-terminal — the workload is up.
       appRegistry.updateApp(address, leaseUuid, {
         provisionState: 'confirmed',
-        ...connectionPatch({ url: connectionUrl, connection }),
+        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }),
       });
       onProgress?.({ phase: 'ready', operation: 'restart' });
 
@@ -1611,7 +1611,7 @@ async function executeConfirmedBatchRestart(
 
           appRegistry.updateApp(address, entry.leaseUuid, {
             provisionState: 'confirmed',
-            ...connectionPatch({ url: connectionUrl, connection }),
+            ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }),
           });
           updateProgress('ready', 'App is live!');
           return { name, url: connectionUrl ?? previous?.url };
@@ -2117,7 +2117,7 @@ export async function executeConfirmedUpdateApp(
       // /provision read above carried no failure signal.
       appRegistry.updateApp(address, leaseUuid, {
         provisionState: 'confirmed',
-        ...connectionPatch({ url: connectionUrl, connection }),
+        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }),
       });
       onProgress?.({ phase: 'ready', operation: 'update' });
 
@@ -2308,7 +2308,7 @@ export async function executeSetCustomDomain(
     }
   }
 
-  const expectedCnameTarget = resolveExpectedCnameTarget(app.connection, serviceName);
+  const expectedCnameTarget = resolveExpectedCnameTarget(app.connection, serviceName, app.connectionStale);
 
   let confirmationMessage: string;
   if (customDomain === '') {

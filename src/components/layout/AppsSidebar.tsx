@@ -70,6 +70,11 @@ interface WalletSnapshot<T> {
   value: T;
 }
 
+interface StatusSelectionFeedback {
+  message: string;
+  blockedBy?: 'request' | 'confirmation';
+}
+
 interface CreditEstimateSnapshot {
   hoursRemaining: number | null;
   burnRate: number | null;
@@ -117,7 +122,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   // until the current A lifecycle successfully refreshes them.
   const walletContext = useMemo(() => ({ address }), [address]);
   const [statusSelection, setStatusSelection] = useState<WalletSnapshot<string> | null>(null);
-  const [statusSelectionError, setStatusSelectionError] = useState<WalletSnapshot<string> | null>(null);
+  const [statusSelectionError, setStatusSelectionError] = useState<WalletSnapshot<StatusSelectionFeedback> | null>(null);
   const [appsSnapshot, setAppsSnapshot] =
     useState<WalletSnapshot<AppEntry[]> | null>(null);
   const [creditBalanceSnapshot, setCreditBalanceSnapshot] =
@@ -405,8 +410,11 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
   );
 
   const selectedStatusApp = currentWalletValue(statusSelection, walletContext);
-  const statusError = currentWalletValue(statusSelectionError, walletContext);
-  const selectionBlocked = !!selectedStatusApp || isStreaming || !!pendingConfirmation;
+  const statusFeedback = currentWalletValue(statusSelectionError, walletContext);
+  const statusError = (statusFeedback?.blockedBy === 'request' && !isStreaming)
+    || (statusFeedback?.blockedBy === 'confirmation' && !pendingConfirmation)
+    ? undefined : statusFeedback?.message;
+  const selectionBlocked = !!selectedStatusApp;
 
   return (
     <div className="apps-sidebar">
@@ -499,11 +507,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
         </div>
         <div className="apps-sidebar__apps-list">
           {statusError && <p className="apps-sidebar__apps-empty" role="alert">{statusError}</p>}
-          {selectionBlocked && <p className="apps-sidebar__apps-empty" role="status">
-            {selectedStatusApp
-              ? `Checking status of ${selectedStatusApp}…`
-              : pendingConfirmation ? 'Confirm or cancel the pending action to select an app.' : 'Finish or cancel the current request to select an app.'}
-          </p>}
+          {selectedStatusApp && <p className="apps-sidebar__apps-empty" role="status">Checking status of {selectedStatusApp}…</p>}
           {runningApps.length === 0 ? (
             <p className="apps-sidebar__apps-empty">No running apps</p>
           ) : (
@@ -547,19 +551,26 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                 <button
                   key={app.leaseUuid}
                   type="button"
-                  disabled={selectionBlocked}
+                  aria-disabled={selectionBlocked || undefined}
                   onClick={async () => {
+                    if (selectionBlocked) return;
                     const context = walletContext;
+                    if (isStreaming || pendingConfirmation) {
+                      setStatusSelectionError({ context, value: { blockedBy: pendingConfirmation ? 'confirmation' : 'request', message: pendingConfirmation
+                        ? 'Confirm or cancel the pending action to select an app.'
+                        : 'Finish or cancel the current request to select an app.' } });
+                      return;
+                    }
                     setStatusSelection({ context, value: app.name });
                     setStatusSelectionError(null);
                     try {
                       const accepted = await requestAppStatus(app.name);
                       if (currentWalletContextRef.current !== context) return;
                       if (accepted) onClose?.();
-                      else setStatusSelectionError({ context, value: 'Could not start the status check. Try selecting the app again.' });
+                      else setStatusSelectionError({ context, value: { message: 'Could not start the status check. Try selecting the app again.' } });
                     } catch (error) {
                       logError('AppsSidebar.appStatus', error);
-                      if (currentWalletContextRef.current === context) setStatusSelectionError({ context, value: 'Could not check app status. Please try again.' });
+                      if (currentWalletContextRef.current === context) setStatusSelectionError({ context, value: { message: 'Could not check app status. Please try again.' } });
                     } finally {
                       if (currentWalletContextRef.current === context) setStatusSelection(null);
                     }

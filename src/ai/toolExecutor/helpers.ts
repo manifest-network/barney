@@ -206,15 +206,17 @@ export function deriveUrlFromConnection(
 /**
  * A returned connection is an independent observation, including an empty or
  * unassigned inventory. Preserve old inventory only when no connection was read.
- * A new primary URL alone must not erase service names or DNS targets.
+ * Lifecycle callers invalidate saved DNS evidence without erasing the inventory.
  */
 export function connectionPatch(
-  { url, connection }: { url?: string; connection?: ConnectionDetails },
-): Pick<AppEntry, 'url' | 'connection'> {
-  const patch: Pick<AppEntry, 'url' | 'connection'> = {};
+  { url, connection, connectionStale }: { url?: string; connection?: ConnectionDetails; connectionStale?: boolean },
+): Pick<AppEntry, 'url' | 'connection' | 'connectionStale'> {
+  const patch: Pick<AppEntry, 'url' | 'connection' | 'connectionStale'> = {};
   if (url !== undefined) patch.url = url;
+  if (connectionStale !== undefined) patch.connectionStale = connectionStale;
   if (connection) {
     patch.connection = JSON.parse(JSON.stringify(connection));
+    patch.connectionStale = false;
   }
   return patch;
 }

@@ -471,7 +471,9 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     // its non-idempotent SDK/chain call.
     assertAuthorization();
     // A confirmed operation can invalidate status, endpoints, logs, and balances
-    // even if the response is lost. Never replay a pre-operation query result.
+    // even if the response is lost. Clear before dispatch so failures and wallet
+    // changes cannot leave old results behind; isStreaming excludes new queries
+    // until execution ends. Cross-tool invalidation is intentional.
     get().clearToolCache();
     const result = await executeConfirmedTool(
       action.toolName,

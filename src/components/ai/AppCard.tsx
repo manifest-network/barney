@@ -26,7 +26,6 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
   const { name, status, providerStatus, customDomain, statusUnavailable, endpointStale, providerEndpoint, connectionStale, endpointInactive, url, connection, domainManagement } = data;
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const requestStopApp = useAIStore((state) => state.requestStopApp);
-  const actionPending = useAIStore((state) => state.isStreaming || !!state.pendingConfirmation);
   const domainReport = useAIStore((state) => customDomain
     ? state.dnsStatuses.get(dnsStatusKey(customDomain.leaseUuid, customDomain.fqdn))
     : undefined);
@@ -48,7 +47,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
     const fqdn = reportedFqdn && isValidFqdn(reportedFqdn) ? reportedFqdn : undefined;
     if (svcPorts || fqdn) {
       servicePortGroups.push({ serviceName, ports: Object.entries(svcPorts ?? {}), fqdn });
-    } else if (svc && (Object.keys(svc).length === 0 || svc.ports || svc.instances?.length)) {
+    } else if (svc && (Object.keys(svc).length === 0 || svc.ports || svc.instances !== undefined)) {
       internalServices.push(serviceName);
     } else {
       missingServices.push(serviceName);
@@ -166,7 +165,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
         <div className="app-card__domain">
           <DomainRow
             fqdn={customDomain.fqdn}
-            expectedCnameTarget={domainReport?.expectedCnameTarget ?? customDomain.expectedCnameTarget}
+            expectedCnameTarget={domainReport ? domainReport.expectedCnameTarget : customDomain.expectedCnameTarget}
             status={domainReport?.kind ?? 'pending_dns'}
             detail={domainReport?.detail}
             serviceName={customDomain.serviceName !== '' ? customDomain.serviceName : undefined}
@@ -185,8 +184,6 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
           <button
             type="button"
             onClick={handleStop}
-            disabled={actionPending}
-            title={actionPending ? 'Finish or cancel the current request first.' : undefined}
             className="btn btn-ghost btn-sm"
           >
             <Square className="w-3.5 h-3.5" aria-hidden="true" />
@@ -198,7 +195,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
             type="button"
             className="btn btn-ghost btn-sm"
             aria-expanded={showDomains}
-            aria-controls={domainsId}
+            aria-controls={showDomains ? domainsId : undefined}
             onClick={() => setShowDomains(!showDomains)}
           >
             <Globe className="w-3.5 h-3.5" aria-hidden="true" />

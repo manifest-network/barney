@@ -106,8 +106,9 @@ export function resolveExpectedCnameTarget(
       }
     | undefined,
   serviceName: string,
+  connectionStale = false,
 ): string | undefined {
-  if (!connection) return undefined;
+  if (!connection || connectionStale) return undefined;
 
   const normalize = (value?: string): string | undefined => {
     if (!value) return undefined;

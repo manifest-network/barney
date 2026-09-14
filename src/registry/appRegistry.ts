@@ -38,6 +38,9 @@ export const AppEntrySchema = z.object({
     metadata: z.record(z.string(), z.string()).optional(),
     services: z.record(z.string(), z.unknown()).optional(),
   }).optional(),
+  /** A lifecycle operation may have replaced the saved service addresses.
+   * Keep the inventory for reference, but do not use it as current DNS evidence. */
+  connectionStale: z.boolean().optional(),
   /** DERIVED from the two observations below; a passed-in `status` is only rule 5's fallback. */
   status: z.enum(APP_STATUSES),
   /** Chain observation. ABSENT (undefined) = never observed, which is what every pre-existing entry is. */

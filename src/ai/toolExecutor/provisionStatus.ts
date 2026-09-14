@@ -13,6 +13,7 @@ import {
   PROVISION_IN_PROGRESS,
 } from '@manifest-network/manifest-sdk/deploy';
 import type { ProvisionState } from '../../registry/appRegistry';
+import { PROVISION_STATUS_CHARS, sanitizeForDisplay } from '../../utils/sanitizeText';
 
 /** fred's soft-delete: the workload is torn down and only its volumes are kept
  *  (restore needs a fresh lease). The SDK models it, but does not export the set. */
@@ -33,9 +34,9 @@ const PROVISION_VERDICT_FAILED: ReadonlySet<string> = new Set([...PROVISION_FAIL
 
 /** Display provider progress even when it cannot retract a registry verdict.
  * Only absent readings lack display information; unknown and future values remain
- * visible verbatim without inventing a registry classification. */
+ * visible within display limits without inventing a registry classification. */
 export function displayProvisionStatus(status: string | undefined): string | undefined {
-  return status === undefined || status === '' ? undefined : status;
+  return status === undefined || status === '' ? undefined : sanitizeForDisplay(status, PROVISION_STATUS_CHARS);
 }
 
 /**
@@ -65,7 +66,8 @@ export function isUnsettledProvisionStatus(status: string | undefined): boolean 
  * future values this client does not model.
  */
 export function classifyProvisionStatus(status: string | undefined): ProvisionState | undefined {
-  const reading = displayProvisionStatus(status);
+  // Sanitization is only for display. Match the provider's raw vocabulary.
+  const reading = status;
   if (reading === undefined) return undefined;
   if (PROVISION_SUCCESS.has(reading)) return 'confirmed';
   if (PROVISION_VERDICT_FAILED.has(reading)) return 'failed';

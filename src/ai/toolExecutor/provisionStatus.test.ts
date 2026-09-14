@@ -22,6 +22,11 @@ describe('classifyProvisionStatus', () => {
     expect(classifyProvisionStatus('retained')).toBe('unconfirmed');
   });
 
+  it('does not classify sanitized text as a provider verdict', () => {
+    expect(displayProvisionStatus('ready\u202E')).toBe('ready');
+    expect(classifyProvisionStatus('ready\u202E')).toBeUndefined();
+  });
+
   it('treats `failing` as the failure verdict it is', () => {
     // fred enters Failing ONLY from Ready, on evContainerDied, writing
     // Reason: ContainerExited synchronously before the async flip to `failed`.

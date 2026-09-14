@@ -129,6 +129,9 @@ export async function executeTool(
           return { success: false, error: `Unknown TX tool: ${toolName}` };
       }
     } catch (error) {
+      // Planning has not submitted a transaction; the chat orchestrator can
+      // close the entire tool-call group on cancellation, just as for queries.
+      if (isAbortError(error)) throw error;
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -141,6 +144,7 @@ export async function executeTool(
     try {
       return await executeCosmosQuery(args, clientManager);
     } catch (error) {
+      if (isAbortError(error)) throw error;
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',

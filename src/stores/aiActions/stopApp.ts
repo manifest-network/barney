@@ -22,17 +22,21 @@ type Set = (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) 
 
 export function requestStopAppFn(get: Get, set: Set, appName: string): void {
   const { isStreaming, address, pendingConfirmation } = get();
-  // Silent no-op while another confirmation card is open. Without this gate,
-  // clicking Stop on app B while a Stop-A / Deploy-X confirmation is already
-  // pending overwrites `pendingConfirmation` and orphans the prior tool
-  // message (`awaitingConfirmation: true`, no confirm/cancel path — chat
-  // wedged). Matches the standard modal-overlay UX: background clicks are
-  // inert. See PR #93 Copilot 3248436550.
-  if (isStreaming || !address || pendingConfirmation !== null) return;
+  // Keep the existing request/confirmation intact, and explain an intentional
+  // click without disabling every historical card throughout a chat reply.
+  if (isStreaming || pendingConfirmation !== null) {
+    get().addLocalMessage(pendingConfirmation
+      ? 'Confirm or cancel the pending action before stopping an app.'
+      : 'Finish or cancel the current request before stopping an app.');
+    return;
+  }
 
   const registry = getAppRegistryAccess();
   const authorization = captureTransactionAuthorization(get());
-  if (!authorization) return;
+  if (!authorization || !address) {
+    get().addLocalMessage('Your wallet is not ready to stop an app. Wait for it to connect, then try again.');
+    return;
+  }
   const app = registry.findApp(address, appName);
   if (!app) {
     get().addLocalMessage(`App "${appName}" is no longer in this wallet's app list.`);

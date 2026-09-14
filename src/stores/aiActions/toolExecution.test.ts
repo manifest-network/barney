@@ -180,6 +180,39 @@ describe('processToolCallsFn', () => {
     expect(toolMsg!.isStreaming).toBe(false);
   });
 
+  it('cancels collected confirmations and unstarted calls when a later query aborts', async () => {
+    const previousReply = makeMessage({ id: 'old', role: 'tool', toolCallId: 'query', content: 'Earlier result.' });
+    state.messages = [previousReply, makeMessage({ id: 'asst_1', isStreaming: true })];
+    const toolCalls = [makeToolCall({ id: 'stop', function: { name: 'stop_app', arguments: { app_name: 'web' } } }),
+      makeToolCall({ id: 'query' }), makeToolCall({ id: 'unstarted' })];
+    vi.mocked(executeTool).mockResolvedValueOnce({
+      success: true, requiresConfirmation: true, confirmationMessage: 'Stop web?',
+      pendingAction: { toolName: 'stop_app', args: { app_name: 'web' } },
+    }).mockRejectedValueOnce(new DOMException('Aborted', 'AbortError'));
+    const result = await processToolCallsFn(get, set, toolCalls, 'asst_1', { content: '', thinking: '', toolCalls });
+    expect(result.shouldContinue).toBe(false);
+    expect(state.pendingConfirmation).toBeNull();
+    expect(state.messages[0]).toBe(previousReply);
+    expect(state.messages.slice(1).filter((message) => message.role === 'tool')).toEqual(toolCalls.map((call) => expect.objectContaining({
+      toolCallId: call.id, content: 'Tool call cancelled.', isStreaming: false,
+    })));
+    expect(executeTool).toHaveBeenCalledTimes(2);
+  });
+
+  it('finalizes interrupted replies on unexpected errors without changing completed results', async () => {
+    state.messages = [makeMessage({ id: 'asst_1', isStreaming: true })];
+    const toolCalls = ['complete', 'failed', 'skipped'].map((id) => makeToolCall({ id, function: { name: 'list_apps', arguments: { id } } }));
+    vi.mocked(executeTool).mockResolvedValueOnce({ success: true, data: { found: true } })
+      .mockRejectedValueOnce(new Error('Unexpected dispatch error'));
+    await expect(processToolCallsFn(get, set, toolCalls, 'asst_1', { content: '', thinking: '', toolCalls })).rejects.toThrow('Unexpected dispatch error');
+    const replies = state.messages.filter((message) => message.role === 'tool');
+    expect(replies).toHaveLength(3);
+    expect(JSON.parse(replies[0].content)).toEqual({ found: true });
+    expect(replies.every((message) => !message.isStreaming)).toBe(true);
+    expect(replies[1].error).toBeTruthy();
+    expect(executeTool).toHaveBeenCalledTimes(2);
+  });
+
   it('returns cached result without executing', async () => {
     const cachedResult: ToolResult = { success: true, data: { cached: true } };
     const toolCall = makeToolCall({ function: { name: 'list_apps', arguments: {} } });

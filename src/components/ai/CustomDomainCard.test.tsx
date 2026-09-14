@@ -137,6 +137,16 @@ describe('CustomDomainCard', () => {
     expect(container.textContent).not.toContain('stale.target.host');
   });
 
+  it.each([false, true])('does not restore an invalidated DNS target from the saved card (multiple domains: %s)', (multiple) => {
+    dnsStatuses.set('lease-1::app.example.com', { kind: 'pending_dns', expectedCnameTarget: undefined });
+    const data = makeData({ expectedCnameTarget: 'stale.target.host', ...(multiple ? { domains: [
+      { serviceName: 'web', customDomain: 'app.example.com', expectedCnameTarget: 'stale.target.host' },
+      { serviceName: 'api', customDomain: 'api.example.com', expectedCnameTarget: 'api.target.host' },
+    ] } : {}) });
+    flushSync(() => { root.render(createElement(CustomDomainCard, { data })); });
+    expect(container.textContent).not.toContain('stale.target.host');
+  });
+
   it('shows service name when present', () => {
     flushSync(() => {
       root.render(createElement(CustomDomainCard, { data: makeData({ serviceName: 'web' }) }));
