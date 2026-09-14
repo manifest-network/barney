@@ -20,7 +20,7 @@ import { getLeaseProvision, type FredLeaseStatus } from '../../api/fred';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits, toBaseUnits } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
-import { withTimeout } from '../../api/utils';
+import { isAbortError, withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
 import { connectionPatch, deriveUrlFromConnection, failureText } from './helpers';
 import { normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
@@ -72,20 +72,6 @@ export type { BatchDeployEntry, BatchDeployPlan, BatchDeployPlanEntry } from './
 export type BatchDeployToolResult = ToolResult & {
   rejectedEntries?: readonly BatchDeployEntryRejection[];
 };
-
-/**
- * Was the thrown thing ITSELF an abort?
- *
- * Deliberately NOT `signal?.aborted`: any new user message aborts the shared
- * chat controller, so a genuine `ProviderApiError(500)` landing while the user
- * types would otherwise be reported as "cancelled before the provider was
- * asked" and never recorded. Two arms because `throwIfAborted()` raises a
- * `DOMException`, but some polyfills raise a plain `Error` with that name.
- */
-function isAbortError(error: unknown): boolean {
-  if (error instanceof DOMException && error.name === 'AbortError') return true;
-  return error instanceof Error && error.name === 'AbortError';
-}
 
 /**
  * Read the SDK's structured transaction-cancellation verdict without relying

@@ -27,6 +27,7 @@ import {
   trimMessages,
   createAssistantMessage,
   getAppRegistryAccess,
+  clearStaleDeployProgress,
 } from './utils';
 
 type Get = () => AIStore;
@@ -56,11 +57,7 @@ async function handleToolCall(
   const cachedResult = get().getCachedToolResult(cacheKey);
   if (cachedResult) return { result: cachedResult, authorization: null };
 
-  // Clear stale deploy progress, but preserve active deploys
-  const { deployProgress } = get();
-  if (!deployProgress || deployProgress.phase === 'ready' || deployProgress.phase === 'failed') {
-    set({ deployProgress: null });
-  }
+  clearStaleDeployProgress(get, set);
 
   const { clientManager, address, signing, abortController, pendingPayload, skuTiers } = get();
   const authorization = captureTransactionAuthorization(get());

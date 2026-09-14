@@ -5,7 +5,7 @@ import { isAbortError, withAbort } from '../../api/utils';
 import { walletIdentityMatches } from '../../utils/walletIdentity';
 import { bigIntReplacer } from '../../utils/json';
 import { logError } from '../../utils/errors';
-import { generateMessageId, getAppRegistryAccess, trimMessages } from './utils';
+import { clearStaleDeployProgress, generateMessageId, getAppRegistryAccess, trimMessages } from './utils';
 
 type Get = () => AIStore;
 type Set = (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) => void;
@@ -30,10 +30,10 @@ export async function requestAppStatusFn(get: Get, set: Set, appName: string): P
   const toolMessageId = generateMessageId();
   const toolDescription = getToolCallDescription('app_status', args);
   const timestamp = Date.now();
+  clearStaleDeployProgress(get, set);
   set({
     isStreaming: true,
     abortController: abort,
-    ...(!state.deployProgress || ['ready', 'failed'].includes(state.deployProgress.phase) ? { deployProgress: null } : {}),
     messages: trimMessages([...state.messages,
       { id: generateMessageId(), role: 'user', content: `What's the status of ${app.name}?`, timestamp },
       {

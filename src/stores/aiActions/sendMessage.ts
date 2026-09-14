@@ -20,6 +20,7 @@ import {
   trimMessages,
   createAssistantMessage,
   toChatApiMessages,
+  clearStaleDeployProgress,
 } from './utils';
 
 type Get = () => AIStore;
@@ -107,11 +108,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
 
   set({ messages: trimMessages([...get().messages, userMessage]) });
 
-  // Clear stale deploy progress
-  const { deployProgress } = get();
-  if (!deployProgress || deployProgress.phase === 'ready' || deployProgress.phase === 'failed') {
-    set({ deployProgress: null });
-  }
+  clearStaleDeployProgress(get, set);
 
   const abort = new AbortController();
   set({ abortController: abort });
