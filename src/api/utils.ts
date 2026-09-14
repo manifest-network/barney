@@ -121,6 +121,26 @@ export async function withTimeout<T>(
   }
 }
 
+/** Stop awaiting SDK work on cancellation without shortening its own deadlines. */
+export async function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort);
+  });
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
+export function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === 'AbortError') return true;
+  return error instanceof Error && error.name === 'AbortError';
+}
+
 /**
  * Throw an AbortError if the signal is already aborted. Use at executor entry
  * and between major await chains to short-circuit cancelled work.

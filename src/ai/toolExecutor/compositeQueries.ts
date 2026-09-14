@@ -231,6 +231,7 @@ export async function executeAppStatus(
   let appUrl = app.url;
   let appConnection = app.connection;
   let endpointRefreshed = false;
+  let providerEndpoint: string | undefined;
   let connectionRefreshed = false;
   let statusUnavailable = true;
   let providerStatus: string | undefined;
@@ -260,6 +261,7 @@ export async function executeAppStatus(
       appConnection = refresh.patch.connection ?? appConnection;
       accessChanged = Object.keys(refresh.patch).length > 0;
       endpointRefreshed = refresh.endpointRefreshed;
+      providerEndpoint = refresh.providerEndpoint;
       connectionRefreshed = refresh.connectionRefreshed;
     }
     if (fredStatus) {
@@ -421,12 +423,15 @@ export async function executeAppStatus(
 
   const endpointStale = !endpointRefreshed && !!connectionUrl;
   const connectionStale = !endpointInactive && !connectionRefreshed && !!appConnection;
+  const namedLeaseServices = leaseItems.map((item) => item.serviceName).filter(Boolean);
+  const serviceNames = namedLeaseServices.length > 0 ? namedLeaseServices : stackServiceNames;
   const data: ToolData<'app_status'> = {
     name: app.name,
     status: currentStatus,
     provision_status: providerStatus,
     statusUnavailable,
     endpointStale,
+    providerEndpoint,
     connectionStale,
     endpointInactive,
     size: app.size,
@@ -451,13 +456,11 @@ export async function executeAppStatus(
         statusUnavailable,
         url: data.url,
         endpointStale,
+        providerEndpoint,
         connectionStale,
         endpointInactive,
-        connection: endpointInactive ? undefined : appCardConnection(appConnection),
-        serviceNames: endpointInactive ? [] : [...new Set([
-          ...stackServiceNames,
-          ...(leaseItems.length > 1 ? leaseItems.map((item) => item.serviceName).filter(Boolean) : []),
-        ])],
+        connection: endpointInactive ? undefined : appCardConnection(appConnection, serviceNames),
+        serviceNames: endpointInactive ? [] : [...new Set(serviceNames)],
         domainManagement: endpointInactive ? undefined : domainManagement,
       },
     },

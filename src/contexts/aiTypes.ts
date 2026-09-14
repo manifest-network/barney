@@ -58,7 +58,7 @@ export interface AppCardServiceInfo {
 /** Connection metadata embedded in an AppCard. Mirrors `AppEntry.connection`
  *  but typed to what AppCard actually uses. */
 export interface AppCardConnection {
-  host: string;
+  host?: string;
   fqdn?: string;
   ports?: Record<string, AppCardPortMapping>;
   instances?: { fqdn?: string; ports?: Record<string, AppCardPortMapping> }[];
@@ -87,6 +87,7 @@ export interface AppCardData {
   /** The recorded status could not be confirmed against the current workload. */
   statusUnavailable?: boolean;
   endpointStale?: boolean;
+  providerEndpoint?: string;
   connectionStale?: boolean;
   endpointInactive?: boolean;
   serviceNames?: readonly string[];

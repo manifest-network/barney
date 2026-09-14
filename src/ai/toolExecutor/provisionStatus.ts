@@ -59,15 +59,15 @@ export function isUnsettledProvisionStatus(status: string | undefined): boolean 
  * Map fred's `provision_status` onto the registry's `provisionState`
  * OBSERVATION.
  *
- * An unsettled value IS a reading — fred is saying the workload is not up — so
- * it records 'unconfirmed' rather than nothing; the caller keeps it from
- * retracting an earlier confirmation. Any value in none of the sets is a future
- * one this client does not model and claims nothing, as does an ABSENT field.
+ * Visible progress records 'unconfirmed'; the caller keeps it from retracting
+ * an earlier confirmation. Absent/unknown values carry no observation, as do
+ * future values this client does not model.
  */
 export function classifyProvisionStatus(status: string | undefined): ProvisionState | undefined {
-  if (status === undefined || status === '') return undefined;
-  if (PROVISION_SUCCESS.has(status)) return 'confirmed';
-  if (PROVISION_VERDICT_FAILED.has(status)) return 'failed';
-  if (PROVISION_IN_PROGRESS.has(status) || status === PROVISION_RETAINED) return 'unconfirmed';
+  const reading = displayProvisionStatus(status);
+  if (reading === undefined) return undefined;
+  if (PROVISION_SUCCESS.has(reading)) return 'confirmed';
+  if (PROVISION_VERDICT_FAILED.has(reading)) return 'failed';
+  if (PROVISION_IN_PROGRESS.has(reading) || reading === PROVISION_RETAINED) return 'unconfirmed';
   return undefined;
 }

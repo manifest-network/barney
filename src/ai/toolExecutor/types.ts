@@ -86,6 +86,7 @@ export interface ToolDataMap {
     provision_status?: string;
     statusUnavailable?: boolean;
     endpointStale?: boolean;
+    providerEndpoint?: string;
     connectionStale?: boolean;
     endpointInactive?: boolean;
     size: string;

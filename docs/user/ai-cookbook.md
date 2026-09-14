@@ -130,7 +130,7 @@ What's deploying?
 
 ### `app_status`
 
-**What it does.** Shows an app overview with its name, status, provider progress, deployment endpoint, and service endpoints for stacks. Selecting an app in the sidebar refreshes this view directly. Custom-domain setup and management are secondary buttons within the overview; **Details** includes size, image, and creation time. Missing status and endpoints are explicitly marked unavailable; cached details are labeled when a refresh cannot confirm them. A temporary connection-read failure preserves the established URL. Terminal deployments show an inactive endpoint. A restart or update requested in chat can continue after the status check confirms readiness.
+**What it does.** Shows an app overview with its name, status, provider progress, deployment endpoint, and service endpoints for stacks. Selecting an app in the sidebar refreshes this view directly, even when AI chat is unavailable. Custom-domain setup and management are secondary buttons within the overview; **Details** includes size, image, and creation time. Missing status and endpoints are explicitly marked unavailable; cached details are labeled when a refresh cannot confirm them. A temporary connection-read failure preserves the established URL and offers any differing provider-reported endpoint separately. Internal services show **No published ports**. Terminal deployments show an inactive endpoint. A restart or update requested in chat can continue after the status check confirms readiness.
 
 **Example prompts.**
 

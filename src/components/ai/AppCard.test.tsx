@@ -255,7 +255,8 @@ describe('AppCard', () => {
       expect(container.querySelector('.app-card__port')?.textContent).toBe('80/tcp → 203.0.113.11:32000');
       expect(container.querySelector('.app-card__service-ports')).toBeNull();
       expect(container.textContent).toContain('Deployment ports');
-      expect(container.textContent).toContain('Service details unavailable for: web.');
+      expect(container.textContent).toContain('web: No published ports.');
+      expect(container.textContent).not.toContain('Service details unavailable');
     });
 
     it('marks wildcard port endpoints unavailable without a reported host', () => {

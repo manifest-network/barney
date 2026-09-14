@@ -28,9 +28,10 @@ describe('classifyProvisionStatus', () => {
     expect(classifyProvisionStatus('failing')).toBe('failed');
   });
 
-  it('claims nothing for an absent or unmodelled status', () => {
+  it('claims nothing for an absent, unknown, or unmodelled status', () => {
     expect(classifyProvisionStatus(undefined)).toBeUndefined();
     expect(classifyProvisionStatus('')).toBeUndefined();
+    expect(classifyProvisionStatus('unknown')).toBeUndefined();
     expect(classifyProvisionStatus('quiescing')).toBeUndefined();
   });
 });

@@ -470,6 +470,9 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
     // and each concrete executor invokes the same live guard immediately before
     // its non-idempotent SDK/chain call.
     assertAuthorization();
+    // A confirmed operation can invalidate status, endpoints, logs, and balances
+    // even if the response is lost. Never replay a pre-operation query result.
+    get().clearToolCache();
     const result = await executeConfirmedTool(
       action.toolName,
       action.args,

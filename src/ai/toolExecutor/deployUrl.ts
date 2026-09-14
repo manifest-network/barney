@@ -25,9 +25,11 @@ export function refreshAppConnection(
   // Status endpoints can be a lower-level IP:port hint. A failed connection
   // read must not replace an established deployment URL with that fallback.
   const previousUrl = previous.url || formatConnectionUrl(undefined, previous.connection);
-  const url = shaped?.url ?? (status && (connection || !previousUrl) ? extractUrlFromFredStatus(status) : undefined);
+  const statusUrl = status ? extractUrlFromFredStatus(status) : undefined;
+  const url = shaped?.url ?? (connection || !previousUrl ? statusUrl : undefined);
   const patch = connectionPatch({ url, connection: shaped?.connection ?? connection }, previous);
-  return { patch, endpointRefreshed: url !== undefined, connectionRefreshed: patch.connection !== undefined };
+  const providerEndpoint = !url && statusUrl !== previousUrl ? statusUrl : undefined;
+  return { patch, providerEndpoint, endpointRefreshed: url !== undefined, connectionRefreshed: patch.connection !== undefined };
 }
 
 /** True if the hostname looks like a DNS name (not a bare IPv4 address). */

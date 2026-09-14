@@ -1,7 +1,7 @@
 import type { AIStore } from '../aiStore';
 import { executeTool } from '../../ai/toolExecutor';
 import { getToolCallDescription } from '../../ai/tools';
-import { withTimeout } from '../../api/utils';
+import { isAbortError, withAbort } from '../../api/utils';
 import { walletIdentityMatches } from '../../utils/walletIdentity';
 import { bigIntReplacer } from '../../utils/json';
 import { logError } from '../../utils/errors';
@@ -15,7 +15,7 @@ type Set = (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) 
 export async function requestAppStatusFn(get: Get, set: Set, appName: string): Promise<boolean> {
   const state = get();
   const { address, chainId, historyIdentity, authorizationEpoch, clientManager, signing } = state;
-  if (!state.isConnected || !address || state.isStreaming || state.pendingConfirmation
+  if (!address || state.isStreaming || state.pendingConfirmation
     || !walletIdentityMatches(historyIdentity, chainId, address)) return false;
 
   const registry = getAppRegistryAccess();
@@ -45,9 +45,9 @@ export async function requestAppStatusFn(get: Get, set: Set, appName: string): P
   });
 
   try {
-    const result = await withTimeout(executeTool('app_status', args, {
+    const result = await withAbort(executeTool('app_status', args, {
       address, clientManager, signing, appRegistry: registry, signal: abort.signal, tiers: state.skuTiers.tiers,
-    }), undefined, 'Check app status', abort.signal);
+    }), abort.signal);
     if (!ownsRequest()) return true;
     abort.signal.throwIfAborted();
     const success = result.success && !result.requiresConfirmation;
@@ -62,7 +62,7 @@ export async function requestAppStatusFn(get: Get, set: Set, appName: string): P
     } : message) });
   } catch (error) {
     if (!ownsRequest()) return true;
-    const cancelled = abort.signal.aborted;
+    const cancelled = isAbortError(error);
     if (!cancelled) logError('requestAppStatus', error);
     const content = cancelled ? 'Status check cancelled.' : 'Unable to check app status. Please try again.';
     set({ messages: get().messages.map((message) => message.id === toolMessageId

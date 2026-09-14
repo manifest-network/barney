@@ -147,7 +147,7 @@ describe('customDomainFlow integration', () => {
     ]);
   });
 
-  it('UI path: cards track DNS changes without rerendering on chat tokens', () => {
+  it('UI path: app cards update only for their own domain while ignoring chat tokens and unrelated DNS updates', () => {
     // Use the exact displayCard.data shape the executor returns above so any
     // drift between the two halves breaks loudly.
     const data: CustomDomainCardData = {
@@ -161,6 +161,8 @@ describe('customDomainFlow integration', () => {
     const key = dnsStatusKey(LEASE_UUID, FQDN);
     const store = createAIStore();
     const onRender = vi.fn();
+    const onStatusRender = vi.fn();
+    const onDeployRender = vi.fn();
 
     let container: HTMLDivElement | null = null;
     let root: Root | null = null;
@@ -174,7 +176,14 @@ describe('customDomainFlow integration', () => {
       flushSync(() => {
         root!.render(createElement(AIStoreContext.Provider, { value: store },
           createElement(Profiler, { id: 'cards', onRender },
-            createElement(AppCard, { data: { name: 'my-app', status: 'running' } }),
+            createElement(Profiler, { id: 'status-card', onRender: onStatusRender },
+              createElement(AppCard, { data: { name: 'my-app', status: 'running' } }),
+            ),
+            createElement(Profiler, { id: 'deploy-card', onRender: onDeployRender },
+              createElement(AppCard, { data: { name: 'deployed-app', status: 'running', customDomain: {
+                fqdn: FQDN, leaseUuid: LEASE_UUID, serviceName: '', expectedCnameTarget: EXPECTED_CNAME, isApex: false,
+              } } }),
+            ),
             createElement(CustomDomainCard, { data }),
           ),
         ));
@@ -182,14 +191,25 @@ describe('customDomainFlow integration', () => {
       expect(container.textContent).toContain('Pending DNS');
 
       onRender.mockClear();
+      onStatusRender.mockClear();
+      onDeployRender.mockClear();
       flushSync(() => { store.setState({ messages: [{ id: 'reply', role: 'assistant', content: 'Another token', timestamp: 1, isStreaming: true }] }); });
       expect(onRender).not.toHaveBeenCalled();
+
+      flushSync(() => { store.getState().setDnsStatuses(new Map([[dnsStatusKey('another-lease', 'other.example.com'), {
+        kind: 'active', leaseUuid: 'another-lease', customDomain: 'other.example.com', serviceName: '',
+      }]])); });
+      expect(onStatusRender).not.toHaveBeenCalled();
+      expect(onDeployRender).not.toHaveBeenCalled();
 
       for (const [kind, label] of [['issuing_cert', 'Issuing certificate'], ['active', 'Active'], ['failed', 'Failed']] as const) {
         flushSync(() => { store.getState().setDnsStatuses(new Map([[key, {
           kind, leaseUuid: LEASE_UUID, customDomain: FQDN, serviceName: '', expectedCnameTarget: EXPECTED_CNAME,
         }]])); });
         expect(container.textContent).toContain(label);
+        expect(onStatusRender).not.toHaveBeenCalled();
+        expect(onDeployRender).toHaveBeenCalled();
+        onDeployRender.mockClear();
       }
     } finally {
       if (root) flushSync(() => { root!.unmount(); });

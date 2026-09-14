@@ -23,10 +23,12 @@ interface AppCardProps {
 }
 
 export const AppCard = memo(function AppCard({ data }: AppCardProps) {
-  const { name, status, providerStatus, customDomain, statusUnavailable, endpointStale, connectionStale, endpointInactive, url, connection, domainManagement } = data;
+  const { name, status, providerStatus, customDomain, statusUnavailable, endpointStale, providerEndpoint, connectionStale, endpointInactive, url, connection, domainManagement } = data;
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const requestStopApp = useAIStore((state) => state.requestStopApp);
-  const dnsStatuses = useAIStore((state) => state.dnsStatuses);
+  const domainReport = useAIStore((state) => customDomain
+    ? state.dnsStatuses.get(dnsStatusKey(customDomain.leaseUuid, customDomain.fqdn))
+    : undefined);
   const [showDomains, setShowDomains] = useState(false);
   const domainsId = useId();
 
@@ -37,15 +39,16 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
   const servicePortGroups: { serviceName: string; fqdn?: string; ports: [string, AppCardPortMapping][] }[] = [];
   const serviceNames = new Set([...Object.keys(connection?.services ?? {}), ...(data.serviceNames ?? [])]);
   const missingServices: string[] = [];
-  const flat = serviceNames.size === 1 ? connection : undefined;
+  const internalServices: string[] = [];
   for (const serviceName of serviceNames) {
-    // Flat metadata belongs to the sole service only when it has no own record.
-    const svc = connection?.services?.[serviceName] ?? flat;
+    const svc = connection?.services?.[serviceName];
     const svcPorts = nonEmptyPorts(svc?.ports) ?? nonEmptyPorts(svc?.instances?.[0]?.ports);
     const reportedFqdn = svc?.fqdn ?? svc?.instances?.[0]?.fqdn;
     const fqdn = reportedFqdn && isValidFqdn(reportedFqdn) ? reportedFqdn : undefined;
     if (svcPorts || fqdn) {
       servicePortGroups.push({ serviceName, ports: Object.entries(svcPorts ?? {}), fqdn });
+    } else if (svc?.ports || svc?.instances?.length) {
+      internalServices.push(serviceName);
     } else {
       missingServices.push(serviceName);
     }
@@ -58,10 +61,6 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
     // stop-everything intent on the model side. See PR #93 Copilot 3244138206.
     requestStopApp(name);
   };
-
-  const domainReport = customDomain
-    ? dnsStatuses.get(dnsStatusKey(customDomain.leaseUuid, customDomain.fqdn))
-    : undefined;
 
   return (
     <div className="app-card" data-status={statusUnavailable ? 'unavailable' : status} role="article" aria-label={`App: ${name}`}>
@@ -77,7 +76,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
       {providerStatus && <p className="app-card__detail">Provider status: {providerStatus}</p>}
       {endpointInactive ? <p className="app-card__detail">Deployment endpoint is no longer active.</p> : <>
         {endpointStale && <p className="app-card__detail">Last known endpoint — this read did not confirm a current endpoint.</p>}
-        {connectionStale && <p className="app-card__detail">Last known service details — connection data could not be refreshed.</p>}
+        {connectionStale && <p className="app-card__detail">Last known service details — this read did not confirm updated connection data.</p>}
         {!url && <p className="app-card__detail">Endpoint unavailable</p>}
       </>}
 
@@ -98,6 +97,15 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
           </button>
         </div>
       )}
+
+      {providerEndpoint && <div className="app-card__url">
+        <span className="app-card__detail">Provider-reported endpoint</span>
+        <span className="app-card__link">{providerEndpoint}</span>
+        <button type="button" onClick={() => void copyToClipboard(providerEndpoint)} className="app-card__copy"
+          aria-label={isCopied(providerEndpoint) ? 'Copied provider-reported endpoint' : 'Copy provider-reported endpoint'}>
+          {isCopied(providerEndpoint) ? <CheckCircle className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+        </button>
+      </div>}
 
       {instanceUrls.length > 0 && (
         <div className="app-card__instances">
@@ -138,6 +146,7 @@ export const AppCard = memo(function AppCard({ data }: AppCardProps) {
       )}
 
       {missingServices.length > 0 && <p className="app-card__detail">Service details unavailable for: {missingServices.join(', ')}.</p>}
+      {internalServices.map((serviceName) => <p key={serviceName} className="app-card__detail">{serviceName}: No published ports.</p>)}
 
       {customDomain && (
         <div className="app-card__domain">
