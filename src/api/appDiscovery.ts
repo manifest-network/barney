@@ -137,7 +137,7 @@ export async function hydrateDiscoveredApp(
   address: string,
   snapshot: AppEntry,
   signing: Pick<SigningContext, 'authTokens'>,
-  { signal, registry = appRegistry, connectionOnly = false }: DiscoveryOptions & { connectionOnly?: boolean } = {},
+  { signal, registry = appRegistry }: DiscoveryOptions = {},
 ): Promise<AppRecoveryObservation | undefined> {
   signal?.throwIfAborted();
   if (!snapshot.providerUrl || snapshot.chainState === 'absent'
@@ -150,7 +150,7 @@ export async function hydrateDiscoveredApp(
     signal: AbortSignal.any([roundSignal, ...(init?.signal ? [init.signal] : [])]),
   });
   try {
-    const statusToken = connectionOnly ? undefined : await withTimeout(
+    const statusToken = await withTimeout(
       recoveryAuthToken(signing, snapshot.leaseUuid),
       AI_TOOL_API_TIMEOUT_MS, 'App discovery authentication', roundSignal,
     );
@@ -170,7 +170,7 @@ export async function hydrateDiscoveredApp(
     // Start status immediately: stalled connection authentication or I/O must
     // not discard a completed readiness/failure observation.
     const observations = await Promise.allSettled([
-      statusToken === undefined ? Promise.resolve(undefined) : withTimeout(
+      withTimeout(
         getLeaseStatus(snapshot.providerUrl, snapshot.leaseUuid, statusToken, fetchWithAbort, roundSignal, import.meta.env.DEV),
         AI_TOOL_API_TIMEOUT_MS, 'App discovery status', roundSignal,
       ),

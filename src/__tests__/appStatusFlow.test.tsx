@@ -311,6 +311,20 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     expect(overview().querySelector('.app-card__link')?.textContent).toBe('https://saved.example.com');
   });
 
+  it('keeps a saved DNS endpoint when the connection only knows an internal host and corroborates it from status', async () => {
+    const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+    vi.mocked(appStatus).mockResolvedValue(statusResult({ connection: undefined,
+      fredStatus: { state: 2, provision_status: 'ready', endpoints: { '80/tcp': 'http://app.provider.net:32000' } } as StatusResult['fredStatus'],
+    }));
+    await selectApp({ url: 'app.provider.net', connection: { host: '10.1.2.3', ports: { '80/tcp': { host_port: 32000 } } } });
+    expect(overview().querySelector('.app-card__link')?.textContent).toBe('app.provider.net');
+    expect(overview().textContent).not.toContain('Last known endpoint');
+    expect(overview().textContent).toContain('Last known service details');
+    expect(getAppByLease(ADDRESS, LEASE_UUID)?.url).toBe('app.provider.net');
+    await act(async () => { overview().querySelector<HTMLButtonElement>('[aria-label="Copy endpoint"]')!.click(); });
+    expect(copy).toHaveBeenCalledWith('app.provider.net');
+  });
+
   it('composes a legacy bare-host URL with saved TCP ports when the connection host is empty', async () => {
     vi.mocked(appStatus).mockResolvedValue(statusResult({ connection: undefined }));
     await selectApp({ url: '1.2.3.4', connection: { host: '', ports: { '5432/tcp': { host_port: 32456 } } } });
@@ -339,6 +353,7 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     await selectApp({}, false);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(store.getState().isStreaming).toBe(true);
+    expect(container.querySelector('.apps-sidebar__apps [role="status"]')).toBeNull();
     await act(async () => {
       store.getState().stopStreaming();
       await vi.waitFor(() => expect(store.getState().isStreaming).toBe(false));
@@ -605,7 +620,7 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     expect(overview().textContent).toContain(provisionStatus === 'unknown' ? 'Provider status: unknown' : 'Workload status unavailable.');
   });
 
-  it.each(['closed', 'rejected', 'expired', 'provider terminal'] as const)('keeps domain management available while %s endpoints are inactive', async (scenario) => {
+  it.each(['closed', 'rejected', 'expired', 'provider terminal'] as const)('gates domain management on the chain verdict while %s endpoints are inactive', async (scenario) => {
     const result = statusResult();
     result.chainState.state = scenario === 'provider terminal' ? 2 : { closed: 3, rejected: 4, expired: 5 }[scenario];
     result.chainState.items[0].customDomain = 'custom.example.com';
@@ -619,9 +634,14 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     expect(overview().textContent).not.toContain('could not be refreshed');
     expect(overview().querySelector('[aria-label="Copy endpoint"]')).toBeNull();
     expect(overview().querySelector('.app-card__link, .app-card__service-ports, .app-card__port')).toBeNull();
-    await act(async () => { domainAction().click(); });
-    expect(overview().querySelector('.custom-domain-card')?.textContent).toContain('custom.example.com');
-    expect(overview().querySelector('.custom-domain-card')?.textContent).toContain('Remove');
+    if (scenario === 'provider terminal') {
+      await act(async () => { domainAction().click(); });
+      expect(overview().querySelector('.custom-domain-card')?.textContent).toContain('custom.example.com');
+      expect(overview().querySelector('.custom-domain-card')?.textContent).toContain('Remove');
+    } else {
+      expect(overview().textContent).not.toContain('Manage custom domains');
+      expect(overview().querySelector('.custom-domain-card')).toBeNull();
+    }
     expect(JSON.parse(store.getState().messages.find((message) => message.toolName === 'app_status')!.content).url).toBeUndefined();
   });
 

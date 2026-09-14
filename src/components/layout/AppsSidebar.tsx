@@ -507,7 +507,6 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
         </div>
         <div className="apps-sidebar__apps-list">
           {statusError && <p className="apps-sidebar__apps-empty" role="alert">{statusError}</p>}
-          {selectedStatusApp && <p className="apps-sidebar__apps-empty" role="status">Checking status of {selectedStatusApp}…</p>}
           {runningApps.length === 0 ? (
             <p className="apps-sidebar__apps-empty">No running apps</p>
           ) : (
@@ -563,15 +562,17 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                     }
                     setStatusSelection({ context, value: app.name });
                     setStatusSelectionError(null);
+                    let started = false;
                     try {
                       const accepted = await requestAppStatus(app.name, () => {
+                        started = true;
                         if (currentWalletContextRef.current === context) onClose?.();
                       });
                       if (currentWalletContextRef.current !== context) return;
                       if (!accepted) setStatusSelectionError({ context, value: { message: 'Could not start the status check. Try selecting the app again.' } });
                     } catch (error) {
                       logError('AppsSidebar.appStatus', error);
-                      if (currentWalletContextRef.current === context) setStatusSelectionError({ context, value: { message: 'Could not check app status. Please try again.' } });
+                      if (!started && currentWalletContextRef.current === context) setStatusSelectionError({ context, value: { message: 'Could not start the status check. Please try again.' } });
                     } finally {
                       if (currentWalletContextRef.current === context) setStatusSelection(null);
                     }

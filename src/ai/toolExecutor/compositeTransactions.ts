@@ -22,7 +22,7 @@ import { fromBaseUnits, toBaseUnits } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { isAbortError, withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
-import { connectionPatch, deriveUrlFromConnection, failureText } from './helpers';
+import { connectionPatch, deriveUrlFromConnection, failureText, resolveAppEndpoint } from './helpers';
 import { appCardConnection } from './appCardConnection';
 import { normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
@@ -691,13 +691,12 @@ export async function executeConfirmedDeployApp(
   // Record the two observations, not a summary: `deployManifest` only RESOLVES
   // once its readiness poll saw the lease ACTIVE on chain AND `provision_status`
   // in `PROVISION_SUCCESS` (exactly `ready`). `status` is derived from them.
-  const updatedApp = appRegistry.updateApp(address, leaseUuid, {
+  appRegistry.updateApp(address, leaseUuid, {
     chainState: 'active',
     provisionState: 'confirmed',
-    ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }),
+    ...connectionPatch({ url: connectionUrl, connection }),
     ...customDomainsUpdate,
   });
-  const finalUrl = connectionUrl ?? updatedApp?.url;
   onProgress?.({ phase: 'ready', detail: 'App is live!' });
 
   const expectedCnameTarget = attachedDomain
@@ -716,11 +715,9 @@ export async function executeConfirmedDeployApp(
     type: 'app' as const,
     data: {
       name,
-      url: finalUrl,
+      url: connectionUrl,
       status: 'running',
-      connection: appCardConnection(updatedApp?.connection ?? connection),
-      connectionStale: !connection && !!updatedApp?.connection,
-      endpointStale: !connectionUrl && !!finalUrl,
+      connection: appCardConnection(connection),
       ...(attachedDomain
         ? {
             customDomain: {
@@ -740,7 +737,7 @@ export async function executeConfirmedDeployApp(
     data: {
       message,
       name,
-      url: finalUrl,
+      url: connectionUrl,
       status: 'running',
       ...(attachedDomain
         ? {
@@ -982,10 +979,10 @@ export async function executeConfirmedBatchDeploy(
       const connection = resolvedConnection ?? result.connection;
 
       // Same two observations as the single-deploy success path.
-      const updatedApp = appRegistry.updateApp(address, result.lease_uuid, {
+      appRegistry.updateApp(address, result.lease_uuid, {
         chainState: 'active',
         provisionState: 'confirmed',
-        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }),
+        ...connectionPatch({ url: connectionUrl, connection }),
       });
 
       // deployManifest attaches the domain on-chain but doesn't touch barney's
@@ -1008,7 +1005,7 @@ export async function executeConfirmedBatchDeploy(
       }
 
       updateProgress('ready', 'App is live!');
-      return { name, url: connectionUrl ?? updatedApp?.url };
+      return { name, url: connectionUrl };
     },
   });
 
@@ -1480,7 +1477,7 @@ export async function executeConfirmedRestartApp(
       // Provider observation: the wait resolved non-terminal — the workload is up.
       appRegistry.updateApp(address, leaseUuid, {
         provisionState: 'confirmed',
-        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }),
+        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }, previous),
       });
       onProgress?.({ phase: 'ready', operation: 'restart' });
 
@@ -1489,7 +1486,7 @@ export async function executeConfirmedRestartApp(
         data: {
           message: `App "${name}" has been restarted.`,
           name,
-          url: connectionUrl ?? previous?.url,
+          url: connectionUrl ?? (previous ? resolveAppEndpoint(previous) : undefined),
           status: 'running',
         },
       };
@@ -1612,10 +1609,10 @@ async function executeConfirmedBatchRestart(
 
           appRegistry.updateApp(address, entry.leaseUuid, {
             provisionState: 'confirmed',
-            ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }),
+            ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }, previous),
           });
           updateProgress('ready', 'App is live!');
-          return { name, url: connectionUrl ?? previous?.url };
+          return { name, url: connectionUrl ?? (previous ? resolveAppEndpoint(previous) : undefined) };
         }
 
         appRegistry.updateApp(address, entry.leaseUuid, { provisionState: 'failed' });
@@ -1965,7 +1962,7 @@ export async function executeConfirmedUpdateApp(
 
   // Snapshot existing app state before overwriting — needed for rollback detection.
   const existingApp = appRegistry.getAppByLease(address, leaseUuid);
-  const previousUrl = existingApp?.url;
+  const previousUrl = existingApp ? resolveAppEndpoint(existingApp) : undefined;
   const previousManifest = existingApp?.manifest;
 
   // Update registry with new manifest content (secrets stripped)
@@ -2118,7 +2115,7 @@ export async function executeConfirmedUpdateApp(
       // /provision read above carried no failure signal.
       appRegistry.updateApp(address, leaseUuid, {
         provisionState: 'confirmed',
-        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }),
+        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }, appRegistry.getAppByLease(address, leaseUuid)),
       });
       onProgress?.({ phase: 'ready', operation: 'update' });
 

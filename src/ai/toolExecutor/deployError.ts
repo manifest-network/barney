@@ -10,7 +10,7 @@ import { TerminalChainStateError, describeFredFailure } from '@manifest-network/
 import { logError } from '../../utils/errors';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { ToolResult, ToolExecutorOptions, SigningContext } from './types';
-import { connectionPatch, failureText } from './helpers';
+import { connectionPatch, failureText, resolveAppEndpoint } from './helpers';
 import { nextStepFor } from './failureGuidance';
 import { resolveAppUrl } from './deployUrl';
 import { isTerminalLeaseState } from '../../utils/leaseState';
@@ -304,12 +304,12 @@ export async function handleDeployManifestError(
         ? await resolveAppUrl(providerUrl, leaseUuid, {} as FredLeaseStatus, address, signing, 'deployError.handleDeployManifestError')
         : { url: undefined, connection: undefined };
       const previous = appRegistry.getAppByLease(address, leaseUuid);
-      const finalUrl = connectionUrl ?? previous?.url;
+      const finalUrl = connectionUrl ?? (previous ? resolveAppEndpoint(previous) : undefined);
       // Chain observation only — no `provisionState`: the deploy THREW, so the
       // provider never confirmed readiness and a chain read may not claim it.
       const updated = appRegistry.updateApp(address, leaseUuid, {
         chainState: 'active',
-        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }),
+        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }, previous),
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
       return {

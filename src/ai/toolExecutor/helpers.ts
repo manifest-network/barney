@@ -167,11 +167,13 @@ export function formatConnectionUrl(
   return host.replace(/^https?:\/\//, '');
 }
 
-/** Qualified saved endpoints are complete. Older bare-host URLs still need
- * their published port composed from the saved connection inventory. */
+/** Keep saved DNS/qualified endpoints intact. Legacy bare IPv4 endpoints need
+ * their published port, without substituting the provider's internal host. */
 export function resolveAppEndpoint({ url, connection }: Pick<AppEntry, 'url' | 'connection'>): string | undefined {
-  if (url && !isValidFqdn(url)) return url;
-  return formatConnectionUrl(url, connection) || url || undefined;
+  if (!url) return formatConnectionUrl(undefined, connection);
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(url)) return url;
+  const port = extractPort(Object.values(connection?.ports ?? {})[0]);
+  return port === undefined ? url : `${url}:${port}`;
 }
 
 /**
@@ -219,14 +221,16 @@ export function deriveUrlFromConnection(
 /**
  * A returned connection is an independent observation, including an empty or
  * unassigned inventory. Preserve old inventory only when no connection was read.
- * Lifecycle callers invalidate saved DNS evidence without erasing the inventory.
+ * Lifecycle callers supply the prior inventory to invalidate saved DNS evidence;
+ * a missing inventory has nothing to mark stale.
  */
 export function connectionPatch(
   { url, connection, connectionStale }: { url?: string; connection?: ConnectionDetails; connectionStale?: boolean },
+  previous?: Pick<AppEntry, 'connection'> | null,
 ): Pick<AppEntry, 'url' | 'connection' | 'connectionStale'> {
   const patch: Pick<AppEntry, 'url' | 'connection' | 'connectionStale'> = {};
   if (url !== undefined) patch.url = url;
-  if (connectionStale !== undefined) patch.connectionStale = connectionStale;
+  if (connectionStale !== undefined) patch.connectionStale = connectionStale && !!previous?.connection;
   if (connection) {
     patch.connection = JSON.parse(JSON.stringify(connection));
     patch.connectionStale = false;

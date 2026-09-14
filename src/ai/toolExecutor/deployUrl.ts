@@ -26,10 +26,12 @@ export function refreshAppConnection(
   // read must not replace an established deployment URL with that fallback.
   const previousUrl = resolveAppEndpoint(previous);
   const statusUrl = status ? extractUrlFromFredStatus(status) : undefined;
+  const statusMatchesPrevious = statusUrl !== undefined && (statusUrl === previousUrl
+    || (!!previousUrl && isDnsHostname(previousUrl) && statusUrl === `https://${previousUrl}`));
   const url = shaped?.url ?? (connection || !previousUrl ? statusUrl : undefined);
   const patch = connectionPatch({ url, connection: shaped?.connection ?? connection });
-  const providerEndpoint = !url && statusUrl !== previousUrl ? statusUrl : undefined;
-  return { patch, providerEndpoint, endpointRefreshed: url !== undefined || (statusUrl !== undefined && statusUrl === previousUrl), connectionRefreshed: connection !== undefined };
+  const providerEndpoint = !url && !statusMatchesPrevious ? statusUrl : undefined;
+  return { patch, providerEndpoint, endpointRefreshed: url !== undefined || statusMatchesPrevious, connectionRefreshed: connection !== undefined };
 }
 
 /** True if the hostname looks like a DNS name (not a bare IPv4 address). */

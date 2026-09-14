@@ -6,6 +6,7 @@ import { getAppByLease, getApps } from '../registry/appRegistry';
 import type { AIStore } from '../stores/aiStore';
 import {
   APP_RECOVERY_MAX_ATTEMPTS,
+  APP_CONNECTION_RECOVERY_MAX_ATTEMPTS,
   APP_CONNECTION_RECOVERY_INTERVAL_MS,
   APP_RECOVERY_POLL_INTERVAL_MS,
   AUTO_REFRESH_INTERVAL_MS,
@@ -70,23 +71,24 @@ export function useAppRecovery(address: string | undefined): void {
         attempt = { snapshot, attempts: 0, nextAttemptAt: 0, retired: false };
         attemptsRef.current.set(app.leaseUuid, attempt);
       }
-      const connectionOnly = app.provisionState === 'confirmed' && !!app.connectionStale;
-      if (attempt.retired || (!connectionOnly && attempt.attempts >= APP_RECOVERY_MAX_ATTEMPTS)
+      const staleInventory = app.provisionState === 'confirmed' && !!app.connectionStale && !!app.connection;
+      const maxAttempts = staleInventory ? APP_CONNECTION_RECOVERY_MAX_ATTEMPTS : APP_RECOVERY_MAX_ATTEMPTS;
+      if (attempt.retired || attempt.attempts >= maxAttempts
         || attempt.nextAttemptAt > Date.now()) return [];
-      return [{ app, attempt, connectionOnly }];
+      return [{ app, attempt, staleInventory }];
     }).sort((left, right) => left.attempt.nextAttemptAt - right.attempt.nextAttemptAt);
     const candidate = candidates[0];
     if (!candidate) return;
 
-    const { app, attempt, connectionOnly } = candidate;
+    const { app, attempt, staleInventory } = candidate;
     const abort = new AbortController();
     abortRef.current = abort;
     attempt.attempts++;
-    const retryDelay = connectionOnly && attempt.attempts >= APP_RECOVERY_MAX_ATTEMPTS
+    const retryDelay = staleInventory && attempt.attempts >= APP_RECOVERY_MAX_ATTEMPTS
       ? APP_CONNECTION_RECOVERY_INTERVAL_MS
       : AUTO_REFRESH_INTERVAL_MS * 2 ** (attempt.attempts - 1);
     try {
-      const observation = await hydrateDiscoveredApp(address, app, wallet.signing, { signal: abort.signal, connectionOnly });
+      const observation = await hydrateDiscoveredApp(address, app, wallet.signing, { signal: abort.signal });
       if (abort.signal.aborted) return;
       const current = getAppByLease(address, app.leaseUuid);
       if (observation && current && recoverySnapshotKey(current) === recoverySnapshotKey(observation.app)) {

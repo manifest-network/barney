@@ -340,11 +340,11 @@ export async function executeAppStatus(
   // domains are attached.
   const stackServiceNames: string[] = serviceImages ? Object.keys(serviceImages) : [];
 
+  // Domain changes require an ACTIVE chain lease, independently of provider readiness.
   // Domain management is secondary to the app overview:
   //  - >=2 custom domains: consolidated multi-domain view
   //  - exactly one custom domain: single-domain status view
   //  - no domain on a running app: "no domain" form (with picker on stacks)
-  //  - stopped apps with no domains: skip (not actionable)
   let domainManagement: CustomDomainCardData | undefined;
   if (customDomains.length >= 2) {
     domainManagement = {
@@ -450,7 +450,7 @@ export async function executeAppStatus(
         endpointInactive,
         connection: endpointInactive ? undefined : appCardConnection(appConnection, serviceNames, flatServiceName),
         serviceNames: endpointInactive ? [] : serviceNames,
-        domainManagement,
+        domainManagement: leaseState === LeaseState.LEASE_STATE_ACTIVE ? domainManagement : undefined,
       },
     },
   };

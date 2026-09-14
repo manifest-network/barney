@@ -1987,20 +1987,22 @@ describe('executeConfirmedDeployApp', () => {
     expect(getLeaseConnectionInfo).toHaveBeenCalled();
   });
 
-  it('preserves saved deploy inventory and marks it stale when the successful deploy has no connection read', async () => {
+  it('leaves missing connection data unset when a new deployment succeeds without a connection read', async () => {
     const registry = makeRegistry();
-    const saved = { host: '1.2.3.4', fqdn: 'saved.provider.example', ports: { '80/tcp': { host_port: 32000 } } };
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, options) => {
       await options?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
-      registry.updateApp(ADDRESS, 'new-lease-uuid', { connection: saved, url: 'https://saved.provider.example' });
       return makeDeployResult({ connection: undefined });
     });
     vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Provider busy'));
     const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry }), makePayload());
     expect(result.success).toBe(true);
-    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')).toMatchObject({ connection: saved, connectionStale: true, url: 'https://saved.provider.example' });
+    const app = registry.getAppByLease(ADDRESS, 'new-lease-uuid')!;
+    expect(app.provisionState).toBe('confirmed');
+    expect(app.connection).toBeUndefined();
+    expect(app.connectionStale).toBeUndefined();
+    expect(app.url).toBeUndefined();
     expect(result.success && !result.requiresConfirmation && result.displayCard).toMatchObject({ type: 'app', data: {
-      connection: saved, connectionStale: true, endpointStale: true, url: 'https://saved.provider.example',
+      connection: undefined, url: undefined, status: 'running',
     } });
   });
 
@@ -3032,20 +3034,21 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.connectionStale).toBe(false);
   });
 
-  it('preserves saved batch-deploy inventory and schedules connection recovery on a failed read', async () => {
+  it('leaves missing connection data unset when a new batch deployment succeeds without a connection read', async () => {
     const registry = makeRegistry();
-    const saved = { host: '1.2.3.4', fqdn: 'saved.provider.example' };
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, options) => {
       await options?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
-      registry.updateApp(ADDRESS, 'new-lease-uuid', { connection: saved, url: 'https://saved.provider.example' });
       return makeDeployResult({ connection: undefined });
     });
     vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Provider busy'));
     const args = await confirmedBatchArgs([makeBatchEntry('alpha')]);
     const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions({ appRegistry: registry }));
     expect(result.success).toBe(true);
-    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')).toMatchObject({ connection: saved, connectionStale: true, url: 'https://saved.provider.example' });
-    expect(JSON.stringify(result.data)).toContain('https://saved.provider.example');
+    const app = registry.getAppByLease(ADDRESS, 'new-lease-uuid')!;
+    expect(app.provisionState).toBe('confirmed');
+    expect(app.connection).toBeUndefined();
+    expect(app.connectionStale).toBeUndefined();
+    expect(app.url).toBeUndefined();
   });
 
   it.each(['throw', 'reject'])('finishes a batch when progress observers %s', async (failure) => {
@@ -6808,6 +6811,29 @@ describe('lifecycle connection observations', () => {
   }
 
   describe.each(modes)('%s', (mode) => {
+    it.each(['app.provider.net', '1.2.3.4'])('keeps the status and lifecycle endpoints consistent for saved URL %s', async url => {
+      const app = makeApp({ url, connection: { host: '10.1.2.3', ports: { '80/tcp': { host_port: 32000 } } } });
+      const registry = makeRegistry([app]);
+      vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Provider unavailable'));
+      const result = await run(mode, app, registry);
+      expect(result.success).toBe(true);
+      const endpoint = url === '1.2.3.4' ? '1.2.3.4:32000' : url;
+      if (mode === 'batch restart') expect(JSON.stringify(result.data)).toContain(endpoint);
+      else expect((result.data as { url?: string }).url).toBe(endpoint);
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.url).toBe(url);
+    });
+
+    it('does not mark absent connection inventory stale after an unsuccessful connection read', async () => {
+      const app = makeApp({ url: undefined, connection: undefined });
+      const registry = makeRegistry([app]);
+      vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Provider unavailable'));
+      const result = await run(mode, app, registry);
+      expect(result.success).toBe(true);
+      const updated = registry.getAppByLease(ADDRESS, app.leaseUuid)!;
+      expect(updated.connection).toBeUndefined();
+      expect(updated.connectionStale).toBe(false);
+    });
+
     it.each(['unreachable', 'empty ports', 'filtered TCP FQDN'])('keeps the saved URL while adopting any returned connection inventory (%s)', async (read) => {
       const app = previousApp();
       const registry = makeRegistry([app]);
