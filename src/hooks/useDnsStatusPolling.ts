@@ -25,6 +25,7 @@ import { useVisibilityPolling } from './useVisibilityPolling';
 import { useAI } from './useAI';
 import {
   computeStatus,
+  PROVIDER_INFO_PENDING_DETAIL,
   probeHttps,
   resolveDnsViaDoh,
 } from '../utils/customDomainStatus';
@@ -71,6 +72,20 @@ function isTerminal(entry: DnsStatusEntry | undefined, expectedCnameTarget: stri
     && entry.expectedCnameTarget === expectedCnameTarget;
 }
 
+function needsProviderInfo(target: DnsPollingTarget, entry: DnsStatusEntry | undefined): boolean {
+  return !target.expectedCnameTarget
+    && (entry?.kind !== 'pending_dns' || entry.detail !== PROVIDER_INFO_PENDING_DETAIL);
+}
+
+function pendingEntry(target: DnsPollingTarget): DnsStatusEntry {
+  return {
+    leaseUuid: target.app.leaseUuid, customDomain: target.domain,
+    serviceName: target.serviceName, expectedCnameTarget: target.expectedCnameTarget,
+    kind: 'pending_dns',
+    ...(!target.expectedCnameTarget ? { detail: PROVIDER_INFO_PENDING_DETAIL } : {}),
+  };
+}
+
 export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
   const { dnsStatuses, setDnsStatuses } = useAI();
 
@@ -83,7 +98,7 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
    *  hits a terminal state. No allocation; the candidate list itself is
    *  reference-stable. */
   const hasNonTerminalTarget = allTargets.some(({ app, domain, expectedCnameTarget }) =>
-    !isTerminal(dnsStatuses.get(dnsStatusKey(app.leaseUuid, domain)), expectedCnameTarget),
+    !!expectedCnameTarget && !isTerminal(dnsStatuses.get(dnsStatusKey(app.leaseUuid, domain)), expectedCnameTarget),
   );
 
   // Refs so the poll callback doesn't depend on dnsStatuses/targets directly
@@ -133,7 +148,8 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
     const liveTargets = new Map(
       allTargets.map((target) => [dnsStatusKey(target.app.leaseUuid, target.domain), target]),
     );
-    let needsPrune = false;
+    let needsPrune = allTargets.some((target) => needsProviderInfo(target,
+      dnsStatusesRef.current.get(dnsStatusKey(target.app.leaseUuid, target.domain))));
     for (const [key, entry] of dnsStatusesRef.current) {
       const target = liveTargets.get(key);
       if (!target || entry.expectedCnameTarget !== target.expectedCnameTarget) { needsPrune = true; break; }
@@ -147,12 +163,11 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
       else if (entry.expectedCnameTarget !== target.expectedCnameTarget) {
         // A previous verdict about a different (or now unconfirmed) target
         // cannot supply current DNS guidance, even if it was terminal.
-        next.set(key, {
-          leaseUuid: target.app.leaseUuid, customDomain: target.domain,
-          serviceName: target.serviceName, expectedCnameTarget: target.expectedCnameTarget,
-          kind: 'pending_dns',
-        });
+        next.set(key, pendingEntry(target));
       }
+    }
+    for (const [key, target] of liveTargets) {
+      if (needsProviderInfo(target, next.get(key))) next.set(key, pendingEntry(target));
     }
     setDnsStatuses(next);
   }, [allTargets, setDnsStatuses]);
@@ -164,7 +179,7 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
     // its memo doesn't churn on slice writes.
     const liveDns = dnsStatusesRef.current;
     const current = allTargetsRef.current.filter(
-      ({ app, domain, expectedCnameTarget }) => !isTerminal(liveDns.get(dnsStatusKey(app.leaseUuid, domain)), expectedCnameTarget),
+      ({ app, domain, expectedCnameTarget }) => !!expectedCnameTarget && !isTerminal(liveDns.get(dnsStatusKey(app.leaseUuid, domain)), expectedCnameTarget),
     );
     if (current.length === 0) return;
 

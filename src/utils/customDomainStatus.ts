@@ -260,6 +260,8 @@ export interface ComputeStatusInput {
  * surface a hint after a long stall. The `detail` field is left blank by the
  * client-side compute and is the slot a future fred-backed reducer will fill.
  */
+export const PROVIDER_INFO_PENDING_DETAIL = 'Waiting for provider info…';
+
 export function computeStatus(input: ComputeStatusInput): CustomDomainStatusReport {
   const { dns, https, expectedCname, isApex } = input;
 
@@ -284,7 +286,7 @@ export function computeStatus(input: ComputeStatusInput): CustomDomainStatusRepo
   // validate against, there's no way to distinguish a correctly-configured
   // apex from a misconfigured one (same terminal-lock hazard as non-apex).
   if (!expectedCname) {
-    return { kind: 'pending_dns', detail: 'Waiting for provider info…' };
+    return { kind: 'pending_dns', detail: PROVIDER_INFO_PENDING_DETAIL };
   }
 
   const expected = normalizeFqdn(expectedCname);

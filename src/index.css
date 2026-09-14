@@ -10714,6 +10714,35 @@ code.lease-card-mono {
   margin: 0.75rem 0 0;
 }
 
+.app-card__saved-connections {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-900);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.app-card__saved-connections > summary {
+  cursor: pointer;
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+}
+
+.app-card__saved-connections > summary::marker {
+  color: var(--color-primary-400);
+}
+
+.app-card__saved-connections > summary:focus-visible {
+  outline: 2px solid var(--color-primary-400);
+  outline-offset: 3px;
+}
+
+.app-card__saved-connections[open] > summary {
+  margin-bottom: 0.75rem;
+}
+
 .app-card__url {
   display: flex;
   align-items: center;

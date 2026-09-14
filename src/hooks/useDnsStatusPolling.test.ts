@@ -15,6 +15,7 @@ vi.mock('./useAI', () => ({
 }));
 
 vi.mock('../utils/customDomainStatus', () => ({
+  PROVIDER_INFO_PENDING_DETAIL: 'Waiting for provider info…',
   resolveDnsViaDoh: vi.fn(),
   probeHttps: vi.fn(),
   computeStatus: vi.fn(),
@@ -123,14 +124,15 @@ describe('useDnsStatusPolling', () => {
     vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
     dnsStatuses.set('lease-1::app.example.com', { kind, expectedCnameTarget: 'auto.barney0.manifest0.net' });
     mounted = mountWith([makeApp({ connectionStale: true })]);
-    expect(vi.mocked(useVisibilityPolling).mock.lastCall?.[2]?.enabled).toBe(true);
+    expect(vi.mocked(useVisibilityPolling).mock.lastCall?.[2]?.enabled).toBe(false);
     const reset = setDnsStatuses.mock.lastCall![0].get('lease-1::app.example.com');
-    expect(reset).toMatchObject({ kind: 'pending_dns', expectedCnameTarget: undefined });
+    expect(reset).toMatchObject({ kind: 'pending_dns', expectedCnameTarget: undefined, detail: 'Waiting for provider info…' });
     vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok', cname: 'new.provider.example' } as any);
     vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' } as any);
     vi.mocked(computeStatus).mockReturnValue({ kind: 'active' });
     await pollFn();
-    expect(computeStatus).toHaveBeenCalledWith(expect.objectContaining({ expectedCname: undefined }));
+    expect(resolveDnsViaDoh).not.toHaveBeenCalled();
+    expect(probeHttps).not.toHaveBeenCalled();
   });
 
   it('rechecks a terminal DNS verdict after a fresh connection reports a different target', async () => {
@@ -208,17 +210,14 @@ describe('useDnsStatusPolling', () => {
     vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok' } as any);
     vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' } as any);
 
-    // Tick 1: target undefined → reducer returns pending_dns (mocked).
+    // No DNS request can validate the domain until provider metadata arrives.
     vi.mocked(resolveExpectedCnameTarget).mockReturnValueOnce(undefined);
-    vi.mocked(computeStatus).mockReturnValueOnce({
-      kind: 'pending_dns',
-      detail: 'Waiting for provider info…',
-    } as any);
 
     mounted = mountWith([makeApp()]);
     await pollFn();
     const firstCall = setDnsStatuses.mock.calls[0][0] as Map<string, { kind: string }>;
     expect(firstCall.get('lease-1::app.example.com')?.kind).toBe('pending_dns');
+    expect(resolveDnsViaDoh).not.toHaveBeenCalled();
 
     // Simulate the slice update landing — the next tick's terminal filter
     // (`isTerminal` at line 108) reads from this map. `pending_dns` is

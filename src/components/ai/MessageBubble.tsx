@@ -158,7 +158,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
         {isTool && message.card?.type === 'app' && (
           <AppCard data={message.card.data} />
         )}
-        {isTool && (
+        {isTool && (!message.card || message.card.type === 'app') && (
           <div className="message-tool-block">
             {isStreaming && <p role="status">{toolDescription || `Running ${toolName || 'tool'}…`}</p>}
             {!isStreaming && (

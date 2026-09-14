@@ -12,7 +12,7 @@ type Set = (partial: Partial<AIStore> | ((state: AIStore) => Partial<AIStore>)) 
 
 /** A sidebar selection is a fresh query, with no model request or narration.
  * Keep the actual tool call/result in history so later chat can refer to it. */
-export async function requestAppStatusFn(get: Get, set: Set, appName: string): Promise<boolean> {
+export async function requestAppStatusFn(get: Get, set: Set, appName: string, onAccepted?: () => void): Promise<boolean> {
   const state = get();
   const { address, chainId, historyIdentity, authorizationEpoch, clientManager, signing } = state;
   if (!address || state.isStreaming || state.pendingConfirmation
@@ -44,7 +44,12 @@ export async function requestAppStatusFn(get: Get, set: Set, appName: string): P
     ]),
   });
 
+  // Let a mobile caller expose the chat's progress and cancel control as soon
+  // as the request is accepted. UI observers cannot prevent the query itself.
+  try { onAccepted?.(); } catch (error) { logError('requestAppStatus.onAccepted', error); }
+
   try {
+    abort.signal.throwIfAborted();
     const result = await withAbort(executeTool('app_status', args, {
       address, clientManager, signing, appRegistry: registry, signal: abort.signal, tiers: state.skuTiers.tiers,
     }), abort.signal);

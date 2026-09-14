@@ -31,7 +31,7 @@ import { classifyProvisionStatus, displayProvisionStatus, isUnsettledProvisionSt
 import { appCardConnection } from './appCardConnection';
 import { buildBarneyCtx } from './capabilityCtx';
 import { nextStepFor } from './failureGuidance';
-import { formatConnectionUrl } from './helpers';
+import { resolveAppEndpoint } from './helpers';
 import { refreshAppConnection } from './deployUrl';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import { getDomainAssignments } from '../../api/leaseDomains';
@@ -304,7 +304,7 @@ export async function executeAppStatus(
 
   const domainTargetsStale = !!app.connectionStale && !connectionRefreshed;
   // Keep the deployed endpoint intact, including its scheme, port, and path.
-  const connectionUrl = endpointInactive ? undefined : appUrl || formatConnectionUrl(undefined, appConnection);
+  const connectionUrl = endpointInactive ? undefined : resolveAppEndpoint({ url: appUrl, connection: appConnection });
 
   // Extract image from stored manifest (single-service or stack)
   let image: string | undefined;
@@ -403,7 +403,12 @@ export async function executeAppStatus(
   const endpointStale = !endpointRefreshed && !!connectionUrl;
   const connectionStale = !endpointInactive && !connectionRefreshed && !!appConnection;
   const namedLeaseServices = leaseItems.map((item) => item.serviceName).filter(Boolean);
-  const serviceNames = namedLeaseServices.length > 0 ? namedLeaseServices : stackServiceNames;
+  const serviceNames = [...new Set(namedLeaseServices.length > 0 ? namedLeaseServices : stackServiceNames)];
+  // Flat inventory describes the whole deployment. A partly named multi-item
+  // lease cannot attribute it to its sole *named* service.
+  const flatServiceName = serviceNames.length === 1
+    && (leaseItems.length <= 1 || leaseItems.every((item) => !!item.serviceName))
+    ? serviceNames[0] : undefined;
   const data: ToolData<'app_status'> = {
     name: app.name,
     status: currentStatus,
@@ -443,9 +448,9 @@ export async function executeAppStatus(
         providerEndpoint,
         connectionStale,
         endpointInactive,
-        connection: endpointInactive ? undefined : appCardConnection(appConnection, serviceNames),
-        serviceNames: endpointInactive ? [] : [...new Set(serviceNames)],
-        domainManagement: endpointInactive ? undefined : domainManagement,
+        connection: endpointInactive ? undefined : appCardConnection(appConnection, serviceNames, flatServiceName),
+        serviceNames: endpointInactive ? [] : serviceNames,
+        domainManagement,
       },
     },
   };

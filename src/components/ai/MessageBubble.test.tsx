@@ -62,6 +62,28 @@ function findButton(label: RegExp | string): HTMLButtonElement | null {
   }) ?? null;
 }
 
+describe('MessageBubble — card details', () => {
+  it('renders log output once without a second raw JSON disclosure', () => {
+    const data = { app_name: 'web', logs: { web: 'Unique application log line' }, truncated: false };
+    render({ id: 'logs', role: 'tool', timestamp: 1, toolName: 'get_logs', toolDescription: 'Getting logs for web',
+      content: JSON.stringify(data), card: { type: 'logs', data } });
+    expect(container.querySelector('.log-card')?.textContent).toContain('Unique application log line');
+    expect(container.textContent?.split('Unique application log line')).toHaveLength(2);
+    expect(container.querySelector('.message-tool-block')).toBeNull();
+  });
+
+  it('retains extra app metadata in the app overview disclosure', () => {
+    render({ id: 'app', role: 'tool', timestamp: 1, toolName: 'app_status', toolDescription: 'Checking web',
+      content: JSON.stringify({ name: 'web', image: 'nginx', size: 'small' }),
+      card: { type: 'app', data: { name: 'web', status: 'running' } } });
+    expect(container.querySelector('.app-card')).not.toBeNull();
+    const details = findButton('Details');
+    expect(details).not.toBeNull();
+    flushSync(() => { details!.click(); });
+    expect(container.querySelector('.message-tool-content')?.textContent).toContain('nginx');
+  });
+});
+
 describe('MessageBubble — ERROR_PATTERNS for tier catalog', () => {
   it('renders a Retry button for the executor "Tier catalog unavailable" message and clicking invokes retrySkuTiers', () => {
     render(makeError('Tier catalog unavailable — try again in a moment.'));

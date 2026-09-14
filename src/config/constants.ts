@@ -36,6 +36,8 @@ export const MS_PER_SECOND = 1000;
 export const AUTO_REFRESH_INTERVAL_MS = 15_000;
 export const APP_RECOVERY_POLL_INTERVAL_MS = 1_000;
 export const APP_RECOVERY_MAX_ATTEMPTS = 4;
+/** Continue repairing invalidated connection metadata after the initial retry burst. */
+export const APP_CONNECTION_RECOVERY_INTERVAL_MS = 5 * 60_000;
 
 /** Health check timeout */
 export const HEALTH_CHECK_TIMEOUT_MS = 5000;

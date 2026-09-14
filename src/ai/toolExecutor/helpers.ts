@@ -167,6 +167,13 @@ export function formatConnectionUrl(
   return host.replace(/^https?:\/\//, '');
 }
 
+/** Qualified saved endpoints are complete. Older bare-host URLs still need
+ * their published port composed from the saved connection inventory. */
+export function resolveAppEndpoint({ url, connection }: Pick<AppEntry, 'url' | 'connection'>): string | undefined {
+  if (url && !isValidFqdn(url)) return url;
+  return formatConnectionUrl(url, connection) || url || undefined;
+}
+
 /**
  * Shape an app URL from a DeployResult.connection with no extra API call.
  * Selects non-empty top-level, instance, or primary-service ports and promotes

@@ -564,10 +564,11 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                     setStatusSelection({ context, value: app.name });
                     setStatusSelectionError(null);
                     try {
-                      const accepted = await requestAppStatus(app.name);
+                      const accepted = await requestAppStatus(app.name, () => {
+                        if (currentWalletContextRef.current === context) onClose?.();
+                      });
                       if (currentWalletContextRef.current !== context) return;
-                      if (accepted) onClose?.();
-                      else setStatusSelectionError({ context, value: { message: 'Could not start the status check. Try selecting the app again.' } });
+                      if (!accepted) setStatusSelectionError({ context, value: { message: 'Could not start the status check. Try selecting the app again.' } });
                     } catch (error) {
                       logError('AppsSidebar.appStatus', error);
                       if (currentWalletContextRef.current === context) setStatusSelectionError({ context, value: { message: 'Could not check app status. Please try again.' } });

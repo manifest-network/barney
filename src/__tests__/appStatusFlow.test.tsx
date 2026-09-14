@@ -311,6 +311,52 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     expect(overview().querySelector('.app-card__link')?.textContent).toBe('https://saved.example.com');
   });
 
+  it('composes a legacy bare-host URL with saved TCP ports when the connection host is empty', async () => {
+    vi.mocked(appStatus).mockResolvedValue(statusResult({ connection: undefined }));
+    await selectApp({ url: '1.2.3.4', connection: { host: '', ports: { '5432/tcp': { host_port: 32456 } } } });
+    expect(overview().querySelector('.app-card__link')?.textContent).toBe('1.2.3.4:32456');
+  });
+
+  it.each([['web', ''], ['web', 'web']])('attributes flat ports only when lease items %j identify one service', async (...names) => {
+    const result = statusResult();
+    result.chainState.items = names.map((serviceName) => ({ ...result.chainState.items[0], serviceName }));
+    vi.mocked(appStatus).mockResolvedValue(result);
+    await selectApp();
+    expect(overview().querySelectorAll('.app-card__port')).toHaveLength(1);
+    if (names.includes('')) {
+      expect(overview().textContent).toContain('Deployment ports');
+      expect(overview().querySelector('.app-card__service-ports')).toBeNull();
+    } else {
+      expect(overview().querySelector('.app-card__service-ports')?.textContent).toContain('web');
+      expect(overview().textContent).not.toContain('Service details unavailable');
+      expect(overview().textContent).not.toContain('Deployment ports');
+    }
+  });
+
+  it('closes the mobile sidebar before a slow status read settles and permits cancellation', async () => {
+    let resolve!: (result: StatusResult) => void;
+    vi.mocked(appStatus).mockReturnValue(new Promise((done) => { resolve = done; }));
+    await selectApp({}, false);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(store.getState().isStreaming).toBe(true);
+    await act(async () => {
+      store.getState().stopStreaming();
+      await vi.waitFor(() => expect(store.getState().isStreaming).toBe(false));
+    });
+    expect(store.getState().messages.at(-1)?.content).toBe('Status check cancelled.');
+    await act(async () => { resolve(statusResult()); });
+    expect(container.querySelector('.app-card')).toBeNull();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes the status read even if the acceptance observer throws', async () => {
+    await renderApp();
+    const error = new Error('Sidebar observer failed');
+    await act(async () => { await store.getState().requestAppStatus('my-app', () => { throw error; }); });
+    expect(overview().querySelector('.app-card__status')?.textContent).toBe('running');
+    expect(logError).toHaveBeenCalledWith('requestAppStatus.onAccepted', error);
+  });
+
   it('retains all provider service records when chain items are only partly named', async () => {
     const result = statusResult({ connection: { host: '203.0.113.10', ports: { '80/tcp': { host_ip: '0.0.0.0', host_port: 32000 } }, services: {
       web: { fqdn: 'web.provider.example' }, db: { ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32001 } } },
@@ -439,7 +485,7 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     vi.mocked(appStatus).mockReturnValue(new Promise((done) => { resolve = done; }));
     await selectApp({}, false);
     expect(container.querySelector('.message-tool [role="status"]')?.textContent).toBe('Checking status of "my-app"...');
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
     expect(container.textContent?.split('Checking status of "my-app"...')).toHaveLength(2);
     expect(container.querySelector('.app-card')).toBeNull();
 
@@ -559,7 +605,7 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     expect(overview().textContent).toContain(provisionStatus === 'unknown' ? 'Provider status: unknown' : 'Workload status unavailable.');
   });
 
-  it.each(['closed', 'rejected', 'expired', 'provider terminal'] as const)('marks %s endpoints inactive and hides stale access controls', async (scenario) => {
+  it.each(['closed', 'rejected', 'expired', 'provider terminal'] as const)('keeps domain management available while %s endpoints are inactive', async (scenario) => {
     const result = statusResult();
     result.chainState.state = scenario === 'provider terminal' ? 2 : { closed: 3, rejected: 4, expired: 5 }[scenario];
     result.chainState.items[0].customDomain = 'custom.example.com';
@@ -573,7 +619,9 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     expect(overview().textContent).not.toContain('could not be refreshed');
     expect(overview().querySelector('[aria-label="Copy endpoint"]')).toBeNull();
     expect(overview().querySelector('.app-card__link, .app-card__service-ports, .app-card__port')).toBeNull();
-    expect(domainActionIfPresent()).toBeUndefined();
+    await act(async () => { domainAction().click(); });
+    expect(overview().querySelector('.custom-domain-card')?.textContent).toContain('custom.example.com');
+    expect(overview().querySelector('.custom-domain-card')?.textContent).toContain('Remove');
     expect(JSON.parse(store.getState().messages.find((message) => message.toolName === 'app_status')!.content).url).toBeUndefined();
   });
 

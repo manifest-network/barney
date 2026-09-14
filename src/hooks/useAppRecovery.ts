@@ -6,6 +6,7 @@ import { getAppByLease, getApps } from '../registry/appRegistry';
 import type { AIStore } from '../stores/aiStore';
 import {
   APP_RECOVERY_MAX_ATTEMPTS,
+  APP_CONNECTION_RECOVERY_INTERVAL_MS,
   APP_RECOVERY_POLL_INTERVAL_MS,
   AUTO_REFRESH_INTERVAL_MS,
 } from '../config/constants';
@@ -69,30 +70,34 @@ export function useAppRecovery(address: string | undefined): void {
         attempt = { snapshot, attempts: 0, nextAttemptAt: 0, retired: false };
         attemptsRef.current.set(app.leaseUuid, attempt);
       }
-      if (attempt.retired || attempt.attempts >= APP_RECOVERY_MAX_ATTEMPTS
+      const connectionOnly = app.provisionState === 'confirmed' && !!app.connectionStale;
+      if (attempt.retired || (!connectionOnly && attempt.attempts >= APP_RECOVERY_MAX_ATTEMPTS)
         || attempt.nextAttemptAt > Date.now()) return [];
-      return [{ app, attempt }];
+      return [{ app, attempt, connectionOnly }];
     }).sort((left, right) => left.attempt.nextAttemptAt - right.attempt.nextAttemptAt);
     const candidate = candidates[0];
     if (!candidate) return;
 
-    const { app, attempt } = candidate;
+    const { app, attempt, connectionOnly } = candidate;
     const abort = new AbortController();
     abortRef.current = abort;
     attempt.attempts++;
+    const retryDelay = connectionOnly && attempt.attempts >= APP_RECOVERY_MAX_ATTEMPTS
+      ? APP_CONNECTION_RECOVERY_INTERVAL_MS
+      : AUTO_REFRESH_INTERVAL_MS * 2 ** (attempt.attempts - 1);
     try {
-      const observation = await hydrateDiscoveredApp(address, app, wallet.signing, { signal: abort.signal });
+      const observation = await hydrateDiscoveredApp(address, app, wallet.signing, { signal: abort.signal, connectionOnly });
       if (abort.signal.aborted) return;
       const current = getAppByLease(address, app.leaseUuid);
       if (observation && current && recoverySnapshotKey(current) === recoverySnapshotKey(observation.app)) {
         attempt.snapshot = recoverySnapshotKey(current);
         attempt.retired = observation.complete;
       }
-      attempt.nextAttemptAt = Date.now() + AUTO_REFRESH_INTERVAL_MS * 2 ** (attempt.attempts - 1);
+      attempt.nextAttemptAt = Date.now() + retryDelay;
     } catch (error) {
       if (!abort.signal.aborted) {
         logError('useAppRecovery', error);
-        attempt.nextAttemptAt = Date.now() + AUTO_REFRESH_INTERVAL_MS * 2 ** (attempt.attempts - 1);
+        attempt.nextAttemptAt = Date.now() + retryDelay;
       }
     } finally {
       // Foreground cancellation refunds the retry budget, but the interrupted

@@ -6,7 +6,7 @@
  * an assigned host port; HTTP FQDNs route through Traefik on 443.
  */
 
-import { connectionPatch, deriveUrlFromConnection, extractPort, extractPrimaryServicePorts, formatConnectionUrl, parseContainerPort, TCP_ONLY_PORTS } from './helpers';
+import { connectionPatch, deriveUrlFromConnection, extractPort, extractPrimaryServicePorts, formatConnectionUrl, parseContainerPort, resolveAppEndpoint, TCP_ONLY_PORTS } from './helpers';
 import { isValidFqdn } from '../../utils/connection';
 import type { FredLeaseStatus } from '../../api/fred';
 import { getLeaseConnectionInfo, type ConnectionDetails } from '../../api/provider-api';
@@ -24,7 +24,7 @@ export function refreshAppConnection(
   const shaped = connection ? deriveUrlFromConnection(connection) : undefined;
   // Status endpoints can be a lower-level IP:port hint. A failed connection
   // read must not replace an established deployment URL with that fallback.
-  const previousUrl = previous.url || formatConnectionUrl(undefined, previous.connection);
+  const previousUrl = resolveAppEndpoint(previous);
   const statusUrl = status ? extractUrlFromFredStatus(status) : undefined;
   const url = shaped?.url ?? (connection || !previousUrl ? statusUrl : undefined);
   const patch = connectionPatch({ url, connection: shaped?.connection ?? connection });

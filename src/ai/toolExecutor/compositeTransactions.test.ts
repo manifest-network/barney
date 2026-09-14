@@ -1987,6 +1987,23 @@ describe('executeConfirmedDeployApp', () => {
     expect(getLeaseConnectionInfo).toHaveBeenCalled();
   });
 
+  it('preserves saved deploy inventory and marks it stale when the successful deploy has no connection read', async () => {
+    const registry = makeRegistry();
+    const saved = { host: '1.2.3.4', fqdn: 'saved.provider.example', ports: { '80/tcp': { host_port: 32000 } } };
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, options) => {
+      await options?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      registry.updateApp(ADDRESS, 'new-lease-uuid', { connection: saved, url: 'https://saved.provider.example' });
+      return makeDeployResult({ connection: undefined });
+    });
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Provider busy'));
+    const result = await executeConfirmedDeployApp(ARGS, CLIENT_MANAGER, makeOptions({ appRegistry: registry }), makePayload());
+    expect(result.success).toBe(true);
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')).toMatchObject({ connection: saved, connectionStale: true, url: 'https://saved.provider.example' });
+    expect(result.success && !result.requiresConfirmation && result.displayCard).toMatchObject({ type: 'app', data: {
+      connection: saved, connectionStale: true, endpointStale: true, url: 'https://saved.provider.example',
+    } });
+  });
+
   it.each([true, false])('retries a filtered-empty deploy connection; assigned port available=%s', async (assigned) => {
     mockDeploySuccess({ connection: { host: '1.2.3.4', ports: {} } });
     const connection: NonNullable<DeployResult['connection']> = { host: '1.2.3.4', ports: assigned
@@ -3012,6 +3029,23 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(result.success).toBe(true);
     expect(getLeaseConnectionInfo).toHaveBeenCalledOnce();
     expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.url).toBe('1.2.3.4:32456');
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')?.connectionStale).toBe(false);
+  });
+
+  it('preserves saved batch-deploy inventory and schedules connection recovery on a failed read', async () => {
+    const registry = makeRegistry();
+    const saved = { host: '1.2.3.4', fqdn: 'saved.provider.example' };
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, options) => {
+      await options?.onLeaseCreated?.('new-lease-uuid', 'https://fred.example.com');
+      registry.updateApp(ADDRESS, 'new-lease-uuid', { connection: saved, url: 'https://saved.provider.example' });
+      return makeDeployResult({ connection: undefined });
+    });
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Provider busy'));
+    const args = await confirmedBatchArgs([makeBatchEntry('alpha')]);
+    const result = await executeConfirmedBatchDeploy(args, CLIENT_MANAGER, makeOptions({ appRegistry: registry }));
+    expect(result.success).toBe(true);
+    expect(registry.getAppByLease(ADDRESS, 'new-lease-uuid')).toMatchObject({ connection: saved, connectionStale: true, url: 'https://saved.provider.example' });
+    expect(JSON.stringify(result.data)).toContain('https://saved.provider.example');
   });
 
   it.each(['throw', 'reject'])('finishes a batch when progress observers %s', async (failure) => {

@@ -42,6 +42,7 @@ const connectionSchema = service.extend({
 export function appCardConnection(
   connection: AppEntry['connection'] | ConnectionDetails,
   serviceNames?: readonly string[],
+  flatServiceName?: string,
 ): AppCardConnection | undefined {
   if (!connection) return undefined;
   const parsed = connectionSchema.safeParse(connection);
@@ -59,9 +60,9 @@ export function appCardConnection(
       ? { host: normalized.host, services: normalized.services }
       : normalized;
   }
-  if (serviceNames.length === 1 && connection.services === undefined) {
+  if (flatServiceName && connection.services === undefined) {
     const { host, ...flat } = normalized;
-    return { host, services: { [serviceNames[0]]: flat } };
+    return { host, services: { [flatServiceName]: flat } };
   }
   return normalized;
 }

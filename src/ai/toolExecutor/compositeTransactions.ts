@@ -691,13 +691,13 @@ export async function executeConfirmedDeployApp(
   // Record the two observations, not a summary: `deployManifest` only RESOLVES
   // once its readiness poll saw the lease ACTIVE on chain AND `provision_status`
   // in `PROVISION_SUCCESS` (exactly `ready`). `status` is derived from them.
-  appRegistry.updateApp(address, leaseUuid, {
+  const updatedApp = appRegistry.updateApp(address, leaseUuid, {
     chainState: 'active',
     provisionState: 'confirmed',
-    url: connectionUrl,
-    connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+    ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }),
     ...customDomainsUpdate,
   });
+  const finalUrl = connectionUrl ?? updatedApp?.url;
   onProgress?.({ phase: 'ready', detail: 'App is live!' });
 
   const expectedCnameTarget = attachedDomain
@@ -716,9 +716,11 @@ export async function executeConfirmedDeployApp(
     type: 'app' as const,
     data: {
       name,
-      url: connectionUrl,
+      url: finalUrl,
       status: 'running',
-      connection: appCardConnection(connection),
+      connection: appCardConnection(updatedApp?.connection ?? connection),
+      connectionStale: !connection && !!updatedApp?.connection,
+      endpointStale: !connectionUrl && !!finalUrl,
       ...(attachedDomain
         ? {
             customDomain: {
@@ -738,7 +740,7 @@ export async function executeConfirmedDeployApp(
     data: {
       message,
       name,
-      url: connectionUrl,
+      url: finalUrl,
       status: 'running',
       ...(attachedDomain
         ? {
@@ -980,11 +982,10 @@ export async function executeConfirmedBatchDeploy(
       const connection = resolvedConnection ?? result.connection;
 
       // Same two observations as the single-deploy success path.
-      appRegistry.updateApp(address, result.lease_uuid, {
+      const updatedApp = appRegistry.updateApp(address, result.lease_uuid, {
         chainState: 'active',
         provisionState: 'confirmed',
-        url: connectionUrl,
-        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }),
       });
 
       // deployManifest attaches the domain on-chain but doesn't touch barney's
@@ -1007,7 +1008,7 @@ export async function executeConfirmedBatchDeploy(
       }
 
       updateProgress('ready', 'App is live!');
-      return { name, url: connectionUrl };
+      return { name, url: connectionUrl ?? updatedApp?.url };
     },
   });
 
