@@ -718,7 +718,7 @@ export async function executeConfirmedDeployApp(
       name,
       url: connectionUrl,
       status: 'running',
-      connection: appCardConnection(connection ? JSON.parse(JSON.stringify(connection)) : undefined),
+      connection: appCardConnection(connection),
       ...(attachedDomain
         ? {
             customDomain: {

@@ -13,7 +13,7 @@ import { useCallback, useContext, useEffect, useRef } from 'react';
 import { getLeasesByTenant, LeaseState } from '../api/billing';
 import { discoverTenantApps } from '../api/appDiscovery';
 import { getDomainAssignments } from '../api/leaseDomains';
-import { throwIfAborted, withTimeout } from '../api/utils';
+import { isAbortError, throwIfAborted, withTimeout } from '../api/utils';
 import { AIStoreContext } from '../contexts/aiStoreContext';
 import {
   getApps,
@@ -103,7 +103,7 @@ export function useRegistryReconciliation(
     try {
       await withTimeout(reconcile(), REGISTRY_RECONCILIATION_TIMEOUT_MS, 'Registry refresh', signal);
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') return;
+      if (isAbortError(error)) return;
       logError('useRegistryReconciliation', error);
       return false;
     } finally {

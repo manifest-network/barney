@@ -9,6 +9,7 @@ import { requestFaucetCredit } from '@manifest-network/manifest-sdk/faucet';
 import { ACCOUNT_SETUP_POLL_INTERVAL_MS, ACCOUNT_SETUP_POLL_TIMEOUT_MS } from '../config/constants';
 import { runtimeConfig } from '../config/runtimeConfig';
 import { getBalance } from './bank';
+import { isAbortError } from './utils';
 
 /** Cooldown period between faucet requests per address+denom. */
 export const FAUCET_COOLDOWN_HOURS = 24;
@@ -53,7 +54,7 @@ export async function faucetDripAndVerify(
     }
     preDripAmount = BigInt(preDrip.amount);
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw error;
+    if (isAbortError(error)) throw error;
     const message = error instanceof Error ? error.message : 'Unknown error';
     return { denom, success: false, error: `Failed to read balance: ${message}` };
   }
