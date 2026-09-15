@@ -25,7 +25,7 @@ import { logError } from '../../utils/errors';
 import { fromBaseUnits } from '../../utils/format';
 import { MAX_PAYLOAD_SIZE, sha256, toHex } from '../../utils/hash';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
-import { throwIfAborted, withTimeout } from '../../api/utils';
+import { isAbortError, throwIfAborted, withTimeout } from '../../api/utils';
 import type { PayloadAttachment, ToolExecutorOptions } from './types';
 import { validateManifestEnvNames } from './deployArgs';
 
@@ -224,7 +224,7 @@ function assertPlanningCurrent(options: ToolExecutorOptions): void {
 }
 
 function rethrowPlanningInterruption(error: unknown, options: ToolExecutorOptions): void {
-  if (error instanceof Error && error.name === 'AbortError') throw error;
+  if (isAbortError(error)) throw error;
   assertPlanningCurrent(options);
 }
 

@@ -139,33 +139,35 @@ describe('requestStopApp', () => {
     expect(store.getState().pendingConfirmation!.messageId).toBe(msgs[2].id);
   });
 
-  it('is a silent no-op when the app is unknown to the registry', () => {
+  it('explains when a historical card no longer has an app in the registry', () => {
     findApp.mockReturnValue(null);
     const store = setupStore();
 
     store.getState().requestStopApp('does-not-exist');
 
-    expect(store.getState().messages).toHaveLength(0);
+    expect(store.getState().messages.at(-1)?.content).toContain('no longer in this wallet');
     expect(store.getState().pendingConfirmation).toBeNull();
   });
 
-  it('is a silent no-op when the app is already stopped', () => {
+  it('explains when a historical card refers to an already stopped lease', () => {
     findApp.mockReturnValue(makeApp({ status: 'stopped' }));
     const store = setupStore();
 
     store.getState().requestStopApp('all');
 
-    expect(store.getState().messages).toHaveLength(0);
+    expect(store.getState().messages.at(-1)?.content).toContain('no active lease to stop');
     expect(store.getState().pendingConfirmation).toBeNull();
   });
 
-  it('is a silent no-op when isStreaming is true', () => {
+  it('explains a Stop refusal while preserving the active request', () => {
     findApp.mockReturnValue(makeApp());
     const store = setupStore({ isStreaming: true });
 
     store.getState().requestStopApp('all');
 
-    expect(store.getState().messages).toHaveLength(0);
+    expect(store.getState().messages.at(-1)?.local).toBe(true);
+    expect(store.getState().messages.at(-1)?.content).toContain('Finish or cancel the current request');
+    expect(store.getState().isStreaming).toBe(true);
     expect(store.getState().pendingConfirmation).toBeNull();
     expect(findApp).not.toHaveBeenCalled();
   });
@@ -173,11 +175,8 @@ describe('requestStopApp', () => {
   // Regression: PR #93 Copilot 3248436550. Without this gate, clicking Stop
   // while another confirmation is open would overwrite pendingConfirmation
   // and orphan the prior tool message (awaitingConfirmation: true, no
-  // confirm/cancel path → chat wedged). The fix matches standard modal
-  // overlay UX: background clicks while a modal is open are inert. The
-  // referential `.toBe(priorConfirmation)` assertion is the strongest
-  // form — guarantees no overwrite at all, not just same-shape.
-  it('is a silent no-op when another confirmation is already pending', () => {
+  // confirm/cancel path → chat wedged). Preserve the prior confirmation by reference.
+  it('explains a Stop refusal without overwriting the pending confirmation', () => {
     findApp.mockReturnValue(makeApp({ name: 'redis' }));
     const store = setupStore();
     const priorConfirmation = {
@@ -198,26 +197,35 @@ describe('requestStopApp', () => {
 
     store.getState().requestStopApp('redis');
 
-    expect(store.getState().messages).toHaveLength(0);
+    expect(store.getState().messages.at(-1)?.local).toBe(true);
+    expect(store.getState().messages.at(-1)?.content).toContain('Confirm or cancel the pending action');
     // Critically: the prior confirmation is preserved by reference, not
     // overwritten with a new stop_app one.
     expect(store.getState().pendingConfirmation).toBe(priorConfirmation);
     expect(findApp).not.toHaveBeenCalled();  // bail-out before registry lookup
   });
 
-  it('is a silent no-op when not connected or address is missing', () => {
+  it('works without the relay but refuses a missing wallet address', () => {
     findApp.mockReturnValue(makeApp());
 
     const disconnected = setupStore({ isConnected: false });
     disconnected.getState().requestStopApp('all');
-    expect(disconnected.getState().messages).toHaveLength(0);
-    expect(disconnected.getState().pendingConfirmation).toBeNull();
+    expect(disconnected.getState().pendingConfirmation?.action.toolName).toBe('stop_app');
+    findApp.mockClear();
 
     const noAddress = setupStore({ address: undefined });
     noAddress.getState().requestStopApp('all');
-    expect(noAddress.getState().messages).toHaveLength(0);
+    expect(noAddress.getState().messages.at(-1)?.content).toContain('wallet is not ready');
     expect(noAddress.getState().pendingConfirmation).toBeNull();
 
+    expect(findApp).not.toHaveBeenCalled();
+  });
+
+  it('explains a missing transaction client during a wallet transition', () => {
+    const store = setupStore({ clientManager: null });
+    store.getState().requestStopApp('all');
+    expect(store.getState().messages.at(-1)?.content).toContain('wallet is not ready');
+    expect(store.getState().pendingConfirmation).toBeNull();
     expect(findApp).not.toHaveBeenCalled();
   });
 });

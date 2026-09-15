@@ -20,9 +20,10 @@ import { getLeaseProvision, type FredLeaseStatus } from '../../api/fred';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits, toBaseUnits } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
-import { withTimeout } from '../../api/utils';
+import { isAbortError, withTimeout } from '../../api/utils';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
-import { connectionPatch, deriveUrlFromConnection, failureText } from './helpers';
+import { connectionPatch, deriveUrlFromConnection, failureText, resolveAppEndpoint } from './helpers';
+import { appCardConnection } from './appCardConnection';
 import { normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
 import { getLeaseItemsForLease } from '../../api/leaseItems';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
@@ -72,20 +73,6 @@ export type { BatchDeployEntry, BatchDeployPlan, BatchDeployPlanEntry } from './
 export type BatchDeployToolResult = ToolResult & {
   rejectedEntries?: readonly BatchDeployEntryRejection[];
 };
-
-/**
- * Was the thrown thing ITSELF an abort?
- *
- * Deliberately NOT `signal?.aborted`: any new user message aborts the shared
- * chat controller, so a genuine `ProviderApiError(500)` landing while the user
- * types would otherwise be reported as "cancelled before the provider was
- * asked" and never recorded. Two arms because `throwIfAborted()` raises a
- * `DOMException`, but some polyfills raise a plain `Error` with that name.
- */
-function isAbortError(error: unknown): boolean {
-  if (error instanceof DOMException && error.name === 'AbortError') return true;
-  return error instanceof Error && error.name === 'AbortError';
-}
 
 /**
  * Read the SDK's structured transaction-cancellation verdict without relying
@@ -707,8 +694,7 @@ export async function executeConfirmedDeployApp(
   appRegistry.updateApp(address, leaseUuid, {
     chainState: 'active',
     provisionState: 'confirmed',
-    url: connectionUrl,
-    connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+    ...connectionPatch({ url: connectionUrl, connection }),
     ...customDomainsUpdate,
   });
   onProgress?.({ phase: 'ready', detail: 'App is live!' });
@@ -731,7 +717,7 @@ export async function executeConfirmedDeployApp(
       name,
       url: connectionUrl,
       status: 'running',
-      connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+      connection: appCardConnection(connection),
       ...(attachedDomain
         ? {
             customDomain: {
@@ -996,8 +982,7 @@ export async function executeConfirmedBatchDeploy(
       appRegistry.updateApp(address, result.lease_uuid, {
         chainState: 'active',
         provisionState: 'confirmed',
-        url: connectionUrl,
-        connection: connection ? JSON.parse(JSON.stringify(connection)) : undefined,
+        ...connectionPatch({ url: connectionUrl, connection }),
       });
 
       // deployManifest attaches the domain on-chain but doesn't touch barney's
@@ -1492,7 +1477,7 @@ export async function executeConfirmedRestartApp(
       // Provider observation: the wait resolved non-terminal — the workload is up.
       appRegistry.updateApp(address, leaseUuid, {
         provisionState: 'confirmed',
-        ...connectionPatch({ url: connectionUrl, connection }, previous),
+        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }, previous),
       });
       onProgress?.({ phase: 'ready', operation: 'restart' });
 
@@ -1501,7 +1486,7 @@ export async function executeConfirmedRestartApp(
         data: {
           message: `App "${name}" has been restarted.`,
           name,
-          url: connectionUrl ?? previous?.url,
+          url: connectionUrl ?? (previous ? resolveAppEndpoint(previous) : undefined),
           status: 'running',
         },
       };
@@ -1624,10 +1609,10 @@ async function executeConfirmedBatchRestart(
 
           appRegistry.updateApp(address, entry.leaseUuid, {
             provisionState: 'confirmed',
-            ...connectionPatch({ url: connectionUrl, connection }, previous),
+            ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }, previous),
           });
           updateProgress('ready', 'App is live!');
-          return { name, url: connectionUrl ?? previous?.url };
+          return { name, url: connectionUrl ?? (previous ? resolveAppEndpoint(previous) : undefined) };
         }
 
         appRegistry.updateApp(address, entry.leaseUuid, { provisionState: 'failed' });
@@ -1977,7 +1962,7 @@ export async function executeConfirmedUpdateApp(
 
   // Snapshot existing app state before overwriting — needed for rollback detection.
   const existingApp = appRegistry.getAppByLease(address, leaseUuid);
-  const previousUrl = existingApp?.url;
+  const previousUrl = existingApp ? resolveAppEndpoint(existingApp) : undefined;
   const previousManifest = existingApp?.manifest;
 
   // Update registry with new manifest content (secrets stripped)
@@ -2130,7 +2115,7 @@ export async function executeConfirmedUpdateApp(
       // /provision read above carried no failure signal.
       appRegistry.updateApp(address, leaseUuid, {
         provisionState: 'confirmed',
-        ...connectionPatch({ url: connectionUrl, connection }, existingApp),
+        ...connectionPatch({ url: connectionUrl, connection, connectionStale: !connection }, appRegistry.getAppByLease(address, leaseUuid)),
       });
       onProgress?.({ phase: 'ready', operation: 'update' });
 
@@ -2321,7 +2306,7 @@ export async function executeSetCustomDomain(
     }
   }
 
-  const expectedCnameTarget = resolveExpectedCnameTarget(app.connection, serviceName);
+  const expectedCnameTarget = resolveExpectedCnameTarget(app.connection, serviceName, app.connectionStale);
 
   let confirmationMessage: string;
   if (customDomain === '') {

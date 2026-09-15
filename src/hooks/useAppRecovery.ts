@@ -6,6 +6,8 @@ import { getAppByLease, getApps } from '../registry/appRegistry';
 import type { AIStore } from '../stores/aiStore';
 import {
   APP_RECOVERY_MAX_ATTEMPTS,
+  APP_CONNECTION_RECOVERY_MAX_ATTEMPTS,
+  APP_CONNECTION_RECOVERY_INTERVAL_MS,
   APP_RECOVERY_POLL_INTERVAL_MS,
   AUTO_REFRESH_INTERVAL_MS,
 } from '../config/constants';
@@ -15,6 +17,7 @@ import { useVisibilityPolling } from './useVisibilityPolling';
 interface RecoveryAttempt {
   snapshot: string;
   attempts: number;
+  maxAttempts: number;
   nextAttemptAt: number;
   retired: boolean;
 }
@@ -62,14 +65,20 @@ export function useAppRecovery(address: string | undefined): void {
     const candidates = apps.flatMap(app => {
       if (!app.providerUrl || !app.chainState || app.chainState === 'absent'
         || app.provisionState === 'failed'
-        || (app.provisionState === 'confirmed' && app.url && app.connection)) return [];
+        || (app.provisionState === 'confirmed' && app.url && app.connection && !app.connectionStale)) return [];
       const snapshot = recoverySnapshotKey(app);
+      const staleInventory = app.provisionState === 'confirmed' && !!app.connectionStale && !!app.connection;
+      const maxAttempts = staleInventory ? APP_CONNECTION_RECOVERY_MAX_ATTEMPTS : APP_RECOVERY_MAX_ATTEMPTS;
       let attempt = attemptsRef.current.get(app.leaseUuid);
       if (!attempt || attempt.snapshot !== snapshot) {
-        attempt = { snapshot, attempts: 0, nextAttemptAt: 0, retired: false };
+        attempt = {
+          snapshot, attempts: 0, nextAttemptAt: 0, retired: false,
+          maxAttempts,
+        };
         attemptsRef.current.set(app.leaseUuid, attempt);
       }
-      if (attempt.retired || attempt.attempts >= APP_RECOVERY_MAX_ATTEMPTS
+      attempt.maxAttempts = Math.max(attempt.maxAttempts, maxAttempts);
+      if (attempt.retired || attempt.attempts >= attempt.maxAttempts
         || attempt.nextAttemptAt > Date.now()) return [];
       return [{ app, attempt }];
     }).sort((left, right) => left.attempt.nextAttemptAt - right.attempt.nextAttemptAt);
@@ -80,6 +89,9 @@ export function useAppRecovery(address: string | undefined): void {
     const abort = new AbortController();
     abortRef.current = abort;
     attempt.attempts++;
+    const retryDelay = attempt.attempts >= APP_RECOVERY_MAX_ATTEMPTS
+      ? APP_CONNECTION_RECOVERY_INTERVAL_MS
+      : AUTO_REFRESH_INTERVAL_MS * 2 ** (attempt.attempts - 1);
     try {
       const observation = await hydrateDiscoveredApp(address, app, wallet.signing, { signal: abort.signal });
       if (abort.signal.aborted) return;
@@ -88,11 +100,11 @@ export function useAppRecovery(address: string | undefined): void {
         attempt.snapshot = recoverySnapshotKey(current);
         attempt.retired = observation.complete;
       }
-      attempt.nextAttemptAt = Date.now() + AUTO_REFRESH_INTERVAL_MS * 2 ** (attempt.attempts - 1);
+      attempt.nextAttemptAt = Date.now() + retryDelay;
     } catch (error) {
       if (!abort.signal.aborted) {
         logError('useAppRecovery', error);
-        attempt.nextAttemptAt = Date.now() + AUTO_REFRESH_INTERVAL_MS * 2 ** (attempt.attempts - 1);
+        attempt.nextAttemptAt = Date.now() + retryDelay;
       }
     } finally {
       // Foreground cancellation refunds the retry budget, but the interrupted

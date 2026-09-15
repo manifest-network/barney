@@ -15,7 +15,7 @@
  * additionally tracks its own "stuck" timer locally (a UI-only concern that
  * doesn't need cross-surface coherence).
  *
- * All three states route mutations through `useAI().sendMessage` so the AI
+ * All three states route mutations through the store's `sendMessage` so the AI
  * tool flow (validation → ConfirmationCard → broadcast) handles the chain
  * interaction.
  */
@@ -23,7 +23,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Globe, Copy, Check, AlertCircle } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
-import { useAI } from '../../hooks/useAI';
+import { useAIStore } from '../../contexts/aiStoreContext';
 import type { CustomDomainStatusKind } from '../../utils/customDomainStatus';
 import { validateCustomDomainFormat, isApex, apexRecordKindLabel } from '../../utils/customDomainValidation';
 import { normalizeFqdn } from '../../utils/connection';
@@ -60,7 +60,7 @@ function StatusPill({ kind }: { kind: CustomDomainStatusKind }) {
 }
 
 function NoDomainForm({ data }: { data: CustomDomainCardData }) {
-  const { sendMessage } = useAI();
+  const sendMessage = useAIStore((state) => state.sendMessage);
   const [input, setInput] = useState('');
   // Service picker for stacks — initial = AI-prefilled serviceName, else the
   // lone stack service when there's only one. Multi-service stacks start empty
@@ -154,14 +154,15 @@ function NoDomainForm({ data }: { data: CustomDomainCardData }) {
 
 function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
-  const { sendMessage, dnsStatuses } = useAI();
+  const sendMessage = useAIStore((state) => state.sendMessage);
+  const dnsStatuses = useAIStore((state) => state.dnsStatuses);
 
   // Read from the shared slice driven by `useDnsStatusPolling` in MainLayout
   // — no local poll loop, no double-probing.
   const report = dnsStatuses.get(dnsStatusKey(data.leaseUuid, data.fqdn));
   const kind = report?.kind ?? 'pending_dns';
   const detail = report?.detail;
-  const target = report?.expectedCnameTarget ?? data.expectedCnameTarget;
+  const target = report ? report.expectedCnameTarget : data.expectedCnameTarget;
 
   // The stuck hint is purely a UI-side derivation: how long has this domain
   // been showing as pending_dns *since this card mounted*. The slice itself
@@ -267,7 +268,8 @@ function ActiveDomainView({ data }: { data: CustomDomainCardData }) {
 }
 
 function MultiDomainView({ data }: { data: CustomDomainCardData }) {
-  const { dnsStatuses, sendMessage } = useAI();
+  const dnsStatuses = useAIStore((state) => state.dnsStatuses);
+  const sendMessage = useAIStore((state) => state.sendMessage);
   const domains = data.domains ?? [];
 
   const handleChange = useCallback((serviceName: string) => {
@@ -302,7 +304,7 @@ function MultiDomainView({ data }: { data: CustomDomainCardData }) {
             <DomainRow
               key={d.customDomain}
               fqdn={d.customDomain}
-              expectedCnameTarget={report?.expectedCnameTarget ?? d.expectedCnameTarget}
+              expectedCnameTarget={report ? report.expectedCnameTarget : d.expectedCnameTarget}
               status={report?.kind ?? 'pending_dns'}
               detail={report?.detail}
               serviceName={d.serviceName !== '' ? d.serviceName : undefined}

@@ -14,7 +14,8 @@ vi.mock('./useAI', () => ({
   useAI: () => ({ dnsStatuses, setDnsStatuses }),
 }));
 
-vi.mock('../utils/customDomainStatus', () => ({
+vi.mock('../utils/customDomainStatus', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../utils/customDomainStatus')>(),
   resolveDnsViaDoh: vi.fn(),
   probeHttps: vi.fn(),
   computeStatus: vi.fn(),
@@ -40,6 +41,7 @@ import { useDnsStatusPolling, deriveCandidateTargets } from './useDnsStatusPolli
 import { useVisibilityPolling } from './useVisibilityPolling';
 import { resolveDnsViaDoh, probeHttps, computeStatus } from '../utils/customDomainStatus';
 import { resolveExpectedCnameTarget } from '../utils/connection';
+import { logError } from '../utils/errors';
 import type { AppEntry } from '../registry/appRegistry';
 
 function makeApp(overrides: Partial<AppEntry> = {}): AppEntry {
@@ -74,6 +76,7 @@ describe('useDnsStatusPolling', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(resolveExpectedCnameTarget).mockReset().mockImplementation((_connection, _serviceName, stale) => stale ? undefined : 'auto.barney0.manifest0.net');
     dnsStatuses = new Map();
   });
 
@@ -101,7 +104,7 @@ describe('useDnsStatusPolling', () => {
 
   it('skips apps whose domains are all in terminal states', () => {
     dnsStatuses = new Map([
-      ['lease-1::app.example.com', { kind: 'active' }],
+      ['lease-1::app.example.com', { kind: 'active', expectedCnameTarget: 'auto.barney0.manifest0.net' }],
     ]);
     mounted = mountWith([makeApp()]);
     const calls = vi.mocked(useVisibilityPolling).mock.calls;
@@ -114,6 +117,48 @@ describe('useDnsStatusPolling', () => {
     const calls = vi.mocked(useVisibilityPolling).mock.calls;
     const lastOpts = calls[calls.length - 1][2];
     expect(lastOpts?.enabled).toBe(false);
+  });
+
+  it.each(['active', 'failed', 'pending_dns'])('discards a saved %s DNS verdict when an operation invalidates its target', async (kind) => {
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+    dnsStatuses.set('lease-1::app.example.com', { kind, expectedCnameTarget: 'auto.barney0.manifest0.net' });
+    mounted = mountWith([makeApp({ connectionStale: true })]);
+    expect(vi.mocked(useVisibilityPolling).mock.lastCall?.[2]?.enabled).toBe(false);
+    const reset = setDnsStatuses.mock.lastCall![0].get('lease-1::app.example.com');
+    expect(reset).toMatchObject({ kind: 'pending_dns', expectedCnameTarget: undefined, detail: 'Waiting for provider info…' });
+    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok', cname: 'new.provider.example' } as any);
+    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' } as any);
+    vi.mocked(computeStatus).mockReturnValue({ kind: 'active' });
+    await pollFn();
+    expect(resolveDnsViaDoh).not.toHaveBeenCalled();
+    expect(probeHttps).not.toHaveBeenCalled();
+  });
+
+  it('rechecks a terminal DNS verdict after a fresh connection reports a different target', async () => {
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+    dnsStatuses.set('lease-1::app.example.com', { kind: 'active', expectedCnameTarget: 'old.provider.example' });
+    vi.mocked(resolveExpectedCnameTarget).mockReturnValue('new.provider.example');
+    mounted = mountWith([makeApp()]);
+    expect(vi.mocked(useVisibilityPolling).mock.lastCall?.[2]?.enabled).toBe(true);
+    expect(setDnsStatuses.mock.lastCall![0].get('lease-1::app.example.com')).toMatchObject({ kind: 'pending_dns', expectedCnameTarget: 'new.provider.example' });
+    vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok', cname: 'new.provider.example' } as any);
+    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' } as any);
+    vi.mocked(computeStatus).mockReturnValue({ kind: 'active' });
+    await pollFn();
+    expect(computeStatus).toHaveBeenCalledWith(expect.objectContaining({ expectedCname: 'new.provider.example' }));
+  });
+
+  it('ignores a plain Error cancellation without logging a DNS failure', async () => {
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+    vi.mocked(resolveDnsViaDoh).mockRejectedValue(Object.assign(new Error('Cancelled'), { name: 'AbortError' }));
+    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' } as any);
+    mounted = mountWith([makeApp()]);
+    await pollFn();
+    expect(logError).not.toHaveBeenCalled();
+    expect(setDnsStatuses.mock.lastCall![0].size).toBe(0);
   });
 
   it('runs probes when polling fires and writes to the store', async () => {
@@ -165,17 +210,14 @@ describe('useDnsStatusPolling', () => {
     vi.mocked(resolveDnsViaDoh).mockResolvedValue({ result: 'ok' } as any);
     vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' } as any);
 
-    // Tick 1: target undefined → reducer returns pending_dns (mocked).
+    // No DNS request can validate the domain until provider metadata arrives.
     vi.mocked(resolveExpectedCnameTarget).mockReturnValueOnce(undefined);
-    vi.mocked(computeStatus).mockReturnValueOnce({
-      kind: 'pending_dns',
-      detail: 'Waiting for provider info…',
-    } as any);
 
     mounted = mountWith([makeApp()]);
     await pollFn();
     const firstCall = setDnsStatuses.mock.calls[0][0] as Map<string, { kind: string }>;
     expect(firstCall.get('lease-1::app.example.com')?.kind).toBe('pending_dns');
+    expect(resolveDnsViaDoh).not.toHaveBeenCalled();
 
     // Simulate the slice update landing — the next tick's terminal filter
     // (`isTerminal` at line 108) reads from this map. `pending_dns` is
@@ -203,7 +245,7 @@ describe('useDnsStatusPolling', () => {
     // Mutate the slice the hook sees and force a re-render. Mirrors the real
     // effect of `setDnsStatuses` landing in the store between polls.
     dnsStatuses = new Map([
-      ['lease-1::app.example.com', { kind: 'active' }],
+      ['lease-1::app.example.com', { kind: 'active', expectedCnameTarget: 'auto.barney0.manifest0.net' }],
     ]);
     flushSync(() => { mounted!.root.render(createElement(Wrapper, { apps: [makeApp()] })); });
 
@@ -348,7 +390,7 @@ describe('useDnsStatusPolling', () => {
   // by the reactive `useEffect([allTargets])` so future renders don't see a
   // ghost terminal row.
   it('prunes stale dnsStatuses entries when a domain is removed from the candidate set', () => {
-    dnsStatuses = new Map([['lease-1::app.example.com', { kind: 'active' }]]);
+    dnsStatuses = new Map([['lease-1::app.example.com', { kind: 'active', expectedCnameTarget: 'auto.barney0.manifest0.net' }]]);
     mounted = mountWith([makeApp()]);
     setDnsStatuses.mockClear();
     flushSync(() => {
@@ -368,7 +410,7 @@ describe('useDnsStatusPolling', () => {
   // duration of the trap. The reactive prune effect breaks the trap by
   // evicting the stale key when the candidate set goes empty.
   it('re-enables polling after clear-then-reattach of the same (lease, domain)', () => {
-    dnsStatuses = new Map([['lease-1::app.example.com', { kind: 'active' }]]);
+    dnsStatuses = new Map([['lease-1::app.example.com', { kind: 'active', expectedCnameTarget: 'auto.barney0.manifest0.net' }]]);
     mounted = mountWith([makeApp()]);
     // Initially trapped (stale active): polling should be disabled.
     let calls = vi.mocked(useVisibilityPolling).mock.calls;

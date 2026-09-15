@@ -25,6 +25,7 @@ import { useVisibilityPolling } from './useVisibilityPolling';
 import { useAI } from './useAI';
 import {
   computeStatus,
+  PROVIDER_INFO_PENDING_DETAIL,
   probeHttps,
   resolveDnsViaDoh,
 } from '../utils/customDomainStatus';
@@ -34,12 +35,14 @@ import { logError } from '../utils/errors';
 import type { AppEntry } from '../registry/appRegistry';
 import { dnsStatusKey, type DnsStatusEntry } from '../stores/aiStore';
 import { DNS_POLL_INTERVAL_MS } from '../config/constants';
+import { isAbortError } from '../api/utils';
 
 /** Candidate polling target — one per (app, custom-domain) pair. */
 export interface DnsPollingTarget {
   app: AppEntry;
   domain: string;
   serviceName: string;
+  expectedCnameTarget?: string;
 }
 
 /** Pure derivation of polling candidates from the registry. Does NOT consult
@@ -55,7 +58,8 @@ export function deriveCandidateTargets(apps: readonly AppEntry[]): DnsPollingTar
     if (!app.customDomains || app.customDomains.length === 0) continue;
     if (app.status !== 'running') continue;
     for (const dom of app.customDomains) {
-      list.push({ app, domain: dom.customDomain, serviceName: dom.serviceName });
+      list.push({ app, domain: dom.customDomain, serviceName: dom.serviceName,
+        expectedCnameTarget: resolveExpectedCnameTarget(app.connection, dom.serviceName, app.connectionStale) });
     }
   }
   return list;
@@ -63,8 +67,23 @@ export function deriveCandidateTargets(apps: readonly AppEntry[]): DnsPollingTar
 
 /** Predicate: is this domain in a terminal state (active or failed)?
  *  Encapsulates the once-active-stop-polling rule. */
-function isTerminal(entry: DnsStatusEntry | undefined): boolean {
-  return entry?.kind === 'active' || entry?.kind === 'failed';
+function isTerminal(entry: DnsStatusEntry | undefined, expectedCnameTarget: string | undefined): boolean {
+  return (entry?.kind === 'active' || entry?.kind === 'failed')
+    && entry.expectedCnameTarget === expectedCnameTarget;
+}
+
+function needsProviderInfo(target: DnsPollingTarget, entry: DnsStatusEntry | undefined): boolean {
+  return !target.expectedCnameTarget
+    && (entry?.kind !== 'pending_dns' || entry.detail !== PROVIDER_INFO_PENDING_DETAIL);
+}
+
+function pendingEntry(target: DnsPollingTarget): DnsStatusEntry {
+  return {
+    leaseUuid: target.app.leaseUuid, customDomain: target.domain,
+    serviceName: target.serviceName, expectedCnameTarget: target.expectedCnameTarget,
+    kind: 'pending_dns',
+    ...(!target.expectedCnameTarget ? { detail: PROVIDER_INFO_PENDING_DETAIL } : {}),
+  };
 }
 
 export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
@@ -78,8 +97,8 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
    *  the live `dnsStatuses` so polling actually stops once every candidate
    *  hits a terminal state. No allocation; the candidate list itself is
    *  reference-stable. */
-  const hasNonTerminalTarget = allTargets.some(({ app, domain }) =>
-    !isTerminal(dnsStatuses.get(dnsStatusKey(app.leaseUuid, domain))),
+  const hasNonTerminalTarget = allTargets.some(({ app, domain, expectedCnameTarget }) =>
+    !!expectedCnameTarget && !isTerminal(dnsStatuses.get(dnsStatusKey(app.leaseUuid, domain)), expectedCnameTarget),
   );
 
   // Refs so the poll callback doesn't depend on dnsStatuses/targets directly
@@ -126,18 +145,29 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
   //
   // Refs: PR #93 Copilot review comment 3243486930.
   useEffect(() => {
-    const liveKeys = new Set(
-      allTargets.map((t) => dnsStatusKey(t.app.leaseUuid, t.domain)),
+    const liveTargets = new Map(
+      allTargets.map((target) => [dnsStatusKey(target.app.leaseUuid, target.domain), target]),
     );
-    let needsPrune = false;
-    for (const key of dnsStatusesRef.current.keys()) {
-      if (!liveKeys.has(key)) { needsPrune = true; break; }
+    let needsPrune = allTargets.some((target) => needsProviderInfo(target,
+      dnsStatusesRef.current.get(dnsStatusKey(target.app.leaseUuid, target.domain))));
+    for (const [key, entry] of dnsStatusesRef.current) {
+      const target = liveTargets.get(key);
+      if (!target || entry.expectedCnameTarget !== target.expectedCnameTarget) { needsPrune = true; break; }
     }
     if (!needsPrune) return;
 
     const next = new Map(dnsStatusesRef.current);
-    for (const key of next.keys()) {
-      if (!liveKeys.has(key)) next.delete(key);
+    for (const [key, entry] of next) {
+      const target = liveTargets.get(key);
+      if (!target) next.delete(key);
+      else if (entry.expectedCnameTarget !== target.expectedCnameTarget) {
+        // A previous verdict about a different (or now unconfirmed) target
+        // cannot supply current DNS guidance, even if it was terminal.
+        next.set(key, pendingEntry(target));
+      }
+    }
+    for (const [key, target] of liveTargets) {
+      if (needsProviderInfo(target, next.get(key))) next.set(key, pendingEntry(target));
     }
     setDnsStatuses(next);
   }, [allTargets, setDnsStatuses]);
@@ -149,7 +179,7 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
     // its memo doesn't churn on slice writes.
     const liveDns = dnsStatusesRef.current;
     const current = allTargetsRef.current.filter(
-      ({ app, domain }) => !isTerminal(liveDns.get(dnsStatusKey(app.leaseUuid, domain))),
+      ({ app, domain, expectedCnameTarget }) => !!expectedCnameTarget && !isTerminal(liveDns.get(dnsStatusKey(app.leaseUuid, domain)), expectedCnameTarget),
     );
     if (current.length === 0) return;
 
@@ -157,8 +187,7 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
     const ac = new AbortController();
     abortRef.current = ac;
 
-    const updates = await Promise.all(current.map(async ({ app, domain, serviceName }) => {
-      const expectedCnameTarget = resolveExpectedCnameTarget(app.connection, serviceName);
+    const updates = await Promise.all(current.map(async ({ app, domain, serviceName, expectedCnameTarget }) => {
       try {
         const [dns, https] = await Promise.all([
           resolveDnsViaDoh(domain, ac.signal),
@@ -180,7 +209,7 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
         };
         return entry;
       } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') return null;
+        if (isAbortError(err)) return null;
         logError('useDnsStatusPolling', err);
         return null;
       }
@@ -206,7 +235,8 @@ export function useDnsStatusPolling(apps: readonly AppEntry[]): void {
     for (const u of updates) {
       if (!u) continue;
       const stillTargeted = liveTargets.some(
-        (t) => t.app.leaseUuid === u.leaseUuid && t.domain === u.customDomain,
+        (t) => t.app.leaseUuid === u.leaseUuid && t.domain === u.customDomain
+          && t.expectedCnameTarget === u.expectedCnameTarget,
       );
       if (!stillTargeted) continue;
       next.set(dnsStatusKey(u.leaseUuid, u.customDomain), u);

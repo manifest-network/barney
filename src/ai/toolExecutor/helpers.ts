@@ -65,16 +65,22 @@ export function extractPrimaryServicePorts<Port>(
  *  - Plain number:       12345
  */
 export function extractPort(value: unknown): number | undefined {
-  let raw = Array.isArray(value) ? value[0] : value;
-  if (raw && typeof raw === 'object') {
-    const mapping = raw as Record<string, unknown>;
-    raw = mapping.host_port ?? mapping.HostPort;
-  }
+  return normalizePortMapping(value)?.host_port;
+}
+
+/** Normalize legacy and current mappings together. Null means unassigned;
+ * undefined means malformed, which is not evidence of an empty inventory. */
+export function normalizePortMapping(value: unknown): { host_port: number; host_ip?: string } | null | undefined {
+  const unwrapped = Array.isArray(value) ? value[0] : value;
+  const mapping = unwrapped && typeof unwrapped === 'object' ? unwrapped as Record<string, unknown> : undefined;
+  const raw = mapping ? mapping.host_port ?? mapping.HostPort : unwrapped;
+  if (raw === 0 || raw === '0') return null;
   if (typeof raw !== 'number' && typeof raw !== 'string') return undefined;
   if (typeof raw === 'string' && !/^\d+$/.test(raw.trim())) return undefined;
   const port = Number(raw);
-  // Zero means unassigned; fractions and values outside the TCP/UDP range are unusable.
-  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return undefined;
+  const host = mapping?.host_ip ?? mapping?.HostIp;
+  return { host_port: port, ...(typeof host === 'string' ? { host_ip: host } : {}) };
 }
 
 // TODO: Replace this hard-coded set with an automated signal from the provider
@@ -161,6 +167,15 @@ export function formatConnectionUrl(
   return host.replace(/^https?:\/\//, '');
 }
 
+/** Keep saved DNS/qualified endpoints intact. Legacy bare IPv4 endpoints need
+ * their published port, without substituting the provider's internal host. */
+export function resolveAppEndpoint({ url, connection }: Pick<AppEntry, 'url' | 'connection'>): string | undefined {
+  if (!url) return formatConnectionUrl(undefined, connection);
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(url)) return url;
+  const port = extractPort(Object.values(connection?.ports ?? {})[0]);
+  return port === undefined ? url : `${url}:${port}`;
+}
+
 /**
  * Shape an app URL from a DeployResult.connection with no extra API call.
  * Selects non-empty top-level, instance, or primary-service ports and promotes
@@ -204,22 +219,21 @@ export function deriveUrlFromConnection(
 }
 
 /**
- * Keep stored access details when a provider read supplies no usable endpoint.
- * Port mappings may stay stale until a later read yields a usable URL, but an
- * incomplete read must not erase the existing access details.
+ * A returned connection is an independent observation, including an empty or
+ * unassigned inventory. Preserve old inventory only when no connection was read.
+ * Lifecycle callers supply the prior inventory to invalidate saved DNS evidence;
+ * a missing inventory has nothing to mark stale.
  */
 export function connectionPatch(
-  { url, connection }: { url?: string; connection?: ConnectionDetails },
-  previous?: Pick<AppEntry, 'url' | 'connection'> | null,
-): Pick<AppEntry, 'url' | 'connection'> {
-  const patch: Pick<AppEntry, 'url' | 'connection'> = {};
+  { url, connection, connectionStale }: { url?: string; connection?: ConnectionDetails; connectionStale?: boolean },
+  previous?: Pick<AppEntry, 'connection'> | null,
+): Pick<AppEntry, 'url' | 'connection' | 'connectionStale'> {
+  const patch: Pick<AppEntry, 'url' | 'connection' | 'connectionStale'> = {};
   if (url !== undefined) patch.url = url;
-  if (connection && (url !== undefined || !previous?.connection)) {
+  if (connectionStale !== undefined) patch.connectionStale = connectionStale && !!previous?.connection;
+  if (connection) {
     patch.connection = JSON.parse(JSON.stringify(connection));
-  } else if (url !== undefined && url !== previous?.url) {
-    // A new status endpoint supersedes old port mappings, even when the
-    // connection read failed. Keeping those mappings would override the new URL.
-    patch.connection = undefined;
+    patch.connectionStale = false;
   }
   return patch;
 }

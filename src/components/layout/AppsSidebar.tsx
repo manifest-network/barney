@@ -70,6 +70,11 @@ interface WalletSnapshot<T> {
   value: T;
 }
 
+interface StatusSelectionFeedback {
+  message: string;
+  blockedBy?: 'request' | 'confirmation';
+}
+
 interface CreditEstimateSnapshot {
   hoursRemaining: number | null;
   burnRate: number | null;
@@ -111,11 +116,13 @@ function currentWalletValue<T>(
 
 export function AppsSidebar({ onClose }: AppsSidebarProps) {
   const { address, disconnect, wallet } = useChain(CHAIN_NAME);
-  const { sendMessage, attachPayload, clearPayload, dnsStatuses } = useAI();
+  const { sendMessage, requestAppStatus, attachPayload, clearPayload, dnsStatuses, isStreaming, pendingConfirmation } = useAI();
   // Unlike an address string, this identity changes for A → B → A. Registry
   // and credit snapshots from an earlier visit to A therefore remain hidden
   // until the current A lifecycle successfully refreshes them.
   const walletContext = useMemo(() => ({ address }), [address]);
+  const [statusSelection, setStatusSelection] = useState<WalletSnapshot<string> | null>(null);
+  const [statusSelectionError, setStatusSelectionError] = useState<WalletSnapshot<StatusSelectionFeedback> | null>(null);
   const [appsSnapshot, setAppsSnapshot] =
     useState<WalletSnapshot<AppEntry[]> | null>(null);
   const [creditBalanceSnapshot, setCreditBalanceSnapshot] =
@@ -402,6 +409,15 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
     [apps]
   );
 
+  const selectedStatusApp = currentWalletValue(statusSelection, walletContext);
+  const statusFeedback = currentWalletValue(statusSelectionError, walletContext);
+  if ((statusFeedback?.blockedBy === 'request' && !isStreaming)
+    || (statusFeedback?.blockedBy === 'confirmation' && !pendingConfirmation)) {
+    setStatusSelectionError(null);
+  }
+  const statusError = statusFeedback?.message;
+  const selectionBlocked = !!selectedStatusApp;
+
   return (
     <div className="apps-sidebar">
       {/* Wallet pill */}
@@ -492,6 +508,7 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
           <span ref={badgeRef} className="apps-sidebar__apps-count">{runningApps.length}</span>
         </div>
         <div className="apps-sidebar__apps-list">
+          {statusError && <p className="apps-sidebar__apps-empty" role="alert">{statusError}</p>}
           {runningApps.length === 0 ? (
             <p className="apps-sidebar__apps-empty">No running apps</p>
           ) : (
@@ -535,9 +552,32 @@ export function AppsSidebar({ onClose }: AppsSidebarProps) {
                 <button
                   key={app.leaseUuid}
                   type="button"
-                  onClick={() => {
-                    void sendMessage(`What's the status of ${app.name}?`);
-                    onClose?.();
+                  aria-disabled={selectionBlocked || undefined}
+                  onClick={async () => {
+                    if (selectionBlocked) return;
+                    const context = walletContext;
+                    if (isStreaming || pendingConfirmation) {
+                      setStatusSelectionError({ context, value: { blockedBy: pendingConfirmation ? 'confirmation' : 'request', message: pendingConfirmation
+                        ? 'Confirm or cancel the pending action to select an app.'
+                        : 'Finish or cancel the current request to select an app.' } });
+                      return;
+                    }
+                    setStatusSelection({ context, value: app.name });
+                    setStatusSelectionError(null);
+                    let started = false;
+                    try {
+                      const accepted = await requestAppStatus(app.name, () => {
+                        started = true;
+                        if (currentWalletContextRef.current === context) onClose?.();
+                      });
+                      if (currentWalletContextRef.current !== context) return;
+                      if (!accepted) setStatusSelectionError({ context, value: { message: 'Could not start the status check. Try selecting the app again.' } });
+                    } catch (error) {
+                      logError('AppsSidebar.appStatus', error);
+                      if (!started && currentWalletContextRef.current === context) setStatusSelectionError({ context, value: { message: 'Could not start the status check. Please try again.' } });
+                    } finally {
+                      if (currentWalletContextRef.current === context) setStatusSelection(null);
+                    }
                   }}
                   className="apps-sidebar__app-item"
                 >

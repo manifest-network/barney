@@ -9,7 +9,7 @@ import type { SigningContext } from '../ai/toolExecutor/types';
 import { LeaseState } from '../api/billing';
 import * as registry from '../registry/appRegistry';
 import type { AppEntry } from '../registry/appRegistry';
-import { APP_RECOVERY_MAX_ATTEMPTS, APP_RECOVERY_POLL_INTERVAL_MS, APP_RECOVERY_TIMEOUT_MS, AUTO_REFRESH_INTERVAL_MS } from '../config/constants';
+import { APP_CONNECTION_RECOVERY_INTERVAL_MS, APP_CONNECTION_RECOVERY_MAX_ATTEMPTS, APP_RECOVERY_MAX_ATTEMPTS, APP_RECOVERY_POLL_INTERVAL_MS, APP_RECOVERY_TIMEOUT_MS, AUTO_REFRESH_INTERVAL_MS } from '../config/constants';
 import { useAppRecovery } from './useAppRecovery';
 
 vi.mock('../utils/errors', () => ({ logError: vi.fn() }));
@@ -105,6 +105,129 @@ describe('useAppRecovery', () => {
     expect(vi.mocked(getLeaseStatus).mock.calls.map(call => call[2])).toEqual(['status-1', 'status-2']);
     expect(vi.mocked(getLeaseConnectionInfo).mock.calls.map(call => call[2])).toEqual(['connection-1', 'connection-2']);
     expect(registry.getApps(address).every(app => app.status === 'running')).toBe(true);
+  });
+
+  it('refreshes invalidated connection metadata even for a confirmed app with a saved URL', async () => {
+    addApp({ provisionState: 'confirmed', url: 'https://new.example.com',
+      connection: { host: '', fqdn: 'old.example.com' }, connectionStale: true });
+    await render();
+    expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(1);
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({
+      connectionStale: false, connection: { fqdn: 'app.example.com' },
+    });
+    expect(getLeaseStatus).toHaveBeenCalledTimes(1);
+    expect(getAuthToken).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([0, 1, APP_RECOVERY_MAX_ATTEMPTS])('repairs invalidated DNS metadata after the initial budget, with readiness confirmed after %s rounds', async (readyAfter) => {
+    addApp({ provisionState: readyAfter === 0 ? 'confirmed' : 'unconfirmed', url: 'https://new.example.com',
+      connection: { host: '', fqdn: 'old.example.com' }, connectionStale: true });
+    for (let attempt = 1; attempt < readyAfter; attempt++) {
+      vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'provisioning' });
+    }
+    const connectionRead = vi.mocked(getLeaseConnectionInfo).getMockImplementation()!;
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Provider restarting'));
+    await render();
+    for (let attempt = 0; attempt < APP_RECOVERY_MAX_ATTEMPTS - 1; attempt++) {
+      await advance(AUTO_REFRESH_INTERVAL_MS * 2 ** attempt);
+    }
+    expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(APP_RECOVERY_MAX_ATTEMPTS);
+    expect(getAuthToken).toHaveBeenCalledTimes(APP_RECOVERY_MAX_ATTEMPTS * 2);
+    expect(getLeaseStatus).toHaveBeenCalledTimes(APP_RECOVERY_MAX_ATTEMPTS);
+    expect(registry.getAppByLease(address, LEASE_UUID)?.connectionStale).toBe(true);
+    vi.mocked(getLeaseConnectionInfo).mockImplementation(connectionRead);
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS - APP_RECOVERY_POLL_INTERVAL_MS);
+    expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(APP_RECOVERY_MAX_ATTEMPTS);
+    await advance(APP_RECOVERY_POLL_INTERVAL_MS);
+    expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(APP_RECOVERY_MAX_ATTEMPTS + 1);
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ connectionStale: false, connection: { fqdn: 'app.example.com' } });
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS);
+    expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(APP_RECOVERY_MAX_ATTEMPTS + 1);
+  });
+
+  it.each([
+    { saved: false, stale: undefined },
+    { saved: false, stale: true },
+    { saved: true, stale: true },
+  ])('bounds permanently unreachable providers with saved inventory=$saved, stale=$stale', async ({ saved, stale }) => {
+    addApp({ provisionState: 'confirmed', connectionStale: stale,
+      ...(saved ? { url: 'https://old.example.com', connection: { host: '', fqdn: 'old.example.com' } } : {}),
+    });
+    vi.mocked(getLeaseStatus).mockRejectedValue(new Error('Provider unavailable'));
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Provider unavailable'));
+    const maxAttempts = saved ? APP_CONNECTION_RECOVERY_MAX_ATTEMPTS : APP_RECOVERY_MAX_ATTEMPTS;
+    await render();
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getLeaseStatus).toHaveBeenCalledTimes(maxAttempts);
+    expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(maxAttempts);
+    expect(getAuthToken).toHaveBeenCalledTimes(maxAttempts * 2);
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getAuthToken).toHaveBeenCalledTimes(maxAttempts * 2);
+    expect(registry.getAppByLease(address, LEASE_UUID)?.provisionState).toBe('confirmed');
+  });
+
+  it('caps newly confirmed stale-inventory recovery without resetting used attempts', async () => {
+    addApp({ provisionState: 'unconfirmed', connectionStale: true,
+      url: 'https://old.example.com', connection: { host: '', fqdn: 'old.example.com' },
+    });
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Connection unavailable'));
+    await render();
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'confirmed', connectionStale: true });
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getLeaseStatus).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getAuthToken).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS * 2);
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS);
+    expect(getAuthToken).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS * 2);
+  });
+
+  it.each(['unshapeable connection', 'retained status'])('keeps the original retry allowance and cadence after a partial %s observation', async (partial) => {
+    addApp({ provisionState: 'confirmed', connectionStale: true, connection: { host: '' } });
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Connection unavailable'));
+    await render();
+    for (let attempt = 0; attempt < APP_RECOVERY_MAX_ATTEMPTS - 1; attempt++) {
+      await advance(AUTO_REFRESH_INTERVAL_MS * 2 ** attempt);
+    }
+    if (partial === 'unshapeable connection') {
+      vi.mocked(getLeaseConnectionInfo).mockResolvedValue({
+        lease_uuid: LEASE_UUID, tenant: address, provider_uuid: PROVIDER_UUID, connection: { host: '' },
+      });
+    } else {
+      vi.mocked(getLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'retained' });
+    }
+    for (let attempt = APP_RECOVERY_MAX_ATTEMPTS; attempt < APP_CONNECTION_RECOVERY_MAX_ATTEMPTS; attempt++) {
+      await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS - APP_RECOVERY_POLL_INTERVAL_MS);
+      expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(attempt);
+      await advance(APP_RECOVERY_POLL_INTERVAL_MS);
+      expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(attempt + 1);
+    }
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({
+      provisionState: partial === 'retained status' ? 'unconfirmed' : 'confirmed',
+      connectionStale: partial === 'retained status',
+    });
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getAuthToken).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS * 2);
+  });
+
+  it.each([
+    { state: LeaseState.LEASE_STATE_CLOSED },
+    { state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'failed' },
+  ])('retires stale connection recovery when the provider later reports failure: %j', async status => {
+    addApp({ provisionState: 'confirmed', connectionStale: true,
+      url: 'https://old.example.com', connection: { host: '', fqdn: 'old.example.com' },
+    });
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Connection unavailable'));
+    await render();
+    for (let attempt = 0; attempt < APP_RECOVERY_MAX_ATTEMPTS - 1; attempt++) {
+      await advance(AUTO_REFRESH_INTERVAL_MS * 2 ** attempt);
+    }
+    vi.mocked(getLeaseStatus).mockResolvedValue(status);
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS);
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'failed', status: 'failed' });
+    expect(getLeaseStatus).toHaveBeenCalledTimes(APP_RECOVERY_MAX_ATTEMPTS + 1);
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getLeaseStatus).toHaveBeenCalledTimes(APP_RECOVERY_MAX_ATTEMPTS + 1);
   });
 
   it.each([false, true])('retires ready empty endpoint inventories, including blocked storage: %s', async blockedStorage => {

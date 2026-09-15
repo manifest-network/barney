@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   address: 'manifest1walleta' as string | undefined,
   disconnect: vi.fn(),
   sendMessage: vi.fn(),
+  requestAppStatus: vi.fn(),
   attachPayload: vi.fn(),
   clearPayload: vi.fn(),
   getApps: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock('@cosmos-kit/react', () => ({
 vi.mock('../../hooks/useAI', () => ({
   useAI: () => ({
     sendMessage: mocks.sendMessage,
+    requestAppStatus: mocks.requestAppStatus,
     attachPayload: mocks.attachPayload,
     clearPayload: mocks.clearPayload,
     dnsStatuses: new Map(),

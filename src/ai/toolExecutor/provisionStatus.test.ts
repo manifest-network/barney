@@ -1,6 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { PROVISION_IN_PROGRESS } from '@manifest-network/manifest-sdk/deploy';
-import { classifyProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
+import { classifyProvisionStatus, displayProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
+
+describe('displayProvisionStatus', () => {
+  it('displays unknown readiness while withholding absent readings', () => {
+    for (const status of [undefined, '']) expect(displayProvisionStatus(status)).toBeUndefined();
+    for (const status of ['unknown', 'ready', 'restarting', 'updating', 'provisioning', 'failed', 'quiescing']) {
+      expect(displayProvisionStatus(status)).toBe(status);
+    }
+  });
+});
 
 describe('classifyProvisionStatus', () => {
   it('reads fred’s verdicts', () => {
@@ -13,15 +22,21 @@ describe('classifyProvisionStatus', () => {
     expect(classifyProvisionStatus('retained')).toBe('unconfirmed');
   });
 
+  it('does not classify sanitized text as a provider verdict', () => {
+    expect(displayProvisionStatus('ready\u202E')).toBe('ready');
+    expect(classifyProvisionStatus('ready\u202E')).toBeUndefined();
+  });
+
   it('treats `failing` as the failure verdict it is', () => {
     // fred enters Failing ONLY from Ready, on evContainerDied, writing
     // Reason: ContainerExited synchronously before the async flip to `failed`.
     expect(classifyProvisionStatus('failing')).toBe('failed');
   });
 
-  it('claims nothing for an absent or unmodelled status', () => {
+  it('records unknown readiness without inventing a verdict for absent or unmodelled values', () => {
     expect(classifyProvisionStatus(undefined)).toBeUndefined();
     expect(classifyProvisionStatus('')).toBeUndefined();
+    expect(classifyProvisionStatus('unknown')).toBe('unconfirmed');
     expect(classifyProvisionStatus('quiescing')).toBeUndefined();
   });
 });

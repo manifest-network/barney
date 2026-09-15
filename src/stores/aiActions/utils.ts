@@ -9,6 +9,15 @@ import { AI_MAX_MESSAGES } from '../../config/constants';
 import * as appRegistry from '../../registry/appRegistry';
 import type { AppRegistryAccess } from '../../ai/toolExecutor/types';
 import type { ResolvedSkuTier } from '../../api/skuTiers';
+import type { AIStore } from '../aiStore';
+
+/** Preserve an active deployment while clearing a previous result's progress. */
+export function clearStaleDeployProgress(get: () => AIStore, set: (state: Partial<AIStore>) => void): void {
+  const { deployProgress } = get();
+  if (!deployProgress || deployProgress.phase === 'ready' || deployProgress.phase === 'failed') {
+    set({ deployProgress: null });
+  }
+}
 
 export function generateMessageId(): string {
   return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;

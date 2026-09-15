@@ -1,6 +1,7 @@
 import { parse as parseTld } from 'tldts';
 import { isValidFqdn, normalizeFqdn } from './connection';
 import { getReservedDomainSuffixes } from '../api/billingParams';
+import { isAbortError } from '../api/utils';
 
 /** Single source of truth for the apex-domain warning copy. Used by `validateAll`,
  *  the post-confirm domain-args merger, and any other consumer that needs to
@@ -110,7 +111,7 @@ export async function validateAll(
   try {
     suffixes = await getReservedDomainSuffixes(signal);
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw error;
+    if (isAbortError(error)) throw error;
     // Chain unreachable → don't block; the chain will reject authoritatively.
   }
 

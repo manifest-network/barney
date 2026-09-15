@@ -3,6 +3,7 @@
  */
 
 import { streamChat } from '../../api/morpheus';
+import { isAbortError } from '../../api/utils';
 import { buildAITools } from '../../ai/tools';
 import { processStreamWithTimeout } from '../../ai/streamUtils';
 import { validateUserInput } from '../../ai/validation';
@@ -20,6 +21,7 @@ import {
   trimMessages,
   createAssistantMessage,
   toChatApiMessages,
+  clearStaleDeployProgress,
 } from './utils';
 
 type Get = () => AIStore;
@@ -107,11 +109,7 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
 
   set({ messages: trimMessages([...get().messages, userMessage]) });
 
-  // Clear stale deploy progress
-  const { deployProgress } = get();
-  if (!deployProgress || deployProgress.phase === 'ready' || deployProgress.phase === 'failed') {
-    set({ deployProgress: null });
-  }
+  clearStaleDeployProgress(get, set);
 
   const abort = new AbortController();
   set({ abortController: abort });
@@ -229,15 +227,16 @@ export async function sendMessageFn(get: Get, set: Set, content: string): Promis
   } catch (error) {
     if (get().authorizationEpoch !== authorizationEpoch
         || get().abortController !== abort) return true;
-    logError('AIContext.sendMessage', error);
+    const cancelled = isAbortError(error);
+    if (!cancelled) logError('AIContext.sendMessage', error);
     const updated = get().messages.map((m) =>
       m.id === currentAssistantMessageId
         ? {
             ...m,
-            content: error instanceof Error && error.message.includes('timeout')
+            content: cancelled ? 'Request cancelled.' : error instanceof Error && error.message.includes('timeout')
               ? 'The AI server took too long to respond. Please try again.'
               : 'Sorry, I encountered an error. Please try again.',
-            error: error instanceof Error ? error.message : 'Unknown error',
+            error: cancelled ? undefined : error instanceof Error ? error.message : 'Unknown error',
             isStreaming: false,
           }
         : m

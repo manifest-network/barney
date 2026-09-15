@@ -13,6 +13,7 @@ import {
   PROVISION_IN_PROGRESS,
 } from '@manifest-network/manifest-sdk/deploy';
 import type { ProvisionState } from '../../registry/appRegistry';
+import { PROVISION_STATUS_CHARS, sanitizeForDisplay } from '../../utils/sanitizeText';
 
 /** fred's soft-delete: the workload is torn down and only its volumes are kept
  *  (restore needs a fresh lease). The SDK models it, but does not export the set. */
@@ -30,6 +31,13 @@ const PROVISION_RETAINED = 'retained';
  * for both consumers.
  */
 const PROVISION_VERDICT_FAILED: ReadonlySet<string> = new Set([...PROVISION_FAILED, 'failing']);
+
+/** Display provider progress even when it cannot retract a registry verdict.
+ * Only absent readings lack display information; unknown and future values remain
+ * visible within display limits without inventing a registry classification. */
+export function displayProvisionStatus(status: string | undefined): string | undefined {
+  return status === undefined || status === '' ? undefined : sanitizeForDisplay(status, PROVISION_STATUS_CHARS);
+}
 
 /**
  * True when the status carries NO verdict about the workload — the only reason
@@ -52,12 +60,13 @@ export function isUnsettledProvisionStatus(status: string | undefined): boolean 
  * Map fred's `provision_status` onto the registry's `provisionState`
  * OBSERVATION.
  *
- * An unsettled value IS a reading — fred is saying the workload is not up — so
- * it records 'unconfirmed' rather than nothing; the caller keeps it from
- * retracting an earlier confirmation. Any value in none of the sets is a future
- * one this client does not model and claims nothing, as does an ABSENT field.
+ * Visible progress records 'unconfirmed'; the caller keeps it from retracting
+ * an earlier confirmation. `unknown` explicitly reports unconfirmed readiness.
+ * Absent values carry no observation, as do
+ * future values this client does not model.
  */
 export function classifyProvisionStatus(status: string | undefined): ProvisionState | undefined {
+  // Sanitization is only for display. Match the provider's raw vocabulary.
   if (status === undefined || status === '') return undefined;
   if (PROVISION_SUCCESS.has(status)) return 'confirmed';
   if (PROVISION_VERDICT_FAILED.has(status)) return 'failed';

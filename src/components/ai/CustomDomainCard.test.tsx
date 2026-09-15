@@ -6,8 +6,8 @@ import { createRoot } from 'react-dom/client';
 const sendMessage = vi.fn<(content: string) => Promise<boolean>>(() => Promise.resolve(true));
 let dnsStatuses: Map<string, { kind: string; expectedCnameTarget?: string; detail?: string }> = new Map();
 
-vi.mock('../../hooks/useAI', () => ({
-  useAI: () => ({ sendMessage, dnsStatuses }),
+vi.mock('../../contexts/aiStoreContext', () => ({
+  useAIStore: (selector: (state: unknown) => unknown) => selector({ sendMessage, dnsStatuses }),
 }));
 
 import { CustomDomainCard } from './CustomDomainCard';
@@ -134,6 +134,16 @@ describe('CustomDomainCard', () => {
       root.render(createElement(CustomDomainCard, { data: makeData({ expectedCnameTarget: 'stale.target.host' }) }));
     });
     expect(container.textContent).toContain('live.target.host');
+    expect(container.textContent).not.toContain('stale.target.host');
+  });
+
+  it.each([false, true])('does not restore an invalidated DNS target from the saved card (multiple domains: %s)', (multiple) => {
+    dnsStatuses.set('lease-1::app.example.com', { kind: 'pending_dns', expectedCnameTarget: undefined });
+    const data = makeData({ expectedCnameTarget: 'stale.target.host', ...(multiple ? { domains: [
+      { serviceName: 'web', customDomain: 'app.example.com', expectedCnameTarget: 'stale.target.host' },
+      { serviceName: 'api', customDomain: 'api.example.com', expectedCnameTarget: 'api.target.host' },
+    ] } : {}) });
+    flushSync(() => { root.render(createElement(CustomDomainCard, { data })); });
     expect(container.textContent).not.toContain('stale.target.host');
   });
 

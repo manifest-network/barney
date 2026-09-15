@@ -203,6 +203,25 @@ afterEach(() => {
 // ===========================================================================
 
 describe('confirmAction', () => {
+  it.each(['stop_app', 'restart_app', 'update_app'])('invalidates pre-operation query results before dispatching %s, including ambiguous failures', async (toolName) => {
+    for (const success of [true, false]) {
+      const store = setupStore({
+        pendingConfirmation: makePendingConfirmation({ action: { toolName, args: { app_name: 'web' } } }),
+        messages: [makeToolMessage('tool_msg_1')],
+      });
+      const key = store.getState().getToolCacheKey('app_status', { app_name: 'web' });
+      store.getState().cacheToolResult(key, { success: true, data: { status: 'running' } });
+      mockExecuteConfirmedTool.mockImplementationOnce(async () => {
+        expect(store.getState().getCachedToolResult(key)).toBeNull();
+        return success ? { success: true, data: {} } : { success: false, error: 'Provider response lost' };
+      });
+      mockProcessStream.mockResolvedValue(makeStreamResult());
+      await store.getState().confirmAction();
+      expect(store.getState().getCachedToolResult(key)).toBeNull();
+      store.getState().destroy();
+    }
+  });
+
   // -----------------------------------------------------------------------
   // Guard clauses
   // -----------------------------------------------------------------------

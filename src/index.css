@@ -192,7 +192,7 @@ html[data-theme="light"] body {
   background: oklch(0.90 0.01 260);
 }
 
-[data-theme="light"] .apps-sidebar__app-item:hover {
+[data-theme="light"] .apps-sidebar__app-item:hover:not([aria-disabled="true"]) {
   background: oklch(0.93 0.01 260);
 }
 
@@ -343,7 +343,7 @@ html[data-theme="retro"] body {
   background: oklch(0.16 0.06 290);
 }
 
-[data-theme="retro"] .apps-sidebar__app-item:hover {
+[data-theme="retro"] .apps-sidebar__app-item:hover:not([aria-disabled="true"]) {
   background: oklch(0.18 0.06 290);
 }
 
@@ -1002,7 +1002,7 @@ html[data-theme="nord"] body {
   background: #434C5E;
 }
 
-[data-theme="nord"] .apps-sidebar__app-item:hover {
+[data-theme="nord"] .apps-sidebar__app-item:hover:not([aria-disabled="true"]) {
   background: #434C5E;
 }
 
@@ -1122,7 +1122,7 @@ html[data-theme="dracula"] body {
   background: #44475A;
 }
 
-[data-theme="dracula"] .apps-sidebar__app-item:hover {
+[data-theme="dracula"] .apps-sidebar__app-item:hover:not([aria-disabled="true"]) {
   background: #44475A;
 }
 
@@ -1242,7 +1242,7 @@ html[data-theme="catppuccin"] body {
   background: #313244;
 }
 
-[data-theme="catppuccin"] .apps-sidebar__app-item:hover {
+[data-theme="catppuccin"] .apps-sidebar__app-item:hover:not([aria-disabled="true"]) {
   background: #45475A;
 }
 
@@ -1431,7 +1431,7 @@ html[data-theme="matrix"] body {
   background: oklch(0.12 0.05 145);
 }
 
-[data-theme="matrix"] .apps-sidebar__app-item:hover {
+[data-theme="matrix"] .apps-sidebar__app-item:hover:not([aria-disabled="true"]) {
   background: oklch(0.14 0.06 145);
 }
 
@@ -10264,8 +10264,13 @@ code.lease-card-mono {
   transition: background-color 0.1s;
 }
 
-.apps-sidebar__app-item:hover {
+.apps-sidebar__app-item:hover:not([aria-disabled="true"]) {
   background: var(--color-surface-700);
+}
+
+.apps-sidebar__app-item[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .apps-sidebar__app-name {
@@ -10663,8 +10668,12 @@ code.lease-card-mono {
   margin: 0.75rem 1rem;
   padding: 1rem;
   background: var(--color-surface-800);
-  border: 1px solid var(--color-success-600);
+  border: 1px solid var(--panel-border);
   border-radius: var(--radius-lg);
+}
+
+.app-card[data-status="running"] {
+  border-color: var(--color-success-600);
 }
 
 .app-card__header {
@@ -10683,8 +10692,55 @@ code.lease-card-mono {
 .app-card__status {
   margin-left: auto;
   font-size: 0.75rem;
-  color: var(--color-success-400);
+  color: var(--text-secondary);
   font-weight: 500;
+}
+
+.app-card[data-status="running"] .app-card__status {
+  color: var(--color-success-400);
+}
+
+.app-card[data-status="failed"] .app-card__status {
+  color: var(--color-error-400);
+}
+
+.app-card__detail {
+  margin-bottom: 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.app-card__domain-management .custom-domain-card {
+  margin: 0.75rem 0 0;
+}
+
+.app-card__saved-connections {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-900);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.app-card__saved-connections > summary {
+  cursor: pointer;
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+}
+
+.app-card__saved-connections > summary::marker {
+  color: var(--color-primary-400);
+}
+
+.app-card__saved-connections > summary:focus-visible {
+  outline: 2px solid var(--color-primary-400);
+  outline-offset: 3px;
+}
+
+.app-card__saved-connections[open] > summary {
+  margin-bottom: 0.75rem;
 }
 
 .app-card__url {
@@ -10796,8 +10852,17 @@ code.lease-card-mono {
   letter-spacing: 0.04em;
 }
 
+.app-card__service-endpoint {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
 .app-card__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 

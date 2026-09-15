@@ -248,6 +248,14 @@ describe('executeTool', () => {
       error: 'network failure',
     });
   });
+
+  it.each([
+    ['get_logs', executeGetLogs], ['deploy_app', executeDeployApp], ['cosmos_query', executeCosmosQuery],
+  ] as const)('propagates plain cancellation errors from %s to the chat orchestrator', async (name, executor) => {
+    const error = Object.assign(new Error('Cancelled'), { name: 'AbortError' });
+    vi.mocked(executor).mockRejectedValue(error);
+    await expect(executeTool(name, {}, makeOptions())).rejects.toBe(error);
+  });
 });
 
 describe('executeConfirmedTool', () => {

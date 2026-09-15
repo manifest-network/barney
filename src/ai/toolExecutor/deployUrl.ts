@@ -6,13 +6,33 @@
  * an assigned host port; HTTP FQDNs route through Traefik on 443.
  */
 
-import { deriveUrlFromConnection, extractPort, extractPrimaryServicePorts, formatConnectionUrl, parseContainerPort, TCP_ONLY_PORTS } from './helpers';
+import { connectionPatch, deriveUrlFromConnection, extractPort, extractPrimaryServicePorts, formatConnectionUrl, parseContainerPort, resolveAppEndpoint, TCP_ONLY_PORTS } from './helpers';
 import { isValidFqdn } from '../../utils/connection';
 import type { FredLeaseStatus } from '../../api/fred';
 import { getLeaseConnectionInfo, type ConnectionDetails } from '../../api/provider-api';
 import { asLeaseUuid } from '@manifest-network/manifest-sdk';
 import { logError } from '../../utils/errors';
 import type { SigningContext } from './types';
+import type { AppEntry } from '../../registry/appRegistry';
+
+/** Refresh the primary endpoint independently of the saved service inventory. */
+export function refreshAppConnection(
+  status: FredLeaseStatus | undefined,
+  connection: ConnectionDetails | undefined,
+  previous: Pick<AppEntry, 'url' | 'connection'>,
+) {
+  const shaped = connection ? deriveUrlFromConnection(connection) : undefined;
+  // Status endpoints can be a lower-level IP:port hint. A failed connection
+  // read must not replace an established deployment URL with that fallback.
+  const previousUrl = resolveAppEndpoint(previous);
+  const statusUrl = status ? extractUrlFromFredStatus(status) : undefined;
+  const statusMatchesPrevious = statusUrl !== undefined && (statusUrl === previousUrl
+    || (!!previousUrl && isDnsHostname(previousUrl) && statusUrl === `https://${previousUrl}`));
+  const url = shaped?.url ?? (connection || !previousUrl ? statusUrl : undefined);
+  const patch = connectionPatch({ url, connection: shaped?.connection ?? connection });
+  const providerEndpoint = !url && !statusMatchesPrevious ? statusUrl : undefined;
+  return { patch, providerEndpoint, endpointRefreshed: url !== undefined || statusMatchesPrevious, connectionRefreshed: connection !== undefined };
+}
 
 /** True if the hostname looks like a DNS name (not a bare IPv4 address). */
 function isDnsHostname(hostname: string): boolean {

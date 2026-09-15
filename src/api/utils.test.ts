@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { withRetry, withTimeout, throwIfAborted } from './utils';
+import { withRetry, withTimeout, withAbort, isAbortError, throwIfAborted } from './utils';
 
 describe('withRetry', () => {
   it('returns result on first success', async () => {
@@ -136,5 +136,40 @@ describe('throwIfAborted', () => {
     const ac = new AbortController();
     ac.abort();
     expect(() => throwIfAborted(ac.signal, 'work')).toThrow(/work aborted/);
+  });
+});
+
+describe('withAbort', () => {
+  it('treats a signal without a reason as user cancellation', async () => {
+    const controller = new AbortController();
+    vi.spyOn(controller.signal, 'reason', 'get').mockReturnValue(undefined);
+    const work = withAbort(new Promise(() => {}), controller.signal);
+    controller.abort();
+    await expect(work).rejects.toMatchObject({ name: 'AbortError' });
+  });
+  it('preserves the work result and detaches its listener', async () => {
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, 'removeEventListener');
+    expect(await withAbort(Promise.resolve('done'), controller.signal)).toBe('done');
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+  });
+
+  it('rejects an already-cancelled request without leaving a rejected work promise unhandled', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(withAbort(new Promise(() => {}), controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(withAbort(Promise.reject(new Error('work failed')), controller.signal)).rejects.toThrow('work failed');
+  });
+
+  it('preserves a non-cancellation reason instead of relabeling it AbortError', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Transport failed');
+    const work = withAbort(new Promise(() => {}), controller.signal);
+    controller.abort(reason);
+    await expect(work).rejects.toBe(reason);
+    expect(isAbortError(reason)).toBe(false);
+    expect(isAbortError(new DOMException('Cancelled', 'AbortError'))).toBe(true);
+    expect(isAbortError(Object.assign(new Error('Cancelled'), { name: 'AbortError' }))).toBe(true);
+    expect(isAbortError(null)).toBe(false);
   });
 });

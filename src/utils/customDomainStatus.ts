@@ -248,6 +248,8 @@ export interface ComputeStatusInput {
   isApex?: boolean;
 }
 
+export const PROVIDER_INFO_PENDING_DETAIL = 'Waiting for provider info…';
+
 /**
  * Pure status reducer:
  *   - DNS not present       → pending_dns
@@ -284,7 +286,7 @@ export function computeStatus(input: ComputeStatusInput): CustomDomainStatusRepo
   // validate against, there's no way to distinguish a correctly-configured
   // apex from a misconfigured one (same terminal-lock hazard as non-apex).
   if (!expectedCname) {
-    return { kind: 'pending_dns', detail: 'Waiting for provider info…' };
+    return { kind: 'pending_dns', detail: PROVIDER_INFO_PENDING_DETAIL };
   }
 
   const expected = normalizeFqdn(expectedCname);

@@ -13,6 +13,8 @@ import type { ToolResult, ToolExecutorOptions, SigningContext } from './types';
 import { connectionPatch, failureText } from './helpers';
 import { nextStepFor } from './failureGuidance';
 import { resolveAppUrl } from './deployUrl';
+import { isTerminalLeaseState } from '../../utils/leaseState';
+import { appCardConnection } from './appCardConnection';
 
 /**
  * Best-effort fetch of provider logs and provision status for failed deploys.
@@ -92,11 +94,7 @@ export async function classifyLeaseChainState(leaseUuid: string): Promise<ChainD
     const lease = await getLease(leaseUuid);
     if (!lease) return 'failed';
     if (lease.state === LeaseState.LEASE_STATE_ACTIVE) return 'running';
-    if (
-      lease.state === LeaseState.LEASE_STATE_CLOSED ||
-      lease.state === LeaseState.LEASE_STATE_REJECTED ||
-      lease.state === LeaseState.LEASE_STATE_EXPIRED
-    ) {
+    if (isTerminalLeaseState(lease.state)) {
       return 'failed';
     }
     return 'deploying';
@@ -305,21 +303,22 @@ export async function handleDeployManifestError(
       const { url: connectionUrl, connection } = providerUrl
         ? await resolveAppUrl(providerUrl, leaseUuid, {} as FredLeaseStatus, address, signing, 'deployError.handleDeployManifestError')
         : { url: undefined, connection: undefined };
-      const previous = appRegistry.getAppByLease(address, leaseUuid);
-      const finalUrl = connectionUrl ?? previous?.url;
       // Chain observation only — no `provisionState`: the deploy THREW, so the
       // provider never confirmed readiness and a chain read may not claim it.
-      const updated = appRegistry.updateApp(address, leaseUuid, {
+      appRegistry.updateApp(address, leaseUuid, {
         chainState: 'active',
-        ...connectionPatch({ url: connectionUrl, connection }, previous),
+        ...connectionPatch({ url: connectionUrl, connection }),
       });
       onProgress?.({ phase: 'ready', detail: 'App is live!' });
       return {
         success: true,
-        data: { message: `App "${name}" is live!`, name, url: finalUrl, status: 'running' },
+        data: { message: `App "${name}" is live!`, name, url: connectionUrl, status: 'running' },
         displayCard: {
           type: 'app' as const,
-          data: { name, url: finalUrl, status: 'running', connection: updated?.connection ? JSON.parse(JSON.stringify(updated.connection)) : undefined },
+          data: {
+            name, url: connectionUrl, status: 'running',
+            connection: appCardConnection(connection),
+          },
         },
       };
     }

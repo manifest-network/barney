@@ -7,8 +7,8 @@ const sendMessage = vi.fn();
 const requestStopApp = vi.fn();
 let dnsStatuses: Map<string, { kind: string; expectedCnameTarget?: string; detail?: string }> = new Map();
 
-vi.mock('../../hooks/useAI', () => ({
-  useAI: () => ({ sendMessage, dnsStatuses, requestStopApp }),
+vi.mock('../../contexts/aiStoreContext', () => ({
+  useAIStore: (selector: (state: unknown) => unknown) => selector({ sendMessage, dnsStatuses, requestStopApp }),
 }));
 
 import { AppCard } from './AppCard';
@@ -49,6 +49,45 @@ describe('AppCard', () => {
     render(makeData());
     expect(container.textContent).toContain('my-app');
     expect(container.textContent).toContain('running');
+  });
+
+  it('distinguishes an empty instance inventory from a malformed endpoint', () => {
+    render(makeData({ connection: { services: {
+      cache: { instances: [] }, invalid: { fqdn: 'not_a_valid_host!' },
+    } } }));
+    expect(container.textContent).toContain('cache: No published ports.');
+    expect(container.textContent).toContain('Service details unavailable for: invalid.');
+  });
+
+  it('clears a saved custom-domain target when the live report no longer confirms it', () => {
+    dnsStatuses.set('lease-1::app.example.com', { kind: 'pending_dns', expectedCnameTarget: undefined });
+    render(makeData({ customDomain: { fqdn: 'app.example.com', leaseUuid: 'lease-1', serviceName: '', isApex: false, expectedCnameTarget: 'old.provider.example' } }));
+    expect(container.textContent).not.toContain('old.provider.example');
+  });
+
+  it('renders a deployment port once when the named service supplies only an HTTP hostname', () => {
+    render(makeData({ connection: {
+      host: '203.0.113.10', ports: { '80/tcp': { host_port: 32000 } },
+      services: { web: { fqdn: 'web.example.com' }, db: {} },
+    } }));
+    expect(container.querySelectorAll('.app-card__port')).toHaveLength(1);
+    expect(container.querySelector('.app-card__service-ports .app-card__port')).toBeNull();
+    expect(container.textContent).toContain('Deployment ports');
+    expect(container.textContent).toContain('web.example.com');
+    expect(container.textContent).toContain('db: No published ports.');
+    expect(container.textContent).not.toContain('Service details unavailable');
+  });
+
+  it('does not attach the deployment HTTP hostname to a service with its own TCP mappings', () => {
+    render(makeData({
+      connection: {
+        host: '203.0.113.10', fqdn: 'lease.example',
+        services: { db: { ports: { '5432/tcp': { host_ip: '0.0.0.0', host_port: 32001 } } } },
+      },
+    }));
+    const service = container.querySelector('.app-card__service-ports');
+    expect(service?.textContent).toContain('5432/tcp → 203.0.113.10:32001');
+    expect(service?.textContent).not.toContain('lease.example');
   });
 
   it('accepts url and connection props', () => {
@@ -230,7 +269,7 @@ describe('AppCard', () => {
       });
     });
 
-    it('retains top-level ports when services have no usable port mappings', () => {
+    it('keeps flat deployment ports separate when a named service has its own empty record', () => {
       render(makeData({
         connection: {
           host: '203.0.113.10',
@@ -242,6 +281,9 @@ describe('AppCard', () => {
       expect(container.querySelectorAll('.app-card__port')).toHaveLength(1);
       expect(container.querySelector('.app-card__port')?.textContent).toBe('80/tcp → 203.0.113.11:32000');
       expect(container.querySelector('.app-card__service-ports')).toBeNull();
+      expect(container.textContent).toContain('Deployment ports');
+      expect(container.textContent).toContain('web: No published ports.');
+      expect(container.textContent).not.toContain('Service details unavailable');
     });
 
     it('marks wildcard port endpoints unavailable without a reported host', () => {

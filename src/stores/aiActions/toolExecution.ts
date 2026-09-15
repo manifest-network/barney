@@ -3,6 +3,7 @@
  */
 
 import type { ToolCall } from '../../api/morpheus';
+import { isAbortError, withAbort } from '../../api/utils';
 import { getToolCallDescription, isValidToolName } from '../../ai/tools';
 import { executeTool, type ToolResult } from '../../ai/toolExecutor';
 import type { TransactionAuthorization } from '../../ai/toolExecutor/types';
@@ -27,6 +28,7 @@ import {
   trimMessages,
   createAssistantMessage,
   getAppRegistryAccess,
+  clearStaleDeployProgress,
 } from './utils';
 
 type Get = () => AIStore;
@@ -56,21 +58,18 @@ async function handleToolCall(
   const cachedResult = get().getCachedToolResult(cacheKey);
   if (cachedResult) return { result: cachedResult, authorization: null };
 
-  // Clear stale deploy progress, but preserve active deploys
-  const { deployProgress } = get();
-  if (!deployProgress || deployProgress.phase === 'ready' || deployProgress.phase === 'failed') {
-    set({ deployProgress: null });
-  }
+  clearStaleDeployProgress(get, set);
 
   const { clientManager, address, signing, abortController, pendingPayload, skuTiers } = get();
   const authorization = captureTransactionAuthorization(get());
 
-  const result = await executeTool(toolCall.function.name, sanitizedArgs, {
+  const execution = executeTool(toolCall.function.name, sanitizedArgs, {
     clientManager,
     address,
     signing,
     onProgress: (progress) => {
-      if (get().authorizationEpoch === authorizationEpoch) {
+      if (get().authorizationEpoch === authorizationEpoch
+          && get().abortController === abortController && !abortController?.signal.aborted) {
         set({ deployProgress: { ...progress } });
       }
     },
@@ -79,6 +78,8 @@ async function handleToolCall(
     tiers: skuTiers.tiers,
     prepareBatchDeployDraft,
   }, pendingPayload ?? undefined);
+  const result = abortController ? await withAbort(execution, abortController.signal) : await execution;
+  abortController?.signal.throwIfAborted();
 
   if (get().authorizationEpoch !== authorizationEpoch) {
     return {
@@ -527,6 +528,7 @@ export async function processToolCallsFn(
   authorizationEpoch = get().authorizationEpoch,
 ): Promise<ProcessToolCallsResult> {
   if (get().authorizationEpoch !== authorizationEpoch) return { shouldContinue: false };
+  const abortController = get().abortController;
   // Update the assistant message with the stream result
   const updated1 = get().messages.map((m) =>
     m.id === currentAssistantMessageId
@@ -536,6 +538,7 @@ export async function processToolCallsFn(
   set({ messages: updated1 });
 
   let hasDisplayCard = false;
+  let continueConversation = true;
   const collectedConfirmations: CollectedConfirmation[] = [];
   const prepareBatchDeployDrafts = toolCalls.filter(
     (toolCall) => toolCall.function.name === 'deploy_app',
@@ -559,13 +562,46 @@ export async function processToolCallsFn(
     };
     set({ messages: trimMessages([...get().messages, toolMsg]) });
 
-    const handled = await handleToolCall(
-      get,
-      set,
-      toolCall,
-      authorizationEpoch,
-      prepareBatchDeployDrafts && toolCall.function.name === 'deploy_app',
-    );
+    let handled: Awaited<ReturnType<typeof handleToolCall>>;
+    try {
+      abortController?.signal.throwIfAborted();
+      handled = await handleToolCall(
+        get,
+        set,
+        toolCall,
+        authorizationEpoch,
+        prepareBatchDeployDrafts && toolCall.function.name === 'deploy_app',
+      );
+    } catch (error) {
+      if (get().authorizationEpoch !== authorizationEpoch || get().abortController !== abortController) {
+        return { shouldContinue: false };
+      }
+      const cancelled = isAbortError(error);
+      const content = cancelled ? 'Tool call cancelled.' : 'Tool call interrupted by an error.';
+      // Every advertised tool_call needs a reply, including calls we never
+      // started and confirmations collected before cancellation. Otherwise
+      // the next model request contains an invalid tool-call group.
+      const messages = [...get().messages];
+      const groupStart = messages.findIndex((message) => message.id === currentAssistantMessageId);
+      for (const call of toolCalls) {
+        const index = messages.findIndex((message, index) => index > groupStart && message.role === 'tool' && message.toolCallId === call.id);
+        if (index === -1) {
+          messages.push({
+            id: generateMessageId(), role: 'tool', toolCallId: call.id,
+            toolName: call.function.name, content, timestamp: Date.now(),
+            isStreaming: false, error: cancelled ? undefined : content,
+          });
+        } else if (messages[index].isStreaming) {
+          messages[index] = {
+            ...messages[index], content, isStreaming: false,
+            awaitingConfirmation: false, error: cancelled ? undefined : content,
+          };
+        }
+      }
+      set({ messages: trimMessages(messages) });
+      if (!cancelled) throw error;
+      return { shouldContinue: false };
+    }
     if (get().authorizationEpoch !== authorizationEpoch) return { shouldContinue: false };
     const { result, authorization } = handled;
 
@@ -583,6 +619,7 @@ export async function processToolCallsFn(
 
     if (result.success && result.displayCard) {
       hasDisplayCard = true;
+      continueConversation &&= result.continueConversation === true;
       const updated = get().messages.map((m) =>
         m.id === toolMessageId
           ? { ...m, content: JSON.stringify(result.data, bigIntReplacer, 2), card: result.displayCard, isStreaming: false }
@@ -608,7 +645,7 @@ export async function processToolCallsFn(
     return await coalesceConfirmations(get, set, collectedConfirmations, authorizationEpoch);
   }
 
-  if (hasDisplayCard) {
+  if (hasDisplayCard && !continueConversation) {
     return { shouldContinue: false };
   }
 

@@ -71,5 +71,7 @@ export const CHECK_MESSAGE_CHARS = 120;
 export const MAX_HEALTH_ERROR_CHARS = 1024;
 /** The `/health` verdict is provider-controlled too, and is echoed as `health_status`. */
 export const HEALTH_STATUS_CHARS = 32;
+/** Provider workload progress is an open vocabulary, bounded for cards and chat. */
+export const PROVISION_STATUS_CHARS = 64;
 /** Cap on the number of failing checks folded into one provider's `healthError`. */
 export const MAX_REPORTED_CHECKS = 5;
