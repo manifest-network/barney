@@ -119,9 +119,12 @@ describe('useAppRecovery', () => {
     expect(getAuthToken).toHaveBeenCalledTimes(2);
   });
 
-  it('repairs invalidated DNS metadata after the initial retry budget is exhausted', async () => {
-    addApp({ provisionState: 'confirmed', url: 'https://new.example.com',
+  it.each([0, 1, APP_RECOVERY_MAX_ATTEMPTS])('repairs invalidated DNS metadata after the initial budget, with readiness confirmed after %s rounds', async (readyAfter) => {
+    addApp({ provisionState: readyAfter === 0 ? 'confirmed' : 'unconfirmed', url: 'https://new.example.com',
       connection: { host: '', fqdn: 'old.example.com' }, connectionStale: true });
+    for (let attempt = 1; attempt < readyAfter; attempt++) {
+      vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'provisioning' });
+    }
     const connectionRead = vi.mocked(getLeaseConnectionInfo).getMockImplementation()!;
     vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Provider restarting'));
     await render();
@@ -161,6 +164,21 @@ describe('useAppRecovery', () => {
     await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
     expect(getAuthToken).toHaveBeenCalledTimes(maxAttempts * 2);
     expect(registry.getAppByLease(address, LEASE_UUID)?.provisionState).toBe('confirmed');
+  });
+
+  it('caps newly confirmed stale-inventory recovery without resetting used attempts', async () => {
+    addApp({ provisionState: 'unconfirmed', connectionStale: true,
+      url: 'https://old.example.com', connection: { host: '', fqdn: 'old.example.com' },
+    });
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Connection unavailable'));
+    await render();
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'confirmed', connectionStale: true });
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getLeaseStatus).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getLeaseConnectionInfo).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getAuthToken).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS * 2);
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS);
+    expect(getAuthToken).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS * 2);
   });
 
   it.each(['unshapeable connection', 'retained status'])('keeps the original retry allowance and cadence after a partial %s observation', async (partial) => {

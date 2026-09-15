@@ -184,8 +184,10 @@ per endpoint. It yields to chat, confirmations, and transactions, and aborts on 
 Incomplete responses retry with per-app backoff (15s, 30s, 60s) up to four attempts for an unchanged
 snapshot. Confirmed apps with saved, invalidated connection inventory get four additional attempts
 at five-minute intervals (eight total); missing inventory keeps the four-attempt limit. Every attempt
-checks readiness as well as connections. Its original attempt allowance and slow retry cadence survive
-the driver's own partial observations. A failed verdict or confirmed workload with an explicit empty port inventory retires;
+checks readiness as well as connections. The allowance can grow from four to eight when readiness
+is confirmed with saved, invalidated inventory, without resetting used attempts. It never shrinks
+across the driver's own partial observations, and the slow retry cadence stays fixed. A failed verdict
+or confirmed workload with an explicit empty port inventory retires;
 missing URLs alone do not cause endless signing. `app_status` remains the explicit refresh path
 after retirement or exhaustion. Provider work never gates chat listing or chain reconciliation.
 

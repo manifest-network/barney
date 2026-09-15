@@ -67,15 +67,17 @@ export function useAppRecovery(address: string | undefined): void {
         || app.provisionState === 'failed'
         || (app.provisionState === 'confirmed' && app.url && app.connection && !app.connectionStale)) return [];
       const snapshot = recoverySnapshotKey(app);
+      const staleInventory = app.provisionState === 'confirmed' && !!app.connectionStale && !!app.connection;
+      const maxAttempts = staleInventory ? APP_CONNECTION_RECOVERY_MAX_ATTEMPTS : APP_RECOVERY_MAX_ATTEMPTS;
       let attempt = attemptsRef.current.get(app.leaseUuid);
       if (!attempt || attempt.snapshot !== snapshot) {
-        const staleInventory = app.provisionState === 'confirmed' && !!app.connectionStale && !!app.connection;
         attempt = {
           snapshot, attempts: 0, nextAttemptAt: 0, retired: false,
-          maxAttempts: staleInventory ? APP_CONNECTION_RECOVERY_MAX_ATTEMPTS : APP_RECOVERY_MAX_ATTEMPTS,
+          maxAttempts,
         };
         attemptsRef.current.set(app.leaseUuid, attempt);
       }
+      attempt.maxAttempts = Math.max(attempt.maxAttempts, maxAttempts);
       if (attempt.retired || attempt.attempts >= attempt.maxAttempts
         || attempt.nextAttemptAt > Date.now()) return [];
       return [{ app, attempt }];
