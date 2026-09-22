@@ -84,6 +84,7 @@ export interface ToolDataMap {
     name: string;
     status: string;
     provision_status?: string;
+    maintenance?: import('./maintenanceReconciliation').MaintenanceReconciliation;
     statusUnavailable?: boolean;
     workloadStatusUnavailable?: boolean;
     providerQuerySkipped?: boolean;

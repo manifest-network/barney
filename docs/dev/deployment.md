@@ -33,6 +33,10 @@ for example `{"https://s049-u002.manifest0.net/api/fred":"pr240"}`. Unlisted
 providers in a map use `v0.13`; `{}` explicitly disables the built-in dev
 override. URL paths are significant and trailing slashes are normalized.
 This setting is public configuration and requires no Vault credentials.
+The selection is parsed when a Fred-dependent operation runs. Invalid values
+fail that operation closed with a configuration error in chat; they do not
+prevent the application from loading. Correct the runtime/build setting and
+reload before trying the operation again.
 
 The dev edge must allow `Idempotency-Key` alongside `Authorization` and
 `Content-Type` for the existing Barney origin. A read-only preflight on

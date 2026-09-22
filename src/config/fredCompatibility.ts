@@ -49,12 +49,18 @@ export function parseFredCompatibility(value: string): FredCompatibilityConfig {
   return Object.freeze(result);
 }
 
-export const fredCompatibility = parseFredCompatibility(runtimeConfig.PUBLIC_FRED_COMPATIBILITY);
+let configuredCompatibility: FredCompatibilityConfig | undefined;
+
+/** Parse at the operation boundary so bad provider configuration produces an
+ * actionable tool error instead of aborting the application's module imports. */
+export function getFredCompatibility(): FredCompatibilityConfig {
+  return configuredCompatibility ??= parseFredCompatibility(runtimeConfig.PUBLIC_FRED_COMPATIBILITY);
+}
 
 /** Match the SDK's canonical provider URL lookup, including significant paths. */
 export function fredCompatibilityForProvider(
   providerUrl: string,
-  config: FredCompatibilityConfig = fredCompatibility,
+  config: FredCompatibilityConfig = getFredCompatibility(),
 ): FredCompatibility {
   return typeof config === 'string' ? config : config[providerKey(providerUrl)] ?? 'v0.13';
 }

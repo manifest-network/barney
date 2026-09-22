@@ -71,6 +71,9 @@ export function computeOverallPhase(
   if (phases.every((p) => p === 'ready' || p === 'failed')) {
     return phases.some((p) => p === 'ready') ? 'ready' : 'failed';
   }
+  if (phases.every((p) => p === 'ready' || p === 'failed' || p === 'unconfirmed')) {
+    return 'unconfirmed';
+  }
   for (const phase of intermediatePhases) {
     if (phases.some((p) => p === phase)) return phase;
   }
@@ -208,6 +211,9 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
           failed.push(entries[i].name);
         } else if (result.outcome === 'unconfirmed') {
           unconfirmed.push(result);
+          if (operation === 'restart' || operation === 'update') {
+            updateProgress('unconfirmed', result.detail ?? batchProgress[i].detail ?? 'Outcome unknown');
+          }
         } else if (result.outcome === 'cancelled') {
           cancelled.push(result.name);
         } else {
@@ -284,10 +290,10 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
   // An unconfirmed batch has not landed, but it is not a failed batch either.
   const nothingLanded = succeeded.length === 0 && unconfirmed.length === 0;
 
-  // Emit final progress. An unconfirmed entry's ROW reads 'failed' because
-  // 'ready'/'failed' are the ProgressCard's only terminal phases — same
-  // trade-off as the single-deploy path (deployError.ts, arm 2a). That is a
-  // per-row concession; the OVERALL phase follows `nothingLanded`.
+  // Maintenance has a neutral terminal phase: no verified restart/update may
+  // be reported as complete just because the runner finished waiting. Deploy
+  // retains its existing summary contract.
+  const maintenanceUnconfirmed = (operation === 'restart' || operation === 'update') && unconfirmed.length > 0;
   if (onProgress) {
     // Every segment is conditional, so zero counts are never printed.
     const segments = [
@@ -298,7 +304,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     ].filter(Boolean);
     const allSucceeded = segments.length === 1 && succeeded.length > 0;
     onProgress({
-      phase: nothingLanded ? 'failed' : 'ready',
+      phase: maintenanceUnconfirmed ? 'unconfirmed' : nothingLanded ? 'failed' : 'ready',
       ...(operation ? { operation } : {}),
       // No segments at all means an empty batch — never emit '' or 'All 0 apps'.
       detail: segments.length === 0

@@ -22,9 +22,10 @@ describe('maintenance outcome verification', () => {
   });
 
   it('does not capture an ambiguous baseline with another command still deploying', () => {
-    expect(captureMaintenanceBaseline(history(release(1), release(2, 'deploying')))).toBeUndefined();
-    expect(captureMaintenanceBaseline(history(release(1), release(1)))).toBeUndefined();
-    expect(captureMaintenanceBaseline(history(release(Number.NaN)))).toBeUndefined();
+    expect(() => captureMaintenanceBaseline(history(release(1), release(2, 'deploying'))))
+      .toThrow('Another command is in progress (release v2 is deploying). Wait and check app_releases and app_status');
+    expect(() => captureMaintenanceBaseline(history(release(1), release(1)))).toThrow('ambiguous release history');
+    expect(() => captureMaintenanceBaseline(history(release(Number.NaN)))).toThrow('ambiguous release history');
   });
 
   it('accepts an empty history and verifies the first release when it becomes active', () => {

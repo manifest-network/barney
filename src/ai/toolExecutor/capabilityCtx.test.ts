@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import type { CosmosClientManager, EventTransport } from '@manifest-network/manifest-sdk';
 import { getReadClient } from '../../api/readClient';
-import { fredCompatibility } from '../../config/fredCompatibility';
+import { getFredCompatibility } from '../../config/fredCompatibility';
 import { buildBarneyCtx } from './capabilityCtx';
 import type { SigningContext } from './types';
 
@@ -17,7 +17,7 @@ it('threads provider compatibility alongside the existing authentication and eve
 
   const ctx = await buildBarneyCtx(chain, signing, { events });
   expect(ctx).toMatchObject({ chain, query, providerAuth, events });
-  expect(ctx.fredCompatibility).toBe(fredCompatibility);
+  expect(ctx.fredCompatibility).toBe(getFredCompatibility());
   expect(ctx.fredCompatibility).toEqual({ 'https://s049-u002.manifest0.net/api/fred': 'pr240' });
   expect(providerAuth.providerToken).not.toHaveBeenCalled();
 });

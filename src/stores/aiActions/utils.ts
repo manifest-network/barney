@@ -14,7 +14,7 @@ import type { AIStore } from '../aiStore';
 /** Preserve an active deployment while clearing a previous result's progress. */
 export function clearStaleDeployProgress(get: () => AIStore, set: (state: Partial<AIStore>) => void): void {
   const { deployProgress } = get();
-  if (!deployProgress || deployProgress.phase === 'ready' || deployProgress.phase === 'failed') {
+  if (!deployProgress || deployProgress.phase === 'ready' || deployProgress.phase === 'failed' || deployProgress.phase === 'unconfirmed') {
     set({ deployProgress: null });
   }
 }

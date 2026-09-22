@@ -42,7 +42,7 @@ import { isUnsettledProvisionStatus } from './provisionStatus';
 import { buildBarneyCtx } from './capabilityCtx';
 import { fredCompatibilityForProvider } from '../../config/fredCompatibility';
 import { createMaintenanceIdempotencyKey } from '@manifest-network/manifest-sdk/deploy';
-import { getPendingMaintenanceOperation } from './maintenanceOperation';
+import { getPendingMaintenanceOperation, retireAbsentMaintenanceOperation } from './maintenanceOperation';
 import { executeMaintenance } from './maintenanceExecution';
 import { creditAmountSchema, parseTransactionPlan, transactionConfirmation } from './transactionPlans';
 import { browserEventTransport } from '../../api/eventTransport';
@@ -383,6 +383,9 @@ export async function executeDeployApp(
     return { success: false, error: 'No available provider found for this tier.' };
   }
 
+  // Example attachments carry a UI-only notice. Validate the same normalized
+  // body that confirmation uploads, while retaining the notice in the plan.
+  payload = await buildPayloadFromManifest(new TextDecoder().decode(payload.bytes));
   const manifestError = await validateManifestForProvider(new TextDecoder().decode(payload.bytes), provider.apiUrl);
   if (manifestError) return { success: false, error: manifestError };
 
@@ -543,10 +546,12 @@ export async function executeConfirmedDeployApp(
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
 
-  // Reconstruct payload from stored manifest JSON (image/stack deploy). This
-  // strips MANIFEST_NOTICE_KEY, so payload.bytes are the byte-exact upload body.
-  if (!payload && typeof plan._generatedManifest === 'string') {
+  // The reviewed manifest is authoritative even when the original attachment
+  // is still present. Both paths strip UI-only notices before SDK validation.
+  if (typeof plan._generatedManifest === 'string') {
     payload = await buildPayloadFromManifest(plan._generatedManifest);
+  } else if (payload) {
+    payload = await buildPayloadFromManifest(new TextDecoder().decode(payload.bytes));
   }
   if (!payload) return { success: false, error: 'Payload missing' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
@@ -1132,7 +1137,7 @@ export async function executeConfirmedStopApp(
       }
 
       try {
-        await stopApp(
+        const result = await stopApp(
           ctx,
           { leaseUuid: asLeaseUuid(entry.leaseUuid) },
           { waitForConfirmation: false, signal },
@@ -1143,6 +1148,14 @@ export async function executeConfirmedStopApp(
         // provisioning — clearing an undisproven diagnosis is the clobber the
         // observation model exists to prevent.
         appRegistry.updateApp(address, entry.leaseUuid, { chainState: 'absent' });
+        // An asynchronous broadcast is not proof that a lease closed. Only
+        // the SDK's terminal pre-query permits retiring pending work here.
+        if (result.outcome === 'already_inactive') {
+          const app = appRegistry.getAppByLease(address, entry.leaseUuid);
+          if (app?.providerUrl) await retireAbsentMaintenanceOperation({
+            address, providerUrl: app.providerUrl, leaseUuid: entry.leaseUuid, chainId: options.authorization?.chainId,
+          });
+        }
         stopped.push(entry.app_name);
       } catch (err) {
         logError('compositeTransactions.executeConfirmedStopApp.bulk', err);
@@ -1205,6 +1218,10 @@ export async function executeConfirmedStopApp(
     // CHAIN observation only — authoritative here, since waitForConfirmation
     // blocks for the DeliverTx outcome. No provisioning observation touched.
     appRegistry.updateApp(address, leaseUuid, { chainState: 'absent' });
+    const app = appRegistry.getAppByLease(address, leaseUuid);
+    if (app?.providerUrl) await retireAbsentMaintenanceOperation({
+      address, providerUrl: app.providerUrl, leaseUuid, chainId: options.authorization?.chainId,
+    });
     const message = result.outcome === 'already_inactive'
       ? `App "${name}" has been stopped (lease was already inactive).`
       : `App "${name}" has been stopped.`;
@@ -1313,60 +1330,88 @@ export async function executeRestartApp(
   const name = args.app_name as string;
   if (!name) return { success: false, error: 'App name is required' };
 
-  // Multi-app restart: "all" or comma-separated names
-  const pendingRestarts = appRegistry.getApps(address).filter((app) => app.providerUrl &&
-    fredCompatibilityForProvider(app.providerUrl) === 'pr240' &&
-    getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId)?.operation === 'restart');
-  const recoverBatch = name.trim().toLowerCase() === 'all' && pendingRestarts.length > 0;
-  const restartFilter = (a: AppEntry) => !!a.providerUrl && (recoverBatch
-    ? pendingRestarts.some((pending) => pending.leaseUuid === a.leaseUuid)
-    : a.status === 'running' || pendingRestarts.some((pending) => pending.leaseUuid === a.leaseUuid));
-  const multi = resolveMultiAppNames(name, address, appRegistry, restartFilter, 'restart');
-  if (multi.mode === 'error') return { success: false, error: multi.error };
-
-  if (multi.mode === 'multi') {
-    const names = multi.apps.map((a) => a.name);
-    const entries = multi.apps.map((a) => ({
-      app_name: a.name,
-      leaseUuid: a.leaseUuid,
-      providerUrl: a.providerUrl!,
-      ...maintenancePlanKey(address, a.providerUrl!, a.leaseUuid, options.authorization?.chainId),
-    }));
-    const skippedNote = multi.skipped ? ` (skipped: ${multi.skipped.join(', ')})` : '';
-    return transactionConfirmation('restart_app', { app_name: name, entries }, recoverBatch
-      ? `Recover pending restarts (${names.join(', ')}) using their original command keys?${skippedNote}`
-      : `Restart ${multi.apps.length} app${multi.apps.length > 1 ? 's' : ''} (${names.join(', ')})? All apps will be briefly unavailable during restart.${skippedNote}`);
+  const requested = name.trim();
+  const restartAll = requested.toLowerCase() === 'all';
+  const requestedNames = requested.split(',').map((value) => value.trim()).filter(Boolean);
+  const isBatch = restartAll || requestedNames.length > 1;
+  // Resolve selection before touching durable records. Corrupt metadata for an
+  // unrelated app must not block a named restart.
+  const candidates: AppEntry[] = [];
+  const missing: string[] = [];
+  if (restartAll) {
+    candidates.push(...appRegistry.getApps(address));
+  } else {
+    for (const requestedName of requestedNames.length ? requestedNames : [requested]) {
+      const app = appRegistry.findApp(address, requestedName);
+      if (!app) missing.push(requestedName);
+      else if (!candidates.some((candidate) => candidate.leaseUuid === app.leaseUuid)) candidates.push(app);
+    }
+  }
+  if (missing.length > 0) {
+    return { success: false, error: isBatch
+      ? `App${missing.length > 1 ? 's' : ''} not found: ${missing.join(', ')}`
+      : `No unique app found matching "${missing[0]}"` };
   }
 
-  // Single app — use normalized name from resolveMultiAppNames
-  const singleName = multi.name;
-  const app = appRegistry.findApp(address, singleName);
-  if (!app) return { success: false, error: `No unique app found matching "${singleName}"` };
-
-  // The `app_status` pointer is load-bearing: a timed-out readiness wait records
-  // `provisionState: 'unconfirmed'` → derives 'deploying', and `app_status` is
-  // the re-observation point that clears it once fred reports `ready`.
-  const pending = app.providerUrl && fredCompatibilityForProvider(app.providerUrl) === 'pr240'
-    ? getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId) : undefined;
-  if (pending && pending.operation !== 'restart') {
-    return { success: false, error: `An update of "${app.name}" is unresolved. Recover that saved update before starting another command.` };
+  const eligible: Array<{ app: AppEntry; pending?: ReturnType<typeof getPendingMaintenanceOperation> }> = [];
+  const skipped: string[] = [];
+  for (const app of candidates) {
+    let reason: string | undefined;
+    let pending: ReturnType<typeof getPendingMaintenanceOperation>;
+    if (app.chainState === 'absent') {
+      reason = `App "${app.name}" has no active lease and cannot be restarted.`;
+    } else if (!app.providerUrl) {
+      reason = `App "${app.name}" has no provider URL.`;
+    } else {
+      try {
+        pending = fredCompatibilityForProvider(app.providerUrl) === 'pr240'
+          ? getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId)
+          : undefined;
+        if (pending?.operation === 'update') {
+          reason = `An update of "${app.name}" is unresolved. Recover that saved update before starting another command.`;
+        } else if (app.status !== 'running' && !pending) {
+          reason = `App "${app.name}" is not running (status: ${app.status}). Only running apps can be restarted. Run app_status("${app.name}") to refresh its status first.`;
+        }
+      } catch (error) {
+        reason = `App "${app.name}": ${error instanceof Error ? error.message : 'Cannot read its saved maintenance operation.'}`;
+      }
+    }
+    if (reason) {
+      if (!isBatch) return { success: false, error: reason };
+      skipped.push(reason);
+    } else {
+      eligible.push({ app, pending });
+    }
   }
-  if (app.status !== 'running' && !pending) {
-    return { success: false, error: `App "${app.name}" is not running (status: ${app.status}). Only running apps can be restarted. Run app_status("${app.name}") to refresh its status first.` };
-  }
 
-  if (!app.providerUrl) {
-    return { success: false, error: `App "${app.name}" has no provider URL.` };
+  // An explicit retry of "all" recovers only still-pending commands, avoiding
+  // a second restart for already-completed items. Absent/unreadable records do
+  // not activate this mode and cannot starve the remaining running apps.
+  const recoverBatch = restartAll && eligible.some(({ pending }) => pending?.operation === 'restart');
+  const selected = recoverBatch ? eligible.filter(({ pending }) => pending?.operation === 'restart') : eligible;
+  if (selected.length === 0) {
+    return { success: false, error: `No eligible apps to restart.${skipped.length ? ` ${skipped.join(' ')}` : ''}` };
   }
-
-  return transactionConfirmation('restart_app', {
+  const entries = selected.map(({ app, pending }) => ({
     app_name: app.name,
     leaseUuid: app.leaseUuid,
-    providerUrl: app.providerUrl,
-    ...maintenancePlanKey(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId),
-  }, pending
-    ? `Recover the pending restart of "${app.name}" using its original command key?`
-    : `Restart app "${app.name}"? The app will be briefly unavailable during restart.`);
+    providerUrl: app.providerUrl!,
+    ...(fredCompatibilityForProvider(app.providerUrl!) === 'pr240'
+      ? { idempotencyKey: pending?.idempotencyKey ?? createMaintenanceIdempotencyKey() }
+      : {}),
+  }));
+
+  if (isBatch) {
+    const names = entries.map((entry) => entry.app_name);
+    const skippedNote = skipped.length > 0 ? ` (skipped: ${skipped.join(' ')})` : '';
+    return transactionConfirmation('restart_app', { app_name: name, entries }, recoverBatch
+      ? `Recover pending restarts (${names.join(', ')}) using their original command keys?${skippedNote}`
+      : `Restart ${entries.length} app${entries.length > 1 ? 's' : ''} (${names.join(', ')})? All apps will be briefly unavailable during restart.${skippedNote}`);
+  }
+
+  return transactionConfirmation('restart_app', entries[0], selected[0].pending
+    ? `Recover the pending restart of "${entries[0].app_name}" using its original command key?`
+    : `Restart app "${entries[0].app_name}"? The app will be briefly unavailable during restart.`);
 }
 
 /**
@@ -1622,7 +1667,7 @@ async function executeConfirmedBatchRestart(
           return null;
         }
         if (isIndeterminateMaintenanceError(error)) {
-          updateProgress('failed', 'Restart outcome unknown');
+          updateProgress('unconfirmed', 'Restart outcome unknown');
           return { name, outcome: 'unconfirmed' as const, detail: 'Check app_status and app_releases before another command; do not automatically retry or stop/redeploy.' };
         }
         // Same abort guard as the single path, and it bites hardest here: a
@@ -1685,7 +1730,7 @@ async function executeConfirmedBatchRestart(
         const observation = provisionObservationFromWaitError(error);
         appRegistry.updateApp(address, entry.leaseUuid, { provisionState: observation });
         if (observation === 'unconfirmed') {
-          updateProgress('failed', `Restart not confirmed for "${name}". Use app_status("${name}") to check.`);
+          updateProgress('unconfirmed', `Restart not confirmed for "${name}". Use app_status("${name}") to check.`);
           return { name, outcome: 'unconfirmed' as const, detail: `no verdict from the provider — check app_status("${name}")` };
         }
         updateProgress('failed', `Restart failed for "${name}": ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -1698,7 +1743,7 @@ async function executeConfirmedBatchRestart(
     succeeded,
     failed,
     unconfirmed,
-    unconfirmedLabel: 'Still restarting',
+    unconfirmedLabel: 'Outcome unknown',
     cancelled,
     dataKey: 'restarted',
     verb: 'Restarted',
@@ -1887,6 +1932,7 @@ export async function executeUpdateApp(
     stackServiceCount = serviceNamesResult.serviceNames.length;
   }
 
+  payload = await buildPayloadFromManifest(new TextDecoder().decode(payload.bytes));
   const manifestError = await validateManifestForProvider(new TextDecoder().decode(payload.bytes), app.providerUrl);
   if (manifestError) return { success: false, error: manifestError };
 
@@ -1949,9 +1995,14 @@ export async function executeConfirmedUpdateApp(
   if (!appRegistry) return { success: false, error: 'App registry not available' };
   if (!signing) return { success: false, error: 'Wallet does not support message signing' };
 
-  // Reconstruct payload from stored manifest JSON (image-based update)
-  if (!payload && typeof plan._generatedManifest === 'string') {
+  // Plan-time merging and confirmation edits define the approved command.
+  // The untouched original attachment must not replace that manifest. Notice
+  // removal preserves every byte when the manifest is already upload-ready,
+  // including exact payloads retained for maintenance recovery.
+  if (typeof plan._generatedManifest === 'string') {
     payload = await buildPayloadFromManifest(plan._generatedManifest);
+  } else if (payload) {
+    payload = await buildPayloadFromManifest(new TextDecoder().decode(payload.bytes));
   }
 
   if (!payload) return { success: false, error: 'Payload missing' };

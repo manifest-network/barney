@@ -14,6 +14,7 @@ export interface DeployProgress {
     | 'provisioning'
     | 'restarting'
     | 'updating'
+    | 'unconfirmed'
     | 'ready'
     | 'failed';
   detail?: string;

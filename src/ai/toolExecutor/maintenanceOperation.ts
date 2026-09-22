@@ -18,6 +18,10 @@ export interface MaintenanceOperation extends MaintenanceScope {
   readonly baselineReleaseVersions: readonly number[];
   readonly manifest?: string;
   readonly previousManifest?: string;
+  /** False only while no caller has handed this command to HTTP. */
+  readonly dispatched?: boolean;
+  /** Persist provider admission so a later read can safely attribute its release. */
+  readonly accepted?: boolean;
 }
 
 interface MaintenanceMetadata {
@@ -26,6 +30,8 @@ interface MaintenanceMetadata {
   readonly idempotencyKey: string;
   readonly payloadHash: string;
   readonly baselineReleaseVersions: readonly number[];
+  readonly dispatched?: boolean;
+  readonly accepted?: boolean;
 }
 
 interface MaintenanceInput extends Omit<MaintenanceScope, 'chainId'> {
@@ -71,6 +77,8 @@ function metadataFor(record: MaintenanceOperation): MaintenanceMetadata {
     idempotencyKey: record.idempotencyKey,
     payloadHash: record.payloadHash,
     baselineReleaseVersions: record.baselineReleaseVersions,
+    ...(record.dispatched !== undefined && { dispatched: record.dispatched }),
+    ...(record.accepted !== undefined && { accepted: record.accepted }),
   };
 }
 
@@ -94,6 +102,8 @@ function readMetadata(key: string): MaintenanceMetadata | undefined {
       || (metadata.operation !== 'restart' && metadata.operation !== 'update')
       || typeof metadata.idempotencyKey !== 'string' || !UUID_V4.test(metadata.idempotencyKey)
       || typeof metadata.payloadHash !== 'string' || !SHA_256.test(metadata.payloadHash)
+      || (metadata.dispatched !== undefined && typeof metadata.dispatched !== 'boolean')
+      || (metadata.accepted !== undefined && typeof metadata.accepted !== 'boolean')
       || !Array.isArray(metadata.baselineReleaseVersions)
       || !metadata.baselineReleaseVersions.every((version: unknown) => typeof version === 'number' && Number.isSafeInteger(version) && version >= 0)) throw new Error();
     return {
@@ -102,6 +112,8 @@ function readMetadata(key: string): MaintenanceMetadata | undefined {
       idempotencyKey: metadata.idempotencyKey,
       payloadHash: metadata.payloadHash,
       baselineReleaseVersions: Object.freeze([...metadata.baselineReleaseVersions]),
+      ...(metadata.dispatched !== undefined && { dispatched: metadata.dispatched }),
+      ...(metadata.accepted !== undefined && { accepted: metadata.accepted }),
     };
   } catch {
     throw new Error('The saved maintenance operation is unreadable. Reconcile the existing operation before submitting another command.');
@@ -138,7 +150,8 @@ export function getPendingMaintenanceOperation(
     if (metadata && !matches(retained, metadata)) {
       throw new Error('Another maintenance operation is recorded for this app. Reconcile the pending operations before retrying.');
     }
-    return retained;
+    // Another tab may have dispatched or acknowledged the same operation.
+    return Object.freeze({ ...retained, ...metadata });
   }
   if (!metadata) return undefined;
   return Object.freeze({ ...scope, ...metadata });
@@ -147,7 +160,7 @@ export function getPendingMaintenanceOperation(
 function assertSameOperation(record: MaintenanceOperation, input: MaintenanceInput): void {
   if (record.operation !== input.operation
     || (input.idempotencyKey !== undefined && record.idempotencyKey !== input.idempotencyKey)) {
-    throw new Error(`A ${record.operation} is still unresolved for this app. Retry that exact operation or reconcile its outcome before submitting a new command.`);
+    throw new Error(`${record.operation === 'update' ? 'An' : 'A'} ${record.operation} is still unresolved for this app. Retry that exact operation or reconcile its outcome before submitting a new command.`);
   }
 }
 
@@ -164,7 +177,7 @@ async function withScopeLock<T>(key: string, action: () => T): Promise<T> {
  * Call before provider I/O. Unknown outcomes retain their key and exact payload,
  * including across new tool invocations. Each lease in a batch has its own scope.
  */
-export async function getOrCreateMaintenanceOperation(input: MaintenanceInput): Promise<MaintenanceOperation> {
+export async function prepareMaintenanceOperation(input: MaintenanceInput): Promise<{ command: MaintenanceOperation; created: boolean }> {
   if (input.idempotencyKey !== undefined && !UUID_V4.test(input.idempotencyKey)) {
     throw new Error('The maintenance operation key must be a canonical UUIDv4.');
   }
@@ -187,7 +200,7 @@ export async function getOrCreateMaintenanceOperation(input: MaintenanceInput): 
   }
   const payloadHash = await metaHashHex(manifest ?? '');
 
-  const retain = (): MaintenanceOperation => {
+  const retain = (): { command: MaintenanceOperation; created: boolean } => {
     // Hashing yields. Re-read inside the critical section so concurrent callers
     // cannot mint separate keys for the same unresolved operation.
     const current = getPendingMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid, scope.chainId);
@@ -206,11 +219,13 @@ export async function getOrCreateMaintenanceOperation(input: MaintenanceInput): 
       baselineReleaseVersions: retained?.baselineReleaseVersions ?? Object.freeze([...input.baselineReleaseVersions!]),
       manifest,
       previousManifest: retained ? retained.previousManifest : input.previousManifest,
+      dispatched: retained ? retained.dispatched : false,
+      accepted: retained?.accepted,
     });
     // Persist before allowing any mutation, and never persist manifest secrets.
     persist(key, record);
     pending.set(key, record);
-    return record;
+    return { command: record, created: retained === undefined };
   };
 
   return withScopeLock(key, retain);
@@ -230,5 +245,90 @@ export async function completeMaintenanceOperation(record: MaintenanceOperation)
       throw storageError();
     }
     pending.delete(key);
+  });
+}
+
+/** Existing callers need only the stable operation handle. */
+export async function getOrCreateMaintenanceOperation(input: MaintenanceInput): Promise<MaintenanceOperation> {
+  return (await prepareMaintenanceOperation(input)).command;
+}
+
+async function markOperation(record: MaintenanceOperation, accepted: boolean, beforeMark?: () => void): Promise<void> {
+  const key = storageKey(record);
+  await withScopeLock(key, () => {
+    beforeMark?.();
+    const current = getPendingMaintenanceOperation(record.address, record.providerUrl, record.leaseUuid, record.chainId);
+    if (!current || !matches(current, metadataFor(record))) {
+      throw new Error('The saved maintenance operation changed before dispatch; reconcile it before submitting a command.');
+    }
+    const updated = Object.freeze({ ...current, dispatched: true, ...(accepted && { accepted: true }) });
+    persist(key, updated);
+    pending.set(key, updated);
+  });
+}
+
+/** Must finish before handing a maintenance POST to the network. */
+export async function markMaintenanceOperationDispatched(record: MaintenanceOperation, beforeMark?: () => void): Promise<void> {
+  await markOperation(record, false, beforeMark);
+}
+
+/** Acknowledged admission survives reload without retaining manifest secrets. */
+export async function markMaintenanceOperationAccepted(record: MaintenanceOperation): Promise<void> {
+  await markOperation(record, true);
+}
+
+/** Clear only a newly prepared operation that no concurrent caller dispatched. */
+export async function discardUnsubmittedMaintenanceOperation(record: MaintenanceOperation): Promise<boolean> {
+  const key = storageKey(record);
+  return withScopeLock(key, () => {
+    const current = getPendingMaintenanceOperation(record.address, record.providerUrl, record.leaseUuid, record.chainId);
+    if (!current || !matches(current, metadataFor(record)) || current.dispatched !== false || current.accepted) return false;
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      throw storageError();
+    }
+    pending.delete(key);
+    return true;
+  });
+}
+
+/** An authoritative absent/terminal chain lease cannot execute retained work. */
+export async function retireAbsentMaintenanceOperation(input: Omit<MaintenanceScope, 'chainId'> & { chainId?: string }): Promise<void> {
+  const key = storageKey(scopeFor(input));
+  await withScopeLock(key, () => {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      throw storageError();
+    }
+    pending.delete(key);
+  });
+}
+
+/** Commit read-only observations only while both the command and caller snapshot remain current. */
+export async function commitMaintenanceObservation(
+  record: MaintenanceOperation,
+  observation: { settled: boolean; isCurrent: () => boolean; apply: () => void },
+): Promise<boolean> {
+  const key = storageKey(record);
+  return withScopeLock(key, () => {
+    const metadata = readMetadata(key);
+    // Unlike retry recovery, absence is a stale result here: another caller may
+    // have settled this command and a successor during the provider reads.
+    if (!metadata || !matches(record, metadata)) return false;
+    const retained = pending.get(key);
+    if (retained && !matches(retained, metadata)) return false;
+    if (!observation.isCurrent()) return false;
+    if (observation.settled) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        throw storageError();
+      }
+      pending.delete(key);
+    }
+    observation.apply();
+    return true;
   });
 }

@@ -10,7 +10,8 @@ import { getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import type { AppEntry } from '../../registry/appRegistry';
 import { resolveAppUrl } from './deployUrl';
 import { executeConfirmedRestartApp, executeConfirmedUpdateApp, executeRestartApp, executeUpdateApp } from './compositeTransactions';
-import { getPendingMaintenanceOperation } from './maintenanceOperation';
+import { completeMaintenanceOperation, getOrCreateMaintenanceOperation, getPendingMaintenanceOperation } from './maintenanceOperation';
+import { reconcilePendingMaintenance } from './maintenanceReconciliation';
 import { makeRegistry } from './testHelpers';
 import type { SigningContext, ToolExecutorOptions } from './types';
 
@@ -158,6 +159,29 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
     expect(options.appRegistry?.getAppByLease(ADDRESS, app.leaseUuid)?.manifest).toBe(OLD_MANIFEST);
   });
 
+  it.each([404, 409])('settles only the exact durable Fred %i refusal, including a lost-response retry', async (status) => {
+    const { apps: [app], plans: [plan], options } = setup();
+    vi.mocked(providerFetch).mockRejectedValueOnce(new TypeError('Lost response'));
+    expect((await dispatch(operation, plan, options)).error).toContain('unconfirmed');
+    const error = status === 404 ? 'lease not yet provisioned' : `invalid state for ${operation}`;
+    vi.mocked(providerFetch).mockResolvedValueOnce(new Response(JSON.stringify({ code: status, error }), { status }));
+    const result = await dispatch(operation, plan, options);
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining(error) });
+    expect(result.error).not.toContain('unconfirmed');
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+    expect(options.appRegistry?.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ status: 'running', manifest: OLD_MANIFEST });
+    expect(await dispatch(operation, plan, options)).toEqual(result);
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+    expect(waitForLeaseStatus).not.toHaveBeenCalled();
+  });
+
+  it('retains a 400 refusal because its body cannot distinguish prior command admission', async () => {
+    const { apps: [app], plans: [plan], options } = setup();
+    vi.mocked(providerFetch).mockResolvedValueOnce(new Response(JSON.stringify({ code: 400, error: 'invalid manifest' }), { status: 400 }));
+    expect((await dispatch(operation, plan, options)).error).toContain('unconfirmed');
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(plan.idempotencyKey);
+  });
+
   it('reports compensated failure while retaining the healthy original runtime', async () => {
     const { apps: [app], plans: [plan], options, appRegistry } = setup();
     const reason = operation === 'restart' ? 'RestartFailed' : 'UpdateFailed';
@@ -211,9 +235,14 @@ it('gives batch items independent keys and retries only the unresolved command',
     return accepted();
   });
   // Replaying the original approved batch also must not resubmit the success.
-  await executeConfirmedRestartApp(args, chain, options);
+  const onProgress = vi.fn();
+  await executeConfirmedRestartApp(args, chain, { ...options, onProgress });
   expect(requests()).toHaveLength(3);
   expect(requests().at(-1)?.key).toBe(plans[1].idempotencyKey);
+  expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'ready', batch: [
+    expect.objectContaining({ name: 'first', phase: 'ready' }),
+    expect.objectContaining({ name: 'second', phase: 'ready' }),
+  ] }));
 });
 
 it('refuses changed update bytes while the previous command outcome remains unknown', async () => {
@@ -259,6 +288,192 @@ it('retains the command if post-readiness verification is unavailable', async ()
 it('does not dispatch without an unambiguous original release baseline', async () => {
   const { apps: [app], plans: [plan], options } = setup();
   histories.set(app.leaseUuid, history(app.leaseUuid, release(1), release(2, 'deploying')));
-  expect(await dispatch('restart', plan, options)).toMatchObject({ success: false });
+  expect(await dispatch('restart', plan, options)).toMatchObject({
+    success: false, error: expect.stringContaining('release v2 is deploying'),
+  });
   expect(providerFetch).not.toHaveBeenCalled();
+});
+
+describe('pre-dispatch cancellation and local failures', () => {
+  it.each(['baseline', 'authentication', 'context', 'authorization'] as const)('discards a new command after a local %s failure', async (stage) => {
+    const { apps: [app], plans: [plan], options, signArbitrary } = setup();
+    const controller = new AbortController();
+    options.signal = controller.signal;
+    if (stage === 'baseline') {
+      vi.mocked(getLeaseReleases).mockImplementationOnce(async () => {
+        controller.abort();
+        return histories.get(app.leaseUuid)!;
+      });
+    } else if (stage === 'authentication') {
+      signArbitrary.mockImplementationOnce(async () => ({ pub_key: { type: 'key', value: 'cHVia2V5' }, signature: 'c2ln' }));
+      signArbitrary.mockImplementationOnce(async () => {
+        controller.abort();
+        return { pub_key: { type: 'key', value: 'cHVia2V5' }, signature: 'c2ln' };
+      });
+    } else if (stage === 'context') {
+      vi.mocked(getReadClient).mockRejectedValueOnce(new Error('Read client unavailable'));
+    } else {
+      options.assertAuthorization = vi.fn().mockImplementationOnce(() => {}).mockImplementation(() => { throw new Error('Wallet changed'); });
+    }
+    const result = await dispatch('restart', plan, options);
+    expect(result.success).toBe(false);
+    expect(result.error).not.toContain('unconfirmed');
+    if (controller.signal.aborted) expect(result.error).toContain('cancelled before dispatch');
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+  });
+
+  it('puts a batch abort during authentication in Cancelled, without a retained command', async () => {
+    const { apps: [app], plans, options, signArbitrary } = setup();
+    const controller = new AbortController();
+    options.signal = controller.signal;
+    signArbitrary.mockImplementationOnce(async () => ({ pub_key: { type: 'key', value: 'cHVia2V5' }, signature: 'c2ln' }));
+    signArbitrary.mockImplementationOnce(async () => {
+      controller.abort();
+      return { pub_key: { type: 'key', value: 'cHVia2V5' }, signature: 'c2ln' };
+    });
+    const result = await executeConfirmedRestartApp({ app_name: 'all', entries: plans }, chain, options);
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('Cancelled: example') });
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+  });
+
+  it('preserves an existing command when its retry is cancelled locally', async () => {
+    const { apps: [app], plans: [plan], options } = setup();
+    vi.mocked(providerFetch).mockRejectedValueOnce(new TypeError('Lost response'));
+    await dispatch('restart', plan, options);
+    const controller = new AbortController();
+    controller.abort();
+    const result = await dispatch('restart', plan, { ...options, signal: controller.signal });
+    expect(result.error).toContain('unconfirmed');
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(plan.idempotencyKey);
+  });
+});
+
+it('stops verification immediately when the readiness wait is cancelled', async () => {
+  const { apps: [app], plans: [plan], options, signArbitrary } = setup();
+  const controller = new AbortController();
+  vi.mocked(waitForLeaseStatus).mockImplementationOnce(async () => {
+    controller.abort();
+    throw new DOMException('Cancelled', 'AbortError');
+  });
+  const result = await dispatch('restart', plan, { ...options, signal: controller.signal });
+  expect(result.error).toContain('unconfirmed');
+  expect(signArbitrary).toHaveBeenCalledTimes(2); // Original baseline and POST only.
+  expect(getLeaseReleases).toHaveBeenCalledTimes(1);
+  expect(getLeaseProvision).not.toHaveBeenCalled();
+  expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toMatchObject({ idempotencyKey: plan.idempotencyKey, accepted: true });
+});
+
+it('compares completed payload fingerprints while avoiding another POST', async () => {
+  const { apps: [app], plans: [plan], options } = setup();
+  vi.mocked(providerFetch).mockImplementationOnce(async () => {
+    histories.set(app.leaseUuid, history(app.leaseUuid, release(1, 'superseded'), release(2)));
+    return accepted();
+  });
+  expect((await dispatch('update', plan, options)).success).toBe(true);
+  expect((await dispatch('update', plan, options)).success).toBe(true);
+  expect((await dispatch('update', plan, options, MANIFEST.trim())).error).toContain('different payload bytes');
+  expect(providerFetch).toHaveBeenCalledTimes(1);
+});
+
+it.each(['restart', 'update'] as const)('does not repeat a confirmed %s after read-only reconciliation settles it', async (operation) => {
+  const { apps: [app], plans: [plan], options } = setup();
+  expect((await dispatch(operation, plan, options)).error).toContain('unconfirmed');
+  histories.set(app.leaseUuid, history(app.leaseUuid, release(1, 'superseded'), release(2)));
+  expect(await reconcilePendingMaintenance(app, options)).toMatchObject({ outcome: 'succeeded' });
+  expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+  expect((await dispatch(operation, plan, options)).success).toBe(true);
+  expect(providerFetch).toHaveBeenCalledTimes(1);
+});
+
+it('does not overwrite a newer command after an older endpoint lookup finishes', async () => {
+  const { apps: [app], plans: [plan], options, appRegistry } = setup();
+  vi.mocked(providerFetch).mockImplementationOnce(async () => {
+    histories.set(app.leaseUuid, history(app.leaseUuid, release(1, 'superseded'), release(2)));
+    return accepted();
+  });
+  let nextKey: string | undefined;
+  vi.mocked(resolveAppUrl).mockImplementationOnce(async () => {
+    const prior = getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)!;
+    await completeMaintenanceOperation(prior);
+    const next = await getOrCreateMaintenanceOperation({
+      address: ADDRESS, providerUrl: PROVIDER, leaseUuid: app.leaseUuid,
+      operation: 'update', manifest: '{"image":"nginx:next"}', baselineReleaseVersions: [1, 2],
+    });
+    nextKey = next.idempotencyKey;
+    appRegistry.updateApp(ADDRESS, app.leaseUuid, { manifest: '{"image":"nginx:next"}', url: 'https://next.example' });
+    return { url: 'https://stale.example' };
+  });
+  expect((await dispatch('update', plan, options)).error).toContain('unconfirmed');
+  expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ manifest: '{"image":"nginx:next"}', url: 'https://next.example' });
+  expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(nextKey);
+});
+
+it('does not write a settled observation after cancellation during endpoint lookup', async () => {
+  const { apps: [app], plans: [plan], options, appRegistry } = setup();
+  const controller = new AbortController();
+  vi.mocked(providerFetch).mockImplementationOnce(async () => {
+    histories.set(app.leaseUuid, history(app.leaseUuid, release(1, 'superseded'), release(2)));
+    return accepted();
+  });
+  vi.mocked(resolveAppUrl).mockImplementationOnce(async () => {
+    controller.abort();
+    return { url: 'https://stale.example' };
+  });
+  expect((await dispatch('update', plan, { ...options, signal: controller.signal })).error).toContain('unconfirmed');
+  expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)?.manifest).toBe(OLD_MANIFEST);
+  expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(plan.idempotencyKey);
+});
+
+it('preserves the registry manifest after a reload and compensated update failure', async () => {
+  const { apps: [app], plans: [plan], options, appRegistry } = setup();
+  await dispatch('update', plan, options); // accepted, but the old release remains visible
+  vi.resetModules();
+  const { executeMaintenance } = await import('./maintenanceExecution');
+  const freshOperations = await import('./maintenanceOperation');
+  expect(freshOperations.getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.previousManifest).toBeUndefined();
+  vi.mocked(providerFetch).mockImplementationOnce(async () => {
+    histories.set(app.leaseUuid, history(app.leaseUuid, release(1), release(2, 'failed', 'UpdateFailed')));
+    return accepted();
+  });
+  const { result } = await executeMaintenance({ ...plan, operation: 'update', manifest: MANIFEST }, options);
+  expect(result.error).toContain('Update failed');
+  expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)?.manifest).toBe(OLD_MANIFEST);
+  expect(freshOperations.getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+});
+
+it('cancels a new command while its dispatch Web Lock is queued without sending or retaining it', async () => {
+  const { apps: [app], plans: [plan], options } = setup();
+  const controller = new AbortController();
+  let notifyQueued!: () => void;
+  const queued = new Promise<void>((resolve) => { notifyQueued = resolve; });
+  let releaseLock!: () => void;
+  const heldLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+  let lockRequests = 0;
+  vi.stubGlobal('navigator', {
+    locks: { request: vi.fn(async (_name: string, action: () => unknown) => {
+      lockRequests += 1;
+      // Preparation takes the first lock. Delay only the subsequent handoff
+      // so cancellation happens after SDK authentication and its own guard.
+      if (lockRequests === 2) {
+        notifyQueued();
+        await heldLock;
+      }
+      return action();
+    }) },
+  });
+  try {
+    const execution = dispatch('restart', plan, { ...options, signal: controller.signal });
+    await queued;
+    controller.abort();
+    releaseLock();
+    expect(await execution).toMatchObject({ success: false, error: expect.stringContaining('cancelled before dispatch') });
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+  } finally {
+    releaseLock();
+    vi.unstubAllGlobals();
+  }
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_FRED_COMPATIBILITY, fredCompatibilityForProvider, parseFredCompatibility } from './fredCompatibility';
 
 describe('Fred provider contract selection', () => {
@@ -26,5 +26,19 @@ describe('Fred provider contract selection', () => {
     '{"https://provider.example.com":"pr240","https://provider.example.com/":"v0.13"}',
   ])('rejects malformed config instead of silently selecting a different protocol: %s', (value) => {
     expect(() => parseFredCompatibility(value)).toThrow('PUBLIC_FRED_COMPATIBILITY');
+  });
+
+  it.each(['PR240', '{"provider.example.com":"pr240"}'])('keeps imports usable with invalid config %s and fails only Fred operations', async (value) => {
+    vi.resetModules();
+    vi.doMock('./runtimeConfig', () => ({ runtimeConfig: { PUBLIC_FRED_COMPATIBILITY: value } }));
+    try {
+      const config = await import('./fredCompatibility');
+      expect(config.DEFAULT_FRED_COMPATIBILITY).toBeDefined();
+      expect(() => config.getFredCompatibility()).toThrow('PUBLIC_FRED_COMPATIBILITY');
+      expect(() => config.fredCompatibilityForProvider('https://provider.example.com')).toThrow('PUBLIC_FRED_COMPATIBILITY');
+    } finally {
+      vi.doUnmock('./runtimeConfig');
+      vi.resetModules();
+    }
   });
 });

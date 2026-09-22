@@ -220,7 +220,8 @@ function messagesAfterAuthorizationChange(state: AIStore): ChatMessage[] {
     || state.pendingPayload !== null
     || (state.deployProgress !== null
       && state.deployProgress.phase !== 'ready'
-      && state.deployProgress.phase !== 'failed');
+      && state.deployProgress.phase !== 'failed'
+      && state.deployProgress.phase !== 'unconfirmed');
 
   // Pending and in-flight transactions already have a durable tool row whose
   // inline alert explains the closure. Add a local assistant notice only for

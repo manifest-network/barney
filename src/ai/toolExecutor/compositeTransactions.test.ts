@@ -27,6 +27,7 @@ import type { ToolExecutorOptions, PayloadAttachment } from './types';
 import type { CosmosClientManager, DeployResult } from '@manifest-network/manifest-sdk';
 import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
+import { getOrCreateMaintenanceOperation, getPendingMaintenanceOperation, retireAbsentMaintenanceOperation } from './maintenanceOperation';
 import { LeaseState } from '../../api/billing';
 import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS } from '../../config/constants';
 import { ProviderApiError } from '../../api/provider-api';
@@ -2215,6 +2216,32 @@ describe('executeStopApp', () => {
 
 describe('executeConfirmedStopApp', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it.each(['stopped', 'cancelled', 'already_inactive'] as const)('retires maintenance after authoritative single-stop outcome %s', async (outcome) => {
+    const app = makeApp({ leaseUuid: crypto.randomUUID() });
+    const scope = { address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid };
+    await getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1] });
+    vi.mocked(stopApp).mockResolvedValue({ outcome } as never);
+    const result = await executeConfirmedStopApp({ app_name: app.name, leaseUuid: app.leaseUuid }, CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry([app]) }));
+    expect(result.success).toBe(true);
+    expect(getPendingMaintenanceOperation(ADDRESS, app.providerUrl!, app.leaseUuid)).toBeUndefined();
+  });
+
+  it('retains maintenance after a bulk CheckTx while retiring an already-inactive lease', async () => {
+    const apps = [makeApp({ name: 'first', leaseUuid: crypto.randomUUID() }), makeApp({ name: 'second', leaseUuid: crypto.randomUUID() })];
+    for (const app of apps) await getOrCreateMaintenanceOperation({
+      address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid, operation: 'restart', baselineReleaseVersions: [1],
+    });
+    vi.mocked(stopApp).mockResolvedValueOnce({ outcome: 'stopped' } as never).mockResolvedValueOnce({ outcome: 'already_inactive' } as never);
+    const result = await executeConfirmedStopApp({ app_name: 'all', entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) }, CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(true);
+    expect(getPendingMaintenanceOperation(ADDRESS, apps[0].providerUrl!, apps[0].leaseUuid)).toBeDefined();
+    expect(getPendingMaintenanceOperation(ADDRESS, apps[1].providerUrl!, apps[1].leaseUuid)).toBeUndefined();
+    await retireAbsentMaintenanceOperation({ address: ADDRESS, providerUrl: apps[0].providerUrl!, leaseUuid: apps[0].leaseUuid });
+  });
+
 
   it('closes lease and updates registry (single, blocking)', async () => {
     vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as any);
@@ -6278,7 +6305,7 @@ describe('F4 — a writer with no observation invents none', () => {
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as { message: string }).message).toContain('Still restarting:');
+    expect((result.data as { message: string }).message).toContain('Outcome unknown:');
     expect(registry.updateApp).not.toHaveBeenCalled();
     expect(registry.getAppByLease(ADDRESS, 'uuid-1')?.status).toBe('running');
   });
@@ -6350,7 +6377,7 @@ describe('G1 (cont.) — error identity at the sites the first pass left uncover
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as { message: string }).message).toContain('Still restarting:');
+    expect((result.data as { message: string }).message).toContain('Outcome unknown:');
     expect((result.data as { cancelled: string[] }).cancelled).toEqual([]);
     // A request error does not establish a workload-health verdict.
     expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, 'uuid-1', expect.objectContaining({ provisionState: expect.anything() }));
@@ -6546,7 +6573,7 @@ describe('G4 (cont.) — a mixed batch keeps the two outcomes apart per entry', 
     // non-abort separation it exists to pin is unchanged, only mongo's bucket.)
     const message = (result.data as { message: string }).message;
     expect(result.success).toBe(true);
-    expect(message).toContain('Still restarting:');
+    expect(message).toContain('Outcome unknown:');
     expect(message).toContain('mongo');
     expect(message).toContain('Cancelled:');
     expect(message).toContain('redis');
@@ -6602,7 +6629,7 @@ describe('CP2 — a wait that never got an answer is not a failure', () => {
     const data = result.data as { unconfirmed: Array<{ name: string; detail?: string }>; failed: string[]; message: string };
     expect(data.unconfirmed.map((u) => u.name)).toEqual(['redis', 'postgres']);
     expect(data.failed).toEqual([]);
-    expect(data.message).toContain('Still restarting:');
+    expect(data.message).toContain('Outcome unknown:');
     expect(data.message).toContain('app_status("redis")');
     expect(data.message).not.toContain('All restarts failed');
     // The bucket and the registry now agree.
@@ -6752,11 +6779,11 @@ describe('batch summary and progress agree on an unconfirmed batch', () => {
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as { message: string }).message).toContain('Still restarting:');
+    expect((result.data as { message: string }).message).toContain('Outcome unknown:');
 
     const last = onProgress.mock.calls.at(-1)![0] as { phase: string; detail?: string };
-    expect(last.phase).toBe('ready');
-    expect(last.detail).toBe('2 still restarting');
+    expect(last.phase).toBe('unconfirmed');
+    expect(last.detail).toBe('2 outcome unknown');
   });
 
   it('batch deploy: an all-succeeded batch still gets the unchanged headline and phase', async () => {

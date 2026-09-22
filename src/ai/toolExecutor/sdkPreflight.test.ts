@@ -3,7 +3,7 @@ import { asAddress, asLeaseUuid, asProviderUuid, asSkuUuid, ManifestMCPErrorCode
 import { deployManifest, updateApp, validateManifest, type FredAuthCtx } from '@manifest-network/manifest-sdk/deploy';
 import { buildStackManifest } from '../manifest';
 import { buildImageManifestFromArgs, parseAndValidateStackServices, validateManifestForProvider } from './deployArgs';
-import { fredCompatibility } from '../../config/fredCompatibility';
+import { getFredCompatibility } from '../../config/fredCompatibility';
 
 const LEASE_UUID = asLeaseUuid('550e8400-e29b-41d4-a716-446655440000');
 
@@ -27,7 +27,7 @@ describe('SDK preflight at Barney transaction boundaries', () => {
     expect(await validateManifestForProvider(manifest, 'https://provider.example.com')).toBeNull();
 
     const { ctx, access } = preflightContext();
-    await expect(updateApp({ ...ctx, fredCompatibility }, {
+    await expect(updateApp({ ...ctx, fredCompatibility: getFredCompatibility() }, {
       address: asAddress('manifest1tenant'), leaseUuid: LEASE_UUID, manifest,
     }, { providerUrl: devProvider, pollOptions: false }))
       .rejects.toMatchObject({ code: ManifestMCPErrorCode.INVALID_CONFIG });
@@ -50,7 +50,7 @@ describe('SDK preflight at Barney transaction boundaries', () => {
     const { ctx, access } = preflightContext();
     const provider = vi.fn().mockResolvedValue({ provider: { apiUrl: 'https://s049-u002.manifest0.net/api/fred' } });
     const deploymentCtx = {
-      ...ctx, fredCompatibility,
+      ...ctx, fredCompatibility: getFredCompatibility(),
       chain: { getAddress: async () => asAddress('manifest1tenant'), acquireRateLimit: async () => {}, withBroadcastLock: access },
       query: { liftedinit: { sku: { v1: { provider } } } },
     } as unknown as FredAuthCtx;

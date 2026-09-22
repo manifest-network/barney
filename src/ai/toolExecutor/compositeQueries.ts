@@ -31,6 +31,8 @@ import { classifyProvisionStatus, displayProvisionStatus, isUnsettledProvisionSt
 import { appCardConnection } from './appCardConnection';
 import { buildBarneyCtx } from './capabilityCtx';
 import { nextStepFor } from './failureGuidance';
+import { reconcilePendingMaintenance } from './maintenanceReconciliation';
+import { retireAbsentMaintenanceOperation } from './maintenanceOperation';
 import { resolveAppEndpoint } from './helpers';
 import { refreshAppConnection } from './deployUrl';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
@@ -102,6 +104,9 @@ export async function executeListApps(
       if (appRegistry.getAppByLease(address, app.leaseUuid)?.chainState !== app.chainState) continue;
       const updated = appRegistry.updateApp(address, app.leaseUuid, { chainState });
       if (updated) app.status = updated.status;
+      if (chainState === 'absent' && app.providerUrl) {
+        await retireAbsentMaintenanceOperation({ address, providerUrl: app.providerUrl, leaseUuid: app.leaseUuid, chainId: options.authorization?.chainId });
+      }
     }
     const liveLeases = new Map([...pendingLeases, ...activeLeases].map((lease) => [lease.uuid, lease]));
     await discoverTenantApps(address, [...liveLeases.values()], { signal, registry: appRegistry });
@@ -249,6 +254,9 @@ export async function executeAppStatus(
   if (isTerminalLeaseState(leaseState)) {
     statusUnavailable = false;
     endpointInactive = true;
+    if (app.providerUrl) {
+      await retireAbsentMaintenanceOperation({ address, providerUrl: app.providerUrl, leaseUuid: app.leaseUuid, chainId: options.authorization?.chainId });
+    }
     if (app.chainState !== 'absent') {
       recordObservation({ chainState: 'absent' });
     }
@@ -302,6 +310,10 @@ export async function executeAppStatus(
     }
   }
 
+  const maintenance = !endpointInactive ? await reconcilePendingMaintenance(app, options) : undefined;
+  const reconciledApp = appRegistry.getAppByLease(address, app.leaseUuid) ?? app;
+  currentStatus = reconciledApp.status;
+
   const domainTargetsStale = !!app.connectionStale && !connectionRefreshed;
   // Keep the deployed endpoint intact, including its scheme, port, and path.
   const connectionUrl = endpointInactive ? undefined : resolveAppEndpoint({ url: appUrl, connection: appConnection });
@@ -309,9 +321,9 @@ export async function executeAppStatus(
   // Extract image from stored manifest (single-service or stack)
   let image: string | undefined;
   let serviceImages: Record<string, string> | undefined;
-  if (app.manifest) {
+  if (reconciledApp.manifest) {
     try {
-      const manifest = JSON.parse(app.manifest);
+      const manifest = JSON.parse(reconciledApp.manifest);
       if (typeof manifest.image === 'string') {
         image = manifest.image;
       } else if (manifest.services && typeof manifest.services === 'object') {
@@ -415,6 +427,7 @@ export async function executeAppStatus(
     name: app.name,
     status: currentStatus,
     provision_status: providerStatus,
+    ...(maintenance && { maintenance }),
     statusUnavailable,
     workloadStatusUnavailable,
     providerQuerySkipped: !signing || !options.clientManager,
@@ -994,12 +1007,19 @@ export async function executeAppReleases(
 
   try {
     const releasesResponse = await getLeaseReleases(app.providerUrl, app.leaseUuid, authToken);
+    const maintenance = await reconcilePendingMaintenance(app, options, releasesResponse);
     return {
       success: true,
       data: {
         app_name: app.name,
-        releases: releasesResponse.releases,
+        // Historical manifests contain secrets; keep raw bytes out of chat persistence.
+        releases: releasesResponse.releases.map((release) => {
+          const publicRelease = { ...release };
+          delete publicRelease.manifest;
+          return publicRelease;
+        }),
         count: releasesResponse.releases.length,
+        ...(maintenance && { maintenance }),
       },
     };
   } catch (error) {

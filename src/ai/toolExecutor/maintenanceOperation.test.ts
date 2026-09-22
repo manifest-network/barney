@@ -64,7 +64,7 @@ describe('maintenance operation retention', () => {
     const saved = localStorage.getItem(localStorage.key(0)!)!;
     expect(JSON.parse(saved)).toEqual({
       v: 1, operation: 'update', idempotencyKey: original.idempotencyKey,
-      payloadHash: original.payloadHash, baselineReleaseVersions: [1],
+      payloadHash: original.payloadHash, baselineReleaseVersions: [1], dispatched: false,
     });
     expect(saved).not.toContain('private-secret');
     expect(saved).not.toContain('nginx');
@@ -231,6 +231,52 @@ describe('maintenance operation retention', () => {
     releaseLock();
     await completion;
     expect(JSON.parse(localStorage.getItem(storageKey)!)).toEqual(newer);
+  });
+
+
+  it('persists acknowledgement for read-only reconciliation after reload', async () => {
+    const original = await operations.getOrCreateMaintenanceOperation(update);
+    await operations.markMaintenanceOperationDispatched(original);
+    await operations.markMaintenanceOperationAccepted(original);
+    vi.resetModules();
+    operations = await import('./maintenanceOperation');
+    expect(pending()).toMatchObject({ accepted: true, dispatched: true });
+    expect(pending()?.manifest).toBeUndefined();
+  });
+
+  it('discards a newly prepared command only while it remains unsubmitted', async () => {
+    const prepared = await operations.prepareMaintenanceOperation(restart);
+    expect(prepared.created).toBe(true);
+    const retry = await operations.prepareMaintenanceOperation(restart);
+    expect(retry.created).toBe(false);
+    expect(await operations.discardUnsubmittedMaintenanceOperation(prepared.command)).toBe(true);
+    expect(pending()).toBeUndefined();
+  });
+
+  it('retains a prepared command once a concurrent caller starts HTTP', async () => {
+    const original = await operations.getOrCreateMaintenanceOperation(restart);
+    await operations.markMaintenanceOperationDispatched(original);
+    expect(await operations.discardUnsubmittedMaintenanceOperation(original)).toBe(false);
+    expect(pending()?.idempotencyKey).toBe(original.idempotencyKey);
+  });
+
+  it('does not assume a legacy saved record was never dispatched', async () => {
+    const original = await operations.getOrCreateMaintenanceOperation(restart);
+    const storageKey = localStorage.key(0)!;
+    const metadata = JSON.parse(localStorage.getItem(storageKey)!);
+    delete metadata.dispatched;
+    localStorage.setItem(storageKey, JSON.stringify(metadata));
+    vi.resetModules();
+    operations = await import('./maintenanceOperation');
+    expect(await operations.discardUnsubmittedMaintenanceOperation(original)).toBe(false);
+  });
+
+  it('retires absent-lease metadata even when it cannot be parsed', async () => {
+    await operations.getOrCreateMaintenanceOperation(restart);
+    localStorage.setItem(localStorage.key(0)!, '{broken');
+    await operations.retireAbsentMaintenanceOperation(scope);
+    expect(pending()).toBeUndefined();
+    expect(localStorage.length).toBe(0);
   });
 
   it('rejects invalid caller-provided operation keys before creating a marker', async () => {

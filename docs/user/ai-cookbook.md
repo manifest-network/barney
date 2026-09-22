@@ -59,6 +59,15 @@ Update wordpress to use a new theme  (File attached: stack.json)
 
 **What it does.** Restarts the container(s) without changing the manifest.
 
+On dev, **Outcome unknown** means the restart or update may still execute. Check
+the app's status and releases first. Acknowledged commands can settle from those
+checks even after a reload. Retrying an unresolved command reuses its original
+key and exact manifest; after reloading, an update retry may require the original
+file. Do not replace it with a new command or stop/redeploy while its outcome is
+unknown. A healthy app can still have a failed restart if the provider restored
+the previous runtime. For a partially completed batch, retrying `restart all`
+recovers only the unresolved restarts.
+
 **Example prompts.**
 
 ```

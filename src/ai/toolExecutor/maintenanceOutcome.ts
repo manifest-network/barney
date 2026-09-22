@@ -18,12 +18,16 @@ function validVersions(versions: readonly number[]): boolean {
 }
 
 /** Capture once before the first POST; exact retries must retain this snapshot. */
-export function captureMaintenanceBaseline(releases: FredLeaseReleases): readonly number[] | undefined {
+export function captureMaintenanceBaseline(releases: FredLeaseReleases): readonly number[] {
   const versions = releases.releases.map((release) => release.version);
   // A pending predecessor makes later history ambiguous even if its work settles
   // before our POST is admitted. Missing historical rows from retention are fine.
-  if (!validVersions(versions) || releases.releases.some((release) => release.status === 'deploying')) {
-    return undefined;
+  if (!validVersions(versions)) {
+    throw new Error('The provider returned ambiguous release history. Check app_releases and app_status before retrying.');
+  }
+  const deploying = releases.releases.find((release) => release.status === 'deploying');
+  if (deploying) {
+    throw new Error(`Another command is in progress (release v${deploying.version} is deploying). Wait and check app_releases and app_status before retrying.`);
   }
   return Object.freeze(versions.toSorted((left, right) => left - right));
 }
