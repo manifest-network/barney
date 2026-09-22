@@ -1796,7 +1796,7 @@ describe('executeDeployApp', () => {
     vi.mocked(getCreditAccount).mockResolvedValue({
       balances: [{ denom: DENOMS.PWR, amount: '100000000' }],
     } as any);
-    const json = JSON.stringify({ image: 'nginx', port: '80' });
+    const json = JSON.stringify({ image: 'nginx', ports: { '80/tcp': {} } });
     const payload: PayloadAttachment = {
       bytes: new TextEncoder().encode(json),
       filename: 'app.json',
@@ -3797,7 +3797,7 @@ describe('executeConfirmedRestartApp', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('not in a restartable state');
+    expect(result.error).toContain('conflicting work or an invalid state');
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'failed' }));
   });
 
@@ -4355,11 +4355,10 @@ describe('executeUpdateApp', () => {
     const result = await executeUpdateApp(
       { app_name: 'my-app', image: 'redis:8' },
       makeOptions({ appRegistry: makeRegistry([app]) }),
-      makePayload()
+      makeJsonPayload()
     );
     expect(result.success).toBe(true);
-    expect(result.pendingAction?.args._generatedManifest).toBeUndefined();
-    expect(result.confirmationMessage).toContain('new manifest');
+    expect(JSON.parse(result.pendingAction!.args._generatedManifest as string).image).toBe('nginx');
   });
 
   it('returns error when app is stopped', async () => {
@@ -4378,7 +4377,7 @@ describe('executeUpdateApp', () => {
     const result = await executeUpdateApp(
       { app_name: 'my-app' },
       makeOptions({ appRegistry: makeRegistry([app]) }),
-      makePayload()
+      makeJsonPayload()
     );
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
@@ -4390,7 +4389,7 @@ describe('executeUpdateApp', () => {
     const result = await executeUpdateApp(
       { app_name: 'my-app' },
       makeOptions({ appRegistry: makeRegistry([app]) }),
-      makePayload()
+      makeJsonPayload()
     );
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
@@ -4505,7 +4504,7 @@ describe('executeUpdateApp', () => {
     expect(merged.env.POSTGRES_DB).toBe('newdb');
   });
 
-  it('preserves YAML payload when merge cannot parse it', async () => {
+  it('rejects YAML payload before confirmation', async () => {
     const yamlContent = 'image: nginx:latest\nports:\n  80/tcp: {}';
     const yamlBytes = new TextEncoder().encode(yamlContent);
     const payload: PayloadAttachment = {
@@ -4522,9 +4521,9 @@ describe('executeUpdateApp', () => {
       payload
     );
 
-    expect(result.success).toBe(true);
-    // _generatedManifest should NOT be set since YAML can't be parsed/merged
-    expect(result.pendingAction?.args._generatedManifest).toBeUndefined();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('JSON');
+    expect(result.pendingAction).toBeUndefined();
   });
 
   it('applies known image defaults for port/user/tmpfs in update (not env)', async () => {
@@ -4793,13 +4792,12 @@ describe('executeUpdateApp', () => {
     });
   });
 
-  it('merges old stop_grace_period, init, labels, depends_on into update', async () => {
+  it('merges old stop_grace_period, init and labels into update', async () => {
     const oldManifest = JSON.stringify({
       image: 'nginx:1.24',
       stop_grace_period: '30s',
       init: true,
       labels: { app: 'myapp', tier: 'basic' },
-      depends_on: { db: { condition: 'service_healthy' } },
     });
     const app = makeApp({ manifest: oldManifest });
     const result = await executeUpdateApp(
@@ -4812,7 +4810,6 @@ describe('executeUpdateApp', () => {
     expect(manifest.stop_grace_period).toBe('30s');
     expect(manifest.init).toBe(true);
     expect(manifest.labels).toEqual({ app: 'myapp', tier: 'basic' });
-    expect(manifest.depends_on).toEqual({ db: { condition: 'service_healthy' } });
   });
 
   it('new labels override old labels during update merge', async () => {
@@ -4894,7 +4891,7 @@ describe('executeConfirmedUpdateApp', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('not in an updatable state');
+    expect(result.error).toContain('conflicting work or an invalid state');
   });
 
   it('handles poll failure (non-active state)', async () => {
@@ -5314,7 +5311,7 @@ describe('executeConfirmedUpdateApp', () => {
     expect(result.error).toContain('may or may not have been applied');
     expect(result.error).toContain(`app_status("${app.name}")`);
     expect(result.error).toContain(`app_releases("${app.name}")`);
-    expect(result.error).toContain('Do NOT stop the app and redeploy');
+    expect(result.error).toContain('do not automatically replay the request or stop/redeploy');
     expect(result.error).not.toContain('Update failed:');
     // The lease is very possibly live — never mark it failed, and never claim
     // barney's stored manifest is the one running.
@@ -5870,7 +5867,7 @@ describe('G1 — the abort guards key on the ERROR, not on the ambient signal', 
   // What the guard decides is the OPERATION's story. C2/C3 separates that from
   // the workload OBSERVATION: a POST-site throw is about initiating the restart,
   // so it reports a failed operation and records nothing.
-  it('restart POST: a provider 5xx landing under an aborted signal is a failure, not a cancellation', async () => {
+  it('restart POST: a provider 5xx under an aborted signal remains uncertain', async () => {
     vi.mocked(restartApp).mockRejectedValue(new ProviderApiError(503, '{"error":"backend unavailable","code":503}'));
 
     const app = makeApp({ chainState: 'active', provisionState: 'confirmed' });
@@ -5885,12 +5882,10 @@ describe('G1 — the abort guards key on the ERROR, not on the ambient signal', 
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('Restart failed');
+    expect(result.error).toContain('is unknown');
     expect(result.error).not.toContain('cancelled');
     expect(result.error).not.toContain('the app is unchanged');
-    // …and no provisioning verdict is invented from it. fred's 500 comes from
-    // `routeReplaceRestart`'s prelude, before the actor handoff — the containers
-    // were never touched, so the app is still running.
+    // No provisioning verdict is inferred from a failed request.
     expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, expect.objectContaining({ provisionState: expect.anything() }));
     const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
     expect(stored?.provisionState).toBe('confirmed');
@@ -6267,7 +6262,7 @@ describe('F4 — a writer with no observation invents none', () => {
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('running');
   });
 
-  it('a refused batch restart records nothing either', async () => {
+  it('uncertain batch restart retains its outcome and runtime observation', async () => {
     // The bulk path must not disagree with the single path about what a refusal
     // means — that split is how the two sets drifted in the first place.
     vi.mocked(restartApp).mockRejectedValue(new ProviderApiError(500, '{"error":"internal error","code":500}'));
@@ -6282,8 +6277,8 @@ describe('F4 — a writer with no observation invents none', () => {
       makeOptions({ appRegistry: registry }),
     );
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('All restarts failed: redis');
+    expect(result.success).toBe(true);
+    expect((result.data as { message: string }).message).toContain('Still restarting:');
     expect(registry.updateApp).not.toHaveBeenCalled();
     expect(registry.getAppByLease(ADDRESS, 'uuid-1')?.status).toBe('running');
   });
@@ -6331,7 +6326,7 @@ describe('G1 (cont.) — error identity at the sites the first pass left uncover
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('deploying');
   });
 
-  it('batch restart POST: a real provider failure under an aborted signal lands in Failed, never Cancelled', async () => {
+  it('batch restart POST: a 503 under an aborted signal stays unconfirmed', async () => {
     // The existing G1 batch test asserts on `result.data.cancelled`, but an
     // all-nothing-landed batch returns `{success:false, error}` with NO `data`
     // at all — so that assertion cannot fail. Assert the string the user
@@ -6354,10 +6349,10 @@ describe('G1 (cont.) — error identity at the sites the first pass left uncover
       makeOptions({ appRegistry: registry, signal: controller.signal })
     );
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('All restarts failed: redis');
-    expect(result.error).not.toContain('Cancelled');
-    // The OPERATION is reported failed; the app it never touched stays running.
+    expect(result.success).toBe(true);
+    expect((result.data as { message: string }).message).toContain('Still restarting:');
+    expect((result.data as { cancelled: string[] }).cancelled).toEqual([]);
+    // A request error does not establish a workload-health verdict.
     expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, 'uuid-1', expect.objectContaining({ provisionState: expect.anything() }));
     expect(registry.getAppByLease(ADDRESS, 'uuid-1')?.status).toBe('running');
   });

@@ -138,7 +138,7 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'restart_app',
-      description: 'Restart apps by name, comma-separated list, or "all" to restart all.',
+      description: 'Restart apps by name, comma-separated list, or "all". An unresolved restart is recovered with its original command key; "all" recovers only pending restarts when any exist. Check app_status and app_releases after an uncertain result; never stop/redeploy to recover it.',
       parameters: {
         type: 'object',
         properties: {
@@ -155,7 +155,7 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'update_app',
-      description: 'Update an app with a new manifest file, a new Docker image, or a new service stack definition.',
+      description: 'Update an app with a new manifest file, a new Docker image, or a new service stack definition. To retry an unresolved update, pass only app_name: Barney retains the original command key and exact payload. After a browser reload, reattach the exact original file. Check app_status and app_releases after an uncertain result; never submit a different command or stop/redeploy to recover it.',
       parameters: {
         type: 'object',
         properties: {

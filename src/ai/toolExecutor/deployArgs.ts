@@ -6,12 +6,30 @@
  */
 
 import { buildManifest, getServiceNames, validateServiceName, resolveGeneratedPassword, type ServiceConfig, type HealthCheckConfig } from '../manifest';
+import { buildManifestPreview } from '@manifest-network/manifest-sdk/catalog';
+import { fredCompatibilityForProvider } from '../../config/fredCompatibility';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex } from '../../utils/hash';
 import { MANIFEST_NOTICE_KEY } from '../../config/constants';
 import { logError } from '../../utils/errors';
 import { BACKEND_SERVICE_NAMES } from './helpers';
 import type { PayloadAttachment } from './types';
+
+/** Apply the same provider contract to the exact preview JSON and SDK execution. */
+export async function validateManifestForProvider(manifest: string, providerUrl: string): Promise<string | null> {
+  try {
+    JSON.parse(manifest);
+  } catch {
+    // Native/SDK parse diagnostics can quote source bytes, including secrets.
+    return 'Manifest must be valid JSON.';
+  }
+  try {
+    const preview = await buildManifestPreview({ manifest }, fredCompatibilityForProvider(providerUrl));
+    return preview.validation.valid ? null : `Invalid manifest: ${preview.validation.errors.join('; ')}`;
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Failed to validate manifest.';
+  }
+}
 
 /** Env var names that could compromise the container runtime or host. */
 const BLOCKED_ENV_NAMES = new Set([

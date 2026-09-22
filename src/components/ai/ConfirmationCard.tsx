@@ -19,6 +19,7 @@ import { parseCustomDomainArgs } from './customDomainBranchData';
 import {
   isBatchDeployPlan,
   summarizeBatchManifest,
+  summarizeBatchManifestText,
   type BatchDeployPlan,
 } from '../../ai/toolExecutor/batchDeployPlan';
 import {
@@ -223,6 +224,15 @@ interface ConfirmationCardProps {
 export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfirm, onCancel, isExecuting }: ConfirmationCardProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const isMaintenanceRetry = action.toolName === 'update_app' && action.args._maintenanceRetry === true;
+  const [hasManifestEdits, setHasManifestEdits] = useState(false);
+  const retryManifestSummary = useMemo(() => {
+    if (!isMaintenanceRetry) return null;
+    const manifest = typeof action.args._generatedManifest === 'string'
+      ? action.args._generatedManifest
+      : action.payload ? new TextDecoder().decode(action.payload.bytes) : '';
+    return summarizeBatchManifestText(manifest);
+  }, [action, isMaintenanceRetry]);
 
   const initialManifest = useMemo(() => {
     const manifest = parseEditableManifest(action);
@@ -234,11 +244,11 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     return manifest;
   }, [action]);
   const [editedManifest, setEditedManifest] = useState<ManifestFields | null>(initialManifest);
-  const isEditable = initialManifest !== null;
+  const isEditable = !isMaintenanceRetry && initialManifest !== null;
 
   const initialStack = useMemo(() => parseEditableStackManifest(action), [action]);
   const [editedStack, setEditedStack] = useState<StackManifestFields | null>(initialStack);
-  const isStackEditable = initialStack !== null;
+  const isStackEditable = !isMaintenanceRetry && initialStack !== null;
 
   const manifestEnv = useMemo(() => {
     if (isEditable || isStackEditable) return null;
@@ -483,11 +493,16 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
       return;
     }
 
-    const manifestOverride = editedManifest
-      ? serializeManifest(editedManifest)
-      : editedStack
-        ? serializeStackManifest(editedStack)
-        : undefined;
+    // Parsing the editor changes formatting and can omit empty fields. Preserve
+    // the original bytes unless the user changed the manifest. A pending update
+    // must always retry its original payload, even if this card had stale edits.
+    const manifestOverride = !isMaintenanceRetry && hasManifestEdits
+      ? editedManifest
+        ? serializeManifest(editedManifest)
+        : editedStack
+          ? serializeStackManifest(editedStack)
+          : undefined
+      : undefined;
 
     if (!isDeployApp) {
       onConfirm(manifestOverride ? { editedManifestJson: manifestOverride } : undefined);
@@ -504,7 +519,7 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
     //    and stackServicePickerError blocks confirm when still '')
     overrides.editedCustomDomainServiceName = editedDomainTrimmed ? editedCustomDomainServiceName : '';
     onConfirm(overrides);
-  }, [batchPlan, batchIsDirty, batchDrafts, batchManifestEdits, editedManifest, editedStack, isDeployApp, editedDomainTrimmed, editedCustomDomainServiceName, onConfirm]);
+  }, [batchPlan, batchIsDirty, batchDrafts, batchManifestEdits, editedManifest, editedStack, hasManifestEdits, isMaintenanceRetry, isDeployApp, editedDomainTrimmed, editedCustomDomainServiceName, onConfirm]);
 
   // Filter to user-facing args only. The AI tool schema in AI_TOOLS is the
   // single source of truth — this avoids the drift bug where every new TX
@@ -774,13 +789,32 @@ export const ConfirmationCard = memo(function ConfirmationCard({ action, onConfi
           </div>
         ) : customDomainData ? (
           <CustomDomainBranch data={customDomainData} />
+        ) : isMaintenanceRetry ? (
+          <div className="confirmation-details" data-testid="maintenance-manifest-summary">
+            <p className="confirmation-details-title">Saved update</p>
+            <p className="text-xs text-muted">This retry uses the original manifest.</p>
+            {retryManifestSummary?.map((service, index) => (
+              <div className="confirmation-payload" key={service.name || index}>
+                {service.name && <p className="text-sm font-semibold">{service.name}</p>}
+                <p className="text-xs">Image: <code>{service.image}</code></p>
+                <p className="text-xs">Ports: <code>{service.ports.join(', ') || 'none'}</code></p>
+                <p className="text-xs">Environment: <code>{service.environmentKeys.map((key) => `${key}=••••`).join(', ') || 'none'}</code></p>
+              </div>
+            ))}
+          </div>
         ) : isStackEditable && editedStack ? (
           <div className="confirmation-details">
-            <StackManifestEditor stack={editedStack} onChange={setEditedStack} />
+            <StackManifestEditor stack={editedStack} onChange={(stack) => {
+              setEditedStack(stack);
+              setHasManifestEdits(true);
+            }} />
           </div>
         ) : isEditable && editedManifest ? (
           <div className="confirmation-details">
-            <ManifestEditor manifest={editedManifest} onChange={setEditedManifest} />
+            <ManifestEditor manifest={editedManifest} onChange={(manifest) => {
+              setEditedManifest(manifest);
+              setHasManifestEdits(true);
+            }} />
           </div>
         ) : (
           <>

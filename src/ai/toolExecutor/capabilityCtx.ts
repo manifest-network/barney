@@ -3,6 +3,7 @@ import { noopLogger, type CosmosClientManager } from '@manifest-network/manifest
 import type { FredAuthCtx } from '@manifest-network/manifest-sdk/deploy';
 import { getReadClient } from '../../api/readClient';
 import { providerFetch } from '../../api/providerFetchAdapter';
+import { fredCompatibility } from '../../config/fredCompatibility';
 import type { SigningContext } from './types';
 
 /**
@@ -37,6 +38,7 @@ export async function buildBarneyCtx(
     logger: noopLogger,
     allowLoopback: import.meta.env.DEV,
     providerAuth: signing.providerAuth,
+    fredCompatibility,
     events: opts?.events,
   };
 }

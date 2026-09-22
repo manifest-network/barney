@@ -11,7 +11,7 @@ import {
   asProviderUuid,
   noopLogger,
 } from '@manifest-network/manifest-sdk';
-import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
+import { ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
@@ -40,6 +40,10 @@ import { deployManifest, stopApp, fundCredits, setItemCustomDomain as monoSetIte
 import { nextStepFor } from './failureGuidance';
 import { isUnsettledProvisionStatus } from './provisionStatus';
 import { buildBarneyCtx } from './capabilityCtx';
+import { fredCompatibilityForProvider } from '../../config/fredCompatibility';
+import { createMaintenanceIdempotencyKey } from '@manifest-network/manifest-sdk/deploy';
+import { getPendingMaintenanceOperation } from './maintenanceOperation';
+import { executeMaintenance } from './maintenanceExecution';
 import { creditAmountSchema, parseTransactionPlan, transactionConfirmation } from './transactionPlans';
 import { browserEventTransport } from '../../api/eventTransport';
 import {
@@ -50,6 +54,7 @@ import {
   parseAndValidateStackServices,
   validateInternalServiceNames,
   validateManifestEnvNames,
+  validateManifestForProvider,
 } from './deployArgs';
 import { resolveAppUrl } from './deployUrl';
 import { handleDeployManifestError } from './deployError';
@@ -377,6 +382,9 @@ export async function executeDeployApp(
   if (!provider || !provider.apiUrl) {
     return { success: false, error: 'No available provider found for this tier.' };
   }
+
+  const manifestError = await validateManifestForProvider(new TextDecoder().decode(payload.bytes), provider.apiUrl);
+  if (manifestError) return { success: false, error: manifestError };
 
   // Pricing is normalized to $/hour at the source (`resolveSkuTiers`).
   // Pass-11 invariant: every resolved tier has `basePrice`, so
@@ -1285,6 +1293,12 @@ export async function executeConfirmedFundCredits(
 // restart_app
 // ============================================================================
 
+/** Confirmation owns the command key. A pending command is recovered verbatim. */
+function maintenancePlanKey(address: string, providerUrl: string, leaseUuid: string, chainId?: string) {
+  if (fredCompatibilityForProvider(providerUrl) !== 'pr240') return {};
+  return { idempotencyKey: getPendingMaintenanceOperation(address, providerUrl, leaseUuid, chainId)?.idempotencyKey ?? createMaintenanceIdempotencyKey() };
+}
+
 /**
  * Pre-validation for restart_app. Returns confirmation result or error.
  */
@@ -1300,7 +1314,13 @@ export async function executeRestartApp(
   if (!name) return { success: false, error: 'App name is required' };
 
   // Multi-app restart: "all" or comma-separated names
-  const restartFilter = (a: AppEntry) => a.status === 'running' && !!a.providerUrl;
+  const pendingRestarts = appRegistry.getApps(address).filter((app) => app.providerUrl &&
+    fredCompatibilityForProvider(app.providerUrl) === 'pr240' &&
+    getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId)?.operation === 'restart');
+  const recoverBatch = name.trim().toLowerCase() === 'all' && pendingRestarts.length > 0;
+  const restartFilter = (a: AppEntry) => !!a.providerUrl && (recoverBatch
+    ? pendingRestarts.some((pending) => pending.leaseUuid === a.leaseUuid)
+    : a.status === 'running' || pendingRestarts.some((pending) => pending.leaseUuid === a.leaseUuid));
   const multi = resolveMultiAppNames(name, address, appRegistry, restartFilter, 'restart');
   if (multi.mode === 'error') return { success: false, error: multi.error };
 
@@ -1310,9 +1330,12 @@ export async function executeRestartApp(
       app_name: a.name,
       leaseUuid: a.leaseUuid,
       providerUrl: a.providerUrl!,
+      ...maintenancePlanKey(address, a.providerUrl!, a.leaseUuid, options.authorization?.chainId),
     }));
     const skippedNote = multi.skipped ? ` (skipped: ${multi.skipped.join(', ')})` : '';
-    return transactionConfirmation('restart_app', { app_name: name, entries }, `Restart ${multi.apps.length} app${multi.apps.length > 1 ? 's' : ''} (${names.join(', ')})? All apps will be briefly unavailable during restart.${skippedNote}`);
+    return transactionConfirmation('restart_app', { app_name: name, entries }, recoverBatch
+      ? `Recover pending restarts (${names.join(', ')}) using their original command keys?${skippedNote}`
+      : `Restart ${multi.apps.length} app${multi.apps.length > 1 ? 's' : ''} (${names.join(', ')})? All apps will be briefly unavailable during restart.${skippedNote}`);
   }
 
   // Single app — use normalized name from resolveMultiAppNames
@@ -1323,7 +1346,12 @@ export async function executeRestartApp(
   // The `app_status` pointer is load-bearing: a timed-out readiness wait records
   // `provisionState: 'unconfirmed'` → derives 'deploying', and `app_status` is
   // the re-observation point that clears it once fred reports `ready`.
-  if (app.status !== 'running') {
+  const pending = app.providerUrl && fredCompatibilityForProvider(app.providerUrl) === 'pr240'
+    ? getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId) : undefined;
+  if (pending && pending.operation !== 'restart') {
+    return { success: false, error: `An update of "${app.name}" is unresolved. Recover that saved update before starting another command.` };
+  }
+  if (app.status !== 'running' && !pending) {
     return { success: false, error: `App "${app.name}" is not running (status: ${app.status}). Only running apps can be restarted. Run app_status("${app.name}") to refresh its status first.` };
   }
 
@@ -1335,7 +1363,10 @@ export async function executeRestartApp(
     app_name: app.name,
     leaseUuid: app.leaseUuid,
     providerUrl: app.providerUrl,
-  }, `Restart app "${app.name}"? The app will be briefly unavailable during restart.`);
+    ...maintenancePlanKey(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId),
+  }, pending
+    ? `Recover the pending restart of "${app.name}" using its original command key?`
+    : `Restart app "${app.name}"? The app will be briefly unavailable during restart.`);
 }
 
 /**
@@ -1349,12 +1380,12 @@ export async function executeRestartApp(
  * fallback). Do not "finish migrating" them to `deployManifest` — that
  * primitive is create-lease + deploy, not update/restart.
  *
+ * PR240 uses executeMaintenance to retain command identity and verify releases
+ * separately from runtime readiness. The legacy path below remains for v0.13.
  * Both call options are MANDATORY:
  *   - `pollOptions: false` — return straight after the provider POST, leaving
- *     barney's readiness wait, progress reporting and (update) rollback gate in
- *     charge. What barney takes from the primitives is the `throwIfAborted`
- *     guard before the non-idempotent POST, plus (update only) the ENG-619 5xx
- *     `UPDATE_INDETERMINATE` classification.
+ *     Barney's readiness and operation-outcome checks in charge. The SDK owns
+ *     fresh authentication, pre-dispatch cancellation and recovery diagnostics.
  *   - `providerUrl` — selects the fast path; omitting it silently adds two
  *     chain reads per call.
  *
@@ -1388,7 +1419,12 @@ export async function executeConfirmedRestartApp(
       signal,
       clientManager,
       options.assertAuthorization,
+      options.authorization,
     );
+  }
+
+  if (fredCompatibilityForProvider(plan.providerUrl) === 'pr240') {
+    return (await executeMaintenance({ ...plan, operation: 'restart' }, { ...options, clientManager })).result;
   }
 
   // ENG-312 Phase 6: the readiness wait now runs through the SDK's
@@ -1412,11 +1448,14 @@ export async function executeConfirmedRestartApp(
     await restartApp(ctx, { address, leaseUuid }, { pollOptions: false, providerUrl, signal });
   } catch (error) {
     logError('compositeTransactions.executeConfirmedRestartApp', error);
-    // 409 = lease is not in the right state for restart; don't mark as failed
-    // because the app may still be running — only the restart was rejected.
+    // A conflict is a request verdict, not a workload-health observation.
     if (ProviderApiError.isProviderApiError(error) && error.status === 409) {
-      onProgress?.({ phase: 'failed', detail: 'App is not in a restartable state', operation: 'restart' });
-      return { success: false, error: `Cannot restart "${name}": app is not in a restartable state.` };
+      onProgress?.({ phase: 'failed', detail: 'Restart request conflicted', operation: 'restart' });
+      return { success: false, error: `Cannot restart "${name}": the provider reports conflicting work or an invalid state. Check app_status and app_releases before another command.` };
+    }
+    if (isIndeterminateMaintenanceError(error)) {
+      onProgress?.({ phase: 'failed', detail: 'Restart outcome unknown', operation: 'restart' });
+      return { success: false, error: `Restart outcome for "${name}" is unknown. Check app_status and app_releases before another command; this provider has no command deduplication. Do not automatically retry or stop/redeploy.` };
     }
     // `restartApp` calls `signal?.throwIfAborted()` after the token mint and
     // before the non-idempotent POST, so an abort here means the provider was
@@ -1433,12 +1472,7 @@ export async function executeConfirmedRestartApp(
     }
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     onProgress?.({ phase: 'failed', detail: `Restart failed: ${errorMsg}`, operation: 'restart' });
-    // No observation, like the abort arm: a throw here is about INITIATING the
-    // restart, never about the workload — token mint before the POST, transport
-    // error, 4xx refusal, or a fred 500, which returns from `routeReplaceRestart`'s
-    // prelude before the actor handoff (fred internal/backend/docker/restart_update.go).
-    // No container was touched, and 'failed' would drop a healthy app out of
-    // list_apps(running), restart_app and DNS polling.
+    // Request errors alone supply no observation of workload health.
     return { success: false, error: `Restart failed: ${errorMsg}` };
   }
 
@@ -1460,7 +1494,7 @@ export async function executeConfirmedRestartApp(
       },
     });
 
-    // Deliberately NO post-wait /provision gate here — do NOT mirror the update
+    // Legacy v0.13 only (pr240 uses executeMaintenance above). NO /provision gate — do NOT mirror the update
     // one onto restart. When a restart fails and the rollback restores the old
     // containers, fred CLEARS reason/message/last_error and reports a clean
     // 'ready' (`onEnterReadyFromReplaceRecovered`, guarded on
@@ -1522,7 +1556,7 @@ export async function executeConfirmedRestartApp(
  * Uses a signing mutex to serialize signArbitrary calls (shared wallet sequence numbers).
  */
 async function executeConfirmedBatchRestart(
-  entries: Array<{ app_name: string; leaseUuid: string; providerUrl: string }>,
+  entries: Array<{ app_name: string; leaseUuid: string; providerUrl: string; idempotencyKey?: string }>,
   address: string,
   appRegistry: ToolExecutorOptions['appRegistry'] & object,
   signing: SigningContext,
@@ -1530,6 +1564,7 @@ async function executeConfirmedBatchRestart(
   signal: AbortSignal | undefined,
   clientManager: CosmosClientManager,
   assertAuthorization: ToolExecutorOptions['assertAuthorization'],
+  authorization: ToolExecutorOptions['authorization'],
 ): Promise<ToolResult> {
   const batchEntries = entries.map((e) => ({ ...e, name: e.app_name }));
 
@@ -1546,6 +1581,20 @@ async function executeConfirmedBatchRestart(
     onProgress,
     executeOne: async (entry, _i, updateProgress) => {
       const name = entry.app_name;
+
+      if (fredCompatibilityForProvider(entry.providerUrl) === 'pr240') {
+        const execution = await executeMaintenance({ ...entry, operation: 'restart' }, {
+          address, appRegistry, signing, signal, clientManager, assertAuthorization, authorization,
+          tiers: [],
+          onProgress: (progress) => updateProgress(progress.phase, progress.detail),
+        });
+        if (execution.outcome === 'succeeded') return { name, url: execution.url };
+        if (execution.outcome === 'failed') {
+          updateProgress('failed', execution.result.error);
+          return null;
+        }
+        return { name, outcome: execution.outcome, detail: execution.result.error };
+      }
 
       updateProgress('restarting', 'Restarting...');
 
@@ -1569,8 +1618,12 @@ async function executeConfirmedBatchRestart(
       } catch (error) {
         logError('executeConfirmedBatchRestart.restart', error);
         if (ProviderApiError.isProviderApiError(error) && error.status === 409) {
-          updateProgress('failed', 'Not in a restartable state');
+          updateProgress('failed', 'Provider reports conflicting work or an invalid state');
           return null;
+        }
+        if (isIndeterminateMaintenanceError(error)) {
+          updateProgress('failed', 'Restart outcome unknown');
+          return { name, outcome: 'unconfirmed' as const, detail: 'Check app_status and app_releases before another command; do not automatically retry or stop/redeploy.' };
         }
         // Same abort guard as the single path, and it bites hardest here: a
         // "restart all" queues most entries behind the signing mutex, so one new
@@ -1581,9 +1634,7 @@ async function executeConfirmedBatchRestart(
         }
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         updateProgress('failed', `Restart failed: ${errorMsg}`);
-        // No observation, exactly as on the single-restart POST site — the
-        // restart was never initiated, so nothing saw the workload fail. The
-        // entry still reports under `Failed:`: the OPERATION failed.
+        // A request error alone supplies no observation of workload health.
         return null;
       }
 
@@ -1673,6 +1724,32 @@ export async function executeUpdateApp(
   const { address, appRegistry } = options;
   if (!address) return { success: false, error: 'Wallet not connected' };
   if (!appRegistry) return { success: false, error: 'App registry not available' };
+
+  const retryApp = typeof args.app_name === 'string' ? appRegistry.findApp(address, args.app_name) : null;
+  const pending = retryApp?.providerUrl && fredCompatibilityForProvider(retryApp.providerUrl) === 'pr240'
+    ? getPendingMaintenanceOperation(address, retryApp.providerUrl, retryApp.leaseUuid, options.authorization?.chainId)
+    : undefined;
+  if (pending) {
+    if (pending.operation !== 'update') {
+      return { success: false, error: `A restart of "${retryApp!.name}" is unresolved. Recover that saved restart before starting another command.` };
+    }
+    // Recovery never regenerates passwords or merges against a now-different
+    // registry snapshot. An attachment can restore exact bytes after a reload.
+    const manifest = payload ? new TextDecoder().decode(payload.bytes) : pending.manifest;
+    if (!manifest) {
+      return { success: false, error: `The update of "${retryApp!.name}" is unresolved. Reattach the exact original file to recover it; its payload was not saved to browser storage.` };
+    }
+    if (toHex(await sha256(manifest)) !== pending.payloadHash) {
+      return { success: false, error: `The update of "${retryApp!.name}" is unresolved with different payload bytes. Recovery requires the exact original file.` };
+    }
+    if (Object.keys(args).some((key) => key !== 'app_name')) {
+      return { success: false, error: `The update of "${retryApp!.name}" is unresolved. Retry update_app with only app_name to use the original payload; changes cannot replace a pending command.` };
+    }
+    return transactionConfirmation('update_app', {
+      app_name: retryApp!.name, leaseUuid: retryApp!.leaseUuid, providerUrl: retryApp!.providerUrl!,
+      idempotencyKey: pending.idempotencyKey, _generatedManifest: manifest, _maintenanceRetry: true,
+    }, `Recover the pending update of "${retryApp!.name}" with the original command key and exact payload?`);
+  }
   let isImageUpdate = false;
 
   // Stack-based update: build stack manifest from services param
@@ -1810,10 +1887,14 @@ export async function executeUpdateApp(
     stackServiceCount = serviceNamesResult.serviceNames.length;
   }
 
+  const manifestError = await validateManifestForProvider(new TextDecoder().decode(payload.bytes), app.providerUrl);
+  if (manifestError) return { success: false, error: manifestError };
+
   return transactionConfirmation('update_app', {
     app_name: app.name,
     leaseUuid: app.leaseUuid,
     providerUrl: app.providerUrl,
+    ...maintenancePlanKey(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId),
     ...(typeof args._generatedManifest === 'string' ? { _generatedManifest: args._generatedManifest } : {}),
     ...(args._isStack ? { _isStack: true } : {}),
   }, args._isStack
@@ -1841,18 +1922,13 @@ const UPDATE_ATTRIBUTABLE_REASONS: ReadonlySet<string> = new Set([
   'Unknown',
 ]);
 
-/**
- * True when a throw from `POST /update` leaves the outcome genuinely unknown
- * (ENG-619).
- *
- * The SDK's `updateApp` maps `ProviderApiError` with `status >= 500` to
- * `UPDATE_INDETERMINATE`; the raw `status >= 500` arm catches a 5xx that arrives
- * unwrapped (DEV /proxy-provider and PROD nginx both mint their own 502).
- * Deliberately NOT extended to status 0 — also in doubt, different story.
- */
-function isIndeterminateUpdateError(error: unknown): boolean {
-  if (error instanceof ManifestMCPError && error.code === ManifestMCPErrorCode.UPDATE_INDETERMINATE) return true;
-  return ProviderApiError.isProviderApiError(error) && error.status >= 500;
+/** Legacy requests also remain uncertain after a transport failure or 5xx. */
+function isIndeterminateMaintenanceError(error: unknown): boolean {
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+  return code === ManifestMCPErrorCode.UPDATE_INDETERMINATE
+    || code === ManifestMCPErrorCode.RESTART_INDETERMINATE
+    || code === ManifestMCPErrorCode.MAINTENANCE_REQUEST_FAILED
+    || (ProviderApiError.isProviderApiError(error) && (error.status === 0 || error.status >= 500));
 }
 
 /**
@@ -1879,6 +1955,12 @@ export async function executeConfirmedUpdateApp(
   }
 
   if (!payload) return { success: false, error: 'Payload missing' };
+
+  if (fredCompatibilityForProvider(plan.providerUrl) === 'pr240') {
+    return (await executeMaintenance({
+      ...plan, operation: 'update', manifest: new TextDecoder().decode(payload.bytes),
+    }, { ...options, clientManager })).result;
+  }
 
   const name = plan.app_name;
   const leaseUuid = plan.leaseUuid;
@@ -1908,40 +1990,19 @@ export async function executeConfirmedUpdateApp(
     );
   } catch (error) {
     logError('compositeTransactions.executeConfirmedUpdateApp', error);
-    // 409 = lease is not in the right state for update; don't mark as failed
-    // because the app may still be running — only the update was rejected.
-    // (The primitive rethrows 4xx untouched; only >= 500 is reclassified.)
     if (ProviderApiError.isProviderApiError(error) && error.status === 409) {
-      onProgress?.({ phase: 'failed', detail: 'App is not in an updatable state', operation: 'update' });
-      return { success: false, error: `Cannot update "${name}": app is not in an updatable state.` };
+      onProgress?.({ phase: 'failed', detail: 'Update request conflicted', operation: 'update' });
+      return { success: false, error: `Cannot update "${name}": the provider reports conflicting work or an invalid state. Check app_status and app_releases before another command.` };
     }
-    // ENG-619: a 5xx from POST /update does NOT establish that the update was
-    // rejected. Fred answers 500 both when it refuses before the backend AND
-    // when the backend applied it but persisting the payload failed — identical
-    // bodies. A flat failure here pushes a model toward close-and-redeploy.
-    if (isIndeterminateUpdateError(error)) {
-      // NO registry write, deliberately: writing `provisionState` would invent a
-      // verdict out of an ambiguous 500. The entry keeps its last real
-      // observation and the PREVIOUS manifest — the durable truth either way,
-      // since fred reverts an unrecorded update on its next reprovision.
-      //
-      // The copy says "version", not "manifest": MessageBubble's ERROR_PATTERNS
-      // matches /manifest/ and would attach a "Deploy an app" button — the one
-      // action this branch exists to talk the user out of.
+    if (isIndeterminateMaintenanceError(error)) {
       onProgress?.({ phase: 'failed', detail: 'Update outcome unknown', operation: 'update' });
       return {
         success: false,
-        error:
-          `The provider could not durably record the update to "${name}", so it may or may not have been applied ` +
-          `— and an update that WAS applied but not recorded is reverted by the provider's next reprovision. ` +
-          `Check app_status("${name}") and app_releases("${name}") to see which version is actually live; the copy ` +
-          `stored here is still the previous one. Re-running update_app("${name}") is safe and re-applies AND ` +
-          `re-records it. Do NOT stop the app and redeploy — it may be running.`,
+        error: `The update to "${name}" may or may not have been applied. ` +
+          `Check app_status("${name}") and app_releases("${name}") before deliberately submitting another command. ` +
+          'This provider has no command deduplication; do not automatically replay the request or stop/redeploy. The stored version is still the previous one.',
       };
     }
-    // Twin of the restart POST-site guard. ORDER matters as much as the gate:
-    // `isIndeterminateUpdateError` above runs first, so a 5xx that coincides
-    // with an abort still gets the ENG-619 story, not "the app is unchanged".
     if (isAbortError(error)) {
       onProgress?.({ phase: 'failed', detail: 'Update cancelled', operation: 'update' });
       // No observation: the provider was never asked.
@@ -1952,11 +2013,7 @@ export async function executeConfirmedUpdateApp(
     }
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     onProgress?.({ phase: 'failed', detail: `Update failed: ${errorMsg}`, operation: 'update' });
-    // No observation, and stronger than the restart twin: 5xx left via the
-    // indeterminate arm above, so what remains is a 4xx refusal, a transport
-    // error, or INVALID_CONFIG — which `updateApp` raises while MERGING the
-    // manifest, before any POST. The replacement never started; the previous
-    // version is still live, and its manifest is still the stored one.
+    // A request error alone supplies no observation of workload health.
     return { success: false, error: `Update failed: ${errorMsg}` };
   }
 

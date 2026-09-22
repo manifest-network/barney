@@ -46,6 +46,13 @@ Barney is a single-page React application that:
 
 The **Morpheus API** never returns a manifest or a signed transaction. It returns *tool calls*. Barney executes those tool calls locally — building manifests, signing on-chain messages, uploading payloads, and polling providers — and feeds the results back to the model.
 
+Provider maintenance uses explicit Fred compatibility selection. PR 240 restart
+and update commands retain a UUIDv4 and exact payload across retries; safe
+recovery metadata survives reload without persisting manifest secrets. Command
+outcome is verified against release history separately from runtime readiness,
+which can recover after a failed replacement. See the
+[maintenance transaction boundary](docs/dev/transaction-boundary.md#fred-pr-240-maintenance-eng-976).
+
 ## Layers
 
 ### 1. UI layer (`src/components/`, `src/contexts/`)

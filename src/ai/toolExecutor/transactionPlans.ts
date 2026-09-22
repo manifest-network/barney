@@ -21,7 +21,10 @@ export const creditAmountSchema = z.number().positive('Amount must be a positive
 );
 
 const stopEntry = z.strictObject({ app_name: name, leaseUuid: name });
-const restartEntry = stopEntry.extend({ providerUrl });
+const restartEntry = stopEntry.extend({
+  providerUrl,
+  idempotencyKey: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/).optional(),
+});
 
 /** The semantic action shown for approval and parsed again before execution.
  * Unknown fields fail closed, including caller-supplied fees or raw TX data.
@@ -51,6 +54,7 @@ const transactionPlanSchemas = {
   update_app: restartEntry.extend({
     _generatedManifest: z.string().optional(),
     _isStack: z.boolean().optional(),
+    _maintenanceRetry: z.boolean().optional(),
   }),
   set_custom_domain: z.strictObject({
     app_name: name,

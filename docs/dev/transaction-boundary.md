@@ -4,7 +4,7 @@ Barney plans and previews product actions, obtains user confirmation, then calls
 
 ## Transaction inventory (ENG-830)
 
-Reviewed against the pinned `@manifest-network/manifest-sdk` 0.22.0. There are no direct `cosmosTx`, `executeTx`, signing-client, or low-level broadcast calls in Barney product code. `src/build/transactionBoundary.test.ts` guards this boundary.
+Reviewed against the pinned `@manifest-network/manifest-sdk` 0.23.0. There are no direct `cosmosTx`, `executeTx`, signing-client, or low-level broadcast calls in Barney product code. `src/build/transactionBoundary.test.ts` guards this boundary.
 
 | Product action / caller | SDK operation | Approval data | Validation, fees, and cancellation |
 | --- | --- | --- | --- |
@@ -37,6 +37,38 @@ The wallet manager receives `MAX_TRANSACTION_GAS = 50_000_000`. SDK simulation r
 Web3Auth's `promptSign` automatically accepts SDK signature requests. It is not a human approval boundary. Chat approval is consumed once in `confirmAction`, with wallet/chain/client/signer generation checks and cancellation before dispatch and each SDK mutation. Account setup and off-chain authentication follow the separate policies in [security](security.md#5-transaction-confirmation).
 
 ## Regression coverage
+
+### Fred PR 240 maintenance (ENG-976)
+
+`capabilityCtx.ts` carries an explicit provider compatibility map. For `pr240`,
+`maintenanceExecution.ts` calls the SDK's `restartApp`/`updateApp` with one UUIDv4
+per logical command and `pollOptions: false`. The SDK owns fresh authentication
+on each invocation and its structured uncertain-request diagnostics. Barney
+does not automatically retry a mutation or replace its key after an error.
+
+`maintenanceOperation.ts` scopes recovery by chain/endpoints, wallet, provider,
+and lease. It persists the key, operation, exact-byte SHA-256, and original
+release-version baseline before dispatch. Raw payloads and prior manifests
+remain in memory. A retry uses those exact bytes without rebuilding passwords
+or merging again; after reload it requires the exact original file. Browser
+storage failures block dispatch. Web Locks coordinate creation/completion
+between tabs where supported. Settled confirmations are memoized in memory so
+retrying a batch does not resubmit already completed items.
+
+`maintenanceOutcome.ts` evaluates command outcome separately from readiness.
+A 202 replay can precede execution while the source runtime is still ready.
+Verification therefore requires a single new consecutive settled release from
+the original baseline; a failed replacement can coexist with a healthy restored
+runtime. Missing reads, unchanged history, and ambiguous generations retain the
+recovery record. The Fred tenant API exposes no command key in release history,
+so multiple intervening operations cannot be attributed automatically and
+remain unconfirmed. Uncertain requests never authorize stop/redeploy or a new
+command.
+
+The confirmation UI preserves unchanged payload bytes and disables editing of
+recovery payloads. Focused tests use the real SDK lifecycle and authentication
+methods with simulated transport failures, alongside storage, outcome, and
+provider-validation tests.
 
 - `transactionConsent.test.tsx` exercises real model dispatch and the rendered confirmation flow: unknown/removed/raw tool names, malformed amounts and raw overrides, automatic signature approval, cancellation, uncertain submission, and duplicate confirmation.
 - Existing executor/integration suites cover every retained operation, including single/bulk lifecycle actions, custom-domain attach/clear, batch deployment integrity, and account setup.

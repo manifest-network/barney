@@ -19,6 +19,44 @@ For the relay threat model, see [Security model](security.md#1-paid-relay-trust-
 
 Pin an exact tag in production. Pre-release tags do not update `:latest`.
 
+## Fred compatibility (ENG-976)
+
+Barney explicitly selects SDK `fredCompatibility: "pr240"` for dev's provider,
+`https://s049-u002.manifest0.net/api/fred`, matching Fred
+`f42a639a8e3bbc5bd2c9e2faa525bfff54b8b72c`. All other provider URLs retain the
+SDK's `v0.13` contract. Manifest previews and deployment/update validation use
+the same provider selection as restart and update requests.
+
+`PUBLIC_FRED_COMPATIBILITY` optionally replaces this selection at container
+startup or build time. It accepts `v0.13`, `pr240`, or a JSON provider URL map,
+for example `{"https://s049-u002.manifest0.net/api/fred":"pr240"}`. Unlisted
+providers in a map use `v0.13`; `{}` explicitly disables the built-in dev
+override. URL paths are significant and trailing slashes are normalized.
+This setting is public configuration and requires no Vault credentials.
+
+The dev edge must allow `Idempotency-Key` alongside `Authorization` and
+`Content-Type` for the existing Barney origin. A read-only preflight on
+2026-09-22 still returned only `Content-Type,Authorization,Accept`; the disallowed
+origin received no `Access-Control-Allow-Origin`. Updating Barney alone cannot
+enable browser maintenance until the Traefik policy is deployed.
+
+From a reviewed `manifest-deploy` checkout containing that CORS change, set
+dev's `barney_branch` to the reviewed ENG-976 Barney commit and use the existing
+operator workflow (with the deployment environment's existing credentials):
+
+```bash
+scripts/ansible-playbook playbooks/update-traefik.yml -i inventory/base -i inventory/dev --diff
+scripts/ansible-playbook playbooks/update-barney.yml -i inventory/base -i inventory/dev --diff
+```
+
+Verify the actual `/api/fred/v1/leases/<uuid>/restart` and `/update` OPTIONS
+responses permit `Idempotency-Key` for `https://barney.dev.manifest.network`,
+while an unlisted origin receives no allow-origin header. Then exercise a
+disposable workload from the browser: restart/update, exact retry after a lost
+response, and compensated failure. Record both runtime readiness and release
+outcome in [ENG-976](https://linear.app/liftedinit/issue/ENG-976). Local simulated
+transport tests do not establish these deployed-workload acceptance checks.
+
 ## Required configuration
 
 The relay deliberately has no unlimited financial defaults. Paid inference and

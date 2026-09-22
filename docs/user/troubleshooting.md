@@ -93,6 +93,20 @@ You attached an oversized manifest (raw input) or asked for a stack with too man
 
 ## Runtime problems
 
+### Restart or update outcome is unconfirmed
+
+Check the app's status and releases. The provider may still execute a pending
+command after a timeout or lost response. Ask Barney to retry the same restart,
+or retry the update using only the app name; it will recover the saved command.
+For a bulk restart, retrying "all" recovers only unresolved restarts. Avoid
+changing the update or stopping and redeploying while its outcome is unresolved.
+
+Barney keeps update contents in memory to protect secrets. After a browser
+reload, recovery requires reattaching the exact original file; the saved command
+key and payload fingerprint prevent a different file from replacing it. A
+healthy app can still have a failed restart or update if the provider restored
+the previous runtime. The operation result and app health are reported separately.
+
 ### "App is failed"
 
 After provisioning succeeds, the container can still crash. `app_status <name>` and `get_logs <name>` surface what the container is saying. `app_diagnostics <name>` surfaces what the *provider* thinks happened.
