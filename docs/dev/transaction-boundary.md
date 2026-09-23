@@ -80,17 +80,29 @@ records without the advice flag conservatively retain that barrier. Deliberate
 Every new confirmation binds the previous receipt's key so another settlement refuses dispatch.
 A tab also retains a nonsecret recovery intent in sessionStorage and memory: another tab's
 later successor cannot erase old advice here. Only dispatch of an explicitly confirmed new
-command consumes its bound intent. Nonsecret scoped identities remain attached to completed chat rows,
-so loading persisted advice restores its guard in a new tab even after a successor or sessionStorage quota failure.
+command whose bound key still matches consumes the tab's guard and its earlier observed advice.
+A durable tab-local consumed-key record prevents reload from
+rearming it. This retains the newest 128 consumed keys per lease; older restored advice can
+conservatively require deliberate new intent. Nonsecret scoped identities attach only to the tool result that issued the advice;
+unrelated and older rows never inherit them. Loading an advice-bearing row in another tab restores
+its guard, including after a successor or sessionStorage quota failure. Token streaming does not scan
+recovery intents or copy advice.
 Advice marking does not rewrite an already-settled receipt,
 and storage-write failures preserve local recovery evidence without failing status queries.
 If that intent survives but neither a pending record nor a settled receipt exists, both planning
 and execution refuse a new command, including `new_command: true`; missing metadata proves no outcome.
-Cancellation before dispatch writes a smaller `not_sent` receipt with any prior blocking flag. It proves
-that only its matching recovery intent can be retired, including in an observing tab or restored transcript.
-Advice for a newer unsent command preserves an existing guard. Transcript restoration loads
+Cancellation before dispatch restores the previous sent receipt (or no receipt), retaining exact
+never-sent keys alongside it. It does not change the prior command identity or invalidate another
+approved card. These proofs survive later cancellations and settlements, retiring only matching advice
+in an observing tab or restored transcript. At most 128 proofs are retained per lease; exceptionally
+old advice whose proof has aged out conservatively requires deliberate new intent.
+Advice for a newer unsent command preserves an existing guard. If older advice arrives late,
+retiring the unsent command promotes that still-actionable identity instead of discarding it. Transcript restoration loads
 never-sent proof before selecting the oldest actionable advice, so retiring one temporary
-command cannot erase an older command's still-visible guidance.
+command cannot erase an older command's still-visible guidance. Preparing a previously cancelled
+confirmation with its same key atomically revokes only that key's never-sent proof before HTTP.
+Legacy development `not_sent` receipts retain their conservative identity because the prior sent
+receipt was not preserved and cannot be reconstructed.
 Verified provider outcomes and manifest
 updates survive receipt-write failure; cached exact retries repeat local cleanup without another
 POST. Replays identify the previously verified result; cancellation during cleanup leaves that verdict known.
@@ -135,8 +147,12 @@ Successful batch maintenance preserves any local-cleanup warning in its result, 
 progress. Automatic deploy diagnostics keep the provider verdict and guidance before a bounded
 tail per service. Batch summaries redistribute unused diagnostic space and render compact
 reason, lookup and service tails at the final budget, preserving headers and ending lines.
-Internal rendering metadata is stripped from progress and tool results. Single-deploy logs
-preserve line breaks, and preview processing slices the input before code-point conversion.
+A row that fits the verdict and curated next step retains both and omits excess service excerpts
+with a count and `get_logs` lookup. Cancelled rows retain any previously verified outcome in the
+summary after the progress card disappears. Internal rendering metadata is stripped from progress and tool results. Single-deploy logs
+preserve line breaks, and preview processing scans trailing noise in linear time and slices the input before code-point conversion.
+Manifest validation diagnostics are sanitized and bounded to 4,096 code points in planning and both
+provider confirmation paths; ordinary preparation diagnostics keep their smaller cap.
 
 The confirmation UI preserves unchanged payload bytes and disables editing of
 recovery payloads. Focused tests use the real SDK lifecycle and authentication

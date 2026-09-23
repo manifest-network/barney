@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { executeTool, executeConfirmedTool } from './index';
 import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import type { ToolResult, ToolExecutorOptions } from './types';
+import { maintenanceRecoveryAdvice } from './maintenanceRecoveryIntent';
 
 vi.mock('./compositeQueries', () => ({
   executeListApps: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock('./compositeTransactions', () => ({
 }));
 
 import {
+  executeAppStatus,
   executeGetBalance,
   executeGetLogs,
   executeListApps,
@@ -80,6 +82,28 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
 describe('executeTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('keeps advice with its own result when two tool invocations overlap', async () => {
+    const first = maintenanceRecoveryAdvice({ address: ADDRESS, providerUrl: 'https://provider.example', leaseUuid: crypto.randomUUID(),
+      operation: 'restart', idempotencyKey: crypto.randomUUID() });
+    const second = { ...first, leaseUuid: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), operation: 'update' as const };
+    let finishFirst!: () => void;
+    vi.mocked(executeAppStatus).mockImplementationOnce(async (_args, options) => {
+      options.onMaintenanceRecoveryAdvice?.(first);
+      await new Promise<void>((resolve) => { finishFirst = resolve; });
+      options.onMaintenanceRecoveryAdvice?.(first);
+      return { success: true, data: { message: 'First recovery advice' } };
+    }).mockImplementationOnce(async (_args, options) => {
+      options.onMaintenanceRecoveryAdvice?.(second);
+      return { success: false, error: 'Second recovery advice' };
+    });
+    const pending = executeTool('app_status', { app_name: 'first' }, makeOptions());
+    const later = await executeTool('app_status', { app_name: 'second' }, makeOptions());
+    finishFirst();
+    expect(later.maintenanceRecoveryAdvice).toEqual([second]);
+    expect((await pending).maintenanceRecoveryAdvice).toEqual([first]);
+    expect(later.error).toBe('Second recovery advice');
   });
 
   // --- Query tools ---
@@ -261,6 +285,20 @@ describe('executeTool', () => {
 describe('executeConfirmedTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('collects independent batch advice identities without adding them to the model result', async () => {
+    const advice = [0, 1].map(() => maintenanceRecoveryAdvice({ address: ADDRESS, providerUrl: 'https://provider.example',
+      leaseUuid: crypto.randomUUID(), operation: 'restart', idempotencyKey: crypto.randomUUID() }));
+    const data = { message: 'Two restart outcomes are unconfirmed.' };
+    vi.mocked(executeConfirmedRestartApp).mockImplementationOnce(async (_args, _client, options) => {
+      for (const entry of advice) options.onMaintenanceRecoveryAdvice?.(entry);
+      return { success: true, data };
+    });
+    const result = await executeConfirmedTool('restart_app', { entries: [] }, makeOptions());
+    expect(result.maintenanceRecoveryAdvice).toEqual(advice);
+    expect(result.data).toBe(data);
+    expect(JSON.stringify(result.data)).not.toContain(advice[0].idempotencyKey);
   });
 
   it('fails closed when the immutable authorization context is missing', async () => {

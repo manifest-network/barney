@@ -4,6 +4,7 @@ import { deployManifest, updateApp, validateManifest, type FredAuthCtx } from '@
 import { buildStackManifest } from '../manifest';
 import { buildImageManifestFromArgs, parseAndValidateStackServices, validateManifestForProvider } from './deployArgs';
 import { getFredCompatibility } from '../../config/fredCompatibility';
+import { AI_MANIFEST_VALIDATION_DETAIL_CHARS } from '../../config/constants';
 
 const LEASE_UUID = asLeaseUuid('550e8400-e29b-41d4-a716-446655440000');
 
@@ -45,6 +46,19 @@ describe('SDK preflight at Barney transaction boundaries', () => {
     expect(error).toBe('Manifest must be valid JSON.');
     expect(error).not.toContain('private-password');
   });
+
+  it.each(['https://s049-u002.manifest0.net/api/fred', 'https://provider.example.com'])(
+    'sanitizes and bounds validation diagnostics for %s', async (providerUrl) => {
+      const manifest = JSON.stringify({ image: 'nginx', env: Object.fromEntries(Array.from({ length: 200 }, (_, i) =>
+        [`\u202EBAD=${i}${'long'.repeat(100)}\u200B\u0085`, 'value'])) });
+      const error = await validateManifestForProvider(manifest, providerUrl);
+      expect(error).toContain('Invalid manifest:');
+      expect(error).toContain('BAD=0');
+      expect(error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+      expect(Array.from(error!).length).toBeLessThanOrEqual(AI_MANIFEST_VALIDATION_DETAIL_CHARS + 1);
+      expect(error).toContain('additional validation errors omitted');
+    },
+  );
 
   it('selects dev validation after SDK provider resolution and before lease creation', async () => {
     const { ctx, access } = preflightContext();

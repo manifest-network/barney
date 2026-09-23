@@ -280,17 +280,22 @@ key, so settlement reduces quota usage. Only receipts marked when recovery guida
 block ordinary planning; directly reported outcomes allow routine follow-up commands. Older pending
 records without an advice flag conservatively retain the recovery barrier. Nonsecret recovery
 intent in sessionStorage (with an in-memory fallback) keeps this tab's old advice guarded even
-after another tab completes a deliberate successor. Completed chat rows retain nonsecret scoped advice
-identities alongside their text; loading that transcript restores the guard even in a new tab or after
-a failed sessionStorage write. Dispatch consumes only the active tab's bound intent, never the metadata
-on older advice rows. Shared advice marking updates pending
+after another tab completes a deliberate successor. Only the tool result that issues advice retains its
+nonsecret scoped identity; older and unrelated rows never inherit it. Loading that row restores the guard
+in another tab or after a failed sessionStorage write. Dispatch must match the active tab's bound intent;
+it acknowledges that tab's earlier observed advice too, and durably retains the newest 128 consumed keys per lease in that tab so reload cannot rearm them.
+Older restored advice whose suppression has aged out conservatively needs deliberate new intent. Persistence does not scan active
+intents on streaming frames. Shared advice marking updates pending
 records only, never grows a settled receipt, and cannot fail a status read on quota exhaustion. A new
 command requires a settled receipt when tab-local recovery intent survives a missing pending record;
 without either record, even `new_command: true` remains observation-only because no outcome is known. Every new
-confirmation binds the previous receipt's key; a changed receipt refuses dispatch. A never-sent
-cancellation leaves a compact `not_sent` receipt, preserving any prior blocking flag. Only its matching
-intent can be retired, so an observing tab is not stranded and newer advice remains guarded.
-Temporary advice for a newer unsent command cannot replace an older active guard. Transcript
+confirmation binds the previous sent receipt's key; a changed sent receipt refuses dispatch. A never-sent
+cancellation restores that receipt (or none) with bounded exact zero-HTTP proofs, preserving prior
+blocking semantics without invalidating approved cards. Proofs survive successors and retire only
+matching advice. The oldest proofs age out conservatively at 128 per lease; lost proof can require
+deliberate new intent but cannot authorize replay.
+Temporary advice for a newer unsent command cannot replace an older active guard. If older advice
+arrives late, retiring the unsent command promotes that actionable identity, including after reload. Transcript
 restoration reads never-sent proof first, then retains the oldest actionable advice per lease.
 Verified outcomes and manifest updates survive failed
 receipt writes, which cached exact retries reattempt without another provider request. If command
@@ -316,12 +321,15 @@ command failure without a runtime reading also schedules readiness checks. Model
 Stop confirmations share a metadata-only warning naming affected apps: Fred may still execute
 pending maintenance until their leases close.
 
-Automatic deployment diagnostics retain a bounded tail for each service, including its header.
-Trailing whitespace/control noise cannot hide the last visible line. Batch summaries redistribute
+Automatic deployment diagnostics retain bounded service tails with headers. An ordinary batch row
+prioritizes its verdict, fail count and curated next step, then includes the services that fit and an
+explicit omitted-service count. A linear reverse scan prevents trailing whitespace/control noise from
+hiding the last visible line. Batch summaries redistribute
 unused diagnostic space; when shortening is still required, structured diagnostics are rendered
 again with the failure reason, `get_logs` lookup and service tails. They are never duplicated in the
-persisted tool result. Complete manifest-validation lists remain visible on both compatibility paths;
-other preparation failures are sanitized and bounded at their source.
+persisted tool result. Cancelled replay details remain in the summary after progress rows disappear.
+Manifest-validation lists are sanitized and capped at 4,096 code points on both compatibility paths;
+other preparation failures keep their smaller cap.
 
 ⚠️ **The SDK primitives serialize their own broadcasts — call them directly, never through a signing mutex.** `deployManifest` / `stopApp` / `fundCredits` / `waitForLeaseStatus` / `updateApp` / `restartApp` mint their own ADR-036 tokens through the same non-reentrant signing mutex, so wrapping any of them in a caller-side sign-lock deadlocks (e.g. deployManifest → `providerAuth.leaseDataToken` → same mutex → circular wait). Chain-TX serialization comes entirely from `CosmosClientManager.withBroadcastLock` (held internally by the SDK cosmos-tx path) plus the mutex-wrapped `signArbitrary` (the D2 replay guard). ENG-312 Phase 8 **removed** the old `SigningContext.withSign` escape hatch — there is no caller-side sign-lock to misuse anymore.
 
@@ -435,7 +443,10 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `AI_HEALTH_CHECK_MAX_BACKOFF` | 8 | Max backoff multiplier (×60s = 8min ceiling) when health checks repeatedly fail |
 | `AI_BATCH_DEPLOY_CONCURRENCY` | 4 | Max concurrent batch deploys (runtime-configurable) |
 | `AI_DEPLOY_LOG_PREVIEW_CHARS` | 2000 | Automatic container-log tail; batch rows remain bounded and direct users to `get_logs` |
-| `AI_MAINTENANCE_PREPARATION_DETAIL_CHARS` | 1024 | Sanitized wallet/storage/SDK preparation diagnostics; complete manifest-validation lists bypass this cap |
+| `AI_MAINTENANCE_PREPARATION_DETAIL_CHARS` | 1024 | Sanitized wallet/storage/SDK preparation diagnostics |
+| `AI_MANIFEST_VALIDATION_DETAIL_CHARS` | 4096 | Sanitized manifest-validation diagnostics in planning and confirmation |
+| `MAINTENANCE_NEVER_SENT_PROOF_LIMIT` | 128 | Exact zero-HTTP proofs retained per lease across cancellations and settlements |
+| `MAINTENANCE_CONSUMED_ADVICE_LIMIT` | 128 | Consumed advice keys retained per lease in this tab; older restored advice fails conservatively |
 | `MAX_PAYLOAD_SIZE` | 5KB | Maximum file upload size (in `hash.ts`) |
 | `FRED_POLL_INTERVAL_MS` | 3s | Default polling interval for Fred status checks (passed as `waitForLeaseStatus`'s `intervalMs`) |
 | `DNS_POLL_INTERVAL_MS` | 30s | Polling interval for browser-side DNS / HTTPS probes (`useDnsStatusPolling`) |

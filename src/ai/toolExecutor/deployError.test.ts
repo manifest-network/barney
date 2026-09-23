@@ -475,6 +475,32 @@ describe('handleDeployManifestError — provider verdict at the poll step', () =
     expect(JSON.stringify(result)).not.toContain('"logs":');
   });
 
+  it.each([[6, true], [10, false], [16, true]] as const)('keeps fail count and complete guidance for a %i-service stack (long message: %s)', async (serviceCount, longMessage) => {
+    const message = longMessage ? 'container exited unexpectedly; '.repeat(20) : 'container exited unexpectedly';
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 7,
+      reason: 'ContainerExited', message } as never);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ logs: Object.fromEntries(Array.from({ length: serviceCount }, (_, index) => [
+      `service-${index}`, `${'startup '.repeat(200)}service-${index} panic: final crash line`,
+    ])) } as never);
+    let diagnostic: DeployFailureDiagnostic | undefined;
+    const result = await handleDeployManifestError(partialError('poll'), ctx({ maxDetailChars: AI_BATCH_GUIDANCE_CHARS,
+      onDiagnostic: (value: DeployFailureDiagnostic) => { diagnostic = value; } }));
+    const text = result.error!;
+    expect(text).toContain('Provision error (fail_count=7): ContainerExited:');
+    expect(text).toContain(nextStepFor('ContainerExited', 'test-app'));
+    expect(text).toContain('service-0 panic: final crash line');
+    const omitted = Number(text.match(/\((\d+) more services; use get_logs\.\)$/)?.[1]);
+    expect(omitted).toBeGreaterThan(0);
+    expect((text.match(/\[service-\d+\]/g)?.length ?? 0) + omitted).toBe(serviceCount);
+    expect([...text].length).toBeLessThanOrEqual(AI_BATCH_GUIDANCE_CHARS);
+    const summary = summarizeBatchResult({ succeeded: [{ name: 'healthy' }], failed: ['test-app'],
+      batchProgress: [{ name: 'test-app', phase: 'failed', detail: text, diagnostic }],
+      dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys' });
+    expect(summary.data).toMatchObject({ message: expect.stringContaining(nextStepFor('ContainerExited', 'test-app')!) });
+    expect(summary.data).toMatchObject({ message: expect.stringContaining('Provision error (fail_count=7)') });
+    expect(JSON.stringify(summary)).not.toContain('Details were shortened');
+  });
+
   it.each([' ', '\u0000\u202e\r\n'])('keeps each service header and panic before a long trailing noise run (%j)', async (noise) => {
     const panic = 'panic: nil pointer at main.go:42';
     vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1,

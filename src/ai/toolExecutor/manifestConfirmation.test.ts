@@ -363,6 +363,41 @@ it('preserves the complete legacy SDK validation list for edits made at confirma
   expect(providerFetch).not.toHaveBeenCalled();
 });
 
+it.each([DEV, LEGACY])('sanitizes validation at both planning and confirmation on %s', async (providerUrl) => {
+  const app: AppEntry = { name: 'web', leaseUuid: crypto.randomUUID(), providerUrl,
+    providerUuid: 'provider', size: 'small', createdAt: 0, status: 'running', chainState: 'active', provisionState: 'confirmed', manifest: '{"image":"nginx"}' };
+  const options = optionsFor(providerUrl, [app]);
+  const invalid = JSON.stringify({ image: 'nginx', env: { '\u202EBAD=X\u200B\u0085': 'value' } });
+  const planning = await executeUpdateApp({ app_name: app.name }, options, attachment(invalid));
+  const plan = await executeUpdateApp({ app_name: app.name, image: 'nginx' }, options);
+  expect(plan.requiresConfirmation, plan.error).toBe(true);
+  const confirmed = await executeConfirmedUpdateApp({ ...plan.pendingAction!.args, _generatedManifest: invalid }, chain, options);
+  for (const result of [planning, confirmed]) {
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('BAD=X');
+    expect(result.error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+  }
+  expect(providerFetch).not.toHaveBeenCalled();
+});
+
+it.each(['uncertain', 'rejected'] as const)('does not claim a %s recovery verified an update when disclosing an unused attachment', async (outcome) => {
+  const app: AppEntry = { name: 'web', leaseUuid: crypto.randomUUID(), providerUrl: DEV,
+    providerUuid: 'provider', size: 'small', createdAt: 0, status: 'running', chainState: 'active', provisionState: 'confirmed', manifest: '{"image":"nginx"}' };
+  const options = optionsFor(DEV, [app]);
+  histories.set(app.leaseUuid, releases(app.leaseUuid));
+  const plan = await executeUpdateApp({ app_name: app.name, image: 'nginx:new' }, options);
+  vi.mocked(providerFetch).mockRejectedValueOnce(new TypeError('Response lost'));
+  expect((await executeConfirmedUpdateApp(plan.pendingAction!.args, chain, options)).success).toBe(false);
+  const recovery = await executeUpdateApp({ app_name: app.name }, options, attachment('{"image":"redis"}'));
+  expect(recovery.pendingAction?.args._maintenanceAttachmentUnused).toBe(true);
+  if (outcome === 'uncertain') vi.mocked(providerFetch).mockRejectedValueOnce(new TypeError('Response lost again'));
+  else vi.mocked(providerFetch).mockResolvedValueOnce(new Response('Invalid manifest', { status: 400 }));
+  const result = await executeConfirmedUpdateApp(recovery.pendingAction!.args, chain, options);
+  expect(result.success).toBe(false);
+  expect(result.error).toContain('. The attached file was not used.');
+  expect(result.error).not.toContain('this confirms');
+});
+
 it('keeps exact-payload recovery guidance when signing the history read is rejected', async () => {
   vi.resetModules();
   const state = await import('./maintenanceOperation');

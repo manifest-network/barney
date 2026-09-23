@@ -33,6 +33,7 @@ import {
 } from './compositeTransactions';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import { isAbortError } from '../../api/utils';
+import { createMaintenanceAdviceCollector, mergeMaintenanceAdvice } from './maintenanceRecoveryIntent';
 
 // Re-export types
 export type { ToolResult, ToolExecutorOptions, PendingAction, SignResult, PayloadAttachment, AuthTokens, SigningContext, TransactionAuthorization } from './types';
@@ -67,7 +68,7 @@ const CONFIRMED_TX_TOOLS = new Set([...TX_TOOLS, 'batch_deploy']);
 /**
  * Execute a tool call from the AI assistant.
  */
-export async function executeTool(
+async function executeToolImpl(
   toolName: string,
   args: Record<string, unknown>,
   options: ToolExecutorOptions,
@@ -158,7 +159,7 @@ export async function executeTool(
 /**
  * Execute a transaction that has been confirmed by the user.
  */
-export async function executeConfirmedTool(
+async function executeConfirmedToolImpl(
   toolName: string,
   args: Record<string, unknown>,
   options: ToolExecutorOptions,
@@ -212,4 +213,31 @@ export async function executeConfirmedTool(
       error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
+}
+
+async function collectMaintenanceAdvice(
+  execute: typeof executeToolImpl,
+  toolName: string,
+  args: Record<string, unknown>,
+  options: ToolExecutorOptions,
+  payload?: PayloadAttachment,
+): Promise<ToolResult> {
+  const collector = createMaintenanceAdviceCollector();
+  const result = await execute(toolName, args, {
+    ...options,
+    onMaintenanceRecoveryAdvice: (advice) => {
+      collector.onAdvice(advice);
+      options.onMaintenanceRecoveryAdvice?.(advice);
+    },
+  }, payload);
+  const advice = mergeMaintenanceAdvice(result.maintenanceRecoveryAdvice, collector.advice);
+  return advice.length ? { ...result, maintenanceRecoveryAdvice: advice } : result;
+}
+
+export function executeTool(toolName: string, args: Record<string, unknown>, options: ToolExecutorOptions, payload?: PayloadAttachment): Promise<ToolResult> {
+  return collectMaintenanceAdvice(executeToolImpl, toolName, args, options, payload);
+}
+
+export function executeConfirmedTool(toolName: string, args: Record<string, unknown>, options: ToolExecutorOptions, payload?: PayloadAttachment): Promise<ToolResult> {
+  return collectMaintenanceAdvice(executeConfirmedToolImpl, toolName, args, options, payload);
 }

@@ -416,6 +416,41 @@ it('does not dispatch without an unambiguous original release baseline', async (
 });
 
 describe('pre-dispatch cancellation and local failures', () => {
+  it.each(['restart', 'update', 'batch'].flatMap(mode => [false, true].map(priorSent => ({ mode, priorSent }))))('keeps an already planned $mode card valid across two unsent commands (prior sent=$priorSent)', async ({ mode, priorSent }) => {
+    const { apps, plans, options } = setup(mode === 'batch' ? ['first', 'second'] : ['first']);
+    const app = apps[0];
+    const { discardUnsubmittedMaintenanceOperation, markMaintenanceOperationDispatched, markMaintenanceRecoveryAdvised } = await import('./maintenanceOperation');
+    let previousOperationKey: string | undefined;
+    if (priorSent) {
+      const prior = await getOrCreateMaintenanceOperation({ address: ADDRESS, providerUrl: PROVIDER, leaseUuid: app.leaseUuid,
+        operation: 'restart', baselineReleaseVersions: [1] });
+      await markMaintenanceOperationDispatched(prior);
+      await completeMaintenanceOperation(prior, undefined, 'succeeded');
+      previousOperationKey = prior.idempotencyKey;
+    }
+    const planned = { ...plans[0], ...(previousOperationKey && { previousOperationKey }) };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const unsent = await getOrCreateMaintenanceOperation({ address: ADDRESS, providerUrl: PROVIDER, leaseUuid: app.leaseUuid,
+        operation: 'restart', baselineReleaseVersions: [1], previousOperationKey });
+      await markMaintenanceRecoveryAdvised(unsent);
+      expect(await discardUnsubmittedMaintenanceOperation(unsent)).toBe(true);
+    }
+    expect(providerFetch).not.toHaveBeenCalled();
+    vi.mocked(providerFetch).mockImplementation(async (input) => {
+      const target = apps.find(entry => String(input).includes(entry.leaseUuid))!;
+      histories.set(target.leaseUuid, history(target.leaseUuid, release(1, 'superseded'), release(2)));
+      return accepted();
+    });
+    const result = mode === 'batch'
+      ? await executeConfirmedRestartApp({ app_name: 'all', entries: [planned, plans[1]] }, chain, options)
+      : await dispatch(mode as 'restart' | 'update', planned, options);
+    expect(result.success, result.error).toBe(true);
+    expect((result.data as { message?: string }).message ?? '').not.toMatch(/Outcome unknown|unconfirmed|skipped/);
+    if (mode === 'batch') expect(result.data).toMatchObject({ unconfirmed: [], failed: [] });
+    expect(providerFetch).toHaveBeenCalledTimes(apps.length);
+    expect(requests()[0].key).toBe(planned.idempotencyKey);
+  });
+
   it.each(['cancel', 'mint rejection'] as const)('releases another tab’s advice lock after a pre-HTTP %s', async (failure) => {
     const { apps: [app], plans: [plan], options, signArbitrary } = setup();
     const controller = new AbortController();
@@ -434,10 +469,10 @@ describe('pre-dispatch cancellation and local failures', () => {
     });
     expect((await dispatch('restart', plan, options)).success).toBe(false);
     expect(providerFetch).not.toHaveBeenCalled();
-    expect(observer.getSettledMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toMatchObject({ outcome: 'not_sent', recoveryAdvised: false });
+    expect(observer.getSettledMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
     const next = await observerTools.executeRestartApp({ app_name: app.name }, options);
     expect(next.requiresConfirmation).toBe(true);
-    expect(next.pendingAction?.args.previousOperationKey).toBe(plan.idempotencyKey);
+    expect(next.pendingAction?.args.previousOperationKey).toBeUndefined();
   });
 
   it.each(['baseline', 'authentication', 'context', 'authorization'] as const)('discards a new command after a local %s failure', async (stage) => {

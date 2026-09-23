@@ -83,6 +83,108 @@ describe('maintenance operation retention', () => {
     expect(retried.idempotencyKey).toBe(first.idempotencyKey);
   });
 
+  it('keeps both never-sent proofs across another cancellation and a successful successor without changing planned-card identity', async () => {
+    const plannedKey = crypto.randomUUID();
+    const cancelled: string[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const command = await operations.getOrCreateMaintenanceOperation(restart);
+      await operations.markMaintenanceRecoveryAdvised(command);
+      cancelled.push(command.idempotencyKey);
+      expect(await operations.discardUnsubmittedMaintenanceOperation(command)).toBe(true);
+      expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toBeUndefined();
+    }
+    vi.resetModules();
+    operations = await import('./maintenanceOperation');
+    const intent = await import('./maintenanceRecoveryIntent');
+    intent.rememberMaintenanceRecoveryIntent({ ...scope, operation: 'restart', idempotencyKey: cancelled[0] });
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toBeUndefined();
+    expect(intent.getMaintenanceRecoveryIntent(scope)).toBeUndefined();
+    const sent = await operations.getOrCreateMaintenanceOperation({ ...restart, idempotencyKey: plannedKey });
+    await operations.markMaintenanceOperationDispatched(sent);
+    await operations.completeMaintenanceOperation(sent, undefined, 'succeeded');
+    expect(JSON.parse(localStorage.getItem(localStorage.key(0)!)!).neverSentKeys).toEqual(cancelled);
+    for (const idempotencyKey of cancelled) {
+      vi.resetModules();
+      const fresh = await import('./maintenanceOperation');
+      const restored = await import('./maintenanceRecoveryIntent');
+      restored.rememberMaintenanceRecoveryIntent({ ...scope, operation: 'restart', idempotencyKey });
+      expect(fresh.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toMatchObject({
+        idempotencyKey: plannedKey, outcome: 'succeeded', recoveryAdvised: false,
+      });
+      expect(restored.getMaintenanceRecoveryIntent(scope)).toBeUndefined();
+    }
+  });
+
+  it('bounds exact zero-HTTP proof while retaining the most recent keys and no payloads', async () => {
+    const { MAINTENANCE_NEVER_SENT_PROOF_LIMIT } = await import('../../config/constants');
+    const keys: string[] = [];
+    for (let attempt = 0; attempt < MAINTENANCE_NEVER_SENT_PROOF_LIMIT + 2; attempt++) {
+      const command = await operations.getOrCreateMaintenanceOperation(update);
+      keys.push(command.idempotencyKey);
+      await operations.discardUnsubmittedMaintenanceOperation(command);
+    }
+    expect(localStorage.length).toBe(1);
+    const raw = localStorage.getItem(localStorage.key(0)!)!;
+    expect(JSON.parse(raw)).toEqual({ v: 1, neverSentKeys: keys.slice(2) });
+    expect(raw).not.toMatch(/private-secret|nginx|payloadHash/);
+  });
+
+  it('revokes only a retried confirmation’s never-sent proof before its first HTTP handoff', async () => {
+    const command = await operations.getOrCreateMaintenanceOperation({ ...restart, idempotencyKey: key });
+    await operations.markMaintenanceRecoveryAdvised(command);
+    await operations.discardUnsubmittedMaintenanceOperation(command);
+    const other = await operations.getOrCreateMaintenanceOperation(restart);
+    await operations.discardUnsubmittedMaintenanceOperation(other);
+    const retried = await operations.getOrCreateMaintenanceOperation({ ...restart, idempotencyKey: key });
+    expect(retried.idempotencyKey).toBe(key);
+    expect(retried.neverSentKeys).toEqual([other.idempotencyKey]);
+    await operations.markMaintenanceOperationDispatched(retried);
+    await operations.markMaintenanceRecoveryAdvised(retried);
+    const intent = await import('./maintenanceRecoveryIntent');
+    expect(intent.getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(key);
+    expect(await operations.discardUnsubmittedMaintenanceOperation(retried)).toBe(false);
+    vi.resetModules();
+    const observer = await import('./maintenanceOperation');
+    const seen = observer.getPendingMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)!;
+    await observer.markMaintenanceRecoveryAdvised(seen);
+    expect((await import('./maintenanceRecoveryIntent')).getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(key);
+  });
+
+  it.each([['bad-key'], [key, key], 'not-an-array'].map(neverSentKeys => ({ neverSentKeys })))('refuses malformed never-sent proof $neverSentKeys without creating another command', async ({ neverSentKeys }) => {
+    await operations.getOrCreateMaintenanceOperation(restart);
+    const storageKey = localStorage.key(0)!;
+    const raw = JSON.stringify({ v: 1, neverSentKeys });
+    localStorage.setItem(storageKey, raw);
+    expect(() => pending()).toThrow(/unreadable/);
+    expect(() => operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toThrow(/unreadable/);
+    await expect(operations.getOrCreateMaintenanceOperation(restart)).rejects.toThrow(/unreadable/);
+    expect(localStorage.getItem(storageKey)).toBe(raw);
+  });
+
+  it.each([{ v: 2 }, { unexpected: true }, { settled: 'failed' }, { operation: 'restart' }])('does not retire advice from an invalid proof container %j', async (extra) => {
+    const command = await operations.getOrCreateMaintenanceOperation(restart);
+    await operations.markMaintenanceRecoveryAdvised(command);
+    const storageKey = localStorage.key(0)!;
+    localStorage.setItem(storageKey, JSON.stringify({ v: 1, neverSentKeys: [command.idempotencyKey], ...extra }));
+    expect(() => operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toThrow(/unreadable/);
+    const intent = await import('./maintenanceRecoveryIntent');
+    expect(intent.getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(command.idempotencyKey);
+    await expect(operations.getOrCreateMaintenanceOperation(restart)).rejects.toThrow(/unreadable/);
+  });
+
+  it.each([false, true])('rejects a record that calls its own sent key never-sent (settled=%s)', async (settled) => {
+    const command = await operations.getOrCreateMaintenanceOperation(restart);
+    await operations.markMaintenanceOperationDispatched(command);
+    await operations.markMaintenanceRecoveryAdvised(command);
+    if (settled) await operations.completeMaintenanceOperation(command, undefined, 'succeeded');
+    const storageKey = localStorage.key(0)!;
+    const metadata = JSON.parse(localStorage.getItem(storageKey)!);
+    localStorage.setItem(storageKey, JSON.stringify({ ...metadata, neverSentKeys: [command.idempotencyKey] }));
+    expect(() => operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toThrow(/unreadable/);
+    expect(() => pending()).toThrow(/unreadable/);
+    expect((await import('./maintenanceRecoveryIntent')).getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(command.idempotencyKey);
+  });
+
   it('serializes concurrent callers for the same logical operation', async () => {
     const results = await Promise.all(Array.from({ length: 8 }, () => operations.getOrCreateMaintenanceOperation(update)));
     expect(new Set(results.map((record) => record.idempotencyKey)).size).toBe(1);
@@ -216,6 +318,31 @@ describe('maintenance operation retention', () => {
     expect(pending()?.idempotencyKey).toBe(original.idempotencyKey);
   });
 
+  it.each([false, true])('discards without growing storage while preserving proofs and prior sent identity (prior=%s)', async (priorSent) => {
+    let previousOperationKey: string | undefined;
+    if (priorSent) {
+      const prior = await operations.getOrCreateMaintenanceOperation(restart);
+      await operations.markMaintenanceOperationDispatched(prior);
+      await operations.completeMaintenanceOperation(prior, undefined, 'succeeded');
+      previousOperationKey = prior.idempotencyKey;
+    }
+    const first = await operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey });
+    await operations.discardUnsubmittedMaintenanceOperation(first);
+    const second = await operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey });
+    const markerKey = localStorage.key(0)!;
+    const storage = localStorage;
+    const bound = storage.getItem(markerKey)!.length;
+    vi.stubGlobal('localStorage', { getItem: storage.getItem.bind(storage), removeItem: storage.removeItem.bind(storage),
+      setItem: (key: string, value: string) => {
+        if (value.length > bound) throw new DOMException('Quota reached', 'QuotaExceededError');
+        storage.setItem(key, value);
+      } });
+    expect(await operations.discardUnsubmittedMaintenanceOperation(second)).toBe(true);
+    expect(JSON.parse(storage.getItem(markerKey)!)).toMatchObject({ neverSentKeys: [first.idempotencyKey, second.idempotencyKey] });
+    expect(storage.getItem(markerKey)!.length).toBeLessThan(bound);
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)?.idempotencyKey).toBe(previousOperationKey);
+  });
+
   it.each([undefined, false, true])('settles without growing UTF-16 storage usage, including minimal legacy metadata (advised: %s)', async (advised) => {
     const command = await operations.getOrCreateMaintenanceOperation({ ...restart, baselineReleaseVersions: [] });
     const markerKey = localStorage.key(0)!;
@@ -305,7 +432,7 @@ describe('maintenance operation retention', () => {
     const otherTab = await import('./maintenanceOperation');
     expect(await otherTab.discardUnsubmittedMaintenanceOperation(successor)).toBe(true);
     expect(otherTab.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toMatchObject({
-      idempotencyKey: successor.idempotencyKey, outcome: 'not_sent', recoveryAdvised: true,
+      idempotencyKey: command.idempotencyKey, outcome: 'failed', recoveryAdvised: true,
     });
     expect(JSON.stringify(localStorage)).not.toContain('private-secret');
     await expect(otherTab.getOrCreateMaintenanceOperation(restart)).rejects.toThrow(/recovery advice/);
@@ -488,9 +615,8 @@ describe('maintenance operation retention', () => {
     expect(retry.created).toBe(false);
     expect(await operations.discardUnsubmittedMaintenanceOperation(prepared.command)).toBe(true);
     expect(pending()).toBeUndefined();
-    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toMatchObject({
-      idempotencyKey: prepared.command.idempotencyKey, outcome: 'not_sent', recoveryAdvised: false,
-    });
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toBeUndefined();
+    expect(JSON.parse(localStorage.getItem(localStorage.key(0)!)!)).toEqual({ v: 1, neverSentKeys: [prepared.command.idempotencyKey] });
   });
 
   it('retires matching unsent advice in another tab after cancellation without losing a sent command’s guard', async () => {
@@ -500,9 +626,8 @@ describe('maintenance operation retention', () => {
     const otherTab = await import('./maintenanceOperation');
     await otherTab.markMaintenanceRecoveryAdvised(command);
     expect(await operations.discardUnsubmittedMaintenanceOperation(command)).toBe(true);
-    const tombstone = otherTab.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)!;
-    expect(tombstone).toMatchObject({ outcome: 'not_sent', recoveryAdvised: false });
-    const next = await otherTab.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: command.idempotencyKey });
+    expect(otherTab.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toBeUndefined();
+    const next = await otherTab.getOrCreateMaintenanceOperation(restart);
     await otherTab.markMaintenanceRecoveryAdvised(next);
     await otherTab.markMaintenanceOperationDispatched(next);
     expect(await otherTab.discardUnsubmittedMaintenanceOperation(next)).toBe(false);
@@ -518,7 +643,11 @@ describe('maintenance operation retention', () => {
     const next = await operations.getOrCreateMaintenanceOperation({ ...restart,
       previousOperationKey: first.idempotencyKey, recoveryIntentKey: first.idempotencyKey });
     const intent = await import('./maintenanceRecoveryIntent');
-    await operations.markMaintenanceRecoveryAdvised(next);
+    const onAdvice = vi.fn();
+    await operations.markMaintenanceRecoveryAdvised(next, onAdvice);
+    expect(onAdvice).toHaveBeenCalledWith(expect.objectContaining({
+      idempotencyKey: next.idempotencyKey, operation: 'restart', leaseUuid: scope.leaseUuid, address: scope.address,
+    }));
     expect(intent.getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(first.idempotencyKey);
     await operations.markMaintenanceOperationDispatched(next);
     expect(next.dispatched).toBe(false); // The caller’s immutable copy is stale.

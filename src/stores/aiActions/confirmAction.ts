@@ -4,6 +4,7 @@
 
 import { streamChat } from '../../api/morpheus';
 import { executeConfirmedTool, type ToolResult } from '../../ai/toolExecutor';
+import { mergeMaintenanceAdvice } from '../../ai/toolExecutor/maintenanceRecoveryIntent';
 import {
   buildPayloadFromManifest,
   executeBatchDeploy,
@@ -133,6 +134,7 @@ function finalizeStaleToolResult(
     (message) => ({
       ...message,
       content: serializeToolResult(result, visibleOutcome),
+      ...(result.maintenanceRecoveryAdvice?.length && { maintenanceRecoveryAdvice: mergeMaintenanceAdvice(message.maintenanceRecoveryAdvice, result.maintenanceRecoveryAdvice) }),
       error: result.success ? undefined : visibleOutcome,
       isStreaming: false,
       awaitingConfirmation: false,
@@ -522,6 +524,7 @@ export async function confirmActionFn(get: Get, set: Set, overrides?: ConfirmAct
         ? {
             ...m,
             content: resultContent,
+            ...(result.maintenanceRecoveryAdvice?.length && { maintenanceRecoveryAdvice: mergeMaintenanceAdvice(m.maintenanceRecoveryAdvice, result.maintenanceRecoveryAdvice) }),
             card: displayCard,
             error: toolError,
             isStreaming: false,

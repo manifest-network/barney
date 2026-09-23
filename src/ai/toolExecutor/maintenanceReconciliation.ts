@@ -43,7 +43,7 @@ export async function reconcilePendingMaintenance(
   // to this key. Do not prompt for redundant wallet signatures or fetch history
   // on every status read; explicit recovery owns the exact-key retry.
   if (!command.accepted || !signing) {
-    await markMaintenanceRecoveryAdvised(command);
+    await markMaintenanceRecoveryAdvised(command, options.onMaintenanceRecoveryAdvice);
     return { operation: command.operation, outcome: 'unconfirmed', ...observedReadiness,
       detail: !command.accepted
         ? 'Provider admission of this command has not been confirmed. Recover the original command with its same key and exact payload; release history alone cannot identify it.'
@@ -78,7 +78,7 @@ export async function reconcilePendingMaintenance(
   }
   // No registry mutation may precede an awaited read/hash or queued scope lock:
   // a newer command may have completed while this observation was in flight.
-  if (verdict.outcome === 'unconfirmed') await markMaintenanceRecoveryAdvised(command);
+  if (verdict.outcome === 'unconfirmed') await markMaintenanceRecoveryAdvised(command, options.onMaintenanceRecoveryAdvice);
   let cleanupDetail: string | undefined;
   const committed = await commitMaintenanceObservation(command, {
     settled: verdict.outcome !== 'unconfirmed',
@@ -113,9 +113,9 @@ export async function reconcilePendingMaintenance(
     cleanupDetail = error.message;
     return true;
   });
-  if (cleanupDetail) await markMaintenanceRecoveryAdvised(command);
+  if (cleanupDetail) await markMaintenanceRecoveryAdvised(command, options.onMaintenanceRecoveryAdvice);
   if (!committed) {
-    await markMaintenanceRecoveryAdvised(command);
+    await markMaintenanceRecoveryAdvised(command, options.onMaintenanceRecoveryAdvice);
     return { operation: command.operation, outcome: 'unconfirmed',
       detail: 'The app or saved command changed during reconciliation. Read app_status and app_releases again.' };
   }

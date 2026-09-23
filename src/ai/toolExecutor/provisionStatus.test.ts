@@ -71,6 +71,7 @@ describe('isUnsettledProvisionStatus', () => {
 describe('reconcileProvisionStatus', () => {
   it.each(['restarting', 'updating', 'provisioning', 'unknown'])('keeps confirmed readiness while %s remains in flight', (status) => {
     expect(reconcileProvisionStatus(status, 'confirmed')).toBeUndefined();
+    expect(reconcileProvisionStatus(status, 'failed')).toBeUndefined();
     expect(reconcileProvisionStatus(status, 'unconfirmed')).toBe('unconfirmed');
   });
 

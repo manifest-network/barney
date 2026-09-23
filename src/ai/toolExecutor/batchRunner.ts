@@ -342,6 +342,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     ...failed.map((name) => ({ detail: failureRows.get(name)?.detail, copies: 1 })),
     ...rawUnconfirmed.map((entry) => ({ detail: entry.detail, copies: 2 })),
     ...rawSucceeded.map((entry) => ({ detail: entry.detail, copies: 2 })),
+    ...cancelled.map((name) => ({ detail: failureRows.get(name)?.detail, copies: 1 })),
   ];
   const demands = inputs.map(({ detail, copies }) => ({
     size: detail === undefined ? 0 : JSON.stringify(sanitizeDiagnostic(detail)).length, copies,
@@ -357,6 +358,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     failed.length > 0 ? 'Check app_status and app_diagnostics for each failed app.' : '',
     failed.some((name) => failureRows.get(name)?.diagnostic?.logs.length)
       ? 'Use get_logs(app_name, tail=200) for full logs from each failed service.' : '',
+    cancelled.length > 0 ? 'Check app_status and app_releases for cancelled apps before requesting new work.' : '',
     rawUnconfirmed.length === 0 ? '' : operation === 'restart' || operation === 'update'
       ? 'Check app_status and app_releases for each unknown outcome. Recover only a command still pending, using its original key and exact payload. Do not use new_command for recovery. Do not submit a new command or automatically stop/redeploy while its outcome is unresolved.'
       : 'Check app_status for each still-deploying app. Only use stop_app if you have decided to abandon that deployment.',
@@ -376,6 +378,10 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
   const failedText = failed.map((name, index) => {
     const row = failureRows.get(name);
     const detail = fitDiagnostic(row?.detail, budgets[index], row?.diagnostic);
+    return detail ? `${name}: ${detail}` : name;
+  }).join(', ');
+  const cancelledText = cancelled.map((name, index) => {
+    const detail = fitDiagnostic(failureRows.get(name)?.detail, budgets[failed.length + rawUnconfirmed.length + rawSucceeded.length + index]);
     return detail ? `${name}: ${detail}` : name;
   }).join(', ');
 
@@ -415,7 +421,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
       return { success: false, error: `All ${failedNoun} failed: ${failedText}${summaryGuidance ? `\n${summaryGuidance}` : ''}` };
     }
     const failedPart = failed.length > 0 ? `Failed: ${normalizeErrorPunctuation(failedText)}.` : '';
-    const cancelledPart = `Cancelled: ${cancelled.join(', ')}.`;
+    const cancelledPart = `Cancelled: ${normalizeErrorPunctuation(cancelledText)}.`;
     return {
       success: false,
       error: `No ${failedNoun} completed — ${[failedPart, cancelledPart].filter(Boolean).join(' ')}${summaryGuidance ? `\n${summaryGuidance}` : ''}`,
@@ -432,7 +438,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     parts.push(`${unconfirmedLabel}:\n${lines.map((l) => `- ${l}`).join('\n')}`);
   }
   if (failed.length > 0) parts.push(`Failed: ${normalizeErrorPunctuation(failedText)}.`);
-  if (cancelled.length > 0) parts.push(`Cancelled: ${cancelled.join(', ')}.`);
+  if (cancelled.length > 0) parts.push(`Cancelled: ${normalizeErrorPunctuation(cancelledText)}.`);
   if (summaryGuidance) parts.push(summaryGuidance);
 
   return {

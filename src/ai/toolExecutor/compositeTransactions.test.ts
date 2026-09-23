@@ -2192,6 +2192,7 @@ describe('executeStopApp', () => {
     const result = await executeStopApp({ app_name: 'all' }, makeOptions({ appRegistry: makeRegistry(apps) }));
     expect(result.requiresConfirmation).toBe(true);
     expect(result.confirmationMessage).toContain('pending maintenance for "cache", "worker" until their leases close');
+    expect(result.confirmationMessage).toContain('Stopping ends these deployments; it does not recover the pending commands.');
     expect(result.confirmationMessage).not.toContain('"worker", "web"');
     expect(getLeaseProvision).not.toHaveBeenCalled();
     expect(stopApp).not.toHaveBeenCalled();

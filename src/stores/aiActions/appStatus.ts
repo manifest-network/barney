@@ -1,5 +1,6 @@
 import type { AIStore } from '../aiStore';
 import { executeTool } from '../../ai/toolExecutor';
+import { mergeMaintenanceAdvice } from '../../ai/toolExecutor/maintenanceRecoveryIntent';
 import { getToolCallDescription } from '../../ai/tools';
 import { isAbortError, withAbort } from '../../api/utils';
 import { walletIdentityMatches } from '../../utils/walletIdentity';
@@ -61,6 +62,7 @@ export async function requestAppStatusFn(get: Get, set: Set, appName: string, on
     set({ messages: get().messages.map((message) => message.id === toolMessageId ? {
       ...message,
       content: success ? JSON.stringify(result.data, bigIntReplacer, 2) : `Error: ${error}`,
+      ...(result.maintenanceRecoveryAdvice?.length && { maintenanceRecoveryAdvice: mergeMaintenanceAdvice(message.maintenanceRecoveryAdvice, result.maintenanceRecoveryAdvice) }),
       card: success ? result.displayCard : undefined,
       error,
       isStreaming: false,

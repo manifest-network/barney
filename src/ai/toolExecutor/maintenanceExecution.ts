@@ -38,7 +38,7 @@ import {
   reserveMaintenanceCompletions, type MaintenanceCompletionReservation, type MaintenanceResult,
 } from './maintenanceCompletion';
 import { settledMaintenanceRefusal } from './maintenanceRefusal';
-import { consumeMaintenanceRecoveryIntent, rememberMaintenanceRecoveryIntent } from './maintenanceRecoveryIntent';
+import { consumeMaintenanceRecoveryIntent, rememberMaintenanceRecoveryIntent, maintenanceRecoveryAdvice } from './maintenanceRecoveryIntent';
 import type { ToolExecutorOptions } from './types';
 
 function withCleanupWarning(value: MaintenanceResult, warning = MAINTENANCE_CLEANUP_MESSAGE): MaintenanceResult {
@@ -97,7 +97,7 @@ export async function executeMaintenance(
   let reservation: MaintenanceCompletionReservation | undefined;
   const observationOnly = async (detail: string): Promise<MaintenanceResult> => {
     if (command) {
-      try { await markMaintenanceRecoveryAdvised(command); } catch { /* Keep observation-only advice when storage is unavailable. */ }
+      try { await markMaintenanceRecoveryAdvised(command, options.onMaintenanceRecoveryAdvice); } catch { /* Keep observation-only advice when storage is unavailable. */ }
     }
     const guidance = `${verb} observation for "${name}": ${detail} ` +
       `Check app_status("${name}") and app_releases("${name}") to observe the current state.`;
@@ -113,7 +113,7 @@ export async function executeMaintenance(
           : 'This attempt sent no maintenance request; an earlier command may still remain pending at the provider.'} ` +
           'This browser no longer has the original pending record; another tab may have settled or superseded it.');
       }
-      await markMaintenanceRecoveryAdvised(saved);
+      await markMaintenanceRecoveryAdvised(saved, options.onMaintenanceRecoveryAdvice);
       try {
         const observed = await commitMaintenanceObservation(saved, {
           settled: false,
@@ -168,7 +168,8 @@ export async function executeMaintenance(
       } catch { cleanupFailed = true; }
       if (cleanupFailed) {
         rememberMaintenanceRecoveryIntent({ address, chainId, providerUrl, leaseUuid, operation, idempotencyKey: input.idempotencyKey! });
-        if (cleanupCommand) await markMaintenanceRecoveryAdvised(cleanupCommand);
+        if (cleanupCommand) await markMaintenanceRecoveryAdvised(cleanupCommand, options.onMaintenanceRecoveryAdvice);
+        else options.onMaintenanceRecoveryAdvice?.(maintenanceRecoveryAdvice({ address, chainId, providerUrl, leaseUuid, operation, idempotencyKey: input.idempotencyKey! }));
       }
       try { assertCurrent(); } catch {
         return { outcome: 'cancelled', result: { success: false,
@@ -340,7 +341,7 @@ export async function executeMaintenance(
     });
     assertCurrent();
     if (result) {
-      if (cleanupWarning) await markMaintenanceRecoveryAdvised(command);
+      if (cleanupWarning) await markMaintenanceRecoveryAdvised(command, options.onMaintenanceRecoveryAdvice);
       try {
         assertCurrent();
         if (projectionApplied) rememberMaintenanceCompletion(command, result, completionEpoch);
@@ -364,7 +365,7 @@ export async function executeMaintenance(
       return observationOnly(`${dispatchStarted ? 'No further maintenance request was sent.' : input.expectPending ? 'This recovery request was not sent.' : 'This maintenance request was not sent.'} ${detail.message}`);
     }
     if (error instanceof MaintenanceOperationRefusalError) {
-      if (error.command) await markMaintenanceRecoveryAdvised(error.command);
+      if (error.command) await markMaintenanceRecoveryAdvised(error.command, options.onMaintenanceRecoveryAdvice);
       onProgress({ phase: 'failed', operation, detail: error.message });
       return { outcome: 'failed', result: { success: false, error: error.message } };
     }
@@ -387,7 +388,7 @@ export async function executeMaintenance(
       } catch {
         retirementFailed = true;
       }
-      if (retirementFailed) await markMaintenanceRecoveryAdvised(command);
+      if (retirementFailed) await markMaintenanceRecoveryAdvised(command, options.onMaintenanceRecoveryAdvice);
       const safeRefusal = sanitizeForDisplay(refusal, 512);
       const detail = `${verb} failed: ${safeRefusal}${/[.!?…]$/.test(safeRefusal) ? '' : '.'}`;
       const result: MaintenanceResult = { outcome: 'failed', result: { success: false, error: detail } };

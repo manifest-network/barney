@@ -49,7 +49,7 @@ import { createMaintenanceIdempotencyKey } from '@manifest-network/manifest-sdk/
 import { getPendingMaintenanceOperation, getSettledMaintenanceOperation, markMaintenanceRecoveryAdvised, retireAbsentMaintenanceOperation } from './maintenanceOperation';
 import { executeMaintenance } from './maintenanceExecution';
 import { MAINTENANCE_ATTACHMENT_UNUSED_MESSAGE, recoverMaintenancePayload } from './maintenancePayload';
-import { getMaintenanceRecoveryIntent } from './maintenanceRecoveryIntent';
+import { getMaintenanceRecoveryIntent, maintenanceRecoveryAdvice } from './maintenanceRecoveryIntent';
 import {
   canPlanMaintenanceCompletions, captureMaintenanceCompletionEpoch, MAINTENANCE_CAPACITY_MESSAGE,
   releaseMaintenanceCompletionReservation, releaseSettledMaintenanceCompletion, reserveMaintenanceCompletions,
@@ -1398,7 +1398,7 @@ export async function executeRestartApp(
         pending = fredCompatibilityForProvider(app.providerUrl) === 'pr240'
           ? getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId)
           : undefined;
-        if (pending) await markMaintenanceRecoveryAdvised(pending);
+        if (pending) await markMaintenanceRecoveryAdvised(pending, options.onMaintenanceRecoveryAdvice);
         const settled = !pending && fredCompatibilityForProvider(app.providerUrl) === 'pr240'
           ? getSettledMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId)
           : undefined;
@@ -1408,10 +1408,14 @@ export async function executeRestartApp(
         if (pending && args.new_command === true) {
           reason = `The ${pending.operation} of "${app.name}" is unresolved. A new command cannot replace it; recover the saved command first.`;
         } else if (recoveryIntent && !settled) {
+          options.onMaintenanceRecoveryAdvice?.(maintenanceRecoveryAdvice({ address, chainId: options.authorization?.chainId,
+            providerUrl: app.providerUrl, leaseUuid: app.leaseUuid, ...recoveryIntent }));
           reason = missingMaintenancePlanningMessage(app.name);
         } else if ((settled?.recoveryAdvised || recoveryIntent) && args.new_command !== true) {
+          options.onMaintenanceRecoveryAdvice?.(maintenanceRecoveryAdvice({ address, chainId: options.authorization?.chainId,
+            providerUrl: app.providerUrl, leaseUuid: app.leaseUuid, ...(recoveryIntent ?? settled!) }));
           settledRecoverySkip = true;
-          reason = settledMaintenancePlanningMessage(app.name, settled?.operation ?? recoveryIntent!.operation);
+          reason = settledMaintenancePlanningMessage(app.name, recoveryIntent?.operation ?? settled!.operation);
         } else if (pending?.operation === 'update') {
           reason = `An update of "${app.name}" is unresolved. Recover that saved update before starting another command.`;
         } else if (app.status !== 'running' && !pending) {
@@ -1526,6 +1530,7 @@ export async function executeConfirmedRestartApp(
       clientManager,
       options.assertAuthorization,
       options.authorization,
+      options.onMaintenanceRecoveryAdvice,
     );
   }
 
@@ -1680,6 +1685,7 @@ async function executeConfirmedBatchRestart(
   clientManager: CosmosClientManager,
   assertAuthorization: ToolExecutorOptions['assertAuthorization'],
   authorization: ToolExecutorOptions['authorization'],
+  onMaintenanceRecoveryAdvice: ToolExecutorOptions['onMaintenanceRecoveryAdvice'],
 ): Promise<ToolResult> {
   const chainId = authorization?.chainId ?? runtimeConfig.PUBLIC_CHAIN_ID;
   const completionEpoch = captureMaintenanceCompletionEpoch({ address, chainId });
@@ -1721,7 +1727,7 @@ async function executeConfirmedBatchRestart(
 
         if (fredCompatibilityForProvider(entry.providerUrl) === 'pr240') {
           const execution = await executeMaintenance({ ...entry, operation: 'restart' }, {
-            address, appRegistry, signing, signal, clientManager, assertAuthorization, authorization,
+            address, appRegistry, signing, signal, clientManager, assertAuthorization, authorization, onMaintenanceRecoveryAdvice,
             tiers: [],
             onProgress: (progress) => updateProgress(progress.phase, progress.detail),
           });
@@ -1889,7 +1895,7 @@ export async function executeUpdateApp(
     ? getPendingMaintenanceOperation(address, retryApp.providerUrl, retryApp.leaseUuid, options.authorization?.chainId)
     : undefined;
   if (pending) {
-    await markMaintenanceRecoveryAdvised(pending);
+    await markMaintenanceRecoveryAdvised(pending, options.onMaintenanceRecoveryAdvice);
     if (args.new_command === true) {
       return { success: false, error: `The ${pending.operation} of "${retryApp!.name}" is unresolved. A new command cannot replace it; recover the saved command first.` };
     }
@@ -1923,10 +1929,14 @@ export async function executeUpdateApp(
   const recoveryIntent = retryApp?.providerUrl && fredCompatibilityForProvider(retryApp.providerUrl) === 'pr240'
     ? getMaintenanceRecoveryIntent({ address, providerUrl: retryApp.providerUrl, leaseUuid: retryApp.leaseUuid, chainId: options.authorization?.chainId }) : undefined;
   if (recoveryIntent && !previousOperation) {
+    options.onMaintenanceRecoveryAdvice?.(maintenanceRecoveryAdvice({ address, chainId: options.authorization?.chainId,
+      providerUrl: retryApp!.providerUrl!, leaseUuid: retryApp!.leaseUuid, ...recoveryIntent }));
     return { success: false, error: missingMaintenancePlanningMessage(retryApp!.name) };
   }
   if ((previousOperation?.recoveryAdvised || recoveryIntent) && args.new_command !== true) {
-    return { success: false, error: settledMaintenancePlanningMessage(retryApp!.name, previousOperation?.operation ?? recoveryIntent!.operation) };
+    options.onMaintenanceRecoveryAdvice?.(maintenanceRecoveryAdvice({ address, chainId: options.authorization?.chainId,
+      providerUrl: retryApp!.providerUrl!, leaseUuid: retryApp!.leaseUuid, ...(recoveryIntent ?? previousOperation!) }));
+    return { success: false, error: settledMaintenancePlanningMessage(retryApp!.name, recoveryIntent?.operation ?? previousOperation!.operation) };
   }
   let isImageUpdate = false;
 
@@ -2073,7 +2083,7 @@ export async function executeUpdateApp(
   if (fredCompatibilityForProvider(app.providerUrl) === 'pr240') {
     const current = getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId);
     if (current) {
-      await markMaintenanceRecoveryAdvised(current);
+      await markMaintenanceRecoveryAdvised(current, options.onMaintenanceRecoveryAdvice);
       return { success: false, error: `${current.operation === 'update' ? 'An update' : 'A restart'} of "${app.name}" became unresolved while planning. Recover that saved ${current.operation} before starting another command.` };
     }
     const settled = getSettledMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId);
@@ -2165,7 +2175,7 @@ export async function executeConfirmedUpdateApp(
       expectPending: plan._maintenanceRetry || plan.expectPending,
     }, { ...options, clientManager })).result;
     if (!plan._maintenanceAttachmentUnused) return result;
-    if (!result.success) return { ...result, error: `${result.error ?? ''} ${MAINTENANCE_ATTACHMENT_UNUSED_MESSAGE}`.trim() };
+    if (!result.success) return { ...result, error: `${result.error ? `${normalizeErrorPunctuation(result.error)}. ` : ''}The attached file was not used.` };
     const data = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {};
     return { success: true, data: { ...data, attachmentUnused: true,
       message: `${typeof data.message === 'string' ? data.message : ''} ${MAINTENANCE_ATTACHMENT_UNUSED_MESSAGE}`.trim() } };

@@ -85,13 +85,120 @@ describe('tab-local maintenance recovery intent', () => {
     expect(storage.length).toBe(1);
     state.consumeMaintenanceRecoveryIntent(command, secondKey);
     expect(state.getMaintenanceRecoveryIntent(command)).toBeUndefined();
-    expect(storage.length).toBe(0);
+    expect([...storage.entries.values()].map((value) => JSON.parse(value))).toEqual([{ c: [command.idempotencyKey, secondKey] }]);
+  });
+
+  it('acknowledges all observed source advice across reload without changing another tab', async () => {
+    const state = await import('./maintenanceRecoveryIntent');
+    const thirdKey = '33333333-3333-4333-8333-333333333333';
+    const commands = [command, { ...command, idempotencyKey: secondKey }, { ...command, idempotencyKey: thirdKey }];
+    const messages = commands.map((item, index) => ({ id: `advice-${index}`, role: 'tool' as const,
+      content: 'Recover the saved command.', timestamp: index, maintenanceRecoveryAdvice: [state.maintenanceRecoveryAdvice(item)] }));
+    for (const item of commands) state.rememberMaintenanceRecoveryIntent(item);
+    expect(state.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(thirdKey);
+    state.consumeMaintenanceRecoveryIntent(command, thirdKey);
+    vi.resetModules();
+    const reloaded = await import('./maintenanceRecoveryIntent');
+    reloaded.restoreMessageMaintenanceAdvice(messages, { address: command.address, chainId: command.chainId });
+    expect(reloaded.getMaintenanceRecoveryIntent(command)).toBeUndefined();
+    const nextKey = '44444444-4444-4444-8444-444444444444';
+    reloaded.rememberMaintenanceRecoveryIntent({ ...command, idempotencyKey: nextKey });
+    reloaded.consumeMaintenanceRecoveryIntent(command, thirdKey);
+    expect(reloaded.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(nextKey);
+
+    vi.stubGlobal('sessionStorage', tabStorage());
+    vi.resetModules();
+    const otherTab = await import('./maintenanceRecoveryIntent');
+    otherTab.restoreMessageMaintenanceAdvice(messages, { address: command.address, chainId: command.chainId });
+    expect(otherTab.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(command.idempotencyKey);
+    otherTab.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey);
+    vi.resetModules();
+    const otherReloaded = await import('./maintenanceRecoveryIntent');
+    otherReloaded.restoreMessageMaintenanceAdvice(messages, { address: command.address, chainId: command.chainId });
+    expect(otherReloaded.getMaintenanceRecoveryIntent(command)).toBeUndefined();
+  });
+
+  it('durably consumes observed advice at a full UTF-16 storage quota by shrinking the same entry', async () => {
+    const state = await import('./maintenanceRecoveryIntent');
+    state.rememberMaintenanceRecoveryIntent(command);
+    state.rememberMaintenanceRecoveryIntent({ ...command, idempotencyKey: secondKey });
+    const bytes = () => [...storage.entries].reduce((total, [key, value]) => total + 2 * (key.length + value.length), 0);
+    const limit = bytes();
+    storage.setItem.mockImplementation((key, value) => {
+      const next = bytes() - 2 * ((storage.entries.get(key)?.length ?? 0) + (storage.entries.has(key) ? key.length : 0)) + 2 * (key.length + value.length);
+      if (next > limit) throw new DOMException('Quota', 'QuotaExceededError');
+      storage.entries.set(key, value);
+    });
+    state.consumeMaintenanceRecoveryIntent(command, secondKey);
+    expect(bytes()).toBeLessThan(limit);
+    expect(storage.length).toBe(1);
+    vi.resetModules();
+    const reloaded = await import('./maintenanceRecoveryIntent');
+    reloaded.rememberMaintenanceRecoveryIntent(command);
+    reloaded.rememberMaintenanceRecoveryIntent({ ...command, idempotencyKey: secondKey });
+    expect(reloaded.getMaintenanceRecoveryIntent(command)).toBeUndefined();
+  });
+
+  it('does not overwrite unknown stored evidence when a remembered guard can only be read from memory', async () => {
+    const state = await import('./maintenanceRecoveryIntent');
+    state.rememberMaintenanceRecoveryIntent(command);
+    const before = [...storage.entries];
+    storage.setItem.mockClear();
+    storage.getItem.mockImplementation(() => { throw new Error('Storage unavailable'); });
+    state.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey);
+    state.rememberMaintenanceRecoveryIntent(command, true);
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect([...storage.entries]).toEqual(before);
+    expect(state.getMaintenanceRecoveryIntent(command)).toEqual(intent);
+  });
+
+  it('does not overwrite a session entry with an unknown evidence field', async () => {
+    const state = await import('./maintenanceRecoveryIntent');
+    state.rememberMaintenanceRecoveryIntent(command);
+    const key = storage.key(0)!;
+    const raw = JSON.stringify({ c: [command.idempotencyKey], unknownActive: secondKey });
+    storage.setItem(key, raw);
+    expect(() => state.getMaintenanceRecoveryIntent(command)).toThrow('unreadable');
+    state.rememberMaintenanceRecoveryIntent({ ...command, idempotencyKey: secondKey });
+    expect(storage.entries.get(key)).toBe(raw);
+  });
+
+  it.each(['c', 'h'])('fails closed on malformed %s identity lists', async (field) => {
+    const state = await import('./maintenanceRecoveryIntent');
+    state.rememberMaintenanceRecoveryIntent(command);
+    const key = storage.key(0)!;
+    storage.setItem(key, JSON.stringify({ ...intent, [field]: ['not-a-uuid'] }));
+    expect(() => state.getMaintenanceRecoveryIntent(command)).toThrow('unreadable');
+    expect(() => state.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey)).toThrow('unreadable');
+    expect(JSON.parse(storage.entries.get(key)!)[field]).toEqual(['not-a-uuid']);
+  });
+
+  it.each([false, true])('promotes late actionable advice when the active command was never sent (write fails=%s)', async (writeFails) => {
+    const state = await import('./maintenanceRecoveryIntent');
+    const unsent = { ...command, idempotencyKey: secondKey };
+    state.rememberMaintenanceRecoveryIntent(unsent);
+    state.rememberMaintenanceRecoveryIntent({ ...command, operation: 'update' }, true);
+    expect(state.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(secondKey);
+    const prior = [...storage.entries];
+    if (writeFails) storage.setItem.mockImplementation(() => { throw new DOMException('Quota', 'QuotaExceededError'); });
+    state.retireUnsentMaintenanceRecoveryIntent(unsent, secondKey);
+    expect(state.getMaintenanceRecoveryIntent(command)).toEqual({ operation: 'update', idempotencyKey: command.idempotencyKey });
+    if (writeFails) expect([...storage.entries]).toEqual(prior);
+    storage.setItem.mockImplementation((key, value) => { storage.entries.set(key, value); });
+    vi.resetModules();
+    const reloaded = await import('./maintenanceRecoveryIntent');
+    reloaded.syncMaintenanceNeverSentProofs(command, [secondKey]);
+    expect(reloaded.getMaintenanceRecoveryIntent(command)).toEqual({ operation: 'update', idempotencyKey: command.idempotencyKey });
+    reloaded.consumeMaintenanceRecoveryIntent(command, secondKey);
+    expect(reloaded.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(command.idempotencyKey);
+    reloaded.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey);
+    expect(reloaded.getMaintenanceRecoveryIntent(command)).toBeUndefined();
   });
 
   it('retains the barrier if consuming its stored entry fails', async () => {
     const state = await import('./maintenanceRecoveryIntent');
     state.rememberMaintenanceRecoveryIntent(command);
-    storage.removeItem.mockImplementation(() => { throw new Error('Storage unavailable'); });
+    storage.setItem.mockImplementation(() => { throw new Error('Storage unavailable'); });
     state.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey);
     expect(state.getMaintenanceRecoveryIntent(command)).toEqual(intent);
     expect(storage.length).toBe(1);
@@ -149,8 +256,7 @@ describe('tab-local maintenance recovery intent', () => {
     fresh.retireUnsentMaintenanceRecoveryIntent(command, secondKey);
     const nextKey = '33333333-3333-4333-8333-333333333333';
     fresh.rememberMaintenanceRecoveryIntent({ ...command, idempotencyKey: nextKey }, true);
-    const rows = fresh.retainMessageMaintenanceAdvice([{ id: 'next-advice', role: 'tool', content: 'Recover the saved command.', timestamp: 1 }], command);
-    expect(rows[0].maintenanceRecoveryAdvice?.[0].idempotencyKey).toBe(nextKey);
+    expect(fresh.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(nextKey);
     fresh.retireUnsentMaintenanceRecoveryIntent(command, nextKey);
     expect(() => fresh.getMaintenanceRecoveryIntent(command)).toThrow('could not be read');
     expect(storage.setItem).toHaveBeenCalledOnce();
@@ -185,6 +291,6 @@ describe('tab-local maintenance recovery intent', () => {
     state.consumeMaintenanceRecoveryIntent({ ...command, address: ' MANIFEST1ALICE ', providerUrl: `${command.providerUrl}/` }, command.idempotencyKey);
     expect(state.getMaintenanceRecoveryIntent(command)).toBeUndefined();
     for (const scope of others) expect(state.getMaintenanceRecoveryIntent(scope)).toEqual(intent);
-    expect(storage.length).toBe(others.length);
+    expect(storage.length).toBe(others.length + 1); // This tab's consumed UUID stays durable.
   });
 });

@@ -31,6 +31,8 @@ import { logError } from '../utils/errors';
 import { createAIStore } from '../stores/aiStore';
 import { createWalletIdentity } from '../utils/walletIdentity';
 import { AI_TOOL_API_TIMEOUT_MS } from '../config/constants';
+import { runtimeConfig } from '../config/runtimeConfig';
+import { getOrCreateMaintenanceOperation, retireAbsentMaintenanceOperation } from '../ai/toolExecutor/maintenanceOperation';
 
 const ADDRESS = 'manifest1tenant';
 const LEASE_UUID = '550e8400-e29b-41d4-a716-446655440000';
@@ -130,6 +132,28 @@ describe('sidebar selection → app_status → rendered conversation', () => {
     });
     expect(store.getState().messages[0].content).toBe("What's the status of my-app?");
   }
+
+  it('keeps sidebar recovery advice on its status tool result only', async () => {
+    const providerUrl = 'https://s049-u002.manifest0.net/api/fred';
+    const scope = { address: ADDRESS, providerUrl, leaseUuid: LEASE_UUID };
+    const command = await getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1] });
+    store.setState({ chainId: runtimeConfig.PUBLIC_CHAIN_ID, historyIdentity: createWalletIdentity(runtimeConfig.PUBLIC_CHAIN_ID, ADDRESS),
+      messages: [{ id: 'older', role: 'assistant', content: 'Earlier unrelated message.', timestamp: 1 }] });
+    try {
+      await renderApp({ providerUrl });
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('.apps-sidebar__app-item')!.click();
+        await vi.waitFor(() => expect(store.getState().isStreaming).toBe(false));
+      });
+      const carriers = store.getState().messages.filter((message) => message.maintenanceRecoveryAdvice?.length);
+      expect(carriers).toHaveLength(1);
+      expect(carriers[0]).toMatchObject({ role: 'tool', toolName: 'app_status', maintenanceRecoveryAdvice: [
+        expect.objectContaining({ idempotencyKey: command.idempotencyKey, leaseUuid: LEASE_UUID }),
+      ] });
+      expect(store.getState().messages.find((message) => message.id === 'older')?.maintenanceRecoveryAdvice).toBeUndefined();
+      expect(carriers[0].content).not.toContain('maintenanceRecoveryAdvice');
+    } finally { await retireAbsentMaintenanceOperation(scope); }
+  });
 
   function overview() {
     const card = container.querySelector<HTMLElement>('[aria-label="App: my-app"]');

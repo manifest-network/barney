@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppEntry } from '../../registry/appRegistry';
-import { executeConfirmedRestartApp, executeRestartApp } from './compositeTransactions';
+import { executeConfirmedRestartApp, executeRestartApp, executeUpdateApp } from './compositeTransactions';
+import { rememberMaintenanceRecoveryIntent, retireMaintenanceRecoveryIntent } from './maintenanceRecoveryIntent';
 import { executeMaintenance } from './maintenanceExecution';
 import { getPendingMaintenanceOperation, getSettledMaintenanceOperation, type MaintenanceOperation } from './maintenanceOperation';
 import { canPlanMaintenanceCompletions, captureMaintenanceCompletionEpoch, clearCompletedMaintenance, MAX_COMPLETED_MAINTENANCE, rememberMaintenanceCompletion } from './maintenanceCompletion';
@@ -48,6 +49,19 @@ function fillCompletions(count: number) {
 }
 
 describe('restart selection and saved operations', () => {
+  it('names the advised update when another tab has since completed a restart', async () => {
+    const current = app('prior-update', 98);
+    const scope = { address, providerUrl, leaseUuid: current.leaseUuid, chainId: runtimeConfig.PUBLIC_CHAIN_ID };
+    rememberMaintenanceRecoveryIntent({ ...scope, operation: 'update', idempotencyKey: updateKey });
+    vi.mocked(getSettledMaintenanceOperation).mockReturnValue({ ...pending('restart'), ...scope, outcome: 'succeeded', recoveryAdvised: false });
+    try {
+      for (const execute of [executeRestartApp, executeUpdateApp]) {
+        const result = await execute({ app_name: current.name }, options([current]));
+        expect(result.error).toContain('The previous update of "prior-update" has already settled.');
+      }
+    } finally { retireMaintenanceRecoveryIntent(scope); }
+  });
+
   it('does not turn retry advice into a new command after another tab settles the prior command', async () => {
     vi.mocked(getSettledMaintenanceOperation).mockReturnValue({ ...pending('restart'), outcome: 'succeeded', recoveryAdvised: true });
     for (let attempt = 0; attempt < 2; attempt++) {

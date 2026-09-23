@@ -3,6 +3,7 @@ import type { ToolCall } from '../../api/morpheus';
 import type { AIStore } from '../aiStore';
 import type { ChatMessage } from '../../contexts/aiTypes';
 import type { ToolResult } from '../../ai/toolExecutor';
+import { runtimeConfig } from '../../config/runtimeConfig';
 
 // --- Mocks ---
 
@@ -178,6 +179,29 @@ describe('processToolCallsFn', () => {
     const toolMsg = state.messages.find(m => m.role === 'tool');
     expect(toolMsg).toBeDefined();
     expect(toolMsg!.isStreaming).toBe(false);
+  });
+
+  it.each(['plain', 'card', 'error', 'confirmation', 'cached'] as const)('attaches %s recovery advice only to its issuing tool row', async (mode) => {
+    const advice = [{ operation: 'restart' as const, idempotencyKey: '11111111-1111-4111-8111-111111111111',
+      address: state.address!, chainId: state.chainId!, providerUrl: 'https://provider.example', leaseUuid: '550e8400-e29b-41d4-a716-446655440000',
+      rpcUrl: runtimeConfig.PUBLIC_RPC_URL, restUrl: runtimeConfig.PUBLIC_REST_URL }];
+    const result: ToolResult = mode === 'error'
+      ? { success: false, error: 'Recover the pending restart.', maintenanceRecoveryAdvice: advice }
+      : mode === 'confirmation'
+        ? { success: true, requiresConfirmation: true, confirmationMessage: 'Recover the pending restart?',
+          pendingAction: { toolName: 'restart_app', args: { app_name: 'web' } }, maintenanceRecoveryAdvice: advice }
+        : { success: true, data: { message: 'Recover the pending restart.' }, maintenanceRecoveryAdvice: advice,
+          ...(mode === 'card' || mode === 'cached' ? { displayCard: { type: 'app' as const, data: { name: 'web', status: 'running' as const } } } : {}) };
+    const toolCall = makeToolCall({ function: { name: mode === 'confirmation' ? 'restart_app' : 'app_status', arguments: { app_name: 'web' } } });
+    state.messages = [makeMessage({ id: 'older', content: 'Unrelated old text' }), makeMessage({ id: 'asst_1', isStreaming: true })];
+    if (mode === 'cached') state._toolCache.set(get().getToolCacheKey('app_status', toolCall.function.arguments), { result, timestamp: Date.now() });
+    else vi.mocked(executeTool).mockResolvedValueOnce(result);
+    await processToolCallsFn(get, set, [toolCall], 'asst_1', { content: '', thinking: '', toolCalls: [toolCall] });
+    const carriers = state.messages.filter((message) => message.maintenanceRecoveryAdvice?.length);
+    expect(carriers).toHaveLength(1);
+    expect(carriers[0]).toMatchObject({ role: 'tool', toolCallId: toolCall.id, maintenanceRecoveryAdvice: advice });
+    expect(carriers[0].content).not.toContain(advice[0].idempotencyKey);
+    expect(state.messages.find((message) => message.id === 'older')?.maintenanceRecoveryAdvice).toBeUndefined();
   });
 
   it('cancels collected confirmations and unstarted calls when a later query aborts', async () => {

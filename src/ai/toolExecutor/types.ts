@@ -193,7 +193,10 @@ interface ToolResultConfirmation {
  * - Failure: { success: false, error: '...' }
  * - Requires confirmation: { success: true, requiresConfirmation: true, ... }
  */
-export type ToolResult = ToolResultSuccess | ToolResultFailure | ToolResultConfirmation;
+export type ToolResult = (ToolResultSuccess | ToolResultFailure | ToolResultConfirmation) & {
+  /** Internal source-row correlation; excluded from model-facing result data. */
+  maintenanceRecoveryAdvice?: import('./maintenanceRecoveryIntent').MaintenanceRecoveryAdvice[];
+};
 
 export interface AppRegistryAccess {
   discoverAppsFromChain: typeof import('../../registry/appRegistry').discoverAppsFromChain;
@@ -211,6 +214,8 @@ export interface ToolExecutorOptions {
   /** Root-built signing capability (auth-token factory + shared sign lock). */
   signing?: SigningContext;
   onProgress?: (progress: DeployProgress) => void;
+  /** Collector owned by this exact tool invocation, never a background query. */
+  onMaintenanceRecoveryAdvice?: (advice: import('./maintenanceRecoveryIntent').MaintenanceRecoveryAdvice) => void;
   appRegistry?: AppRegistryAccess;
   signal?: AbortSignal;
   /** Resolved SKU tier list from the AI store. An empty array means

@@ -132,6 +132,41 @@ describe('maintenance batch uncertainty', () => {
     expect(result.error).toBe('No restarts completed — Failed: blocked: release v7 is deploying. Cancelled: cancelled.');
   });
 
+  it.each([false, true])('includes a cancelled replay verdict in the tool result (partial success: %s)', async (partialSuccess) => {
+    const detail = 'Replay cancelled before any new request. The earlier restart remains verified as succeeded.';
+    const batch = await runBatchWithConcurrency({
+      entries: [{ name: 'cached' }, ...(partialSuccess ? [{ name: 'fresh' }] : [])],
+      initialPhase: 'restarting', intermediatePhases: ['restarting'], operation: 'restart',
+      executeOne: async ({ name }, _index, progress) => {
+        if (name === 'cached') return { name, outcome: 'cancelled', detail };
+        progress('ready');
+        return { name };
+      },
+    });
+    const result = summarizeBatchResult({ ...batch, operation: 'restart', dataKey: 'restarted', verb: 'Restarted', failedNoun: 'restarts' });
+    const text = result.error ?? (result.data as { message: string }).message;
+    expect(text).toContain(`Cancelled: cached: ${detail}`);
+    expect(text).not.toContain('succeeded..');
+    expect(JSON.stringify(result).split(detail)).toHaveLength(2);
+  });
+
+  it('budgets cancelled diagnostics once and keeps ordinary cancellation text', () => {
+    const cancelled = Array.from({ length: 100 }, (_, index) => `cancelled-${index}`);
+    const detail = 'The previous outcome remains verified. ' + 'Diagnostic "detail" \\ 💥 '.repeat(100);
+    const options = { succeeded: [], failed: [], cancelled,
+      batchProgress: cancelled.map((name) => ({ name, phase: 'failed' as const, detail })),
+      operation: 'restart' as const, dataKey: 'restarted', verb: 'Restarted', failedNoun: 'restarts' };
+    const result = summarizeBatchResult(options);
+    const without = summarizeBatchResult({ ...options, batchProgress: cancelled.map((name) => ({ name, phase: 'failed' as const })) });
+    for (const indentation of [undefined, 2]) {
+      expect(JSON.stringify(result, null, indentation).length - JSON.stringify(without, null, indentation).length).toBeLessThanOrEqual(AI_BATCH_DIAGNOSTIC_CHARS);
+    }
+    expect(result.error).toContain('cancelled-0: The previous outcome remains verified.');
+    const ordinary = summarizeBatchResult({ ...options, cancelled: ['app'],
+      batchProgress: [{ name: 'app', phase: 'failed', detail: 'Cancelled (batch aborted)' }] });
+    expect(ordinary.error).toBe('No restarts completed — Cancelled: app: Cancelled (batch aborted).');
+  });
+
   it('finishes a cancelled row even when the per-item executor emitted only active progress', async () => {
     const onProgress = vi.fn();
     const batch = await runBatchWithConcurrency({

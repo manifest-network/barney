@@ -13,18 +13,24 @@ export interface DeployFailureDiagnostic {
   omittedServices?: number;
 }
 
-/** Scan trailing noise in small windows, then normalize only a bounded tail.
+/** Scan trailing noise once from the end, then normalize only a bounded tail.
  * Long whitespace/control suffixes cannot hide the last useful log line. */
 export function logPreviewTail(raw: string, maxChars: number): string {
   if (maxChars <= 0) return '';
   let end = raw.length;
   while (end > 0) {
-    let start = Math.max(0, end - 4096);
-    if (start > 0 && /[\uDC00-\uDFFF]/u.test(raw[start])) start -= 1;
-    const suffix = raw.slice(start, end).match(/[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u);
-    if (!suffix) break;
-    end = start + suffix.index!;
-    if (suffix.index! > 0) break;
+    const last = raw.charCodeAt(end - 1);
+    // Fast path for ASCII whitespace, C0 and C1 controls. The Unicode test
+    // below sees one code point only, so it cannot backtrack over a log body.
+    if (last <= 0x20 || (last >= 0x7f && last <= 0x9f)) { end -= 1; continue; }
+    if (last < 0x7f) break;
+    let start = end - 1;
+    if (last >= 0xdc00 && last <= 0xdfff && start > 0) {
+      const prior = raw.charCodeAt(start - 1);
+      if (prior >= 0xd800 && prior <= 0xdbff) start -= 1;
+    }
+    if (!/^[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]$/u.test(raw.slice(start, end))) break;
+    end = start;
   }
   if (end === 0) return '';
   const start = Math.max(0, end - 2 * maxChars);
@@ -97,24 +103,34 @@ export function renderDeployDiagnostic(diagnostic: DeployFailureDiagnostic, budg
   const logs = diagnostic.logs.map((entry) => ({ ...entry,
     text: serialized ? sanitizeForDisplay(entry.text, AI_DEPLOY_LOG_PREVIEW_CHARS, '') : entry.text,
   }));
-  const minimumLogs = logs.reduce((total, entry) => total + measure(`[${entry.service}]${lineBreak}`) + Math.min(48, measure(entry.text)), 0);
-  const compact = measure(full) + minimumLogs > limit;
+  // Service count must not displace the provider verdict or curated next step.
+  // Only a genuinely smaller aggregate-summary budget needs the compact form.
+  const compact = measure(full) > limit;
+  const compactFailure = diagnostic.failure
+    ? `Provision error (fail_count=${diagnostic.failCount}): ${fit(diagnostic.failure, Math.min(96, Math.floor(limit / 4)))}`
+    : fit(diagnostic.lead, Math.min(96, Math.floor(limit / 4)));
   const prefix = compact && logs.length > 0
-    ? ['Deployment failed.', fit(diagnostic.failure ?? diagnostic.lead, Math.min(96, Math.floor(limit / 4))), lookup].filter(Boolean).join(separator)
+    ? ['Deployment failed.', compactFailure, lookup].filter(Boolean).join(separator)
     : full;
   if (logs.length === 0 || measure(prefix) >= limit) return fit(prefix, limit);
-  let remaining = limit - measure(prefix) - measure(lineBreak);
+  const remaining = limit - measure(prefix) - measure(lineBreak);
   const headers = logs.map((entry) => `[${entry.service}]${lineBreak}`);
-  const selected: typeof logs = [];
+  const omissionFor = (selected: number) => {
+    const omitted = (diagnostic.omittedServices ?? 0) + logs.length - selected;
+    return omitted > 0 ? `${selected > 0 ? lineBreak : ''}(${omitted} more services; use get_logs.)` : '';
+  };
+  let selectedCount = 0;
+  let minimumCost = 0;
   for (let index = 0; index < logs.length; index += 1) {
-    if (remaining < measure(headers[index]) + 8) break;
-    selected.push(logs[index]);
-    remaining -= measure(headers[index]) + (selected.length > 1 ? measure(lineBreak) : 0);
+    minimumCost += measure(headers[index]) + (index > 0 ? measure(lineBreak) : 0)
+      + Math.min(48, measure(logs[index].text || '(no visible log output)'));
+    if (minimumCost + measure(omissionFor(index + 1)) <= remaining) selectedCount = index + 1;
   }
-  const omitted = (diagnostic.omittedServices ?? 0) + logs.length - selected.length;
-  const omission = omitted > 0 ? `${lineBreak}(${omitted} more services; use get_logs.)` : '';
-  remaining = Math.max(0, remaining - measure(omission));
-  const shares = allocateDiagnosticBudgets(selected.map((entry) => ({ size: measure(entry.text || '(no visible log output)'), copies: 1 })), remaining);
+  const selected = logs.slice(0, selectedCount);
+  const omission = omissionFor(selectedCount);
+  const headerCost = selected.reduce((total, _entry, index) => total + measure(headers[index]) + (index > 0 ? measure(lineBreak) : 0), 0);
+  const tailBudget = Math.max(0, remaining - measure(omission) - headerCost);
+  const shares = allocateDiagnosticBudgets(selected.map((entry) => ({ size: measure(entry.text || '(no visible log output)'), copies: 1 })), tailBudget);
   const excerpts = selected.map((entry, index) => `${headers[index]}${fit(entry.text || '(no visible log output)', shares[index], true)}`);
   return fit(`${prefix}${lineBreak}${excerpts.join(lineBreak)}${omission}`, limit);
 }

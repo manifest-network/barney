@@ -1,8 +1,9 @@
 import { createMaintenanceIdempotencyKey, metaHashHex } from '@manifest-network/manifest-sdk/deploy';
 import { runtimeConfig } from '../../config/runtimeConfig';
+import { MAINTENANCE_NEVER_SENT_PROOF_LIMIT } from '../../config/constants';
 import { logError } from '../../utils/errors';
 import { releaseAbsentMaintenanceCompletions } from './maintenanceCompletion';
-import { getMaintenanceRecoveryIntent, rememberMaintenanceRecoveryIntent, retireMaintenanceRecoveryIntent, retireUnsentMaintenanceRecoveryIntent } from './maintenanceRecoveryIntent';
+import { getMaintenanceRecoveryIntent, maintenanceRecoveryAdvice, rememberMaintenanceRecoveryIntent, retireMaintenanceRecoveryIntent, syncMaintenanceNeverSentProofs, type MaintenanceRecoveryAdvice } from './maintenanceRecoveryIntent';
 
 type MaintenanceKind = 'restart' | 'update';
 
@@ -29,6 +30,8 @@ export interface MaintenanceOperation extends MaintenanceScope {
   readonly recoveryAdvised?: boolean;
   /** Restore only this compact receipt if a successor is cancelled before HTTP. */
   readonly previousSettlement?: SettledMetadata;
+  /** Bounded exact proof for advised commands that never reached HTTP. */
+  readonly neverSentKeys?: readonly string[];
 }
 
 interface MaintenanceMetadata {
@@ -41,6 +44,7 @@ interface MaintenanceMetadata {
   readonly accepted?: boolean;
   readonly recoveryAdvised?: boolean;
   readonly previousSettlement?: SettledMetadata;
+  readonly neverSentKeys?: readonly string[];
 }
 
 interface MaintenanceInput extends Omit<MaintenanceScope, 'chainId'> {
@@ -68,6 +72,7 @@ interface SettledMetadata extends Pick<MaintenanceMetadata, 'v' | 'operation' | 
   readonly settled: SettledMaintenanceOperation['outcome'];
   /** Compact so even a minimum legacy pending marker shrinks on settlement. */
   readonly r?: 1;
+  readonly neverSentKeys?: readonly string[];
 }
 
 /** A local conflict or stale recovery plan must never be reported as a sent command. */
@@ -134,6 +139,31 @@ function readRaw(key: string): string | null {
   }
 }
 
+function parseNeverSentKeys(value: unknown): readonly string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAINTENANCE_NEVER_SENT_PROOF_LIMIT
+    || value.some((key) => typeof key !== 'string' || !UUID_V4.test(key))
+    || new Set(value).size !== value.length) throw new Error('Invalid never-sent proof.');
+  return Object.freeze([...value]);
+}
+
+function recordNeverSentKeys(value: unknown): readonly string[] {
+  if (!value || typeof value !== 'object') return [];
+  const keys = parseNeverSentKeys('neverSentKeys' in value ? value.neverSentKeys : undefined);
+  if ('settled' in value && value.settled === 'not_sent') {
+    // Adopt older builds' single tombstone without losing its proof when the
+    // next command replaces that receipt.
+    const legacy = parseSettled(value);
+    return [...new Set([...keys, legacy.idempotencyKey])].slice(-MAINTENANCE_NEVER_SENT_PROOF_LIMIT);
+  }
+  return keys;
+}
+
+function isProofOnly(value: object): boolean {
+  return 'v' in value && value.v === 1 && 'neverSentKeys' in value
+    && Object.keys(value).every((key) => key === 'v' || key === 'neverSentKeys');
+}
+
 function parseSettled(value: unknown): SettledMetadata {
   if (!value || typeof value !== 'object') throw new Error();
   const record = value as Partial<SettledMetadata>;
@@ -142,8 +172,11 @@ function parseSettled(value: unknown): SettledMetadata {
     || typeof record.payloadHash !== 'string' || !SHA_256.test(record.payloadHash)
     || !['succeeded', 'failed', 'settled', 'not_sent'].includes(record.settled ?? '')
     || (record.r !== undefined && record.r !== 1)) throw new Error();
+  const neverSentKeys = parseNeverSentKeys(record.neverSentKeys);
+  if (record.settled !== 'not_sent' && neverSentKeys.includes(record.idempotencyKey)) throw new Error();
   return { v: 1, operation: record.operation, idempotencyKey: record.idempotencyKey,
-    payloadHash: record.payloadHash, settled: record.settled!, ...(record.r === 1 && { r: 1 as const }) };
+    payloadHash: record.payloadHash, settled: record.settled!, ...(record.r === 1 && { r: 1 as const }),
+    ...(record.neverSentKeys !== undefined && { neverSentKeys }) };
 }
 
 /** One nonsecret receipt per lease prevents old recovery advice from becoming
@@ -159,6 +192,8 @@ export function getSettledMaintenanceOperation(
   const legacy = readRaw(settledStorageKey(scope));
   try {
     const currentValue: unknown = current === null ? undefined : JSON.parse(current);
+    if (currentValue !== undefined) parseMaintenanceMetadata(currentValue);
+    syncMaintenanceNeverSentProofs(scope, recordNeverSentKeys(currentValue));
     let value: SettledMetadata;
     if (currentValue && typeof currentValue === 'object' && 'settled' in currentValue) {
       value = parseSettled(currentValue);
@@ -169,7 +204,7 @@ export function getSettledMaintenanceOperation(
       const prior = JSON.parse(legacy) as Partial<SettledMaintenanceOperation> & { v?: number };
       value = parseSettled({ ...prior, settled: prior.outcome, r: 1 });
     }
-    if (value.settled === 'not_sent') retireUnsentMaintenanceRecoveryIntent(scope, value.idempotencyKey);
+    if (value.settled === 'not_sent') syncMaintenanceNeverSentProofs(scope, [...recordNeverSentKeys(currentValue), value.idempotencyKey]);
     return Object.freeze({ ...scope, operation: value.operation, idempotencyKey: value.idempotencyKey,
       payloadHash: value.payloadHash, outcome: value.settled, recoveryAdvised: value.r === 1 });
   } catch {
@@ -191,12 +226,13 @@ export function assertNewMaintenanceOperation(input: Omit<MaintenanceInput, 'ope
   }
 }
 
-function settledMetadataFor(record: Pick<MaintenanceOperation, 'operation' | 'idempotencyKey' | 'payloadHash' | 'recoveryAdvised'>, outcome: SettledMaintenanceOperation['outcome']): SettledMetadata {
+function settledMetadataFor(record: Pick<MaintenanceOperation, 'operation' | 'idempotencyKey' | 'payloadHash' | 'recoveryAdvised' | 'neverSentKeys'>, outcome: SettledMaintenanceOperation['outcome']): SettledMetadata {
   return { v: 1, operation: record.operation, idempotencyKey: record.idempotencyKey,
-    payloadHash: record.payloadHash, settled: outcome, ...(record.recoveryAdvised && { r: 1 }) };
+    payloadHash: record.payloadHash, settled: outcome, ...(record.recoveryAdvised && { r: 1 }),
+    ...(record.neverSentKeys?.length && { neverSentKeys: record.neverSentKeys }) };
 }
 
-function persistSettled(record: Pick<MaintenanceOperation, 'operation' | 'idempotencyKey' | 'payloadHash' | 'recoveryAdvised'> & MaintenanceScope, outcome: SettledMaintenanceOperation['outcome']): void {
+function persistSettled(record: Pick<MaintenanceOperation, 'operation' | 'idempotencyKey' | 'payloadHash' | 'recoveryAdvised' | 'neverSentKeys'> & MaintenanceScope, outcome: SettledMaintenanceOperation['outcome']): void {
   try {
     localStorage.setItem(storageKey(record), JSON.stringify(settledMetadataFor(record, outcome)));
   } catch {
@@ -217,6 +253,7 @@ function metadataFor(record: MaintenanceOperation): MaintenanceMetadata {
     ...(record.accepted !== undefined && { accepted: record.accepted }),
     ...(record.recoveryAdvised !== undefined && { recoveryAdvised: record.recoveryAdvised }),
     ...(record.previousSettlement !== undefined && { previousSettlement: record.previousSettlement }),
+    ...(record.neverSentKeys?.length && { neverSentKeys: record.neverSentKeys }),
   };
 }
 
@@ -224,39 +261,49 @@ function storageError(): Error {
   return new MaintenanceStorageError('Barney cannot safely read or save this maintenance operation. Restore browser storage access before retrying; do not submit a new command.');
 }
 
-function readMetadata(key: string): MaintenanceMetadata | undefined {
+function parseMaintenanceMetadata(value: unknown): MaintenanceMetadata | undefined {
+  if (typeof value !== 'object' || value === null) throw new Error();
+  const neverSentKeys = recordNeverSentKeys(value);
+  if (isProofOnly(value)) return undefined;
+  if ('settled' in value) {
+    parseSettled(value);
+    return undefined;
+  }
+  const metadata = value as Partial<MaintenanceMetadata>;
+  if (metadata.v !== 1
+    || (metadata.operation !== 'restart' && metadata.operation !== 'update')
+    || typeof metadata.idempotencyKey !== 'string' || !UUID_V4.test(metadata.idempotencyKey)
+    || typeof metadata.payloadHash !== 'string' || !SHA_256.test(metadata.payloadHash)
+    || (metadata.dispatched !== undefined && typeof metadata.dispatched !== 'boolean')
+    || (metadata.accepted !== undefined && typeof metadata.accepted !== 'boolean')
+    || (metadata.recoveryAdvised !== undefined && typeof metadata.recoveryAdvised !== 'boolean')
+    || !Array.isArray(metadata.baselineReleaseVersions)
+    || !metadata.baselineReleaseVersions.every((version: unknown) => typeof version === 'number' && Number.isSafeInteger(version) && version >= 0)) throw new Error();
+  if (neverSentKeys.includes(metadata.idempotencyKey)) throw new Error();
+  return {
+    v: 1,
+    operation: metadata.operation,
+    idempotencyKey: metadata.idempotencyKey,
+    payloadHash: metadata.payloadHash,
+    baselineReleaseVersions: Object.freeze([...metadata.baselineReleaseVersions]),
+    ...(metadata.dispatched !== undefined && { dispatched: metadata.dispatched }),
+    ...(metadata.accepted !== undefined && { accepted: metadata.accepted }),
+    // Earlier versions issued retry advice without tracking it. Only a
+    // fresh record's explicit false proves that no such advice was emitted.
+    recoveryAdvised: metadata.recoveryAdvised ?? true,
+    ...(metadata.previousSettlement !== undefined && { previousSettlement: Object.freeze(parseSettled(metadata.previousSettlement)) }),
+    ...(neverSentKeys.length && { neverSentKeys }),
+  };
+}
+
+function readMetadata(key: string, onProofs?: (keys: readonly string[]) => void): MaintenanceMetadata | undefined {
   const raw = readRaw(key);
-  if (raw === null) return undefined;
+  if (raw === null) { onProofs?.([]); return undefined; }
   try {
     const value: unknown = JSON.parse(raw);
-    if (typeof value !== 'object' || value === null) throw new Error();
-    if ('settled' in value) {
-      parseSettled(value);
-      return undefined;
-    }
-    const metadata = value as Partial<MaintenanceMetadata>;
-    if (metadata.v !== 1
-      || (metadata.operation !== 'restart' && metadata.operation !== 'update')
-      || typeof metadata.idempotencyKey !== 'string' || !UUID_V4.test(metadata.idempotencyKey)
-      || typeof metadata.payloadHash !== 'string' || !SHA_256.test(metadata.payloadHash)
-      || (metadata.dispatched !== undefined && typeof metadata.dispatched !== 'boolean')
-      || (metadata.accepted !== undefined && typeof metadata.accepted !== 'boolean')
-      || (metadata.recoveryAdvised !== undefined && typeof metadata.recoveryAdvised !== 'boolean')
-      || !Array.isArray(metadata.baselineReleaseVersions)
-      || !metadata.baselineReleaseVersions.every((version: unknown) => typeof version === 'number' && Number.isSafeInteger(version) && version >= 0)) throw new Error();
-    return {
-      v: 1,
-      operation: metadata.operation,
-      idempotencyKey: metadata.idempotencyKey,
-      payloadHash: metadata.payloadHash,
-      baselineReleaseVersions: Object.freeze([...metadata.baselineReleaseVersions]),
-      ...(metadata.dispatched !== undefined && { dispatched: metadata.dispatched }),
-      ...(metadata.accepted !== undefined && { accepted: metadata.accepted }),
-      // Earlier versions issued retry advice without tracking it. Only a
-      // fresh record's explicit false proves that no such advice was emitted.
-      recoveryAdvised: metadata.recoveryAdvised ?? true,
-      ...(metadata.previousSettlement !== undefined && { previousSettlement: Object.freeze(parseSettled(metadata.previousSettlement)) }),
-    };
+    const metadata = parseMaintenanceMetadata(value);
+    onProofs?.(recordNeverSentKeys(value));
+    return metadata;
   } catch {
     throw new Error('The saved maintenance operation is unreadable. Reconcile the existing operation before submitting another command.');
   }
@@ -286,7 +333,7 @@ export function getPendingMaintenanceOperation(
 ): MaintenanceOperation | undefined {
   const scope = scopeFor({ address, providerUrl, leaseUuid, chainId });
   const key = storageKey(scope);
-  const metadata = readMetadata(key);
+  const metadata = readMetadata(key, (keys) => syncMaintenanceNeverSentProofs(scope, keys));
   const retained = pending.get(key);
   if (!metadata) {
     pending.delete(key);
@@ -372,10 +419,15 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
     }
     const retained = current;
     const priorReceipt = retained ? undefined : getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid, scope.chainId);
+    const idempotencyKey = retained?.idempotencyKey ?? input.idempotencyKey ?? createMaintenanceIdempotencyKey();
+    // A never-sent confirmation may itself be retried. Revoke only that proof
+    // atomically with preparing its key again, before it can reach HTTP.
+    const neverSentKeys = (retained?.neverSentKeys ?? recordNeverSentKeys(JSON.parse(readRaw(key) ?? 'null')))
+      .filter((key) => key !== idempotencyKey);
     const record: MaintenanceOperation = Object.freeze({
       ...scope,
       operation: input.operation,
-      idempotencyKey: retained?.idempotencyKey ?? input.idempotencyKey ?? createMaintenanceIdempotencyKey(),
+      idempotencyKey,
       payloadHash,
       baselineReleaseVersions: retained?.baselineReleaseVersions ?? Object.freeze([...input.baselineReleaseVersions!]),
       manifest,
@@ -384,9 +436,11 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
       accepted: retained?.accepted,
       recoveryAdvised: retained?.recoveryAdvised ?? false,
       previousSettlement: retained?.previousSettlement ?? (priorReceipt ? settledMetadataFor(priorReceipt, priorReceipt.outcome) : undefined),
+      ...(neverSentKeys.length && { neverSentKeys }),
     });
     // Persist before allowing any mutation, and never persist manifest secrets.
     persist(key, record);
+    syncMaintenanceNeverSentProofs(scope, neverSentKeys);
     pending.set(key, record);
     return { command: record, created: retained === undefined };
   };
@@ -411,7 +465,8 @@ export async function completeMaintenanceOperation(
     if (!matches(record, metadata)) return; // A stale result must not clear a newer command.
     const retained = pending.get(key);
     if (retained && retained.idempotencyKey !== record.idempotencyKey) return;
-    persistSettled({ ...record, recoveryAdvised: metadata.recoveryAdvised || getMaintenanceRecoveryIntent(record)?.idempotencyKey === record.idempotencyKey }, outcome);
+    persistSettled({ ...record, neverSentKeys: metadata.neverSentKeys,
+      recoveryAdvised: metadata.recoveryAdvised || getMaintenanceRecoveryIntent(record)?.idempotencyKey === record.idempotencyKey }, outcome);
     pending.delete(key);
   });
 }
@@ -446,10 +501,11 @@ export async function markMaintenanceOperationAccepted(record: MaintenanceOperat
 }
 
 /** Call before returning recovery advice, including read-only/reloaded recovery. */
-export async function markMaintenanceRecoveryAdvised(record: MaintenanceOperation): Promise<void> {
+export async function markMaintenanceRecoveryAdvised(record: MaintenanceOperation, onAdvice?: (advice: MaintenanceRecoveryAdvice) => void): Promise<void> {
   // An unsent command may disappear safely. Its temporary advice must not
   // replace an older sent command's still-visible recovery guard.
   rememberMaintenanceRecoveryIntent(record, true);
+  onAdvice?.(maintenanceRecoveryAdvice(record));
   const key = storageKey(record);
   try { await withScopeLock(key, () => {
     const current = getPendingMaintenanceOperation(record.address, record.providerUrl, record.leaseUuid, record.chainId);
@@ -472,15 +528,18 @@ export async function discardUnsubmittedMaintenanceOperation(record: Maintenance
   return withScopeLock(key, () => {
     const current = getPendingMaintenanceOperation(record.address, record.providerUrl, record.leaseUuid, record.chainId);
     if (!current || !matches(current, metadataFor(record)) || current.dispatched !== false || current.accepted) return false;
+    const neverSentKeys = [...new Set([...(current.neverSentKeys ?? []), current.idempotencyKey])]
+      .slice(-MAINTENANCE_NEVER_SENT_PROOF_LIMIT);
     try {
-      // Keep proof of the zero-HTTP outcome for advice already observed in a
-      // different tab or saved transcript. Replacing this key only shrinks it.
-      persistSettled({ ...current, recoveryAdvised: current.previousSettlement?.r === 1 }, 'not_sent');
+      // Cancellation never changes the last provider command's identity. Keep
+      // bounded exact zero-HTTP proof alongside that receipt (or on its own),
+      // atomically with removal of the pending marker.
+      localStorage.setItem(key, JSON.stringify({ ...(current.previousSettlement ?? { v: 1 }), neverSentKeys }));
     } catch {
       throw storageError();
     }
     pending.delete(key);
-    retireUnsentMaintenanceRecoveryIntent(record, record.idempotencyKey);
+    syncMaintenanceNeverSentProofs(record, neverSentKeys);
     return true;
   });
 }
@@ -547,7 +606,8 @@ export async function commitMaintenanceObservation(
     if (!observation.isCurrent()) return false;
     if (observation.settled) {
       try {
-        persistSettled({ ...record, recoveryAdvised: metadata.recoveryAdvised || getMaintenanceRecoveryIntent(record)?.idempotencyKey === record.idempotencyKey }, observation.outcome ?? 'settled');
+        persistSettled({ ...record, neverSentKeys: metadata.neverSentKeys,
+          recoveryAdvised: metadata.recoveryAdvised || getMaintenanceRecoveryIntent(record)?.idempotencyKey === record.idempotencyKey }, observation.outcome ?? 'settled');
       } catch {
         observation.apply();
         throw new MaintenanceSettlementStorageError(MAINTENANCE_CLEANUP_MESSAGE);

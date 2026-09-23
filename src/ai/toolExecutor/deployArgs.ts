@@ -10,7 +10,8 @@ import { buildManifestPreview } from '@manifest-network/manifest-sdk/catalog';
 import { fredCompatibilityForProvider } from '../../config/fredCompatibility';
 import { findKnownImage, KNOWN_STACKS } from '../knownImages';
 import { sha256, toHex } from '../../utils/hash';
-import { MANIFEST_NOTICE_KEY } from '../../config/constants';
+import { AI_MANIFEST_VALIDATION_DETAIL_CHARS, MANIFEST_NOTICE_KEY } from '../../config/constants';
+import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import { logError } from '../../utils/errors';
 import { BACKEND_SERVICE_NAMES } from './helpers';
 import type { PayloadAttachment } from './types';
@@ -25,9 +26,9 @@ export async function validateManifestForProvider(manifest: string, providerUrl:
   }
   try {
     const preview = await buildManifestPreview({ manifest }, fredCompatibilityForProvider(providerUrl));
-    return preview.validation.valid ? null : `Invalid manifest: ${preview.validation.errors.join('; ')}`;
+    return preview.validation.valid ? null : sanitizeForDisplay(`Invalid manifest: ${preview.validation.errors.join('; ')}`, AI_MANIFEST_VALIDATION_DETAIL_CHARS);
   } catch (error) {
-    return error instanceof Error ? error.message : 'Failed to validate manifest.';
+    return sanitizeForDisplay(error instanceof Error ? error.message : 'Failed to validate manifest.', AI_MANIFEST_VALIDATION_DETAIL_CHARS);
   }
 }
 

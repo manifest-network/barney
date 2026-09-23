@@ -79,7 +79,7 @@ export function reconcileProvisionStatus(
   status: string | undefined,
   previous: ProvisionState | undefined,
 ): ProvisionState | undefined {
-  return previous === 'confirmed' && isUnsettledProvisionStatus(status)
+  return (previous === 'confirmed' || previous === 'failed') && isUnsettledProvisionStatus(status)
     ? undefined
     : classifyProvisionStatus(status);
 }

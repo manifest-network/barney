@@ -539,6 +539,19 @@ describe('executeAppStatus', () => {
       vi.mocked(getReadClient).mockResolvedValue({ query: {} } as any);
     });
 
+    it.each(['restarting', 'updating', 'provisioning'])('keeps the previous failure badge while Fred reports %s', async (provision_status) => {
+      const app = makeApp({ status: 'failed', chainState: 'active', provisionState: 'failed' });
+      const registry = makeRegistry([app]);
+      vi.mocked(appStatus).mockResolvedValue({
+        lease_uuid: app.leaseUuid,
+        chainState: { state: 2, providerUuid: 'p1', createdAt: '', closedAt: undefined, items: [] },
+        fredStatus: { state: 2, provision_status },
+      } as Awaited<ReturnType<typeof appStatus>>);
+      const result = await executeAppStatus({ app_name: app.name }, makeOptions({ appRegistry: registry, signing: mockSigning }));
+      expect(result.success).toBe(true);
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ status: 'failed', provisionState: 'failed' });
+    });
+
     it('reconciles to running and refreshes connection from appStatus', async () => {
       const app = makeApp({ status: 'deploying' });
       const registry = makeRegistry([app]);

@@ -1,4 +1,5 @@
 import { runtimeConfig } from '../../config/runtimeConfig';
+import { MAINTENANCE_NEVER_SENT_PROOF_LIMIT, MAINTENANCE_CONSUMED_ADVICE_LIMIT } from '../../config/constants';
 import type { WalletIdentity } from '../../utils/walletIdentity';
 import type { ChatMessage } from '../../contexts/aiTypes';
 
@@ -17,10 +18,12 @@ export interface MaintenanceRecoveryAdvice extends MaintenanceRecoveryIntent, Re
   readonly restUrl: string;
 }
 
-// sessionStorage belongs to this tab and survives reload. Another tab's
-// deliberate successor must not erase recovery advice still visible here.
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const memory = new Map<string, { intent: MaintenanceRecoveryIntent; persisted: boolean }>();
-const neverSent = new Map<string, string>();
+const consumed = new Map<string, Set<string>>();
+const observed = new Map<string, Map<string, MaintenanceRecoveryIntent['operation']>>();
+const neverSent = new Map<string, Set<string>>();
+class SessionStorageUnavailable extends Error {}
 let storage: Storage | undefined;
 try { storage = globalThis.sessionStorage; } catch { /* Memory remains available. */ }
 
@@ -31,135 +34,225 @@ function keyFor(scope: RecoveryScope): string {
   ]))}`;
 }
 
+function bounded(keys: Iterable<string>): Set<string> {
+  const result = new Set(keys);
+  while (result.size > MAINTENANCE_CONSUMED_ADVICE_LIMIT) result.delete(result.values().next().value!);
+  return result;
+}
+
+function observe(key: string, intent: MaintenanceRecoveryIntent): void {
+  if (suppressed(key, intent.idempotencyKey)) return;
+  const seen = observed.get(key) ?? new Map();
+  seen.set(intent.idempotencyKey, intent.operation);
+  while (seen.size > MAINTENANCE_CONSUMED_ADVICE_LIMIT) seen.delete(seen.keys().next().value!);
+  observed.set(key, seen);
+}
+
+function fallbackIntent(key: string): MaintenanceRecoveryIntent | undefined {
+  for (const [idempotencyKey, operation] of observed.get(key) ?? []) {
+    if (!suppressed(key, idempotencyKey)) return Object.freeze({ operation, idempotencyKey });
+  }
+}
+
+function actionable(key: string, intent: MaintenanceRecoveryIntent | undefined): MaintenanceRecoveryIntent | undefined {
+  return intent && !suppressed(key, intent.idempotencyKey) ? intent : fallbackIntent(key);
+}
+
+function suppressed(key: string, idempotencyKey: string): boolean {
+  return neverSent.get(key)?.has(idempotencyKey) === true || consumed.get(key)?.has(idempotencyKey) === true;
+}
+
+/** Legacy entries contain only the active identity. New entries retain consumed
+ * UUIDs in the same slot; consumption removes more bytes than it appends. */
+function readStored(key: string): MaintenanceRecoveryIntent | undefined {
+  if (!storage) throw new SessionStorageUnavailable('Session storage unavailable');
+  let raw;
+  try { raw = storage.getItem(key); } catch { throw new SessionStorageUnavailable('Session storage unavailable'); }
+  if (raw === null) { consumed.delete(key); return undefined; }
+  const value = JSON.parse(raw) as Partial<MaintenanceRecoveryIntent> & { c?: unknown; h?: unknown };
+  if (!value || typeof value !== 'object'
+    || Object.keys(value).some((field) => !['operation', 'idempotencyKey', 'c', 'h'].includes(field))) throw new Error('Invalid session entry');
+  if (value.c !== undefined && (!Array.isArray(value.c) || value.c.length > MAINTENANCE_CONSUMED_ADVICE_LIMIT
+    || value.c.some((id) => typeof id !== 'string' || !UUID_V4.test(id)))) throw new Error('Invalid consumed identities');
+  if (value.h !== undefined && (!Array.isArray(value.h) || value.h.length > MAINTENANCE_CONSUMED_ADVICE_LIMIT
+    || value.h.some((item) => !Array.isArray(item) || item.length !== 2 || (item[0] !== 'restart' && item[0] !== 'update')
+      || typeof item[1] !== 'string' || !UUID_V4.test(item[1])))) throw new Error('Invalid observed identities');
+  const used = new Set((value.c ?? []) as string[]);
+  let intent: MaintenanceRecoveryIntent | undefined;
+  if (value.operation !== undefined || value.idempotencyKey !== undefined) {
+    if ((value.operation !== 'restart' && value.operation !== 'update')
+      || typeof value.idempotencyKey !== 'string' || !UUID_V4.test(value.idempotencyKey)) throw new Error('Invalid active identity');
+    intent = Object.freeze({ operation: value.operation, idempotencyKey: value.idempotencyKey });
+  } else if (!used.size && !(value.h as unknown[] | undefined)?.length) throw new Error('Empty session entry');
+  consumed.set(key, used);
+  for (const id of observed.get(key)?.keys() ?? []) if (suppressed(key, id)) observed.get(key)?.delete(id);
+  for (const [operation, idempotencyKey] of (value.h ?? []) as Array<[MaintenanceRecoveryIntent['operation'], string]>) {
+    observe(key, { operation, idempotencyKey });
+  }
+  if (intent) observe(key, intent);
+  return intent;
+}
+
+function serialized(key: string, intent?: MaintenanceRecoveryIntent, used = consumed.get(key), seen = observed.get(key)): string {
+  const prior = [...(seen ?? [])].filter(([id]) => id !== intent?.idempotencyKey && !suppressed(key, id))
+    .map(([id, operation]) => [operation, id]);
+  return JSON.stringify({ ...intent, ...(used?.size && { c: [...used] }), ...(prior.length && { h: prior }) });
+}
+
 export function getMaintenanceRecoveryIntent(scope: RecoveryScope): MaintenanceRecoveryIntent | undefined {
   const key = keyFor(scope);
   const retained = memory.get(key);
-  if (retained && !retained.persisted && neverSent.get(key) !== retained.intent.idempotencyKey) return retained.intent;
-  let raw: string | null | undefined;
-  try {
-    if (!storage) throw new Error('Session storage unavailable');
-    raw = storage.getItem(key);
-  } catch {
-    if (retained && neverSent.get(key) !== retained.intent.idempotencyKey) return retained.intent;
-    throw new Error('This tab’s saved recovery intent could not be read. Restore browser storage access before starting another maintenance command.');
+  if (retained && !retained.persisted && !suppressed(key, retained.intent.idempotencyKey)) return retained.intent;
+  let intent;
+  try { intent = readStored(key); } catch (error) {
+    if (error instanceof SessionStorageUnavailable && retained && !suppressed(key, retained.intent.idempotencyKey)) return retained.intent;
+    throw new Error('This tab’s saved recovery intent could not be read or is unreadable. Restore browser storage access before starting another maintenance command.');
   }
-  if (!raw) { memory.delete(key); return undefined; }
-  try {
-    const value = JSON.parse(raw) as Partial<MaintenanceRecoveryIntent>;
-    if ((value.operation !== 'restart' && value.operation !== 'update')
-      || typeof value.idempotencyKey !== 'string'
-      || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.idempotencyKey)) throw new Error();
-    const intent = Object.freeze({ operation: value.operation, idempotencyKey: value.idempotencyKey });
-    memory.set(key, { intent, persisted: true });
-    return neverSent.get(key) === intent.idempotencyKey ? undefined : intent;
-  } catch {
-    throw new Error('This tab’s saved recovery intent is unreadable. Restore browser storage access before starting another maintenance command.');
-  }
+  const selected = actionable(key, intent);
+  if (!selected) { memory.delete(key); return undefined; }
+  memory.set(key, { intent: selected, persisted: selected === intent });
+  return selected;
 }
 
 export function rememberMaintenanceRecoveryIntent(command: RecoveryScope & MaintenanceRecoveryIntent, preserveExisting = false): void {
   const key = keyFor(command);
-  if (neverSent.get(key) === command.idempotencyKey) return;
   const intent = Object.freeze({ operation: command.operation, idempotencyKey: command.idempotencyKey });
-  if (preserveExisting) {
-    try { if (getMaintenanceRecoveryIntent(command)) return; } catch {
-      // Preserve unreadable storage; this known command still needs an in-memory
-      // guard and transcript correlation while access is unavailable.
-      const retained = memory.get(key);
-      if (!retained || neverSent.get(key) === retained.intent.idempotencyKey) memory.set(key, { intent, persisted: false });
-      return;
-    }
-  }
-  memory.set(key, { intent, persisted: false });
+  let selected = intent;
   try {
-    if (storage) { storage.setItem(key, JSON.stringify(intent)); memory.set(key, { intent, persisted: true }); }
+    // Recheck storage before any write, even when a quota failure left newer
+    // memory evidence. Unknown persisted advice must remain untouched.
+    const stored = readStored(key);
+    const retained = memory.get(key);
+    const existing = retained && !retained.persisted && !suppressed(key, retained.intent.idempotencyKey)
+      ? retained.intent : actionable(key, stored);
+    if (suppressed(key, command.idempotencyKey)) return;
+    observe(key, intent);
+    if (preserveExisting && existing) selected = existing;
+  } catch {
+    const retained = memory.get(key);
+    observe(key, intent);
+    if (!suppressed(key, command.idempotencyKey)
+      && (!preserveExisting || !retained || suppressed(key, retained.intent.idempotencyKey))) memory.set(key, { intent, persisted: false });
+    return; // Never overwrite unreadable prior evidence.
+  }
+  memory.set(key, { intent: selected, persisted: false });
+  try {
+    if (storage) { storage.setItem(key, serialized(key, selected)); memory.set(key, { intent: selected, persisted: true }); }
   } catch { /* Never lose in-memory evidence on quota failure. */ }
 }
 
-/** Only dispatch of the approved deliberate successor consumes its own intent. */
+/** Exact deliberate dispatch acknowledges advice already observed in this tab,
+ * including after reload. Other tabs retain their independent source advice. */
 export function consumeMaintenanceRecoveryIntent(scope: RecoveryScope, expectedKey: string | undefined): void {
   if (!expectedKey || getMaintenanceRecoveryIntent(scope)?.idempotencyKey !== expectedKey) return;
   const key = keyFor(scope);
-  try { storage?.removeItem(key); } catch { return; }
-  memory.delete(key);
+  try {
+    // A memory fallback cannot authorize overwriting unreadable or newer disk
+    // evidence if storage changes between advice and the HTTP handoff.
+    const stored = readStored(key);
+    if (stored && stored.idempotencyKey !== expectedKey && !suppressed(key, stored.idempotencyKey)) return;
+    if (!storage) return;
+    const seen = [...(observed.get(key)?.keys() ?? []), expectedKey].filter((id) => !neverSent.get(key)?.has(id));
+    const used = bounded([...(consumed.get(key) ?? []), ...seen]);
+    storage.setItem(key, serialized(key, undefined, used, new Map()));
+    consumed.set(key, used);
+    observed.delete(key);
+    memory.delete(key);
+  } catch { /* Keep the active guard unless suppression is durable. */ }
 }
 
 export function retireMaintenanceRecoveryIntent(scope: RecoveryScope): void {
   const key = keyFor(scope);
   memory.delete(key);
-  try { storage?.removeItem(key); } catch { /* An authoritative closed lease cannot execute more maintenance. */ }
+  consumed.delete(key);
+  observed.delete(key);
+  try { storage?.removeItem(key); } catch { /* The closed lease cannot execute more maintenance. */ }
 }
 
-/** Only an authoritative never-sent receipt may discard an exact stale intent. */
+export function isMaintenanceAdviceNeverSent(advice: RecoveryScope & MaintenanceRecoveryIntent): boolean {
+  return neverSent.get(keyFor(advice))?.has(advice.idempotencyKey) === true;
+}
+
+/** Exact proof cannot erase unreadable or newer session evidence. */
 export function retireUnsentMaintenanceRecoveryIntent(scope: RecoveryScope, idempotencyKey: string): void {
   const key = keyFor(scope);
-  neverSent.set(key, idempotencyKey);
+  const keys = neverSent.get(key) ?? new Set<string>();
+  keys.add(idempotencyKey);
+  while (keys.size > MAINTENANCE_NEVER_SENT_PROOF_LIMIT) keys.delete(keys.values().next().value!);
+  neverSent.set(key, keys);
   const retained = memory.get(key);
-  let stored: Partial<MaintenanceRecoveryIntent> | undefined;
-  try { stored = JSON.parse(storage?.getItem(key) ?? 'null') ?? undefined; } catch { return; }
+  let stored;
+  try { stored = readStored(key); } catch { return; }
   if (retained?.intent.idempotencyKey !== idempotencyKey && stored?.idempotencyKey !== idempotencyKey) return;
   if (retained && retained.intent.idempotencyKey !== idempotencyKey) return;
   if (stored && stored.idempotencyKey !== idempotencyKey) return;
-  memory.delete(key);
-  try { storage?.removeItem(key); } catch { /* The matching authoritative tombstone is sufficient. */ }
+  const next = fallbackIntent(key);
+  if (next) memory.set(key, { intent: next, persisted: false });
+  else memory.delete(key);
+  try {
+    if (next || consumed.get(key)?.size) storage?.setItem(key, serialized(key, next));
+    else storage?.removeItem(key);
+    if (next && storage) memory.set(key, { intent: next, persisted: true });
+  } catch { /* The exact proof and any promoted guard remain available in memory. */ }
 }
 
-function activeAdvice(identity: WalletIdentity): MaintenanceRecoveryAdvice[] {
-  const advice: MaintenanceRecoveryAdvice[] = [];
-  for (const [key, value] of memory) {
-    if (neverSent.get(key) === value.intent.idempotencyKey) continue;
-    const [chainId, rpcUrl, restUrl, address, providerUrl, leaseUuid] = JSON.parse(decodeURIComponent(key.slice('barney:maintenance:recovery-intent:'.length))) as string[];
-    if (chainId !== identity.chainId || address !== identity.address) continue;
-    advice.push({ ...value.intent, chainId, rpcUrl, restUrl, address, providerUrl, leaseUuid });
+export function syncMaintenanceNeverSentProofs(scope: RecoveryScope, keys: readonly string[]): void {
+  neverSent.set(keyFor(scope), new Set(keys));
+  for (const key of keys) retireUnsentMaintenanceRecoveryIntent(scope, key);
+}
+
+export function maintenanceRecoveryAdvice(command: RecoveryScope & MaintenanceRecoveryIntent): MaintenanceRecoveryAdvice {
+  return { operation: command.operation, idempotencyKey: command.idempotencyKey,
+    address: command.address.trim().toLowerCase(), chainId: command.chainId ?? runtimeConfig.PUBLIC_CHAIN_ID,
+    providerUrl: new URL(command.providerUrl).href.replace(/\/+$/, ''), leaseUuid: command.leaseUuid,
+    rpcUrl: runtimeConfig.PUBLIC_RPC_URL, restUrl: runtimeConfig.PUBLIC_REST_URL };
+}
+
+function adviceKey(advice: MaintenanceRecoveryAdvice): string {
+  return JSON.stringify([advice.chainId, advice.rpcUrl, advice.restUrl, advice.address, advice.providerUrl, advice.leaseUuid, advice.idempotencyKey]);
+}
+
+export function mergeMaintenanceAdvice(existing: readonly MaintenanceRecoveryAdvice[] = [], incoming: readonly MaintenanceRecoveryAdvice[] = []): MaintenanceRecoveryAdvice[] {
+  const keys = new Set(existing.map(adviceKey));
+  const merged = [...existing];
+  for (const advice of incoming) {
+    const key = adviceKey(advice);
+    if (!keys.has(key)) { keys.add(key); merged.push(advice); }
   }
-  return advice;
+  return merged;
 }
 
-/** Advice stays attached to the rows that can be replayed, even after a local
- * deliberate successor consumes the active guard. No manifest bytes are kept. */
-export function retainMessageMaintenanceAdvice(messages: ChatMessage[], identity: WalletIdentity): ChatMessage[] {
-  const advice = activeAdvice(identity);
-  if (!advice.length) return messages;
-  let changed = false;
-  const result = messages.map((message) => {
-    if (message.role === 'user' || message.local || message.isStreaming || message.awaitingConfirmation || message.transactionInFlight) return message;
-    const retained = message.maintenanceRecoveryAdvice ?? [];
-    const additions = advice.filter((entry) => !retained.some((prior) => prior.rpcUrl === entry.rpcUrl
-      && prior.restUrl === entry.restUrl && keyFor(prior) === keyFor(entry)));
-    if (!additions.length) return message;
-    changed = true;
-    return { ...message, maintenanceRecoveryAdvice: [...retained, ...additions] };
-  });
-  return changed ? result : messages;
+/** A collector belongs to one executor invocation, including its batch items. */
+export function createMaintenanceAdviceCollector() {
+  const advice = new Map<string, MaintenanceRecoveryAdvice>();
+  return {
+    onAdvice(value: MaintenanceRecoveryAdvice) {
+      rememberMaintenanceRecoveryIntent(value, true);
+      advice.set(adviceKey(value), value);
+    },
+    get advice(): MaintenanceRecoveryAdvice[] { return [...advice.values()]; },
+  };
 }
 
-export function restoreMessageMaintenanceAdvice(
-  messages: ChatMessage[],
-  identity: WalletIdentity,
-  prepareScope?: (advice: MaintenanceRecoveryAdvice) => void,
-): void {
-  const applicable: MaintenanceRecoveryAdvice[] = [];
+export function restoreMessageMaintenanceAdvice(messages: ChatMessage[], identity: WalletIdentity, prepareScope?: (advice: MaintenanceRecoveryAdvice) => void): void {
+  const applicable: Array<{ advice: MaintenanceRecoveryAdvice; key: string }> = [];
   const prepared = new Set<string>();
   for (const message of messages) {
     for (const advice of message.maintenanceRecoveryAdvice ?? []) {
       if (advice.chainId !== identity.chainId || advice.address !== identity.address
         || advice.rpcUrl !== runtimeConfig.PUBLIC_RPC_URL || advice.restUrl !== runtimeConfig.PUBLIC_REST_URL) continue;
-      applicable.push(advice);
       const key = keyFor(advice);
+      applicable.push({ advice, key });
       if (prepared.has(key)) continue;
       prepared.add(key);
-      // Learn authoritative never-sent proof before any later row can replace
-      // an older sent command's still-visible recovery advice.
-      try { prepareScope?.(advice); } catch { /* Unreadable proof cannot retire any advice. */ }
+      try { prepareScope?.(advice); } catch { /* Unreadable proof cannot retire advice. */ }
+      try { getMaintenanceRecoveryIntent(advice); } catch { /* Restore known advice conservatively. */ }
     }
   }
   const restored = new Set<string>();
-  for (const advice of applicable) {
-    const key = keyFor(advice);
-    if (restored.has(key) || neverSent.get(key) === advice.idempotencyKey) continue;
-    // Keep the oldest actionable row. If proof was temporarily unreadable,
-    // retiring a newer never-sent command later still cannot erase this guard.
-    rememberMaintenanceRecoveryIntent(advice);
+  for (const { advice, key } of applicable) {
+    if (suppressed(key, advice.idempotencyKey)) continue;
+    rememberMaintenanceRecoveryIntent(advice, restored.has(key));
     restored.add(key);
   }
 }

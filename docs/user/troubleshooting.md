@@ -134,7 +134,13 @@ after restoring it in a new tab. App status and release history can show the cur
 state, but those checks cannot recreate the missing command record or lift this block.
 A separately confirmed stop can end the deployment; it does not recover the command.
 Commands cancelled before any request was sent leave proof that they were not sent,
-so their old advice does not leave the app blocked.
+so repeated cancellations and later successful work do not revive that advice or invalidate
+an already-approved card. Barney retains the most recent 128 such proofs per lease; advice older
+than that can conservatively require an explicit request for a new operation. Recovery safeguards
+attach only to the result that issued the advice. Reloading the same tab after a deliberate new
+command preserves its acknowledgement; unrelated later chat rows do not carry old safeguards.
+The tab retains the latest 128 acknowledgements per lease. Restoring still-older advice can
+require another explicit request for new work.
 
 Each wallet session has room for 128 completed or pending operations. Barney
 checks the whole batch before confirmation and reserves room before starting it,
