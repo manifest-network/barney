@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FredLeaseRelease, FredLeaseReleases } from '@manifest-network/manifest-sdk/deploy';
-import type { AppEntry } from '../../registry/appRegistry';
+import { sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
 import type { ToolExecutorOptions } from './types';
 import { makeRegistry } from './testHelpers';
 
@@ -74,6 +74,19 @@ async function reload() {
 const pending = () => operations.getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid);
 
 describe('read-only maintenance reconciliation', () => {
+  it('commits an update manifest despite unrelated registry changes and preserves newer readiness', async () => {
+    await prepare();
+    vi.mocked(fred.getLeaseReleases).mockImplementationOnce(async () => {
+      options.appRegistry!.updateApp(address, app.leaseUuid, { name: 'renamed', provisionState: 'failed', url: 'https://newer.example' });
+      return history(release(1, 'superseded'), release(2));
+    });
+    expect(await reconcile(app, options)).toMatchObject({ outcome: 'succeeded' });
+    expect(options.appRegistry!.getAppByLease(address, app.leaseUuid)).toMatchObject({
+      name: 'renamed', provisionState: 'failed', url: 'https://newer.example', manifest: sanitizeManifestForStorage(payload),
+    });
+    expect(pending()).toBeUndefined();
+  });
+
   it.each([false, true])('does not overwrite a successor command while reconciling an old read (successor settled: %s)', async (settleSuccessor) => {
     const first = await prepare();
     let releaseRead!: (value: FredLeaseReleases) => void;
@@ -82,7 +95,7 @@ describe('read-only maintenance reconciliation', () => {
     await vi.waitFor(() => expect(releaseRead).toBeTypeOf('function'));
     await operations.completeMaintenanceOperation(first);
     const successor = await operations.getOrCreateMaintenanceOperation({
-      ...scope, operation: 'update', manifest: '{"image":"successor"}', baselineReleaseVersions: [1, 2],
+      ...scope, operation: 'update', manifest: '{"image":"successor"}', baselineReleaseVersions: [1, 2], previousOperationKey: first.idempotencyKey,
     });
     options.appRegistry!.updateApp(address, app.leaseUuid, { manifest: '{"image":"successor"}', provisionState: 'failed' });
     if (settleSuccessor) await operations.completeMaintenanceOperation(successor);

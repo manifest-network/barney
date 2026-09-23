@@ -164,6 +164,10 @@ export const AI_BATCH_DEPLOY_CONCURRENCY = getNumericConfig('PUBLIC_AI_BATCH_DEP
  * error bodies from consuming the persisted conversation's prompt budget. */
 export const AI_BATCH_DIAGNOSTIC_CHARS = 8_192;
 
+/** Per-row bound for Barney's guidance after individual provider fields have
+ * been sanitized. Leaves room for full recovery instructions and next steps. */
+export const AI_BATCH_GUIDANCE_CHARS = 1_024;
+
 // ============================================
 // Fred WebSocket / Polling Constants
 // ============================================

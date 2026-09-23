@@ -29,7 +29,7 @@ import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
 import { getOrCreateMaintenanceOperation, getPendingMaintenanceOperation, retireAbsentMaintenanceOperation } from './maintenanceOperation';
 import { LeaseState } from '../../api/billing';
-import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS } from '../../config/constants';
+import { AI_BATCH_GUIDANCE_CHARS, AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS } from '../../config/constants';
 import { ProviderApiError } from '../../api/provider-api';
 import { logError } from '../../utils/errors';
 
@@ -3420,13 +3420,16 @@ describe('executeConfirmedBatchDeploy', () => {
   // is permanently false against a current provider — and when the container
   // never started there are no logs either, leaving a batch entry that reports
   // the failure with no cause at all.
-  it('surfaces the post-ENG-508 provision reason/message in a failed batch entry', async () => {
+  it.each([false, true])('surfaces provision diagnostics and complete batch next steps (long provider text: %s)', async (longProviderText) => {
+    const providerText = 'HTTP 403: \u202e<html>\u0000' + 'untrusted provider response '.repeat(180);
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
       await callOptions?.onLeaseCreated?.('lease-x', 'https://resolved.example.com');
-      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true, failedStep: 'poll' });
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED,
+        longProviderText ? providerText.slice(0, 4096) : 'provision failed', { partial: true, failedStep: 'poll' });
     });
     vi.mocked(getLeaseProvision).mockResolvedValueOnce({
-      status: 'failed', fail_count: 2, reason: 'ImagePullFailed', message: 'pull access denied for ngnix',
+      status: 'failed', fail_count: 2, reason: 'ImagePullFailed',
+      message: `pull access denied for ngnix${longProviderText ? ` ${providerText.slice(0, 4096)}` : ''}`,
     } as any);
     vi.mocked(getLeaseLogs).mockResolvedValueOnce({ lease_uuid: 'lease-x', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
 
@@ -3435,7 +3438,7 @@ describe('executeConfirmedBatchDeploy', () => {
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
     ];
 
-    await executeConfirmedBatchDeploy(
+    const result = await executeConfirmedBatchDeploy(
       await confirmedBatchArgs(entries),
       CLIENT_MANAGER,
       makeOptions({ onProgress }),
@@ -3446,9 +3449,11 @@ describe('executeConfirmedBatchDeploy', () => {
       .flatMap((c) => (c[0] as { batch?: Array<{ detail?: string }> }).batch ?? [])
       .map((b) => b.detail ?? '');
     expect(details.some((d) => d.includes('ImagePullFailed: pull access denied for ngnix'))).toBe(true);
-    // The bounded row retains the useful start of the curated next step.
-    expect(details.some((d) => d.includes(FRED_REASON_GUIDANCE.ImagePullFailed.nextStep.slice(0, 48)))).toBe(true);
-    expect(details.every((d) => Array.from(d).length <= FAILURE_DETAIL_CHARS + 1)).toBe(true);
+    // Provider fields are bounded before Barney's complete next step is added.
+    expect(details.some((d) => d.includes(FRED_REASON_GUIDANCE.ImagePullFailed.nextStep))).toBe(true);
+    expect(details.every((d) => Array.from(d).length <= AI_BATCH_GUIDANCE_CHARS + 1)).toBe(true);
+    expect(result.error).toContain(FRED_REASON_GUIDANCE.ImagePullFailed.nextStep);
+    expect(result.error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
   });
 
   it('does not count a readiness-unconfirmed entry as deployed', async () => {
@@ -3492,6 +3497,9 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(data.failed).toHaveLength(0);
     expect(data.message).toContain('Still deploying');
     expect(data.message).toContain('postgres');
+    expect(data.message).toContain('Check with app_status("postgres").');
+    expect(data.message).toContain('Only stop_app("postgres") if you have decided to abandon it.');
+    expect(data.unconfirmed[0].detail).toContain('Only stop_app("postgres") if you have decided to abandon it.');
     // The exact claim the bug made.
     const lastProgress = onProgress.mock.calls.at(-1)![0];
     expect(lastProgress.detail).not.toContain('All 2 apps deployed!');
@@ -3870,7 +3878,7 @@ describe('executeConfirmedRestartApp', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('may still be in progress');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed', connectionStale: true });
     // The observation is still recorded (the anti-"stays running" guarantee the
     // original test existed for), it just derives 'deploying' rather than
     // asserting a failure verdict nobody gave.
@@ -3914,7 +3922,7 @@ describe('executeConfirmedRestartApp', () => {
       makeOptions({ appRegistry: registry })
     );
 
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed', connectionStale: true });
   });
 
   it('does NOT mark the app failed when the wait is aborted (user interrupt)', async () => {
@@ -4963,7 +4971,7 @@ describe('executeConfirmedUpdateApp', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('may still be in progress');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed', connectionStale: true });
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('deploying');
   });
 
@@ -5940,7 +5948,7 @@ describe('G1 — the abort guards key on the ERROR, not on the ambient signal', 
     // because the gate is the error's identity and not the ambient state. N4
     // only changes WHICH observation gets recorded — 'unconfirmed', because a
     // rejected wait never carries a provider verdict.
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed', connectionStale: true });
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('unconfirmed');
   });
 
@@ -6166,7 +6174,7 @@ describe('F4 — a writer with no observation invents none', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('may or may not have been applied');
-    expect(registry.updateApp).not.toHaveBeenCalled();
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { connectionStale: true });
     const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
     expect(stored?.provisionState).toBe('confirmed');
     expect(stored?.status).toBe('running');
@@ -6307,7 +6315,7 @@ describe('F4 — a writer with no observation invents none', () => {
 
     expect(result.success).toBe(true);
     expect((result.data as { message: string }).message).toContain('Outcome unknown:');
-    expect(registry.updateApp).not.toHaveBeenCalled();
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'uuid-1', { connectionStale: true });
     expect(registry.getAppByLease(ADDRESS, 'uuid-1')?.status).toBe('running');
   });
 });
@@ -6350,7 +6358,7 @@ describe('G1 (cont.) — error identity at the sites the first pass left uncover
     expect(result.success).toBe(false);
     // As above: G1 pins that the write HAPPENS despite the ambient abort; N4
     // pins that a connection reset is silence about provisioning, not a verdict.
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed', connectionStale: true });
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('deploying');
   });
 
@@ -6588,7 +6596,7 @@ describe('G4 (cont.) — a mixed batch keeps the two outcomes apart per entry', 
     // ended without an answer, not that the provider failed the restart. The
     // aborted two record nothing at all — that is still the G1/G4 separation
     // this test exists to pin, and it survives the value change.
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'uuid-3', { provisionState: 'unconfirmed' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'uuid-3', { provisionState: 'unconfirmed', connectionStale: true });
     expect(registry.getAppByLease(ADDRESS, 'uuid-3')?.status).toBe('deploying');
     for (const uuid of ['uuid-1', 'uuid-2']) {
       expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, uuid, expect.objectContaining({ provisionState: expect.anything() }));
@@ -6788,6 +6796,40 @@ describe('legacy maintenance preserves readiness until a provider verdict arrive
         expect(result.success).toBe(false);
         expect(result.error).toContain('may still be in progress');
       }
+    }
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
+  });
+});
+
+describe('legacy restart provider diagnostics', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['single', 'request'], ['batch', 'request'], ['single', 'poll verdict'], ['batch', 'poll verdict'],
+  ] as const)('bounds untrusted %s %s text at its source', async (mode, stage) => {
+    const raw = ('HTTP 403: \u202e<html>\u0000\r\n' + 'untrusted provider response '.repeat(180)).slice(0, 4096);
+    if (stage === 'request') vi.mocked(restartApp).mockRejectedValue(new ProviderApiError(403, raw));
+    else {
+      vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+      vi.mocked(waitForLeaseStatus).mockRejectedValue(new ProviderApiError(0, raw, { kind: 'poll_verdict' }));
+    }
+    const app = makeApp();
+    const onProgress = vi.fn();
+    const entry = { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl };
+    const result = await executeConfirmedRestartApp(mode === 'batch' ? { app_name: 'all', entries: [entry] } : entry,
+      CLIENT_MANAGER, makeOptions({ appRegistry: makeRegistry([app]), onProgress }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('HTTP 403: <html>');
+    expect(result.error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+    expect(Array.from(result.error ?? '').length).toBeLessThan(FAILURE_DETAIL_CHARS + 100);
+    const details = onProgress.mock.calls.flatMap(([progress]) => mode === 'batch'
+      ? (progress.batch ?? []).map((row: { detail?: string }) => row.detail ?? '')
+      : [progress.detail ?? '']);
+    expect(details.some((detail) => detail.includes('HTTP 403: <html>'))).toBe(true);
+    for (const detail of details) {
+      expect(detail).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+      expect(Array.from(detail).length).toBeLessThan(FAILURE_DETAIL_CHARS + 100);
     }
     expect(getLeaseProvision).not.toHaveBeenCalled();
     expect(getLeaseConnectionInfo).not.toHaveBeenCalled();

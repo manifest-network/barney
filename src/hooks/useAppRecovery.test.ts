@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement, type FC } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createStore, type StoreApi } from 'zustand/vanilla';
-import { getLeaseConnectionInfo, getLeaseStatus } from '@manifest-network/manifest-sdk/deploy';
+import { getLeaseConnectionInfo, getLeaseStatus, restartApp, updateApp, waitForLeaseStatus } from '@manifest-network/manifest-sdk/deploy';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
+import { executeConfirmedRestartApp, executeConfirmedUpdateApp } from '../ai/toolExecutor/compositeTransactions';
 import { AIStoreContext } from '../contexts/aiStoreContext';
 import type { AIStore } from '../stores/aiStore';
 import type { SigningContext } from '../ai/toolExecutor/types';
@@ -17,7 +19,9 @@ vi.mock('@manifest-network/manifest-sdk/deploy', async original => ({
   ...await original<typeof import('@manifest-network/manifest-sdk/deploy')>(),
   getLeaseStatus: vi.fn(),
   getLeaseConnectionInfo: vi.fn(),
+  restartApp: vi.fn(), updateApp: vi.fn(), waitForLeaseStatus: vi.fn(),
 }));
+vi.mock('../ai/toolExecutor/capabilityCtx', () => ({ buildBarneyCtx: vi.fn(async () => ({})) }));
 
 const LEASE_UUID = '550e8400-e29b-41d4-a716-446655440000';
 const PROVIDER_UUID = '550e8400-e29b-41d4-a716-446655440001';
@@ -117,6 +121,39 @@ describe('useAppRecovery', () => {
     });
     expect(getLeaseStatus).toHaveBeenCalledTimes(1);
     expect(getAuthToken).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['restart', 'batch restart', 'update'].flatMap(operation => ['timeout', 'abort'].map(reason => ({ operation, reason }))))('observes a later runtime failure after a legacy $operation wait $reason without retracting readiness first', async ({ operation, reason }) => {
+    const app = addApp({ provisionState: 'confirmed', url: 'https://app.example.com',
+      connection: { host: '', fqdn: 'app.example.com' }, connectionStale: false });
+    await render();
+    expect(getLeaseStatus).not.toHaveBeenCalled();
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: app.leaseUuid, status: 'restarting' });
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: app.leaseUuid, status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockRejectedValue(reason === 'abort'
+      ? new DOMException('Wait cancelled after POST', 'AbortError') : new Error('Readiness wait timed out'));
+    const entry = { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl };
+    const chain = {} as CosmosClientManager;
+    const options = { address, clientManager: chain, appRegistry: registry, signing: store.getState().signing!, tiers: [] };
+    await act(async () => {
+      if (operation === 'update') {
+        const bytes = new TextEncoder().encode('{"image":"nginx:new"}');
+        await executeConfirmedUpdateApp(entry, chain, options, { bytes, size: bytes.length, hash: 'test' });
+      } else {
+        await executeConfirmedRestartApp(operation === 'batch restart'
+          ? { app_name: 'all', entries: [entry] } : entry, chain, options);
+      }
+    });
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'confirmed', status: 'running', connectionStale: true });
+    vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'restarting' });
+    await advance(APP_RECOVERY_POLL_INTERVAL_MS);
+    expect(getLeaseStatus).toHaveBeenCalledTimes(1);
+    // Fresh connection data during maintenance must not retire readiness checks.
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'confirmed', connectionStale: true });
+    vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'failed' });
+    await advance(AUTO_REFRESH_INTERVAL_MS);
+    expect(getLeaseStatus).toHaveBeenCalledTimes(2);
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'failed', status: 'failed' });
   });
 
   it.each([0, 1, APP_RECOVERY_MAX_ATTEMPTS])('repairs invalidated DNS metadata after the initial budget, with readiness confirmed after %s rounds', async (readyAfter) => {

@@ -4,6 +4,7 @@ import { getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { runtimeConfig } from '../../config/runtimeConfig';
 import { reconcileProvisionStatus } from './provisionStatus';
+import { maintenanceRegistryPatch } from './maintenanceRegistryPatch';
 import { recoverReleaseManifest } from './maintenancePayload';
 import { captureMaintenanceCompletionEpoch, isMaintenanceCompletionEpochCurrent, rememberMaintenanceCompletion } from './maintenanceCompletion';
 import { resolveAppEndpoint } from './helpers';
@@ -49,7 +50,7 @@ export async function reconcilePendingMaintenance(
 
   const completionEpoch = captureMaintenanceCompletionEpoch(command);
   const currentApp = appRegistry.getAppByLease(address, app.leaseUuid);
-  const registrySnapshot = JSON.stringify(currentApp);
+  const registrySnapshot = structuredClone(currentApp);
   const token = async () => {
     signal?.throwIfAborted();
     const auth = await signing.authTokens.getAuthToken(asLeaseUuid(app.leaseUuid));
@@ -81,13 +82,18 @@ export async function reconcilePendingMaintenance(
   // a newer command may have completed while this observation was in flight.
   const committed = await commitMaintenanceObservation(command, {
     settled: verdict.outcome !== 'unconfirmed',
+    ...(verdict.outcome !== 'unconfirmed' && { outcome: verdict.outcome }),
     isCurrent: () => {
       signal?.throwIfAborted();
+      const current = appRegistry.getAppByLease(address, app.leaseUuid);
       return isMaintenanceCompletionEpochCurrent(completionEpoch)
-        && JSON.stringify(appRegistry.getAppByLease(address, app.leaseUuid)) === registrySnapshot;
+        && current?.providerUrl === registrySnapshot?.providerUrl
+        && current?.providerUuid === registrySnapshot?.providerUuid
+        && current?.chainState === registrySnapshot?.chainState;
     },
     apply: () => {
-      if (Object.keys(patch).length > 0) appRegistry.updateApp(address, app.leaseUuid, patch);
+      const currentPatch = maintenanceRegistryPatch(registrySnapshot, appRegistry.getAppByLease(address, app.leaseUuid), patch);
+      if (Object.keys(currentPatch).length > 0) appRegistry.updateApp(address, app.leaseUuid, currentPatch);
       if (verdict.outcome === 'unconfirmed') return;
       // Failed updates never replace the registry manifest, including after reload.
       const current = appRegistry.getAppByLease(address, app.leaseUuid) ?? app;

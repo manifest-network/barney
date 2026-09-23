@@ -101,7 +101,7 @@ retry the same restart, or retry the update using only the app name; it recovers
 the saved command. For a bulk restart, retrying "all" recovers only unresolved
 restarts. Legacy v0.13 providers cannot deduplicate requests: inspect status and
 releases before deliberately submitting another command. Avoid changing the
-update or stopping and redeploying while its outcome is unresolved.
+update or automatically stopping and redeploying to resolve uncertainty.
 
 Barney keeps update contents in memory to protect secrets. After a browser
 reload, retry using only the app name to look for matching bytes in provider
@@ -113,17 +113,29 @@ Rejected updates create no release. If that rejection's response and the exact
 payload are both lost, Barney cannot resolve the command through the available
 provider API. Clearing chat or abandoning local metadata would not cancel it;
 do not use either as permission to send a replacement command.
+If the exact bytes are permanently lost, the only in-app exit is to deliberately
+stop the deployment through a separate confirmation. Fred may still execute the
+pending command until the lease closes. Stopping ends the deployment; it does
+not recover the update, and Barney does not automatically redeploy it.
 Recovery never changes the command's key or infers success from matching bytes. A
 healthy app can still have a failed restart or update if the provider restored
 the previous runtime. The operation result and app health are reported separately.
 
-If another tab already settled or replaced the saved command, Barney asks you
-to observe status and releases instead of offering a retry. Check that outcome
-before deciding whether you need another operation.
+Barney retains the last settled command's identity across tabs and reloads. If
+you follow old retry advice after it settled, Barney reports that receipt instead
+of offering another operation. Check the outcome first. If you deliberately want
+another restart or update, ask for a new operation; its confirmation says so.
 
-After 128 completed operations in one wallet session, Barney asks you to clear
-chat history before starting a new command. Existing pending commands remain
-recoverable; clearing history does not cancel or discard them.
+Each wallet session has room for 128 completed or pending operations. Barney
+checks the whole batch before confirmation and reserves room before starting it,
+so a capacity limit cannot cause only part of an approved batch to run. At the
+limit, clear chat history before starting new work. Existing pending commands
+remain recoverable; clearing history does not cancel or discard them.
+
+After an uncertain restart or update, background checks continue for a bounded
+number of attempts even when the app was previously healthy. The sidebar keeps
+the last observed readiness until a fresh provider observation changes it. You
+can always request `app_status` if those checks are exhausted.
 
 ### "App is failed"
 

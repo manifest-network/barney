@@ -43,6 +43,15 @@ interface MaintenanceInput extends Omit<MaintenanceScope, 'chainId'> {
   readonly previousManifest?: string;
   readonly baselineReleaseVersions?: readonly number[];
   readonly expectPending?: boolean;
+  /** Explicit confirmation to start another command after this settled key. */
+  readonly previousOperationKey?: string;
+}
+
+export interface SettledMaintenanceOperation extends MaintenanceScope {
+  readonly operation: MaintenanceKind;
+  readonly idempotencyKey: string;
+  readonly payloadHash: string;
+  readonly outcome: 'succeeded' | 'failed' | 'settled';
 }
 
 /** A local conflict or stale recovery plan must never be reported as a sent command. */
@@ -80,6 +89,55 @@ function storageKey(scope: MaintenanceScope): string {
     scope.chainId, runtimeConfig.PUBLIC_RPC_URL, runtimeConfig.PUBLIC_REST_URL,
     scope.address, scope.providerUrl, scope.leaseUuid,
   ]))}`;
+}
+
+function settledStorageKey(scope: MaintenanceScope): string {
+  return `${storageKey(scope)}:settled`;
+}
+
+/** One nonsecret receipt per lease prevents old recovery advice from becoming
+ * a new command in another tab or after a reload. No time-based expiration. */
+export function getSettledMaintenanceOperation(
+  address: string,
+  providerUrl: string,
+  leaseUuid: string,
+  chainId = runtimeConfig.PUBLIC_CHAIN_ID,
+): SettledMaintenanceOperation | undefined {
+  const scope = scopeFor({ address, providerUrl, leaseUuid, chainId });
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(settledStorageKey(scope));
+  } catch {
+    throw storageError();
+  }
+  if (raw === null) return undefined;
+  try {
+    const value = JSON.parse(raw) as Partial<SettledMaintenanceOperation> & { v?: number };
+    if (value.v !== 1 || (value.operation !== 'restart' && value.operation !== 'update')
+      || typeof value.idempotencyKey !== 'string' || !UUID_V4.test(value.idempotencyKey)
+      || typeof value.payloadHash !== 'string' || !SHA_256.test(value.payloadHash)
+      || !['succeeded', 'failed', 'settled'].includes(value.outcome ?? '')) throw new Error();
+    return Object.freeze({ ...scope, operation: value.operation, idempotencyKey: value.idempotencyKey,
+      payloadHash: value.payloadHash, outcome: value.outcome! });
+  } catch {
+    throw new MaintenanceOperationRefusalError('The saved maintenance receipt is unreadable. Restore browser storage access before starting another command.');
+  }
+}
+
+export function assertNewMaintenanceOperation(input: Omit<MaintenanceInput, 'operation'>): void {
+  const receipt = getSettledMaintenanceOperation(input.address, input.providerUrl, input.leaseUuid, input.chainId);
+  if (receipt ? input.previousOperationKey !== receipt.idempotencyKey || input.idempotencyKey === receipt.idempotencyKey : input.previousOperationKey !== undefined) {
+    throw new MaintenanceOperationSupersededError('The previous maintenance command has settled or changed. Observe its result before explicitly requesting a new command.');
+  }
+}
+
+function persistSettled(record: MaintenanceOperation, outcome: SettledMaintenanceOperation['outcome']): void {
+  try {
+    localStorage.setItem(settledStorageKey(record), JSON.stringify({ v: 1, operation: record.operation,
+      idempotencyKey: record.idempotencyKey, payloadHash: record.payloadHash, outcome }));
+  } catch {
+    throw storageError();
+  }
 }
 
 function metadataFor(record: MaintenanceOperation): MaintenanceMetadata {
@@ -212,6 +270,7 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
   const initial = getPendingMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid, scope.chainId);
   if (initial) assertMaintenanceOperationMatches(initial, input);
   else if (input.expectPending) throw missingOperation();
+  else assertNewMaintenanceOperation(input);
   if (!initial && !input.baselineReleaseVersions) {
     throw new Error('Read the release history before starting a maintenance operation so its outcome can be verified.');
   }
@@ -229,6 +288,7 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
     // cannot mint separate keys for the same unresolved operation.
     const current = getPendingMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid, scope.chainId);
     if (!current && (initial || input.expectPending)) throw missingOperation();
+    if (!current) assertNewMaintenanceOperation(input);
     if (current) {
       if (initial && !matches(initial, metadataFor(current))) {
         throw new MaintenanceOperationSupersededError('The saved maintenance operation changed during preparation; it may have been settled or superseded in another tab.');
@@ -260,7 +320,11 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
 }
 
 /** Release only after the caller has verified a settled maintenance outcome. */
-export async function completeMaintenanceOperation(record: MaintenanceOperation, beforeComplete?: () => void): Promise<void> {
+export async function completeMaintenanceOperation(
+  record: MaintenanceOperation,
+  beforeComplete?: () => void,
+  outcome: SettledMaintenanceOperation['outcome'] = 'settled',
+): Promise<void> {
   const key = storageKey(record);
   await withScopeLock(key, () => {
     beforeComplete?.();
@@ -272,6 +336,7 @@ export async function completeMaintenanceOperation(record: MaintenanceOperation,
     if (!matches(record, metadata)) return; // A stale result must not clear a newer command.
     const retained = pending.get(key);
     if (retained && retained.idempotencyKey !== record.idempotencyKey) return;
+    persistSettled(record, outcome);
     try {
       localStorage.removeItem(key);
     } catch {
@@ -345,6 +410,7 @@ export async function retireAbsentMaintenanceOperation(input: Omit<MaintenanceSc
     await withScopeLock(key, () => {
       pending.delete(key);
       localStorage.removeItem(key);
+      localStorage.removeItem(settledStorageKey(scopeFor(input)));
     });
   } catch {
     pending.delete(key);
@@ -357,7 +423,7 @@ export async function retireAbsentMaintenanceOperation(input: Omit<MaintenanceSc
 /** Commit read-only observations only while both the command and caller snapshot remain current. */
 export async function commitMaintenanceObservation(
   record: MaintenanceOperation,
-  observation: { settled: boolean; isCurrent: () => boolean; apply: () => void },
+  observation: { settled: boolean; outcome?: SettledMaintenanceOperation['outcome']; isCurrent: () => boolean; apply: () => void },
 ): Promise<boolean> {
   const key = storageKey(record);
   return withScopeLock(key, () => {
@@ -373,6 +439,7 @@ export async function commitMaintenanceObservation(
     if (!matches(record, metadata)) return false;
     if (!observation.isCurrent()) return false;
     if (observation.settled) {
+      persistSettled(record, observation.outcome ?? 'settled');
       try {
         localStorage.removeItem(key);
       } catch {

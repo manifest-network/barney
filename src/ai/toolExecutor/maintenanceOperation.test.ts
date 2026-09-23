@@ -169,21 +169,50 @@ describe('maintenance operation retention', () => {
     expect(retried.previousManifest).toBeUndefined();
   });
 
-  it('releases a settled operation and honors the same plan key on an exact replay', async () => {
+  it('retains a nonsecret receipt and refuses rebasing an already settled key', async () => {
     const original = await operations.getOrCreateMaintenanceOperation({ ...restart, idempotencyKey: key });
     await operations.completeMaintenanceOperation(original);
     expect(pending()).toBeUndefined();
-    expect(localStorage.length).toBe(0);
-    const replayed = await operations.getOrCreateMaintenanceOperation({ ...restart, idempotencyKey: key });
-    expect(replayed.idempotencyKey).toBe(key);
+    expect(localStorage.length).toBe(1);
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toMatchObject({
+      operation: 'restart', idempotencyKey: key, payloadHash: original.payloadHash, outcome: 'settled',
+    });
+    await expect(operations.getOrCreateMaintenanceOperation({ ...restart, idempotencyKey: key })).rejects.toThrow(/previous maintenance command/);
+    await expect(operations.getOrCreateMaintenanceOperation({ ...restart, idempotencyKey: key, previousOperationKey: key })).rejects.toThrow(/previous maintenance command/);
   });
 
   it('does not let a stale completion release a newer command', async () => {
     const old = await operations.getOrCreateMaintenanceOperation(restart);
     await operations.completeMaintenanceOperation(old);
-    const current = await operations.getOrCreateMaintenanceOperation(restart);
+    const current = await operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: old.idempotencyKey });
     await operations.completeMaintenanceOperation(old);
     expect(pending()?.idempotencyKey).toBe(current.idempotencyKey);
+  });
+
+  it('preserves one nonsecret settled receipt across reloads and requires a matching new-command confirmation', async () => {
+    const first = await operations.getOrCreateMaintenanceOperation(update);
+    await operations.completeMaintenanceOperation(first, undefined, 'failed');
+    vi.resetModules();
+    operations = await import('./maintenanceOperation');
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toMatchObject({
+      idempotencyKey: first.idempotencyKey, outcome: 'failed',
+    });
+    expect(localStorage.getItem(localStorage.key(0)!)!).not.toMatch(/private-secret|nginx|manifest/);
+    await expect(operations.getOrCreateMaintenanceOperation(restart)).rejects.toThrow(/previous maintenance command/);
+    const next = await operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: first.idempotencyKey });
+    await operations.completeMaintenanceOperation(next, undefined, 'succeeded');
+    expect(localStorage.length).toBe(1);
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)?.idempotencyKey).toBe(next.idempotencyKey);
+    await expect(operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: first.idempotencyKey })).rejects.toThrow(/previous maintenance command/);
+    await operations.retireAbsentMaintenanceOperation(scope);
+    expect(localStorage.length).toBe(0);
+  });
+
+  it('retains the pending marker when its settled receipt cannot be saved', async () => {
+    const original = await operations.getOrCreateMaintenanceOperation(update);
+    failStorageMethod('setItem');
+    await expect(operations.completeMaintenanceOperation(original)).rejects.toThrow(/storage access/);
+    expect(pending()?.idempotencyKey).toBe(original.idempotencyKey);
   });
 
   it('forgets stale in-memory commands when the durable marker is cleared', async () => {
@@ -201,7 +230,8 @@ describe('maintenance operation retention', () => {
     const secondTab = await import('./maintenanceOperation');
     await secondTab.completeMaintenanceOperation(original);
     expect(pending()).toBeUndefined();
-    const next = await operations.getOrCreateMaintenanceOperation(restart);
+    await expect(operations.getOrCreateMaintenanceOperation(restart)).rejects.toThrow(/previous maintenance command/);
+    const next = await operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: original.idempotencyKey });
     expect(next.operation).toBe('restart');
     expect(next.idempotencyKey).not.toBe(original.idempotencyKey);
     expect(next.manifest).toBeUndefined();
@@ -212,7 +242,7 @@ describe('maintenance operation retention', () => {
     vi.resetModules();
     const secondTab = await import('./maintenanceOperation');
     await secondTab.completeMaintenanceOperation(original);
-    const next = await secondTab.getOrCreateMaintenanceOperation(restart);
+    const next = await secondTab.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: original.idempotencyKey });
     expect(pending()).toMatchObject({ operation: 'restart', idempotencyKey: next.idempotencyKey });
     expect(pending()?.manifest).toBeUndefined();
     expect(pending()?.previousManifest).toBeUndefined();

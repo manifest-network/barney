@@ -1,5 +1,5 @@
 import { asLeaseUuid } from '@manifest-network/manifest-sdk';
-import { metaHashHex, restartApp, updateApp, waitForLeaseStatus } from '@manifest-network/manifest-sdk/deploy';
+import { createMaintenanceIdempotencyKey, metaHashHex, restartApp, updateApp, waitForLeaseStatus } from '@manifest-network/manifest-sdk/deploy';
 import { getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { browserEventTransport } from '../../api/eventTransport';
 import { AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
@@ -13,8 +13,10 @@ import { connectionPatch, resolveAppEndpoint } from './helpers';
 import { resolveAppUrl } from './deployUrl';
 import { validateManifestForProvider } from './deployArgs';
 import { reconcileProvisionStatus } from './provisionStatus';
+import { maintenanceRegistryPatch } from './maintenanceRegistryPatch';
 import {
   assertMaintenanceOperationMatches,
+  assertNewMaintenanceOperation,
   completeMaintenanceOperation,
   commitMaintenanceObservation,
   discardUnsubmittedMaintenanceOperation,
@@ -28,8 +30,9 @@ import {
 } from './maintenanceOperation';
 import { captureMaintenanceBaseline, evaluateMaintenanceOutcome } from './maintenanceOutcome';
 import {
-  captureMaintenanceCompletionEpoch, getCompletedMaintenance, isMaintenanceCompletionCacheFull, isMaintenanceCompletionEpochCurrent,
-  rememberMaintenanceCompletion, type MaintenanceResult,
+  captureMaintenanceCompletionEpoch, getCompletedMaintenance, isMaintenanceCompletionEpochCurrent,
+  MAINTENANCE_CAPACITY_MESSAGE, releaseMaintenanceCompletionReservation, rememberMaintenanceCompletion,
+  reserveMaintenanceCompletions, type MaintenanceCompletionReservation, type MaintenanceResult,
 } from './maintenanceCompletion';
 import { settledMaintenanceRefusal } from './maintenanceRefusal';
 import type { ToolExecutorOptions } from './types';
@@ -45,6 +48,7 @@ export async function executeMaintenance(
     idempotencyKey?: string;
     manifest?: string;
     expectPending?: boolean;
+    previousOperationKey?: string;
   },
   options: ToolExecutorOptions,
 ): Promise<MaintenanceResult> {
@@ -70,17 +74,38 @@ export async function executeMaintenance(
   let accepted = false;
   let localDispatchError: unknown;
   let recoveryKey = input.idempotencyKey;
+  let reservation: MaintenanceCompletionReservation | undefined;
   const observationOnly = (detail: string): MaintenanceResult => {
     const guidance = `${verb} observation for "${name}": ${detail} ` +
       `Check app_status("${name}") and app_releases("${name}") to observe the current state.`;
     onProgress({ phase: 'unconfirmed', operation, detail: 'Observe the current app state' });
     return { outcome: 'unconfirmed', result: { success: false, error: guidance } };
   };
-  const unconfirmed = (detail: string): MaintenanceResult => {
+  const unconfirmed = async (detail: string): Promise<MaintenanceResult> => {
     try {
       const saved = getPendingMaintenanceOperation(address, providerUrl, leaseUuid, chainId);
       if (!saved || saved.operation !== operation || saved.idempotencyKey !== recoveryKey) {
-        return observationOnly(`${detail} The saved command is no longer pending here; it may have been settled or superseded in another tab.`);
+        return observationOnly('This browser no longer has the original pending record; another tab may have settled or superseded it. This response alone cannot establish its outcome.');
+      }
+      try {
+        const observed = await commitMaintenanceObservation(saved, {
+          settled: false,
+          isCurrent: () => {
+            options.assertAuthorization?.();
+            return isMaintenanceCompletionEpochCurrent(completionEpoch);
+          },
+          apply: () => {
+            const current = appRegistry.getAppByLease(address, leaseUuid);
+            if (current?.providerUrl === providerUrl && current.chainState !== 'absent') {
+              // Retain the readiness badge, but let bounded background recovery
+              // observe work that can finish after this request was cancelled.
+              appRegistry.updateApp(address, leaseUuid, { connectionStale: true });
+            }
+          },
+        });
+        if (!observed) return observationOnly('The saved command changed while this response was being prepared. Observe its current result before deciding whether another command is needed.');
+      } catch {
+        // A stale UI session must not erase the retained provider command.
       }
     } catch {
       return observationOnly(`${detail} The saved command could not be read. Restore browser storage access before further recovery.`);
@@ -88,7 +113,7 @@ export async function executeMaintenance(
     const guidance = `${verb} outcome for "${name}" is unconfirmed. ${detail} ` +
       `Check app_status("${name}") and app_releases("${name}"). ` +
       `Retry ${operation}_app(app_name="${name}") to recover the saved command with its original key and exact payload. ` +
-      'Do not submit a new command or stop/redeploy while this outcome is unresolved.';
+      'Do not submit a new command or automatically stop/redeploy to recover this outcome.';
     onProgress({ phase: 'unconfirmed', operation, detail: `${verb} outcome unconfirmed` });
     return { outcome: 'unconfirmed', result: { success: false, error: guidance } };
   };
@@ -111,10 +136,12 @@ export async function executeMaintenance(
     else if (input.expectPending) {
       throw new MaintenanceOperationSupersededError('The saved maintenance operation no longer exists; it may have been settled or superseded in another tab.');
     }
-    if (!pending && isMaintenanceCompletionCacheFull({ address, chainId })) {
-      throw new MaintenanceOperationRefusalError('This wallet has reached its maintenance confirmation limit. Clear its chat history before starting another command.');
-    }
-    recoveryKey = pending?.idempotencyKey ?? recoveryKey;
+    else assertNewMaintenanceOperation({ ...input, address, chainId });
+    recoveryKey = pending?.idempotencyKey ?? recoveryKey ?? createMaintenanceIdempotencyKey();
+    reservation = reserveMaintenanceCompletions([{
+      address, chainId, providerUrl, leaseUuid, operation, idempotencyKey: recoveryKey, recovery: !!pending,
+    }], completionEpoch);
+    if (!reservation) throw new MaintenanceOperationRefusalError(MAINTENANCE_CAPACITY_MESSAGE);
     existedBeforeAttempt = pending !== undefined;
     assertCurrent();
     if (pending && input.manifest !== undefined && pending.payloadHash !== await metaHashHex(input.manifest)) {
@@ -130,16 +157,17 @@ export async function executeMaintenance(
       captureMaintenanceBaseline(await getLeaseReleases(providerUrl, leaseUuid, await token()));
     const prepared = await prepareMaintenanceOperation({
       address, providerUrl, leaseUuid, operation, chainId,
-      idempotencyKey: input.idempotencyKey,
+      idempotencyKey: recoveryKey,
       manifest: input.manifest,
       previousManifest: appRegistry.getAppByLease(address, leaseUuid)?.manifest,
       baselineReleaseVersions: baseline,
       expectPending: input.expectPending || existedBeforeAttempt,
+      previousOperationKey: input.previousOperationKey,
     });
     command = prepared.command;
     recoveryKey = command.idempotencyKey;
     created = prepared.created;
-    const registrySnapshot = JSON.stringify(appRegistry.getAppByLease(address, leaseUuid));
+    const registrySnapshot = structuredClone(appRegistry.getAppByLease(address, leaseUuid));
     const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
     const maintenanceCtx = {
       ...ctx,
@@ -234,6 +262,7 @@ export async function executeMaintenance(
       } } };
     const applied = await commitMaintenanceObservation(command, {
       settled,
+      ...(settled && { outcome: verdict.outcome as 'succeeded' | 'failed' }),
       isCurrent: () => {
         assertCurrent();
         return true;
@@ -241,8 +270,9 @@ export async function executeMaintenance(
       apply: () => {
         // Registry freshness controls only this projection, not the independently
         // verified command verdict or retirement of its still-current marker.
-        if (JSON.stringify(appRegistry.getAppByLease(address, leaseUuid)) === registrySnapshot && Object.keys(patch).length > 0) {
-          appRegistry.updateApp(address, leaseUuid, patch);
+        const currentPatch = maintenanceRegistryPatch(registrySnapshot, appRegistry.getAppByLease(address, leaseUuid), patch);
+        if (Object.keys(currentPatch).length > 0) {
+          appRegistry.updateApp(address, leaseUuid, currentPatch);
         }
       },
     });
@@ -264,7 +294,7 @@ export async function executeMaintenance(
   } catch (error) {
     if (error instanceof MaintenanceOperationSupersededError || localDispatchError instanceof MaintenanceOperationSupersededError) {
       const detail = (localDispatchError instanceof MaintenanceOperationSupersededError ? localDispatchError : error) as MaintenanceOperationSupersededError;
-      return observationOnly(`${dispatchStarted ? 'No further maintenance request was sent.' : 'This recovery request was not sent.'} ${detail.message}`);
+      return observationOnly(`${dispatchStarted ? 'No further maintenance request was sent.' : input.expectPending ? 'This recovery request was not sent.' : 'This maintenance request was not sent.'} ${detail.message}`);
     }
     if (error instanceof MaintenanceOperationRefusalError) {
       onProgress({ phase: 'failed', operation, detail: error.message });
@@ -281,18 +311,28 @@ export async function executeMaintenance(
     }
     const refusal = command && settledMaintenanceRefusal(error, command);
     if (command && refusal) {
+      let retirementFailed = false;
       try {
-        assertCurrent();
-        await completeMaintenanceOperation(command, assertCurrent);
-        assertCurrent();
+        // An authoritative receipt remains valid after Esc, wallet changes, or
+        // chat invalidation. Identity matching protects any successor command.
+        await completeMaintenanceOperation(command, undefined, 'failed');
       } catch {
-        return observationOnly('The provider refused the command, but this confirmation or its recovery record could not be safely updated.');
+        retirementFailed = true;
       }
       const safeRefusal = sanitizeForDisplay(refusal, 512);
-      const detail = `${verb} failed: ${safeRefusal}${/[.!?…]$/.test(safeRefusal) ? '' : '.'}`;
+      const detail = `${verb} failed: ${safeRefusal}${/[.!?…]$/.test(safeRefusal) ? '' : '.'}` +
+        (retirementFailed ? ' Its local recovery record could not be cleared. Restore browser storage access before starting another command.' : '');
       const result: MaintenanceResult = { outcome: 'failed', result: { success: false, error: detail } };
-      rememberMaintenanceCompletion(command, result, completionEpoch);
-      onProgress({ phase: 'failed', operation, detail });
+      try {
+        options.assertAuthorization?.();
+        if (isMaintenanceCompletionEpochCurrent(completionEpoch)) {
+          rememberMaintenanceCompletion(command, result, completionEpoch);
+          onProgress({ phase: 'failed', operation, detail });
+        }
+      } catch {
+        // The old wallet's receipt can retire its marker without updating the
+        // new session's cache or progress UI.
+      }
       return result;
     }
     if (command || existedBeforeAttempt) {
@@ -306,5 +346,17 @@ export async function executeMaintenance(
     const preparationError = localDispatchError ?? error;
     if (isAbortError(preparationError)) return { outcome: 'cancelled', result: { success: false, error: `${verb} cancelled before dispatch.` } };
     return { outcome: 'failed', result: { success: false, error: preparationError instanceof Error ? preparationError.message : `${verb} could not be prepared.` } };
+  } finally {
+    if (reservation) {
+      let retainPending = false;
+      try {
+        const saved = getPendingMaintenanceOperation(address, providerUrl, leaseUuid, chainId);
+        retainPending = !!saved && saved.idempotencyKey === recoveryKey && !!saved.dispatched;
+      } catch {
+        // A dispatched request with unreadable metadata still owns its slot.
+        retainPending = dispatchStarted || existedBeforeAttempt;
+      }
+      releaseMaintenanceCompletionReservation(reservation, retainPending);
+    }
   }
 }

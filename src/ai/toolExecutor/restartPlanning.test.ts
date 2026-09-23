@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppEntry } from '../../registry/appRegistry';
 import { executeConfirmedRestartApp, executeRestartApp } from './compositeTransactions';
 import { executeMaintenance } from './maintenanceExecution';
-import { getPendingMaintenanceOperation, type MaintenanceOperation } from './maintenanceOperation';
+import { getPendingMaintenanceOperation, getSettledMaintenanceOperation, type MaintenanceOperation } from './maintenanceOperation';
+import { canPlanMaintenanceCompletions, captureMaintenanceCompletionEpoch, clearCompletedMaintenance, MAX_COMPLETED_MAINTENANCE, rememberMaintenanceCompletion } from './maintenanceCompletion';
+import { runtimeConfig } from '../../config/runtimeConfig';
 import { makeRegistry } from './testHelpers';
 import type { ToolExecutorOptions } from './types';
 
 vi.mock('../../config/fredCompatibility', () => ({ fredCompatibilityForProvider: () => 'pr240' }));
-vi.mock('./maintenanceOperation', () => ({ getPendingMaintenanceOperation: vi.fn() }));
+vi.mock('./maintenanceOperation', () => ({ getPendingMaintenanceOperation: vi.fn(), getSettledMaintenanceOperation: vi.fn() }));
 vi.mock('./maintenanceExecution', () => ({ executeMaintenance: vi.fn() }));
 vi.mock('./capabilityCtx', () => ({ buildBarneyCtx: vi.fn().mockResolvedValue({}) }));
 
@@ -32,9 +34,99 @@ function pending(operation: 'restart' | 'update'): MaintenanceOperation {
     payloadHash: 'a'.repeat(64), baselineReleaseVersions: [1] };
 }
 
-beforeEach(() => vi.resetAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  clearCompletedMaintenance({ address, chainId: runtimeConfig.PUBLIC_CHAIN_ID });
+});
+
+function fillCompletions(count: number) {
+  const command = { ...pending('restart'), chainId: runtimeConfig.PUBLIC_CHAIN_ID };
+  const epoch = captureMaintenanceCompletionEpoch(command);
+  for (let i = 0; i < count; i++) rememberMaintenanceCompletion({ ...command, idempotencyKey: crypto.randomUUID() }, {
+    outcome: 'succeeded', result: { success: true, data: {} },
+  }, epoch);
+}
 
 describe('restart selection and saved operations', () => {
+  it('does not turn retry advice into a new command after another tab settles the prior command', async () => {
+    vi.mocked(getSettledMaintenanceOperation).mockReturnValue({ ...pending('restart'), outcome: 'succeeded' });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await executeRestartApp({ app_name: 'web' }, options([app('web', 1)]));
+      expect(result.requiresConfirmation).toBeUndefined();
+      expect(result.error).toContain('has already settled');
+      expect(result.pendingAction).toBeUndefined();
+    }
+  });
+
+  it('explicit new intent binds the confirmation to the previous settled command', async () => {
+    vi.mocked(getSettledMaintenanceOperation).mockReturnValue({ ...pending('restart'), outcome: 'succeeded' });
+    const result = await executeRestartApp({ app_name: 'web', new_command: true }, options([app('web', 1)]));
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args).toMatchObject({ previousOperationKey: restartKey });
+    expect(result.pendingAction?.args.idempotencyKey).not.toBe(restartKey);
+    expect(result.confirmationMessage).toContain('NEW command after the previous settled operation');
+  });
+
+  it('does not let explicit new intent bypass an unresolved command', async () => {
+    vi.mocked(getPendingMaintenanceOperation).mockReturnValue(pending('restart'));
+    const result = await executeRestartApp({ app_name: 'web', new_command: true }, options([app('web', 1)]));
+    expect(result.requiresConfirmation).toBeUndefined();
+    expect(result.error).toContain('new command cannot replace it');
+  });
+
+  it.each(['web', 'all'])('refuses %s before confirmation when the complete selection cannot fit', async (app_name) => {
+    fillCompletions(MAX_COMPLETED_MAINTENANCE);
+    const result = await executeRestartApp({ app_name }, options([app('web', 1)]));
+    expect(result.requiresConfirmation).toBeUndefined();
+    expect(result.error).toContain('maintenance confirmation limit');
+  });
+
+  it('refuses an eight-app plan with only one remaining slot', async () => {
+    fillCompletions(MAX_COMPLETED_MAINTENANCE - 1);
+    const result = await executeRestartApp({ app_name: 'all' }, options(Array.from({ length: 8 }, (_, i) => app(`web${i}`, i + 1))));
+    expect(result.requiresConfirmation).toBeUndefined();
+    expect(result.error).toContain('maintenance confirmation limit');
+  });
+
+  it('allows pending recovery at the cap', async () => {
+    fillCompletions(MAX_COMPLETED_MAINTENANCE);
+    vi.mocked(getPendingMaintenanceOperation).mockReturnValue(pending('restart'));
+    const result = await executeRestartApp({ app_name: 'web' }, options([app('web', 1)]));
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args).toMatchObject({ idempotencyKey: restartKey, expectPending: true });
+  });
+
+  it('atomically refuses an already-approved batch when capacity changed, before executing any item', async () => {
+    const executionOptions = { ...options(Array.from({ length: 8 }, (_, i) => app(`web${i}`, i + 1))),
+      signing: {} as NonNullable<ToolExecutorOptions['signing']> };
+    const confirmation = await executeRestartApp({ app_name: 'all' }, executionOptions);
+    fillCompletions(MAX_COMPLETED_MAINTENANCE - 1);
+    const result = await executeConfirmedRestartApp(confirmation.pendingAction!.args, {} as NonNullable<ToolExecutorOptions['clientManager']>, executionOptions);
+    expect(result.error).toContain('maintenance confirmation limit');
+    expect(executeMaintenance).not.toHaveBeenCalled();
+  });
+
+  it('reserves queued batch items against concurrent planning and releases unsubmitted slots after cancellation', async () => {
+    fillCompletions(MAX_COMPLETED_MAINTENANCE - 8);
+    const executionOptions = { ...options(Array.from({ length: 8 }, (_, i) => app(`web${i}`, i + 1))),
+      signing: {} as NonNullable<ToolExecutorOptions['signing']> };
+    const confirmation = await executeRestartApp({ app_name: 'all' }, executionOptions);
+    let finish!: () => void;
+    const waiting = new Promise<void>((resolve) => { finish = resolve; });
+    vi.mocked(executeMaintenance).mockImplementation(async () => {
+      await waiting;
+      return { outcome: 'cancelled', result: { success: false, error: 'Cancelled before dispatch.' } };
+    });
+    const running = executeConfirmedRestartApp(confirmation.pendingAction!.args, {} as NonNullable<ToolExecutorOptions['clientManager']>, executionOptions);
+    await vi.waitFor(() => expect(executeMaintenance).toHaveBeenCalledTimes(4));
+    const concurrent = await executeRestartApp({ app_name: 'web0' }, executionOptions);
+    expect(concurrent.requiresConfirmation).toBeUndefined();
+    expect(concurrent.error).toContain('maintenance confirmation limit');
+    finish();
+    await running;
+    expect(executeMaintenance).toHaveBeenCalledTimes(8);
+    expect(canPlanMaintenanceCompletions({ address, chainId: runtimeConfig.PUBLIC_CHAIN_ID }, 8)).toBe(true);
+  });
   it('does not inspect unrelated corrupt metadata for a named restart', async () => {
     vi.mocked(getPendingMaintenanceOperation).mockImplementation((_address, _provider, lease) => {
       if (lease === leaseUuid(2)) throw new Error('Saved operation is unreadable');

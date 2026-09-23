@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { captureMaintenanceCompletionEpoch, clearCompletedMaintenance, getCompletedMaintenance, isMaintenanceCompletionCacheFull, isMaintenanceCompletionEpochCurrent, MAX_COMPLETED_MAINTENANCE, rememberMaintenanceCompletion } from './maintenanceCompletion';
+import { canPlanMaintenanceCompletions, captureMaintenanceCompletionEpoch, clearCompletedMaintenance, getCompletedMaintenance, isMaintenanceCompletionCacheFull, isMaintenanceCompletionEpochCurrent, MAX_COMPLETED_MAINTENANCE, releaseMaintenanceCompletionReservation, rememberMaintenanceCompletion, reserveMaintenanceCompletions } from './maintenanceCompletion';
 import type { MaintenanceOperation } from './maintenanceOperation';
 
 const command: MaintenanceOperation = {
@@ -36,6 +36,58 @@ describe('maintenance completion lifecycle', () => {
     expect(getCompletedMaintenance(commands.at(-1)!)).toBeUndefined();
     clearCompletedMaintenance(command);
     expect(isMaintenanceCompletionCacheFull(command)).toBe(false);
+  });
+
+  it('reserves an entire batch synchronously, includes pending work in admission, and rolls back no slots on refusal', () => {
+    const epoch = captureMaintenanceCompletionEpoch(command);
+    for (let i = 0; i < MAX_COMPLETED_MAINTENANCE - 1; i++) {
+      rememberMaintenanceCompletion({ ...command, idempotencyKey: crypto.randomUUID() }, result, epoch);
+    }
+    const batch = Array.from({ length: 8 }, () => ({ ...command, idempotencyKey: crypto.randomUUID() }));
+    expect(reserveMaintenanceCompletions(batch, epoch)).toBeUndefined();
+    expect(canPlanMaintenanceCompletions(command, 1)).toBe(true);
+    const single = reserveMaintenanceCompletions([batch[0]], epoch)!;
+    expect(isMaintenanceCompletionCacheFull(command)).toBe(true);
+    expect(reserveMaintenanceCompletions([batch[1]], epoch)).toBeUndefined();
+    releaseMaintenanceCompletionReservation(single);
+    expect(canPlanMaintenanceCompletions(command, 1)).toBe(true);
+  });
+
+  it('shares batch admission with executing items without releasing another owner or unresolved dispatch', () => {
+    const epoch = captureMaintenanceCompletionEpoch(command);
+    const batch = Array.from({ length: MAX_COMPLETED_MAINTENANCE }, () => ({ ...command, idempotencyKey: crypto.randomUUID() }));
+    const outer = reserveMaintenanceCompletions(batch, epoch)!;
+    const inner = reserveMaintenanceCompletions([batch[0]], epoch)!;
+    releaseMaintenanceCompletionReservation(outer);
+    expect(canPlanMaintenanceCompletions(command, MAX_COMPLETED_MAINTENANCE)).toBe(false);
+    releaseMaintenanceCompletionReservation(inner, true);
+    expect(canPlanMaintenanceCompletions(command, MAX_COMPLETED_MAINTENANCE)).toBe(false);
+    expect(rememberMaintenanceCompletion(batch[0], result, epoch)).toBe(true);
+    expect(canPlanMaintenanceCompletions(command, MAX_COMPLETED_MAINTENANCE - 1)).toBe(true);
+    expect(getCompletedMaintenance(batch[0])).toEqual({ payloadHash: command.payloadHash, result });
+  });
+
+  it('preserves completed replays and pending recoveries at the capacity limit', () => {
+    const epoch = captureMaintenanceCompletionEpoch(command);
+    for (let i = 0; i < MAX_COMPLETED_MAINTENANCE; i++) {
+      rememberMaintenanceCompletion({ ...command, idempotencyKey: i === 0 ? command.idempotencyKey : crypto.randomUUID() }, result, epoch);
+    }
+    const replay = reserveMaintenanceCompletions([command], epoch);
+    const recovery = reserveMaintenanceCompletions([{ ...command, idempotencyKey: crypto.randomUUID(), recovery: true }], epoch);
+    expect(replay).toBeDefined();
+    expect(recovery).toBeDefined();
+    expect(getCompletedMaintenance(command)).toEqual({ payloadHash: command.payloadHash, result });
+    expect(isMaintenanceCompletionCacheFull(command)).toBe(true);
+  });
+
+  it('does not let unrelated completion writes consume slots reserved for an approved batch', () => {
+    const epoch = captureMaintenanceCompletionEpoch(command);
+    const batch = Array.from({ length: MAX_COMPLETED_MAINTENANCE }, () => ({ ...command, idempotencyKey: crypto.randomUUID() }));
+    const reservation = reserveMaintenanceCompletions(batch, epoch)!;
+    expect(rememberMaintenanceCompletion(command, result, epoch)).toBe(false);
+    for (const item of batch) expect(rememberMaintenanceCompletion(item, result, epoch)).toBe(true);
+    releaseMaintenanceCompletionReservation(reservation);
+    expect(getCompletedMaintenance(batch.at(-1)!)).toEqual({ payloadHash: command.payloadHash, result });
   });
 
   it('rejects late writes after invalidation, including after the same wallet starts a new session', () => {

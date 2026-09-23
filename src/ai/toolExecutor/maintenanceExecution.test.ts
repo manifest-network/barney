@@ -7,7 +7,7 @@ import {
 import { getReadClient } from '../../api/readClient';
 import { providerFetch } from '../../api/providerFetchAdapter';
 import { getLeaseProvision, getLeaseReleases } from '../../api/fred';
-import type { AppEntry } from '../../registry/appRegistry';
+import { sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
 import { resolveAppUrl } from './deployUrl';
 import { executeConfirmedRestartApp, executeConfirmedUpdateApp, executeRestartApp, executeUpdateApp } from './compositeTransactions';
 import { completeMaintenanceOperation, getOrCreateMaintenanceOperation, getPendingMaintenanceOperation } from './maintenanceOperation';
@@ -210,7 +210,7 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
     expect(await dispatch(operation, plan, options)).toEqual(refused);
     expect(providerFetch).toHaveBeenCalledTimes(2);
 
-    const next = { ...plan, idempotencyKey: crypto.randomUUID() };
+    const next = { ...plan, idempotencyKey: crypto.randomUUID(), previousOperationKey: plan.idempotencyKey };
     vi.mocked(providerFetch).mockImplementationOnce(async () => {
       histories.set(app.leaseUuid, history(app.leaseUuid, release(1, 'superseded'), release(2)));
       return accepted();
@@ -315,11 +315,12 @@ it('rejects invalid edited manifests before saving a new operation or requesting
 });
 
 it('retains the command if post-readiness verification is unavailable', async () => {
-  const { apps: [app], plans: [plan], options } = setup();
+  const { apps: [app], plans: [plan], options, appRegistry } = setup();
   vi.mocked(getLeaseProvision).mockRejectedValueOnce(new TypeError('Read unavailable'));
   const result = await dispatch('restart', plan, options);
   expect(result).toMatchObject({ success: false, error: expect.stringContaining('unconfirmed') });
   expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(plan.idempotencyKey);
+  expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ provisionState: 'confirmed', connectionStale: true });
 });
 
 it('does not dispatch without an unambiguous original release baseline', async () => {
@@ -437,7 +438,7 @@ it('does not overwrite a newer command after an older endpoint lookup finishes',
     await completeMaintenanceOperation(prior);
     const next = await getOrCreateMaintenanceOperation({
       address: ADDRESS, providerUrl: PROVIDER, leaseUuid: app.leaseUuid,
-      operation: 'update', manifest: '{"image":"nginx:next"}', baselineReleaseVersions: [1, 2],
+      operation: 'update', manifest: '{"image":"nginx:next"}', baselineReleaseVersions: [1, 2], previousOperationKey: prior.idempotencyKey,
     });
     nextKey = next.idempotencyKey;
     appRegistry.updateApp(ADDRESS, app.leaseUuid, { manifest: '{"image":"nginx:next"}', url: 'https://next.example' });
@@ -516,6 +517,26 @@ it('cancels a new command while its dispatch Web Lock is queued without sending 
 });
 
 describe('stale recovery confirmations', () => {
+  it.each(['restart', 'update'] as const)('keeps a stale %s recovery inert through the public confirmation wrapper', async (operation) => {
+    const { apps: [app], plans: [plan], options, signArbitrary } = setup();
+    const command = await getOrCreateMaintenanceOperation({
+      address: ADDRESS, ...plan, operation, baselineReleaseVersions: [1],
+      ...(operation === 'update' && { manifest: MANIFEST }),
+    });
+    vi.resetModules();
+    const secondTab = await import('./maintenanceOperation');
+    await secondTab.completeMaintenanceOperation(command);
+    const result = operation === 'restart'
+      ? await executeConfirmedRestartApp({ ...plan, expectPending: true }, chain, options)
+      : await executeConfirmedUpdateApp({ ...plan, _maintenanceRetry: true, _generatedManifest: MANIFEST }, chain, options);
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('recovery request was not sent') });
+    expect(result.error).not.toMatch(/Retry |failed/);
+    expect(getLeaseReleases).not.toHaveBeenCalled();
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(signArbitrary).not.toHaveBeenCalled();
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+  });
+
   it.each(['restart', 'update'] as const)('refuses a %s recovery completed in another tab before any baseline read or POST', async (operation) => {
     const { apps: [app], plans: [plan], options, signArbitrary } = setup();
     const command = await getOrCreateMaintenanceOperation({
@@ -631,6 +652,47 @@ describe('stale recovery confirmations', () => {
 });
 
 describe('independent maintenance verdicts', () => {
+  it('retains its update manifest when chain reconciliation fills in active state and custom domains', async () => {
+    const { apps: [app], plans: [plan], options, appRegistry } = setup();
+    appRegistry.updateApp(ADDRESS, app.leaseUuid, { chainState: undefined });
+    vi.mocked(providerFetch).mockImplementationOnce(async () => {
+      histories.set(app.leaseUuid, history(app.leaseUuid, release(1, 'superseded'), release(2)));
+      return accepted();
+    });
+    const customDomains = [{ serviceName: 'web', customDomain: 'custom.example' }];
+    vi.mocked(waitForLeaseStatus).mockImplementationOnce(async () => {
+      appRegistry.updateApp(ADDRESS, app.leaseUuid, { chainState: 'active', customDomains });
+      return { state: LeaseState.LEASE_STATE_ACTIVE, phase: 'ready' } as Awaited<ReturnType<typeof waitForLeaseStatus>>;
+    });
+    expect(await executeMaintenance({ ...plan, operation: 'update', manifest: MANIFEST }, options)).toMatchObject({ outcome: 'succeeded' });
+    expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({
+      chainState: 'active', customDomains, manifest: sanitizeManifestForStorage(MANIFEST),
+    });
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+  });
+
+  it('saves the settled update manifest despite concurrent registry observations without reverting them', async () => {
+    const { apps: [app], plans: [plan], options, appRegistry } = setup();
+    vi.mocked(providerFetch).mockImplementationOnce(async () => {
+      histories.set(app.leaseUuid, history(app.leaseUuid, release(1, 'superseded'), release(2)));
+      return accepted();
+    });
+    vi.mocked(resolveAppUrl).mockImplementationOnce(async () => {
+      appRegistry.updateApp(ADDRESS, app.leaseUuid, {
+        name: 'renamed-app', provisionState: 'failed', url: 'https://current.example',
+        connection: { host: 'new-observation.example' }, connectionStale: true,
+      });
+      return { url: 'https://older-observation.example', connection: { host: 'old-observation.example' } };
+    });
+    expect(await executeMaintenance({ ...plan, operation: 'update', manifest: MANIFEST }, options)).toMatchObject({ outcome: 'succeeded' });
+    expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({
+      name: 'renamed-app', provisionState: 'failed', url: 'https://current.example',
+      connection: { host: 'new-observation.example' }, connectionStale: true,
+      manifest: sanitizeManifestForStorage(MANIFEST),
+    });
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+  });
+
   it.each([
     ['restart', 'succeeded'], ['restart', 'failed'], ['update', 'succeeded'], ['update', 'failed'],
   ] as const)('retains a verified %s %s verdict after a second module settles the command during readiness', async (operation, outcome) => {
@@ -733,7 +795,28 @@ describe('independent maintenance verdicts', () => {
 });
 
 describe('late maintenance refusals', () => {
-  it.each(['wallet', 'history', 'cancellation'] as const)('cannot clear a pending marker or refill completion memory after %s invalidation', async (change) => {
+  it.each([400, 404, 409])('preserves an update HTTP %i receipt after Esc during the POST, including after reload', async (status) => {
+    const { apps: [app], plans: [plan], options } = setup();
+    const controller = new AbortController();
+    const reason = status === 400 ? 'validation error: \u202Eimage\u202C is not allowed'
+      : status === 404 ? 'lease not yet provisioned' : 'invalid state for update';
+    vi.mocked(providerFetch).mockImplementationOnce(async () => {
+      controller.abort();
+      return new Response(JSON.stringify({ code: status, error: reason }), { status });
+    });
+    const result = await dispatch('update', plan, { ...options, signal: controller.signal });
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining(status === 400 ? 'image is not allowed' : reason) });
+    expect(result.error).not.toMatch(/unconfirmed|\p{Cf}/u);
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+    vi.resetModules();
+    const fresh = await import('./maintenanceOperation');
+    expect(fresh.getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+    expect(fresh.getSettledMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toMatchObject({ idempotencyKey: plan.idempotencyKey, outcome: 'failed' });
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+    expect(waitForLeaseStatus).not.toHaveBeenCalled();
+  });
+
+  it.each(['wallet', 'history', 'cancellation'] as const)('retires a durable refusal after %s invalidation without writing into a changed session', async (change) => {
     const { apps: [app], plans: [plan], options } = setup();
     let current = true;
     options.assertAuthorization = () => { if (!current) throw new Error('Wallet changed'); };
@@ -754,9 +837,10 @@ describe('late maintenance refusals', () => {
     if (change !== 'cancellation') clearCompletedMaintenance(command);
     respond(new Response(JSON.stringify({ code: 400, error: 'validation error: image is not allowed' }), { status: 400 }));
     const result = await execution;
-    expect(result.outcome).toBe('unconfirmed');
-    expect(getCompletedMaintenance(command)).toBeUndefined();
-    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(command.idempotencyKey);
+    expect(result).toMatchObject({ outcome: 'failed', result: { error: 'Restart failed: validation error: image is not allowed.' } });
+    if (change === 'cancellation') expect(getCompletedMaintenance(command)?.result).toEqual(result);
+    else expect(getCompletedMaintenance(command)).toBeUndefined();
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
     expect(providerFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -803,7 +887,7 @@ it('keeps known replays and pending recovery safe when completion memory reaches
     expect(getCompletedMaintenance(pending)).toBeUndefined(); // Capacity does not evict an older key.
 
     expect(await executeMaintenance({ ...pendingPlan, operation: 'restart' }, options)).toMatchObject({
-      outcome: 'failed', result: { error: expect.stringContaining('confirmation limit') },
+      outcome: 'unconfirmed', result: { error: expect.stringContaining('previous maintenance command has settled') },
     });
     expect(providerFetch).toHaveBeenCalledTimes(1);
     expect(getLeaseReleases).toHaveBeenCalledTimes(1);

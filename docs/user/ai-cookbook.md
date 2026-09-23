@@ -65,10 +65,14 @@ checks even after a reload. Retrying an unresolved command reuses its original
 key and exact manifest; after reloading, Barney can recover matching bytes from
 provider history or verify a reattached file merged with saved defaults. If
 neither matches, the exact reviewed manifest is required. Do not replace it
-with a new command or stop/redeploy while its outcome is
-unknown. A healthy app can still have a failed restart if the provider restored
+with a new command or automatically stop/redeploy to recover uncertainty.
+If those bytes are permanently lost, a separately confirmed stop can end the
+deployment; it does not recover the update. A healthy app can still have a failed restart if the provider restored
 the previous runtime. For a partially completed batch, retrying `restart all`
 recovers only the unresolved restarts.
+Settled receipts survive tabs and reloads, so old retry advice cannot silently
+restart an app again. Ask explicitly for a new operation after a settled notice
+if another restart or update is intended.
 
 **Example prompts.**
 

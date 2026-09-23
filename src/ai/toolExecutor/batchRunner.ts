@@ -6,7 +6,7 @@
  * executeConfirmedBatchRestart.
  */
 
-import { AI_BATCH_DEPLOY_CONCURRENCY, AI_BATCH_DIAGNOSTIC_CHARS } from '../../config/constants';
+import { AI_BATCH_DEPLOY_CONCURRENCY, AI_BATCH_DIAGNOSTIC_CHARS, AI_BATCH_GUIDANCE_CHARS } from '../../config/constants';
 import { normalizeErrorPunctuation } from '../../utils/errors';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { DeployProgress } from '../progress';
@@ -155,7 +155,9 @@ export interface BatchRunResult {
 }
 
 function sanitizeDiagnostic(detail: string | undefined): string | undefined {
-  return detail === undefined ? undefined : sanitizeForDisplay(detail, FAILURE_DETAIL_CHARS);
+  // These strings include Barney's next steps, after provider fields have been
+  // bounded at their source. A provider-field cap would cut off that guidance.
+  return detail === undefined ? undefined : sanitizeForDisplay(detail, AI_BATCH_GUIDANCE_CHARS);
 }
 
 function sanitizeProgressDetail(phase: DeployProgress['phase'], detail: string | undefined): string | undefined {
@@ -255,7 +257,7 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
         batchProgress[i] = {
           name: entries[i].name,
           phase: 'failed',
-          detail: sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error'),
+          detail: sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS),
         };
         emitProgress();
         failed.push(entries[i].name);
@@ -329,8 +331,24 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     + 2 * detailedUnconfirmed;
   // Include each detail's property/comma and the chat serializer's two-space
   // indentation, not just the compact JSON representation.
-  const textBudget = Math.max(0, AI_BATCH_DIAGNOSTIC_CHARS - 20 * detailedUnconfirmed);
-  const perCopyBudget = Math.floor(textBudget / Math.max(1, diagnosticCopies));
+  let textBudget = Math.max(0, AI_BATCH_DIAGNOSTIC_CHARS - 20 * detailedUnconfirmed);
+  let perCopyBudget = Math.floor(textBudget / Math.max(1, diagnosticCopies));
+  const exceedsShare = (detail: string | undefined) => detail !== undefined
+    && JSON.stringify(sanitizeDiagnostic(detail)).length > perCopyBudget;
+  const shortened = failed.some((name) => exceedsShare(failureDetails.get(name)))
+    || rawUnconfirmed.some((entry) => exceedsShare(entry.detail));
+  // Large batches may need shortened per-app details. Reserve one complete
+  // next step rather than leaving the model with only partial instructions.
+  const summaryGuidance = !shortened ? undefined : rawUnconfirmed.length === 0
+    ? 'Details were shortened. Check app_status and app_diagnostics for each failed app.'
+    : operation === 'restart' || operation === 'update'
+      ? 'Details were shortened. Check app_status and app_releases for each unknown outcome. Recover only a command still pending, using its original key and exact payload. Do not use new_command for recovery. Do not submit a new command or stop/redeploy while its outcome is unresolved.'
+      : 'Details were shortened. Check app_status for each still-deploying app. Only use stop_app if you have decided to abandon that deployment.';
+  if (summaryGuidance) {
+    // JSON quotes account for the two escaped characters of the added newline.
+    textBudget = Math.max(0, textBudget - JSON.stringify(summaryGuidance).length);
+    perCopyBudget = Math.floor(textBudget / Math.max(1, diagnosticCopies));
+  }
   const unconfirmed = rawUnconfirmed.map((entry) => ({ ...entry, detail: fitDiagnostic(entry.detail, perCopyBudget) }));
   const failedText = failed.map((name) => {
     const detail = fitDiagnostic(failureDetails.get(name), perCopyBudget);
@@ -368,13 +386,13 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     // batch — keep the original message (test/UX contract). Otherwise name both
     // buckets so the abort isn't hidden behind a bare "all failed".
     if (cancelled.length === 0) {
-      return { success: false, error: `All ${failedNoun} failed: ${failedText}` };
+      return { success: false, error: `All ${failedNoun} failed: ${failedText}${summaryGuidance ? `\n${summaryGuidance}` : ''}` };
     }
     const failedPart = failed.length > 0 ? `Failed: ${normalizeErrorPunctuation(failedText)}.` : '';
     const cancelledPart = `Cancelled: ${cancelled.join(', ')}.`;
     return {
       success: false,
-      error: `No ${failedNoun} completed — ${[failedPart, cancelledPart].filter(Boolean).join(' ')}`,
+      error: `No ${failedNoun} completed — ${[failedPart, cancelledPart].filter(Boolean).join(' ')}${summaryGuidance ? `\n${summaryGuidance}` : ''}`,
     };
   }
 
@@ -389,6 +407,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
   }
   if (failed.length > 0) parts.push(`Failed: ${normalizeErrorPunctuation(failedText)}.`);
   if (cancelled.length > 0) parts.push(`Cancelled: ${cancelled.join(', ')}.`);
+  if (summaryGuidance) parts.push(summaryGuidance);
 
   return {
     success: true,

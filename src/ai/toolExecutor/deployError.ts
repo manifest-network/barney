@@ -10,7 +10,7 @@ import { TerminalChainStateError, describeFredFailure } from '@manifest-network/
 import { logError } from '../../utils/errors';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { ToolResult, ToolExecutorOptions, SigningContext } from './types';
-import { connectionPatch, failureText } from './helpers';
+import { connectionPatch, FAILURE_DETAIL_CHARS, failureText } from './helpers';
 import { nextStepFor } from './failureGuidance';
 import { resolveAppUrl } from './deployUrl';
 import { isTerminalLeaseState } from '../../utils/leaseState';
@@ -227,13 +227,14 @@ export async function handleDeployManifestError(
     if (leaseUuid) {
       appRegistry.updateApp(address, leaseUuid, { chainState: 'absent', provisionState: 'failed' });
     }
-    onProgress?.({ phase: 'failed', detail: error.message });
-    return { success: false, error: `Deployment failed: ${error.message}` };
+    const detail = sanitizeForDisplay(error.message, FAILURE_DETAIL_CHARS);
+    onProgress?.({ phase: 'failed', detail });
+    return { success: false, error: `Deployment failed: ${detail}` };
   }
 
   // Case 2: post-lease throw.
   if (leaseUuid) {
-    const errMessage = error instanceof Error ? error.message : String(error);
+    const errMessage = sanitizeForDisplay(error instanceof Error ? error.message : String(error), FAILURE_DETAIL_CHARS);
     const details: DeployThrowDetails = error instanceof ManifestMCPError ? error.details : undefined;
     const cancelled = error instanceof ManifestMCPError && error.code === ManifestMCPErrorCode.OPERATION_CANCELLED;
 
@@ -351,9 +352,9 @@ export async function handleDeployManifestError(
     return { success: false, error: errorMsg };
   }
 
-  // Case 1: raw Error with NO lease (create-lease rejected) — surface the
-  // raw error; no failure-log fetch (there's no lease to fetch logs for).
-  const message = error instanceof Error ? error.message : 'Deployment failed';
+  // Case 1: raw Error with NO lease (create-lease rejected) — bound its display
+  // text; no failure-log fetch (there's no lease to fetch logs for).
+  const message = sanitizeForDisplay(error instanceof Error ? error.message : 'Deployment failed', FAILURE_DETAIL_CHARS);
   onProgress?.({ phase: 'failed', detail: message });
   return { success: false, error: message };
 }

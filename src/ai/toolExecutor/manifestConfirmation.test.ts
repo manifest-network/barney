@@ -284,6 +284,8 @@ it.each(['different release', 'no release after a rejected command'])('does not 
   const result = await fresh.executeUpdateApp({ app_name: app.name }, options);
   expect(result.requiresConfirmation).not.toBe(true);
   expect(result.error).toContain('exact submitted payload could not be recovered');
+  expect(result.error).toContain('separately confirmed stop_app to end this deployment');
+  expect(result.error).toContain('Fred may execute the old command until the lease closes');
   expect(providerFetch).not.toHaveBeenCalled();
   expect((await import('./maintenanceOperation')).getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)?.idempotencyKey).toBe(saved.idempotencyKey);
   // A supplied replacement must also fail rather than repurpose the old key.
@@ -341,6 +343,7 @@ it.each(['restart', 'update'] as const)('does not borrow a %s key introduced by 
   localStorage.setItem(storageKey, metadata);
   const result = await planning;
   expect(result.requiresConfirmation).not.toBe(true);
+  expect(result.error).toContain('became unresolved while planning');
   expect(result.error).toContain(`Recover that saved ${operation}`);
   expect(state.getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)?.idempotencyKey).toBe(command.idempotencyKey);
   expect(providerFetch).not.toHaveBeenCalled();

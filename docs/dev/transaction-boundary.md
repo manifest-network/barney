@@ -58,18 +58,32 @@ source matches, the exact reviewed payload is still required. A durable rejectio
 creates no release: if its response and a generated/edited payload are both lost,
 the tenant API offers no receipt lookup to resolve the command. Barney keeps it
 unresolved; deleting its metadata would not cancel Fred's command or make a new
-key safe. Browser storage
+key safe. Fred's per-lease fence prevents overlapping work, but a new key can
+execute after the old command finishes and repeat the operation. If exact bytes
+cannot be recovered, a user may separately confirm `stop_app` to end the lease;
+this retires the record only after authoritative closure, and is termination,
+not update recovery. Browser storage
 failures block dispatch, but retirement after an authoritative closed lease is
 best-effort and cannot change the stop result. Web Locks coordinate state
 between tabs where supported; the fallback serializes only within one tab.
 Missing metadata drops stale memory, and a recovery confirmation
 requires the pending record to still exist. Settled confirmations are memoized
 in memory so retrying a batch does not resubmit already completed items.
-The session retains at most 128 completed results without evicting command
-identities. At that limit, existing pending operations remain recoverable, but
-new commands require clearing chat history to invalidate old confirmations.
+One nonsecret settled receipt per lease also persists across tabs and reloads.
+Planning returns this receipt instead of turning old retry advice into another
+command. Only deliberate `new_command: true` planning offers a new confirmation,
+bound to the receipt's key so a later settlement cannot silently change its
+meaning. An unresolved pending record always takes precedence over this flag.
+The session retains at most 128 completed/reserved identities without eviction.
+Planning checks capacity before offering a card; confirmed batches reserve all
+new entries atomically before any provider work. Unsubmitted slots are released,
+while dispatched unresolved commands retain theirs. Existing pending operations
+remain recoverable at capacity, but new commands require clearing chat history
+to invalidate old confirmations.
 Wallet changes, history clearing, and store destruction also invalidate cache
 epochs so late responses cannot repopulate a previous session.
+A durable Fred refusal still retires its matching pending record after abort or
+session invalidation; cancellation cannot undo that authoritative receipt.
 
 `maintenanceOutcome.ts` evaluates command outcome separately from readiness.
 A 202 replay can precede execution while the source runtime is still ready.
@@ -78,8 +92,12 @@ the original baseline; a failed replacement can coexist with a healthy restored
 runtime. Missing reads, unchanged history, and ambiguous generations retain the
 recovery record. The Fred tenant API exposes no command key in release history,
 so multiple intervening operations cannot be attributed automatically and
-remain unconfirmed. Uncertain requests never authorize stop/redeploy or a new
-command.
+remain unconfirmed. Uncertain requests never authorize an automatic stop/redeploy
+or a replacement command. Settled updates project their command-owned manifest
+even after unrelated registry changes; readiness and connection observations
+are applied only when their own snapshot fields remain current. Uncertain
+maintenance invalidates saved connection inventory to schedule bounded background
+status reads without retracting previously confirmed readiness.
 
 The confirmation UI preserves unchanged payload bytes and disables editing of
 recovery payloads. Focused tests use the real SDK lifecycle and authentication

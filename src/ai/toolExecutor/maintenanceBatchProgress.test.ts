@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AI_BATCH_DIAGNOSTIC_CHARS } from '../../config/constants';
+import { AI_BATCH_DIAGNOSTIC_CHARS, AI_BATCH_GUIDANCE_CHARS } from '../../config/constants';
 import { FAILURE_DETAIL_CHARS } from './helpers';
 import { computeOverallPhase, runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
 
@@ -74,10 +74,9 @@ describe('maintenance batch uncertainty', () => {
 
   it('retains a failed item reason when the remaining items were cancelled', () => {
     const result = summarizeBatchResult({ succeeded: [], failed: ['blocked'], cancelled: ['cancelled'],
-      batchProgress: [{ name: 'blocked', phase: 'failed', detail: 'release v7 is deploying' }],
+      batchProgress: [{ name: 'blocked', phase: 'failed', detail: 'release v7 is deploying.' }],
       operation: 'restart', dataKey: 'restarted', verb: 'Restarted', failedNoun: 'restarts' });
-    expect(result.error).toContain('Failed: blocked: release v7 is deploying.');
-    expect(result.error).toContain('Cancelled: cancelled.');
+    expect(result.error).toBe('No restarts completed — Failed: blocked: release v7 is deploying. Cancelled: cancelled.');
   });
 
   it('finishes a cancelled row even when the per-item executor emitted only active progress', async () => {
@@ -92,6 +91,49 @@ describe('maintenance batch uncertainty', () => {
     expect(batch.cancelled).toEqual(['web']);
     expect(batch.batchProgress).toEqual([{ name: 'web', phase: 'failed', detail: 'Restart cancelled before dispatch.' }]);
     expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'failed' }));
+  });
+
+  it.each([4, 8, 100])('keeps complete recovery guidance for a batch of %i unknown commands', async (count) => {
+    const names = Array.from({ length: count }, (_, index) => `billing-production-service-${index}`);
+    const guidance = (name: string) => `Restart outcome for "${name}" is unconfirmed. The provider may retain a pending command that executes later. `
+      + `Check app_status("${name}") and app_releases("${name}"). `
+      + `Retry restart_app(app_name="${name}") to recover the saved command with its original key and exact payload. `
+      + 'Do not submit a new command or stop/redeploy while this outcome is unresolved.';
+    const batch = await runBatchWithConcurrency({
+      entries: names.map((name) => ({ name })),
+      initialPhase: 'restarting', intermediatePhases: ['restarting'], operation: 'restart',
+      executeOne: async ({ name }) => ({ name, outcome: 'unconfirmed', detail: guidance(name) }),
+    });
+    const options = { ...batch, operation: 'restart' as const, dataKey: 'restarted',
+      verb: 'Restarted', failedNoun: 'restarts', unconfirmedLabel: 'Outcome unknown' };
+    const result = summarizeBatchResult(options);
+    const data = result.data as { message: string; unconfirmed: Array<{ name: string; detail?: string }> };
+    for (const row of batch.batchProgress) expect(row.detail).toBe(guidance(row.name));
+    if (count < 100) {
+      for (const entry of data.unconfirmed) {
+        expect(entry.detail).toBe(guidance(entry.name));
+        expect(data.message).toContain(guidance(entry.name));
+      }
+      expect(data.message).not.toContain('Details were shortened');
+    } else {
+      expect(data.message).toContain('Recover only a command still pending, using its original key and exact payload.');
+      expect(data.message).toContain('Do not use new_command for recovery.');
+      expect(data.message).toContain('Do not submit a new command or stop/redeploy while its outcome is unresolved.');
+      const withoutDiagnostics = summarizeBatchResult({ ...options,
+        unconfirmed: batch.unconfirmed.map(({ name, outcome }) => ({ name, outcome })) });
+      for (const indentation of [undefined, 2]) {
+        expect(JSON.stringify(result, null, indentation).length - JSON.stringify(withoutDiagnostics, null, indentation).length)
+          .toBeLessThanOrEqual(AI_BATCH_DIAGNOSTIC_CHARS);
+      }
+    }
+  });
+
+  it('keeps the deliberate-abandonment condition when a large deployment summary needs shorter details', () => {
+    const result = summarizeBatchResult({ succeeded: [], failed: [],
+      unconfirmed: Array.from({ length: 100 }, (_, index) => ({ name: `app-${index}`, outcome: 'unconfirmed',
+        detail: 'The app is still deploying. '.repeat(15) + 'Only stop_app if you have decided to abandon it.' })),
+      dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys', unconfirmedLabel: 'Still deploying' });
+    expect(result.data).toMatchObject({ message: expect.stringContaining('Check app_status for each still-deploying app. Only use stop_app if you have decided to abandon that deployment.') });
   });
 
   it.each([false, true])('bounds serialized diagnostics for a large batch of HTML rejections (partial success: %s)', async (partialSuccess) => {
@@ -124,7 +166,8 @@ describe('maintenance batch uncertainty', () => {
     expect(serialized).toContain('app-198: HTTP 403:');
     expect(result.success).toBe(partialSuccess);
     for (const row of batch.batchProgress.filter((entry) => entry.phase === 'failed')) {
-      expect(Array.from(row.detail ?? '').length).toBeLessThanOrEqual(FAILURE_DETAIL_CHARS + 1);
+      const safetyNet = Number(row.name.slice(4)) % 2 === 0;
+      expect(Array.from(row.detail ?? '').length).toBeLessThanOrEqual((safetyNet ? FAILURE_DETAIL_CHARS : AI_BATCH_GUIDANCE_CHARS) + 1);
       expect(row.detail).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
       expect(row.detail).toContain('<html>');
     }
