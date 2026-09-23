@@ -181,9 +181,35 @@ describe('read-only maintenance reconciliation', () => {
   it('does not attribute a release to a command whose POST response was lost', async () => {
     const command = await prepare('update', false);
     await reload();
-    expect(await reconcile(app, options)).toMatchObject({ outcome: 'unconfirmed', runtimeReady: true });
+    expect(await reconcile(app, options)).toMatchObject({ outcome: 'unconfirmed', runtimeReady: false });
+    expect(options.signing!.authTokens.getAuthToken).not.toHaveBeenCalled();
+    expect(fred.getLeaseProvision).not.toHaveBeenCalled();
+    expect(fred.getLeaseReleases).not.toHaveBeenCalled();
     expect(pending()?.idempotencyKey).toBe(command.idempotencyKey);
     expect(options.appRegistry!.getAppByLease(address, app.leaseUuid)?.manifest).toBe(app.manifest);
+  });
+
+  it('reuses an existing readiness observation without signing for unaccepted commands', async () => {
+    await prepare('restart', false);
+    expect(await reconcile(app, options, undefined, 'ready')).toMatchObject({ outcome: 'unconfirmed', runtimeReady: true });
+    expect(options.signing!.authTokens.getAuthToken).not.toHaveBeenCalled();
+    expect(fred.getLeaseProvision).not.toHaveBeenCalled();
+    expect(fred.getLeaseReleases).not.toHaveBeenCalled();
+  });
+
+  it.each(['restarting', 'updating', 'provisioning', 'unknown'])('does not retract prior readiness on a %s maintenance observation', async (status) => {
+    await prepare();
+    vi.mocked(fred.getLeaseProvision).mockResolvedValue({ status, fail_count: 0 });
+    expect(await reconcile(app, options)).toMatchObject({ outcome: 'unconfirmed' });
+    expect(options.appRegistry!.getAppByLease(address, app.leaseUuid)).toMatchObject({ status: 'running', provisionState: 'confirmed' });
+    expect(pending()).toBeDefined();
+  });
+
+  it.each([['retained', 'unconfirmed'], ['failed', 'failed'], ['failing', 'failed']] as const)('records the %s verdict during reconciliation', async (status, provisionState) => {
+    await prepare();
+    vi.mocked(fred.getLeaseProvision).mockResolvedValue({ status, fail_count: 1 });
+    await reconcile(app, options);
+    expect(options.appRegistry!.getAppByLease(address, app.leaseUuid)?.provisionState).toBe(provisionState);
   });
 
   it('retains pending or ambiguous outcomes without losing the original baseline', async () => {

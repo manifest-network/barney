@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../../utils/errors', () => ({ logError: vi.fn() }));
+
 type Operations = typeof import('./maintenanceOperation');
 let operations: Operations;
 
@@ -184,12 +186,85 @@ describe('maintenance operation retention', () => {
     expect(pending()?.idempotencyKey).toBe(current.idempotencyKey);
   });
 
-  it('retains an in-memory pending command if browser storage was cleared', async () => {
+  it('forgets stale in-memory commands when the durable marker is cleared', async () => {
     const original = await operations.getOrCreateMaintenanceOperation(restart);
     localStorage.clear();
-    const retried = await operations.getOrCreateMaintenanceOperation(restart);
-    expect(retried.idempotencyKey).toBe(original.idempotencyKey);
+    expect(pending()).toBeUndefined();
+    const next = await operations.getOrCreateMaintenanceOperation(restart);
+    expect(next.idempotencyKey).not.toBe(original.idempotencyKey);
     expect(localStorage.length).toBe(1);
+  });
+
+  it('observes another tab completing a retained update and can prepare a new restart', async () => {
+    const original = await operations.getOrCreateMaintenanceOperation(update);
+    vi.resetModules();
+    const secondTab = await import('./maintenanceOperation');
+    await secondTab.completeMaintenanceOperation(original);
+    expect(pending()).toBeUndefined();
+    const next = await operations.getOrCreateMaintenanceOperation(restart);
+    expect(next.operation).toBe('restart');
+    expect(next.idempotencyKey).not.toBe(original.idempotencyKey);
+    expect(next.manifest).toBeUndefined();
+  });
+
+  it('adopts another tab’s newer metadata without retaining the prior raw payload', async () => {
+    const original = await operations.getOrCreateMaintenanceOperation(update);
+    vi.resetModules();
+    const secondTab = await import('./maintenanceOperation');
+    await secondTab.completeMaintenanceOperation(original);
+    const next = await secondTab.getOrCreateMaintenanceOperation(restart);
+    expect(pending()).toMatchObject({ operation: 'restart', idempotencyKey: next.idempotencyKey });
+    expect(pending()?.manifest).toBeUndefined();
+    expect(pending()?.previousManifest).toBeUndefined();
+  });
+
+  it('refuses recovery when the saved marker is gone instead of creating it again', async () => {
+    const original = await operations.getOrCreateMaintenanceOperation(update);
+    localStorage.clear();
+    await expect(operations.prepareMaintenanceOperation({
+      ...update, idempotencyKey: original.idempotencyKey, expectPending: true,
+    })).rejects.toThrow(/no longer exists/);
+    expect(localStorage.length).toBe(0);
+    expect(pending()).toBeUndefined();
+  });
+
+  it('does not resurrect a pending snapshot removed while preparation waits for its lock', async () => {
+    const original = await operations.getOrCreateMaintenanceOperation(update);
+    let notifyQueued!: () => void;
+    const queued = new Promise<void>((resolve) => { notifyQueued = resolve; });
+    let releaseLock!: () => void;
+    const heldLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+    vi.stubGlobal('navigator', {
+      locks: { request: async (_name: string, action: () => unknown) => {
+        notifyQueued();
+        await heldLock;
+        return action();
+      } },
+    });
+    const preparation = operations.prepareMaintenanceOperation({ ...update, idempotencyKey: original.idempotencyKey });
+    const rejected = expect(preparation).rejects.toThrow(/no longer exists/);
+    await queued;
+    localStorage.clear(); // Another tab settled the command before this lock was acquired.
+    releaseLock();
+    await rejected;
+    expect(localStorage.length).toBe(0);
+    expect(pending()).toBeUndefined();
+  });
+
+  it('drops a stale raw payload when committing an observation finds its marker absent', async () => {
+    const original = await operations.getOrCreateMaintenanceOperation(update);
+    const storageKey = localStorage.key(0)!;
+    const metadata = localStorage.getItem(storageKey)!;
+    localStorage.clear();
+    const apply = vi.fn();
+    expect(await operations.commitMaintenanceObservation(original, {
+      settled: true, isCurrent: () => true, apply,
+    })).toBe(false);
+    expect(apply).not.toHaveBeenCalled();
+    // If that identity is observed again, only durable metadata may be used.
+    localStorage.setItem(storageKey, metadata);
+    expect(pending()?.manifest).toBeUndefined();
+    expect(pending()?.previousManifest).toBeUndefined();
   });
 
   it.each(['getItem', 'setItem'] as const)('fails closed when storage %s fails', async (method) => {
@@ -277,6 +352,23 @@ describe('maintenance operation retention', () => {
     await operations.retireAbsentMaintenanceOperation(scope);
     expect(pending()).toBeUndefined();
     expect(localStorage.length).toBe(0);
+  });
+
+  it('treats absent-lease cleanup as best effort when the provider URL is invalid', async () => {
+    await operations.getOrCreateMaintenanceOperation(update);
+    await expect(operations.retireAbsentMaintenanceOperation({ ...scope, providerUrl: 'invalid-url' })).resolves.toBeUndefined();
+    expect(pending()?.manifest).toBeUndefined();
+    expect(pending()?.previousManifest).toBeUndefined();
+  });
+
+  it('logs absent-lease storage cleanup failures and still drops memory-only payloads', async () => {
+    await operations.getOrCreateMaintenanceOperation(update);
+    const { logError } = await import('../../utils/errors');
+    failStorageMethod('removeItem');
+    await expect(operations.retireAbsentMaintenanceOperation(scope)).resolves.toBeUndefined();
+    expect(logError).toHaveBeenCalledWith('maintenanceOperation.retireAbsent', expect.any(Error));
+    expect(pending()?.manifest).toBeUndefined();
+    expect(pending()?.previousManifest).toBeUndefined();
   });
 
   it('rejects invalid caller-provided operation keys before creating a marker', async () => {

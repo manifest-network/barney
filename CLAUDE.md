@@ -254,6 +254,20 @@ The TX path splits by tool:
   `RESTART_INDETERMINATE`, `UPDATE_INDETERMINATE`, `MAINTENANCE_REQUEST_FAILED`, lost responses, and inconclusive verification retain pending commands unless a known durable refusal proves settlement. Timeouts never prove that nothing happened. An unrelated 409 conflict is not an observation of workload health or authority to issue a replacement. Verify the command against fresh release history, separately from readiness: PR240 Fred can restore a healthy runtime while retaining the failed restart/update diagnostics. A healthy app can therefore coexist with a failed maintenance result. Status and releases reconcile acknowledged operations without raw update bytes; unacknowledged commands still require same-key recovery because release history has no command identity. Authoritative absent/terminal chain observations retire pending metadata. Completion caches retain only payload hashes and public results. Legacy v0.13 has no command deduplication; uncertain outcomes require observation before another command, and its existing readiness/provision gates remain separate from PR240 recovery.
 - **`set_custom_domain`** — `setItemCustomDomain` from `@manifest-network/manifest-sdk/deploy` (standalone tool only; the deploy path attaches domains atomically *inside* `deployManifest`).
 
+PR240 recovery plans explicitly require the pending record to still exist;
+another tab's settlement cannot become a new command with a fresh baseline.
+Persisted metadata is authoritative over stale memory. After reload,
+`maintenancePayload.ts` can recover exact bytes from release history or a
+deterministic re-merge of a reattached file, but every candidate must match the
+saved payload hash. Payload recovery does not establish admission or outcome.
+Unacknowledged commands add no signatures or provider reads to status queries.
+`reconcileProvisionStatus` preserves confirmed readiness during in-flight
+observations. Pinned Fred validation receipts (including durable HTTP 400s)
+surface their diagnostic and settle; its pre-admission parser/header errors
+remain uncertain. Cleanup after confirmed lease closure is best-effort.
+Completion hashes/results are cleared for a wallet/chain when chat history or
+authorization is invalidated; ordinary query-cache clears retain replay protection.
+
 ⚠️ **The SDK primitives serialize their own broadcasts — call them directly, never through a signing mutex.** `deployManifest` / `stopApp` / `fundCredits` / `waitForLeaseStatus` / `updateApp` / `restartApp` mint their own ADR-036 tokens through the same non-reentrant signing mutex, so wrapping any of them in a caller-side sign-lock deadlocks (e.g. deployManifest → `providerAuth.leaseDataToken` → same mutex → circular wait). Chain-TX serialization comes entirely from `CosmosClientManager.withBroadcastLock` (held internally by the SDK cosmos-tx path) plus the mutex-wrapped `signArbitrary` (the D2 replay guard). ENG-312 Phase 8 **removed** the old `SigningContext.withSign` escape hatch — there is no caller-side sign-lock to misuse anymore.
 
 ### Wallet Integration

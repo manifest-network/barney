@@ -73,3 +73,13 @@ export function classifyProvisionStatus(status: string | undefined): ProvisionSt
   if (PROVISION_IN_PROGRESS.has(status) || status === PROVISION_RETAINED) return 'unconfirmed';
   return undefined;
 }
+
+/** Record a new verdict without letting in-flight observations erase prior readiness. */
+export function reconcileProvisionStatus(
+  status: string | undefined,
+  previous: ProvisionState | undefined,
+): ProvisionState | undefined {
+  return previous === 'confirmed' && isUnsettledProvisionStatus(status)
+    ? undefined
+    : classifyProvisionStatus(status);
+}

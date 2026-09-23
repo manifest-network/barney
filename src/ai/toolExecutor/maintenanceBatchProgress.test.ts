@@ -40,4 +40,53 @@ describe('maintenance batch uncertainty', () => {
       operation: 'deploy', onProgress, dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys', unconfirmedLabel: 'Still deploying' });
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'ready', detail: '1 still deploying' }));
   });
+
+  it.each([false, true])('preserves named baseline failures in the tool result (partial success: %s)', async (partialSuccess) => {
+    const detail = 'Another command is in progress (release v7 is deploying). Wait and check app_releases and app_status before retrying.';
+    const batch = await runBatchWithConcurrency({
+      entries: [{ name: 'blocked' }, ...(partialSuccess ? [{ name: 'healthy' }] : [])],
+      initialPhase: 'restarting', intermediatePhases: ['restarting'], operation: 'restart',
+      executeOne: async (entry, _index, updateProgress) => {
+        if (entry.name === 'blocked') {
+          updateProgress('failed', detail);
+          return null;
+        }
+        updateProgress('ready');
+        return { name: entry.name };
+      },
+    });
+    const result = summarizeBatchResult({ ...batch, operation: 'restart',
+      dataKey: 'restarted', verb: 'Restarted', failedNoun: 'restarts' });
+    if (partialSuccess) {
+      expect(result.data).toMatchObject({
+        failed: ['blocked'],
+        failureDetails: [{ name: 'blocked', detail }],
+        message: expect.stringContaining(`blocked: ${detail}`),
+      });
+    } else {
+      expect(result).toMatchObject({ success: false, error: `All restarts failed: blocked: ${detail}` });
+    }
+  });
+
+  it('retains a failed item reason when the remaining items were cancelled', () => {
+    const result = summarizeBatchResult({ succeeded: [], failed: ['blocked'], cancelled: ['cancelled'],
+      batchProgress: [{ name: 'blocked', phase: 'failed', detail: 'release v7 is deploying' }],
+      operation: 'restart', dataKey: 'restarted', verb: 'Restarted', failedNoun: 'restarts' });
+    expect(result.error).toContain('Failed: blocked: release v7 is deploying.');
+    expect(result.error).toContain('Cancelled: cancelled.');
+  });
+
+  it('finishes a cancelled row even when the per-item executor emitted only active progress', async () => {
+    const onProgress = vi.fn();
+    const batch = await runBatchWithConcurrency({
+      entries: [{ name: 'web' }], initialPhase: 'restarting', intermediatePhases: ['restarting'], operation: 'restart', onProgress,
+      executeOne: async (entry, _index, updateProgress) => {
+        updateProgress('restarting', 'Restart requested...');
+        return { name: entry.name, outcome: 'cancelled', detail: 'Restart cancelled before dispatch.' };
+      },
+    });
+    expect(batch.cancelled).toEqual(['web']);
+    expect(batch.batchProgress).toEqual([{ name: 'web', phase: 'failed', detail: 'Restart cancelled before dispatch.' }]);
+    expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'failed' }));
+  });
 });

@@ -14,10 +14,13 @@ type CommandIdentity = Pick<MaintenanceOperation, 'address' | 'providerUrl' | 'l
 // release baseline. Retain only its fingerprint and public result, never bytes.
 const completed = new Map<string, { result: MaintenanceResult; payloadHash: string }>();
 
+function completionScope(scope: Pick<CommandIdentity, 'address' | 'chainId'>): readonly string[] {
+  return [scope.chainId, runtimeConfig.PUBLIC_RPC_URL, runtimeConfig.PUBLIC_REST_URL, scope.address.trim().toLowerCase()];
+}
+
 function completionKey(command: CommandIdentity): string {
   return JSON.stringify([
-    command.chainId, runtimeConfig.PUBLIC_RPC_URL, runtimeConfig.PUBLIC_REST_URL,
-    command.address.trim().toLowerCase(), new URL(command.providerUrl).href.replace(/\/+$/, ''),
+    ...completionScope(command), new URL(command.providerUrl).href.replace(/\/+$/, ''),
     command.leaseUuid, command.operation, command.idempotencyKey,
   ]);
 }
@@ -28,4 +31,12 @@ export function getCompletedMaintenance(command: CommandIdentity) {
 
 export function rememberMaintenanceCompletion(command: MaintenanceOperation, result: MaintenanceResult): void {
   completed.set(completionKey(command), { result, payloadHash: command.payloadHash });
+}
+
+/** Clear only when the owning wallet's approved confirmations have been invalidated. */
+export function clearCompletedMaintenance(scope: Pick<CommandIdentity, 'address' | 'chainId'>): void {
+  const prefix = `${JSON.stringify(completionScope(scope)).slice(0, -1)},`;
+  for (const key of completed.keys()) {
+    if (key.startsWith(prefix)) completed.delete(key);
+  }
 }

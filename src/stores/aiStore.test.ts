@@ -70,8 +70,20 @@ import { createAIStore, type AIStore } from './aiStore';
 import { logError } from '../utils/errors';
 import { validateFile } from '../utils/fileValidation';
 import { clearHistoryStorage, loadHistory, saveHistory } from './aiActions/persistence';
+import { clearCompletedMaintenance, getCompletedMaintenance, rememberMaintenanceCompletion } from '../ai/toolExecutor/maintenanceCompletion';
+import type { MaintenanceOperation } from '../ai/toolExecutor/maintenanceOperation';
 
 type Store = StoreApi<AIStore>;
+
+function rememberCompletedCommand(store: Store): MaintenanceOperation {
+  const command: MaintenanceOperation = {
+    address: store.getState().address!, chainId: store.getState().chainId,
+    providerUrl: 'https://provider.example', leaseUuid: crypto.randomUUID(), operation: 'restart',
+    idempotencyKey: crypto.randomUUID(), payloadHash: 'a'.repeat(64), baselineReleaseVersions: [1],
+  };
+  rememberMaintenanceCompletion(command, { outcome: 'succeeded', result: { success: true, data: { status: 'running' } } });
+  return command;
+}
 
 function makeMessage(overrides: Partial<AIStore['messages'][0]> = {}): AIStore['messages'][0] {
   return {
@@ -106,7 +118,9 @@ describe('aiStore', () => {
   });
 
   afterEach(() => {
-    store.getState().destroy();
+    const state = store.getState();
+    if (state.address) clearCompletedMaintenance({ address: state.address, chainId: state.chainId });
+    state.destroy();
   });
 
   // ---- Simple actions ----
@@ -300,6 +314,16 @@ describe('aiStore', () => {
   });
 
   describe('authorization context invalidation', () => {
+    it('retains replay protection for unchanged authorization and ordinary tool-cache invalidation', () => {
+      updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
+      const completed = rememberCompletedCommand(store);
+      updateWalletContext(store, { address: 'manifest1active', chainId: 'chain-a' });
+      store.getState().clearToolCache();
+      expect(getCompletedMaintenance(completed)).toBeDefined();
+      store.getState().clearHistory();
+      expect(getCompletedMaintenance(completed)).toBeUndefined();
+    });
+
     it.each(['address', 'chain', 'client', 'signing'] as const)(
       'atomically cancels authorization state when %s changes',
       (changedField) => {
@@ -349,6 +373,7 @@ describe('aiStore', () => {
           },
         });
 
+        const completed = rememberCompletedCommand(store);
         const beforeEpoch = store.getState().authorizationEpoch;
         store.getState().setWalletContext({
           clientManager: changedField === 'client' ? managerB : managerA,
@@ -361,6 +386,7 @@ describe('aiStore', () => {
         expect(abortSpy).toHaveBeenCalledOnce();
         expect(cancelRafSpy).toHaveBeenCalledWith(17);
         expect(state.authorizationEpoch).toBe(beforeEpoch + 1);
+        expect(getCompletedMaintenance(completed)).toBeUndefined();
         expect(state.pendingConfirmation).toBeNull();
         expect(state.pendingPayload).toBeNull();
         expect(state.deployProgress).toBeNull();
@@ -427,7 +453,9 @@ describe('aiStore', () => {
       const activeIdentity = store.getState().historyIdentity;
       store.getState().addMessage(makeMessage());
       store.getState().cacheToolResult('k', { success: true, data: 1 });
+      const completed = rememberCompletedCommand(store);
       store.getState().clearHistory();
+      expect(getCompletedMaintenance(completed)).toBeUndefined();
       expect(store.getState().messages).toHaveLength(0);
       expect(store.getState()._toolCache.size).toBe(0);
       expect(clearHistoryStorage).toHaveBeenCalledWith(activeIdentity);
@@ -449,8 +477,10 @@ describe('aiStore', () => {
         isStreaming: true,
       });
       const beforeEpoch = store.getState().authorizationEpoch;
+      const completed = rememberCompletedCommand(store);
 
       store.getState().clearHistory();
+      expect(getCompletedMaintenance(completed)).toBeDefined();
 
       expect(abortSpy).not.toHaveBeenCalled();
       const state = store.getState();

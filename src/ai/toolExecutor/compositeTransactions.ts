@@ -44,6 +44,7 @@ import { fredCompatibilityForProvider } from '../../config/fredCompatibility';
 import { createMaintenanceIdempotencyKey } from '@manifest-network/manifest-sdk/deploy';
 import { getPendingMaintenanceOperation, retireAbsentMaintenanceOperation } from './maintenanceOperation';
 import { executeMaintenance } from './maintenanceExecution';
+import { recoverMaintenancePayload } from './maintenancePayload';
 import { creditAmountSchema, parseTransactionPlan, transactionConfirmation } from './transactionPlans';
 import { browserEventTransport } from '../../api/eventTransport';
 import {
@@ -1310,12 +1311,6 @@ export async function executeConfirmedFundCredits(
 // restart_app
 // ============================================================================
 
-/** Confirmation owns the command key. A pending command is recovered verbatim. */
-function maintenancePlanKey(address: string, providerUrl: string, leaseUuid: string, chainId?: string) {
-  if (fredCompatibilityForProvider(providerUrl) !== 'pr240') return {};
-  return { idempotencyKey: getPendingMaintenanceOperation(address, providerUrl, leaseUuid, chainId)?.idempotencyKey ?? createMaintenanceIdempotencyKey() };
-}
-
 /**
  * Pre-validation for restart_app. Returns confirmation result or error.
  */
@@ -1356,6 +1351,9 @@ export async function executeRestartApp(
   const eligible: Array<{ app: AppEntry; pending?: ReturnType<typeof getPendingMaintenanceOperation> }> = [];
   const skipped: string[] = [];
   for (const app of candidates) {
+    // "All" means live restart candidates; historical stopped leases are not
+    // errors and must not drown out actionable recovery/conflict diagnostics.
+    if (restartAll && (app.chainState === 'absent' || app.status === 'stopped')) continue;
     let reason: string | undefined;
     let pending: ReturnType<typeof getPendingMaintenanceOperation>;
     if (app.chainState === 'absent') {
@@ -1399,6 +1397,7 @@ export async function executeRestartApp(
     ...(fredCompatibilityForProvider(app.providerUrl!) === 'pr240'
       ? { idempotencyKey: pending?.idempotencyKey ?? createMaintenanceIdempotencyKey() }
       : {}),
+    ...(pending ? { expectPending: true as const } : {}),
   }));
 
   if (isBatch) {
@@ -1601,7 +1600,7 @@ export async function executeConfirmedRestartApp(
  * Uses a signing mutex to serialize signArbitrary calls (shared wallet sequence numbers).
  */
 async function executeConfirmedBatchRestart(
-  entries: Array<{ app_name: string; leaseUuid: string; providerUrl: string; idempotencyKey?: string }>,
+  entries: Array<{ app_name: string; leaseUuid: string; providerUrl: string; idempotencyKey?: string; expectPending?: boolean }>,
   address: string,
   appRegistry: ToolExecutorOptions['appRegistry'] & object,
   signing: SigningContext,
@@ -1778,17 +1777,16 @@ export async function executeUpdateApp(
     if (pending.operation !== 'update') {
       return { success: false, error: `A restart of "${retryApp!.name}" is unresolved. Recover that saved restart before starting another command.` };
     }
-    // Recovery never regenerates passwords or merges against a now-different
-    // registry snapshot. An attachment can restore exact bytes after a reload.
-    const manifest = payload ? new TextDecoder().decode(payload.bytes) : pending.manifest;
-    if (!manifest) {
-      return { success: false, error: `The update of "${retryApp!.name}" is unresolved. Reattach the exact original file to recover it; its payload was not saved to browser storage.` };
-    }
-    if (toHex(await sha256(manifest)) !== pending.payloadHash) {
-      return { success: false, error: `The update of "${retryApp!.name}" is unresolved with different payload bytes. Recovery requires the exact original file.` };
-    }
     if (Object.keys(args).some((key) => key !== 'app_name')) {
       return { success: false, error: `The update of "${retryApp!.name}" is unresolved. Retry update_app with only app_name to use the original payload; changes cannot replace a pending command.` };
+    }
+    const manifest = await recoverMaintenancePayload(pending, retryApp!.manifest, payload, options);
+    const current = getPendingMaintenanceOperation(address, retryApp!.providerUrl!, retryApp!.leaseUuid, options.authorization?.chainId);
+    if (!current || current.idempotencyKey !== pending.idempotencyKey || current.operation !== 'update') {
+      return { success: false, error: `The saved update of "${retryApp!.name}" changed or was already settled. Check app_status and run update_app again before confirming another command.` };
+    }
+    if (!manifest) {
+      return { success: false, error: `The update of "${retryApp!.name}" is unresolved. Its exact submitted payload could not be recovered${payload ? ' from this file and the saved defaults' : ' from provider release history'}. Reattach the original file to check a matching merge, or provide the exact reviewed manifest. Generated passwords and confirmation edits must match the saved payload fingerprint; Barney will not generate replacement bytes.` };
     }
     return transactionConfirmation('update_app', {
       app_name: retryApp!.name, leaseUuid: retryApp!.leaseUuid, providerUrl: retryApp!.providerUrl!,
@@ -1936,11 +1934,17 @@ export async function executeUpdateApp(
   const manifestError = await validateManifestForProvider(new TextDecoder().decode(payload.bytes), app.providerUrl);
   if (manifestError) return { success: false, error: manifestError };
 
+  let idempotencyKey: string | undefined;
+  if (fredCompatibilityForProvider(app.providerUrl) === 'pr240') {
+    const current = getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId);
+    if (current) return { success: false, error: `${current.operation === 'update' ? 'An update' : 'A restart'} of "${app.name}" became unresolved while planning. Recover that saved ${current.operation} before starting another command.` };
+    idempotencyKey = createMaintenanceIdempotencyKey();
+  }
   return transactionConfirmation('update_app', {
     app_name: app.name,
     leaseUuid: app.leaseUuid,
     providerUrl: app.providerUrl,
-    ...maintenancePlanKey(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(typeof args._generatedManifest === 'string' ? { _generatedManifest: args._generatedManifest } : {}),
     ...(args._isStack ? { _isStack: true } : {}),
   }, args._isStack
@@ -2010,6 +2014,7 @@ export async function executeConfirmedUpdateApp(
   if (fredCompatibilityForProvider(plan.providerUrl) === 'pr240') {
     return (await executeMaintenance({
       ...plan, operation: 'update', manifest: new TextDecoder().decode(payload.bytes),
+      expectPending: plan._maintenanceRetry || plan.expectPending,
     }, { ...options, clientManager })).result;
   }
 

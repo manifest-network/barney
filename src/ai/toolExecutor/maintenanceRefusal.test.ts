@@ -46,7 +46,11 @@ describe('persisted Fred maintenance refusal receipts', () => {
   });
 
   it.each([
-    [400, 'the restart request was rejected as invalid'],
+    [400, 'invalid request body'],
+    [400, 'payload is required'],
+    [400, 'invalid lease UUID format'],
+    [400, 'Idempotency-Key header must occur exactly once'],
+    [400, 'Idempotency-Key must be a canonical UUIDv4'],
     [401, 'unauthorized'],
     [403, 'forbidden'],
     [404, 'route not found'],
@@ -57,6 +61,21 @@ describe('persisted Fred maintenance refusal receipts', () => {
     [503, 'service unavailable'],
   ])('retains uncertainty for HTTP %s: %s', async (status, message) => {
     const { error } = await requestError(original, status, receipt(status, message));
+    expect(settledMaintenanceRefusal(error, original)).toBeUndefined();
+  });
+
+  it.each([
+    'validation error: image not allowed: registry "blocked.example"; allowed registries: [docker.io]',
+    'services.web.image: registry is not allowed',
+    'the update request was rejected as invalid',
+  ])('settles a durable validation receipt and preserves its diagnostic: %s', async (message) => {
+    const command = { ...original, operation: 'update' as const };
+    const { error } = await requestError(command, 400, receipt(400, message), true);
+    expect(settledMaintenanceRefusal(error, command)).toBe(message);
+  });
+
+  it.each(['', ' '.repeat(10), 'x'.repeat(516), 'bad\nmanifest', 'bad\u001bmanifest'])('does not mistake an uncurated 400 detail for Fred validation: %s', async (message) => {
+    const { error } = await requestError(original, 400, receipt(400, message));
     expect(settledMaintenanceRefusal(error, original)).toBeUndefined();
   });
 

@@ -27,6 +27,9 @@ Barney explicitly selects SDK `fredCompatibility: "pr240"` for dev's provider,
 SDK's `v0.13` contract. Manifest previews and deployment/update validation use
 the same provider selection as restart and update requests.
 
+Read-only status queries do not resolve this mutation compatibility setting;
+they can still observe chain state and provider health if it is invalid.
+
 `PUBLIC_FRED_COMPATIBILITY` optionally replaces this selection at container
 startup or build time. It accepts `v0.13`, `pr240`, or a JSON provider URL map,
 for example `{"https://s049-u002.manifest0.net/api/fred":"pr240"}`. Unlisted

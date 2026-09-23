@@ -27,7 +27,7 @@ import {
   type ConnectionDetails,
   type ProviderHealthResponse,
 } from '@manifest-network/manifest-sdk/deploy';
-import { classifyProvisionStatus, displayProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
+import { displayProvisionStatus, reconcileProvisionStatus } from './provisionStatus';
 import { appCardConnection } from './appCardConnection';
 import { buildBarneyCtx } from './capabilityCtx';
 import { nextStepFor } from './failureGuidance';
@@ -192,7 +192,7 @@ export async function executeAppStatus(
 
   if (signing && options.clientManager) {
     try {
-      const ctx = await buildBarneyCtx(options.clientManager, signing);
+      const ctx = await buildBarneyCtx(options.clientManager, signing, { operation: 'query' });
       throwIfAborted(signal, 'app_status');
       const st = await appStatus(ctx, { address, leaseUuid: app.leaseUuid });
       throwIfAborted(signal, 'app_status');
@@ -281,10 +281,7 @@ export async function executeAppStatus(
       providerEndpoint = refresh.providerEndpoint;
       connectionRefreshed = refresh.connectionRefreshed;
       const accessChanged = Object.keys(refresh.patch).length > 0;
-      const observed = classifyProvisionStatus(fredStatus?.provision_status);
-      // Progress can fill a gap, but cannot retract a previous confirmation.
-      const unsettled = isUnsettledProvisionStatus(fredStatus?.provision_status);
-      const provisionState = unsettled && app.provisionState === 'confirmed' ? undefined : observed;
+      const provisionState = reconcileProvisionStatus(fredStatus?.provision_status, app.provisionState);
       providerStatus = displayProvisionStatus(fredStatus?.provision_status);
       workloadStatusUnavailable = providerStatus === undefined;
       if (app.chainState !== 'active'
@@ -310,7 +307,7 @@ export async function executeAppStatus(
     }
   }
 
-  const maintenance = !endpointInactive ? await reconcilePendingMaintenance(app, options) : undefined;
+  const maintenance = !endpointInactive ? await reconcilePendingMaintenance(app, options, undefined, fredStatus?.provision_status) : undefined;
   const reconciledApp = appRegistry.getAppByLease(address, app.leaseUuid) ?? app;
   currentStatus = reconciledApp.status;
 

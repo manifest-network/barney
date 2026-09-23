@@ -28,7 +28,7 @@ export type BarneyCtx = FredAuthCtx & { events?: EventTransport };
 export async function buildBarneyCtx(
   clientManager: CosmosClientManager,
   signing: SigningContext,
-  opts?: { events?: EventTransport },
+  opts?: { events?: EventTransport; operation?: 'query' | 'mutation' },
 ): Promise<BarneyCtx> {
   const readClient = await getReadClient();
   return {
@@ -38,7 +38,9 @@ export async function buildBarneyCtx(
     logger: noopLogger,
     allowLoopback: import.meta.env.DEV,
     providerAuth: signing.providerAuth,
-    fredCompatibility: getFredCompatibility(),
+    // SDK reads do not consult the mutation protocol selector. A typo must
+    // not prevent status/diagnostics from observing the existing deployment.
+    ...(opts?.operation !== 'query' && { fredCompatibility: getFredCompatibility() }),
     events: opts?.events,
   };
 }

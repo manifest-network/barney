@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { asAddress, type CosmosClientManager } from '@manifest-network/manifest-sdk';
 import { buildManifestPreview } from '@manifest-network/manifest-sdk/catalog';
 import {
@@ -86,6 +86,9 @@ function releases(leaseUuid: string, latest = 1): FredLeaseReleases {
 }
 
 beforeEach(() => {
+  // Exercise SDK fresh-auth sequencing without a real one-second wait per mint.
+  let clock = Date.UTC(2026, 8, 23, 12);
+  vi.spyOn(Date, 'now').mockImplementation(() => (clock += 1000));
   vi.clearAllMocks();
   localStorage.clear();
   histories.clear();
@@ -105,6 +108,8 @@ beforeEach(() => {
     return { lease_uuid: leaseUuid, provider_url: providerUrl, state: LeaseState.LEASE_STATE_ACTIVE } as never;
   });
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 describe.each([DEV, LEGACY])('manifest confirmation on %s', (providerUrl) => {
   it('sends the merged approved update even when confirmation retains the original attachment', async () => {
@@ -204,4 +209,109 @@ it('preserves approved recovery bytes even when an unrelated raw attachment is s
   expect(calls[1][1]?.body).toBe(calls[0][1]?.body);
   expect(atob(JSON.parse(calls[1][1]?.body as string).payload)).toBe(exact);
   expect(new Headers(calls[1][1]?.headers).get('Idempotency-Key')).toBe(args.idempotencyKey);
+});
+
+it.each(['file', 'image', 'stack'] as const)('recovers a lost-response %s update after reload with identical key and upload bytes', async (source) => {
+  const app: AppEntry = {
+    name: 'example', leaseUuid: crypto.randomUUID(), providerUrl: DEV, providerUuid: 'provider',
+    size: 'docker-micro', createdAt: 0, status: 'running', chainState: 'active',
+    provisionState: 'confirmed', manifest: '{"image":"nginx:1.27","env":{"MODE":"production"},"user":"1000:1000","tmpfs":["/cache"]}',
+  };
+  const options = optionsFor(DEV, [app]);
+  histories.set(app.leaseUuid, releases(app.leaseUuid));
+  const file = source === 'file' ? attachment('{"image":"nginx:1.28"}') : undefined;
+  const args = source === 'stack'
+    ? { app_name: app.name, services: JSON.stringify({ web: { image: 'nginx:1.28', ports: '80', env: { PASSWORD: 'original-secret' } } }) }
+    : source === 'image' ? { app_name: app.name, image: 'nginx:1.28' } : { app_name: app.name };
+  const plan = await executeUpdateApp(args, options, file);
+  expect(plan.requiresConfirmation, plan.error).toBe(true);
+  const submitted = plan.pendingAction!.args._generatedManifest as string;
+  vi.mocked(providerFetch).mockImplementationOnce(async () => {
+    if (source !== 'file') {
+      const observed = releases(app.leaseUuid, 2);
+      histories.set(app.leaseUuid, { ...observed, releases: observed.releases.map((release) =>
+        release.version === 2 ? { ...release, manifest: btoa(submitted) } : release) });
+    }
+    throw new TypeError('Accepted command response lost');
+  });
+  expect((await executeConfirmedUpdateApp(plan.pendingAction!.args, chain, options, file)).error).toContain('unconfirmed');
+
+  vi.resetModules();
+  const fresh = await import('./compositeTransactions');
+  const state = await import('./maintenanceOperation');
+  expect(state.getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)?.manifest).toBeUndefined();
+  const recovery = await fresh.executeUpdateApp({ app_name: app.name }, options, file);
+  expect(recovery.requiresConfirmation, recovery.error).toBe(true);
+  expect(recovery.pendingAction!.args).toMatchObject({
+    _generatedManifest: submitted, _maintenanceRetry: true, idempotencyKey: plan.pendingAction!.args.idempotencyKey,
+  });
+  expect(providerFetch).toHaveBeenCalledTimes(1);
+  expect(state.getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)?.accepted).not.toBe(true);
+  for (let index = 0; index < localStorage.length; index++) {
+    expect(localStorage.getItem(localStorage.key(index)!)).not.toContain('original-secret');
+  }
+  vi.mocked(providerFetch).mockImplementationOnce(async () => {
+    histories.set(app.leaseUuid, releases(app.leaseUuid, 2));
+    return new Response(JSON.stringify({ status: 'updating' }), { status: 202 });
+  });
+  expect((await fresh.executeConfirmedUpdateApp(recovery.pendingAction!.args, chain, options, file)).success).toBe(true);
+  const calls = vi.mocked(providerFetch).mock.calls;
+  expect(calls).toHaveLength(2);
+  expect(calls[1][1]?.body).toBe(calls[0][1]?.body);
+  expect(new Headers(calls[1][1]?.headers).get('Idempotency-Key')).toBe(new Headers(calls[0][1]?.headers).get('Idempotency-Key'));
+  expect(state.getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)).toBeUndefined();
+});
+
+it('does not recover a different historical manifest or regenerate a lost payload', async () => {
+  vi.resetModules();
+  const { executeUpdateApp: planUpdate } = await import('./compositeTransactions');
+  const state = await import('./maintenanceOperation');
+  const app: AppEntry = {
+    name: 'example', leaseUuid: crypto.randomUUID(), providerUrl: DEV, providerUuid: 'provider',
+    size: 'small', createdAt: 0, status: 'running', chainState: 'active', provisionState: 'confirmed',
+    manifest: '{"image":"nginx:old"}',
+  };
+  const options = optionsFor(DEV, [app]);
+  const saved = await state.getOrCreateMaintenanceOperation({
+    address: ADDRESS, providerUrl: DEV, leaseUuid: app.leaseUuid, operation: 'update',
+    manifest: '{"image":"nginx:new","env":{"PASSWORD":"unrecoverable-secret"}}', baselineReleaseVersions: [1],
+  });
+  const observed = releases(app.leaseUuid, 2);
+  histories.set(app.leaseUuid, { ...observed, releases: observed.releases.map((release) =>
+    release.version === 2 ? { ...release, manifest: btoa('{"image":"nginx:new","env":{"PASSWORD":"different-secret"}}') } : release) });
+  vi.resetModules();
+  const fresh = await import('./compositeTransactions');
+  const result = await fresh.executeUpdateApp({ app_name: app.name }, options);
+  expect(result.requiresConfirmation).not.toBe(true);
+  expect(result.error).toContain('exact submitted payload could not be recovered');
+  expect(providerFetch).not.toHaveBeenCalled();
+  expect((await import('./maintenanceOperation')).getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)?.idempotencyKey).toBe(saved.idempotencyKey);
+  // A supplied replacement must also fail rather than repurpose the old key.
+  expect((await planUpdate({ app_name: app.name }, options, attachment('{"image":"redis"}'))).requiresConfirmation).not.toBe(true);
+});
+
+it.each(['restart', 'update'] as const)('does not borrow a %s key introduced by another tab during update planning', async (operation) => {
+  vi.resetModules();
+  const { executeUpdateApp: planUpdate } = await import('./compositeTransactions');
+  const state = await import('./maintenanceOperation');
+  const app: AppEntry = {
+    name: 'example', leaseUuid: crypto.randomUUID(), providerUrl: DEV, providerUuid: 'provider',
+    size: 'small', createdAt: 0, status: 'running', chainState: 'active', provisionState: 'confirmed',
+    manifest: '{"image":"nginx:old"}',
+  };
+  const options = optionsFor(DEV, [app]);
+  const command = await state.getOrCreateMaintenanceOperation({
+    address: ADDRESS, providerUrl: DEV, leaseUuid: app.leaseUuid, operation,
+    ...(operation === 'update' && { manifest: '{"image":"nginx:other"}' }), baselineReleaseVersions: [1],
+  });
+  const storageKey = localStorage.key(0)!;
+  const metadata = localStorage.getItem(storageKey)!;
+  localStorage.removeItem(storageKey);
+  const planning = planUpdate({ app_name: app.name }, options, attachment('{"image":"nginx:new"}'));
+  localStorage.setItem(storageKey, metadata);
+  const result = await planning;
+  expect(result.requiresConfirmation).not.toBe(true);
+  expect(result.error).toContain(`Recover that saved ${operation}`);
+  expect(state.getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)?.idempotencyKey).toBe(command.idempotencyKey);
+  expect(providerFetch).not.toHaveBeenCalled();
 });

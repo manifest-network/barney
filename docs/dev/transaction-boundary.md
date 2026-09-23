@@ -49,11 +49,17 @@ does not automatically retry a mutation or replace its key after an error.
 `maintenanceOperation.ts` scopes recovery by chain/endpoints, wallet, provider,
 and lease. It persists the key, operation, exact-byte SHA-256, and original
 release-version baseline before dispatch. Raw payloads and prior manifests
-remain in memory. A retry uses those exact bytes without rebuilding passwords
-or merging again; after reload it requires the exact original file. Browser
-storage failures block dispatch. Web Locks coordinate creation/completion
-between tabs where supported. Settled confirmations are memoized in memory so
-retrying a batch does not resubmit already completed items.
+remain in memory. A retry uses those exact bytes without rebuilding passwords.
+After reload, an original attachment can be merged with cached defaults only
+as a candidate: its exact hash must match. Without an attachment, provider
+release history can supply hash-matching bytes for a recovery confirmation;
+that lookup does not establish command admission or completion. If neither
+source matches, the exact reviewed payload is still required. Browser storage
+failures block dispatch, but retirement after an authoritative closed lease is
+best-effort and cannot change the stop result. Web Locks coordinate state
+between tabs; missing metadata drops stale memory, and a recovery confirmation
+requires the pending record to still exist. Settled confirmations are memoized
+in memory so retrying a batch does not resubmit already completed items.
 
 `maintenanceOutcome.ts` evaluates command outcome separately from readiness.
 A 202 replay can precede execution while the source runtime is still ready.

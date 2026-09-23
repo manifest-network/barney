@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { PROVISION_IN_PROGRESS } from '@manifest-network/manifest-sdk/deploy';
-import { classifyProvisionStatus, displayProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
+import { classifyProvisionStatus, displayProvisionStatus, isUnsettledProvisionStatus, reconcileProvisionStatus } from './provisionStatus';
 
 describe('displayProvisionStatus', () => {
   it('displays unknown readiness while withholding absent readings', () => {
@@ -65,5 +65,18 @@ describe('isUnsettledProvisionStatus', () => {
     // `omitempty` drops the field when a degraded provider's provision lookup fails.
     expect(isUnsettledProvisionStatus(undefined)).toBe(true);
     expect(isUnsettledProvisionStatus('')).toBe(true);
+  });
+});
+
+describe('reconcileProvisionStatus', () => {
+  it.each(['restarting', 'updating', 'provisioning', 'unknown'])('keeps confirmed readiness while %s remains in flight', (status) => {
+    expect(reconcileProvisionStatus(status, 'confirmed')).toBeUndefined();
+    expect(reconcileProvisionStatus(status, 'unconfirmed')).toBe('unconfirmed');
+  });
+
+  it('retains meaningful retained and failure observations', () => {
+    expect(reconcileProvisionStatus('retained', 'confirmed')).toBe('unconfirmed');
+    expect(reconcileProvisionStatus('failed', 'confirmed')).toBe('failed');
+    expect(reconcileProvisionStatus('failing', 'confirmed')).toBe('failed');
   });
 });

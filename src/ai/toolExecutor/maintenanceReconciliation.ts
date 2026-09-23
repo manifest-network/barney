@@ -1,9 +1,10 @@
 import { asLeaseUuid } from '@manifest-network/manifest-sdk';
-import { metaHashHex, type FredLeaseReleases } from '@manifest-network/manifest-sdk/deploy';
+import type { FredLeaseReleases } from '@manifest-network/manifest-sdk/deploy';
 import { getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { runtimeConfig } from '../../config/runtimeConfig';
-import { classifyProvisionStatus } from './provisionStatus';
+import { reconcileProvisionStatus } from './provisionStatus';
+import { recoverReleaseManifest } from './maintenancePayload';
 import { rememberMaintenanceCompletion } from './maintenanceCompletion';
 import { resolveAppEndpoint } from './helpers';
 import { getPendingMaintenanceOperation, commitMaintenanceObservation } from './maintenanceOperation';
@@ -15,26 +16,12 @@ export interface MaintenanceReconciliation extends MaintenanceOutcome {
   readonly operation?: 'restart' | 'update';
 }
 
-/** Fred returns historical manifest bytes as base64, not JSON text. */
-async function recoverReleaseManifest(encoded: string | undefined, payloadHash: string): Promise<string | undefined> {
-  if (!encoded) return undefined;
-  try {
-    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
-    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    if (await metaHashHex(decoded) !== payloadHash) return undefined;
-    const parsed: unknown = JSON.parse(decoded);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-    return decoded;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Observe a retained command without needing its raw update payload or issuing a POST. */
 export async function reconcilePendingMaintenance(
   app: AppEntry,
   options: ToolExecutorOptions,
   observedReleases?: FredLeaseReleases,
+  observedProvisionStatus?: string,
 ): Promise<MaintenanceReconciliation | undefined> {
   const { address, signing, appRegistry, signal } = options;
   signal?.throwIfAborted();
@@ -47,9 +34,17 @@ export async function reconcilePendingMaintenance(
     return { outcome: 'unconfirmed', runtimeReady: false, detail: error instanceof Error ? error.message : 'The saved maintenance operation could not be read.' };
   }
   if (!command) return undefined;
+  // Without acknowledged admission, release history cannot attribute a result
+  // to this key. Do not prompt for redundant wallet signatures or fetch history
+  // on every status read; explicit recovery owns the exact-key retry.
+  if (!command.accepted) return {
+    operation: command.operation, outcome: 'unconfirmed', runtimeReady: observedProvisionStatus === 'ready',
+    detail: 'Provider admission of this command has not been confirmed. Recover the original command with its same key and exact payload; release history alone cannot identify it.',
+  };
   if (!signing) return { operation: command.operation, outcome: 'unconfirmed', runtimeReady: false, detail: 'Connect the wallet to read the pending command outcome.' };
 
-  const registrySnapshot = JSON.stringify(appRegistry.getAppByLease(address, app.leaseUuid));
+  const currentApp = appRegistry.getAppByLease(address, app.leaseUuid);
+  const registrySnapshot = JSON.stringify(currentApp);
   const token = async () => {
     signal?.throwIfAborted();
     const auth = await signing.authTokens.getAuthToken(asLeaseUuid(app.leaseUuid));
@@ -63,14 +58,10 @@ export async function reconcilePendingMaintenance(
   signal?.throwIfAborted();
   const provision = provisionRead.status === 'fulfilled' ? provisionRead.value : undefined;
   const releases = releasesRead.status === 'fulfilled' ? releasesRead.value : undefined;
-  // A release has no command key. After a lost POST response, another client's
-  // release cannot prove that our saved command was admitted or has completed.
-  const verdict: MaintenanceOutcome = command.accepted
-    ? evaluateMaintenanceOutcome({ baselineVersions: command.baselineReleaseVersions, provision, releases })
-    : { outcome: 'unconfirmed', runtimeReady: provision?.status === 'ready', detail: 'Provider admission of this command has not been confirmed. Recover the original command with its same key and exact payload; release history alone cannot identify it.' };
+  const verdict: MaintenanceOutcome = evaluateMaintenanceOutcome({ baselineVersions: command.baselineReleaseVersions, provision, releases });
   const patch: Partial<Omit<AppEntry, 'leaseUuid'>> = {};
   if (provision) {
-    const provisionState = classifyProvisionStatus(provision.status);
+    const provisionState = reconcileProvisionStatus(provision.status, currentApp?.provisionState);
     if (provisionState) patch.provisionState = provisionState;
   }
   if (command.operation === 'update' && verdict.outcome === 'succeeded') {

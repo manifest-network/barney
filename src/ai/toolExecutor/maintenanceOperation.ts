@@ -1,5 +1,6 @@
 import { createMaintenanceIdempotencyKey, metaHashHex } from '@manifest-network/manifest-sdk/deploy';
 import { runtimeConfig } from '../../config/runtimeConfig';
+import { logError } from '../../utils/errors';
 
 type MaintenanceKind = 'restart' | 'update';
 
@@ -41,6 +42,14 @@ interface MaintenanceInput extends Omit<MaintenanceScope, 'chainId'> {
   readonly manifest?: string;
   readonly previousManifest?: string;
   readonly baselineReleaseVersions?: readonly number[];
+  readonly expectPending?: boolean;
+}
+
+/** A local conflict or stale recovery plan must never be reported as a sent command. */
+export class MaintenanceOperationRefusalError extends Error {}
+
+function missingOperation(): MaintenanceOperationRefusalError {
+  return new MaintenanceOperationRefusalError('The saved maintenance operation no longer exists. Refresh app_status and app_releases before requesting a new command.');
 }
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -146,21 +155,29 @@ export function getPendingMaintenanceOperation(
   const key = storageKey(scope);
   const metadata = readMetadata(key);
   const retained = pending.get(key);
-  if (retained) {
-    if (metadata && !matches(retained, metadata)) {
-      throw new Error('Another maintenance operation is recorded for this app. Reconcile the pending operations before retrying.');
-    }
-    // Another tab may have dispatched or acknowledged the same operation.
-    return Object.freeze({ ...retained, ...metadata });
+  if (!metadata) {
+    pending.delete(key);
+    return undefined;
   }
-  if (!metadata) return undefined;
+  if (retained) {
+    if (matches(retained, metadata)) {
+      // Another tab may have dispatched or acknowledged the same operation.
+      return Object.freeze({ ...retained, ...metadata });
+    }
+    // Another tab completed the old command and prepared a successor. Its
+    // durable identity wins; the old raw payload must not survive that change.
+    pending.delete(key);
+  }
   return Object.freeze({ ...scope, ...metadata });
 }
 
-function assertSameOperation(record: MaintenanceOperation, input: MaintenanceInput): void {
+export function assertMaintenanceOperationMatches(
+  record: MaintenanceOperation,
+  input: Pick<MaintenanceInput, 'operation' | 'idempotencyKey'>,
+): void {
   if (record.operation !== input.operation
     || (input.idempotencyKey !== undefined && record.idempotencyKey !== input.idempotencyKey)) {
-    throw new Error(`${record.operation === 'update' ? 'An' : 'A'} ${record.operation} is still unresolved for this app. Retry that exact operation or reconcile its outcome before submitting a new command.`);
+    throw new MaintenanceOperationRefusalError(`${record.operation === 'update' ? 'An' : 'A'} ${record.operation} is still unresolved for this app. Retry that exact operation or reconcile its outcome before submitting a new command.`);
   }
 }
 
@@ -187,7 +204,8 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
   const scope = scopeFor(input);
   const key = storageKey(scope);
   const initial = getPendingMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid, scope.chainId);
-  if (initial) assertSameOperation(initial, input);
+  if (initial) assertMaintenanceOperationMatches(initial, input);
+  else if (input.expectPending) throw missingOperation();
   if (!initial && !input.baselineReleaseVersions) {
     throw new Error('Read the release history before starting a maintenance operation so its outcome can be verified.');
   }
@@ -204,13 +222,17 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
     // Hashing yields. Re-read inside the critical section so concurrent callers
     // cannot mint separate keys for the same unresolved operation.
     const current = getPendingMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid, scope.chainId);
+    if (!current && (initial || input.expectPending)) throw missingOperation();
     if (current) {
-      assertSameOperation(current, input);
+      assertMaintenanceOperationMatches(current, input);
+      if (initial && !matches(initial, metadataFor(current))) {
+        throw new MaintenanceOperationRefusalError('The saved maintenance operation changed during preparation. Refresh app_status and app_releases before retrying.');
+      }
       if (current.payloadHash !== payloadHash || (current.manifest !== undefined && current.manifest !== manifest)) {
-        throw new Error('An update is still unresolved with different manifest bytes. Retry its exact original payload or reconcile its outcome before submitting a new command.');
+        throw new MaintenanceOperationRefusalError('An update is still unresolved with different manifest bytes. Retry its exact original payload or reconcile its outcome before submitting a new command.');
       }
     }
-    const retained = current ?? initial;
+    const retained = current;
     const record: MaintenanceOperation = Object.freeze({
       ...scope,
       operation: input.operation,
@@ -236,7 +258,11 @@ export async function completeMaintenanceOperation(record: MaintenanceOperation)
   const key = storageKey(record);
   await withScopeLock(key, () => {
     const metadata = readMetadata(key);
-    if (metadata && !matches(record, metadata)) return; // A stale result must not clear a newer command.
+    if (!metadata) {
+      pending.delete(key);
+      return;
+    }
+    if (!matches(record, metadata)) return; // A stale result must not clear a newer command.
     const retained = pending.get(key);
     if (retained && retained.idempotencyKey !== record.idempotencyKey) return;
     try {
@@ -295,15 +321,30 @@ export async function discardUnsubmittedMaintenanceOperation(record: Maintenance
 
 /** An authoritative absent/terminal chain lease cannot execute retained work. */
 export async function retireAbsentMaintenanceOperation(input: Omit<MaintenanceScope, 'chainId'> & { chainId?: string }): Promise<void> {
-  const key = storageKey(scopeFor(input));
-  await withScopeLock(key, () => {
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      throw storageError();
+  let key: string;
+  try {
+    key = storageKey(scopeFor(input));
+  } catch {
+    // The chain's terminal/absent verdict remains valid even when a stale
+    // registry entry has an invalid URL. Discard its memory-only payloads.
+    for (const [entryKey, record] of pending) {
+      if (record.address === input.address.trim().toLowerCase()
+        && record.chainId === (input.chainId ?? runtimeConfig.PUBLIC_CHAIN_ID)
+        && record.leaseUuid === input.leaseUuid) pending.delete(entryKey);
     }
+    return;
+  }
+  try {
+    await withScopeLock(key, () => {
+      pending.delete(key);
+      localStorage.removeItem(key);
+    });
+  } catch {
     pending.delete(key);
-  });
+    // Cleanup cannot turn a confirmed stop/status result into a failed action.
+    // Log a bounded message, never the provider URL or raw storage contents.
+    logError('maintenanceOperation.retireAbsent', storageError());
+  }
 }
 
 /** Commit read-only observations only while both the command and caller snapshot remain current. */
@@ -314,11 +355,15 @@ export async function commitMaintenanceObservation(
   const key = storageKey(record);
   return withScopeLock(key, () => {
     const metadata = readMetadata(key);
-    // Unlike retry recovery, absence is a stale result here: another caller may
-    // have settled this command and a successor during the provider reads.
-    if (!metadata || !matches(record, metadata)) return false;
+    // Absence is a stale result: another caller may have settled this command
+    // and a successor during the provider reads. Never retain its raw payload.
+    if (!metadata) {
+      pending.delete(key);
+      return false;
+    }
     const retained = pending.get(key);
-    if (retained && !matches(retained, metadata)) return false;
+    if (retained && !matches(retained, metadata)) pending.delete(key);
+    if (!matches(record, metadata)) return false;
     if (!observation.isCurrent()) return false;
     if (observation.settled) {
       try {

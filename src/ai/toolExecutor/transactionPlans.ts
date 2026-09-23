@@ -24,6 +24,7 @@ const stopEntry = z.strictObject({ app_name: name, leaseUuid: name });
 const restartEntry = stopEntry.extend({
   providerUrl,
   idempotencyKey: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/).optional(),
+  expectPending: z.literal(true).optional(),
 });
 
 /** The semantic action shown for approval and parsed again before execution.

@@ -11,8 +11,9 @@ import { buildBarneyCtx } from './capabilityCtx';
 import { connectionPatch, resolveAppEndpoint } from './helpers';
 import { resolveAppUrl } from './deployUrl';
 import { validateManifestForProvider } from './deployArgs';
-import { classifyProvisionStatus } from './provisionStatus';
+import { reconcileProvisionStatus } from './provisionStatus';
 import {
+  assertMaintenanceOperationMatches,
   completeMaintenanceOperation,
   commitMaintenanceObservation,
   discardUnsubmittedMaintenanceOperation,
@@ -20,6 +21,7 @@ import {
   markMaintenanceOperationAccepted,
   markMaintenanceOperationDispatched,
   prepareMaintenanceOperation,
+  MaintenanceOperationRefusalError,
   type MaintenanceOperation,
 } from './maintenanceOperation';
 import { captureMaintenanceBaseline, evaluateMaintenanceOutcome } from './maintenanceOutcome';
@@ -37,6 +39,7 @@ export async function executeMaintenance(
     providerUrl: string;
     idempotencyKey?: string;
     manifest?: string;
+    expectPending?: boolean;
   },
   options: ToolExecutorOptions,
 ): Promise<MaintenanceResult> {
@@ -76,6 +79,10 @@ export async function executeMaintenance(
       return priorResult.result;
     }
     const pending = getPendingMaintenanceOperation(address, providerUrl, leaseUuid, chainId);
+    if (pending) assertMaintenanceOperationMatches(pending, input);
+    else if (input.expectPending) {
+      throw new MaintenanceOperationRefusalError('The saved maintenance operation no longer exists. Refresh app_status and app_releases before requesting a new command.');
+    }
     existedBeforeAttempt = pending !== undefined;
     options.assertAuthorization?.();
     signal?.throwIfAborted();
@@ -96,6 +103,7 @@ export async function executeMaintenance(
       manifest: input.manifest,
       previousManifest: appRegistry.getAppByLease(address, leaseUuid)?.manifest,
       baselineReleaseVersions: baseline,
+      expectPending: input.expectPending || existedBeforeAttempt,
     });
     command = prepared.command;
     created = prepared.created;
@@ -177,7 +185,7 @@ export async function executeMaintenance(
         ...connectionPatch({ url: endpoint.url, connection: endpoint.connection, connectionStale: !endpoint.connection }, previous),
       });
     } else if (provision) {
-      const provisionState = classifyProvisionStatus(provision.status);
+      const provisionState = reconcileProvisionStatus(provision.status, appRegistry.getAppByLease(address, leaseUuid)?.provisionState);
       if (provisionState) patch.provisionState = provisionState;
     }
     signal?.throwIfAborted();
@@ -216,6 +224,10 @@ export async function executeMaintenance(
     onProgress({ phase: result.outcome === 'succeeded' ? 'ready' : 'failed', operation, detail: result.result.error });
     return result;
   } catch (error) {
+    if (error instanceof MaintenanceOperationRefusalError) {
+      onProgress({ phase: 'failed', operation, detail: error.message });
+      return { outcome: 'failed', result: { success: false, error: error.message } };
+    }
     // Only a newly created command with no HTTP handoff can be discarded.
     // On an existing command even a local abort cannot undo an earlier attempt.
     if (command && created && !accepted && !dispatchStarted) {

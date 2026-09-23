@@ -216,6 +216,8 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
           }
         } else if (result.outcome === 'cancelled') {
           cancelled.push(result.name);
+          const detail = result.detail ?? (batchProgress[i].phase === 'failed' ? batchProgress[i].detail : undefined);
+          updateProgress('failed', detail ?? 'Cancelled');
         } else {
           succeeded.push(result);
         }
@@ -289,6 +291,16 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
   // branch below, so the ProgressCard and the chat text can never disagree.
   // An unconfirmed batch has not landed, but it is not a failed batch either.
   const nothingLanded = succeeded.length === 0 && unconfirmed.length === 0;
+  // Rows disappear when the next tool starts. Preserve the failure reason in
+  // the tool result so both the user and model can act on it afterwards.
+  const failureDetails = failed.flatMap((name) => {
+    const row = batchProgress?.find((entry) => entry.name === name && entry.phase === 'failed');
+    return row?.detail ? [{ name, detail: row.detail }] : [];
+  });
+  const failedText = failed.map((name) => {
+    const detail = failureDetails.find((entry) => entry.name === name)?.detail;
+    return detail ? `${name}: ${detail}` : name;
+  }).join(', ');
 
   // Maintenance has a neutral terminal phase: no verified restart/update may
   // be reported as complete just because the runner finished waiting. Deploy
@@ -321,9 +333,9 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     // batch — keep the original message (test/UX contract). Otherwise name both
     // buckets so the abort isn't hidden behind a bare "all failed".
     if (cancelled.length === 0) {
-      return { success: false, error: `All ${failedNoun} failed: ${failed.join(', ')}` };
+      return { success: false, error: `All ${failedNoun} failed: ${failedText}` };
     }
-    const failedPart = failed.length > 0 ? `Failed: ${failed.join(', ')}.` : '';
+    const failedPart = failed.length > 0 ? `Failed: ${failedText}.` : '';
     const cancelledPart = `Cancelled: ${cancelled.join(', ')}.`;
     return {
       success: false,
@@ -340,7 +352,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     const lines = unconfirmed.map((u) => u.detail ? `${u.name}: ${u.detail}` : u.name);
     parts.push(`${unconfirmedLabel}:\n${lines.map((l) => `- ${l}`).join('\n')}`);
   }
-  if (failed.length > 0) parts.push(`Failed: ${failed.join(', ')}.`);
+  if (failed.length > 0) parts.push(`Failed: ${failedText}.`);
   if (cancelled.length > 0) parts.push(`Cancelled: ${cancelled.join(', ')}.`);
 
   return {
@@ -348,6 +360,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     data: {
       [dataKey]: succeeded,
       failed,
+      ...(failureDetails.length > 0 && { failureDetails }),
       unconfirmed,
       cancelled,
       message: parts.join('\n'),

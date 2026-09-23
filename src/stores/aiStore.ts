@@ -10,6 +10,7 @@ import { checkApiHealth } from '../api/morpheus';
 import type { AISettings } from '../ai/validation';
 import type { PayloadAttachment, ToolResult, SigningContext } from '../ai/toolExecutor';
 import type { DeployProgress } from '../ai/progress';
+import { clearCompletedMaintenance } from '../ai/toolExecutor/maintenanceCompletion';
 import { validateFile, validateManifestContent } from '../utils/fileValidation';
 import { sha256, toHex } from '../utils/hash';
 import { logError } from '../utils/errors';
@@ -352,6 +353,7 @@ export const createAIStore = () =>
       current.abortController?.abort();
       if (current._rafId !== null) cancelAnimationFrame(current._rafId);
       current._toolCache.clear();
+      if (current.address) clearCompletedMaintenance({ address: current.address, chainId: current.chainId });
 
       const closedMessages = messagesAfterAuthorizationChange(current);
 
@@ -482,6 +484,7 @@ export const createAIStore = () =>
       current.abortController?.abort();
       if (current._rafId !== null) cancelAnimationFrame(current._rafId);
       current._toolCache.clear();
+      if (current.address) clearCompletedMaintenance({ address: current.address, chainId: current.chainId });
       if (current.historyIdentity) {
         current._historyCache.set(walletIdentityKey(current.historyIdentity), []);
         clearHistoryStorage(current.historyIdentity);

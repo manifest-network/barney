@@ -1,4 +1,4 @@
-import { expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import type { CosmosClientManager, EventTransport } from '@manifest-network/manifest-sdk';
 import { getReadClient } from '../../api/readClient';
 import { getFredCompatibility } from '../../config/fredCompatibility';
@@ -20,4 +20,21 @@ it('threads provider compatibility alongside the existing authentication and eve
   expect(ctx.fredCompatibility).toBe(getFredCompatibility());
   expect(ctx.fredCompatibility).toEqual({ 'https://s049-u002.manifest0.net/api/fred': 'pr240' });
   expect(providerAuth.providerToken).not.toHaveBeenCalled();
+});
+
+afterEach(() => {
+  vi.doUnmock('../../config/runtimeConfig');
+  vi.resetModules();
+});
+
+it('omits the unused selector for query contexts while mutations still validate configuration', async () => {
+  vi.resetModules();
+  vi.doMock('../../config/runtimeConfig', () => ({ runtimeConfig: { PUBLIC_FRED_COMPATIBILITY: 'PR240' } }));
+  const { buildBarneyCtx: build } = await import('./capabilityCtx');
+  vi.mocked(getReadClient).mockResolvedValue({ query: {} } as Awaited<ReturnType<typeof getReadClient>>);
+  const chain = {} as CosmosClientManager;
+  const signing = { providerAuth: {} } as SigningContext;
+  expect(await build(chain, signing, { operation: 'query' })).not.toHaveProperty('fredCompatibility');
+  await expect(build(chain, signing)).rejects.toThrow('PUBLIC_FRED_COMPATIBILITY');
+  await expect(build(chain, signing, { operation: 'mutation' })).rejects.toThrow('PUBLIC_FRED_COMPATIBILITY');
 });

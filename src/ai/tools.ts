@@ -138,7 +138,7 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'restart_app',
-      description: 'Restart apps by name, comma-separated list, or "all". An unresolved restart is recovered with its original command key; "all" recovers only pending restarts when any exist. Check app_status and app_releases after an uncertain result; never stop/redeploy to recover it.',
+      description: 'Restart apps by name, comma-separated list, or "all". On pr240 providers, an unresolved restart is recovered with its original command key; "all" recovers only pending restarts when any exist. Legacy v0.13 providers cannot deduplicate retries: observe app_status and app_releases before deliberately requesting another restart. Never stop/redeploy to recover an uncertain result.',
       parameters: {
         type: 'object',
         properties: {
@@ -155,7 +155,7 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'update_app',
-      description: 'Update an app with a new manifest file, a new Docker image, or a new service stack definition. To retry an unresolved update, pass only app_name: Barney retains the original command key and exact payload. After a browser reload, reattach the exact original file. Check app_status and app_releases after an uncertain result; never submit a different command or stop/redeploy to recover it.',
+      description: 'Update an app with a new manifest file, a new Docker image, or a new service stack definition. On pr240, retry an unresolved update with only app_name to recover its original key and exact payload. After reload, Barney checks provider history for matching bytes, or can verify the original attached file merged with saved defaults by its payload fingerprint. If no match exists, exact reviewed bytes are required; never regenerate passwords or replace a pending command. Legacy v0.13 cannot deduplicate retries: observe app_status and app_releases before deliberately submitting another update. Never stop/redeploy to recover an uncertain result.',
       parameters: {
         type: 'object',
         properties: {

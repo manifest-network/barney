@@ -96,14 +96,20 @@ You attached an oversized manifest (raw input) or asked for a stack with too man
 ### Restart or update outcome is unconfirmed
 
 Check the app's status and releases. The provider may still execute a pending
-command after a timeout or lost response. Ask Barney to retry the same restart,
-or retry the update using only the app name; it will recover the saved command.
-For a bulk restart, retrying "all" recovers only unresolved restarts. Avoid
-changing the update or stopping and redeploying while its outcome is unresolved.
+command after a timeout or lost response. On dev's PR240 provider, ask Barney to
+retry the same restart, or retry the update using only the app name; it recovers
+the saved command. For a bulk restart, retrying "all" recovers only unresolved
+restarts. Legacy v0.13 providers cannot deduplicate requests: inspect status and
+releases before deliberately submitting another command. Avoid changing the
+update or stopping and redeploying while its outcome is unresolved.
 
 Barney keeps update contents in memory to protect secrets. After a browser
-reload, recovery requires reattaching the exact original file; the saved command
-key and payload fingerprint prevent a different file from replacing it. A
+reload, retry using only the app name to look for matching bytes in provider
+release history. You can also reattach the original file: Barney tries its
+original merge with saved defaults and requires an exact payload fingerprint
+match. Generated passwords and confirmation edits cannot be regenerated; if
+the provider has no matching manifest, the exact reviewed bytes are needed.
+Recovery never changes the command's key or infers success from matching bytes. A
 healthy app can still have a failed restart or update if the provider restored
 the previous runtime. The operation result and app health are reported separately.
 

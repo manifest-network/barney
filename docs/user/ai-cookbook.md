@@ -62,8 +62,10 @@ Update wordpress to use a new theme  (File attached: stack.json)
 On dev, **Outcome unknown** means the restart or update may still execute. Check
 the app's status and releases first. Acknowledged commands can settle from those
 checks even after a reload. Retrying an unresolved command reuses its original
-key and exact manifest; after reloading, an update retry may require the original
-file. Do not replace it with a new command or stop/redeploy while its outcome is
+key and exact manifest; after reloading, Barney can recover matching bytes from
+provider history or verify a reattached file merged with saved defaults. If
+neither matches, the exact reviewed manifest is required. Do not replace it
+with a new command or stop/redeploy while its outcome is
 unknown. A healthy app can still have a failed restart if the provider restored
 the previous runtime. For a partially completed batch, retrying `restart all`
 recovers only the unresolved restarts.

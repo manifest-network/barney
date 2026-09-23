@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppEntry } from '../../registry/appRegistry';
-import { executeRestartApp } from './compositeTransactions';
+import { executeConfirmedRestartApp, executeRestartApp } from './compositeTransactions';
+import { executeMaintenance } from './maintenanceExecution';
 import { getPendingMaintenanceOperation, type MaintenanceOperation } from './maintenanceOperation';
 import { makeRegistry } from './testHelpers';
 import type { ToolExecutorOptions } from './types';
 
 vi.mock('../../config/fredCompatibility', () => ({ fredCompatibilityForProvider: () => 'pr240' }));
 vi.mock('./maintenanceOperation', () => ({ getPendingMaintenanceOperation: vi.fn() }));
+vi.mock('./maintenanceExecution', () => ({ executeMaintenance: vi.fn() }));
+vi.mock('./capabilityCtx', () => ({ buildBarneyCtx: vi.fn().mockResolvedValue({}) }));
 
 const address = 'manifest1alice';
 const providerUrl = 'https://provider.example';
@@ -57,8 +60,8 @@ describe('restart selection and saved operations', () => {
       app('closed', 1, { chainState: 'absent', status: 'stopped' }), app('web', 2),
     ]));
     expect(result.pendingAction?.args.entries).toEqual([expect.objectContaining({ app_name: 'web' })]);
-    expect(result.confirmationMessage).toContain('closed');
-    expect(result.confirmationMessage).toContain('no active lease');
+    expect(result.confirmationMessage).not.toContain('closed');
+    expect(result.confirmationMessage).not.toContain('skipped');
     expect(getPendingMaintenanceOperation).toHaveBeenCalledTimes(1);
   });
 
@@ -105,7 +108,67 @@ describe('restart selection and saved operations', () => {
     const result = await executeRestartApp({ app_name: 'all' }, options([
       app('pending', 1, { provisionState: 'unconfirmed', status: 'deploying' }), app('completed', 2),
     ]));
-    expect(result.pendingAction?.args.entries).toEqual([expect.objectContaining({ app_name: 'pending', idempotencyKey: restartKey })]);
+    expect(result.pendingAction?.args.entries).toEqual([expect.objectContaining({ app_name: 'pending', idempotencyKey: restartKey, expectPending: true })]);
     expect(result.confirmationMessage).toContain('Recover pending restarts');
+  });
+
+  it('omits historical stopped apps from restart all while naming an actual update conflict', async () => {
+    vi.mocked(getPendingMaintenanceOperation).mockImplementation((_address, _provider, lease) => lease === leaseUuid(3) ? pending('update') : undefined);
+    const result = await executeRestartApp({ app_name: 'all' }, options([
+      app('closed', 1, { chainState: 'absent', status: 'stopped' }),
+      app('legacy-stopped', 2, { chainState: undefined, status: 'stopped' }),
+      app('updating', 3), app('web', 4),
+    ]));
+    expect(result.confirmationMessage).not.toContain('closed');
+    expect(result.confirmationMessage).not.toContain('legacy-stopped');
+    expect(result.confirmationMessage).toContain('An update of "updating" is unresolved');
+  });
+
+  it.each(['web', 'all'])('passes the pending-recovery requirement from %s confirmation to execution', async (app_name) => {
+    vi.mocked(getPendingMaintenanceOperation).mockReturnValue(pending('restart'));
+    const executionOptions = { ...options([app('web', 1)]), signing: {} as NonNullable<ToolExecutorOptions['signing']> };
+    const confirmation = await executeRestartApp({ app_name }, executionOptions);
+    expect(confirmation.requiresConfirmation).toBe(true);
+    vi.mocked(executeMaintenance).mockResolvedValue({ outcome: 'succeeded', result: { success: true, data: {} } });
+
+    await executeConfirmedRestartApp(confirmation.pendingAction!.args, {} as NonNullable<ToolExecutorOptions['clientManager']>, executionOptions);
+
+    expect(executeMaintenance).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'restart', idempotencyKey: restartKey, expectPending: true,
+    }), expect.anything());
+  });
+
+  it('keeps fresh batch items distinct from pending recovery entries', async () => {
+    vi.mocked(getPendingMaintenanceOperation).mockImplementation((_address, _provider, lease) => lease === leaseUuid(1) ? pending('restart') : undefined);
+    const result = await executeRestartApp({ app_name: 'pending,fresh' }, options([app('pending', 1), app('fresh', 2)]));
+    const entries = result.pendingAction!.args.entries as Array<{ expectPending?: boolean }>;
+    expect(entries[0].expectPending).toBe(true);
+    expect(entries[1]).not.toHaveProperty('expectPending');
+  });
+
+  it('shows a cancelled PR240 item as terminal and retains the cancellation reason', async () => {
+    const executionOptions = { ...options([app('web', 1)]), signing: {} as NonNullable<ToolExecutorOptions['signing']>, onProgress: vi.fn() };
+    const confirmation = await executeRestartApp({ app_name: 'all' }, executionOptions);
+    vi.mocked(executeMaintenance).mockResolvedValue({ outcome: 'cancelled', result: { success: false, error: 'Restart cancelled before dispatch.' } });
+
+    const result = await executeConfirmedRestartApp(confirmation.pendingAction!.args, {} as NonNullable<ToolExecutorOptions['clientManager']>, executionOptions);
+
+    expect(result.error).toContain('Cancelled: web');
+    expect(executionOptions.onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'failed', batch: [
+      expect.objectContaining({ name: 'web', phase: 'failed', detail: 'Restart cancelled before dispatch.' }),
+    ] }));
+  });
+
+  it('preserves an actionable maintenance preparation failure in the batch tool response', async () => {
+    const executionOptions = { ...options([app('web', 1)]), signing: {} as NonNullable<ToolExecutorOptions['signing']> };
+    const confirmation = await executeRestartApp({ app_name: 'all' }, executionOptions);
+    vi.mocked(executeMaintenance).mockResolvedValue({ outcome: 'failed', result: {
+      success: false, error: 'Another command is in progress (release v7 is deploying). Wait and check app_releases and app_status before retrying.',
+    } });
+
+    const result = await executeConfirmedRestartApp(confirmation.pendingAction!.args, {} as NonNullable<ToolExecutorOptions['clientManager']>, executionOptions);
+
+    expect(result.error).toContain('web: Another command is in progress (release v7 is deploying)');
+    expect(result.error).toContain('app_releases and app_status');
   });
 });

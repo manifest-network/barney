@@ -6538,7 +6538,7 @@ describe('G3 (cont.) — the ProgressCard detail must not re-assert what the cop
 describe('G4 (cont.) — a mixed batch keeps the two outcomes apart per entry', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('routes the aborted waits to Cancelled and the one unanswered wait to Still restarting', async () => {
+  it('routes aborted waits to Cancelled and the unanswered wait to Outcome unknown', async () => {
     // Where G1 and G4 meet, and the only shape that distinguishes the fix from
     // "bucket everything as cancelled once the signal is aborted". All three
     // POSTs land; the user presses Stop; two waits reject with the signal's own
@@ -6606,7 +6606,7 @@ describe('CP2 — a wait that never got an answer is not a failure', () => {
     return apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! }));
   }
 
-  it('batch restart: an unanswered readiness wait lands in Still restarting, not Failed', async () => {
+  it('batch restart: an unanswered readiness wait lands in Outcome unknown, not Failed', async () => {
     // The catch already recorded 'unconfirmed' but returned null, so the
     // registry said 'deploying' while the summary said "All restarts failed" —
     // a failure verdict fred never issued.

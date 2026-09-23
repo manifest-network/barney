@@ -12,6 +12,7 @@ import { resolveAppUrl } from './deployUrl';
 import { executeConfirmedRestartApp, executeConfirmedUpdateApp, executeRestartApp, executeUpdateApp } from './compositeTransactions';
 import { completeMaintenanceOperation, getOrCreateMaintenanceOperation, getPendingMaintenanceOperation } from './maintenanceOperation';
 import { reconcilePendingMaintenance } from './maintenanceReconciliation';
+import { executeMaintenance } from './maintenanceExecution';
 import { makeRegistry } from './testHelpers';
 import type { SigningContext, ToolExecutorOptions } from './types';
 
@@ -159,6 +160,15 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
     expect(options.appRegistry?.getAppByLease(ADDRESS, app.leaseUuid)?.manifest).toBe(OLD_MANIFEST);
   });
 
+  it('preserves a confirmed runtime while maintenance verification reports only progress', async () => {
+    const { apps: [app], plans: [plan], options, appRegistry } = setup();
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: operation === 'restart' ? 'restarting' : 'updating', fail_count: 0 });
+    const result = await dispatch(operation, plan, options);
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('unconfirmed') });
+    expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ provisionState: 'confirmed', status: 'running' });
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(plan.idempotencyKey);
+  });
+
   it.each([404, 409])('settles only the exact durable Fred %i refusal, including a lost-response retry', async (status) => {
     const { apps: [app], plans: [plan], options } = setup();
     vi.mocked(providerFetch).mockRejectedValueOnce(new TypeError('Lost response'));
@@ -175,11 +185,34 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
     expect(waitForLeaseStatus).not.toHaveBeenCalled();
   });
 
-  it('retains a 400 refusal because its body cannot distinguish prior command admission', async () => {
+  it('retains an early 400 refusal because its body cannot distinguish prior command admission', async () => {
     const { apps: [app], plans: [plan], options } = setup();
-    vi.mocked(providerFetch).mockResolvedValueOnce(new Response(JSON.stringify({ code: 400, error: 'invalid manifest' }), { status: 400 }));
+    vi.mocked(providerFetch).mockResolvedValueOnce(new Response(JSON.stringify({ code: 400, error: 'invalid request body' }), { status: 400 }));
     expect((await dispatch(operation, plan, options)).error).toContain('unconfirmed');
     expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(plan.idempotencyKey);
+  });
+
+  it('settles a persisted validation rejection recovered after a lost response and allows a new command', async () => {
+    const { apps: [app], plans: [plan], options } = setup();
+    vi.mocked(providerFetch).mockRejectedValueOnce(new TypeError('Lost response'));
+    expect((await dispatch(operation, plan, options)).error).toContain('unconfirmed');
+    const error = 'validation error: image not allowed: registry.example/private/app:latest';
+    vi.mocked(providerFetch).mockResolvedValueOnce(new Response(JSON.stringify({ code: 400, error }), { status: 400 }));
+    const refused = await dispatch(operation, plan, options);
+    expect(refused).toMatchObject({ success: false, error: expect.stringContaining(error) });
+    expect(refused.error).not.toContain('unconfirmed');
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+    expect(requests().map((request) => request.key)).toEqual([plan.idempotencyKey, plan.idempotencyKey]);
+    expect(await dispatch(operation, plan, options)).toEqual(refused);
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+
+    const next = { ...plan, idempotencyKey: crypto.randomUUID() };
+    vi.mocked(providerFetch).mockImplementationOnce(async () => {
+      histories.set(app.leaseUuid, history(app.leaseUuid, release(1, 'superseded'), release(2)));
+      return accepted();
+    });
+    expect((await dispatch(operation, next, options)).success).toBe(true);
+    expect(requests().at(-1)?.key).toBe(next.idempotencyKey);
   });
 
   it('reports compensated failure while retaining the healthy original runtime', async () => {
@@ -227,7 +260,7 @@ it('gives batch items independent keys and retries only the unresolved command',
   expect(new Set(requests().map((request) => request.key)).size).toBe(2);
   expect(requests().every((request) => UUID_V4.test(request.key!))).toBe(true);
   const recovery = await executeRestartApp({ app_name: 'all' }, options);
-  expect(recovery.pendingAction?.args.entries).toEqual([plans[1]]);
+  expect(recovery.pendingAction?.args.entries).toEqual([{ ...plans[1], expectPending: true }]);
 
   vi.mocked(providerFetch).mockImplementation(async (input) => {
     expect(String(input)).toContain(apps[1].leaseUuid);
@@ -476,4 +509,114 @@ it('cancels a new command while its dispatch Web Lock is queued without sending 
     releaseLock();
     vi.unstubAllGlobals();
   }
+});
+
+describe('stale recovery confirmations', () => {
+  it.each(['restart', 'update'] as const)('refuses a %s recovery completed in another tab before any baseline read or POST', async (operation) => {
+    const { apps: [app], plans: [plan], options, signArbitrary } = setup();
+    const command = await getOrCreateMaintenanceOperation({
+      address: ADDRESS, ...plan, operation, baselineReleaseVersions: [1],
+      ...(operation === 'update' && { manifest: MANIFEST }),
+    });
+    vi.resetModules();
+    const secondTab = await import('./maintenanceOperation');
+    await secondTab.completeMaintenanceOperation(command);
+    const result = await executeMaintenance({
+      ...plan, operation, expectPending: true,
+      ...(operation === 'update' && { manifest: MANIFEST }),
+    }, options);
+    expect(result).toMatchObject({ outcome: 'failed', result: { success: false, error: expect.stringContaining('no longer exists') } });
+    expect(getLeaseReleases).not.toHaveBeenCalled();
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(signArbitrary).not.toHaveBeenCalled();
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+  });
+
+  it('refuses a recovery with no saved marker after a full module reload', async () => {
+    const { plans: [plan], options, signArbitrary } = setup();
+    vi.resetModules();
+    const fresh = await import('./maintenanceExecution');
+    const result = await fresh.executeMaintenance({ ...plan, operation: 'restart', expectPending: true }, options);
+    expect(result).toMatchObject({ outcome: 'failed', result: { error: expect.stringContaining('no longer exists') } });
+    expect(getLeaseReleases).not.toHaveBeenCalled();
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(signArbitrary).not.toHaveBeenCalled();
+    expect(localStorage.length).toBe(0);
+  });
+
+  it('reports a different pending operation before comparing update bytes or classifying uncertainty', async () => {
+    const { apps: [app], plans: [plan], options, signArbitrary } = setup();
+    const restart = await getOrCreateMaintenanceOperation({
+      address: ADDRESS, providerUrl: PROVIDER, leaseUuid: app.leaseUuid, operation: 'restart', baselineReleaseVersions: [1],
+    });
+    const result = await executeMaintenance({ ...plan, operation: 'update', manifest: 'invalid secret manifest' }, options);
+    expect(result).toMatchObject({ outcome: 'failed', result: { error: expect.stringContaining('A restart is still unresolved') } });
+    expect(result.result.error).not.toContain('unconfirmed');
+    expect(result.result.error).not.toContain('different manifest bytes');
+    expect(result.result.error).not.toContain('secret');
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(restart.idempotencyKey);
+    expect(getLeaseReleases).not.toHaveBeenCalled();
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(signArbitrary).not.toHaveBeenCalled();
+  });
+
+  it('refuses a different key before treating an existing update as this attempt', async () => {
+    const { apps: [app], plans: [plan], options, signArbitrary } = setup();
+    const update = await getOrCreateMaintenanceOperation({
+      address: ADDRESS, providerUrl: PROVIDER, leaseUuid: app.leaseUuid, operation: 'update', manifest: MANIFEST, baselineReleaseVersions: [1],
+    });
+    const result = await executeMaintenance({ ...plan, operation: 'update', manifest: MANIFEST }, options);
+    expect(result).toMatchObject({ outcome: 'failed', result: { error: expect.stringContaining('An update is still unresolved') } });
+    expect(result.result.error).not.toContain('unconfirmed');
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(update.idempotencyKey);
+    expect(getLeaseReleases).not.toHaveBeenCalled();
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(signArbitrary).not.toHaveBeenCalled();
+  });
+
+  it('accurately refuses when another operation appears during the original baseline read', async () => {
+    const { apps: [app], plans: [plan], options } = setup();
+    let nextKey: string | undefined;
+    vi.mocked(getLeaseReleases).mockImplementationOnce(async () => {
+      const next = await getOrCreateMaintenanceOperation({
+        address: ADDRESS, providerUrl: PROVIDER, leaseUuid: app.leaseUuid,
+        operation: 'update', manifest: MANIFEST, baselineReleaseVersions: [1],
+      });
+      nextKey = next.idempotencyKey;
+      return histories.get(app.leaseUuid)!;
+    });
+    const result = await executeMaintenance({ ...plan, operation: 'restart' }, options);
+    expect(result).toMatchObject({ outcome: 'failed', result: { error: expect.stringContaining('An update is still unresolved') } });
+    expect(result.result.error).not.toContain('unconfirmed');
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(nextKey);
+  });
+
+  it('does not recreate a recovery marker removed while its preparation lock was queued', async () => {
+    const { apps: [app], plans: [plan], options, signArbitrary } = setup();
+    await getOrCreateMaintenanceOperation({ address: ADDRESS, ...plan, operation: 'restart', baselineReleaseVersions: [1] });
+    let notifyQueued!: () => void;
+    const queued = new Promise<void>((resolve) => { notifyQueued = resolve; });
+    let releaseLock!: () => void;
+    const heldLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+    vi.stubGlobal('navigator', { locks: { request: async (_name: string, action: () => unknown) => {
+      notifyQueued();
+      await heldLock;
+      return action();
+    } } });
+    try {
+      const execution = executeMaintenance({ ...plan, operation: 'restart', expectPending: true }, options);
+      await queued;
+      localStorage.clear();
+      releaseLock();
+      expect(await execution).toMatchObject({ outcome: 'failed', result: { error: expect.stringContaining('no longer exists') } });
+      expect(getLeaseReleases).not.toHaveBeenCalled();
+      expect(providerFetch).not.toHaveBeenCalled();
+      expect(signArbitrary).not.toHaveBeenCalled();
+      expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+    } finally {
+      releaseLock();
+      vi.unstubAllGlobals();
+    }
+  });
 });
