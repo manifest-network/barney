@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { canPlanMaintenanceCompletions, captureMaintenanceCompletionEpoch, clearCompletedMaintenance, getCompletedMaintenance, isMaintenanceCompletionCacheFull, isMaintenanceCompletionEpochCurrent, MAX_COMPLETED_MAINTENANCE, releaseMaintenanceCompletionReservation, rememberMaintenanceCompletion, reserveMaintenanceCompletions } from './maintenanceCompletion';
+import { canPlanMaintenanceCompletions, captureMaintenanceCompletionEpoch, clearCompletedMaintenance, getCompletedMaintenance, isMaintenanceCompletionCacheFull, isMaintenanceCompletionEpochCurrent, MAX_COMPLETED_MAINTENANCE, releaseAbsentMaintenanceCompletions, releaseMaintenanceCompletionReservation, rememberMaintenanceCompletion, reserveMaintenanceCompletions } from './maintenanceCompletion';
 import type { MaintenanceOperation } from './maintenanceOperation';
 
 const command: MaintenanceOperation = {
@@ -78,6 +78,24 @@ describe('maintenance completion lifecycle', () => {
     expect(recovery).toBeDefined();
     expect(getCompletedMaintenance(command)).toEqual({ payloadHash: command.payloadHash, result });
     expect(isMaintenanceCompletionCacheFull(command)).toBe(true);
+  });
+
+  it('releases only the closed lease reservation while preserving other scopes and completed results', () => {
+    const otherLease = { ...command, leaseUuid: crypto.randomUUID() };
+    for (const retained of [command, otherLease, otherWallet, otherChain]) {
+      const epoch = captureMaintenanceCompletionEpoch(retained);
+      const reservation = reserveMaintenanceCompletions([retained], epoch)!;
+      releaseMaintenanceCompletionReservation(reservation, true);
+    }
+    const epoch = captureMaintenanceCompletionEpoch(command);
+    const completed = { ...command, idempotencyKey: crypto.randomUUID() };
+    rememberMaintenanceCompletion(completed, result, epoch);
+    releaseAbsentMaintenanceCompletions(command);
+    expect(canPlanMaintenanceCompletions(command, MAX_COMPLETED_MAINTENANCE - 2)).toBe(true);
+    expect(canPlanMaintenanceCompletions(command, MAX_COMPLETED_MAINTENANCE - 1)).toBe(false);
+    expect(canPlanMaintenanceCompletions(otherWallet, MAX_COMPLETED_MAINTENANCE)).toBe(false);
+    expect(canPlanMaintenanceCompletions(otherChain, MAX_COMPLETED_MAINTENANCE)).toBe(false);
+    expect(getCompletedMaintenance(completed)).toEqual({ payloadHash: command.payloadHash, result });
   });
 
   it('does not let unrelated completion writes consume slots reserved for an approved batch', () => {

@@ -270,8 +270,8 @@ export async function executeAppStatus(
       endpointInactive = true;
       // A terminal provider-side lease is a workload verdict even when the
       // chain still reports an active lease.
-      if (app.chainState !== 'active' || app.provisionState !== 'failed') {
-        recordObservation({ chainState: 'active', provisionState: 'failed' });
+      if (app.chainState !== 'active' || app.provisionState !== 'failed' || app.readinessStale) {
+        recordObservation({ chainState: 'active', provisionState: 'failed', ...(app.readinessStale && { readinessStale: false }) });
       }
     } else {
       const refresh = refreshAppConnection(fredStatus ?? undefined, refreshedConnection, app);

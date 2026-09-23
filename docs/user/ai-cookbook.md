@@ -66,13 +66,16 @@ key and exact manifest; after reloading, Barney can recover matching bytes from
 provider history or verify a reattached file merged with saved defaults. If
 neither matches, the exact reviewed manifest is required. Do not replace it
 with a new command or automatically stop/redeploy to recover uncertainty.
-If those bytes are permanently lost, a separately confirmed stop can end the
-deployment; it does not recover the update. A healthy app can still have a failed restart if the provider restored
+An unavailable history read can be retried. If a successful read finds no matching
+bytes and the original file is permanently lost, a separately confirmed stop can end
+the deployment; it does not recover the update. Fred may execute the pending command
+until the lease closes. A healthy app can still have a failed restart if the provider restored
 the previous runtime. For a partially completed batch, retrying `restart all`
 recovers only the unresolved restarts.
-Settled receipts survive tabs and reloads, so old retry advice cannot silently
-restart an app again. Ask explicitly for a new operation after a settled notice
-if another restart or update is intended.
+Receipts for previously uncertain commands survive tabs and reloads, so old retry
+advice cannot silently restart an app again. Ask explicitly for a new operation
+after a settled notice if another restart or update is intended. Ordinary completed
+commands allow the next requested restart or update without this extra step.
 
 **Example prompts.**
 

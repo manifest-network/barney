@@ -87,6 +87,30 @@ describe('read-only maintenance reconciliation', () => {
     expect(pending()).toBeUndefined();
   });
 
+  it('reports a verified outcome and saves its manifest even when the settled receipt cannot be written', async () => {
+    const command = await prepare();
+    const storage = localStorage;
+    let rejectSettlement = true;
+    vi.stubGlobal('localStorage', {
+      getItem: storage.getItem.bind(storage), removeItem: storage.removeItem.bind(storage),
+      setItem: (key: string, value: string) => {
+        if (rejectSettlement && Object.hasOwn(JSON.parse(value), 'settled')) throw new Error('Storage unavailable');
+        storage.setItem(key, value);
+      },
+    });
+    try {
+      const result = await reconcile(app, options);
+      expect(result).toMatchObject({ outcome: 'succeeded', detail: expect.stringContaining('provider outcome was verified') });
+      expect(options.appRegistry!.getAppByLease(address, app.leaseUuid)?.manifest).toBe(sanitizeManifestForStorage(payload));
+      expect(pending()?.idempotencyKey).toBe(command.idempotencyKey);
+      rejectSettlement = false;
+      expect(await reconcile(app, options)).toMatchObject({ outcome: 'succeeded' });
+      expect(pending()).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each([false, true])('does not overwrite a successor command while reconciling an old read (successor settled: %s)', async (settleSuccessor) => {
     const first = await prepare();
     let releaseRead!: (value: FredLeaseReleases) => void;

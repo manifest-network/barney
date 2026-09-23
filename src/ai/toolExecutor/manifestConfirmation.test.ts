@@ -289,7 +289,10 @@ it.each(['different release', 'no release after a rejected command'])('does not 
   expect(providerFetch).not.toHaveBeenCalled();
   expect((await import('./maintenanceOperation')).getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)?.idempotencyKey).toBe(saved.idempotencyKey);
   // A supplied replacement must also fail rather than repurpose the old key.
-  expect((await planUpdate({ app_name: app.name }, options, attachment('{"image":"redis"}'))).requiresConfirmation).not.toBe(true);
+  const mismatched = await planUpdate({ app_name: app.name }, options, attachment('{"image":"redis"}'));
+  expect(mismatched.requiresConfirmation).not.toBe(true);
+  expect(mismatched.error).toContain('no attachment');
+  expect(mismatched.error).not.toContain('stop_app');
 });
 
 it('keeps exact-payload recovery guidance when signing the history read is rejected', async () => {
@@ -314,9 +317,54 @@ it('keeps exact-payload recovery guidance when signing the history read is rejec
   expect(result.error).toContain('exact reviewed manifest');
   expect(result.error).not.toContain('private diagnostic');
   expect(result.error).not.toContain('recovered from provider release history');
+  expect(result.error).toContain('Release history could not be read');
+  expect(result.error).not.toContain('stop_app');
   expect(getLeaseReleases).not.toHaveBeenCalled();
   expect(providerFetch).not.toHaveBeenCalled();
   expect((await import('./maintenanceOperation')).getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)?.idempotencyKey).toBe(saved.idempotencyKey);
+});
+
+it('recovers an accepted update after a temporary history failure without suggesting a stop', async () => {
+  const app: AppEntry = {
+    name: 'healthy-service', leaseUuid: crypto.randomUUID(), providerUrl: DEV, providerUuid: 'provider',
+    size: 'small', createdAt: 0, status: 'running', chainState: 'active', provisionState: 'confirmed',
+    manifest: '{"image":"nginx:old"}',
+  };
+  const options = optionsFor(DEV, [app]);
+  histories.set(app.leaseUuid, releases(app.leaseUuid));
+  const plan = await executeUpdateApp({ app_name: app.name, image: 'nginx:new', ports: '8080' }, options);
+  expect(plan.requiresConfirmation, plan.error).toBe(true);
+  const manifest = plan.pendingAction!.args._generatedManifest as string;
+  vi.mocked(providerFetch).mockImplementationOnce(async () => {
+    const observed = releases(app.leaseUuid, 2);
+    histories.set(app.leaseUuid, { ...observed, releases: observed.releases.map((release) =>
+      release.version === 2 ? { ...release, manifest: btoa(manifest) } : release) });
+    throw new TypeError('Accepted 202 response was lost');
+  });
+  expect((await executeConfirmedUpdateApp(plan.pendingAction!.args, chain, options)).error).toContain('unconfirmed');
+  const originalRequest = vi.mocked(providerFetch).mock.calls[0][1];
+
+  vi.resetModules();
+  const fresh = await import('./compositeTransactions');
+  vi.mocked(getLeaseReleases).mockRejectedValueOnce(new TypeError('Transient history failure with private diagnostics'));
+  const unavailable = await fresh.executeUpdateApp({ app_name: app.name }, options);
+  expect(unavailable.requiresConfirmation).not.toBe(true);
+  expect(unavailable.error).toContain('Release history could not be read');
+  expect(unavailable.error).toContain('matching bytes may still be recoverable');
+  expect(unavailable.error).not.toMatch(/stop_app|only in-app exit|private diagnostics/);
+  expect(options.appRegistry!.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('confirmed');
+  expect(providerFetch).toHaveBeenCalledTimes(1);
+
+  const recovery = await fresh.executeUpdateApp({ app_name: app.name }, options);
+  expect(recovery.requiresConfirmation, recovery.error).toBe(true);
+  expect(recovery.pendingAction!.args).toMatchObject({
+    idempotencyKey: plan.pendingAction!.args.idempotencyKey, _generatedManifest: manifest, _maintenanceRetry: true,
+  });
+  vi.mocked(providerFetch).mockResolvedValueOnce(new Response(JSON.stringify({ status: 'updating' }), { status: 202 }));
+  expect((await fresh.executeConfirmedUpdateApp(recovery.pendingAction!.args, chain, options)).success).toBe(true);
+  const retryRequest = vi.mocked(providerFetch).mock.calls[1][1];
+  expect(retryRequest?.body).toBe(originalRequest?.body);
+  expect(new Headers(retryRequest?.headers).get('Idempotency-Key')).toBe(new Headers(originalRequest?.headers).get('Idempotency-Key'));
 });
 
 it.each(['restart', 'update'] as const)('does not borrow a %s key introduced by another tab during update planning', async (operation) => {

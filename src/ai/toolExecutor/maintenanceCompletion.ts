@@ -124,6 +124,16 @@ export function releaseSettledMaintenanceCompletion(command: CommandIdentity): v
   sessions.get(scopeKey(command))?.reservations.delete(completionKey(command));
 }
 
+/** A closed lease cannot execute retained work, even if browser cleanup failed. */
+export function releaseAbsentMaintenanceCompletions(scope: CompletionScope & { leaseUuid: string }): void {
+  const session = sessions.get(scopeKey(scope));
+  if (!session) return;
+  for (const key of session.reservations.keys()) {
+    const [, leaseUuid] = JSON.parse(key) as string[];
+    if (leaseUuid === scope.leaseUuid) session.reservations.delete(key);
+  }
+}
+
 export function rememberMaintenanceCompletion(
   command: MaintenanceOperation,
   result: MaintenanceResult,

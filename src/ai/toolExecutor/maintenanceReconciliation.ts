@@ -8,7 +8,7 @@ import { maintenanceRegistryPatch } from './maintenanceRegistryPatch';
 import { recoverReleaseManifest } from './maintenancePayload';
 import { captureMaintenanceCompletionEpoch, isMaintenanceCompletionEpochCurrent, rememberMaintenanceCompletion } from './maintenanceCompletion';
 import { resolveAppEndpoint } from './helpers';
-import { getPendingMaintenanceOperation, commitMaintenanceObservation } from './maintenanceOperation';
+import { getPendingMaintenanceOperation, commitMaintenanceObservation, markMaintenanceRecoveryAdvised, MaintenanceSettlementStorageError } from './maintenanceOperation';
 import { evaluateMaintenanceOutcome, type MaintenanceOutcome } from './maintenanceOutcome';
 import type { AppEntry } from '../../registry/appRegistry';
 import type { ToolExecutorOptions } from './types';
@@ -42,11 +42,16 @@ export async function reconcilePendingMaintenance(
   // Without acknowledged admission, release history cannot attribute a result
   // to this key. Do not prompt for redundant wallet signatures or fetch history
   // on every status read; explicit recovery owns the exact-key retry.
-  if (!command.accepted) return {
-    operation: command.operation, outcome: 'unconfirmed', ...observedReadiness,
-    detail: 'Provider admission of this command has not been confirmed. Recover the original command with its same key and exact payload; release history alone cannot identify it.',
-  };
-  if (!signing) return { operation: command.operation, outcome: 'unconfirmed', ...observedReadiness, detail: 'Connect the wallet to read the pending command outcome.' };
+  if (!command.accepted || !signing) {
+    try { await markMaintenanceRecoveryAdvised(command); } catch {
+      return { operation: command.operation, outcome: 'unconfirmed', ...observedReadiness,
+        detail: 'Restore browser storage access before recovering the pending command; its recovery advice could not be safely recorded.' };
+    }
+    return { operation: command.operation, outcome: 'unconfirmed', ...observedReadiness,
+      detail: !command.accepted
+        ? 'Provider admission of this command has not been confirmed. Recover the original command with its same key and exact payload; release history alone cannot identify it.'
+        : 'Connect the wallet to read the pending command outcome.' };
+  }
 
   const completionEpoch = captureMaintenanceCompletionEpoch(command);
   const currentApp = appRegistry.getAppByLease(address, app.leaseUuid);
@@ -69,6 +74,7 @@ export async function reconcilePendingMaintenance(
   if (provision) {
     const provisionState = reconcileProvisionStatus(provision.status, currentApp?.provisionState);
     if (provisionState) patch.provisionState = provisionState;
+    if (provisionState === 'confirmed' || provisionState === 'failed') patch.readinessStale = false;
   }
   if (command.operation === 'update' && verdict.outcome === 'succeeded') {
     // A reload deliberately discards secret manifest bytes. Use the identified
@@ -80,6 +86,8 @@ export async function reconcilePendingMaintenance(
   }
   // No registry mutation may precede an awaited read/hash or queued scope lock:
   // a newer command may have completed while this observation was in flight.
+  if (verdict.outcome === 'unconfirmed') await markMaintenanceRecoveryAdvised(command);
+  let cleanupDetail: string | undefined;
   const committed = await commitMaintenanceObservation(command, {
     settled: verdict.outcome !== 'unconfirmed',
     ...(verdict.outcome !== 'unconfirmed' && { outcome: verdict.outcome }),
@@ -108,9 +116,17 @@ export async function reconcilePendingMaintenance(
           error: `${verb} failed${verdict.runtimeReady ? '; the previous runtime is healthy' : ''}. ${verdict.detail ?? ''}`.trim(),
         } }, completionEpoch);
     },
+  }).catch((error: unknown) => {
+    if (!(error instanceof MaintenanceSettlementStorageError)) throw error;
+    cleanupDetail = error.message;
+    return true;
   });
-  if (!committed) return { operation: command.operation, outcome: 'unconfirmed',
-    detail: 'The app or saved command changed during reconciliation. Read app_status and app_releases again.' };
+  if (!committed) {
+    await markMaintenanceRecoveryAdvised(command);
+    return { operation: command.operation, outcome: 'unconfirmed',
+      detail: 'The app or saved command changed during reconciliation. Read app_status and app_releases again.' };
+  }
   const { runtimeReady, ...outcome } = verdict;
-  return { operation: command.operation, ...outcome, ...(provision ? { runtimeReady } : observedReadiness) };
+  return { operation: command.operation, ...outcome, ...(provision ? { runtimeReady } : observedReadiness),
+    ...(cleanupDetail && { detail: [outcome.detail, cleanupDetail].filter(Boolean).join(' ') }) };
 }

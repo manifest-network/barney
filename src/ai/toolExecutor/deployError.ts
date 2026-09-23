@@ -15,6 +15,7 @@ import { nextStepFor } from './failureGuidance';
 import { resolveAppUrl } from './deployUrl';
 import { isTerminalLeaseState } from '../../utils/leaseState';
 import { appCardConnection } from './appCardConnection';
+import { AI_DEPLOY_LOG_PREVIEW_CHARS } from '../../config/constants';
 
 /**
  * Best-effort fetch of provider logs and provision status for failed deploys.
@@ -61,7 +62,11 @@ async function fetchFailureLogs(
         const logText = logEntries
           .map(([service, text]) => `[${service}]\n${typeof text === 'string' ? text : JSON.stringify(text)}`)
           .join('\n');
-        parts.push(`Container logs:\n${logText}`);
+        const logTail = Array.from(logText).slice(-AI_DEPLOY_LOG_PREVIEW_CHARS).join('');
+        // Keep the lookup hint before the logs so a batch's shorter row preview
+        // cannot hide how to request the complete tail. Never cut away the
+        // provider verdict or curated next step to make room for raw log text.
+        parts.push(`Container logs (preview). Use get_logs(app_name="${appName}", tail=200) for more:\n${sanitizeForDisplay(logTail, AI_DEPLOY_LOG_PREVIEW_CHARS)}`);
       }
     } catch (error) {
       logError('deployError.fetchFailureLogs.logs', error);
@@ -69,12 +74,7 @@ async function fetchFailureLogs(
 
     if (parts.length === 0) return null;
 
-    const combined = parts.join('\n\n');
-    // Truncate to last ~2000 chars to avoid bloating LLM context
-    if (combined.length > 2000) {
-      return '...' + combined.slice(-2000);
-    }
-    return combined;
+    return parts.join('\n\n');
   } catch (error) {
     logError('deployError.fetchFailureLogs', error);
     return null;

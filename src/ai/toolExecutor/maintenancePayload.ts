@@ -21,12 +21,16 @@ export async function recoverReleaseManifest(encoded: string | undefined, payloa
   }
 }
 
+export type MaintenancePayloadRecovery =
+  | { outcome: 'recovered'; manifest: string }
+  | { outcome: 'attachment_mismatch' | 'history_unavailable' | 'no_match' };
+
 export async function recoverMaintenancePayload(
   command: MaintenanceOperation,
   storedManifest: string | undefined,
   payload: PayloadAttachment | undefined,
   options: ToolExecutorOptions,
-): Promise<string | undefined> {
+): Promise<MaintenancePayloadRecovery> {
   const { signal, signing } = options;
   signal?.throwIfAborted();
   if (payload) {
@@ -47,13 +51,13 @@ export async function recoverMaintenancePayload(
     for (const candidate of candidates) {
       if (await metaHashHex(candidate) === command.payloadHash) {
         signal?.throwIfAborted();
-        return candidate;
+        return { outcome: 'recovered', manifest: candidate };
       }
     }
-    return undefined;
+    return { outcome: 'attachment_mismatch' };
   }
-  if (command.manifest !== undefined) return command.manifest;
-  if (!signing) return undefined;
+  if (command.manifest !== undefined) return { outcome: 'recovered', manifest: command.manifest };
+  if (!signing) return { outcome: 'history_unavailable' };
   options.assertAuthorization?.();
   try {
     const token = await signing.authTokens.getAuthToken(asLeaseUuid(command.leaseUuid));
@@ -64,7 +68,7 @@ export async function recoverMaintenancePayload(
     for (const release of releases.releases) {
       const manifest = await recoverReleaseManifest(release.manifest, command.payloadHash);
       signal?.throwIfAborted();
-      if (manifest !== undefined) return manifest;
+      if (manifest !== undefined) return { outcome: 'recovered', manifest };
     }
   } catch (error) {
     signal?.throwIfAborted();
@@ -72,6 +76,7 @@ export async function recoverMaintenancePayload(
     if (isAbortError(error)) throw error;
     // Recovery remains unavailable; never replace the command or expose a raw
     // provider error that might include secret-bearing historical bytes.
+    return { outcome: 'history_unavailable' };
   }
-  return undefined;
+  return { outcome: 'no_match' };
 }

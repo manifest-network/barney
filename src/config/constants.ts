@@ -168,6 +168,10 @@ export const AI_BATCH_DIAGNOSTIC_CHARS = 8_192;
  * been sanitized. Leaves room for full recovery instructions and next steps. */
 export const AI_BATCH_GUIDANCE_CHARS = 1_024;
 
+/** Automatic deploy diagnostics include only a bounded container-log tail;
+ * get_logs remains available for an explicit, larger log request. */
+export const AI_DEPLOY_LOG_PREVIEW_CHARS = 2_000;
+
 // ============================================
 // Fred WebSocket / Polling Constants
 // ============================================

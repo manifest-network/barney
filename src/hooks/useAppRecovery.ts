@@ -64,8 +64,8 @@ export function useAppRecovery(address: string | undefined): void {
     // Unattempted leases come first; retries never starve a larger inventory.
     const candidates = apps.flatMap(app => {
       if (!app.providerUrl || !app.chainState || app.chainState === 'absent'
-        || app.provisionState === 'failed'
-        || (app.provisionState === 'confirmed' && app.url && app.connection && !app.connectionStale)) return [];
+        || (app.provisionState === 'failed' && !app.readinessStale)
+        || (app.provisionState === 'confirmed' && app.url && app.connection && !app.connectionStale && !app.readinessStale)) return [];
       const snapshot = recoverySnapshotKey(app);
       const staleInventory = app.provisionState === 'confirmed' && !!app.connectionStale && !!app.connection;
       const maxAttempts = staleInventory ? APP_CONNECTION_RECOVERY_MAX_ATTEMPTS : APP_RECOVERY_MAX_ATTEMPTS;

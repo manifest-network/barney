@@ -97,8 +97,8 @@ The AI assistant uses a 3-layer architecture:
 | `deploy_app(app_name?, size?, image?, port?, env?, user?, tmpfs?, command?, args?, services?, health_check?, stop_grace_period?, init?, expose?, labels?, custom_domain?, service_name?)` | TX | Deploy from attached manifest, Docker image, or service stack. `services` (JSON) is mutually exclusive with `image`. `custom_domain` attaches a domain in the same TX flow (single-step deploy + DNS); `service_name` picks the target service in a multi-service stack. The `size` enum is rebuilt at prompt-build time from the resolved SKU tier list (chain ∩ `PUBLIC_SKU_SPECS`); default size is the cheapest available tier (lowest normalized `$/hour` via `getCheapestTier(tiers)` in `src/api/skuTiers.ts`). The executor resolves size via `resolveSizeOrCheapest`: an omitted **or unavailable** size falls back to the cheapest tier; it returns `Tier catalog unavailable — try again in a moment.` only when the resolved tier list is empty |
 | `stop_app(app_name)` | TX | Stop apps by name, comma-separated list (e.g. "redis,postgres"), or "all" to stop all running apps |
 | `fund_credits(amount)` | TX | Add credits in display units |
-| `restart_app(app_name, new_command?)` | TX | Restart a named app, comma-separated selection, or all eligible apps. On PR240, recover pending restarts with their saved command keys; `all` recovers only unresolved active items when any remain. A persisted settled receipt blocks stale retry advice from planning another command; `new_command:true` requires deliberate new intent and never bypasses pending work. Ignore chain-absent leases, isolate unreadable records per selected app, and refuse to replace a pending update with a restart. Readiness and operation outcome are separate: a restored healthy runtime may retain a failed restart diagnostic. |
-| `update_app(app_name, image?, port?, env?, user?, tmpfs?, command?, args?, services?, health_check?, stop_grace_period?, init?, expose?, labels?, new_command?)` | TX | Update from an attached manifest, image, or service stack (`services` excludes `image`). PR240 recovery retains the exact final manifest bytes and command key, including after a lost response; reconstructing a different payload is refused while unresolved. A settled receipt requires explicit new-command planning for another operation. Correlate fresh release history and diagnostics separately from workload readiness. The legacy v0.13 path retains its post-update provision verdict gate. |
+| `restart_app(app_name, new_command?)` | TX | Restart a named app, comma-separated selection, or all eligible apps. On PR240, recover pending restarts with their saved command keys; `all` recovers only unresolved active items when any remain. A persisted receipt blocks stale retry advice only when recovery guidance was issued; routine settled commands allow ordinary follow-up work; `new_command:true` requires deliberate new intent and never bypasses pending work. Ignore chain-absent leases, isolate unreadable records per selected app, and refuse to replace a pending update with a restart. Readiness and operation outcome are separate: a restored healthy runtime may retain a failed restart diagnostic. |
+| `update_app(app_name, image?, port?, env?, user?, tmpfs?, command?, args?, services?, health_check?, stop_grace_period?, init?, expose?, labels?, new_command?)` | TX | Update from an attached manifest, image, or service stack (`services` excludes `image`). PR240 recovery retains the exact final manifest bytes and command key, including after a lost response; reconstructing a different payload is refused while unresolved. A receipt for a previously uncertain command requires explicit new-command planning; directly reported ordinary outcomes do not. Correlate fresh release history and diagnostics separately from workload readiness. The legacy v0.13 path retains its post-update provision verdict gate. |
 | `set_custom_domain(app_name, custom_domain, service_name?)` | TX | Attach, change, or clear (`custom_domain=""`) a per-LeaseItem custom domain. Surfaces a `CustomDomainCard` post-broadcast with DNS status polling |
 | `list_apps(state?)` | Query | Discover and list apps (default: running and deploying; explicit state filters remain exact). Re-observes the chain for EVERY app in BOTH directions — records `chainState: 'active' \| 'pending' \| 'absent'` rather than only latching the negative — and keeps PENDING distinct from ACTIVE (a pending lease derives `deploying`, not `running`). Never touches `provisionState`: it has no provider evidence |
 | `app_status(app_name)` | Query | Detailed status: registry + chain + fred. Records BOTH observations it makes — `chainState` from the chain lease (`active`/`pending`/`absent`, the PENDING branch matching `list_apps` and `reconcileWithChain`) and `provisionState` from fred's `provision_status` (via `classifyProvisionStatus`: the SDK's `PROVISION_SUCCESS` → `confirmed`, `PROVISION_FAILED` → `failed`, `PROVISION_IN_PROGRESS` and `retained` → `unconfirmed`, anything in none of those sets → no observation). An in-flight reading fills a gap but never RETRACTS an existing `confirmed`; `retained` does, because the workload really is gone. Always emits an `AppCard` overview with status, endpoint, and stack connections. Unavailable status and cached endpoints are labeled explicitly. Eligible domain setup/management opens a secondary `CustomDomainCard` within the overview |
@@ -142,7 +142,7 @@ Original friendly names and manifest bodies are unavailable through the current 
 
 ```
 Key: barney-apps-{address}
-AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, connection?, connectionStale?, manifest?, customDomains?,
+AppEntry { name, leaseUuid, size, providerUuid, providerUrl, createdAt, url?, connection?, connectionStale?, readinessStale?, manifest?, customDomains?,
            status, chainState?, provisionState? }
   connection? { host, fqdn?, ports?, instances?: { fqdn?, ports? }[], metadata?, services? }
 AppStatus:      'deploying' | 'running' | 'stopped' | 'failed'   (DERIVED — never written directly)
@@ -187,7 +187,7 @@ at five-minute intervals (eight total); missing inventory keeps the four-attempt
 checks readiness as well as connections. The allowance can grow from four to eight when readiness
 is confirmed with saved, invalidated inventory, without resetting used attempts. It never shrinks
 across the driver's own partial observations, and the slow retry cadence stays fixed. A failed verdict
-or confirmed workload with an explicit empty port inventory retires;
+or confirmed workload with an explicit empty port inventory retires once pending readiness is resolved;
 missing URLs alone do not cause endless signing. `app_status` remains the explicit refresh path
 after retirement or exhaustion. Provider work never gates chat listing or chain reconciliation.
 
@@ -212,7 +212,9 @@ precisely how the latch arose. Two rules for anyone extending `AppEntry`:
   belongs in this set.
 
 `connectionStale` is a notifying scalar: changing it invalidates or restores the DNS evidence
-rendered by subscribers. `customDomains` and `connection` are notifying structural fields.
+rendered by subscribers. The independent `readinessStale` flag schedules bounded runtime
+observation after uncertain maintenance, including for previously failed apps. Fresh connection
+data clears only connection staleness; a fresh runtime verdict clears readiness staleness. `customDomains` and `connection` are notifying structural fields.
 
 Functions: `getApps`, `getApp`, `findApp`, `getAppByLease`, `discoverAppsFromChain`, `addApp`, `updateApp`, `removeApp`, `reconcileWithChain`, `reconcileCustomDomainsWithChain`, `deriveAppStatus`, `validateAppName`, `sanitizeManifestForStorage`.
 
@@ -259,7 +261,9 @@ another tab's settlement cannot become a new command with a fresh baseline.
 Persisted metadata is authoritative over stale memory. After reload,
 `maintenancePayload.ts` can recover exact bytes from release history or a
 deterministic re-merge of a reattached file, but every candidate must match the
-saved payload hash. Payload recovery does not establish admission or outcome.
+saved payload hash. A failed history read or rejected signature offers another same-key recovery
+attempt; only a successful history read with no matching bytes offers the stop-only exit.
+Payload recovery does not establish admission or outcome.
 Unacknowledged commands add no signatures or provider reads to status queries.
 `reconcileProvisionStatus` preserves confirmed readiness during in-flight
 observations. Pinned Fred validation receipts (including durable HTTP 400s)
@@ -267,16 +271,25 @@ surface their diagnostic and settle; its pre-admission parser/header errors
 remain uncertain. Cleanup after confirmed lease closure is best-effort.
 Completion hashes/results are cleared for a wallet/chain when chat history or
 authorization is invalidated; ordinary query-cache clears retain replay protection.
-One nonsecret settled receipt per lease survives tabs and reloads. New confirmations
-bind the previous receipt's key; a changed receipt refuses dispatch. The 128-entry
+One compact nonsecret settled receipt per lease replaces the pending record at the same storage
+key, so settlement reduces quota usage. Only receipts marked when recovery guidance was issued
+block ordinary planning; directly reported outcomes allow routine follow-up commands. Older pending
+records without an advice flag conservatively retain the recovery barrier. Every new
+confirmation binds the previous receipt's key; a changed receipt refuses dispatch. A never-sent
+cancellation restores the prior receipt. Verified outcomes and manifest updates survive failed
+receipt writes, which cached exact retries reattempt without another provider request. If command
+identity cannot be read, preserve the provider verdict but defer registry projection and completed
+memoization until storage access returns. The 128-entry
 session limit includes reserved work: planning checks capacity and whole batches
-reserve before any request, while pending recovery remains possible at the limit.
+reserve before any request, while pending recovery remains possible at the limit. Authoritative lease closure frees pending
+reservations even when storage cleanup fails.
 Durable refusals settle their matching marker even after abort, but invalidated
 sessions cannot receive cached results or progress. Command-owned manifests are
-projected independently of unrelated registry observations. Uncertain maintenance
-marks connection inventory stale so bounded background reads can observe a later
-failure without retracting previously confirmed readiness. Fresh connection data
-alone does not retire these checks while status is unavailable or in progress.
+projected independently of unrelated registry observations. Uncertain maintenance sets
+`connectionStale` and `readinessStale` without changing the previous `provisionState`, including
+an absent observation. `refreshAppConnection` shares readiness retirement between status queries
+and background reads. Fresh connections restore DNS evidence even while status is unavailable or
+in progress; bounded readiness reads continue independently until a verdict or budget exhaustion.
 
 ⚠️ **The SDK primitives serialize their own broadcasts — call them directly, never through a signing mutex.** `deployManifest` / `stopApp` / `fundCredits` / `waitForLeaseStatus` / `updateApp` / `restartApp` mint their own ADR-036 tokens through the same non-reentrant signing mutex, so wrapping any of them in a caller-side sign-lock deadlocks (e.g. deployManifest → `providerAuth.leaseDataToken` → same mutex → circular wait). Chain-TX serialization comes entirely from `CosmosClientManager.withBroadcastLock` (held internally by the SDK cosmos-tx path) plus the mutex-wrapped `signArbitrary` (the D2 replay guard). ENG-312 Phase 8 **removed** the old `SigningContext.withSign` escape hatch — there is no caller-side sign-lock to misuse anymore.
 
@@ -389,6 +402,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `AI_HEALTH_CHECK_INTERVAL_MS` | 60s | Base interval for Morpheus connectivity checks |
 | `AI_HEALTH_CHECK_MAX_BACKOFF` | 8 | Max backoff multiplier (×60s = 8min ceiling) when health checks repeatedly fail |
 | `AI_BATCH_DEPLOY_CONCURRENCY` | 4 | Max concurrent batch deploys (runtime-configurable) |
+| `AI_DEPLOY_LOG_PREVIEW_CHARS` | 2000 | Automatic container-log tail; batch rows remain bounded and direct users to `get_logs` |
 | `MAX_PAYLOAD_SIZE` | 5KB | Maximum file upload size (in `hash.ts`) |
 | `FRED_POLL_INTERVAL_MS` | 3s | Default polling interval for Fred status checks (passed as `waitForLeaseStatus`'s `intervalMs`) |
 | `DNS_POLL_INTERVAL_MS` | 30s | Polling interval for browser-side DNS / HTTPS probes (`useDnsStatusPolling`) |

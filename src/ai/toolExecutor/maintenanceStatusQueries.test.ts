@@ -9,6 +9,7 @@ import * as fred from '../../api/fred';
 import * as operations from './maintenanceOperation';
 import * as queries from './compositeQueries';
 import { buildBarneyCtx } from './capabilityCtx';
+import { resolveExpectedCnameTarget } from '../../utils/connection';
 
 // Keep app_status, its capability context, and protocol parsing real. Only
 // chain/provider I/O is controlled, so silent context-construction failures fail.
@@ -35,7 +36,7 @@ beforeEach(async () => {
   configuration.compatibility = '';
 });
 
-async function setup(status = 'ready', accepted?: boolean, badConfig?: string) {
+async function setup(status: string | undefined = 'ready', accepted?: boolean, badConfig?: string) {
   configuration.compatibility = badConfig ?? '';
   const lease = vi.fn().mockResolvedValue({ lease: { uuid: app.leaseUuid, state: 2, providerUuid: app.providerUuid, items: [] } });
   const provider = vi.fn().mockResolvedValue({ provider: { apiUrl: app.providerUrl } });
@@ -44,7 +45,7 @@ async function setup(status = 'ready', accepted?: boolean, badConfig?: string) {
     const url = String(input);
     const response = url.endsWith('/status')
       ? { state: 'LEASE_STATE_ACTIVE', provision_status: status }
-      : { lease_uuid: app.leaseUuid, tenant: address, provider_uuid: app.providerUuid, connection: { host: 'app.example' } };
+      : { lease_uuid: app.leaseUuid, tenant: address, provider_uuid: app.providerUuid, connection: { host: 'app.example', fqdn: 'app.example' } };
     return new Response(JSON.stringify(response), { status: 200 });
   });
   const releases = { lease_uuid: app.leaseUuid, tenant: address, provider_uuid: app.providerUuid,
@@ -67,6 +68,34 @@ async function setup(status = 'ready', accepted?: boolean, badConfig?: string) {
 }
 
 describe('maintenance status query integration', () => {
+  it.each(['restarting', 'updating', 'missing', 'unavailable'])('refreshes DNS evidence without retiring pending readiness during %s', async (status) => {
+    const { options } = await setup(status);
+    options.appRegistry!.updateApp(address, app.leaseUuid, {
+      readinessStale: true, connectionStale: true,
+      url: 'https://old.example', connection: { host: '', fqdn: 'old.example' },
+    });
+    const fetch = vi.mocked(providerFetch).getMockImplementation()!;
+    vi.mocked(providerFetch).mockImplementation(async (...args) => {
+      if (String(args[0]).endsWith('/status')) {
+        if (status === 'unavailable') throw new Error('Provider status unavailable');
+        if (status === 'missing') return new Response(JSON.stringify({ state: 'LEASE_STATE_ACTIVE' }), { status: 200 });
+      }
+      return fetch(...args);
+    });
+    const result = await queries.executeAppStatus({ app_name: app.name }, options);
+    expect(result.success).toBe(true);
+    const stored = options.appRegistry!.getAppByLease(address, app.leaseUuid)!;
+    expect(stored).toMatchObject({ provisionState: 'confirmed', readinessStale: true, connectionStale: false });
+    expect(resolveExpectedCnameTarget(stored.connection, '', stored.connectionStale)).toBe('app.example');
+  });
+
+  it.each(['ready', 'failed', 'retained'])('retires pending readiness after an actual %s verdict', async (status) => {
+    const { options } = await setup(status);
+    options.appRegistry!.updateApp(address, app.leaseUuid, { readinessStale: true, connectionStale: true });
+    await queries.executeAppStatus({ app_name: app.name }, options);
+    expect(options.appRegistry!.getAppByLease(address, app.leaseUuid)?.readinessStale).toBe(false);
+  });
+
   it.each(['PR240', '{"provider.example":"pr240"}'])('still reads authoritative status with invalid mutation compatibility %s', async (config) => {
     const { options, queries, lease, providerFetch } = await setup('ready', undefined, config);
     const result = await queries.executeAppStatus({ app_name: app.name }, options);

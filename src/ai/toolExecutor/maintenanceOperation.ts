@@ -1,6 +1,7 @@
 import { createMaintenanceIdempotencyKey, metaHashHex } from '@manifest-network/manifest-sdk/deploy';
 import { runtimeConfig } from '../../config/runtimeConfig';
 import { logError } from '../../utils/errors';
+import { releaseAbsentMaintenanceCompletions } from './maintenanceCompletion';
 
 type MaintenanceKind = 'restart' | 'update';
 
@@ -23,6 +24,10 @@ export interface MaintenanceOperation extends MaintenanceScope {
   readonly dispatched?: boolean;
   /** Persist provider admission so a later read can safely attribute its release. */
   readonly accepted?: boolean;
+  /** Persist whether Barney advised recovery, so old advice cannot start new work. */
+  readonly recoveryAdvised?: boolean;
+  /** Restore only this compact receipt if a successor is cancelled before HTTP. */
+  readonly previousSettlement?: SettledMetadata;
 }
 
 interface MaintenanceMetadata {
@@ -33,6 +38,8 @@ interface MaintenanceMetadata {
   readonly baselineReleaseVersions: readonly number[];
   readonly dispatched?: boolean;
   readonly accepted?: boolean;
+  readonly recoveryAdvised?: boolean;
+  readonly previousSettlement?: SettledMetadata;
 }
 
 interface MaintenanceInput extends Omit<MaintenanceScope, 'chainId'> {
@@ -52,6 +59,13 @@ export interface SettledMaintenanceOperation extends MaintenanceScope {
   readonly idempotencyKey: string;
   readonly payloadHash: string;
   readonly outcome: 'succeeded' | 'failed' | 'settled';
+  readonly recoveryAdvised: boolean;
+}
+
+interface SettledMetadata extends Pick<MaintenanceMetadata, 'v' | 'operation' | 'idempotencyKey' | 'payloadHash'> {
+  readonly settled: SettledMaintenanceOperation['outcome'];
+  /** Compact so even a minimum legacy pending marker shrinks on settlement. */
+  readonly r?: 1;
 }
 
 /** A local conflict or stale recovery plan must never be reported as a sent command. */
@@ -59,6 +73,18 @@ export class MaintenanceOperationRefusalError extends Error {}
 
 /** A recovery can become obsolete without the original operation having failed. */
 export class MaintenanceOperationSupersededError extends Error {}
+
+/** The provider verdict and its registry projection remain valid. */
+export class MaintenanceSettlementStorageError extends Error {
+  readonly projectionApplied: boolean;
+  constructor(message: string, projectionApplied = true) {
+    super(message);
+    this.projectionApplied = projectionApplied;
+  }
+}
+class MaintenanceStorageError extends Error {}
+export const MAINTENANCE_CLEANUP_MESSAGE = 'The provider outcome was verified, but its local recovery record could not be retired. Restore browser storage access and retry the same confirmation to finish local cleanup.';
+export const MAINTENANCE_PROJECTION_MESSAGE = 'The provider outcome was verified, but browser storage could not be read to safely update the app or retire its recovery record. Restore browser storage access, then check app_status or retry the same confirmation.';
 
 function missingOperation(): MaintenanceOperationSupersededError {
   return new MaintenanceOperationSupersededError('The saved maintenance operation no longer exists; it may have been settled or superseded in another tab.');
@@ -95,6 +121,26 @@ function settledStorageKey(scope: MaintenanceScope): string {
   return `${storageKey(scope)}:settled`;
 }
 
+function readRaw(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    throw storageError();
+  }
+}
+
+function parseSettled(value: unknown): SettledMetadata {
+  if (!value || typeof value !== 'object') throw new Error();
+  const record = value as Partial<SettledMetadata>;
+  if (record.v !== 1 || (record.operation !== 'restart' && record.operation !== 'update')
+    || typeof record.idempotencyKey !== 'string' || !UUID_V4.test(record.idempotencyKey)
+    || typeof record.payloadHash !== 'string' || !SHA_256.test(record.payloadHash)
+    || !['succeeded', 'failed', 'settled'].includes(record.settled ?? '')
+    || (record.r !== undefined && record.r !== 1)) throw new Error();
+  return { v: 1, operation: record.operation, idempotencyKey: record.idempotencyKey,
+    payloadHash: record.payloadHash, settled: record.settled!, ...(record.r === 1 && { r: 1 as const }) };
+}
+
 /** One nonsecret receipt per lease prevents old recovery advice from becoming
  * a new command in another tab or after a reload. No time-based expiration. */
 export function getSettledMaintenanceOperation(
@@ -104,21 +150,22 @@ export function getSettledMaintenanceOperation(
   chainId = runtimeConfig.PUBLIC_CHAIN_ID,
 ): SettledMaintenanceOperation | undefined {
   const scope = scopeFor({ address, providerUrl, leaseUuid, chainId });
-  let raw: string | null;
+  const current = readRaw(storageKey(scope));
+  const legacy = readRaw(settledStorageKey(scope));
   try {
-    raw = localStorage.getItem(settledStorageKey(scope));
-  } catch {
-    throw storageError();
-  }
-  if (raw === null) return undefined;
-  try {
-    const value = JSON.parse(raw) as Partial<SettledMaintenanceOperation> & { v?: number };
-    if (value.v !== 1 || (value.operation !== 'restart' && value.operation !== 'update')
-      || typeof value.idempotencyKey !== 'string' || !UUID_V4.test(value.idempotencyKey)
-      || typeof value.payloadHash !== 'string' || !SHA_256.test(value.payloadHash)
-      || !['succeeded', 'failed', 'settled'].includes(value.outcome ?? '')) throw new Error();
+    const currentValue: unknown = current === null ? undefined : JSON.parse(current);
+    let value: SettledMetadata;
+    if (currentValue && typeof currentValue === 'object' && 'settled' in currentValue) {
+      value = parseSettled(currentValue);
+    } else {
+      if (legacy === null) return undefined;
+      // Older releases wrote a separate receipt for every result and could have
+      // issued retry advice without recording it. Preserve that safety barrier.
+      const prior = JSON.parse(legacy) as Partial<SettledMaintenanceOperation> & { v?: number };
+      value = parseSettled({ ...prior, settled: prior.outcome, r: 1 });
+    }
     return Object.freeze({ ...scope, operation: value.operation, idempotencyKey: value.idempotencyKey,
-      payloadHash: value.payloadHash, outcome: value.outcome! });
+      payloadHash: value.payloadHash, outcome: value.settled, recoveryAdvised: value.r === 1 });
   } catch {
     throw new MaintenanceOperationRefusalError('The saved maintenance receipt is unreadable. Restore browser storage access before starting another command.');
   }
@@ -131,13 +178,19 @@ export function assertNewMaintenanceOperation(input: Omit<MaintenanceInput, 'ope
   }
 }
 
-function persistSettled(record: MaintenanceOperation, outcome: SettledMaintenanceOperation['outcome']): void {
+function settledMetadataFor(record: Pick<MaintenanceOperation, 'operation' | 'idempotencyKey' | 'payloadHash' | 'recoveryAdvised'>, outcome: SettledMaintenanceOperation['outcome']): SettledMetadata {
+  return { v: 1, operation: record.operation, idempotencyKey: record.idempotencyKey,
+    payloadHash: record.payloadHash, settled: outcome, ...(record.recoveryAdvised && { r: 1 }) };
+}
+
+function persistSettled(record: Pick<MaintenanceOperation, 'operation' | 'idempotencyKey' | 'payloadHash' | 'recoveryAdvised'> & MaintenanceScope, outcome: SettledMaintenanceOperation['outcome']): void {
   try {
-    localStorage.setItem(settledStorageKey(record), JSON.stringify({ v: 1, operation: record.operation,
-      idempotencyKey: record.idempotencyKey, payloadHash: record.payloadHash, outcome }));
+    localStorage.setItem(storageKey(record), JSON.stringify(settledMetadataFor(record, outcome)));
   } catch {
     throw storageError();
   }
+  // Removing the obsolete separate receipt is cleanup, not part of settlement.
+  try { localStorage.removeItem(settledStorageKey(record)); } catch { /* Same-key receipt is authoritative. */ }
 }
 
 function metadataFor(record: MaintenanceOperation): MaintenanceMetadata {
@@ -149,24 +202,25 @@ function metadataFor(record: MaintenanceOperation): MaintenanceMetadata {
     baselineReleaseVersions: record.baselineReleaseVersions,
     ...(record.dispatched !== undefined && { dispatched: record.dispatched }),
     ...(record.accepted !== undefined && { accepted: record.accepted }),
+    ...(record.recoveryAdvised !== undefined && { recoveryAdvised: record.recoveryAdvised }),
+    ...(record.previousSettlement !== undefined && { previousSettlement: record.previousSettlement }),
   };
 }
 
 function storageError(): Error {
-  return new Error('Barney cannot safely read or save this maintenance operation. Restore browser storage access before retrying; do not submit a new command.');
+  return new MaintenanceStorageError('Barney cannot safely read or save this maintenance operation. Restore browser storage access before retrying; do not submit a new command.');
 }
 
 function readMetadata(key: string): MaintenanceMetadata | undefined {
-  let raw: string | null;
-  try {
-    raw = localStorage.getItem(key);
-  } catch {
-    throw storageError();
-  }
+  const raw = readRaw(key);
   if (raw === null) return undefined;
   try {
     const value: unknown = JSON.parse(raw);
     if (typeof value !== 'object' || value === null) throw new Error();
+    if ('settled' in value) {
+      parseSettled(value);
+      return undefined;
+    }
     const metadata = value as Partial<MaintenanceMetadata>;
     if (metadata.v !== 1
       || (metadata.operation !== 'restart' && metadata.operation !== 'update')
@@ -174,6 +228,7 @@ function readMetadata(key: string): MaintenanceMetadata | undefined {
       || typeof metadata.payloadHash !== 'string' || !SHA_256.test(metadata.payloadHash)
       || (metadata.dispatched !== undefined && typeof metadata.dispatched !== 'boolean')
       || (metadata.accepted !== undefined && typeof metadata.accepted !== 'boolean')
+      || (metadata.recoveryAdvised !== undefined && typeof metadata.recoveryAdvised !== 'boolean')
       || !Array.isArray(metadata.baselineReleaseVersions)
       || !metadata.baselineReleaseVersions.every((version: unknown) => typeof version === 'number' && Number.isSafeInteger(version) && version >= 0)) throw new Error();
     return {
@@ -184,6 +239,10 @@ function readMetadata(key: string): MaintenanceMetadata | undefined {
       baselineReleaseVersions: Object.freeze([...metadata.baselineReleaseVersions]),
       ...(metadata.dispatched !== undefined && { dispatched: metadata.dispatched }),
       ...(metadata.accepted !== undefined && { accepted: metadata.accepted }),
+      // Earlier versions issued retry advice without tracking it. Only a
+      // fresh record's explicit false proves that no such advice was emitted.
+      recoveryAdvised: metadata.recoveryAdvised ?? true,
+      ...(metadata.previousSettlement !== undefined && { previousSettlement: Object.freeze(parseSettled(metadata.previousSettlement)) }),
     };
   } catch {
     throw new Error('The saved maintenance operation is unreadable. Reconcile the existing operation before submitting another command.');
@@ -299,6 +358,7 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
       }
     }
     const retained = current;
+    const priorReceipt = retained ? undefined : getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid, scope.chainId);
     const record: MaintenanceOperation = Object.freeze({
       ...scope,
       operation: input.operation,
@@ -309,6 +369,8 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
       previousManifest: retained ? retained.previousManifest : input.previousManifest,
       dispatched: retained ? retained.dispatched : false,
       accepted: retained?.accepted,
+      recoveryAdvised: retained?.recoveryAdvised ?? false,
+      previousSettlement: retained?.previousSettlement ?? (priorReceipt ? settledMetadataFor(priorReceipt, priorReceipt.outcome) : undefined),
     });
     // Persist before allowing any mutation, and never persist manifest secrets.
     persist(key, record);
@@ -336,12 +398,7 @@ export async function completeMaintenanceOperation(
     if (!matches(record, metadata)) return; // A stale result must not clear a newer command.
     const retained = pending.get(key);
     if (retained && retained.idempotencyKey !== record.idempotencyKey) return;
-    persistSettled(record, outcome);
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      throw storageError();
-    }
+    persistSettled({ ...record, recoveryAdvised: metadata.recoveryAdvised }, outcome);
     pending.delete(key);
   });
 }
@@ -375,6 +432,25 @@ export async function markMaintenanceOperationAccepted(record: MaintenanceOperat
   await markOperation(record, true);
 }
 
+/** Call before returning recovery advice, including read-only/reloaded recovery. */
+export async function markMaintenanceRecoveryAdvised(record: MaintenanceOperation): Promise<void> {
+  const key = storageKey(record);
+  await withScopeLock(key, () => {
+    const current = getPendingMaintenanceOperation(record.address, record.providerUrl, record.leaseUuid, record.chainId);
+    if (current) {
+      if (!matches(record, metadataFor(current)) || current.recoveryAdvised) return;
+      const updated = Object.freeze({ ...current, recoveryAdvised: true });
+      persist(key, updated);
+      pending.set(key, updated);
+      return;
+    }
+    const settled = getSettledMaintenanceOperation(record.address, record.providerUrl, record.leaseUuid, record.chainId);
+    if (settled?.idempotencyKey === record.idempotencyKey && !settled.recoveryAdvised) {
+      persistSettled({ ...settled, recoveryAdvised: true }, settled.outcome);
+    }
+  });
+}
+
 /** Clear only a newly prepared operation that no concurrent caller dispatched. */
 export async function discardUnsubmittedMaintenanceOperation(record: MaintenanceOperation): Promise<boolean> {
   const key = storageKey(record);
@@ -382,7 +458,8 @@ export async function discardUnsubmittedMaintenanceOperation(record: Maintenance
     const current = getPendingMaintenanceOperation(record.address, record.providerUrl, record.leaseUuid, record.chainId);
     if (!current || !matches(current, metadataFor(record)) || current.dispatched !== false || current.accepted) return false;
     try {
-      localStorage.removeItem(key);
+      if (current.previousSettlement) localStorage.setItem(key, JSON.stringify(current.previousSettlement));
+      else localStorage.removeItem(key);
     } catch {
       throw storageError();
     }
@@ -393,30 +470,34 @@ export async function discardUnsubmittedMaintenanceOperation(record: Maintenance
 
 /** An authoritative absent/terminal chain lease cannot execute retained work. */
 export async function retireAbsentMaintenanceOperation(input: Omit<MaintenanceScope, 'chainId'> & { chainId?: string }): Promise<void> {
-  let key: string;
   try {
-    key = storageKey(scopeFor(input));
-  } catch {
-    // The chain's terminal/absent verdict remains valid even when a stale
-    // registry entry has an invalid URL. Discard its memory-only payloads.
-    for (const [entryKey, record] of pending) {
-      if (record.address === input.address.trim().toLowerCase()
-        && record.chainId === (input.chainId ?? runtimeConfig.PUBLIC_CHAIN_ID)
-        && record.leaseUuid === input.leaseUuid) pending.delete(entryKey);
+    let key: string;
+    try {
+      key = storageKey(scopeFor(input));
+    } catch {
+      // The chain's terminal/absent verdict remains valid even when a stale
+      // registry entry has an invalid URL. Discard its memory-only payloads.
+      for (const [entryKey, record] of pending) {
+        if (record.address === input.address.trim().toLowerCase()
+          && record.chainId === (input.chainId ?? runtimeConfig.PUBLIC_CHAIN_ID)
+          && record.leaseUuid === input.leaseUuid) pending.delete(entryKey);
+      }
+      return;
     }
-    return;
-  }
-  try {
-    await withScopeLock(key, () => {
+    try {
+      await withScopeLock(key, () => {
+        pending.delete(key);
+        localStorage.removeItem(key);
+        localStorage.removeItem(settledStorageKey(scopeFor(input)));
+      });
+    } catch {
       pending.delete(key);
-      localStorage.removeItem(key);
-      localStorage.removeItem(settledStorageKey(scopeFor(input)));
-    });
-  } catch {
-    pending.delete(key);
-    // Cleanup cannot turn a confirmed stop/status result into a failed action.
-    // Log a bounded message, never the provider URL or raw storage contents.
-    logError('maintenanceOperation.retireAbsent', storageError());
+      // Cleanup cannot turn a confirmed stop/status result into a failed action.
+      // Log a bounded message, never the provider URL or raw storage contents.
+      logError('maintenanceOperation.retireAbsent', storageError());
+    }
+  } finally {
+    releaseAbsentMaintenanceCompletions({ address: input.address, chainId: input.chainId ?? runtimeConfig.PUBLIC_CHAIN_ID, leaseUuid: input.leaseUuid });
   }
 }
 
@@ -427,7 +508,15 @@ export async function commitMaintenanceObservation(
 ): Promise<boolean> {
   const key = storageKey(record);
   return withScopeLock(key, () => {
-    const metadata = readMetadata(key);
+    let metadata: MaintenanceMetadata | undefined;
+    try { metadata = readMetadata(key); } catch (error) {
+      if (observation.settled && error instanceof MaintenanceStorageError) {
+        // The immutable provider baseline still establishes the verdict. Without
+        // current identity, neither registry projection nor clean memo is safe.
+        throw new MaintenanceSettlementStorageError(MAINTENANCE_PROJECTION_MESSAGE, false);
+      }
+      throw error;
+    }
     // Absence is a stale result: another caller may have settled this command
     // and a successor during the provider reads. Never retain its raw payload.
     if (!metadata) {
@@ -439,11 +528,11 @@ export async function commitMaintenanceObservation(
     if (!matches(record, metadata)) return false;
     if (!observation.isCurrent()) return false;
     if (observation.settled) {
-      persistSettled(record, observation.outcome ?? 'settled');
       try {
-        localStorage.removeItem(key);
+        persistSettled({ ...record, recoveryAdvised: metadata.recoveryAdvised }, observation.outcome ?? 'settled');
       } catch {
-        throw storageError();
+        observation.apply();
+        throw new MaintenanceSettlementStorageError(MAINTENANCE_CLEANUP_MESSAGE);
       }
       pending.delete(key);
     }

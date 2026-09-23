@@ -9,7 +9,7 @@ import { makeRegistry } from './testHelpers';
 import type { ToolExecutorOptions } from './types';
 
 vi.mock('../../config/fredCompatibility', () => ({ fredCompatibilityForProvider: () => 'pr240' }));
-vi.mock('./maintenanceOperation', () => ({ getPendingMaintenanceOperation: vi.fn(), getSettledMaintenanceOperation: vi.fn() }));
+vi.mock('./maintenanceOperation', () => ({ getPendingMaintenanceOperation: vi.fn(), getSettledMaintenanceOperation: vi.fn(), markMaintenanceRecoveryAdvised: vi.fn() }));
 vi.mock('./maintenanceExecution', () => ({ executeMaintenance: vi.fn() }));
 vi.mock('./capabilityCtx', () => ({ buildBarneyCtx: vi.fn().mockResolvedValue({}) }));
 
@@ -49,7 +49,7 @@ function fillCompletions(count: number) {
 
 describe('restart selection and saved operations', () => {
   it('does not turn retry advice into a new command after another tab settles the prior command', async () => {
-    vi.mocked(getSettledMaintenanceOperation).mockReturnValue({ ...pending('restart'), outcome: 'succeeded' });
+    vi.mocked(getSettledMaintenanceOperation).mockReturnValue({ ...pending('restart'), outcome: 'succeeded', recoveryAdvised: true });
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = await executeRestartApp({ app_name: 'web' }, options([app('web', 1)]));
       expect(result.requiresConfirmation).toBeUndefined();
@@ -59,12 +59,44 @@ describe('restart selection and saved operations', () => {
   });
 
   it('explicit new intent binds the confirmation to the previous settled command', async () => {
-    vi.mocked(getSettledMaintenanceOperation).mockReturnValue({ ...pending('restart'), outcome: 'succeeded' });
+    vi.mocked(getSettledMaintenanceOperation).mockReturnValue({ ...pending('restart'), outcome: 'succeeded', recoveryAdvised: true });
     const result = await executeRestartApp({ app_name: 'web', new_command: true }, options([app('web', 1)]));
     expect(result.requiresConfirmation).toBe(true);
     expect(result.pendingAction?.args).toMatchObject({ previousOperationKey: restartKey });
     expect(result.pendingAction?.args.idempotencyKey).not.toBe(restartKey);
     expect(result.confirmationMessage).toContain('NEW command after the previous settled operation');
+  });
+
+  it.each(['succeeded', 'failed'] as const)('permits a routine restart after a directly reported %s result on the first call', async (outcome) => {
+    vi.mocked(getSettledMaintenanceOperation).mockReturnValue({ ...pending('restart'), outcome, recoveryAdvised: false });
+    const result = await executeRestartApp({ app_name: 'web' }, options([app('web', 1)]));
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args.previousOperationKey).toBe(restartKey);
+    expect(result.pendingAction?.args.idempotencyKey).not.toBe(restartKey);
+    expect(result.confirmationMessage).not.toContain('NEW command');
+  });
+
+  it('includes previously maintained apps in a routine restart all', async () => {
+    vi.mocked(getSettledMaintenanceOperation).mockReturnValue({ ...pending('restart'), outcome: 'succeeded', recoveryAdvised: false });
+    const result = await executeRestartApp({ app_name: 'all' }, options(Array.from({ length: 40 }, (_, i) => app(`web${i}`, i + 1))));
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args.entries).toHaveLength(40);
+    expect(result.confirmationMessage).not.toContain('skipped');
+  });
+
+  it.each([false, true])('bounds forty settled recovery skips to one summary, with a fresh app: %s', async (withFreshApp) => {
+    vi.mocked(getSettledMaintenanceOperation).mockImplementation((_address, _provider, lease) => lease === leaseUuid(99) ? undefined : {
+      ...pending('restart'), outcome: 'succeeded', recoveryAdvised: true,
+    });
+    const apps = Array.from({ length: 40 }, (_, i) => app(`web${i}-${'long-name'.repeat(10)}`, i + 1));
+    if (withFreshApp) apps.push(app('fresh', 99));
+    const result = await executeRestartApp({ app_name: 'all' }, options(apps));
+    const text = result.confirmationMessage ?? result.error!;
+    expect(text).toContain('40 previously uncertain commands have settled');
+    expect(text.match(/Check app_status/g)).toHaveLength(1);
+    expect(text.length).toBeLessThan(600);
+    if (withFreshApp) expect(result.pendingAction?.args.entries).toEqual([expect.objectContaining({ app_name: 'fresh' })]);
+    else expect(result.requiresConfirmation).toBeUndefined();
   });
 
   it('does not let explicit new intent bypass an unresolved command', async () => {

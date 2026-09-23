@@ -339,11 +339,13 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     || rawUnconfirmed.some((entry) => exceedsShare(entry.detail));
   // Large batches may need shortened per-app details. Reserve one complete
   // next step rather than leaving the model with only partial instructions.
-  const summaryGuidance = !shortened ? undefined : rawUnconfirmed.length === 0
-    ? 'Details were shortened. Check app_status and app_diagnostics for each failed app.'
-    : operation === 'restart' || operation === 'update'
-      ? 'Details were shortened. Check app_status and app_releases for each unknown outcome. Recover only a command still pending, using its original key and exact payload. Do not use new_command for recovery. Do not submit a new command or stop/redeploy while its outcome is unresolved.'
-      : 'Details were shortened. Check app_status for each still-deploying app. Only use stop_app if you have decided to abandon that deployment.';
+  const sharedNextSteps = [
+    failed.length > 0 ? 'Check app_status and app_diagnostics for each failed app.' : '',
+    rawUnconfirmed.length === 0 ? '' : operation === 'restart' || operation === 'update'
+      ? 'Check app_status and app_releases for each unknown outcome. Recover only a command still pending, using its original key and exact payload. Do not use new_command for recovery. Do not submit a new command or automatically stop/redeploy while its outcome is unresolved.'
+      : 'Check app_status for each still-deploying app. Only use stop_app if you have decided to abandon that deployment.',
+  ].filter(Boolean).join(' ');
+  const summaryGuidance = shortened ? `Details were shortened. ${sharedNextSteps}` : undefined;
   if (summaryGuidance) {
     // JSON quotes account for the two escaped characters of the added newline.
     textBudget = Math.max(0, textBudget - JSON.stringify(summaryGuidance).length);

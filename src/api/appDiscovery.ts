@@ -187,12 +187,6 @@ export async function hydrateDiscoveredApp(
       && response.tenant === address && response.provider_uuid === snapshot.providerUuid
       ? response.connection : undefined;
     const patch: Partial<AppEntry> = refreshAppConnection(status, connection, snapshot).patch;
-    // A maintenance timeout invalidates saved inventory to schedule background
-    // observations without retracting earlier readiness. Fresh connection data
-    // alone cannot finish that check while readiness is missing or in progress.
-    if (snapshot.connectionStale && status?.provision_status !== 'ready') {
-      patch.connectionStale = true;
-    }
     if (status) {
       const observed = classifyProvisionStatus(status.provision_status);
       if (isTerminalLeaseState(status.state)) patch.provisionState = 'failed';
@@ -206,8 +200,8 @@ export async function hydrateDiscoveredApp(
       : snapshot;
     if (updated) return {
       app: updated,
-      complete: updated.provisionState === 'failed'
-        || (updated.provisionState === 'confirmed' && !updated.connectionStale && !!connection
+      complete: (updated.provisionState === 'failed' && !updated.readinessStale)
+        || (updated.provisionState === 'confirmed' && !updated.readinessStale && !updated.connectionStale && !!connection
           && (!!updated.url || hasEmptyEndpointInventory(connection))),
     };
   } catch (error) {

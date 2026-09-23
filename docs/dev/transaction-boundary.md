@@ -54,7 +54,8 @@ After reload, an original attachment can be merged with cached defaults only
 as a candidate: its exact hash must match. Without an attachment, provider
 release history can supply hash-matching bytes for a recovery confirmation;
 that lookup does not establish command admission or completion. If neither
-source matches, the exact reviewed payload is still required. A durable rejection
+source matches, the exact reviewed payload is still required. A failed history read or rejected
+signature remains retryable and does not establish that the bytes are permanently lost. A durable rejection
 creates no release: if its response and a generated/edited payload are both lost,
 the tenant API offers no receipt lookup to resolve the command. Barney keeps it
 unresolved; deleting its metadata would not cancel Fred's command or make a new
@@ -69,15 +70,23 @@ between tabs where supported; the fallback serializes only within one tab.
 Missing metadata drops stale memory, and a recovery confirmation
 requires the pending record to still exist. Settled confirmations are memoized
 in memory so retrying a batch does not resubmit already completed items.
-One nonsecret settled receipt per lease also persists across tabs and reloads.
-Planning returns this receipt instead of turning old retry advice into another
-command. Only deliberate `new_command: true` planning offers a new confirmation,
-bound to the receipt's key so a later settlement cannot silently change its
-meaning. An unresolved pending record always takes precedence over this flag.
+A compact nonsecret settled receipt replaces the pending record at the same storage
+key, using less quota, and persists across tabs and reloads. It blocks ordinary planning
+only when recovery advice was issued, preventing stale retry advice from becoming a new
+command. Routine directly reported outcomes allow follow-up work immediately. Legacy pending
+records without the advice flag conservatively retain that barrier. Deliberate
+`new_command: true` planning acknowledges a blocking receipt; no flag bypasses pending work.
+Every new confirmation binds the previous receipt's key so another settlement refuses dispatch.
+Cancellation before dispatch restores any prior receipt. Verified provider outcomes and manifest
+updates survive receipt-write failure; cached exact retries repeat local cleanup without another
+POST. If storage cannot be read to verify current command identity, the provider verdict remains
+known but registry projection is deferred. No completed memo hides that work: restoring storage
+allows status reconciliation or same-key recovery to finish the projection safely.
 The session retains at most 128 completed/reserved identities without eviction.
 Planning checks capacity before offering a card; confirmed batches reserve all
 new entries atomically before any provider work. Unsubmitted slots are released,
-while dispatched unresolved commands retain theirs. Existing pending operations
+while dispatched unresolved commands retain theirs until authoritative closure, even when
+local storage cleanup fails. Existing pending operations
 remain recoverable at capacity, but new commands require clearing chat history
 to invalidate old confirmations.
 Wallet changes, history clearing, and store destruction also invalidate cache
@@ -96,8 +105,10 @@ remain unconfirmed. Uncertain requests never authorize an automatic stop/redeplo
 or a replacement command. Settled updates project their command-owned manifest
 even after unrelated registry changes; readiness and connection observations
 are applied only when their own snapshot fields remain current. Uncertain
-maintenance invalidates saved connection inventory to schedule bounded background
-status reads without retracting previously confirmed readiness.
+maintenance marks connection inventory and readiness stale independently, scheduling bounded
+background status reads without changing the prior provider observation (including an absent
+observation). Shared foreground/background logic restores DNS evidence on a fresh connection
+read while continuing readiness observation through missing or in-progress statuses.
 
 The confirmation UI preserves unchanged payload bytes and disables editing of
 recovery payloads. Focused tests use the real SDK lifecycle and authentication

@@ -41,6 +41,9 @@ export const AppEntrySchema = z.object({
   /** A lifecycle operation may have replaced the saved service addresses.
    * Keep the inventory for reference, but do not use it as current DNS evidence. */
   connectionStale: z.boolean().optional(),
+  /** A dispatched maintenance command needs a fresh runtime observation.
+   * Independent of connection freshness so healthy DNS evidence remains usable. */
+  readinessStale: z.boolean().optional(),
   /** DERIVED from the two observations below; a passed-in `status` is only rule 5's fallback. */
   status: z.enum(APP_STATUSES),
   /** Chain observation. ABSENT (undefined) = never observed, which is what every pre-existing entry is. */

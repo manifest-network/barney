@@ -66,7 +66,7 @@ describe('maintenance operation retention', () => {
     const saved = localStorage.getItem(localStorage.key(0)!)!;
     expect(JSON.parse(saved)).toEqual({
       v: 1, operation: 'update', idempotencyKey: original.idempotencyKey,
-      payloadHash: original.payloadHash, baselineReleaseVersions: [1], dispatched: false,
+      payloadHash: original.payloadHash, baselineReleaseVersions: [1], dispatched: false, recoveryAdvised: false,
     });
     expect(saved).not.toContain('private-secret');
     expect(saved).not.toContain('nginx');
@@ -215,6 +215,77 @@ describe('maintenance operation retention', () => {
     expect(pending()?.idempotencyKey).toBe(original.idempotencyKey);
   });
 
+  it.each([undefined, false, true])('settles without growing UTF-16 storage usage, including minimal legacy metadata (advised: %s)', async (advised) => {
+    const command = await operations.getOrCreateMaintenanceOperation({ ...restart, baselineReleaseVersions: [] });
+    const markerKey = localStorage.key(0)!;
+    localStorage.setItem(markerKey, JSON.stringify({ v: 1, operation: command.operation, idempotencyKey: command.idempotencyKey,
+      payloadHash: command.payloadHash, baselineReleaseVersions: [], ...(advised !== undefined && { recoveryAdvised: advised }) }));
+    const storage = localStorage;
+    const usage = () => Array.from({ length: storage.length }, (_, index) => storage.key(index)!)
+      .reduce((bytes, key) => bytes + 2 * (key.length + storage.getItem(key)!.length), 0);
+    const quota = usage();
+    vi.stubGlobal('localStorage', {
+      getItem: storage.getItem.bind(storage), removeItem: storage.removeItem.bind(storage),
+      setItem: (key: string, value: string) => {
+        const old = storage.getItem(key);
+        const projected = usage() - (old === null ? 0 : 2 * (key.length + old.length)) + 2 * (key.length + value.length);
+        if (projected > quota) throw new DOMException('Quota reached', 'QuotaExceededError');
+        storage.setItem(key, value);
+      },
+    });
+    await operations.completeMaintenanceOperation(command, undefined, 'succeeded');
+    expect(pending()).toBeUndefined();
+    expect(storage.length).toBe(1);
+    expect(storage.key(0)).toBe(markerKey);
+    expect(usage()).toBeLessThan(quota);
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toMatchObject({
+      outcome: 'succeeded', recoveryAdvised: advised ?? true,
+    });
+  });
+
+  it('records advice from another tab on settlement without blocking routine direct results', async () => {
+    const command = await operations.getOrCreateMaintenanceOperation(restart);
+    vi.resetModules();
+    const otherTab = await import('./maintenanceOperation');
+    await otherTab.markMaintenanceRecoveryAdvised(command);
+    await operations.completeMaintenanceOperation(command, undefined, 'failed');
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)?.recoveryAdvised).toBe(true);
+    const next = await operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: command.idempotencyKey });
+    await operations.completeMaintenanceOperation(next, undefined, 'succeeded');
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)?.recoveryAdvised).toBe(false);
+  });
+
+  it('restores a blocking receipt if a prepared successor is discarded after reload', async () => {
+    const command = await operations.getOrCreateMaintenanceOperation(update);
+    await operations.markMaintenanceRecoveryAdvised(command);
+    await operations.completeMaintenanceOperation(command, undefined, 'failed');
+    const successor = await operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: command.idempotencyKey });
+    vi.resetModules();
+    const otherTab = await import('./maintenanceOperation');
+    expect(await otherTab.discardUnsubmittedMaintenanceOperation(successor)).toBe(true);
+    expect(otherTab.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toMatchObject({
+      idempotencyKey: command.idempotencyKey, recoveryAdvised: true,
+    });
+    expect(JSON.stringify(localStorage)).not.toContain('private-secret');
+    await expect(otherTab.getOrCreateMaintenanceOperation(restart)).rejects.toThrow(/previous maintenance command/);
+  });
+
+  it('reads legacy separate receipts conservatively and migrates them on the next settlement', async () => {
+    const command = await operations.getOrCreateMaintenanceOperation(restart);
+    const markerKey = localStorage.key(0)!;
+    localStorage.removeItem(markerKey);
+    localStorage.setItem(`${markerKey}:settled`, JSON.stringify({ v: 1, operation: command.operation,
+      idempotencyKey: command.idempotencyKey, payloadHash: command.payloadHash, outcome: 'succeeded' }));
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toMatchObject({ recoveryAdvised: true });
+    const next = await operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: command.idempotencyKey });
+    await operations.completeMaintenanceOperation(next, undefined, 'succeeded');
+    expect(localStorage.getItem(`${markerKey}:settled`)).toBeNull();
+    expect(localStorage.length).toBe(1);
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toMatchObject({
+      idempotencyKey: next.idempotencyKey, recoveryAdvised: false,
+    });
+  });
+
   it('forgets stale in-memory commands when the durable marker is cleared', async () => {
     const original = await operations.getOrCreateMaintenanceOperation(restart);
     localStorage.clear();
@@ -302,11 +373,12 @@ describe('maintenance operation retention', () => {
     await expect(operations.getOrCreateMaintenanceOperation(restart)).rejects.toThrow(/browser storage access/);
   });
 
-  it('keeps the pending key when clearing its marker fails', async () => {
+  it('settles through a same-key overwrite even when obsolete separate-receipt cleanup fails', async () => {
     const original = await operations.getOrCreateMaintenanceOperation(restart);
     failStorageMethod('removeItem');
-    await expect(operations.completeMaintenanceOperation(original)).rejects.toThrow(/browser storage access/);
-    expect(pending()?.idempotencyKey).toBe(original.idempotencyKey);
+    await expect(operations.completeMaintenanceOperation(original)).resolves.toBeUndefined();
+    expect(pending()).toBeUndefined();
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)?.idempotencyKey).toBe(original.idempotencyKey);
   });
 
   it('does not replace unreadable durable recovery metadata', async () => {

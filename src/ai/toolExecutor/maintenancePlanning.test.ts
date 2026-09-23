@@ -1,18 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import { providerFetch } from '../../api/providerFetchAdapter';
-import { getLeaseReleases } from '../../api/fred';
+import { getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { runtimeConfig } from '../../config/runtimeConfig';
 import type { AppEntry } from '../../registry/appRegistry';
 import { executeConfirmedRestartApp, executeRestartApp, executeUpdateApp } from './compositeTransactions';
-import { captureMaintenanceCompletionEpoch, clearCompletedMaintenance, MAX_COMPLETED_MAINTENANCE, rememberMaintenanceCompletion } from './maintenanceCompletion';
-import { getOrCreateMaintenanceOperation, markMaintenanceOperationDispatched } from './maintenanceOperation';
+import { canPlanMaintenanceCompletions, captureMaintenanceCompletionEpoch, clearCompletedMaintenance, MAX_COMPLETED_MAINTENANCE, releaseMaintenanceCompletionReservation, rememberMaintenanceCompletion, reserveMaintenanceCompletions } from './maintenanceCompletion';
+import { completeMaintenanceOperation, getOrCreateMaintenanceOperation, markMaintenanceOperationAccepted, markMaintenanceOperationDispatched, markMaintenanceRecoveryAdvised, retireAbsentMaintenanceOperation } from './maintenanceOperation';
 import { makeRegistry } from './testHelpers';
 import type { PayloadAttachment, SigningContext, ToolExecutorOptions } from './types';
 
 vi.mock('../../config/fredCompatibility', () => ({ fredCompatibilityForProvider: () => 'pr240' }));
 vi.mock('../../api/providerFetchAdapter', () => ({ providerFetch: vi.fn() }));
-vi.mock('../../api/fred', async (original) => ({ ...await original<typeof import('../../api/fred')>(), getLeaseReleases: vi.fn() }));
+vi.mock('../../api/fred', async (original) => ({ ...await original<typeof import('../../api/fred')>(), getLeaseProvision: vi.fn(), getLeaseReleases: vi.fn() }));
 vi.mock('./capabilityCtx', () => ({ buildBarneyCtx: vi.fn().mockResolvedValue({}) }));
 
 const address = 'manifest1planning';
@@ -44,8 +44,40 @@ beforeEach(() => {
   localStorage.clear();
   clearCompletedMaintenance(scope);
 });
+afterEach(() => vi.restoreAllMocks());
 
 describe('maintenance planning admission and settled receipts', () => {
+  it.each(['succeeded', 'failed'] as const)('preserves older retry advice after a legacy pending update settles %s through a reloaded status read', async (outcome) => {
+    const { app, options } = setup();
+    const command = await getOrCreateMaintenanceOperation({
+      ...scope, providerUrl, leaseUuid: app.leaseUuid, operation: 'update', manifest, baselineReleaseVersions: [1],
+    });
+    await markMaintenanceOperationAccepted(command);
+    const markerKey = localStorage.key(0)!;
+    const metadata = JSON.parse(localStorage.getItem(markerKey)!);
+    delete metadata.recoveryAdvised; // a3e175c pending format, which already issued retry advice
+    localStorage.setItem(markerKey, JSON.stringify(metadata));
+    vi.mocked(getLeaseProvision).mockResolvedValueOnce({ status: 'ready', fail_count: outcome === 'failed' ? 1 : 0 });
+    vi.resetModules();
+    const { reconcilePendingMaintenance } = await import('./maintenanceReconciliation');
+    const result = await reconcilePendingMaintenance(app, options, {
+      lease_uuid: app.leaseUuid, tenant: address, provider_uuid: app.providerUuid,
+      releases: [
+        { version: 1, status: outcome === 'succeeded' ? 'superseded' : 'active', image: 'nginx:old', created_at: '2026-09-23T00:00:00Z' },
+        { version: 2, status: outcome === 'succeeded' ? 'active' : 'failed', image: 'nginx:new', created_at: '2026-09-23T00:00:01Z', manifest: btoa(manifest) },
+      ],
+    });
+    expect(result).toMatchObject({ outcome });
+    for (const next of [
+      await executeRestartApp({ app_name: app.name }, options),
+      await executeUpdateApp({ app_name: app.name }, options, payload()),
+    ]) {
+      expect(next.requiresConfirmation).toBeUndefined();
+      expect(next.error).toContain('has already settled');
+    }
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
   it('refuses an update before showing confirmation when the session is full', async () => {
     const { app, options } = setup();
     const epoch = captureMaintenanceCompletionEpoch(scope);
@@ -66,6 +98,7 @@ describe('maintenance planning admission and settled receipts', () => {
       ...(operation === 'update' ? { manifest } : {}),
     });
     await markMaintenanceOperationDispatched(command);
+    await markMaintenanceRecoveryAdvised(command);
     // This module still retains the command bytes from the lost-response attempt.
     // A separate module instance models the other tab settling it through status.
     vi.resetModules();
@@ -87,6 +120,46 @@ describe('maintenance planning admission and settled receipts', () => {
     expect(next.confirmationMessage).toContain('NEW command');
     expect(token).not.toHaveBeenCalled();
     expect(providerFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['succeeded', 'file'], ['failed', 'file'], ['succeeded', 'image'], ['failed', 'image'], ['succeeded', 'services'],
+  ] as const)('plans a routine %s update with %s input on its first request after a directly reported result', async (outcome, input) => {
+    const { app, options } = setup();
+    const command = await getOrCreateMaintenanceOperation({
+      ...scope, providerUrl, leaseUuid: app.leaseUuid, operation: 'update', manifest, baselineReleaseVersions: [1],
+    });
+    await completeMaintenanceOperation(command, undefined, outcome);
+    const args = input === 'image' ? { app_name: app.name, image: 'nginx:next', ports: '80' }
+      : input === 'services' ? { app_name: app.name, services: JSON.stringify({ web: { image: 'nginx:next', ports: '80' } }) }
+        : { app_name: app.name };
+    const result = await executeUpdateApp(args, options, input === 'file' ? payload() : undefined);
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.pendingAction?.args.previousOperationKey).toBe(command.idempotencyKey);
+    expect(result.pendingAction?.args.idempotencyKey).not.toBe(command.idempotencyKey);
+    expect(result.pendingAction?.args._generatedManifest).toEqual(expect.any(String));
+    expect(result.confirmationMessage).not.toContain('NEW command');
+  });
+
+  it.each([false, true])('releases a closed lease reservation with storage cleanup failing: %s', async (cleanupFails) => {
+    const { app } = setup();
+    const command = await getOrCreateMaintenanceOperation({
+      ...scope, providerUrl, leaseUuid: app.leaseUuid, operation: 'restart', baselineReleaseVersions: [1],
+    });
+    await markMaintenanceOperationDispatched(command);
+    const epoch = captureMaintenanceCompletionEpoch(scope);
+    const reservation = reserveMaintenanceCompletions([command], epoch)!;
+    releaseMaintenanceCompletionReservation(reservation, true);
+    for (let i = 0; i < MAX_COMPLETED_MAINTENANCE - 1; i++) rememberMaintenanceCompletion({
+      ...command, idempotencyKey: crypto.randomUUID(),
+    }, { outcome: 'succeeded', result: { success: true, data: {} } }, epoch);
+    expect(canPlanMaintenanceCompletions(scope, 1)).toBe(false);
+    if (cleanupFails) vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new Error('Storage unavailable'); });
+    await retireAbsentMaintenanceOperation(command);
+    expect(canPlanMaintenanceCompletions(scope, 1)).toBe(true);
+    // An in-flight callback cannot pin the already-closed lease again.
+    releaseMaintenanceCompletionReservation(reservation, true);
+    expect(canPlanMaintenanceCompletions(scope, 1)).toBe(true);
   });
 
   it('refuses new update intent while allowing recovery of the exact pending update', async () => {

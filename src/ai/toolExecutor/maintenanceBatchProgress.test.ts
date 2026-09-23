@@ -118,7 +118,7 @@ describe('maintenance batch uncertainty', () => {
     } else {
       expect(data.message).toContain('Recover only a command still pending, using its original key and exact payload.');
       expect(data.message).toContain('Do not use new_command for recovery.');
-      expect(data.message).toContain('Do not submit a new command or stop/redeploy while its outcome is unresolved.');
+      expect(data.message).toContain('Do not submit a new command or automatically stop/redeploy while its outcome is unresolved.');
       const withoutDiagnostics = summarizeBatchResult({ ...options,
         unconfirmed: batch.unconfirmed.map(({ name, outcome }) => ({ name, outcome })) });
       for (const indentation of [undefined, 2]) {
@@ -129,11 +129,14 @@ describe('maintenance batch uncertainty', () => {
   });
 
   it('keeps the deliberate-abandonment condition when a large deployment summary needs shorter details', () => {
-    const result = summarizeBatchResult({ succeeded: [], failed: [],
+    const failed = ['failed-app'];
+    const result = summarizeBatchResult({ succeeded: [], failed,
+      batchProgress: [{ name: failed[0], phase: 'failed', detail: 'Container exited. '.repeat(60) }],
       unconfirmed: Array.from({ length: 100 }, (_, index) => ({ name: `app-${index}`, outcome: 'unconfirmed',
         detail: 'The app is still deploying. '.repeat(15) + 'Only stop_app if you have decided to abandon it.' })),
       dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys', unconfirmedLabel: 'Still deploying' });
     expect(result.data).toMatchObject({ message: expect.stringContaining('Check app_status for each still-deploying app. Only use stop_app if you have decided to abandon that deployment.') });
+    expect(result.data).toMatchObject({ message: expect.stringContaining('Check app_status and app_diagnostics for each failed app.') });
   });
 
   it.each([false, true])('bounds serialized diagnostics for a large batch of HTML rejections (partial success: %s)', async (partialSuccess) => {
