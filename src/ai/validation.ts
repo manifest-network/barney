@@ -121,6 +121,13 @@ const PersistedMessageSchema = z.object({
   id: z.string().min(1).max(64),
   role: z.enum(['user', 'assistant', 'tool']),
   content: z.string().max(MAX_CONTENT_LENGTH),
+  maintenanceRecoveryAdvice: z.array(z.object({
+    operation: z.enum(['restart', 'update']),
+    idempotencyKey: z.string().uuid(),
+    address: z.string().min(1).max(256), chainId: z.string().min(1).max(256),
+    providerUrl: z.string().url().max(2048), leaseUuid: z.string().uuid(),
+    rpcUrl: z.string().max(2048), restUrl: z.string().max(2048),
+  })).optional(),
   timestamp: z.number().finite(),
   thinking: z.string().max(MAX_CONTENT_LENGTH).optional().catch(undefined),
   toolCallId: z.string().max(64).optional().catch(undefined),

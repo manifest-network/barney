@@ -7,6 +7,8 @@ import { buildPayloadFromManifest } from './deployArgs';
 import type { MaintenanceOperation } from './maintenanceOperation';
 import type { PayloadAttachment, ToolExecutorOptions } from './types';
 
+export const MAINTENANCE_ATTACHMENT_UNUSED_MESSAGE = 'The attached file was not used; this confirms the previously submitted update.';
+
 /** Recover bytes only: a matching manifest does not identify command admission. */
 export async function recoverReleaseManifest(encoded: string | undefined, payloadHash: string): Promise<string | undefined> {
   if (!encoded) return undefined;
@@ -22,7 +24,7 @@ export async function recoverReleaseManifest(encoded: string | undefined, payloa
 }
 
 export type MaintenancePayloadRecovery =
-  | { outcome: 'recovered'; manifest: string }
+  | { outcome: 'recovered'; manifest: string; attachmentUnused?: boolean }
   | { outcome: 'history_unavailable' | 'no_match' };
 
 export async function recoverMaintenancePayload(
@@ -58,7 +60,7 @@ export async function recoverMaintenancePayload(
     // not hide retained bytes or history that can recover the original command.
     signal?.throwIfAborted();
   }
-  if (command.manifest !== undefined) return { outcome: 'recovered', manifest: command.manifest };
+  if (command.manifest !== undefined) return { outcome: 'recovered', manifest: command.manifest, ...(payload && { attachmentUnused: true }) };
   if (!signing) return { outcome: 'history_unavailable' };
   options.assertAuthorization?.();
   try {
@@ -70,7 +72,7 @@ export async function recoverMaintenancePayload(
     for (const release of releases.releases) {
       const manifest = await recoverReleaseManifest(release.manifest, command.payloadHash);
       signal?.throwIfAborted();
-      if (manifest !== undefined) return { outcome: 'recovered', manifest };
+      if (manifest !== undefined) return { outcome: 'recovered', manifest, ...(payload && { attachmentUnused: true }) };
     }
   } catch (error) {
     signal?.throwIfAborted();

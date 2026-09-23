@@ -14,9 +14,13 @@ export function maintenanceRegistryPatch(
   // Chain observations can change independently while this command still owns
   // its manifest. Avoid projecting old runtime reads over that newer state.
   if (snapshot.chainState !== current.chainState) return next;
-  if (snapshot.provisionState === current.provisionState
-    && (snapshot.readinessStale ?? false) === (current.readinessStale ?? false)) {
+  if (snapshot.provisionState === current.provisionState) {
     if (Object.hasOwn(patch, 'provisionState')) next.provisionState = patch.provisionState;
+  }
+  // Asking for another runtime observation is conservative even if an earlier
+  // read cleared the flag before this command transitioned. Clearing it still
+  // requires an unchanged flag so an old verdict cannot cancel a newer check.
+  if (patch.readinessStale === true || (snapshot.readinessStale ?? false) === (current.readinessStale ?? false)) {
     if (Object.hasOwn(patch, 'readinessStale') && (patch.readinessStale !== false || current.readinessStale)) {
       next.readinessStale = patch.readinessStale;
     }

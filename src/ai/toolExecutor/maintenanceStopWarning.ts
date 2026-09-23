@@ -19,6 +19,6 @@ export function pendingMaintenanceStopWarning(apps: readonly AppEntry[], address
   }
   const warnings: string[] = [];
   if (pending.length) warnings.push(`Fred may execute pending maintenance for ${pending.join(', ')} until ${pending.length === 1 ? 'its lease closes' : 'their leases close'}. Stopping ends the deployment; it does not recover the pending command${pending.length === 1 ? '' : 's'}.`);
-  if (unreadable.length) warnings.push(`Saved maintenance could not be checked for ${unreadable.join(', ')}. Fred may still execute pending commands for these apps until their leases close.`);
+  if (unreadable.length) warnings.push(`Saved maintenance could not be checked for ${unreadable.join(', ')}. Fred may still execute pending commands for ${unreadable.length === 1 ? 'this app until its lease closes' : 'these apps until their leases close'}.`);
   return warnings.length ? ` ${warnings.join(' ')}` : '';
 }

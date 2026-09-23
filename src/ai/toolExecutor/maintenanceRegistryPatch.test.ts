@@ -23,17 +23,29 @@ describe('maintenance readiness projection freshness', () => {
     )).toEqual({ provisionState: 'failed', readinessStale: false });
   });
 
-  it.each([[undefined, true], [true, false]] as const)('does not project old readiness across a real stale flag change %s to %s', (before, after) => {
+  it.each([[undefined, true], [true, false]] as const)('preserves a verified runtime failure across an independent stale flag change %s to %s', (before, after) => {
     expect(maintenanceRegistryPatch(
       { ...app, readinessStale: before }, { ...app, readinessStale: after },
       { provisionState: 'failed', readinessStale: false, manifest: '{"image":"nginx:new"}' },
-    )).toEqual({ manifest: '{"image":"nginx:new"}' });
+    )).toEqual({ provisionState: 'failed', manifest: '{"image":"nginx:new"}' });
   });
 
   it('does not replace a newer runtime verdict even when stale flags are equivalent', () => {
     expect(maintenanceRegistryPatch(
       app, { ...app, provisionState: 'failed', readinessStale: false },
       { provisionState: 'confirmed', readinessStale: false },
+    )).toEqual({});
+  });
+
+  it('reasserts unresolved readiness after an earlier ready observation clears the scheduling flag', () => {
+    expect(maintenanceRegistryPatch(
+      { ...app, readinessStale: true }, { ...app, readinessStale: false },
+      { readinessStale: true },
+    )).toEqual({ readinessStale: true });
+    // An old settled observation still cannot clear a newer recheck request.
+    expect(maintenanceRegistryPatch(
+      { ...app, readinessStale: false }, { ...app, readinessStale: true },
+      { readinessStale: false },
     )).toEqual({});
   });
 

@@ -2175,7 +2175,7 @@ describe('executeStopApp', () => {
     expect(result.requiresConfirmation).toBe(true);
     expect(result.confirmationMessage).toContain('Saved maintenance could not be checked');
     expect(result.confirmationMessage).toContain(`Saved maintenance could not be checked for "${app.name}"`);
-    expect(result.confirmationMessage).toContain('until their leases close');
+    expect(result.confirmationMessage).toContain('for this app until its lease closes');
     expect(result.confirmationMessage).not.toContain('private metadata');
     expect(getLeaseProvision).not.toHaveBeenCalled();
     expect(getLease).not.toHaveBeenCalled();
@@ -3517,6 +3517,35 @@ describe('executeConfirmedBatchDeploy', () => {
       expect(fullLogs).toMatchObject({ success: true, displayCard: { type: 'logs', data: { logs, truncated: false } } });
       expect(getLeaseLogs).toHaveBeenLastCalledWith('https://fred.example.com', 'lease-x', 'mock-auth-token', 200);
     }
+  });
+
+  it('keeps each failed service tail when a real 24-app batch summary is shortened', async () => {
+    const panic = 'panic: nil pointer at main.go:42';
+    let leaseIndex = 0;
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.(`failed-lease-${leaseIndex++}`, 'https://fred.example.com');
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true, failedStep: 'poll' });
+    });
+    const entries = Array.from({ length: 24 }, (_, index) => ({
+      app_name: `failed-${index}`, size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1',
+      providerUrl: 'https://fred.example.com', payload: makePayload(),
+    }));
+    for (let index = 0; index < entries.length; index += 1) {
+      vi.mocked(getLeaseProvision).mockResolvedValueOnce({ status: 'failed', fail_count: 1,
+        reason: 'ContainerExited', message: 'container exited unexpectedly' });
+      vi.mocked(getLeaseLogs).mockResolvedValueOnce({ lease_uuid: `failed-lease-${index}`, tenant: ADDRESS, provider_uuid: 'p1', logs: {
+        web: `${'startup line '.repeat(250)}\n${panic}`,
+        worker: `${'heartbeat '.repeat(80)}worker-still-alive`,
+      } });
+    }
+    const onProgress = vi.fn();
+    const result = await executeConfirmedBatchDeploy(await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions({ onProgress }));
+    expect(result.success).toBe(false);
+    expect(result.error?.split(panic)).toHaveLength(25);
+    expect(result.error?.split('worker-still-alive')).toHaveLength(25);
+    for (const entry of entries) expect(result.error).toContain(`get_logs(app_name="${entry.app_name}", tail=200)`);
+    expect(JSON.stringify(onProgress.mock.calls)).not.toContain('"diagnostic":');
+    expect(result.error).toContain('Details were shortened');
   });
 
   it('does not count a readiness-unconfirmed entry as deployed', async () => {

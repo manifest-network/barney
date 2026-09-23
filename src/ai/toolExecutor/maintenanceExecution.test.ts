@@ -127,6 +127,67 @@ function failNextReceiptWrite(): void {
   });
 }
 
+describe.each(['restart', 'update'] as const)('%s runtime observation after command settlement', (operation) => {
+  it.each(['confirmed', 'failed', undefined].flatMap(previous => ['restarting', 'updating', 'unknown', ''].map(status => ({ previous, status }))))('preserves $previous readiness and schedules observation after a rejected wait with status "$status"', async ({ previous, status }) => {
+    const { apps: [app], plans: [plan], options, appRegistry } = setup();
+    appRegistry.updateApp(ADDRESS, app.leaseUuid, { provisionState: previous as AppEntry['provisionState'] });
+    vi.mocked(waitForLeaseStatus).mockImplementationOnce(async () => {
+      histories.set(app.leaseUuid, history(app.leaseUuid, release(1), release(2, 'failed')));
+      throw new Error('Readiness wait timed out');
+    });
+    vi.mocked(getLeaseProvision).mockResolvedValueOnce({ status, fail_count: 0 });
+    expect((await dispatch(operation, plan, options)).error).toContain('failed');
+    const updated = appRegistry.getAppByLease(ADDRESS, app.leaseUuid)!;
+    expect(updated.provisionState).toBe(previous);
+    expect(updated.readinessStale).toBe(true);
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+  });
+
+  it.each(['ready', 'failed'] as const)('uses the wait result %s when the fresh provision read is unavailable', async (status) => {
+    const { apps: [app], plans: [plan], options, appRegistry } = setup();
+    appRegistry.updateApp(ADDRESS, app.leaseUuid, { readinessStale: true });
+    vi.mocked(waitForLeaseStatus).mockImplementationOnce(async () => {
+      histories.set(app.leaseUuid, history(app.leaseUuid, release(1, 'superseded'), release(2, status === 'ready' ? 'active' : 'failed')));
+      return { state: LeaseState.LEASE_STATE_ACTIVE, provision_status: status };
+    });
+    vi.mocked(getLeaseProvision).mockRejectedValueOnce(new Error('Provision unavailable'));
+    const result = await dispatch(operation, plan, options);
+    expect(result.success).toBe(status === 'ready');
+    expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({
+      provisionState: status === 'ready' ? 'confirmed' : 'failed', readinessStale: false,
+    });
+    expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+  });
+
+  it('uses fresh progress instead of an older failed wait verdict', async () => {
+    const { apps: [app], plans: [plan], options, appRegistry } = setup();
+    vi.mocked(waitForLeaseStatus).mockImplementationOnce(async () => {
+      histories.set(app.leaseUuid, history(app.leaseUuid, release(1), release(2, 'failed')));
+      return { state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'failed' };
+    });
+    vi.mocked(getLeaseProvision).mockResolvedValueOnce({ status: 'restarting', fail_count: 1 });
+    expect((await dispatch(operation, plan, options)).error).toContain('failed');
+    expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ provisionState: 'confirmed', readinessStale: true });
+  });
+
+  it.each([undefined, 'restarting', 'updating', 'unknown', ''])('retains readiness observation when another tab settles first with provision %s', async (status) => {
+    const { apps: [app], plans: [plan], options, appRegistry } = setup();
+    if (status === undefined) vi.mocked(getLeaseProvision).mockRejectedValue(new Error('Provision unavailable'));
+    else vi.mocked(getLeaseProvision).mockResolvedValue({ status, fail_count: 0 });
+    vi.mocked(waitForLeaseStatus).mockImplementationOnce(async () => {
+      histories.set(app.leaseUuid, history(app.leaseUuid, release(1), release(2, 'failed')));
+      vi.resetModules();
+      const otherTab = await import('./maintenanceReconciliation');
+      expect(await otherTab.reconcilePendingMaintenance(app, options)).toMatchObject({ outcome: 'failed' });
+      expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+      throw new Error('Original tab wait timed out');
+    });
+    expect((await dispatch(operation, plan, options)).error).toContain('failed');
+    expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ provisionState: 'confirmed', readinessStale: true });
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe.each(['restart', 'update'] as const)('%s command recovery through the real SDK', (operation) => {
   it.each([
     ['lost response', 0, operation === 'restart' ? 'RESTART_INDETERMINATE' : 'UPDATE_INDETERMINATE'],
@@ -201,7 +262,9 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
     expect(result.error).not.toContain('unconfirmed');
     expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
     expect(options.appRegistry?.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ status: 'running', manifest: OLD_MANIFEST });
-    expect(await dispatch(operation, plan, options)).toEqual(result);
+    const replay = await dispatch(operation, plan, options);
+    expect(replay).toMatchObject({ success: false, error: expect.stringContaining(result.error!) });
+    expect(replay.error).toContain('No new maintenance request was sent.');
     expect(providerFetch).toHaveBeenCalledTimes(2);
     expect(waitForLeaseStatus).not.toHaveBeenCalled();
   });
@@ -224,7 +287,9 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
     expect(refused.error).not.toContain('unconfirmed');
     expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
     expect(requests().map((request) => request.key)).toEqual([plan.idempotencyKey, plan.idempotencyKey]);
-    expect(await dispatch(operation, plan, options)).toEqual(refused);
+    const replay = await dispatch(operation, plan, options);
+    expect(replay).toMatchObject({ success: false, error: expect.stringContaining(refused.error!) });
+    expect(replay.error).toContain('No new maintenance request was sent.');
     expect(providerFetch).toHaveBeenCalledTimes(2);
 
     const next = { ...plan, idempotencyKey: crypto.randomUUID(), previousOperationKey: plan.idempotencyKey, recoveryIntentKey: plan.idempotencyKey };
@@ -351,6 +416,30 @@ it('does not dispatch without an unambiguous original release baseline', async (
 });
 
 describe('pre-dispatch cancellation and local failures', () => {
+  it.each(['cancel', 'mint rejection'] as const)('releases another tab’s advice lock after a pre-HTTP %s', async (failure) => {
+    const { apps: [app], plans: [plan], options, signArbitrary } = setup();
+    const controller = new AbortController();
+    options.signal = controller.signal;
+    vi.resetModules();
+    const observer = await import('./maintenanceOperation');
+    const observerTools = await import('./compositeTransactions');
+    signArbitrary.mockImplementationOnce(async () => ({ pub_key: { type: 'key', value: 'cHVia2V5' }, signature: 'c2ln' }));
+    signArbitrary.mockImplementationOnce(async () => {
+      const unsent = observer.getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)!;
+      expect(unsent.dispatched).toBe(false);
+      await observer.markMaintenanceRecoveryAdvised(unsent);
+      if (failure === 'cancel') controller.abort();
+      else throw new Error('Wallet mint rejected');
+      return { pub_key: { type: 'key', value: 'cHVia2V5' }, signature: 'c2ln' };
+    });
+    expect((await dispatch('restart', plan, options)).success).toBe(false);
+    expect(providerFetch).not.toHaveBeenCalled();
+    expect(observer.getSettledMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toMatchObject({ outcome: 'not_sent', recoveryAdvised: false });
+    const next = await observerTools.executeRestartApp({ app_name: app.name }, options);
+    expect(next.requiresConfirmation).toBe(true);
+    expect(next.pendingAction?.args.previousOperationKey).toBe(plan.idempotencyKey);
+  });
+
   it.each(['baseline', 'authentication', 'context', 'authorization'] as const)('discards a new command after a local %s failure', async (stage) => {
     const { apps: [app], plans: [plan], options, signArbitrary } = setup();
     const controller = new AbortController();
@@ -720,8 +809,9 @@ describe('independent maintenance verdicts', () => {
     });
   });
 
-  it('keeps a verified runtime failure when another observer only materializes readinessStale false', async () => {
+  it.each([undefined, true])('keeps a verified runtime failure when another observer changes readinessStale from %s to false', async (readinessStale) => {
     const { apps: [app], plans: [plan], options, appRegistry } = setup();
+    appRegistry.updateApp(ADDRESS, app.leaseUuid, { readinessStale });
     vi.mocked(waitForLeaseStatus).mockImplementationOnce(async () => {
       appRegistry.updateApp(ADDRESS, app.leaseUuid, { readinessStale: false });
       histories.set(app.leaseUuid, history(app.leaseUuid, release(1), release(2, 'failed', 'RestartFailed')));
@@ -824,6 +914,9 @@ describe('independent maintenance verdicts', () => {
     expect(JSON.stringify(getCompletedMaintenance(retained))).not.toContain('could not be retired');
     const clean = await dispatch('update', plan, options);
     expect(clean.success).toBe(outcome === 'succeeded');
+    expect(JSON.stringify(clean)).toContain('Previously verified update');
+    expect(JSON.stringify(clean)).toContain('No new maintenance request was sent.');
+    if (outcome === 'succeeded') expect(clean.data).toMatchObject({ replayed: true });
     expect(JSON.stringify(clean)).not.toContain('could not be retired');
     expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
     expect(getSettledMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toMatchObject({ outcome, recoveryAdvised: true });
@@ -899,7 +992,11 @@ describe('independent maintenance verdicts', () => {
     const memo = getCompletedMaintenance(observedCommand!);
     expect(memo).toEqual({ payloadHash: observedCommand!.payloadHash, result });
     expect(JSON.stringify(memo)).not.toContain('exact secret bytes');
-    expect(await executeMaintenance(input, options)).toEqual(result);
+    const replay = await executeMaintenance(input, options);
+    expect(replay.outcome).toBe(result.outcome);
+    expect(replay.result.success).toBe(result.result.success);
+    expect(JSON.stringify(replay)).toContain('No new maintenance request was sent.');
+    if (result.result.error) expect(replay.result.error).toContain(result.result.error);
     expect(providerFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -1006,7 +1103,9 @@ describe('late maintenance refusals', () => {
     expect(first).toMatchObject({ success: false, error: expect.stringContaining('image is not allowed') });
     expect(first.error).toContain('local recovery record could not be retired');
     expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(plan.idempotencyKey);
-    expect(await dispatch('update', plan, options)).toEqual({ success: false, error: 'Update failed: validation error: image is not allowed.' });
+    const replay = await dispatch('update', plan, options);
+    expect(replay).toMatchObject({ success: false, error: expect.stringContaining('Update failed: validation error: image is not allowed.') });
+    expect(replay.error).toContain('No new maintenance request was sent.');
     expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
     expect(getSettledMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toMatchObject({ outcome: 'failed', recoveryAdvised: true });
     expect(providerFetch).toHaveBeenCalledTimes(1);
@@ -1102,6 +1201,68 @@ it('preserves complete SDK validation lists at update confirmation', async () =>
   expect(providerFetch).not.toHaveBeenCalled();
 });
 
+it.each(['wallet', 'client', 'sdk'] as const)('bounds and sanitizes %s preparation errors while retaining the operation lead', async (source) => {
+  const { plans: [plan], options, signArbitrary } = setup();
+  const failure = new Error('\u202Efailure\0 ' + 'untrusted '.repeat(500));
+  if (source === 'wallet') signArbitrary.mockRejectedValueOnce(failure);
+  if (source === 'client') vi.mocked(getReadClient).mockRejectedValueOnce(failure);
+  if (source === 'sdk') vi.mocked(restartApp).mockRejectedValueOnce(failure);
+  const result = await executeMaintenance({ ...plan, operation: 'restart' }, options);
+  expect(result.outcome).toBe('failed');
+  expect(result.result.error).toMatch(/^Restart could not be prepared: failure /);
+  expect(result.result.error).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+  expect([...result.result.error!].length).toBeLessThanOrEqual(1025 + 'Restart could not be prepared: '.length);
+  expect(providerFetch).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['succeeded', 'cleanup', 'cancel'], ['failed', 'cleanup', 'cancel'],
+  ['succeeded', 'advice', 'cancel'], ['failed', 'advice', 'cancel'],
+  ['succeeded', 'cleanup', 'wallet'], ['failed', 'cleanup', 'wallet'],
+  ['succeeded', 'advice', 'wallet'], ['failed', 'advice', 'wallet'],
+] as const)('keeps a cached %s verdict known when %s is interrupted by %s', async (outcome, phase, interruption) => {
+  const { apps: [app], plans: [plan], options, appRegistry } = setup();
+  vi.mocked(providerFetch).mockImplementationOnce(async () => {
+    histories.set(app.leaseUuid, outcome === 'succeeded'
+      ? history(app.leaseUuid, release(1, 'superseded'), release(2))
+      : history(app.leaseUuid, release(1), release(2, 'failed', 'RestartFailed')));
+    failNextReceiptWrite();
+    return accepted();
+  });
+  const input = { ...plan, operation: 'restart' as const };
+  expect((await executeMaintenance(input, options)).outcome).toBe(outcome);
+  const before = structuredClone(appRegistry.getAppByLease(ADDRESS, app.leaseUuid));
+  vi.mocked(appRegistry.updateApp).mockClear();
+  if (phase === 'advice') failNextReceiptWrite();
+  let queued!: () => void;
+  const waiting = new Promise<void>(resolve => { queued = resolve; });
+  let releaseLock!: () => void;
+  const lock = new Promise<void>(resolve => { releaseLock = resolve; });
+  let requests = 0;
+  vi.stubGlobal('navigator', { locks: { request: async (_name: string, action: () => unknown) => {
+    if (++requests === (phase === 'cleanup' ? 1 : 2)) { queued(); await lock; }
+    return action();
+  } } });
+  const controller = new AbortController();
+  let current = true;
+  const onProgress = vi.fn();
+  const execution = executeMaintenance(input, { ...options, signal: controller.signal, onProgress,
+    assertAuthorization: () => { if (!current) throw new Error('Wallet changed'); } });
+  await waiting;
+  if (interruption === 'cancel') controller.abort();
+  else current = false;
+  releaseLock();
+  const result = await execution;
+  expect(result.outcome).toBe('cancelled');
+  expect(result.result.error).toContain(`outcome remains verified as ${outcome}`);
+  expect(result.result.error).not.toMatch(/unknown|unconfirmed|may retain/);
+  expect(onProgress).not.toHaveBeenCalled();
+  expect(appRegistry.updateApp).not.toHaveBeenCalled();
+  expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toEqual(before);
+  expect(providerFetch).toHaveBeenCalledTimes(1);
+  expect(getLeaseReleases).toHaveBeenCalledTimes(2);
+});
+
 it('keeps known replays and pending recovery safe when completion memory reaches its limit', async () => {
   const { apps: [pendingApp], plans: [pendingPlan, freshPlan], options } = setup(['pending', 'fresh']);
   const pending = await getOrCreateMaintenanceOperation({
@@ -1115,8 +1276,10 @@ it('keeps known replays and pending recovery safe when completion memory reaches
     for (const idempotencyKey of rememberedKeys) {
       expect(rememberMaintenanceCompletion({ ...pending, idempotencyKey }, knownResult, epoch)).toBe(true);
     }
-    // A known key returns its exact prior result even when another command is pending.
-    expect(await executeMaintenance({ ...pendingPlan, operation: 'restart', idempotencyKey: rememberedKeys[0] }, options)).toEqual(knownResult);
+    // A known key retains its prior verdict even when another command is pending.
+    const replay = await executeMaintenance({ ...pendingPlan, operation: 'restart', idempotencyKey: rememberedKeys[0] }, options);
+    expect(replay).toMatchObject({ outcome: knownResult.outcome, result: { error: expect.stringContaining(knownResult.result.error) } });
+    expect(replay.result.error).toContain('No new maintenance request was sent.');
     expect(await executeMaintenance({ ...freshPlan, operation: 'restart' }, options)).toMatchObject({
       outcome: 'failed', result: { error: expect.stringContaining('confirmation limit') },
     });

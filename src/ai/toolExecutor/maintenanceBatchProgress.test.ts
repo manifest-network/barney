@@ -4,6 +4,28 @@ import { FAILURE_DETAIL_CHARS } from './helpers';
 import { computeOverallPhase, runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
 
 describe('maintenance batch uncertainty', () => {
+  it.each([false, true])('distinguishes cached results from new successful commands (mixed: %s)', async (mixed) => {
+    const detail = 'Previous restart succeeded. This confirmation recovered that earlier result; no new request was sent.';
+    const onProgress = vi.fn();
+    const batch = await runBatchWithConcurrency({
+      entries: [{ name: 'cached' }, ...(mixed ? [{ name: 'fresh' }] : [])],
+      initialPhase: 'restarting', intermediatePhases: ['restarting'], operation: 'restart', onProgress,
+      executeOne: async ({ name }, _index, progress) => {
+        if (name === 'cached') return { name, replayed: true, detail };
+        progress('ready');
+        return { name };
+      },
+    });
+    const result = summarizeBatchResult({ ...batch, operation: 'restart', onProgress,
+      dataKey: 'restarted', verb: 'Restarted', failedNoun: 'restarts' });
+    expect(result.data).toMatchObject({ restarted: expect.arrayContaining([{ name: 'cached', replayed: true, detail }]),
+      message: expect.stringContaining(detail) });
+    expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'ready',
+      detail: mixed ? '1 restarted, 1 previous result recovered' : '1 previous result recovered',
+      batch: expect.arrayContaining([{ name: 'cached', phase: 'ready', detail }]),
+    }));
+  });
+
   it.each([1, 4, 128])('keeps cleanup warnings on %i verified successes within the serialized diagnostic budget', async (count) => {
     const detail = 'The provider outcome was verified, but its local recovery record could not be retired. Restore browser storage access and retry the same confirmation to finish local cleanup.';
     const onProgress = vi.fn();

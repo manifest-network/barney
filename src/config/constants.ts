@@ -167,6 +167,8 @@ export const AI_BATCH_DIAGNOSTIC_CHARS = 8_192;
 /** Per-row bound for Barney's guidance after individual provider fields have
  * been sanitized. Leaves room for full recovery instructions and next steps. */
 export const AI_BATCH_GUIDANCE_CHARS = 1_024;
+/** Preparation failures can include wallet/storage guidance, but are untrusted text. */
+export const AI_MAINTENANCE_PREPARATION_DETAIL_CHARS = 1_024;
 
 /** Automatic deploy diagnostics include only a bounded container-log tail;
  * get_logs remains available for an explicit, larger log request. */

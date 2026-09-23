@@ -18,6 +18,7 @@ import {
   executeConfirmedDeployApp, executeConfirmedUpdateApp, executeDeployApp, executeUpdateApp,
 } from './compositeTransactions';
 import { resolveAppUrl } from './deployUrl';
+import { validateManifestForProvider } from './deployArgs';
 import { makeRegistry } from './testHelpers';
 import type { PayloadAttachment, SigningContext, ToolExecutorOptions } from './types';
 
@@ -327,6 +328,7 @@ it.each(['memory', 'history'] as const)('recovers exact bytes from %s even when 
   for (let call = 0; call < 2; call++) {
     const recovery = await actions.executeUpdateApp({ app_name: app.name }, options, turnAttachment);
     expect(recovery.requiresConfirmation, recovery.error).toBe(true);
+    expect(recovery.confirmationMessage).toContain('The attached file was not used; this confirms the previously submitted update.');
     expect(recovery.pendingAction?.args).toMatchObject({
       _generatedManifest: manifest, _maintenanceRetry: true, idempotencyKey: plan.pendingAction!.args.idempotencyKey,
     });
@@ -339,9 +341,26 @@ it.each(['memory', 'history'] as const)('recovers exact bytes from %s even when 
   vi.mocked(providerFetch).mockResolvedValueOnce(new Response(JSON.stringify({ status: 'updating' }), { status: 202 }));
   const result = await actions.executeConfirmedUpdateApp(recovery.pendingAction!.args, chain, options, turnAttachment);
   expect(result.success, result.error).toBe(true);
+  expect(result.data).toMatchObject({ attachmentUnused: true, message: expect.stringContaining('The attached file was not used') });
   const recoveredRequest = vi.mocked(providerFetch).mock.calls[1][1]!;
   expect(recoveredRequest.body).toBe(firstRequest.body);
   expect(new Headers(recoveredRequest.headers).get('Idempotency-Key')).toBe(new Headers(firstRequest.headers).get('Idempotency-Key'));
+});
+
+it('preserves the complete legacy SDK validation list for edits made at confirmation', async () => {
+  const app: AppEntry = { name: 'web', leaseUuid: crypto.randomUUID(), providerUrl: LEGACY,
+    providerUuid: 'provider', size: 'small', createdAt: 0, status: 'running', chainState: 'active', provisionState: 'confirmed', manifest: '{"image":"nginx"}' };
+  const options = optionsFor(LEGACY, [app]);
+  const plan = await executeUpdateApp({ app_name: app.name, image: 'nginx' }, options);
+  expect(plan.requiresConfirmation, plan.error).toBe(true);
+  const invalid = JSON.stringify({ services: Object.fromEntries(Array.from({ length: 12 }, (_, index) => [
+    `web${index}`, { image: 123 },
+  ])) });
+  const detail = await validateManifestForProvider(invalid, LEGACY);
+  expect(detail!.length).toBeGreaterThan(256);
+  const result = await executeConfirmedUpdateApp({ ...plan.pendingAction!.args, _generatedManifest: invalid }, chain, options);
+  expect(result.error).toBe(`Update failed: ${detail}`);
+  expect(providerFetch).not.toHaveBeenCalled();
 });
 
 it('keeps exact-payload recovery guidance when signing the history read is rejected', async () => {

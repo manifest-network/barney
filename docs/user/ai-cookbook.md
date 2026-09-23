@@ -64,7 +64,9 @@ the app's status and releases first. Acknowledged commands can settle from those
 checks even after a reload. Retrying an unresolved command reuses its original
 key and exact manifest; after reloading, Barney can recover matching bytes from
 provider history or verify a reattached file merged with saved defaults. A mismatched
-attachment does not block recovery from retained bytes or matching history. If
+attachment does not block recovery from retained bytes or matching history. The
+confirmation and result say when the attached file was not used; recovery confirms
+the previously submitted update. If
 neither matches, the exact reviewed manifest is required. Do not replace it
 with a new command or automatically stop/redeploy to recover uncertainty.
 An unavailable history read can be retried. If a successful read finds no matching
@@ -77,6 +79,8 @@ Receipts for previously uncertain commands survive tabs and reloads, so old retr
 advice cannot silently restart an app again. Ask explicitly for a new operation
 after a settled notice if another restart or update is intended. Ordinary completed
 commands allow the next requested restart or update without this extra step.
+Restoring a conversation in a new tab also restores its retry safeguards. A cached
+result explicitly identifies the previous operation; it does not send another request.
 
 **Example prompts.**
 

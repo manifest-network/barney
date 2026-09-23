@@ -296,7 +296,7 @@ describe('maintenance operation retention', () => {
     await expect(operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: command.idempotencyKey })).rejects.toThrow(/recovery advice/);
   });
 
-  it('restores a blocking receipt if a prepared successor is discarded after reload', async () => {
+  it('preserves the earlier blocking verdict when recording a successor was never sent', async () => {
     const command = await operations.getOrCreateMaintenanceOperation(update);
     await operations.markMaintenanceRecoveryAdvised(command);
     await operations.completeMaintenanceOperation(command, undefined, 'failed');
@@ -305,7 +305,7 @@ describe('maintenance operation retention', () => {
     const otherTab = await import('./maintenanceOperation');
     expect(await otherTab.discardUnsubmittedMaintenanceOperation(successor)).toBe(true);
     expect(otherTab.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toMatchObject({
-      idempotencyKey: command.idempotencyKey, recoveryAdvised: true,
+      idempotencyKey: successor.idempotencyKey, outcome: 'not_sent', recoveryAdvised: true,
     });
     expect(JSON.stringify(localStorage)).not.toContain('private-secret');
     await expect(otherTab.getOrCreateMaintenanceOperation(restart)).rejects.toThrow(/recovery advice/);
@@ -488,6 +488,34 @@ describe('maintenance operation retention', () => {
     expect(retry.created).toBe(false);
     expect(await operations.discardUnsubmittedMaintenanceOperation(prepared.command)).toBe(true);
     expect(pending()).toBeUndefined();
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)).toMatchObject({
+      idempotencyKey: prepared.command.idempotencyKey, outcome: 'not_sent', recoveryAdvised: false,
+    });
+  });
+
+  it('retires matching unsent advice in another tab after cancellation without losing a sent command’s guard', async () => {
+    const command = await operations.getOrCreateMaintenanceOperation(restart);
+    await operations.markMaintenanceRecoveryAdvised(command);
+    vi.resetModules();
+    const otherTab = await import('./maintenanceOperation');
+    await otherTab.markMaintenanceRecoveryAdvised(command);
+    expect(await operations.discardUnsubmittedMaintenanceOperation(command)).toBe(true);
+    const tombstone = otherTab.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)!;
+    expect(tombstone).toMatchObject({ outcome: 'not_sent', recoveryAdvised: false });
+    const next = await otherTab.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: command.idempotencyKey });
+    await otherTab.markMaintenanceRecoveryAdvised(next);
+    await otherTab.markMaintenanceOperationDispatched(next);
+    expect(await otherTab.discardUnsubmittedMaintenanceOperation(next)).toBe(false);
+    await otherTab.completeMaintenanceOperation(next, undefined, 'succeeded');
+    expect(otherTab.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)?.recoveryAdvised).toBe(true);
+  });
+
+  it('keeps pending metadata and advice when the never-sent tombstone cannot be written', async () => {
+    const command = await operations.getOrCreateMaintenanceOperation(restart);
+    await operations.markMaintenanceRecoveryAdvised(command);
+    failStorageMethod('setItem');
+    await expect(operations.discardUnsubmittedMaintenanceOperation(command)).rejects.toThrow(/storage/);
+    expect(pending()?.idempotencyKey).toBe(command.idempotencyKey);
   });
 
   it('retains a prepared command once a concurrent caller starts HTTP', async () => {

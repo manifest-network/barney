@@ -22,9 +22,10 @@ import { handleDeployManifestError } from './deployError';
 import { makeRegistry } from './testHelpers';
 import { LeaseState } from '../../api/billing';
 import type { AppEntry } from '../../registry/appRegistry';
-import { AI_BATCH_GUIDANCE_CHARS, AI_DEPLOY_LOG_PREVIEW_CHARS } from '../../config/constants';
+import { AI_BATCH_DIAGNOSTIC_CHARS, AI_BATCH_GUIDANCE_CHARS, AI_DEPLOY_LOG_PREVIEW_CHARS } from '../../config/constants';
 import { nextStepFor } from './failureGuidance';
 import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
+import type { DeployFailureDiagnostic } from './deployDiagnostic';
 
 vi.mock('../../api/billing', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/billing')>()),
@@ -410,8 +411,10 @@ describe('handleDeployManifestError — provider verdict at the poll step', () =
       entries: [{ name: 'test-app' }, { name: 'healthy' }], initialPhase: 'provisioning', intermediatePhases: ['provisioning'],
       executeOne: async ({ name }, _index, progress) => {
         if (name === 'healthy') return { name };
-        const result = await handleDeployManifestError(partialError('poll'), ctx({ maxDetailChars: AI_BATCH_GUIDANCE_CHARS }));
-        progress('failed', result.error);
+        let diagnostic: DeployFailureDiagnostic | undefined;
+        const result = await handleDeployManifestError(partialError('poll'), ctx({ maxDetailChars: AI_BATCH_GUIDANCE_CHARS,
+          onDiagnostic: (value: DeployFailureDiagnostic) => { diagnostic = value; } }));
+        progress('failed', result.error, diagnostic);
         return null;
       },
     });
@@ -424,6 +427,81 @@ describe('handleDeployManifestError — provider verdict at the poll step', () =
     expect(row).not.toContain('earliest-line');
     const summary = summarizeBatchResult({ ...batch, dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys' });
     expect(summary.data).toMatchObject({ message: expect.stringContaining(panic) });
+  });
+
+  it.each(['mixed-six', 'failed-24'] as const)('keeps ending panic lines and log lookups in %s summary budgeting', async (shape) => {
+    const panic = 'panic: nil pointer at main.go:42';
+    const names = Array.from({ length: shape === 'mixed-six' ? 6 : 24 }, (_, index) => `app-${index}`);
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1,
+      reason: 'ContainerExited', message: 'container exited unexpectedly' } as never);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ logs: {
+      web: `${'before crash '.repeat(250)}\n${panic}`,
+      worker: `${'heartbeat '.repeat(800)}worker-still-alive`,
+    } } as never);
+    const onProgress = vi.fn();
+    const batch = await runBatchWithConcurrency({
+      entries: names.map((name) => ({ name })), initialPhase: 'provisioning', intermediatePhases: ['provisioning'], onProgress,
+      executeOne: async ({ name }, index, progress) => {
+        if (shape === 'mixed-six' && index === 1) return { name };
+        if (shape === 'mixed-six' && index > 1) return { name, outcome: 'unconfirmed', detail: 'Still deploying. Check app_status before deciding whether to abandon this deployment.' };
+        let diagnostic: DeployFailureDiagnostic | undefined;
+        const result = await handleDeployManifestError(partialError('poll'), ctx({ name, maxDetailChars: AI_BATCH_GUIDANCE_CHARS,
+          onDiagnostic: (value: DeployFailureDiagnostic) => { diagnostic = value; } }));
+        progress('failed', result.error, diagnostic);
+        return null;
+      },
+    });
+    const options = { ...batch, dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys' };
+    const result = summarizeBatchResult(options);
+    const text = result.error ?? (result.data as { message: string }).message;
+    for (const name of batch.failed) {
+      expect(text).toContain(`get_logs(app_name="${name}", tail=200)`);
+    }
+    expect(text.split(panic)).toHaveLength(batch.failed.length + 1);
+    expect(text.split('[web]')).toHaveLength(batch.failed.length + 1);
+    expect(text.split('[worker]')).toHaveLength(batch.failed.length + 1);
+    expect(text.split('worker-still-alive')).toHaveLength(batch.failed.length + 1);
+    if (shape === 'mixed-six') {
+      expect(text).toContain(nextStepFor('ContainerExited', names[0]));
+      expect(text).not.toContain('Details were shortened');
+    }
+    const withoutDiagnostics = summarizeBatchResult({ ...options,
+      batchProgress: batch.batchProgress.map(({ name, phase }) => ({ name, phase })),
+      unconfirmed: batch.unconfirmed.map(({ name, outcome }) => ({ name, outcome })) });
+    for (const indentation of [undefined, 2]) {
+      expect(JSON.stringify(result, null, indentation).length - JSON.stringify(withoutDiagnostics, null, indentation).length).toBeLessThanOrEqual(AI_BATCH_DIAGNOSTIC_CHARS);
+    }
+    expect(JSON.stringify(onProgress.mock.calls)).not.toContain('"diagnostic":');
+    expect(JSON.stringify(result)).not.toContain('"logs":');
+  });
+
+  it.each([' ', '\u0000\u202e\r\n'])('keeps each service header and panic before a long trailing noise run (%j)', async (noise) => {
+    const panic = 'panic: nil pointer at main.go:42';
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1,
+      reason: 'ContainerExited', message: 'container exited unexpectedly' } as never);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ logs: {
+      web: `web startup\n${panic}${noise.repeat(100_000)}`,
+      worker: `${'heartbeat '.repeat(800)}worker-still-alive`,
+      empty: noise.repeat(100_000),
+    } } as never);
+    let diagnostic: DeployFailureDiagnostic | undefined;
+    const result = await handleDeployManifestError(partialError('poll'), ctx({ maxDetailChars: AI_BATCH_GUIDANCE_CHARS,
+      onDiagnostic: (value: DeployFailureDiagnostic) => { diagnostic = value; } }));
+    const text = result.error!;
+    expect(text).toContain(`[web]\nweb startup\n${panic}`);
+    expect(text).toContain('[worker]');
+    expect(text).toContain('worker-still-alive');
+    expect(text).toContain('[empty]\n(no visible log output)');
+    expect(text).not.toContain('\u0000');
+    expect(text).not.toMatch(/\p{Cf}/u);
+    expect([...text].length).toBeLessThanOrEqual(AI_BATCH_GUIDANCE_CHARS);
+    const summary = summarizeBatchResult({ succeeded: [], failed: ['test-app'],
+      batchProgress: [{ name: 'test-app', phase: 'failed', detail: text, diagnostic }],
+      dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys' });
+    expect(summary.error).toContain(panic);
+    expect(summary.error).toContain('[web]');
+    expect(summary.error).toContain('[worker]');
+    expect(summary.error).toContain('worker-still-alive');
   });
 
   it('bounds code-point allocation for a large log while preserving safe ending line breaks', async () => {

@@ -97,6 +97,27 @@ describe('tab-local maintenance recovery intent', () => {
     expect(storage.length).toBe(1);
   });
 
+  it.each(['read failure', 'malformed value'] as const)('does not erase unknown stored advice during never-sent retirement after %s', async (failure) => {
+    const state = await import('./maintenanceRecoveryIntent');
+    state.rememberMaintenanceRecoveryIntent(command);
+    const key = storage.key(0)!;
+    if (failure === 'read failure') storage.getItem.mockImplementation(() => { throw new Error('Storage unavailable'); });
+    else storage.setItem(key, '{malformed-newer-advice');
+    state.retireUnsentMaintenanceRecoveryIntent(command, command.idempotencyKey);
+    expect(storage.removeItem).not.toHaveBeenCalled();
+    expect(storage.entries.has(key)).toBe(true);
+    expect(() => state.getMaintenanceRecoveryIntent(command)).toThrow(/could not be read|unreadable/);
+  });
+
+  it('does not let late never-sent advice replace a newer retained intent', async () => {
+    const state = await import('./maintenanceRecoveryIntent');
+    state.rememberMaintenanceRecoveryIntent(command);
+    state.retireUnsentMaintenanceRecoveryIntent(command, command.idempotencyKey);
+    state.rememberMaintenanceRecoveryIntent({ ...command, idempotencyKey: secondKey });
+    state.rememberMaintenanceRecoveryIntent(command);
+    expect(state.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(secondKey);
+  });
+
   it('does not erase an entry that becomes malformed before consumption', async () => {
     const state = await import('./maintenanceRecoveryIntent');
     state.rememberMaintenanceRecoveryIntent(command);

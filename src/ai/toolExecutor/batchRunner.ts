@@ -12,6 +12,8 @@ import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { DeployProgress } from '../progress';
 import { FAILURE_DETAIL_CHARS } from './helpers';
 import type { SignResult, ToolResult } from './types';
+import { renderDeployDiagnostic, type DeployFailureDiagnostic } from './deployDiagnostic';
+import { allocateDiagnosticBudgets } from './diagnosticBudget';
 
 // ---------------------------------------------------------------------------
 // Signing Mutex
@@ -97,6 +99,8 @@ export interface BatchSuccessItem {
   url?: string;
   /** Verified provider success can still require local recovery cleanup. */
   localCleanupPending?: boolean;
+  /** A cached result describes earlier work, not a new provider request. */
+  replayed?: boolean;
   /** Authored guidance rendered beside the app name in the summary. */
   detail?: string;
 }
@@ -142,7 +146,7 @@ export interface BatchRunnerOptions<E extends BatchEntry> {
   executeOne: (
     entry: E,
     index: number,
-    updateProgress: (phase: DeployProgress['phase'], detail?: string) => void,
+    updateProgress: (phase: DeployProgress['phase'], detail?: string, diagnostic?: DeployFailureDiagnostic) => void,
   ) => Promise<BatchResultItem | null>;
 }
 
@@ -153,7 +157,7 @@ export interface BatchRunResult {
   unconfirmed: BatchResultItem[];
   /** Aborted by the user rather than failed: never queued (the signal aborted before its turn), or `executeOne` said so. */
   cancelled: string[];
-  batchProgress: Array<{ name: string; phase: DeployProgress['phase']; detail?: string }>;
+  batchProgress: Array<{ name: string; phase: DeployProgress['phase']; detail?: string; diagnostic?: DeployFailureDiagnostic }>;
 }
 
 function sanitizeDiagnostic(detail: string | undefined): string | undefined {
@@ -166,12 +170,12 @@ function sanitizeProgressDetail(phase: DeployProgress['phase'], detail: string |
   return phase === 'failed' || phase === 'unconfirmed' || phase === 'ready' ? sanitizeDiagnostic(detail) : detail;
 }
 
-/** Bound JSON length, including escaped quotes/backslashes and surrogate pairs.
- * Each diagnostic gets an equal share so one long response cannot hide others. */
-function fitDiagnostic(detail: string | undefined, budget: number): string | undefined {
+/** Fit an allocated JSON budget, including quotes, escapes and surrogate pairs. */
+function fitDiagnostic(detail: string | undefined, budget: number, diagnostic?: DeployFailureDiagnostic): string | undefined {
   const clean = sanitizeDiagnostic(detail);
   if (clean === undefined || budget < 3) return undefined;
   if (JSON.stringify(clean).length <= budget) return clean;
+  if (diagnostic) return renderDeployDiagnostic(diagnostic, budget, true);
   let result = '';
   let length = 3; // JSON quotes and the final ellipsis.
   for (const point of clean) {
@@ -197,7 +201,7 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
     executeOne,
   } = opts;
 
-  const batchProgress: Array<{ name: string; phase: DeployProgress['phase']; detail?: string }> =
+  const batchProgress: BatchRunResult['batchProgress'] =
     entries.map((e) => ({ name: e.name, phase: initialPhase, detail: 'Waiting...' }));
 
   const emitProgress = () => {
@@ -208,7 +212,7 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
     onProgress?.({
       phase: overallPhase,
       ...(operation ? { operation } : {}),
-      batch: batchProgress.map((b) => ({ ...b })),
+      batch: batchProgress.map(({ name, phase, detail }) => ({ name, phase, detail })),
     });
   };
 
@@ -231,8 +235,8 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
     if (signal?.aborted) break;
     queuedCount = i + 1;
 
-    const updateProgress = (phase: DeployProgress['phase'], detail?: string) => {
-      batchProgress[i] = { name: entries[i].name, phase, detail: sanitizeProgressDetail(phase, detail) };
+    const updateProgress = (phase: DeployProgress['phase'], detail?: string, diagnostic?: DeployFailureDiagnostic) => {
+      batchProgress[i] = { name: entries[i].name, phase, detail: sanitizeProgressDetail(phase, detail), ...(diagnostic && { diagnostic }) };
       emitProgress();
     };
 
@@ -252,7 +256,8 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
           updateProgress('failed', detail ?? 'Cancelled');
         } else {
           succeeded.push({ ...result, ...(result.detail !== undefined && { detail: sanitizeDiagnostic(result.detail) }) });
-          if (result.localCleanupPending) updateProgress('ready', result.detail ?? 'Local cleanup remains pending');
+          if (result.localCleanupPending || result.replayed) updateProgress('ready', result.detail
+            ?? (result.localCleanupPending ? 'Local cleanup remains pending' : 'Previous result recovered; no new request sent'));
         }
       } catch (error) {
         // Safety net — executeOne should handle its own errors, but if it
@@ -307,7 +312,7 @@ export interface BatchSummaryOptions {
   /** Noun for the "all failed" error (e.g. 'deploys', 'restarts'). */
   failedNoun: string;
   /** Batch progress for the final progress emission. */
-  batchProgress?: Array<{ name: string; phase: DeployProgress['phase']; detail?: string }>;
+  batchProgress?: BatchRunResult['batchProgress'];
   /** Optional operation for the final progress emission. */
   operation?: DeployProgress['operation'];
   /** Progress callback for the final emission. */
@@ -326,28 +331,32 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
   const nothingLanded = rawSucceeded.length === 0 && rawUnconfirmed.length === 0;
   // Rows disappear when the next tool starts. Preserve the failure reason in
   // the tool result so both the user and model can act on it afterwards.
-  const failureDetails = new Map(batchProgress?.filter((row) => row.phase === 'failed').map((row) => [row.name, row.detail]));
+  const failureRows = new Map(batchProgress?.filter((row) => row.phase === 'failed').map((row) => [row.name, row]));
   // Failed reasons appear once in message/error. Unconfirmed reasons and local
   // cleanup warnings have both a structured field and a message copy.
   const detailedUnconfirmed = rawUnconfirmed.filter((entry) => entry.detail !== undefined).length;
   const detailedSucceeded = rawSucceeded.filter((entry) => entry.detail !== undefined).length;
   const cleanupPending = rawSucceeded.filter((entry) => entry.localCleanupPending).length;
-  const diagnosticCopies = failed.filter((name) => failureDetails.get(name) !== undefined).length
-    + 2 * (detailedUnconfirmed + detailedSucceeded);
-  // Include each detail's property/comma, cleanup flag and two-space indentation,
-  // not just the compact JSON representation.
-  let textBudget = Math.max(0, AI_BATCH_DIAGNOSTIC_CHARS - 20 * detailedUnconfirmed - 60 * detailedSucceeded);
-  let perCopyBudget = Math.floor(textBudget / Math.max(1, diagnosticCopies));
-  const exceedsShare = (detail: string | undefined) => detail !== undefined
-    && JSON.stringify(sanitizeDiagnostic(detail)).length > perCopyBudget;
-  const shortened = failed.some((name) => exceedsShare(failureDetails.get(name)))
-    || rawUnconfirmed.some((entry) => exceedsShare(entry.detail))
-    || rawSucceeded.some((entry) => exceedsShare(entry.detail));
+  const replayed = rawSucceeded.filter((entry) => entry.replayed).length;
+  const inputs = [
+    ...failed.map((name) => ({ detail: failureRows.get(name)?.detail, copies: 1 })),
+    ...rawUnconfirmed.map((entry) => ({ detail: entry.detail, copies: 2 })),
+    ...rawSucceeded.map((entry) => ({ detail: entry.detail, copies: 2 })),
+  ];
+  const demands = inputs.map(({ detail, copies }) => ({
+    size: detail === undefined ? 0 : JSON.stringify(sanitizeDiagnostic(detail)).length, copies,
+  }));
+  // Include structured detail/flag fields and two-space indentation as well as
+  // text copies. Short entries return their unused share to longer diagnostics.
+  let textBudget = Math.max(0, AI_BATCH_DIAGNOSTIC_CHARS - 20 * detailedUnconfirmed - 90 * detailedSucceeded);
+  const shortened = demands.reduce((total, entry) => total + entry.size * entry.copies, 0) > textBudget;
   // Large batches may need shortened per-app details. Reserve one complete
   // next step rather than leaving the model with only partial instructions.
   const sharedNextSteps = [
     cleanupPending > 0 ? 'Provider outcomes were verified, but local cleanup remains pending. Restore browser storage access, then check app_status or retry the same confirmation; do not start a new command for recovery.' : '',
     failed.length > 0 ? 'Check app_status and app_diagnostics for each failed app.' : '',
+    failed.some((name) => failureRows.get(name)?.diagnostic?.logs.length)
+      ? 'Use get_logs(app_name, tail=200) for full logs from each failed service.' : '',
     rawUnconfirmed.length === 0 ? '' : operation === 'restart' || operation === 'update'
       ? 'Check app_status and app_releases for each unknown outcome. Recover only a command still pending, using its original key and exact payload. Do not use new_command for recovery. Do not submit a new command or automatically stop/redeploy while its outcome is unresolved.'
       : 'Check app_status for each still-deploying app. Only use stop_app if you have decided to abandon that deployment.',
@@ -356,14 +365,17 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
   if (summaryGuidance) {
     // JSON quotes account for the two escaped characters of the added newline.
     textBudget = Math.max(0, textBudget - JSON.stringify(summaryGuidance).length);
-    perCopyBudget = Math.floor(textBudget / Math.max(1, diagnosticCopies));
   }
-  const unconfirmed = rawUnconfirmed.map((entry) => ({ ...entry, detail: fitDiagnostic(entry.detail, perCopyBudget) }));
-  const succeeded = rawSucceeded.map((entry) => ({ ...entry,
-    ...(entry.detail !== undefined && { detail: fitDiagnostic(entry.detail, perCopyBudget) }),
+  const budgets = allocateDiagnosticBudgets(demands, textBudget);
+  const unconfirmed = rawUnconfirmed.map((entry, index) => ({ ...entry,
+    detail: fitDiagnostic(entry.detail, budgets[failed.length + index]),
   }));
-  const failedText = failed.map((name) => {
-    const detail = fitDiagnostic(failureDetails.get(name), perCopyBudget);
+  const succeeded = rawSucceeded.map((entry, index) => ({ ...entry,
+    ...(entry.detail !== undefined && { detail: fitDiagnostic(entry.detail, budgets[failed.length + rawUnconfirmed.length + index]) }),
+  }));
+  const failedText = failed.map((name, index) => {
+    const row = failureRows.get(name);
+    const detail = fitDiagnostic(row?.detail, budgets[index], row?.diagnostic);
     return detail ? `${name}: ${detail}` : name;
   }).join(', ');
 
@@ -374,13 +386,14 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
   if (onProgress) {
     // Every segment is conditional, so zero counts are never printed.
     const segments = [
-      succeeded.length > 0 ? `${succeeded.length} ${verb.toLowerCase()}` : '',
+      succeeded.length > replayed ? `${succeeded.length - replayed} ${verb.toLowerCase()}` : '',
+      replayed > 0 ? `${replayed} previous ${replayed === 1 ? 'result' : 'results'} recovered` : '',
       cleanupPending > 0 ? `${cleanupPending} local cleanup pending` : '',
       failed.length > 0 ? `${failed.length} failed` : '',
       unconfirmed.length > 0 ? `${unconfirmed.length} ${unconfirmedLabel.toLowerCase()}` : '',
       cancelled.length > 0 ? `${cancelled.length} cancelled` : '',
     ].filter(Boolean);
-    const allSucceeded = segments.length === 1 && succeeded.length > 0;
+    const allSucceeded = segments.length === 1 && succeeded.length > 0 && replayed === 0;
     onProgress({
       phase: maintenanceUnconfirmed ? 'unconfirmed' : nothingLanded ? 'failed' : 'ready',
       ...(operation ? { operation } : {}),
@@ -390,7 +403,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
         : allSucceeded
           ? `All ${succeeded.length} ${succeeded.length === 1 ? 'app' : 'apps'} ${verb.toLowerCase()}!`
           : segments.join(', '),
-      ...(batchProgress ? { batch: batchProgress.map((b) => ({ ...b, detail: sanitizeProgressDetail(b.phase, b.detail) })) } : {}),
+      ...(batchProgress ? { batch: batchProgress.map(({ name, phase, detail }) => ({ name, phase, detail: sanitizeProgressDetail(phase, detail) })) } : {}),
     });
   }
 

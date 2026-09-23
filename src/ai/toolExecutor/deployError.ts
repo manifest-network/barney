@@ -15,29 +15,7 @@ import { nextStepFor } from './failureGuidance';
 import { resolveAppUrl } from './deployUrl';
 import { isTerminalLeaseState } from '../../utils/leaseState';
 import { appCardConnection } from './appCardConnection';
-import { AI_DEPLOY_LOG_PREVIEW_CHARS } from '../../config/constants';
-
-/** Preserve safe log line breaks and the final lines without allocating an
- * array for the provider's potentially multi-megabyte response. */
-function logPreviewTail(raw: string, maxChars: number): string {
-  if (maxChars <= 0) return '';
-  const bounded = raw.slice(-2 * maxChars);
-  // The UTF-16 window may start halfway through a surrogate pair. Remove that
-  // fragment before normalization, which can shrink the rest of the excerpt.
-  const aligned = bounded.length < raw.length ? bounded.replace(/^[\uDC00-\uDFFF]/u, '') : bounded;
-  const clean = aligned.normalize('NFC')
-    .replace(/\r\n?/g, '\n')
-    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (point) => point === '\n' ? '\n' : ' ')
-    .replace(/[^\S\n]+/g, ' ')
-    .trim();
-  // NFC can expand canonical characters (e.g. U+0344), so cap AFTER it runs.
-  // Only the small UTF-16 window is ever normalized or split into code points.
-  const points = Array.from(clean);
-  const shortened = bounded.length < raw.length || points.length > maxChars;
-  const retained = shortened ? maxChars - 1 : maxChars;
-  const tail = retained > 0 ? points.slice(-retained).join('').trim() : '';
-  return `${shortened ? '…' : ''}${tail}`;
-}
+import { previewServiceLogs, renderDeployDiagnostic, type DeployFailureDiagnostic } from './deployDiagnostic';
 
 /**
  * Best-effort fetch of provider logs and provision status for failed deploys.
@@ -50,14 +28,13 @@ async function fetchFailureLogs(
   _address: string,
   signing: SigningContext | undefined,
   appName: string,
-  maxDetailChars?: number,
-): Promise<string | null> {
+): Promise<Omit<DeployFailureDiagnostic, 'lead'> | null> {
   if (!signing) return null;
 
   try {
     const authToken = await signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
 
-    const parts: string[] = [];
+    const diagnostic: Omit<DeployFailureDiagnostic, 'lead'> = { appName, logs: [] };
 
     // Fetch provision status first — more structured than raw logs
     try {
@@ -66,12 +43,13 @@ async function fetchFailureLogs(
       // pair — read neither directly; `describeFredFailure` covers both eras.
       if (describeFredFailure(provision)) {
         const detail = failureText(provision, 'no detail reported');
-        parts.push(`Provision error (fail_count=${provision.fail_count}): ${detail}`);
+        diagnostic.failure = detail;
+        diagnostic.failCount = provision.fail_count;
         // Via barney's remapper, never the SDK's `guidanceFor` — see
         // failureGuidance.ts. `reason` is an OPEN set: an unknown value yields
         // undefined here and is still relayed verbatim above, never rejected.
         const nextStep = nextStepFor(provision.reason, appName);
-        if (nextStep) parts.push(nextStep);
+        if (nextStep) diagnostic.nextStep = nextStep;
       }
     } catch (error) {
       logError('deployError.fetchFailureLogs.provision', error);
@@ -80,28 +58,12 @@ async function fetchFailureLogs(
     // Fetch container logs
     try {
       const response = await getLeaseLogs(providerUrl, leaseUuid, authToken, 100);
-      const logEntries = Object.entries(response.logs ?? {});
-      if (logEntries.length > 0) {
-        const logText = logEntries
-          .map(([service, text]) => `[${service}]\n${typeof text === 'string' ? text : JSON.stringify(text)}`)
-          .join('\n');
-        const heading = `Container logs (preview). Use get_logs(app_name="${appName}", tail=200) for more:`;
-        // Reserve the verdict, curated next step and lookup hint first. A batch
-        // row uses its remaining room for the END of the logs, where exits and
-        // panics appear, before the generic display cap runs.
-        const prefixLength = Array.from([...parts, heading].join('\n\n')).length + 1;
-        const tailBudget = maxDetailChars === undefined ? AI_DEPLOY_LOG_PREVIEW_CHARS
-          : Math.max(0, Math.min(AI_DEPLOY_LOG_PREVIEW_CHARS, maxDetailChars - prefixLength));
-        const logTail = logPreviewTail(logText, tailBudget);
-        parts.push(`${heading}${logTail ? `\n${logTail}` : ''}`);
-      }
+      Object.assign(diagnostic, previewServiceLogs(response.logs ?? {}));
     } catch (error) {
       logError('deployError.fetchFailureLogs.logs', error);
     }
 
-    if (parts.length === 0) return null;
-
-    return parts.join('\n\n');
+    return diagnostic.failure || diagnostic.logs.length > 0 ? diagnostic : null;
   } catch (error) {
     logError('deployError.fetchFailureLogs', error);
     return null;
@@ -225,6 +187,8 @@ interface DeployErrorContext {
   onProgress?: ToolExecutorOptions['onProgress'];
   /** Batch row budget, including the lead, guidance and ending log preview. */
   maxDetailChars?: number;
+  /** Internal structured preview for batch summaries; never persisted twice. */
+  onDiagnostic?: (diagnostic: DeployFailureDiagnostic) => void;
 }
 
 /**
@@ -306,10 +270,11 @@ export async function handleDeployManifestError(
       logError('deployError.pollVerdict', error);
       appRegistry.updateApp(address, leaseUuid, { provisionState: 'failed' });
       const lead = 'Deployment failed: the provider reported the deployment as failed.';
-      const diagnostics = providerUrl ? await fetchFailureLogs(providerUrl, leaseUuid, address, signing, name,
-        ctx.maxDetailChars === undefined ? undefined : ctx.maxDetailChars - Array.from(lead).length - 2) : null;
+      const diagnostics = providerUrl ? await fetchFailureLogs(providerUrl, leaseUuid, address, signing, name) : null;
+      const diagnostic = diagnostics ? { ...diagnostics, lead } : undefined;
+      if (diagnostic) ctx.onDiagnostic?.(diagnostic);
       onProgress?.({ phase: 'failed', detail: 'The provider reported the deployment as failed.' });
-      return { success: false, error: diagnostics ? `${lead}\n\n${diagnostics}` : lead };
+      return { success: false, error: diagnostic ? renderDeployDiagnostic(diagnostic, ctx.maxDetailChars) : lead };
     }
 
     // An unknown/malformed step from a future SDK carries no readiness verdict.
@@ -375,11 +340,12 @@ export async function handleDeployManifestError(
     const lead = `Deployment failed: ${errMessage}`;
     const diagnostics = cancelled || !providerUrl
       ? null
-      : await fetchFailureLogs(providerUrl, leaseUuid, address, signing, name,
-        ctx.maxDetailChars === undefined ? undefined : ctx.maxDetailChars - Array.from(lead).length - 2);
+      : await fetchFailureLogs(providerUrl, leaseUuid, address, signing, name);
+    const diagnostic = diagnostics ? { ...diagnostics, lead } : undefined;
+    if (diagnostic) ctx.onDiagnostic?.(diagnostic);
     // barney copy — NOT the SDK's "…close_lease" text (barney has no close_lease tool).
-    const errorMsg = diagnostics
-      ? `${lead}\n\n${diagnostics}`
+    const errorMsg = diagnostic
+      ? renderDeployDiagnostic(diagnostic, ctx.maxDetailChars)
       : lead;
     return { success: false, error: errorMsg };
   }

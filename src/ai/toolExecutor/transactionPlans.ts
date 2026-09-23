@@ -58,6 +58,7 @@ const transactionPlanSchemas = {
     _generatedManifest: z.string().optional(),
     _isStack: z.boolean().optional(),
     _maintenanceRetry: z.boolean().optional(),
+    _maintenanceAttachmentUnused: z.literal(true).optional(),
   }),
   set_custom_domain: z.strictObject({
     app_name: name,

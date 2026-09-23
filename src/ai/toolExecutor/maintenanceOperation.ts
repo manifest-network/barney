@@ -2,7 +2,7 @@ import { createMaintenanceIdempotencyKey, metaHashHex } from '@manifest-network/
 import { runtimeConfig } from '../../config/runtimeConfig';
 import { logError } from '../../utils/errors';
 import { releaseAbsentMaintenanceCompletions } from './maintenanceCompletion';
-import { getMaintenanceRecoveryIntent, rememberMaintenanceRecoveryIntent, retireMaintenanceRecoveryIntent } from './maintenanceRecoveryIntent';
+import { getMaintenanceRecoveryIntent, rememberMaintenanceRecoveryIntent, retireMaintenanceRecoveryIntent, retireUnsentMaintenanceRecoveryIntent } from './maintenanceRecoveryIntent';
 
 type MaintenanceKind = 'restart' | 'update';
 
@@ -60,7 +60,7 @@ export interface SettledMaintenanceOperation extends MaintenanceScope {
   readonly operation: MaintenanceKind;
   readonly idempotencyKey: string;
   readonly payloadHash: string;
-  readonly outcome: 'succeeded' | 'failed' | 'settled';
+  readonly outcome: 'succeeded' | 'failed' | 'settled' | 'not_sent';
   readonly recoveryAdvised: boolean;
 }
 
@@ -140,7 +140,7 @@ function parseSettled(value: unknown): SettledMetadata {
   if (record.v !== 1 || (record.operation !== 'restart' && record.operation !== 'update')
     || typeof record.idempotencyKey !== 'string' || !UUID_V4.test(record.idempotencyKey)
     || typeof record.payloadHash !== 'string' || !SHA_256.test(record.payloadHash)
-    || !['succeeded', 'failed', 'settled'].includes(record.settled ?? '')
+    || !['succeeded', 'failed', 'settled', 'not_sent'].includes(record.settled ?? '')
     || (record.r !== undefined && record.r !== 1)) throw new Error();
   return { v: 1, operation: record.operation, idempotencyKey: record.idempotencyKey,
     payloadHash: record.payloadHash, settled: record.settled!, ...(record.r === 1 && { r: 1 as const }) };
@@ -169,6 +169,7 @@ export function getSettledMaintenanceOperation(
       const prior = JSON.parse(legacy) as Partial<SettledMaintenanceOperation> & { v?: number };
       value = parseSettled({ ...prior, settled: prior.outcome, r: 1 });
     }
+    if (value.settled === 'not_sent') retireUnsentMaintenanceRecoveryIntent(scope, value.idempotencyKey);
     return Object.freeze({ ...scope, operation: value.operation, idempotencyKey: value.idempotencyKey,
       payloadHash: value.payloadHash, outcome: value.settled, recoveryAdvised: value.r === 1 });
   } catch {
@@ -177,11 +178,11 @@ export function getSettledMaintenanceOperation(
 }
 
 export function assertNewMaintenanceOperation(input: Omit<MaintenanceInput, 'operation'>): void {
+  const receipt = getSettledMaintenanceOperation(input.address, input.providerUrl, input.leaseUuid, input.chainId);
   const intent = getMaintenanceRecoveryIntent(input);
   if (intent && input.recoveryIntentKey !== intent.idempotencyKey) {
     throw new MaintenanceOperationSupersededError('This tab still has recovery advice for an earlier command. Observe its outcome before explicitly requesting a new command.');
   }
-  const receipt = getSettledMaintenanceOperation(input.address, input.providerUrl, input.leaseUuid, input.chainId);
   if (intent && !receipt) {
     throw new MaintenanceOperationSupersededError('This tab has recovery advice but no saved pending command or settled receipt. The provider outcome remains unknown; observe the current app state before further recovery. A new command cannot replace the missing record.');
   }
@@ -469,12 +470,14 @@ export async function discardUnsubmittedMaintenanceOperation(record: Maintenance
     const current = getPendingMaintenanceOperation(record.address, record.providerUrl, record.leaseUuid, record.chainId);
     if (!current || !matches(current, metadataFor(record)) || current.dispatched !== false || current.accepted) return false;
     try {
-      if (current.previousSettlement) localStorage.setItem(key, JSON.stringify(current.previousSettlement));
-      else localStorage.removeItem(key);
+      // Keep proof of the zero-HTTP outcome for advice already observed in a
+      // different tab or saved transcript. Replacing this key only shrinks it.
+      persistSettled({ ...current, recoveryAdvised: current.previousSettlement?.r === 1 }, 'not_sent');
     } catch {
       throw storageError();
     }
     pending.delete(key);
+    retireUnsentMaintenanceRecoveryIntent(record, record.idempotencyKey);
     return true;
   });
 }

@@ -3,7 +3,7 @@ import type { FredLeaseReleases } from '@manifest-network/manifest-sdk/deploy';
 import { getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { runtimeConfig } from '../../config/runtimeConfig';
-import { reconcileProvisionStatus } from './provisionStatus';
+import { maintenanceReadinessPatch } from './maintenanceReadiness';
 import { maintenanceRegistryPatch } from './maintenanceRegistryPatch';
 import { recoverReleaseManifest } from './maintenancePayload';
 import { captureMaintenanceCompletionEpoch, isMaintenanceCompletionEpochCurrent, rememberMaintenanceCompletion } from './maintenanceCompletion';
@@ -43,10 +43,7 @@ export async function reconcilePendingMaintenance(
   // to this key. Do not prompt for redundant wallet signatures or fetch history
   // on every status read; explicit recovery owns the exact-key retry.
   if (!command.accepted || !signing) {
-    try { await markMaintenanceRecoveryAdvised(command); } catch {
-      return { operation: command.operation, outcome: 'unconfirmed', ...observedReadiness,
-        detail: 'Restore browser storage access before recovering the pending command; its recovery advice could not be safely recorded.' };
-    }
+    await markMaintenanceRecoveryAdvised(command);
     return { operation: command.operation, outcome: 'unconfirmed', ...observedReadiness,
       detail: !command.accepted
         ? 'Provider admission of this command has not been confirmed. Recover the original command with its same key and exact payload; release history alone cannot identify it.'
@@ -70,12 +67,7 @@ export async function reconcilePendingMaintenance(
   const provision = provisionRead.status === 'fulfilled' ? provisionRead.value : undefined;
   const releases = releasesRead.status === 'fulfilled' ? releasesRead.value : undefined;
   const verdict: MaintenanceOutcome = evaluateMaintenanceOutcome({ baselineVersions: command.baselineReleaseVersions, provision, releases });
-  const patch: Partial<Omit<AppEntry, 'leaseUuid'>> = {};
-  if (provision) {
-    const provisionState = reconcileProvisionStatus(provision.status, currentApp?.provisionState);
-    if (provisionState) patch.provisionState = provisionState;
-    if ((provisionState === 'confirmed' || provisionState === 'failed') && registrySnapshot?.readinessStale) patch.readinessStale = false;
-  }
+  const patch = maintenanceReadinessPatch(provision?.status, registrySnapshot);
   if (command.operation === 'update' && verdict.outcome === 'succeeded') {
     // A reload deliberately discards secret manifest bytes. Use the identified
     // active release's manifest when available; otherwise remove stale cache

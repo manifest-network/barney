@@ -18,6 +18,7 @@ import {
 import type { ChatMessage } from '../../contexts/aiTypes';
 import type { StoreApi } from 'zustand';
 import type { AIStore } from '../aiStore';
+import { retainMessageMaintenanceAdvice, restoreMessageMaintenanceAdvice } from '../../ai/toolExecutor/maintenanceRecoveryIntent';
 
 const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const LEGACY_STORAGE_KEY_HISTORY = 'barney-ai-history';
@@ -134,7 +135,9 @@ export function loadHistory(identity: WalletIdentity): ChatMessage[] {
   const key = historyStorageKey(identity);
   const saved = historyStorage.load(key);
   if (saved && walletIdentitiesEqual(saved.identity, identity)) {
-    return rehydrateChatHistory(saved.messages);
+    const messages = rehydrateChatHistory(saved.messages);
+    restoreMessageMaintenanceAdvice(messages, identity);
+    return messages;
   }
 
   // Nothing usable. Clear the key so the next load stays cheap — but not when
@@ -244,7 +247,7 @@ export function saveHistory(
   // Belt-and-suspenders: PersistedMessageSchema doesn't whitelist
   // `card` either, so anything that leaks through this filter is
   // dropped by Zod on rehydrate.
-  const toSave = messages
+  const toSave = retainMessageMaintenanceAdvice(messages, identity)
     .filter((m) => !m.isStreaming)
     // eslint-disable-next-line @typescript-eslint/no-unused-vars -- see comment above
     .map(({ card, toolCalls, ...rest }) =>
@@ -324,6 +327,13 @@ export function setupPersistenceSubscriptions(store: StoreApi<AIStore>): () => v
 
   const unsubHistory = store.subscribe(
     (state, prev) => {
+      // Capture at the live boundary even when history writes are disabled.
+      // Turning persistence on later must not separate old advice from its key.
+      if (state.messages !== prev.messages && state.historyIdentity
+          && walletIdentitiesEqual(state.historyIdentity, prev.historyIdentity)) {
+        const messages = retainMessageMaintenanceAdvice(state.messages, state.historyIdentity);
+        if (messages !== state.messages) { store.setState({ messages }); return; }
+      }
       // The browser-global preference controls future writes only. Turning it
       // back on snapshots the selected wallet; no toggle direction ever deletes.
       if (state.settings.saveHistory !== prev.settings.saveHistory) {

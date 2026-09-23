@@ -75,6 +75,36 @@ async function reload() {
 const pending = () => operations.getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid);
 
 describe('read-only maintenance reconciliation', () => {
+  it.each(['confirmed', 'failed', undefined].flatMap(previous => [undefined, 'restarting', 'updating', 'unknown', ''].map(status => ({ previous, status }))))('preserves $previous readiness when failed command settlement sees runtime status $status', async ({ previous, status }) => {
+    await prepare();
+    options.appRegistry!.updateApp(address, app.leaseUuid, { provisionState: previous as AppEntry['provisionState'] });
+    if (status === undefined) vi.mocked(fred.getLeaseProvision).mockRejectedValueOnce(new Error('Provision unavailable'));
+    else vi.mocked(fred.getLeaseProvision).mockResolvedValueOnce({ status, fail_count: 0 });
+    expect(await reconcile(app, options, history(release(1), release(2, 'failed')))).toMatchObject({ outcome: 'failed' });
+    const updated = options.appRegistry!.getAppByLease(address, app.leaseUuid)!;
+    expect(updated.provisionState).toBe(previous);
+    expect(updated.readinessStale).toBe(true);
+    expect(pending()).toBeUndefined();
+  });
+
+  it('records recovery advice under quota failure without redundant authentication or losing the pending key', async () => {
+    const command = await prepare('restart', false);
+    const storage = localStorage;
+    vi.stubGlobal('localStorage', {
+      getItem: storage.getItem.bind(storage), removeItem: storage.removeItem.bind(storage),
+      setItem: () => { throw new DOMException('Quota exceeded', 'QuotaExceededError'); },
+    });
+    try {
+      expect(await reconcile(app, options)).toMatchObject({ outcome: 'unconfirmed', detail: expect.stringContaining('Recover the original command') });
+      expect(pending()?.idempotencyKey).toBe(command.idempotencyKey);
+      const { getMaintenanceRecoveryIntent } = await import('./maintenanceRecoveryIntent');
+      expect(getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(command.idempotencyKey);
+      expect(options.signing!.authTokens.getAuthToken).not.toHaveBeenCalled();
+      expect(fred.getLeaseProvision).not.toHaveBeenCalled();
+      expect(fred.getLeaseReleases).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it('commits an update manifest despite unrelated registry changes and preserves newer readiness', async () => {
     await prepare();
     vi.mocked(fred.getLeaseReleases).mockImplementationOnce(async () => {

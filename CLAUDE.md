@@ -264,7 +264,8 @@ Persisted metadata is authoritative over stale memory. After reload,
 `maintenancePayload.ts` can recover exact bytes from release history or a
 deterministic re-merge of a reattached file, but every candidate must match the
 saved payload hash. A mismatched attachment falls through to retained memory and release history,
-so the current turn can recover without first discarding its attachment. A failed history read or rejected signature offers another same-key recovery
+so the current turn can recover without first discarding its attachment. The recovery card and result
+explicitly say that this attachment was not used. A failed history read or rejected signature offers another same-key recovery
 attempt; only a successful history read with no matching bytes offers the stop-only exit.
 Payload recovery does not establish admission or outcome.
 Unacknowledged commands add no signatures or provider reads to status queries.
@@ -279,13 +280,17 @@ key, so settlement reduces quota usage. Only receipts marked when recovery guida
 block ordinary planning; directly reported outcomes allow routine follow-up commands. Older pending
 records without an advice flag conservatively retain the recovery barrier. Nonsecret recovery
 intent in sessionStorage (with an in-memory fallback) keeps this tab's old advice guarded even
-after another tab completes a deliberate successor. Only dispatch of an explicitly approved new
-command consumes its bound intent; cancellation keeps it. Shared advice marking updates pending
+after another tab completes a deliberate successor. Completed chat rows retain nonsecret scoped advice
+identities alongside their text; loading that transcript restores the guard even in a new tab or after
+a failed sessionStorage write. Dispatch consumes only the active tab's bound intent, never the metadata
+on older advice rows. Shared advice marking updates pending
 records only, never grows a settled receipt, and cannot fail a status read on quota exhaustion. A new
 command requires a settled receipt when tab-local recovery intent survives a missing pending record;
 without either record, even `new_command: true` remains observation-only because no outcome is known. Every new
 confirmation binds the previous receipt's key; a changed receipt refuses dispatch. A never-sent
-cancellation restores the prior receipt. Verified outcomes and manifest updates survive failed
+cancellation leaves a compact `not_sent` receipt, preserving any prior blocking flag. Only its matching
+intent can be retired, so an observing tab is not stranded and newer advice remains guarded.
+Verified outcomes and manifest updates survive failed
 receipt writes, which cached exact retries reattempt without another provider request. If command
 identity cannot be read, preserve the provider verdict but defer registry projection and completed
 memoization until storage access returns. The 128-entry
@@ -294,7 +299,12 @@ reserve before any request, while pending recovery remains possible at the limit
 reservations even when storage cleanup fails.
 Durable refusals settle their matching marker even after abort, but invalidated
 sessions cannot receive cached results or progress. Command-owned manifests are
-projected independently of unrelated registry observations. Uncertain maintenance sets
+projected independently of unrelated registry observations. A readiness-flag refresh does not suppress
+a verified provision-state verdict; the two fields have independent freshness checks. Both execution
+and reconciliation retain the prior provision state and set `readinessStale` when runtime status carries
+no verdict, even if the command itself settled. A failed fresh runtime read can use the readiness wait's
+settled verdict. Cached replays identify the previous result and send no new request; interruption of local
+cleanup cannot turn that verified result into uncertainty. Uncertain maintenance sets
 `connectionStale` and `readinessStale` without changing the previous `provisionState`, including
 an absent observation. `refreshAppConnection` shares readiness retirement between status queries
 and background reads. Fresh connections restore DNS evidence even while status is unavailable or
@@ -303,6 +313,13 @@ Unset and false freshness flags are equivalent when checking observation snapsho
 command failure without a runtime reading also schedules readiness checks. Model and AppCard
 Stop confirmations share a metadata-only warning naming affected apps: Fred may still execute
 pending maintenance until their leases close.
+
+Automatic deployment diagnostics retain a bounded tail for each service, including its header.
+Trailing whitespace/control noise cannot hide the last visible line. Batch summaries redistribute
+unused diagnostic space; when shortening is still required, structured diagnostics are rendered
+again with the failure reason, `get_logs` lookup and service tails. They are never duplicated in the
+persisted tool result. Complete manifest-validation lists remain visible on both compatibility paths;
+other preparation failures are sanitized and bounded at their source.
 
 ⚠️ **The SDK primitives serialize their own broadcasts — call them directly, never through a signing mutex.** `deployManifest` / `stopApp` / `fundCredits` / `waitForLeaseStatus` / `updateApp` / `restartApp` mint their own ADR-036 tokens through the same non-reentrant signing mutex, so wrapping any of them in a caller-side sign-lock deadlocks (e.g. deployManifest → `providerAuth.leaseDataToken` → same mutex → circular wait). Chain-TX serialization comes entirely from `CosmosClientManager.withBroadcastLock` (held internally by the SDK cosmos-tx path) plus the mutex-wrapped `signArbitrary` (the D2 replay guard). ENG-312 Phase 8 **removed** the old `SigningContext.withSign` escape hatch — there is no caller-side sign-lock to misuse anymore.
 
@@ -416,6 +433,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `AI_HEALTH_CHECK_MAX_BACKOFF` | 8 | Max backoff multiplier (×60s = 8min ceiling) when health checks repeatedly fail |
 | `AI_BATCH_DEPLOY_CONCURRENCY` | 4 | Max concurrent batch deploys (runtime-configurable) |
 | `AI_DEPLOY_LOG_PREVIEW_CHARS` | 2000 | Automatic container-log tail; batch rows remain bounded and direct users to `get_logs` |
+| `AI_MAINTENANCE_PREPARATION_DETAIL_CHARS` | 1024 | Sanitized wallet/storage/SDK preparation diagnostics; complete manifest-validation lists bypass this cap |
 | `MAX_PAYLOAD_SIZE` | 5KB | Maximum file upload size (in `hash.ts`) |
 | `FRED_POLL_INTERVAL_MS` | 3s | Default polling interval for Fred status checks (passed as `waitForLeaseStatus`'s `intervalMs`) |
 | `DNS_POLL_INTERVAL_MS` | 30s | Polling interval for browser-side DNS / HTTPS probes (`useDnsStatusPolling`) |

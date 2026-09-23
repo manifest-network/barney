@@ -129,8 +129,12 @@ you follow old retry advice after it settled, Barney reports that receipt instea
 of offering another operation. Check the outcome first. If you deliberately want
 another restart or update, ask for a new operation; its confirmation says so.
 If Barney reports a missing saved command record, the outcome is still unknown.
-Check app status and release history; asking for a new operation cannot bypass
-that uncertainty.
+The conversation carrying that recovery advice blocks another command, including
+after restoring it in a new tab. App status and release history can show the current
+state, but those checks cannot recreate the missing command record or lift this block.
+A separately confirmed stop can end the deployment; it does not recover the command.
+Commands cancelled before any request was sent leave proof that they were not sent,
+so their old advice does not leave the app blocked.
 
 Each wallet session has room for 128 completed or pending operations. Barney
 checks the whole batch before confirmation and reserves room before starting it,

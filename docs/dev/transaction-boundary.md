@@ -80,13 +80,18 @@ records without the advice flag conservatively retain that barrier. Deliberate
 Every new confirmation binds the previous receipt's key so another settlement refuses dispatch.
 A tab also retains a nonsecret recovery intent in sessionStorage and memory: another tab's
 later successor cannot erase old advice here. Only dispatch of an explicitly confirmed new
-command consumes its bound intent. Advice marking does not rewrite an already-settled receipt,
+command consumes its bound intent. Nonsecret scoped identities remain attached to completed chat rows,
+so loading persisted advice restores its guard in a new tab even after a successor or sessionStorage quota failure.
+Advice marking does not rewrite an already-settled receipt,
 and storage-write failures preserve local recovery evidence without failing status queries.
 If that intent survives but neither a pending record nor a settled receipt exists, both planning
 and execution refuse a new command, including `new_command: true`; missing metadata proves no outcome.
-Cancellation before dispatch restores any prior receipt. Verified provider outcomes and manifest
+Cancellation before dispatch writes a smaller `not_sent` receipt with any prior blocking flag. It proves
+that only its matching recovery intent can be retired, including in an observing tab or restored transcript.
+Verified provider outcomes and manifest
 updates survive receipt-write failure; cached exact retries repeat local cleanup without another
-POST. If storage cannot be read to verify current command identity, the provider verdict remains
+POST. Replays identify the previously verified result; cancellation during cleanup leaves that verdict known.
+If storage cannot be read to verify current command identity, the provider verdict remains
 known but registry projection is deferred. No completed memo hides that work: restoring storage
 allows status reconciliation or same-key recovery to finish the projection safely.
 The session retains at most 128 completed/reserved identities without eviction.
@@ -110,18 +115,24 @@ recovery record. The Fred tenant API exposes no command key in release history,
 so multiple intervening operations cannot be attributed automatically and
 remain unconfirmed. Uncertain requests never authorize an automatic stop/redeploy
 or a replacement command. Settled updates project their command-owned manifest
-even after unrelated registry changes; readiness and connection observations
-are applied only when their own snapshot fields remain current. Uncertain
+even after unrelated registry changes. Provision-state verdicts are independent
+of readiness-flag refreshes. Clearing readiness staleness and changing connection
+observations require their own snapshot fields to remain current; missing or unsettled
+runtime status can reassert readiness staleness without retracting a verdict. Uncertain
 maintenance marks connection inventory and readiness stale independently, scheduling bounded
 background status reads without changing the prior provider observation (including an absent
 observation). Shared foreground/background logic restores DNS evidence on a fresh connection
 read while continuing readiness observation through missing or in-progress statuses. Uncertain
 readiness keeps the extended eight-attempt allowance after foreground refreshes and reloads;
 false and unset freshness flags compare equally when checking a registry snapshot.
+Execution and reconciliation share this rule even after the command itself settles.
+When a fresh provision read fails, execution retains a settled runtime verdict from its wait.
 
 Successful batch maintenance preserves any local-cleanup warning in its result, summary and
 progress. Automatic deploy diagnostics keep the provider verdict and guidance before a bounded
-log tail; batch previews retain the final log lines within their row budget. Single-deploy logs
+tail per service. Batch summaries redistribute unused diagnostic space and render compact
+reason, lookup and service tails at the final budget, preserving headers and ending lines.
+Internal rendering metadata is stripped from progress and tool results. Single-deploy logs
 preserve line breaks, and preview processing slices the input before code-point conversion.
 
 The confirmation UI preserves unchanged payload bytes and disables editing of

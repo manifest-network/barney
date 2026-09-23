@@ -11,7 +11,7 @@ import {
   asProviderUuid,
   noopLogger,
 } from '@manifest-network/manifest-sdk';
-import { ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
+import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
 import { getProviders } from '../../api/sku';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
@@ -38,6 +38,7 @@ import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import type { SigningContext } from './types';
 import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
+import type { DeployFailureDiagnostic } from './deployDiagnostic';
 import { deployManifest, stopApp, fundCredits, setItemCustomDomain as monoSetItemCustomDomain, waitForLeaseStatus, isLeaseFailureTerminal, restartApp, updateApp, describeFredFailure, isKnownFailureReason, type FredAuthCtx, type DeployCallOptions, type StopAppResult, type TerminalChainState } from '@manifest-network/manifest-sdk/deploy';
 import { nextStepFor } from './failureGuidance';
 import { isUnsettledProvisionStatus } from './provisionStatus';
@@ -47,7 +48,7 @@ import { runtimeConfig } from '../../config/runtimeConfig';
 import { createMaintenanceIdempotencyKey } from '@manifest-network/manifest-sdk/deploy';
 import { getPendingMaintenanceOperation, getSettledMaintenanceOperation, markMaintenanceRecoveryAdvised, retireAbsentMaintenanceOperation } from './maintenanceOperation';
 import { executeMaintenance } from './maintenanceExecution';
-import { recoverMaintenancePayload } from './maintenancePayload';
+import { MAINTENANCE_ATTACHMENT_UNUSED_MESSAGE, recoverMaintenancePayload } from './maintenancePayload';
 import { getMaintenanceRecoveryIntent } from './maintenanceRecoveryIntent';
 import {
   canPlanMaintenanceCompletions, captureMaintenanceCompletionEpoch, MAINTENANCE_CAPACITY_MESSAGE,
@@ -965,11 +966,13 @@ export async function executeConfirmedBatchDeploy(
       try {
         result = await deployManifest(ctx, spec, callOptions);
       } catch (error) {
+        let diagnostic: DeployFailureDiagnostic | undefined;
         const errResult = await handleDeployManifestError(error, {
           name,
           leaseUuid: capturedLeaseUuid,
           providerUrl: capturedProviderUrl ?? entry.providerUrl,
           maxDetailChars: AI_BATCH_GUIDANCE_CHARS,
+          onDiagnostic: (value) => { diagnostic = value; },
           address,
           signing,
           appRegistry,
@@ -992,7 +995,7 @@ export async function executeConfirmedBatchDeploy(
           // instead of a bare name.
           return { name, url: data?.url };
         }
-        updateProgress('failed', errResult.error ?? 'Deployment failed');
+        updateProgress('failed', errResult.error ?? 'Deployment failed', diagnostic);
         return null;
       }
 
@@ -1723,10 +1726,14 @@ async function executeConfirmedBatchRestart(
             onProgress: (progress) => updateProgress(progress.phase, progress.detail),
           });
           if (execution.outcome === 'succeeded') {
-            const data = execution.result.data as { localCleanupPending?: boolean; message?: string } | undefined;
-            return { name, url: execution.url, ...(data?.localCleanupPending && {
-              localCleanupPending: true, detail: data.message ?? 'The provider outcome was verified; local cleanup remains pending.',
-            }) };
+            const data = execution.result.data as { localCleanupPending?: boolean; replayed?: boolean; message?: string } | undefined;
+            return { name, url: execution.url,
+              ...(data?.localCleanupPending && { localCleanupPending: true }),
+              ...(data?.replayed && { replayed: true }),
+              ...((data?.localCleanupPending || data?.replayed) && {
+                detail: data.message ?? 'The provider outcome was previously verified; no new request was sent.',
+              }),
+            };
           }
           if (execution.outcome === 'failed') {
             updateProgress('failed', execution.result.error);
@@ -1906,7 +1913,8 @@ export async function executeUpdateApp(
     return transactionConfirmation('update_app', {
       app_name: retryApp!.name, leaseUuid: retryApp!.leaseUuid, providerUrl: retryApp!.providerUrl!,
       idempotencyKey: pending.idempotencyKey, _generatedManifest: recovery.manifest, _maintenanceRetry: true,
-    }, `Recover the pending update of "${retryApp!.name}" with the original command key and exact payload?`);
+      ...(recovery.attachmentUnused && { _maintenanceAttachmentUnused: true }),
+    }, `Recover the pending update of "${retryApp!.name}" with the original command key and exact payload?${recovery.attachmentUnused ? ` ${MAINTENANCE_ATTACHMENT_UNUSED_MESSAGE}` : ''}`);
   }
   const previousOperation = retryApp?.providerUrl && fredCompatibilityForProvider(retryApp.providerUrl) === 'pr240'
     ? getSettledMaintenanceOperation(address, retryApp.providerUrl, retryApp.leaseUuid, options.authorization?.chainId)
@@ -2152,10 +2160,15 @@ export async function executeConfirmedUpdateApp(
   if (!payload) return { success: false, error: 'Payload missing' };
 
   if (fredCompatibilityForProvider(plan.providerUrl) === 'pr240') {
-    return (await executeMaintenance({
+    const result = (await executeMaintenance({
       ...plan, operation: 'update', manifest: new TextDecoder().decode(payload.bytes),
       expectPending: plan._maintenanceRetry || plan.expectPending,
     }, { ...options, clientManager })).result;
+    if (!plan._maintenanceAttachmentUnused) return result;
+    if (!result.success) return { ...result, error: `${result.error ?? ''} ${MAINTENANCE_ATTACHMENT_UNUSED_MESSAGE}`.trim() };
+    const data = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {};
+    return { success: true, data: { ...data, attachmentUnused: true,
+      message: `${typeof data.message === 'string' ? data.message : ''} ${MAINTENANCE_ATTACHMENT_UNUSED_MESSAGE}`.trim() } };
   }
 
   const name = plan.app_name;
@@ -2208,7 +2221,11 @@ export async function executeConfirmedUpdateApp(
         error: `Update of "${name}" was cancelled before the provider was asked; the app is unchanged.`,
       };
     }
-    const errorMsg = sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS);
+    // SDK validation failures precede HTTP. Rebuild the complete validation
+    // list for the reviewed bytes; other SDK/provider failures remain bounded.
+    const validationError = error instanceof ManifestMCPError && error.code === ManifestMCPErrorCode.INVALID_CONFIG
+      ? await validateManifestForProvider(manifestJson, providerUrl) : null;
+    const errorMsg = validationError ?? sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS);
     onProgress?.({ phase: 'failed', detail: `Update failed: ${errorMsg}`, operation: 'update' });
     // A request error alone supplies no observation of workload health.
     return { success: false, error: `Update failed: ${errorMsg}` };

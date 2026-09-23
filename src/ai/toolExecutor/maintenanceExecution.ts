@@ -2,9 +2,9 @@ import { asLeaseUuid } from '@manifest-network/manifest-sdk';
 import { createMaintenanceIdempotencyKey, metaHashHex, ProviderApiError, restartApp, updateApp, waitForLeaseStatus } from '@manifest-network/manifest-sdk/deploy';
 import { getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { browserEventTransport } from '../../api/eventTransport';
-import { AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
+import { AI_LEASE_WAIT_TIMEOUT_MS, AI_MAINTENANCE_PREPARATION_DETAIL_CHARS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
 import { runtimeConfig } from '../../config/runtimeConfig';
-import { sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
+import { sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { isAbortError } from '../../api/utils';
 import { createProgressReporter } from '../progress';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
@@ -12,7 +12,7 @@ import { buildBarneyCtx } from './capabilityCtx';
 import { connectionPatch, FAILURE_DETAIL_CHARS, resolveAppEndpoint } from './helpers';
 import { resolveAppUrl } from './deployUrl';
 import { validateManifestForProvider } from './deployArgs';
-import { reconcileProvisionStatus } from './provisionStatus';
+import { maintenanceReadinessPatch } from './maintenanceReadiness';
 import { maintenanceRegistryPatch } from './maintenanceRegistryPatch';
 import {
   assertMaintenanceOperationMatches,
@@ -47,6 +47,13 @@ function withCleanupWarning(value: MaintenanceResult, warning = MAINTENANCE_CLEA
   const data = value.result.data && typeof value.result.data === 'object' ? value.result.data as Record<string, unknown> : {};
   return { ...value, result: { success: true, data: { ...data, localCleanupPending: true,
     message: `${typeof data.message === 'string' ? data.message : 'Maintenance succeeded.'} ${warning}` } } };
+}
+
+function withReplayNotice(value: MaintenanceResult, operation: 'restart' | 'update', name: string): MaintenanceResult {
+  const notice = `Previously verified ${operation} of "${name}": ${value.outcome}. No new maintenance request was sent.`;
+  if (!value.result.success) return { ...value, result: { ...value.result, error: `${notice} ${value.result.error ?? ''}`.trim() } };
+  const data = value.result.data && typeof value.result.data === 'object' ? value.result.data as Record<string, unknown> : {};
+  return { ...value, result: { success: true, data: { ...data, replayed: true, message: notice } } };
 }
 
 /** PR 240 commands are durable. Preserve their identity until command outcome,
@@ -149,23 +156,28 @@ export async function executeMaintenance(
       }
       assertCurrent();
       let cleanupFailed = false;
+      let cleanupCommand: Readonly<MaintenanceOperation> | undefined;
       try {
         const saved = getPendingMaintenanceOperation(address, providerUrl, leaseUuid, chainId);
         if (saved && saved.idempotencyKey === input.idempotencyKey && saved.operation === operation
           && saved.payloadHash === priorResult.payloadHash
           && (priorResult.result.outcome === 'succeeded' || priorResult.result.outcome === 'failed')) {
-          command = saved;
+          cleanupCommand = saved;
           await completeMaintenanceOperation(saved, undefined, priorResult.result.outcome);
         }
       } catch { cleanupFailed = true; }
       if (cleanupFailed) {
         rememberMaintenanceRecoveryIntent({ address, chainId, providerUrl, leaseUuid, operation, idempotencyKey: input.idempotencyKey! });
-        if (command) await markMaintenanceRecoveryAdvised(command);
+        if (cleanupCommand) await markMaintenanceRecoveryAdvised(cleanupCommand);
       }
-      assertCurrent();
-      const result = cleanupFailed ? withCleanupWarning(priorResult.result) : priorResult.result;
+      try { assertCurrent(); } catch {
+        return { outcome: 'cancelled', result: { success: false,
+          error: `Recovery cancelled. The previous ${operation} outcome remains verified as ${priorResult.result.outcome}. No new maintenance request was sent.` } };
+      }
+      const replay = withReplayNotice(priorResult.result, operation, name);
+      const result = cleanupFailed ? withCleanupWarning(replay) : replay;
       onProgress({ phase: result.outcome === 'succeeded' ? 'ready' : result.outcome === 'failed' ? 'failed' : 'unconfirmed', operation,
-        detail: cleanupFailed ? MAINTENANCE_CLEANUP_MESSAGE : result.result.error });
+        detail: cleanupFailed ? MAINTENANCE_CLEANUP_MESSAGE : result.result.error ?? (result.result.data as { message?: string } | undefined)?.message });
       return result;
     }
     const pending = getPendingMaintenanceOperation(address, providerUrl, leaseUuid, chainId);
@@ -249,7 +261,6 @@ export async function executeMaintenance(
     }
     onProgress({ phase: 'provisioning', operation, detail: 'Waiting for runtime and operation outcome...' });
     let status;
-    let readinessWaitRejected = false;
     try {
       status = await waitForLeaseStatus(ctx, asLeaseUuid(leaseUuid), {
         timeout: AI_LEASE_WAIT_TIMEOUT_MS,
@@ -259,7 +270,6 @@ export async function executeMaintenance(
       });
     } catch (error) {
       if (isAbortError(error)) throw error;
-      readinessWaitRejected = true;
       // A failed readiness wait can still have a definite command verdict.
       // Fresh reads below distinguish failed replacement from missing evidence.
     }
@@ -269,14 +279,17 @@ export async function executeMaintenance(
       token().then((auth) => { signal?.throwIfAborted(); return getLeaseReleases(providerUrl, leaseUuid, auth); }),
     ]);
     signal?.throwIfAborted();
-    const provision = provisionRead.status === 'fulfilled' ? provisionRead.value : undefined;
+    // The wait's runtime verdict remains useful when the subsequent read fails.
+    // A successful fresh read, including progress, always supersedes it.
+    const provision = provisionRead.status === 'fulfilled' ? provisionRead.value
+      : status?.provision_status ? { ...status, status: status.provision_status, fail_count: status.fail_count ?? 0 } : undefined;
     const releases = releasesRead.status === 'fulfilled' ? releasesRead.value : undefined;
     const verdict = evaluateMaintenanceOutcome({ baselineVersions: command.baselineReleaseVersions, provision, releases });
 
     // Runtime health is useful even if the requested replacement failed and
     // Fred compensated by bringing the old runtime back online.
     let url: string | undefined;
-    const patch: Partial<AppEntry> = {};
+    const patch = maintenanceReadinessPatch(provision?.status, registrySnapshot);
     if (verdict.runtimeReady) {
       const endpoint = status
         ? await resolveAppUrl(providerUrl, leaseUuid, status, address, signing, 'maintenanceExecution')
@@ -284,18 +297,11 @@ export async function executeMaintenance(
       const previous = appRegistry.getAppByLease(address, leaseUuid);
       url = endpoint.url ?? (previous ? resolveAppEndpoint(previous) : undefined);
       Object.assign(patch, {
-        provisionState: 'confirmed',
-        ...(registrySnapshot?.readinessStale && { readinessStale: false }),
         ...connectionPatch({ url: endpoint.url, connection: endpoint.connection, connectionStale: !endpoint.connection }, previous),
       });
-    } else if (provision) {
-      const provisionState = reconcileProvisionStatus(provision.status, appRegistry.getAppByLease(address, leaseUuid)?.provisionState);
-      if (provisionState) patch.provisionState = provisionState;
-      if (provisionState === 'failed' && registrySnapshot?.readinessStale) patch.readinessStale = false;
-    } else if (readinessWaitRejected) {
+    } else if (patch.readinessStale) {
       // Releases can prove the command failed while runtime readiness remains
       // unknown. Keep observing that independent outcome after this call ends.
-      patch.readinessStale = true;
       patch.connectionStale = true;
     }
     signal?.throwIfAborted();
@@ -410,7 +416,7 @@ export async function executeMaintenance(
     const detail = preparationError instanceof Error
       ? ProviderApiError.isProviderApiError(preparationError)
         ? sanitizeForDisplay(preparationError.message, FAILURE_DETAIL_CHARS)
-        : preparationError.message
+        : sanitizeForDisplay(preparationError.message, AI_MAINTENANCE_PREPARATION_DETAIL_CHARS)
       : 'Unknown preparation error.';
     return { outcome: 'failed', result: { success: false, error: `${verb} could not be prepared: ${detail}` } };
   } finally {
