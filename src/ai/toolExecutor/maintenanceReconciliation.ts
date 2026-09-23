@@ -5,14 +5,16 @@ import { sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { runtimeConfig } from '../../config/runtimeConfig';
 import { reconcileProvisionStatus } from './provisionStatus';
 import { recoverReleaseManifest } from './maintenancePayload';
-import { rememberMaintenanceCompletion } from './maintenanceCompletion';
+import { captureMaintenanceCompletionEpoch, isMaintenanceCompletionEpochCurrent, rememberMaintenanceCompletion } from './maintenanceCompletion';
 import { resolveAppEndpoint } from './helpers';
 import { getPendingMaintenanceOperation, commitMaintenanceObservation } from './maintenanceOperation';
 import { evaluateMaintenanceOutcome, type MaintenanceOutcome } from './maintenanceOutcome';
 import type { AppEntry } from '../../registry/appRegistry';
 import type { ToolExecutorOptions } from './types';
 
-export interface MaintenanceReconciliation extends MaintenanceOutcome {
+export interface MaintenanceReconciliation extends Omit<MaintenanceOutcome, 'runtimeReady'> {
+  /** Omitted when this read did not observe runtime readiness. */
+  readonly runtimeReady?: boolean;
   readonly operation?: 'restart' | 'update';
 }
 
@@ -26,23 +28,26 @@ export async function reconcilePendingMaintenance(
   const { address, signing, appRegistry, signal } = options;
   signal?.throwIfAborted();
   if (!address || !app.providerUrl || !appRegistry) return undefined;
+  const observedReadiness = observedProvisionStatus === undefined || observedProvisionStatus === ''
+    ? {} : { runtimeReady: observedProvisionStatus === 'ready' };
   let command;
   try {
     command = getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid,
       options.authorization?.chainId ?? runtimeConfig.PUBLIC_CHAIN_ID);
   } catch (error) {
-    return { outcome: 'unconfirmed', runtimeReady: false, detail: error instanceof Error ? error.message : 'The saved maintenance operation could not be read.' };
+    return { outcome: 'unconfirmed', ...observedReadiness, detail: error instanceof Error ? error.message : 'The saved maintenance operation could not be read.' };
   }
   if (!command) return undefined;
   // Without acknowledged admission, release history cannot attribute a result
   // to this key. Do not prompt for redundant wallet signatures or fetch history
   // on every status read; explicit recovery owns the exact-key retry.
   if (!command.accepted) return {
-    operation: command.operation, outcome: 'unconfirmed', runtimeReady: observedProvisionStatus === 'ready',
+    operation: command.operation, outcome: 'unconfirmed', ...observedReadiness,
     detail: 'Provider admission of this command has not been confirmed. Recover the original command with its same key and exact payload; release history alone cannot identify it.',
   };
-  if (!signing) return { operation: command.operation, outcome: 'unconfirmed', runtimeReady: false, detail: 'Connect the wallet to read the pending command outcome.' };
+  if (!signing) return { operation: command.operation, outcome: 'unconfirmed', ...observedReadiness, detail: 'Connect the wallet to read the pending command outcome.' };
 
+  const completionEpoch = captureMaintenanceCompletionEpoch(command);
   const currentApp = appRegistry.getAppByLease(address, app.leaseUuid);
   const registrySnapshot = JSON.stringify(currentApp);
   const token = async () => {
@@ -78,7 +83,8 @@ export async function reconcilePendingMaintenance(
     settled: verdict.outcome !== 'unconfirmed',
     isCurrent: () => {
       signal?.throwIfAborted();
-      return JSON.stringify(appRegistry.getAppByLease(address, app.leaseUuid)) === registrySnapshot;
+      return isMaintenanceCompletionEpochCurrent(completionEpoch)
+        && JSON.stringify(appRegistry.getAppByLease(address, app.leaseUuid)) === registrySnapshot;
     },
     apply: () => {
       if (Object.keys(patch).length > 0) appRegistry.updateApp(address, app.leaseUuid, patch);
@@ -94,10 +100,11 @@ export async function reconcilePendingMaintenance(
         } } }
         : { outcome: 'failed', result: { success: false,
           error: `${verb} failed${verdict.runtimeReady ? '; the previous runtime is healthy' : ''}. ${verdict.detail ?? ''}`.trim(),
-        } });
+        } }, completionEpoch);
     },
   });
-  if (!committed) return { operation: command.operation, outcome: 'unconfirmed', runtimeReady: false,
+  if (!committed) return { operation: command.operation, outcome: 'unconfirmed',
     detail: 'The app or saved command changed during reconciliation. Read app_status and app_releases again.' };
-  return { operation: command.operation, ...verdict };
+  const { runtimeReady, ...outcome } = verdict;
+  return { operation: command.operation, ...outcome, ...(provision ? { runtimeReady } : observedReadiness) };
 }

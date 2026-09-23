@@ -6,8 +6,11 @@
  * executeConfirmedBatchRestart.
  */
 
-import { AI_BATCH_DEPLOY_CONCURRENCY } from '../../config/constants';
+import { AI_BATCH_DEPLOY_CONCURRENCY, AI_BATCH_DIAGNOSTIC_CHARS } from '../../config/constants';
+import { normalizeErrorPunctuation } from '../../utils/errors';
+import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { DeployProgress } from '../progress';
+import { FAILURE_DETAIL_CHARS } from './helpers';
 import type { SignResult, ToolResult } from './types';
 
 // ---------------------------------------------------------------------------
@@ -151,6 +154,31 @@ export interface BatchRunResult {
   batchProgress: Array<{ name: string; phase: DeployProgress['phase']; detail?: string }>;
 }
 
+function sanitizeDiagnostic(detail: string | undefined): string | undefined {
+  return detail === undefined ? undefined : sanitizeForDisplay(detail, FAILURE_DETAIL_CHARS);
+}
+
+function sanitizeProgressDetail(phase: DeployProgress['phase'], detail: string | undefined): string | undefined {
+  return phase === 'failed' || phase === 'unconfirmed' ? sanitizeDiagnostic(detail) : detail;
+}
+
+/** Bound JSON length, including escaped quotes/backslashes and surrogate pairs.
+ * Each diagnostic gets an equal share so one long response cannot hide others. */
+function fitDiagnostic(detail: string | undefined, budget: number): string | undefined {
+  const clean = sanitizeDiagnostic(detail);
+  if (clean === undefined || budget < 3) return undefined;
+  if (JSON.stringify(clean).length <= budget) return clean;
+  let result = '';
+  let length = 3; // JSON quotes and the final ellipsis.
+  for (const point of clean) {
+    const size = JSON.stringify(point).length - 2;
+    if (length + size > budget) break;
+    result += point;
+    length += size;
+  }
+  return `${result}…`;
+}
+
 export async function runBatchWithConcurrency<E extends BatchEntry>(
   opts: BatchRunnerOptions<E>,
 ): Promise<BatchRunResult> {
@@ -200,7 +228,7 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
     queuedCount = i + 1;
 
     const updateProgress = (phase: DeployProgress['phase'], detail?: string) => {
-      batchProgress[i] = { name: entries[i].name, phase, detail };
+      batchProgress[i] = { name: entries[i].name, phase, detail: sanitizeProgressDetail(phase, detail) };
       emitProgress();
     };
 
@@ -210,7 +238,7 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
         if (!result) {
           failed.push(entries[i].name);
         } else if (result.outcome === 'unconfirmed') {
-          unconfirmed.push(result);
+          unconfirmed.push({ ...result, detail: sanitizeDiagnostic(result.detail) });
           if (operation === 'restart' || operation === 'update') {
             updateProgress('unconfirmed', result.detail ?? batchProgress[i].detail ?? 'Outcome unknown');
           }
@@ -227,7 +255,7 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
         batchProgress[i] = {
           name: entries[i].name,
           phase: 'failed',
-          detail: error instanceof Error ? error.message : 'Unknown error',
+          detail: sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error'),
         };
         emitProgress();
         failed.push(entries[i].name);
@@ -283,22 +311,29 @@ export interface BatchSummaryOptions {
 
 export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
   const {
-    succeeded, failed, cancelled = [], unconfirmed = [], unconfirmedLabel = 'Still pending',
+    succeeded, failed, cancelled = [], unconfirmed: rawUnconfirmed = [], unconfirmedLabel = 'Still pending',
     dataKey, verb, failedNoun, batchProgress, operation, onProgress,
   } = opts;
 
   // Single predicate behind BOTH the overall progress phase and the failure
   // branch below, so the ProgressCard and the chat text can never disagree.
   // An unconfirmed batch has not landed, but it is not a failed batch either.
-  const nothingLanded = succeeded.length === 0 && unconfirmed.length === 0;
+  const nothingLanded = succeeded.length === 0 && rawUnconfirmed.length === 0;
   // Rows disappear when the next tool starts. Preserve the failure reason in
   // the tool result so both the user and model can act on it afterwards.
-  const failureDetails = failed.flatMap((name) => {
-    const row = batchProgress?.find((entry) => entry.name === name && entry.phase === 'failed');
-    return row?.detail ? [{ name, detail: row.detail }] : [];
-  });
+  const failureDetails = new Map(batchProgress?.filter((row) => row.phase === 'failed').map((row) => [row.name, row.detail]));
+  // Failed reasons appear once in message/error. Unconfirmed reasons retain
+  // their existing structured field and message copy, so reserve both copies.
+  const detailedUnconfirmed = rawUnconfirmed.filter((entry) => entry.detail !== undefined).length;
+  const diagnosticCopies = failed.filter((name) => failureDetails.get(name) !== undefined).length
+    + 2 * detailedUnconfirmed;
+  // Include each detail's property/comma and the chat serializer's two-space
+  // indentation, not just the compact JSON representation.
+  const textBudget = Math.max(0, AI_BATCH_DIAGNOSTIC_CHARS - 20 * detailedUnconfirmed);
+  const perCopyBudget = Math.floor(textBudget / Math.max(1, diagnosticCopies));
+  const unconfirmed = rawUnconfirmed.map((entry) => ({ ...entry, detail: fitDiagnostic(entry.detail, perCopyBudget) }));
   const failedText = failed.map((name) => {
-    const detail = failureDetails.find((entry) => entry.name === name)?.detail;
+    const detail = fitDiagnostic(failureDetails.get(name), perCopyBudget);
     return detail ? `${name}: ${detail}` : name;
   }).join(', ');
 
@@ -324,7 +359,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
         : allSucceeded
           ? `All ${succeeded.length} ${succeeded.length === 1 ? 'app' : 'apps'} ${verb.toLowerCase()}!`
           : segments.join(', '),
-      ...(batchProgress ? { batch: batchProgress.map((b) => ({ ...b })) } : {}),
+      ...(batchProgress ? { batch: batchProgress.map((b) => ({ ...b, detail: sanitizeProgressDetail(b.phase, b.detail) })) } : {}),
     });
   }
 
@@ -335,7 +370,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     if (cancelled.length === 0) {
       return { success: false, error: `All ${failedNoun} failed: ${failedText}` };
     }
-    const failedPart = failed.length > 0 ? `Failed: ${failedText}.` : '';
+    const failedPart = failed.length > 0 ? `Failed: ${normalizeErrorPunctuation(failedText)}.` : '';
     const cancelledPart = `Cancelled: ${cancelled.join(', ')}.`;
     return {
       success: false,
@@ -352,7 +387,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     const lines = unconfirmed.map((u) => u.detail ? `${u.name}: ${u.detail}` : u.name);
     parts.push(`${unconfirmedLabel}:\n${lines.map((l) => `- ${l}`).join('\n')}`);
   }
-  if (failed.length > 0) parts.push(`Failed: ${failedText}.`);
+  if (failed.length > 0) parts.push(`Failed: ${normalizeErrorPunctuation(failedText)}.`);
   if (cancelled.length > 0) parts.push(`Cancelled: ${cancelled.join(', ')}.`);
 
   return {
@@ -360,7 +395,6 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     data: {
       [dataKey]: succeeded,
       failed,
-      ...(failureDetails.length > 0 && { failureDetails }),
       unconfirmed,
       cancelled,
       message: parts.join('\n'),

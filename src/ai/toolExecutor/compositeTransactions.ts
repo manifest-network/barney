@@ -114,9 +114,11 @@ function isTransactionCancellation(error: unknown): boolean {
  * `isTransientProviderError` is deliberately not consulted — "worth retrying"
  * is orthogonal to "did the workload come up".
  */
-function provisionObservationFromWaitError(error: unknown): ProvisionState {
+function provisionObservationFromWaitError(error: unknown, previous?: ProvisionState): ProvisionState | undefined {
   if (ProviderApiError.isProviderApiError(error) && error.kind === 'poll_verdict') return 'failed';
-  return 'unconfirmed';
+  // Like read-only reconciliation, silence cannot retract earlier readiness.
+  // The command outcome remains unconfirmed independently of this badge.
+  return previous === 'confirmed' ? undefined : 'unconfirmed';
 }
 
 /**
@@ -1577,12 +1579,11 @@ export async function executeConfirmedRestartApp(
   } catch (error) {
     logError('compositeTransactions.executeConfirmedRestartApp.polling', error);
     // waitForLeaseStatus REJECTS on timeout/setup/transport error and on abort.
-    // Record on a genuine wait failure so registry surfaces don't keep showing a
-    // possibly-broken app as 'running'; on a USER abort record nothing — the
-    // restart likely still proceeds provider-side. The copy tracks the same
-    // observation, so no surface asserts a failure fred never issued.
-    const observation = provisionObservationFromWaitError(error);
-    if (!isAbortError(error)) {
+    // Preserve earlier readiness when the provider gave no new verdict, and
+    // record nothing on a user abort. The uncertain command copy remains
+    // independent of the last known runtime readiness.
+    const observation = provisionObservationFromWaitError(error, appRegistry.getAppByLease(address, leaseUuid)?.provisionState);
+    if (!isAbortError(error) && observation !== undefined) {
       appRegistry.updateApp(address, leaseUuid, { provisionState: observation });
     }
     if (observation === 'failed') {
@@ -1726,9 +1727,9 @@ async function executeConfirmedBatchRestart(
         // and it bites harder here: N waits share one budget. The BUCKET has to
         // follow the observation too — bucketing silence under `Failed:` printed
         // "All restarts failed" for a batch fred never ruled on.
-        const observation = provisionObservationFromWaitError(error);
-        appRegistry.updateApp(address, entry.leaseUuid, { provisionState: observation });
-        if (observation === 'unconfirmed') {
+        const observation = provisionObservationFromWaitError(error, appRegistry.getAppByLease(address, entry.leaseUuid)?.provisionState);
+        if (observation !== undefined) appRegistry.updateApp(address, entry.leaseUuid, { provisionState: observation });
+        if (observation !== 'failed') {
           updateProgress('unconfirmed', `Restart not confirmed for "${name}". Use app_status("${name}") to check.`);
           return { name, outcome: 'unconfirmed' as const, detail: `no verdict from the provider — check app_status("${name}")` };
         }
@@ -1783,10 +1784,10 @@ export async function executeUpdateApp(
     const manifest = await recoverMaintenancePayload(pending, retryApp!.manifest, payload, options);
     const current = getPendingMaintenanceOperation(address, retryApp!.providerUrl!, retryApp!.leaseUuid, options.authorization?.chainId);
     if (!current || current.idempotencyKey !== pending.idempotencyKey || current.operation !== 'update') {
-      return { success: false, error: `The saved update of "${retryApp!.name}" changed or was already settled. Check app_status and run update_app again before confirming another command.` };
+      return { success: false, error: `The saved update of "${retryApp!.name}" changed or was already settled. No request was sent. Check app_status and app_releases to observe the outcome before deciding whether another command is needed.` };
     }
     if (!manifest) {
-      return { success: false, error: `The update of "${retryApp!.name}" is unresolved. Its exact submitted payload could not be recovered${payload ? ' from this file and the saved defaults' : ' from provider release history'}. Reattach the original file to check a matching merge, or provide the exact reviewed manifest. Generated passwords and confirmation edits must match the saved payload fingerprint; Barney will not generate replacement bytes.` };
+      return { success: false, error: `The update of "${retryApp!.name}" is unresolved. Its exact submitted payload could not be recovered${payload ? ' from this file and the saved defaults' : ''}. Reattach the original file to check a matching merge, or provide the exact reviewed manifest. Generated passwords and confirmation edits must match the saved payload fingerprint. Authenticated release history may recover matching bytes, but a rejected update creates no release. Barney will not generate replacement bytes or treat this uncertainty as permission for a new command.` };
     }
     return transactionConfirmation('update_app', {
       app_name: retryApp!.name, leaseUuid: retryApp!.leaseUuid, providerUrl: retryApp!.providerUrl!,
@@ -2253,8 +2254,8 @@ export async function executeConfirmedUpdateApp(
     // ABOVE, which do write `'failed'`: those ran on a resolved status or a
     // settled /provision read — fred actually answered. Only this catch is the
     // no-answer case, and the copy tracks the observation.
-    const observation = provisionObservationFromWaitError(error);
-    if (!isAbortError(error)) {
+    const observation = provisionObservationFromWaitError(error, appRegistry.getAppByLease(address, leaseUuid)?.provisionState);
+    if (!isAbortError(error) && observation !== undefined) {
       appRegistry.updateApp(address, leaseUuid, { provisionState: observation });
     }
     if (observation === 'failed') {

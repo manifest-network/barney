@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import type { AppEntry } from '../../registry/appRegistry';
 import type { ToolExecutorOptions } from './types';
 import { makeRegistry } from './testHelpers';
+import { getReadClient } from '../../api/readClient';
+import { providerFetch } from '../../api/providerFetchAdapter';
+import * as fred from '../../api/fred';
+import * as operations from './maintenanceOperation';
+import * as queries from './compositeQueries';
+import { buildBarneyCtx } from './capabilityCtx';
 
 // Keep app_status, its capability context, and protocol parsing real. Only
 // chain/provider I/O is controlled, so silent context-construction failures fail.
@@ -10,7 +16,11 @@ vi.mock('../../api/readClient', () => ({ getReadClient: vi.fn() }));
 vi.mock('../../api/providerFetchAdapter', () => ({ providerFetch: vi.fn() }));
 vi.mock('../../api/fred', () => ({ getLeaseProvision: vi.fn(), getLeaseReleases: vi.fn(), getLeaseLogs: vi.fn() }));
 
-const originalConfig = window.__RUNTIME_CONFIG__;
+const configuration = vi.hoisted(() => ({ compatibility: '' }));
+vi.mock('../../config/runtimeConfig', async (original) => {
+  const actual = await original<typeof import('../../config/runtimeConfig')>();
+  return { ...actual, runtimeConfig: { ...actual.runtimeConfig, get PUBLIC_FRED_COMPATIBILITY() { return configuration.compatibility; } } };
+});
 const address = 'manifest1tenant';
 const app: AppEntry = {
   name: 'my-app', leaseUuid: '550e8400-e29b-41d4-a716-446655440000',
@@ -18,19 +28,15 @@ const app: AppEntry = {
   size: 'small', createdAt: 1, status: 'running', chainState: 'active', provisionState: 'confirmed',
 };
 
-beforeEach(() => {
-  vi.resetModules();
+beforeEach(async () => {
   vi.clearAllMocks();
+  await operations.retireAbsentMaintenanceOperation({ address, providerUrl: app.providerUrl, leaseUuid: app.leaseUuid });
   localStorage.clear();
-  window.__RUNTIME_CONFIG__ = originalConfig;
+  configuration.compatibility = '';
 });
-afterEach(() => { window.__RUNTIME_CONFIG__ = originalConfig; });
 
 async function setup(status = 'ready', accepted?: boolean, badConfig?: string) {
-  if (badConfig) window.__RUNTIME_CONFIG__ = { ...originalConfig, PUBLIC_FRED_COMPATIBILITY: badConfig };
-  const { getReadClient } = await import('../../api/readClient');
-  const { providerFetch } = await import('../../api/providerFetchAdapter');
-  const fred = await import('../../api/fred');
+  configuration.compatibility = badConfig ?? '';
   const lease = vi.fn().mockResolvedValue({ lease: { uuid: app.leaseUuid, state: 2, providerUuid: app.providerUuid, items: [] } });
   const provider = vi.fn().mockResolvedValue({ provider: { apiUrl: app.providerUrl } });
   vi.mocked(getReadClient).mockResolvedValue({ query: { liftedinit: { billing: { v1: { lease } }, sku: { v1: { provider } } } } } as never);
@@ -51,14 +57,13 @@ async function setup(status = 'ready', accepted?: boolean, badConfig?: string) {
     address, clientManager: {} as CosmosClientManager, appRegistry: makeRegistry([{ ...app }]), tiers: [],
     signing: { providerAuth: { providerToken }, authTokens: { getAuthToken } } as unknown as ToolExecutorOptions['signing'],
   };
-  const operations = await import('./maintenanceOperation');
   if (accepted !== undefined) {
     const command = await operations.getOrCreateMaintenanceOperation({ address, providerUrl: app.providerUrl, leaseUuid: app.leaseUuid,
       operation: 'restart', baselineReleaseVersions: [1] });
     await operations.markMaintenanceOperationDispatched(command);
     if (accepted) await operations.markMaintenanceOperationAccepted(command);
   }
-  return { options, lease, fred, providerToken, getAuthToken, operations, providerFetch, queries: await import('./compositeQueries') };
+  return { options, lease, fred, providerToken, getAuthToken, operations, providerFetch, queries };
 }
 
 describe('maintenance status query integration', () => {
@@ -68,7 +73,6 @@ describe('maintenance status query integration', () => {
     expect(result).toMatchObject({ success: true, data: { chainState: 'active', provision_status: 'ready', statusUnavailable: false, status: 'running' } });
     expect(lease).toHaveBeenCalledTimes(1);
     expect(providerFetch).toHaveBeenCalledTimes(2);
-    const { buildBarneyCtx } = await import('./capabilityCtx');
     await expect(buildBarneyCtx(options.clientManager!, options.signing!)).rejects.toThrow('PUBLIC_FRED_COMPATIBILITY');
   });
 
@@ -93,9 +97,9 @@ describe('maintenance status query integration', () => {
 
   it('app_releases performs only the requested history read for an unaccepted command', async () => {
     const { options, queries, fred, getAuthToken } = await setup('ready', false);
-    expect(await queries.executeAppReleases({ app_name: app.name }, options)).toMatchObject({
-      success: true, data: { maintenance: { outcome: 'unconfirmed' } },
-    });
+    const result = await queries.executeAppReleases({ app_name: app.name }, options);
+    expect(result).toMatchObject({ success: true, data: { maintenance: { outcome: 'unconfirmed' } } });
+    expect((result.data as { maintenance: unknown }).maintenance).not.toHaveProperty('runtimeReady');
     expect(getAuthToken).toHaveBeenCalledTimes(1);
     expect(fred.getLeaseReleases).toHaveBeenCalledTimes(1);
     expect(fred.getLeaseProvision).not.toHaveBeenCalled();

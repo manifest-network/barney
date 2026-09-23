@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { formatConnectionUrl, extractPrimaryServicePorts, deriveUrlFromConnection } from './helpers';
+import { formatConnectionUrl, extractPrimaryServicePorts, deriveUrlFromConnection, FAILURE_DETAIL_CHARS } from './helpers';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import {
   deriveAppName,
@@ -3446,8 +3446,9 @@ describe('executeConfirmedBatchDeploy', () => {
       .flatMap((c) => (c[0] as { batch?: Array<{ detail?: string }> }).batch ?? [])
       .map((b) => b.detail ?? '');
     expect(details.some((d) => d.includes('ImagePullFailed: pull access denied for ngnix'))).toBe(true);
-    // The curated next step rides along — asserted against the real constant.
-    expect(details.some((d) => d.includes(FRED_REASON_GUIDANCE.ImagePullFailed.nextStep))).toBe(true);
+    // The bounded row retains the useful start of the curated next step.
+    expect(details.some((d) => d.includes(FRED_REASON_GUIDANCE.ImagePullFailed.nextStep.slice(0, 48)))).toBe(true);
+    expect(details.every((d) => Array.from(d).length <= FAILURE_DETAIL_CHARS + 1)).toBe(true);
   });
 
   it('does not count a readiness-unconfirmed entry as deployed', async () => {
@@ -6751,6 +6752,45 @@ describe('CP2 — a wait that never got an answer is not a failure', () => {
     expect(result.error).toContain('LEASE_STATE_CLOSED');
     expect(result.error).not.toContain('may still be in progress');
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('failed');
+  });
+});
+
+describe('legacy maintenance preserves readiness until a provider verdict arrives', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+  });
+
+  it.each(['single restart', 'batch restart', 'update'] as const)('%s preserves confirmed readiness on timeout and records an explicit failure', async (operation) => {
+    const app = makeApp({ chainState: 'active', provisionState: 'confirmed' });
+    for (const verdict of [false, true]) {
+      const registry = makeRegistry([app]);
+      vi.mocked(waitForLeaseStatus).mockRejectedValue(verdict
+        ? new ProviderApiError(0, 'Container exited', { kind: 'poll_verdict' })
+        : new Error('waitForLeaseStatus timed out after 900000ms'));
+      const entry = { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl };
+      const options = makeOptions({ appRegistry: registry });
+      const result = operation === 'update'
+        ? await executeConfirmedUpdateApp(entry, CLIENT_MANAGER, options, makePayload())
+        : await executeConfirmedRestartApp(operation === 'batch restart'
+          ? { app_name: 'all', entries: [entry] } : entry, CLIENT_MANAGER, options);
+
+      const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+      expect(stored?.provisionState).toBe(verdict ? 'failed' : 'confirmed');
+      expect(stored?.status).toBe(verdict ? 'failed' : 'running');
+      if (verdict) {
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('Container exited');
+      } else if (operation === 'batch restart') {
+        expect(result.data).toMatchObject({ restarted: [], failed: [], unconfirmed: [{ name: app.name }] });
+      } else {
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('may still be in progress');
+      }
+    }
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
   });
 });
 

@@ -262,7 +262,7 @@ it.each(['file', 'image', 'stack'] as const)('recovers a lost-response %s update
   expect(state.getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)).toBeUndefined();
 });
 
-it('does not recover a different historical manifest or regenerate a lost payload', async () => {
+it.each(['different release', 'no release after a rejected command'])('does not regenerate a lost payload with %s', async (scenario) => {
   vi.resetModules();
   const { executeUpdateApp: planUpdate } = await import('./compositeTransactions');
   const state = await import('./maintenanceOperation');
@@ -276,7 +276,7 @@ it('does not recover a different historical manifest or regenerate a lost payloa
     address: ADDRESS, providerUrl: DEV, leaseUuid: app.leaseUuid, operation: 'update',
     manifest: '{"image":"nginx:new","env":{"PASSWORD":"unrecoverable-secret"}}', baselineReleaseVersions: [1],
   });
-  const observed = releases(app.leaseUuid, 2);
+  const observed = releases(app.leaseUuid, scenario === 'different release' ? 2 : 1);
   histories.set(app.leaseUuid, { ...observed, releases: observed.releases.map((release) =>
     release.version === 2 ? { ...release, manifest: btoa('{"image":"nginx:new","env":{"PASSWORD":"different-secret"}}') } : release) });
   vi.resetModules();
@@ -290,9 +290,35 @@ it('does not recover a different historical manifest or regenerate a lost payloa
   expect((await planUpdate({ app_name: app.name }, options, attachment('{"image":"redis"}'))).requiresConfirmation).not.toBe(true);
 });
 
+it('keeps exact-payload recovery guidance when signing the history read is rejected', async () => {
+  vi.resetModules();
+  const state = await import('./maintenanceOperation');
+  const app: AppEntry = {
+    name: 'example', leaseUuid: crypto.randomUUID(), providerUrl: DEV, providerUuid: 'provider',
+    size: 'small', createdAt: 0, status: 'running', chainState: 'active', provisionState: 'confirmed',
+    manifest: '{"image":"nginx:old"}',
+  };
+  const options = optionsFor(DEV, [app]);
+  const saved = await state.getOrCreateMaintenanceOperation({
+    address: ADDRESS, providerUrl: DEV, leaseUuid: app.leaseUuid, operation: 'update',
+    manifest: '{"image":"nginx:new","env":{"PASSWORD":"lost-secret"}}', baselineReleaseVersions: [1],
+  });
+  vi.resetModules();
+  const fresh = await import('./compositeTransactions');
+  vi.spyOn(options.signing!.authTokens, 'getAuthToken').mockRejectedValue(new Error('Wallet rejected: private diagnostic'));
+  const result = await fresh.executeUpdateApp({ app_name: app.name }, options);
+  expect(result.requiresConfirmation).not.toBe(true);
+  expect(result.error).toContain('exact submitted payload could not be recovered');
+  expect(result.error).toContain('exact reviewed manifest');
+  expect(result.error).not.toContain('private diagnostic');
+  expect(result.error).not.toContain('recovered from provider release history');
+  expect(getLeaseReleases).not.toHaveBeenCalled();
+  expect(providerFetch).not.toHaveBeenCalled();
+  expect((await import('./maintenanceOperation')).getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)?.idempotencyKey).toBe(saved.idempotencyKey);
+});
+
 it.each(['restart', 'update'] as const)('does not borrow a %s key introduced by another tab during update planning', async (operation) => {
   vi.resetModules();
-  const { executeUpdateApp: planUpdate } = await import('./compositeTransactions');
   const state = await import('./maintenanceOperation');
   const app: AppEntry = {
     name: 'example', leaseUuid: crypto.randomUUID(), providerUrl: DEV, providerUuid: 'provider',
@@ -307,6 +333,10 @@ it.each(['restart', 'update'] as const)('does not borrow a %s key introduced by 
   const storageKey = localStorage.key(0)!;
   const metadata = localStorage.getItem(storageKey)!;
   localStorage.removeItem(storageKey);
+  // A second module instance models a separate tab with no copy of the first
+  // tab's in-memory pending command. Hydration must observe the storage change.
+  vi.resetModules();
+  const { executeUpdateApp: planUpdate } = await import('./compositeTransactions');
   const planning = planUpdate({ app_name: app.name }, options, attachment('{"image":"nginx:new"}'));
   localStorage.setItem(storageKey, metadata);
   const result = await planning;

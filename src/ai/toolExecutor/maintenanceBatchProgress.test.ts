@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AI_BATCH_DIAGNOSTIC_CHARS } from '../../config/constants';
+import { FAILURE_DETAIL_CHARS } from './helpers';
 import { computeOverallPhase, runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
 
 describe('maintenance batch uncertainty', () => {
@@ -60,9 +62,11 @@ describe('maintenance batch uncertainty', () => {
     if (partialSuccess) {
       expect(result.data).toMatchObject({
         failed: ['blocked'],
-        failureDetails: [{ name: 'blocked', detail }],
         message: expect.stringContaining(`blocked: ${detail}`),
       });
+      expect(result.data).not.toHaveProperty('failureDetails');
+      expect(JSON.stringify(result).split(detail)).toHaveLength(2);
+      expect(JSON.stringify(result)).not.toContain('retrying..');
     } else {
       expect(result).toMatchObject({ success: false, error: `All restarts failed: blocked: ${detail}` });
     }
@@ -88,5 +92,69 @@ describe('maintenance batch uncertainty', () => {
     expect(batch.cancelled).toEqual(['web']);
     expect(batch.batchProgress).toEqual([{ name: 'web', phase: 'failed', detail: 'Restart cancelled before dispatch.' }]);
     expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'failed' }));
+  });
+
+  it.each([false, true])('bounds serialized diagnostics for a large batch of HTML rejections (partial success: %s)', async (partialSuccess) => {
+    const onProgress = vi.fn();
+    const batch = await runBatchWithConcurrency({
+      entries: Array.from({ length: 200 }, (_, index) => ({ name: `app-${index}` })),
+      initialPhase: 'restarting', intermediatePhases: ['restarting'], operation: 'restart', onProgress,
+      executeOne: async (entry, index, updateProgress) => {
+        if (partialSuccess && index === 0) {
+          updateProgress('ready', 'App is live!');
+          return { name: entry.name };
+        }
+        const detail = `HTTP ${index % 2 === 0 ? 403 : 429}: \u202e<html>\u0000\r\n<title>Request denied</title>`
+          + '<body data-error="quoted\\path">💥 forbidden</body>'.repeat(100);
+        if (index % 2 === 0) throw new Error(detail.slice(0, 4096));
+        updateProgress('failed', detail.slice(0, 4096));
+        return null;
+      },
+    });
+    const options = { ...batch, operation: 'restart' as const,
+      dataKey: 'restarted', verb: 'Restarted', failedNoun: 'restarts' };
+    const result = summarizeBatchResult(options);
+    const withoutDiagnostics = summarizeBatchResult({ ...options,
+      batchProgress: batch.batchProgress.map(({ name, phase }) => ({ name, phase })) });
+    const serialized = JSON.stringify(result);
+    expect(serialized.length - JSON.stringify(withoutDiagnostics).length).toBeLessThanOrEqual(AI_BATCH_DIAGNOSTIC_CHARS);
+    expect(serialized.length).toBeLessThan(20_000);
+    expect(serialized).not.toContain('failureDetails');
+    expect(serialized).toContain('app-199: HTTP 429:');
+    expect(serialized).toContain('app-198: HTTP 403:');
+    expect(result.success).toBe(partialSuccess);
+    for (const row of batch.batchProgress.filter((entry) => entry.phase === 'failed')) {
+      expect(Array.from(row.detail ?? '').length).toBeLessThanOrEqual(FAILURE_DETAIL_CHARS + 1);
+      expect(row.detail).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+      expect(row.detail).toContain('<html>');
+    }
+    for (const [progress] of onProgress.mock.calls) {
+      for (const row of progress.batch ?? []) {
+        expect(row.detail).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+      }
+    }
+  });
+
+  it('counts both serialized copies of unknown diagnostics and sanitizes summary inputs', () => {
+    const detail = 'HTTP 429: \u202e\u0000<html data-message="try\\later">' + '💥'.repeat(4096);
+    const failed = Array.from({ length: 100 }, (_, index) => `failed-${index}`);
+    const unconfirmed = Array.from({ length: 100 }, (_, index) => ({ name: `unknown-${index}`, outcome: 'unconfirmed' as const, detail }));
+    const options = { succeeded: [], failed, unconfirmed,
+      batchProgress: failed.map((name) => ({ name, phase: 'failed' as const, detail })),
+      operation: 'restart' as const, dataKey: 'restarted', verb: 'Restarted', failedNoun: 'restarts', unconfirmedLabel: 'Outcome unknown' };
+    const onProgress = vi.fn();
+    const result = summarizeBatchResult({ ...options, onProgress });
+    const withoutDiagnostics = summarizeBatchResult({ ...options,
+      batchProgress: failed.map((name) => ({ name, phase: 'failed' as const })),
+      unconfirmed: unconfirmed.map(({ name, outcome }) => ({ name, outcome })) });
+    for (const indentation of [undefined, 2]) {
+      expect(JSON.stringify(result, null, indentation).length - JSON.stringify(withoutDiagnostics, null, indentation).length)
+        .toBeLessThanOrEqual(AI_BATCH_DIAGNOSTIC_CHARS);
+    }
+    expect(JSON.stringify(result)).not.toMatch(/[\p{Cf}\p{Zl}\p{Zp}]/u);
+    expect(JSON.stringify(result)).not.toContain('\\u0000');
+    expect(result.data).toMatchObject({ failed, unconfirmed: unconfirmed.map(({ name }) => ({ name, detail: expect.stringContaining('HTTP 429:') })) });
+    expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'unconfirmed',
+      batch: expect.arrayContaining([expect.objectContaining({ detail: expect.stringContaining('<html') })]) }));
   });
 });

@@ -109,9 +109,21 @@ release history. You can also reattach the original file: Barney tries its
 original merge with saved defaults and requires an exact payload fingerprint
 match. Generated passwords and confirmation edits cannot be regenerated; if
 the provider has no matching manifest, the exact reviewed bytes are needed.
+Rejected updates create no release. If that rejection's response and the exact
+payload are both lost, Barney cannot resolve the command through the available
+provider API. Clearing chat or abandoning local metadata would not cancel it;
+do not use either as permission to send a replacement command.
 Recovery never changes the command's key or infers success from matching bytes. A
 healthy app can still have a failed restart or update if the provider restored
 the previous runtime. The operation result and app health are reported separately.
+
+If another tab already settled or replaced the saved command, Barney asks you
+to observe status and releases instead of offering a retry. Check that outcome
+before deciding whether you need another operation.
+
+After 128 completed operations in one wallet session, Barney asks you to clear
+chat history before starting a new command. Existing pending commands remain
+recoverable; clearing history does not cancel or discard them.
 
 ### "App is failed"
 

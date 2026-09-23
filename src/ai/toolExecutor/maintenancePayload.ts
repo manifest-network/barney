@@ -55,10 +55,10 @@ export async function recoverMaintenancePayload(
   if (command.manifest !== undefined) return command.manifest;
   if (!signing) return undefined;
   options.assertAuthorization?.();
-  const token = await signing.authTokens.getAuthToken(asLeaseUuid(command.leaseUuid));
-  signal?.throwIfAborted();
-  options.assertAuthorization?.();
   try {
+    const token = await signing.authTokens.getAuthToken(asLeaseUuid(command.leaseUuid));
+    signal?.throwIfAborted();
+    options.assertAuthorization?.();
     const releases = await getLeaseReleases(command.providerUrl, command.leaseUuid, token);
     signal?.throwIfAborted();
     for (const release of releases.releases) {
@@ -67,6 +67,8 @@ export async function recoverMaintenancePayload(
       if (manifest !== undefined) return manifest;
     }
   } catch (error) {
+    signal?.throwIfAborted();
+    options.assertAuthorization?.();
     if (isAbortError(error)) throw error;
     // Recovery remains unavailable; never replace the command or expose a raw
     // provider error that might include secret-bearing historical bytes.

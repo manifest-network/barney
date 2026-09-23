@@ -308,6 +308,25 @@ describe('maintenance operation retention', () => {
     expect(JSON.parse(localStorage.getItem(storageKey)!)).toEqual(newer);
   });
 
+  it('checks completion authorization inside the queued lock before clearing metadata', async () => {
+    const original = await operations.getOrCreateMaintenanceOperation(update);
+    let releaseLock!: () => void;
+    const heldLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+    vi.stubGlobal('navigator', { locks: { request: async (_key: string, action: () => unknown) => {
+      await heldLock;
+      return action();
+    } } });
+    let current = true;
+    const completion = operations.completeMaintenanceOperation(original, () => {
+      if (!current) throw new Error('Wallet authorization changed');
+    });
+    const rejected = expect(completion).rejects.toThrow('Wallet authorization changed');
+    current = false;
+    releaseLock();
+    await rejected;
+    expect(pending()?.idempotencyKey).toBe(original.idempotencyKey);
+  });
+
 
   it('persists acknowledgement for read-only reconciliation after reload', async () => {
     const original = await operations.getOrCreateMaintenanceOperation(update);

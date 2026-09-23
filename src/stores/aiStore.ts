@@ -562,11 +562,38 @@ export const createAIStore = () =>
 
     // --- Lifecycle ---
     destroy: () => {
-      const { _rafId, abortController, _historyCache } = get();
-      if (_rafId) cancelAnimationFrame(_rafId);
-      if (abortController) abortController.abort();
-      _historyCache.clear();
-      set({ _rafId: null, abortController: null });
+      const current = get();
+      if (current._rafId !== null) cancelAnimationFrame(current._rafId);
+      current.abortController?.abort();
+      current._historyCache.clear();
+      current._toolCache.clear();
+      // A teardown (including StrictMode effect cleanup) invalidates cards and
+      // callbacks before releasing their replay protection. Preserve transcript
+      // content, but never leave a hidden confirmation or in-flight UI alive.
+      const messages = current.messages.map((message) => {
+        const pending = message.id === current.pendingConfirmation?.messageId || message.awaitingConfirmation === true;
+        const inFlight = message.id === current.activeTransactionMessageId || message.transactionInFlight === true;
+        if (!pending && !inFlight && !message.isStreaming) return message;
+        const notice = pending ? 'This confirmation expired when the chat session ended.'
+          : inFlight ? 'The chat session ended while this transaction was in progress. Check its status before retrying.'
+            : undefined;
+        return { ...message, isStreaming: false, awaitingConfirmation: false, transactionInFlight: false,
+          ...(notice && { content: notice, error: notice }) };
+      });
+      set({
+        messages,
+        authorizationEpoch: current.authorizationEpoch + 1,
+        pendingConfirmation: null,
+        activeTransactionMessageId: null,
+        pendingPayload: null,
+        deployProgress: null,
+        isStreaming: false,
+        lastMessageTime: 0,
+        _pendingStreamUpdate: null,
+        _rafId: null,
+        abortController: null,
+      });
+      if (current.address) clearCompletedMaintenance({ address: current.address, chainId: current.chainId });
     },
   }));
 

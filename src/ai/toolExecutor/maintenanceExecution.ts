@@ -7,6 +7,7 @@ import { runtimeConfig } from '../../config/runtimeConfig';
 import { sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
 import { isAbortError } from '../../api/utils';
 import { createProgressReporter } from '../progress';
+import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import { buildBarneyCtx } from './capabilityCtx';
 import { connectionPatch, resolveAppEndpoint } from './helpers';
 import { resolveAppUrl } from './deployUrl';
@@ -22,10 +23,14 @@ import {
   markMaintenanceOperationDispatched,
   prepareMaintenanceOperation,
   MaintenanceOperationRefusalError,
+  MaintenanceOperationSupersededError,
   type MaintenanceOperation,
 } from './maintenanceOperation';
 import { captureMaintenanceBaseline, evaluateMaintenanceOutcome } from './maintenanceOutcome';
-import { getCompletedMaintenance, rememberMaintenanceCompletion, type MaintenanceResult } from './maintenanceCompletion';
+import {
+  captureMaintenanceCompletionEpoch, getCompletedMaintenance, isMaintenanceCompletionCacheFull, isMaintenanceCompletionEpochCurrent,
+  rememberMaintenanceCompletion, type MaintenanceResult,
+} from './maintenanceCompletion';
 import { settledMaintenanceRefusal } from './maintenanceRefusal';
 import type { ToolExecutorOptions } from './types';
 
@@ -49,6 +54,12 @@ export async function executeMaintenance(
   }
   const { operation, app_name: name, leaseUuid, providerUrl } = input;
   const chainId = options.authorization?.chainId ?? runtimeConfig.PUBLIC_CHAIN_ID;
+  const completionEpoch = captureMaintenanceCompletionEpoch({ address, chainId });
+  const assertCurrent = () => {
+    options.assertAuthorization?.();
+    signal?.throwIfAborted();
+    if (!isMaintenanceCompletionEpochCurrent(completionEpoch)) throw new Error('This maintenance confirmation is no longer current.');
+  };
   const verb = operation === 'restart' ? 'Restart' : 'Update';
   const onProgress = createProgressReporter(options.onProgress);
   const token = () => signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
@@ -58,7 +69,22 @@ export async function executeMaintenance(
   let dispatchStarted = false;
   let accepted = false;
   let localDispatchError: unknown;
+  let recoveryKey = input.idempotencyKey;
+  const observationOnly = (detail: string): MaintenanceResult => {
+    const guidance = `${verb} observation for "${name}": ${detail} ` +
+      `Check app_status("${name}") and app_releases("${name}") to observe the current state.`;
+    onProgress({ phase: 'unconfirmed', operation, detail: 'Observe the current app state' });
+    return { outcome: 'unconfirmed', result: { success: false, error: guidance } };
+  };
   const unconfirmed = (detail: string): MaintenanceResult => {
+    try {
+      const saved = getPendingMaintenanceOperation(address, providerUrl, leaseUuid, chainId);
+      if (!saved || saved.operation !== operation || saved.idempotencyKey !== recoveryKey) {
+        return observationOnly(`${detail} The saved command is no longer pending here; it may have been settled or superseded in another tab.`);
+      }
+    } catch {
+      return observationOnly(`${detail} The saved command could not be read. Restore browser storage access before further recovery.`);
+    }
     const guidance = `${verb} outcome for "${name}" is unconfirmed. ${detail} ` +
       `Check app_status("${name}") and app_releases("${name}"). ` +
       `Retry ${operation}_app(app_name="${name}") to recover the saved command with its original key and exact payload. ` +
@@ -72,20 +98,25 @@ export async function executeMaintenance(
       ? getCompletedMaintenance({ ...input, address, chainId, idempotencyKey: input.idempotencyKey })
       : undefined;
     if (priorResult) {
+      assertCurrent();
       if (priorResult.payloadHash !== await metaHashHex(input.manifest ?? '')) {
         return { outcome: 'failed', result: { success: false, error: 'A command key cannot be reused with different payload bytes.' } };
       }
-      onProgress({ phase: priorResult.result.outcome === 'succeeded' ? 'ready' : 'failed', operation, detail: priorResult.result.result.error });
+      assertCurrent();
+      onProgress({ phase: priorResult.result.outcome === 'succeeded' ? 'ready' : priorResult.result.outcome === 'failed' ? 'failed' : 'unconfirmed', operation, detail: priorResult.result.result.error });
       return priorResult.result;
     }
     const pending = getPendingMaintenanceOperation(address, providerUrl, leaseUuid, chainId);
     if (pending) assertMaintenanceOperationMatches(pending, input);
     else if (input.expectPending) {
-      throw new MaintenanceOperationRefusalError('The saved maintenance operation no longer exists. Refresh app_status and app_releases before requesting a new command.');
+      throw new MaintenanceOperationSupersededError('The saved maintenance operation no longer exists; it may have been settled or superseded in another tab.');
     }
+    if (!pending && isMaintenanceCompletionCacheFull({ address, chainId })) {
+      throw new MaintenanceOperationRefusalError('This wallet has reached its maintenance confirmation limit. Clear its chat history before starting another command.');
+    }
+    recoveryKey = pending?.idempotencyKey ?? recoveryKey;
     existedBeforeAttempt = pending !== undefined;
-    options.assertAuthorization?.();
-    signal?.throwIfAborted();
+    assertCurrent();
     if (pending && input.manifest !== undefined && pending.payloadHash !== await metaHashHex(input.manifest)) {
       return unconfirmed('This retry has different manifest bytes from the saved command and was not sent.');
     }
@@ -106,6 +137,7 @@ export async function executeMaintenance(
       expectPending: input.expectPending || existedBeforeAttempt,
     });
     command = prepared.command;
+    recoveryKey = command.idempotencyKey;
     created = prepared.created;
     const registrySnapshot = JSON.stringify(appRegistry.getAppByLease(address, leaseUuid));
     const ctx = await buildBarneyCtx(clientManager, signing, { events: browserEventTransport });
@@ -116,14 +148,9 @@ export async function executeMaintenance(
         // cancellation cleanup. A local failure cannot delete another sender's
         // recovery handle. SDK authentication and recovery wrapping stay intact.
         try {
-          options.assertAuthorization?.();
-          signal?.throwIfAborted();
-          await markMaintenanceOperationDispatched(prepared.command, () => {
-            options.assertAuthorization?.();
-            signal?.throwIfAborted();
-          });
-          options.assertAuthorization?.();
-          signal?.throwIfAborted();
+          assertCurrent();
+          await markMaintenanceOperationDispatched(prepared.command, assertCurrent);
+          assertCurrent();
         } catch (error) {
           // The SDK wraps injected-fetch errors as transport uncertainty. Keep
           // local cancellation identity for a safely discarded new command.
@@ -135,7 +162,7 @@ export async function executeMaintenance(
       },
     };
     onProgress({ phase: operation === 'restart' ? 'restarting' : 'updating', operation, detail: `${verb} requested...` });
-    options.assertAuthorization?.();
+    assertCurrent();
     const callOptions = { pollOptions: false as const, providerUrl, signal, idempotencyKey: command.idempotencyKey, fredCompatibility: 'pr240' as const };
     // SDK mints fresh ADR-036 authentication for every invocation, including
     // exact retries; it also retains the command handle in structured errors.
@@ -145,7 +172,13 @@ export async function executeMaintenance(
       await updateApp(maintenanceCtx, { address, leaseUuid, manifest: command.manifest! }, callOptions);
     }
     accepted = true;
-    await markMaintenanceOperationAccepted(command);
+    try {
+      await markMaintenanceOperationAccepted(command);
+    } catch (error) {
+      // Another tab can settle the command before this response arrives. Its
+      // removed marker does not erase this attempt's immutable read baseline.
+      if (!(error instanceof MaintenanceOperationSupersededError)) throw error;
+    }
     onProgress({ phase: 'provisioning', operation, detail: 'Waiting for runtime and operation outcome...' });
     let status;
     try {
@@ -199,31 +232,40 @@ export async function executeMaintenance(
       : { outcome: 'succeeded', url, result: { success: true, data: {
         message: `App "${name}" has been ${operation === 'restart' ? 'restarted' : 'updated'}.`, name, url, status: 'running',
       } } };
-    const observedCommand = command;
     const applied = await commitMaintenanceObservation(command, {
       settled,
       isCurrent: () => {
-        options.assertAuthorization?.();
-        signal?.throwIfAborted();
-        return JSON.stringify(appRegistry.getAppByLease(address, leaseUuid)) === registrySnapshot;
+        assertCurrent();
+        return true;
       },
       apply: () => {
-        if (Object.keys(patch).length > 0) appRegistry.updateApp(address, leaseUuid, patch);
-        if (result) rememberMaintenanceCompletion(observedCommand, result);
+        // Registry freshness controls only this projection, not the independently
+        // verified command verdict or retirement of its still-current marker.
+        if (JSON.stringify(appRegistry.getAppByLease(address, leaseUuid)) === registrySnapshot && Object.keys(patch).length > 0) {
+          appRegistry.updateApp(address, leaseUuid, patch);
+        }
       },
     });
+    assertCurrent();
+    if (result) {
+      rememberMaintenanceCompletion(command, result, completionEpoch);
+      onProgress({ phase: result.outcome === 'succeeded' ? 'ready' : 'failed', operation, detail: result.result.error });
+      return result;
+    }
     if (!applied) {
       const prior = getCompletedMaintenance(command);
       if (prior) {
-        onProgress({ phase: prior.result.outcome === 'succeeded' ? 'ready' : 'failed', operation, detail: prior.result.result.error });
+        onProgress({ phase: prior.result.outcome === 'succeeded' ? 'ready' : prior.result.outcome === 'failed' ? 'failed' : 'unconfirmed', operation, detail: prior.result.result.error });
         return prior.result;
       }
-      return unconfirmed('The app or saved command changed during verification. Refresh its status before recovery.');
+      return observationOnly('The saved command changed during verification and may have been settled or superseded in another tab. This view could not establish its outcome.');
     }
-    if (!result) return unconfirmed(verdict.detail ?? 'The provider has not established a settled command result.');
-    onProgress({ phase: result.outcome === 'succeeded' ? 'ready' : 'failed', operation, detail: result.result.error });
-    return result;
+    return unconfirmed(verdict.detail ?? 'The provider has not established a settled command result.');
   } catch (error) {
+    if (error instanceof MaintenanceOperationSupersededError || localDispatchError instanceof MaintenanceOperationSupersededError) {
+      const detail = (localDispatchError instanceof MaintenanceOperationSupersededError ? localDispatchError : error) as MaintenanceOperationSupersededError;
+      return observationOnly(`${dispatchStarted ? 'No further maintenance request was sent.' : 'This recovery request was not sent.'} ${detail.message}`);
+    }
     if (error instanceof MaintenanceOperationRefusalError) {
       onProgress({ phase: 'failed', operation, detail: error.message });
       return { outcome: 'failed', result: { success: false, error: error.message } };
@@ -240,14 +282,17 @@ export async function executeMaintenance(
     const refusal = command && settledMaintenanceRefusal(error, command);
     if (command && refusal) {
       try {
-        await completeMaintenanceOperation(command);
+        assertCurrent();
+        await completeMaintenanceOperation(command, assertCurrent);
+        assertCurrent();
       } catch {
-        return unconfirmed('The provider refused the command, but its recovery record could not be safely cleared. Restore browser storage access before retrying.');
+        return observationOnly('The provider refused the command, but this confirmation or its recovery record could not be safely updated.');
       }
-      const detail = `${verb} failed: ${refusal}.`;
-      onProgress({ phase: 'failed', operation, detail });
+      const safeRefusal = sanitizeForDisplay(refusal, 512);
+      const detail = `${verb} failed: ${safeRefusal}${/[.!?…]$/.test(safeRefusal) ? '' : '.'}`;
       const result: MaintenanceResult = { outcome: 'failed', result: { success: false, error: detail } };
-      rememberMaintenanceCompletion(command, result);
+      rememberMaintenanceCompletion(command, result, completionEpoch);
+      onProgress({ phase: 'failed', operation, detail });
       return result;
     }
     if (command || existedBeforeAttempt) {

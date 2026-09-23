@@ -109,6 +109,30 @@ describe('read-only maintenance reconciliation', () => {
     expect(pending()?.idempotencyKey).toBe(first.idempotencyKey);
   });
 
+  it('does not settle or repopulate completion memory after its session is cleared', async () => {
+    const command = await prepare();
+    let releaseRead!: (value: FredLeaseReleases) => void;
+    vi.mocked(fred.getLeaseReleases).mockImplementationOnce(() => new Promise((resolve) => { releaseRead = resolve; }));
+    const observation = reconcile(app, options);
+    await vi.waitFor(() => expect(releaseRead).toBeTypeOf('function'));
+    const completion = await import('./maintenanceCompletion');
+    completion.clearCompletedMaintenance(command);
+    releaseRead(history(release(1, 'superseded'), release(2)));
+    expect(await observation).toMatchObject({ outcome: 'unconfirmed' });
+    expect(options.appRegistry!.updateApp).not.toHaveBeenCalled();
+    expect(pending()?.idempotencyKey).toBe(command.idempotencyKey);
+    expect(completion.getCompletedMaintenance(command)).toBeUndefined();
+  });
+
+  it('omits runtime readiness when a failed command is observed without a provision response', async () => {
+    await prepare();
+    vi.mocked(fred.getLeaseProvision).mockRejectedValueOnce(new Error('Runtime read unavailable'));
+    const result = await reconcile(app, options, history(release(1), release(2, 'failed')));
+    expect(result).toMatchObject({ outcome: 'failed' });
+    expect(result).not.toHaveProperty('runtimeReady');
+    expect(pending()).toBeUndefined();
+  });
+
   it('does not sign or query for an already-cancelled reconciliation', async () => {
     await prepare();
     const controller = new AbortController();
@@ -181,7 +205,9 @@ describe('read-only maintenance reconciliation', () => {
   it('does not attribute a release to a command whose POST response was lost', async () => {
     const command = await prepare('update', false);
     await reload();
-    expect(await reconcile(app, options)).toMatchObject({ outcome: 'unconfirmed', runtimeReady: false });
+    const result = await reconcile(app, options);
+    expect(result).toMatchObject({ outcome: 'unconfirmed' });
+    expect(result).not.toHaveProperty('runtimeReady');
     expect(options.signing!.authTokens.getAuthToken).not.toHaveBeenCalled();
     expect(fred.getLeaseProvision).not.toHaveBeenCalled();
     expect(fred.getLeaseReleases).not.toHaveBeenCalled();

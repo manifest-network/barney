@@ -54,12 +54,22 @@ After reload, an original attachment can be merged with cached defaults only
 as a candidate: its exact hash must match. Without an attachment, provider
 release history can supply hash-matching bytes for a recovery confirmation;
 that lookup does not establish command admission or completion. If neither
-source matches, the exact reviewed payload is still required. Browser storage
+source matches, the exact reviewed payload is still required. A durable rejection
+creates no release: if its response and a generated/edited payload are both lost,
+the tenant API offers no receipt lookup to resolve the command. Barney keeps it
+unresolved; deleting its metadata would not cancel Fred's command or make a new
+key safe. Browser storage
 failures block dispatch, but retirement after an authoritative closed lease is
 best-effort and cannot change the stop result. Web Locks coordinate state
-between tabs; missing metadata drops stale memory, and a recovery confirmation
+between tabs where supported; the fallback serializes only within one tab.
+Missing metadata drops stale memory, and a recovery confirmation
 requires the pending record to still exist. Settled confirmations are memoized
 in memory so retrying a batch does not resubmit already completed items.
+The session retains at most 128 completed results without evicting command
+identities. At that limit, existing pending operations remain recoverable, but
+new commands require clearing chat history to invalidate old confirmations.
+Wallet changes, history clearing, and store destruction also invalidate cache
+epochs so late responses cannot repopulate a previous session.
 
 `maintenanceOutcome.ts` evaluates command outcome separately from readiness.
 A 202 replay can precede execution while the source runtime is still ready.

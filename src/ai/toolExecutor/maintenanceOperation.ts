@@ -48,8 +48,11 @@ interface MaintenanceInput extends Omit<MaintenanceScope, 'chainId'> {
 /** A local conflict or stale recovery plan must never be reported as a sent command. */
 export class MaintenanceOperationRefusalError extends Error {}
 
-function missingOperation(): MaintenanceOperationRefusalError {
-  return new MaintenanceOperationRefusalError('The saved maintenance operation no longer exists. Refresh app_status and app_releases before requesting a new command.');
+/** A recovery can become obsolete without the original operation having failed. */
+export class MaintenanceOperationSupersededError extends Error {}
+
+function missingOperation(): MaintenanceOperationSupersededError {
+  return new MaintenanceOperationSupersededError('The saved maintenance operation no longer exists; it may have been settled or superseded in another tab.');
 }
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -173,10 +176,13 @@ export function getPendingMaintenanceOperation(
 
 export function assertMaintenanceOperationMatches(
   record: MaintenanceOperation,
-  input: Pick<MaintenanceInput, 'operation' | 'idempotencyKey'>,
+  input: Pick<MaintenanceInput, 'operation' | 'idempotencyKey' | 'expectPending'>,
 ): void {
   if (record.operation !== input.operation
     || (input.idempotencyKey !== undefined && record.idempotencyKey !== input.idempotencyKey)) {
+    if (input.expectPending) {
+      throw new MaintenanceOperationSupersededError('The saved recovery command is no longer pending; another command is now recorded for this app.');
+    }
     throw new MaintenanceOperationRefusalError(`${record.operation === 'update' ? 'An' : 'A'} ${record.operation} is still unresolved for this app. Retry that exact operation or reconcile its outcome before submitting a new command.`);
   }
 }
@@ -224,10 +230,10 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
     const current = getPendingMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid, scope.chainId);
     if (!current && (initial || input.expectPending)) throw missingOperation();
     if (current) {
-      assertMaintenanceOperationMatches(current, input);
       if (initial && !matches(initial, metadataFor(current))) {
-        throw new MaintenanceOperationRefusalError('The saved maintenance operation changed during preparation. Refresh app_status and app_releases before retrying.');
+        throw new MaintenanceOperationSupersededError('The saved maintenance operation changed during preparation; it may have been settled or superseded in another tab.');
       }
+      assertMaintenanceOperationMatches(current, input);
       if (current.payloadHash !== payloadHash || (current.manifest !== undefined && current.manifest !== manifest)) {
         throw new MaintenanceOperationRefusalError('An update is still unresolved with different manifest bytes. Retry its exact original payload or reconcile its outcome before submitting a new command.');
       }
@@ -254,9 +260,10 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
 }
 
 /** Release only after the caller has verified a settled maintenance outcome. */
-export async function completeMaintenanceOperation(record: MaintenanceOperation): Promise<void> {
+export async function completeMaintenanceOperation(record: MaintenanceOperation, beforeComplete?: () => void): Promise<void> {
   const key = storageKey(record);
   await withScopeLock(key, () => {
+    beforeComplete?.();
     const metadata = readMetadata(key);
     if (!metadata) {
       pending.delete(key);
@@ -285,7 +292,7 @@ async function markOperation(record: MaintenanceOperation, accepted: boolean, be
     beforeMark?.();
     const current = getPendingMaintenanceOperation(record.address, record.providerUrl, record.leaseUuid, record.chainId);
     if (!current || !matches(current, metadataFor(record))) {
-      throw new Error('The saved maintenance operation changed before dispatch; reconcile it before submitting a command.');
+      throw new MaintenanceOperationSupersededError('The saved maintenance operation changed before dispatch; it may have been settled or superseded in another tab.');
     }
     const updated = Object.freeze({ ...current, dispatched: true, ...(accepted && { accepted: true }) });
     persist(key, updated);
