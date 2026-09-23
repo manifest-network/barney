@@ -182,10 +182,12 @@ points, by field:
 One recovery driver selects one app at a time, with a total request deadline and a separate token
 per endpoint. It yields to chat, confirmations, and transactions, and aborts on wallet changes.
 Incomplete responses retry with per-app backoff (15s, 30s, 60s) up to four attempts for an unchanged
-snapshot. Confirmed apps with saved, invalidated connection inventory get four additional attempts
-at five-minute intervals (eight total); missing inventory keeps the four-attempt limit. Every attempt
+snapshot. Uncertain maintenance readiness and confirmed apps with saved, invalidated connection
+inventory get four additional attempts at five-minute intervals (eight total). The readiness flag
+keeps that allowance after foreground connection refreshes and reloads; other missing inventory
+keeps the four-attempt limit. Every attempt
 checks readiness as well as connections. The allowance can grow from four to eight when readiness
-is confirmed with saved, invalidated inventory, without resetting used attempts. It never shrinks
+is uncertain after maintenance or confirmed with saved, invalidated inventory, without resetting used attempts. It never shrinks
 across the driver's own partial observations, and the slow retry cadence stays fixed. A failed verdict
 or confirmed workload with an explicit empty port inventory retires once pending readiness is resolved;
 missing URLs alone do not cause endless signing. `app_status` remains the explicit refresh path
@@ -261,7 +263,8 @@ another tab's settlement cannot become a new command with a fresh baseline.
 Persisted metadata is authoritative over stale memory. After reload,
 `maintenancePayload.ts` can recover exact bytes from release history or a
 deterministic re-merge of a reattached file, but every candidate must match the
-saved payload hash. A failed history read or rejected signature offers another same-key recovery
+saved payload hash. A mismatched attachment falls through to retained memory and release history,
+so the current turn can recover without first discarding its attachment. A failed history read or rejected signature offers another same-key recovery
 attempt; only a successful history read with no matching bytes offers the stop-only exit.
 Payload recovery does not establish admission or outcome.
 Unacknowledged commands add no signatures or provider reads to status queries.
@@ -274,7 +277,13 @@ authorization is invalidated; ordinary query-cache clears retain replay protecti
 One compact nonsecret settled receipt per lease replaces the pending record at the same storage
 key, so settlement reduces quota usage. Only receipts marked when recovery guidance was issued
 block ordinary planning; directly reported outcomes allow routine follow-up commands. Older pending
-records without an advice flag conservatively retain the recovery barrier. Every new
+records without an advice flag conservatively retain the recovery barrier. Nonsecret recovery
+intent in sessionStorage (with an in-memory fallback) keeps this tab's old advice guarded even
+after another tab completes a deliberate successor. Only dispatch of an explicitly approved new
+command consumes its bound intent; cancellation keeps it. Shared advice marking updates pending
+records only, never grows a settled receipt, and cannot fail a status read on quota exhaustion. A new
+command requires a settled receipt when tab-local recovery intent survives a missing pending record;
+without either record, even `new_command: true` remains observation-only because no outcome is known. Every new
 confirmation binds the previous receipt's key; a changed receipt refuses dispatch. A never-sent
 cancellation restores the prior receipt. Verified outcomes and manifest updates survive failed
 receipt writes, which cached exact retries reattempt without another provider request. If command
@@ -290,6 +299,10 @@ projected independently of unrelated registry observations. Uncertain maintenanc
 an absent observation. `refreshAppConnection` shares readiness retirement between status queries
 and background reads. Fresh connections restore DNS evidence even while status is unavailable or
 in progress; bounded readiness reads continue independently until a verdict or budget exhaustion.
+Unset and false freshness flags are equivalent when checking observation snapshots. An explicit
+command failure without a runtime reading also schedules readiness checks. Model and AppCard
+Stop confirmations share a metadata-only warning naming affected apps: Fred may still execute
+pending maintenance until their leases close.
 
 ⚠️ **The SDK primitives serialize their own broadcasts — call them directly, never through a signing mutex.** `deployManifest` / `stopApp` / `fundCredits` / `waitForLeaseStatus` / `updateApp` / `restartApp` mint their own ADR-036 tokens through the same non-reentrant signing mutex, so wrapping any of them in a caller-side sign-lock deadlocks (e.g. deployManifest → `providerAuth.leaseDataToken` → same mutex → circular wait). Chain-TX serialization comes entirely from `CosmosClientManager.withBroadcastLock` (held internally by the SDK cosmos-tx path) plus the mutex-wrapped `signArbitrary` (the D2 replay guard). ENG-312 Phase 8 **removed** the old `SigningContext.withSign` escape hatch — there is no caller-side sign-lock to misuse anymore.
 
@@ -410,7 +423,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 | `AUTO_REFRESH_INTERVAL_MS` | 15s | Auto-refresh interval for sidebar data polling |
 | `APP_RECOVERY_POLL_INTERVAL_MS` | 1s | Idle checks for the next eligible app |
 | `APP_RECOVERY_MAX_ATTEMPTS` | 4 | Initial automatic attempts per unchanged app snapshot |
-| `APP_CONNECTION_RECOVERY_MAX_ATTEMPTS` | 8 | Total attempts for confirmed apps with saved, invalidated connection inventory |
+| `APP_CONNECTION_RECOVERY_MAX_ATTEMPTS` | 8 | Total attempts for uncertain maintenance readiness or confirmed apps with invalidated connection inventory |
 | `APP_CONNECTION_RECOVERY_INTERVAL_MS` | 300000 | Delay between additional recovery attempts after the initial four |
 | `APP_RECOVERY_TIMEOUT_MS` | `AI_TOOL_API_TIMEOUT_MS` | Aggregate provider-recovery deadline |
 | `REGISTRY_RECONCILIATION_TIMEOUT_MS` | `2 * AI_TOOL_API_TIMEOUT_MS` | Aggregate deadline for sequential lease and catalog reads |
@@ -465,7 +478,7 @@ All tunable timeouts, cache sizes, and limits are centralized here. Key values:
 - **Abort guards key on the ERROR, not on the signal**: use `isAbortError(err)` instead of an ambient `signal.aborted` check. Any new chat message can abort the controller while an unrelated failure arrives. Pre-dispatch cancellation is safe only when the SDK establishes the request was never sent and no older unresolved attempt exists. Cancellation while recovering an already-sent command or waiting for readiness does not mean the provider did nothing; retain the operation key and exact payload until a correlated settled verdict is verified.
 - **An unmodelled provider verdict defaults to being trusted**: fred's `ProvisionStatus` and `Reason` sets are open and add-only, so gates over them are written as NEGATIVE lists — name the values that carry no verdict (`isUnsettledProvisionStatus`, `provisionStatus.ts`) or that the operation can be blamed for (`UPDATE_ATTRIBUTABLE_REASONS`) and let everything else fall to the conservative arm. A positive allowlist makes every value fred adds later silently report success. Same open-set discipline as `browse_catalog`'s health verdict.
 - **Error UX boundary**: **Toasts** (`useToast` + `ToastContainer`) are reserved for surfaces that exist *before* the chat panel mounts — wallet connection errors (popup blocked / closed / network) in `AppShell`. User-initiated chat and tool errors flow through **chat messages** (`error` field on `ChatMessage`, surfaced as inline alerts with `ERROR_PATTERNS` regex-matched "Try again" suggestion buttons in `MessageBubble.tsx`): tool failures, deploy failures, signing rejections, payload validation, and manifest parse errors all land in chat. Background reads that belong to a persistent non-chat surface stay local to that surface; the sidebar credit poll, for example, renders an inline alert with Retry rather than injecting chat noise. Don't add new toasts post-connect.
-- **Custom-domain DNS state**: All four custom-domain surfaces (sidebar dot, deploy success pill, single-domain card, multi-domain consolidated card) read DNS status from a single source — `aiStore.dnsStatuses`. The map is populated by `useDnsStatusPolling`, mounted exactly once in `MainLayout` (deliberately outside the sidebar's `ErrorBoundary` — a sidebar render error must not take DNS state down with it). Lifecycle operations mark saved connection inventory `connectionStale` until a fresh connection read clears it. Stale inventory cannot supply an expected CNAME target; a changed or invalidated target resets cached DNS verdicts, including terminal ones. Background recovery also retries confirmed apps with saved, invalidated connections: each attempt checks readiness and connection data with separate credentials. After the initial four attempts, four more run at five-minute intervals; missing inventory stays within the initial budget. Failure verdicts retire recovery, and exhausted budgets require an explicit status check or a changed app snapshot. DNS/HTTPS probes wait until the expected target is available. No surface runs its own polling loop. Adding a new surface means reading `dnsStatuses.get(dnsStatusKey(leaseUuid, fqdn))`, not adding another `useVisibilityPolling`.
+- **Custom-domain DNS state**: All four custom-domain surfaces (sidebar dot, deploy success pill, single-domain card, multi-domain consolidated card) read DNS status from a single source — `aiStore.dnsStatuses`. The map is populated by `useDnsStatusPolling`, mounted exactly once in `MainLayout` (deliberately outside the sidebar's `ErrorBoundary` — a sidebar render error must not take DNS state down with it). Lifecycle operations mark saved connection inventory `connectionStale` until a fresh connection read clears it. Stale inventory cannot supply an expected CNAME target; a changed or invalidated target resets cached DNS verdicts, including terminal ones. Background recovery also retries confirmed apps with saved, invalidated connections: each attempt checks readiness and connection data with separate credentials. Uncertain maintenance readiness also keeps the extended allowance after a fresh connection read or reload. After the initial four attempts, four more run at five-minute intervals; other missing inventory stays within the initial budget. Failure verdicts retire recovery, and exhausted budgets require an explicit status check or a changed app snapshot. DNS/HTTPS probes wait until the expected target is available. No surface runs its own polling loop. Adding a new surface means reading `dnsStatuses.get(dnsStatusKey(leaseUuid, fqdn))`, not adding another `useVisibilityPolling`.
 - **SKU tier resolution**: Single source of truth for ordinary planning and display is `aiStore.skuTiers` (slice produced by `loadSkuTiers`, kicked off once in `AIProvider`). The resolved tier list is chain ∩ `PUBLIC_SKU_SPECS` — chain owns SKU names + per-`Unit` prices (normalized to `$/hr` in `hourlyPriceFromSku()`), env owns CPU/RAM/disk. The UI cache is session-lifetime with no periodic refresh; batch deploy resolves both its initial plan and confirm-time integrity plan against active chain SKUs so the consent hashes use the same price/provider source. All deploy-related surfaces read from the slice: `deploy_app.size.enum` (`buildAITools(tiers)`), `/help` table (`buildHelpText(skuTiers)`), system prompt tier block (`getSystemPrompt(addr, tiers)`), `ConfirmationCard` price/specs row, executor (`compositeTransactions.ts` reads `options.tiers`). No gating: deploy surfaces (`ChatPanel` example-app buttons, `AppsSidebar` re-deploy, `ConfirmationCard` Confirm) are never disabled by tier state. The executor + `ConfirmationCard` share `resolveSizeOrCheapest` — an omitted or unavailable size resolves to the cheapest tier, and the card discloses the resolved tier's price + specs (`formatTierSpecs`) plus a substitution note when an explicitly-requested size isn't offered (`fallback === 'cheapest-unavailable'`). An empty tier list is the only hard failure: the executor returns `Tier catalog unavailable — try again in a moment.`, surfaced inline in chat with a `Retry` (`MessageBubble` `ERROR_PATTERNS` → `retrySkuTiers`). This is also the single failure mode for `buildAITools([])` omitting the `size.enum`.
 
 ### Example Apps

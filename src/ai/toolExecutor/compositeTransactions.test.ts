@@ -2156,7 +2156,7 @@ describe('executeStopApp', () => {
     const result = await executeStopApp({ app_name: mode === 'batch' ? 'all' : app.name },
       makeOptions({ appRegistry: makeRegistry([app]) }));
     expect(result.requiresConfirmation).toBe(true);
-    expect(result.confirmationMessage).toContain('Fred may execute pending maintenance until the affected lease closes.');
+    expect(result.confirmationMessage).toContain(`Fred may execute pending maintenance for "${app.name}" until its lease closes.`);
     expect(result.confirmationMessage).toContain('it does not recover the pending command');
     expect(getLeaseProvision).not.toHaveBeenCalled();
     expect(getLease).not.toHaveBeenCalled();
@@ -2174,11 +2174,28 @@ describe('executeStopApp', () => {
     const result = await executeStopApp({ app_name: app.name }, makeOptions({ appRegistry: makeRegistry([app]) }));
     expect(result.requiresConfirmation).toBe(true);
     expect(result.confirmationMessage).toContain('Saved maintenance could not be checked');
-    expect(result.confirmationMessage).toContain('until the affected lease closes');
+    expect(result.confirmationMessage).toContain(`Saved maintenance could not be checked for "${app.name}"`);
+    expect(result.confirmationMessage).toContain('until their leases close');
     expect(result.confirmationMessage).not.toContain('private metadata');
     expect(getLeaseProvision).not.toHaveBeenCalled();
     expect(getLease).not.toHaveBeenCalled();
     await retireAbsentMaintenanceOperation({ address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid });
+  });
+
+  it('names each affected app in a mixed batch stop warning', async () => {
+    const apps = ['cache', 'worker', 'web'].map(name => makeApp({ name,
+      providerUrl: 'https://s049-u002.manifest0.net/api/fred', leaseUuid: crypto.randomUUID() }));
+    for (const app of apps.slice(0, 2)) {
+      await getOrCreateMaintenanceOperation({ address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid,
+        operation: 'restart', baselineReleaseVersions: [1] });
+    }
+    const result = await executeStopApp({ app_name: 'all' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('pending maintenance for "cache", "worker" until their leases close');
+    expect(result.confirmationMessage).not.toContain('"worker", "web"');
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(stopApp).not.toHaveBeenCalled();
+    for (const app of apps) await retireAbsentMaintenanceOperation({ address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid });
   });
 
   it('returns confirmation for stop all with multiple running apps', async () => {
@@ -3489,6 +3506,8 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(result.error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
     if (longProviderText) {
       expect(result.error).toContain('Use get_logs(app_name="game1", tail=200) for more');
+      expect(result.error).toContain('latest-line');
+      expect(details.some((detail) => detail.includes('latest-line'))).toBe(true);
       expect(result.error).not.toContain('earliest-line');
       vi.mocked(getLeaseLogs).mockResolvedValueOnce({ lease_uuid: 'lease-x', tenant: ADDRESS, provider_uuid: 'p1', logs } as any);
       const { executeGetLogs } = await import('./compositeQueries');

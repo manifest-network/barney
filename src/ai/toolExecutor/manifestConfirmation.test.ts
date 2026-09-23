@@ -288,11 +288,60 @@ it.each(['different release', 'no release after a rejected command'])('does not 
   expect(result.error).toContain('Fred may execute the old command until the lease closes');
   expect(providerFetch).not.toHaveBeenCalled();
   expect((await import('./maintenanceOperation')).getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)?.idempotencyKey).toBe(saved.idempotencyKey);
-  // A supplied replacement must also fail rather than repurpose the old key.
+  // The old module still retains the exact bytes. A replacement attachment
+  // cannot repurpose the key or hide that valid recovery source.
   const mismatched = await planUpdate({ app_name: app.name }, options, attachment('{"image":"redis"}'));
-  expect(mismatched.requiresConfirmation).not.toBe(true);
-  expect(mismatched.error).toContain('no attachment');
-  expect(mismatched.error).not.toContain('stop_app');
+  expect(mismatched.requiresConfirmation, mismatched.error).toBe(true);
+  expect(mismatched.pendingAction?.args).toMatchObject({ idempotencyKey: saved.idempotencyKey,
+    _generatedManifest: saved.manifest, _maintenanceRetry: true });
+  // A reloaded module with neither retained bytes nor matching history still refuses.
+  const unavailable = await fresh.executeUpdateApp({ app_name: app.name }, options, attachment('{"image":"redis"}'));
+  expect(unavailable.requiresConfirmation).not.toBe(true);
+  expect(unavailable.error).toContain('Release history was read successfully but contained no matching manifest');
+});
+
+it.each(['memory', 'history'] as const)('recovers exact bytes from %s even when the same turn keeps supplying a mismatched attachment', async source => {
+  const app: AppEntry = {
+    name: 'example', leaseUuid: crypto.randomUUID(), providerUrl: DEV, providerUuid: 'provider',
+    size: 'small', createdAt: 0, status: 'running', chainState: 'active', provisionState: 'confirmed',
+    manifest: '{"image":"nginx:old"}',
+  };
+  const options = optionsFor(DEV, [app]);
+  histories.set(app.leaseUuid, releases(app.leaseUuid));
+  const plan = await executeUpdateApp({ app_name: app.name, image: 'nginx:new' }, options);
+  expect(plan.requiresConfirmation, plan.error).toBe(true);
+  const manifest = plan.pendingAction!.args._generatedManifest as string;
+  vi.mocked(providerFetch).mockImplementationOnce(async () => {
+    const observed = releases(app.leaseUuid, 2);
+    histories.set(app.leaseUuid, { ...observed, releases: observed.releases.map(release =>
+      release.version === 2 ? { ...release, manifest: btoa(manifest) } : release) });
+    throw new TypeError('Accepted response lost');
+  });
+  expect((await executeConfirmedUpdateApp(plan.pendingAction!.args, chain, options)).error).toContain('unconfirmed');
+  const firstRequest = vi.mocked(providerFetch).mock.calls[0][1]!;
+  const historyReads = vi.mocked(getLeaseReleases).mock.calls.length;
+  if (source === 'history') vi.resetModules();
+  const actions = source === 'memory' ? { executeUpdateApp, executeConfirmedUpdateApp }
+    : await import('./compositeTransactions');
+  const turnAttachment = attachment('{"image":"redis:wrong"}');
+  for (let call = 0; call < 2; call++) {
+    const recovery = await actions.executeUpdateApp({ app_name: app.name }, options, turnAttachment);
+    expect(recovery.requiresConfirmation, recovery.error).toBe(true);
+    expect(recovery.pendingAction?.args).toMatchObject({
+      _generatedManifest: manifest, _maintenanceRetry: true, idempotencyKey: plan.pendingAction!.args.idempotencyKey,
+    });
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+  }
+  if (source === 'memory') expect(getLeaseReleases).toHaveBeenCalledTimes(historyReads);
+  else expect(getLeaseReleases).toHaveBeenCalledTimes(historyReads + 2);
+
+  const recovery = await actions.executeUpdateApp({ app_name: app.name }, options, turnAttachment);
+  vi.mocked(providerFetch).mockResolvedValueOnce(new Response(JSON.stringify({ status: 'updating' }), { status: 202 }));
+  const result = await actions.executeConfirmedUpdateApp(recovery.pendingAction!.args, chain, options, turnAttachment);
+  expect(result.success, result.error).toBe(true);
+  const recoveredRequest = vi.mocked(providerFetch).mock.calls[1][1]!;
+  expect(recoveredRequest.body).toBe(firstRequest.body);
+  expect(new Headers(recoveredRequest.headers).get('Idempotency-Key')).toBe(new Headers(firstRequest.headers).get('Idempotency-Key'));
 });
 
 it('keeps exact-payload recovery guidance when signing the history read is rejected', async () => {
@@ -393,6 +442,12 @@ it.each(['restart', 'update'] as const)('does not borrow a %s key introduced by 
   expect(result.requiresConfirmation).not.toBe(true);
   expect(result.error).toContain('became unresolved while planning');
   expect(result.error).toContain(`Recover that saved ${operation}`);
-  expect(state.getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)?.idempotencyKey).toBe(command.idempotencyKey);
+  expect(state.getPendingMaintenanceOperation(ADDRESS, DEV, app.leaseUuid)).toMatchObject({
+    idempotencyKey: command.idempotencyKey, recoveryAdvised: true,
+  });
+  const { getMaintenanceRecoveryIntent } = await import('./maintenanceRecoveryIntent');
+  expect(getMaintenanceRecoveryIntent({ address: ADDRESS, providerUrl: DEV, leaseUuid: app.leaseUuid })?.idempotencyKey).toBe(command.idempotencyKey);
+  await state.completeMaintenanceOperation(command, undefined, 'succeeded');
+  expect((await planUpdate({ app_name: app.name }, options, attachment('{"image":"nginx:new"}'))).error).toContain('has already settled');
   expect(providerFetch).not.toHaveBeenCalled();
 });

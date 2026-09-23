@@ -181,6 +181,59 @@ describe('useAppRecovery', () => {
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'failed', readinessStale: false });
   });
 
+  it.each([150, 300, 600].flatMap(failedAfter => [false, true].map(reload => ({ failedAfter, reload }))))('observes failure after $failedAfter seconds despite foreground connection refresh and reload=$reload', async ({ failedAfter, reload }) => {
+    const app = addApp({ provisionState: 'confirmed', readinessStale: true, connectionStale: true,
+      url: 'https://old.example.com', connection: { host: '', fqdn: 'old.example.com' } });
+    vi.mocked(appStatus).mockResolvedValue({
+      chainState: { state: LeaseState.LEASE_STATE_ACTIVE, items: [] },
+      fredStatus: { state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'restarting' },
+      connection: { host: '', fqdn: 'app.example.com' },
+    } as never);
+    await executeAppStatus({ app_name: app.name }, {
+      address, clientManager: {} as CosmosClientManager, appRegistry: registry,
+      signing: store.getState().signing!, tiers: [],
+    });
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ connectionStale: false, readinessStale: true });
+    const started = Date.now();
+    vi.mocked(getLeaseStatus).mockImplementation(async () => ({
+      state: LeaseState.LEASE_STATE_ACTIVE,
+      provision_status: Date.now() - started >= failedAfter * 1000 ? 'failed' : 'restarting',
+    }));
+    await render();
+    if (reload) {
+      await advance(30_000);
+      await act(async () => root.unmount());
+      root = createRoot(container);
+      // The fresh hook has no prior in-memory retry budget; persisted readiness
+      // uncertainty must still grant the longer observation window.
+      await render();
+    }
+    await advance(105_000 - (reload ? 30_000 : 0));
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'confirmed', readinessStale: true });
+    await advance(650_000);
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({
+      provisionState: 'failed', status: 'failed', readinessStale: false, connectionStale: false,
+    });
+    expect(vi.mocked(getLeaseStatus).mock.calls.length).toBeGreaterThan(APP_RECOVERY_MAX_ATTEMPTS);
+    const readsAfterFailure = vi.mocked(getLeaseStatus).mock.calls.length;
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getLeaseStatus).toHaveBeenCalledTimes(readsAfterFailure);
+  });
+
+  it('bounds readiness rechecks at eight attempts after fresh connections remove inventory staleness', async () => {
+    addApp({ provisionState: 'confirmed', readinessStale: true, connectionStale: false,
+      url: 'https://app.example.com', connection: { host: '', fqdn: 'app.example.com' } });
+    vi.mocked(getLeaseStatus).mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'updating' });
+    await render();
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getLeaseStatus).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({
+      provisionState: 'confirmed', readinessStale: true, connectionStale: false,
+    });
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getLeaseStatus).toHaveBeenCalledTimes(APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+  });
+
   it('rechecks a previously failed app until a post-maintenance runtime verdict arrives', async () => {
     addApp({ provisionState: 'failed', readinessStale: true, connectionStale: true,
       url: 'https://old.example.com', connection: { host: '', fqdn: 'old.example.com' } });

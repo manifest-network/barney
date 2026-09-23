@@ -22,7 +22,7 @@ import { fromBaseUnits, toBaseUnits } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import { isAbortError, withTimeout } from '../../api/utils';
-import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
+import { AI_BATCH_GUIDANCE_CHARS, AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
 import { connectionPatch, deriveUrlFromConnection, FAILURE_DETAIL_CHARS, failureText, resolveAppEndpoint } from './helpers';
 import { appCardConnection } from './appCardConnection';
 import { normalizeFqdn, resolveExpectedCnameTarget } from '../../utils/connection';
@@ -33,6 +33,7 @@ import { validateAll, apexRecordKindLabel } from '../../utils/customDomainValida
 import { validateAppName, sanitizeManifestForStorage, type AppEntry, type ProvisionState } from '../../registry/appRegistry';
 import { buildStackManifest, mergeManifest, resolveGeneratedPassword } from '../manifest';
 import { createProgressReporter } from '../progress';
+import { pendingMaintenanceStopWarning } from './maintenanceStopWarning';
 import { sha256, toHex, generatePassword } from '../../utils/hash';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import type { SigningContext } from './types';
@@ -47,6 +48,7 @@ import { createMaintenanceIdempotencyKey } from '@manifest-network/manifest-sdk/
 import { getPendingMaintenanceOperation, getSettledMaintenanceOperation, markMaintenanceRecoveryAdvised, retireAbsentMaintenanceOperation } from './maintenanceOperation';
 import { executeMaintenance } from './maintenanceExecution';
 import { recoverMaintenancePayload } from './maintenancePayload';
+import { getMaintenanceRecoveryIntent } from './maintenanceRecoveryIntent';
 import {
   canPlanMaintenanceCompletions, captureMaintenanceCompletionEpoch, MAINTENANCE_CAPACITY_MESSAGE,
   releaseMaintenanceCompletionReservation, releaseSettledMaintenanceCompletion, reserveMaintenanceCompletions,
@@ -967,6 +969,7 @@ export async function executeConfirmedBatchDeploy(
           name,
           leaseUuid: capturedLeaseUuid,
           providerUrl: capturedProviderUrl ?? entry.providerUrl,
+          maxDetailChars: AI_BATCH_GUIDANCE_CHARS,
           address,
           signing,
           appRegistry,
@@ -1053,24 +1056,6 @@ export async function executeConfirmedBatchDeploy(
 // ============================================================================
 // stop_app
 // ============================================================================
-
-function pendingMaintenanceStopWarning(apps: AppEntry[], address: string, chainId?: string): string {
-  let unreadable = false;
-  for (const app of apps) {
-    if (!app.providerUrl) continue;
-    try {
-      if (fredCompatibilityForProvider(app.providerUrl) !== 'pr240') continue;
-      if (getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid, chainId)) {
-        return ' Fred may execute pending maintenance until the affected lease closes. Stopping ends the deployment; it does not recover the pending command.';
-      }
-    } catch {
-      unreadable = true;
-    }
-  }
-  return unreadable
-    ? ' Saved maintenance could not be checked. Fred may still execute a pending command until the affected lease closes.'
-    : '';
-}
 
 /**
  * Pre-validation for stop_app. Returns confirmation result or error.
@@ -1348,6 +1333,10 @@ function settledMaintenancePlanningMessage(name: string, operation: 'restart' | 
   return `The previous ${operation} of "${name}" has already settled. No new command was planned. Check app_status("${name}") and app_releases("${name}") to observe its outcome. Use new_command=true only after the user explicitly requests another operation.`;
 }
 
+function missingMaintenancePlanningMessage(name: string): string {
+  return `The saved command record for "${name}" is missing, and its outcome remains unknown. No new command was planned. Check app_status("${name}") and app_releases("${name}") to observe the current state. new_command=true cannot replace a missing recovery record.`;
+}
+
 /**
  * Pre-validation for restart_app. Returns confirmation result or error.
  */
@@ -1385,7 +1374,7 @@ export async function executeRestartApp(
       : `No unique app found matching "${missing[0]}"` };
   }
 
-  const eligible: Array<{ app: AppEntry; pending?: ReturnType<typeof getPendingMaintenanceOperation>; previousOperationKey?: string }> = [];
+  const eligible: Array<{ app: AppEntry; pending?: ReturnType<typeof getPendingMaintenanceOperation>; previousOperationKey?: string; recoveryIntentKey?: string }> = [];
   const skipped: string[] = [];
   const settledSkips: string[] = [];
   for (const app of candidates) {
@@ -1395,6 +1384,7 @@ export async function executeRestartApp(
     let reason: string | undefined;
     let pending: ReturnType<typeof getPendingMaintenanceOperation>;
     let previousOperationKey: string | undefined;
+    let recoveryIntentKey: string | undefined;
     let settledRecoverySkip = false;
     if (app.chainState === 'absent') {
       reason = `App "${app.name}" has no active lease and cannot be restarted.`;
@@ -1410,17 +1400,22 @@ export async function executeRestartApp(
           ? getSettledMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId)
           : undefined;
         if (settled) releaseSettledMaintenanceCompletion(settled);
+        const recoveryIntent = !pending && fredCompatibilityForProvider(app.providerUrl) === 'pr240'
+          ? getMaintenanceRecoveryIntent({ address, providerUrl: app.providerUrl, leaseUuid: app.leaseUuid, chainId: options.authorization?.chainId }) : undefined;
         if (pending && args.new_command === true) {
           reason = `The ${pending.operation} of "${app.name}" is unresolved. A new command cannot replace it; recover the saved command first.`;
-        } else if (settled?.recoveryAdvised && args.new_command !== true) {
+        } else if (recoveryIntent && !settled) {
+          reason = missingMaintenancePlanningMessage(app.name);
+        } else if ((settled?.recoveryAdvised || recoveryIntent) && args.new_command !== true) {
           settledRecoverySkip = true;
-          reason = settledMaintenancePlanningMessage(app.name, settled.operation);
+          reason = settledMaintenancePlanningMessage(app.name, settled?.operation ?? recoveryIntent!.operation);
         } else if (pending?.operation === 'update') {
           reason = `An update of "${app.name}" is unresolved. Recover that saved update before starting another command.`;
         } else if (app.status !== 'running' && !pending) {
           reason = `App "${app.name}" is not running (status: ${app.status}). Only running apps can be restarted. Run app_status("${app.name}") to refresh its status first.`;
         }
         if (settled) previousOperationKey = settled.idempotencyKey;
+        if (recoveryIntent && args.new_command === true) recoveryIntentKey = recoveryIntent.idempotencyKey;
       } catch (error) {
         reason = `App "${app.name}": ${error instanceof Error ? error.message : 'Cannot read its saved maintenance operation.'}`;
       }
@@ -1430,7 +1425,7 @@ export async function executeRestartApp(
       if (settledRecoverySkip) settledSkips.push(app.name);
       else skipped.push(reason);
     } else {
-      eligible.push({ app, pending, previousOperationKey });
+      eligible.push({ app, pending, previousOperationKey, recoveryIntentKey });
     }
   }
 
@@ -1451,7 +1446,7 @@ export async function executeRestartApp(
   if (!canPlanMaintenanceCompletions({ address, chainId: options.authorization?.chainId ?? runtimeConfig.PUBLIC_CHAIN_ID }, newCommands)) {
     return { success: false, error: MAINTENANCE_CAPACITY_MESSAGE };
   }
-  const entries = selected.map(({ app, pending, previousOperationKey }) => ({
+  const entries = selected.map(({ app, pending, previousOperationKey, recoveryIntentKey }) => ({
     app_name: app.name,
     leaseUuid: app.leaseUuid,
     providerUrl: app.providerUrl!,
@@ -1460,6 +1455,7 @@ export async function executeRestartApp(
       : {}),
     ...(pending ? { expectPending: true as const } : {}),
     ...(previousOperationKey ? { previousOperationKey } : {}),
+    ...(recoveryIntentKey ? { recoveryIntentKey } : {}),
   }));
 
   if (isBatch) {
@@ -1672,7 +1668,7 @@ export async function executeConfirmedRestartApp(
  * Uses a signing mutex to serialize signArbitrary calls (shared wallet sequence numbers).
  */
 async function executeConfirmedBatchRestart(
-  entries: Array<{ app_name: string; leaseUuid: string; providerUrl: string; idempotencyKey?: string; expectPending?: boolean; previousOperationKey?: string }>,
+  entries: Array<{ app_name: string; leaseUuid: string; providerUrl: string; idempotencyKey?: string; expectPending?: boolean; previousOperationKey?: string; recoveryIntentKey?: string }>,
   address: string,
   appRegistry: ToolExecutorOptions['appRegistry'] & object,
   signing: SigningContext,
@@ -1726,7 +1722,12 @@ async function executeConfirmedBatchRestart(
             tiers: [],
             onProgress: (progress) => updateProgress(progress.phase, progress.detail),
           });
-          if (execution.outcome === 'succeeded') return { name, url: execution.url };
+          if (execution.outcome === 'succeeded') {
+            const data = execution.result.data as { localCleanupPending?: boolean; message?: string } | undefined;
+            return { name, url: execution.url, ...(data?.localCleanupPending && {
+              localCleanupPending: true, detail: data.message ?? 'The provider outcome was verified; local cleanup remains pending.',
+            }) };
+          }
           if (execution.outcome === 'failed') {
             updateProgress('failed', execution.result.error);
             return null;
@@ -1899,9 +1900,7 @@ export async function executeUpdateApp(
     if (recovery.outcome !== 'recovered') {
       const nextStep = recovery.outcome === 'history_unavailable'
         ? 'Release history could not be read, so matching bytes may still be recoverable. Reconnect the wallet if needed, then retry update_app with only app_name to read history again.'
-        : recovery.outcome === 'attachment_mismatch'
-          ? 'This file and the saved defaults do not reproduce the submitted bytes. Retry update_app with only app_name and no attachment to check the saved command and release history.'
-          : 'Release history was read successfully but contained no matching manifest. A rejected update creates no release. If those bytes are permanently lost, the only in-app exit is a separately confirmed stop_app to end this deployment. Fred may execute the old command until the lease closes; stopping does not recover the update.';
+        : 'Release history was read successfully but contained no matching manifest. A rejected update creates no release. If those bytes are permanently lost, the only in-app exit is a separately confirmed stop_app to end this deployment. Fred may execute the old command until the lease closes; stopping does not recover the update.';
       return { success: false, error: `The update of "${retryApp!.name}" is unresolved. Its exact submitted payload could not be recovered. ${nextStep} You can also reattach the original file or provide the exact reviewed manifest. Generated passwords and confirmation edits must match the saved payload fingerprint. Barney will not generate replacement bytes or treat uncertainty as permission for a new command.` };
     }
     return transactionConfirmation('update_app', {
@@ -1913,8 +1912,13 @@ export async function executeUpdateApp(
     ? getSettledMaintenanceOperation(address, retryApp.providerUrl, retryApp.leaseUuid, options.authorization?.chainId)
     : undefined;
   if (previousOperation) releaseSettledMaintenanceCompletion(previousOperation);
-  if (previousOperation?.recoveryAdvised && args.new_command !== true) {
-    return { success: false, error: settledMaintenancePlanningMessage(retryApp!.name, previousOperation.operation) };
+  const recoveryIntent = retryApp?.providerUrl && fredCompatibilityForProvider(retryApp.providerUrl) === 'pr240'
+    ? getMaintenanceRecoveryIntent({ address, providerUrl: retryApp.providerUrl, leaseUuid: retryApp.leaseUuid, chainId: options.authorization?.chainId }) : undefined;
+  if (recoveryIntent && !previousOperation) {
+    return { success: false, error: missingMaintenancePlanningMessage(retryApp!.name) };
+  }
+  if ((previousOperation?.recoveryAdvised || recoveryIntent) && args.new_command !== true) {
+    return { success: false, error: settledMaintenancePlanningMessage(retryApp!.name, previousOperation?.operation ?? recoveryIntent!.operation) };
   }
   let isImageUpdate = false;
 
@@ -2060,7 +2064,10 @@ export async function executeUpdateApp(
   let idempotencyKey: string | undefined;
   if (fredCompatibilityForProvider(app.providerUrl) === 'pr240') {
     const current = getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId);
-    if (current) return { success: false, error: `${current.operation === 'update' ? 'An update' : 'A restart'} of "${app.name}" became unresolved while planning. Recover that saved ${current.operation} before starting another command.` };
+    if (current) {
+      await markMaintenanceRecoveryAdvised(current);
+      return { success: false, error: `${current.operation === 'update' ? 'An update' : 'A restart'} of "${app.name}" became unresolved while planning. Recover that saved ${current.operation} before starting another command.` };
+    }
     const settled = getSettledMaintenanceOperation(address, app.providerUrl, app.leaseUuid, options.authorization?.chainId);
     if (settled?.idempotencyKey !== previousOperation?.idempotencyKey) {
       return { success: false, error: `The previous maintenance operation of "${app.name}" changed while planning. No new command was planned. Check app_status and app_releases before deciding whether another operation is needed.` };
@@ -2076,6 +2083,7 @@ export async function executeUpdateApp(
     providerUrl: app.providerUrl,
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(previousOperation ? { previousOperationKey: previousOperation.idempotencyKey } : {}),
+    ...(recoveryIntent && args.new_command === true ? { recoveryIntentKey: recoveryIntent.idempotencyKey } : {}),
     ...(typeof args._generatedManifest === 'string' ? { _generatedManifest: args._generatedManifest } : {}),
     ...(args._isStack ? { _isStack: true } : {}),
   }, (args._isStack

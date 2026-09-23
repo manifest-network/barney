@@ -74,7 +74,7 @@ export async function reconcilePendingMaintenance(
   if (provision) {
     const provisionState = reconcileProvisionStatus(provision.status, currentApp?.provisionState);
     if (provisionState) patch.provisionState = provisionState;
-    if (provisionState === 'confirmed' || provisionState === 'failed') patch.readinessStale = false;
+    if ((provisionState === 'confirmed' || provisionState === 'failed') && registrySnapshot?.readinessStale) patch.readinessStale = false;
   }
   if (command.operation === 'update' && verdict.outcome === 'succeeded') {
     // A reload deliberately discards secret manifest bytes. Use the identified
@@ -121,6 +121,7 @@ export async function reconcilePendingMaintenance(
     cleanupDetail = error.message;
     return true;
   });
+  if (cleanupDetail) await markMaintenanceRecoveryAdvised(command);
   if (!committed) {
     await markMaintenanceRecoveryAdvised(command);
     return { operation: command.operation, outcome: 'unconfirmed',

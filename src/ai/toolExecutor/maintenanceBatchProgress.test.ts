@@ -4,6 +4,37 @@ import { FAILURE_DETAIL_CHARS } from './helpers';
 import { computeOverallPhase, runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
 
 describe('maintenance batch uncertainty', () => {
+  it.each([1, 4, 128])('keeps cleanup warnings on %i verified successes within the serialized diagnostic budget', async (count) => {
+    const detail = 'The provider outcome was verified, but its local recovery record could not be retired. Restore browser storage access and retry the same confirmation to finish local cleanup.';
+    const onProgress = vi.fn();
+    const batch = await runBatchWithConcurrency({
+      entries: Array.from({ length: count }, (_, index) => ({ name: `app-${index}` })),
+      initialPhase: 'restarting', intermediatePhases: ['restarting'], operation: 'restart', onProgress,
+      executeOne: async ({ name }) => ({ name, localCleanupPending: true, detail }),
+    });
+    const options = { ...batch, operation: 'restart' as const, onProgress, dataKey: 'restarted', verb: 'Restarted', failedNoun: 'restarts' };
+    const result = summarizeBatchResult(options);
+    expect(result.success).toBe(true);
+    expect(batch.batchProgress.every((row) => row.phase === 'ready' && row.detail === detail)).toBe(true);
+    expect(onProgress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'ready', detail: `${count} restarted, ${count} local cleanup pending` }));
+    expect(JSON.stringify(result)).not.toContain(`All ${count}`);
+    const data = result.data as { restarted: Array<{ localCleanupPending?: boolean; detail?: string }>; message: string };
+    expect(data.restarted.every((entry) => entry.localCleanupPending)).toBe(true);
+    if (count < 128) {
+      expect(data.restarted.every((entry) => entry.detail === detail)).toBe(true);
+      expect(data.message).toContain(detail);
+    } else {
+      expect(data.message).toContain('local cleanup remains pending');
+      expect(data.message).toContain('do not start a new command for recovery');
+    }
+    const withoutWarnings = summarizeBatchResult({ ...options,
+      succeeded: batch.succeeded.map(({ name }) => ({ name })), onProgress: undefined });
+    for (const indentation of [undefined, 2]) {
+      expect(JSON.stringify(result, null, indentation).length - JSON.stringify(withoutWarnings, null, indentation).length)
+        .toBeLessThanOrEqual(AI_BATCH_DIAGNOSTIC_CHARS);
+    }
+  });
+
   it('settles unknown restart rows without showing successful or failed completion', async () => {
     const onProgress = vi.fn();
     const batch = await runBatchWithConcurrency({

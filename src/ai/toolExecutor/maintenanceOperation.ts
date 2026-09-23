@@ -2,6 +2,7 @@ import { createMaintenanceIdempotencyKey, metaHashHex } from '@manifest-network/
 import { runtimeConfig } from '../../config/runtimeConfig';
 import { logError } from '../../utils/errors';
 import { releaseAbsentMaintenanceCompletions } from './maintenanceCompletion';
+import { getMaintenanceRecoveryIntent, rememberMaintenanceRecoveryIntent, retireMaintenanceRecoveryIntent } from './maintenanceRecoveryIntent';
 
 type MaintenanceKind = 'restart' | 'update';
 
@@ -52,6 +53,7 @@ interface MaintenanceInput extends Omit<MaintenanceScope, 'chainId'> {
   readonly expectPending?: boolean;
   /** Explicit confirmation to start another command after this settled key. */
   readonly previousOperationKey?: string;
+  readonly recoveryIntentKey?: string;
 }
 
 export interface SettledMaintenanceOperation extends MaintenanceScope {
@@ -69,7 +71,10 @@ interface SettledMetadata extends Pick<MaintenanceMetadata, 'v' | 'operation' | 
 }
 
 /** A local conflict or stale recovery plan must never be reported as a sent command. */
-export class MaintenanceOperationRefusalError extends Error {}
+export class MaintenanceOperationRefusalError extends Error {
+  readonly command?: MaintenanceOperation;
+  constructor(message: string, command?: MaintenanceOperation) { super(message); this.command = command; }
+}
 
 /** A recovery can become obsolete without the original operation having failed. */
 export class MaintenanceOperationSupersededError extends Error {}
@@ -172,7 +177,14 @@ export function getSettledMaintenanceOperation(
 }
 
 export function assertNewMaintenanceOperation(input: Omit<MaintenanceInput, 'operation'>): void {
+  const intent = getMaintenanceRecoveryIntent(input);
+  if (intent && input.recoveryIntentKey !== intent.idempotencyKey) {
+    throw new MaintenanceOperationSupersededError('This tab still has recovery advice for an earlier command. Observe its outcome before explicitly requesting a new command.');
+  }
   const receipt = getSettledMaintenanceOperation(input.address, input.providerUrl, input.leaseUuid, input.chainId);
+  if (intent && !receipt) {
+    throw new MaintenanceOperationSupersededError('This tab has recovery advice but no saved pending command or settled receipt. The provider outcome remains unknown; observe the current app state before further recovery. A new command cannot replace the missing record.');
+  }
   if (receipt ? input.previousOperationKey !== receipt.idempotencyKey || input.idempotencyKey === receipt.idempotencyKey : input.previousOperationKey !== undefined) {
     throw new MaintenanceOperationSupersededError('The previous maintenance command has settled or changed. Observe its result before explicitly requesting a new command.');
   }
@@ -300,7 +312,7 @@ export function assertMaintenanceOperationMatches(
     if (input.expectPending) {
       throw new MaintenanceOperationSupersededError('The saved recovery command is no longer pending; another command is now recorded for this app.');
     }
-    throw new MaintenanceOperationRefusalError(`${record.operation === 'update' ? 'An' : 'A'} ${record.operation} is still unresolved for this app. Retry that exact operation or reconcile its outcome before submitting a new command.`);
+    throw new MaintenanceOperationRefusalError(`${record.operation === 'update' ? 'An' : 'A'} ${record.operation} is still unresolved for this app. Retry that exact operation or reconcile its outcome before submitting a new command.`, record);
   }
 }
 
@@ -354,7 +366,7 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
       }
       assertMaintenanceOperationMatches(current, input);
       if (current.payloadHash !== payloadHash || (current.manifest !== undefined && current.manifest !== manifest)) {
-        throw new MaintenanceOperationRefusalError('An update is still unresolved with different manifest bytes. Retry its exact original payload or reconcile its outcome before submitting a new command.');
+        throw new MaintenanceOperationRefusalError('An update is still unresolved with different manifest bytes. Retry its exact original payload or reconcile its outcome before submitting a new command.', current);
       }
     }
     const retained = current;
@@ -398,7 +410,7 @@ export async function completeMaintenanceOperation(
     if (!matches(record, metadata)) return; // A stale result must not clear a newer command.
     const retained = pending.get(key);
     if (retained && retained.idempotencyKey !== record.idempotencyKey) return;
-    persistSettled({ ...record, recoveryAdvised: metadata.recoveryAdvised }, outcome);
+    persistSettled({ ...record, recoveryAdvised: metadata.recoveryAdvised || getMaintenanceRecoveryIntent(record)?.idempotencyKey === record.idempotencyKey }, outcome);
     pending.delete(key);
   });
 }
@@ -434,8 +446,9 @@ export async function markMaintenanceOperationAccepted(record: MaintenanceOperat
 
 /** Call before returning recovery advice, including read-only/reloaded recovery. */
 export async function markMaintenanceRecoveryAdvised(record: MaintenanceOperation): Promise<void> {
+  rememberMaintenanceRecoveryIntent(record);
   const key = storageKey(record);
-  await withScopeLock(key, () => {
+  try { await withScopeLock(key, () => {
     const current = getPendingMaintenanceOperation(record.address, record.providerUrl, record.leaseUuid, record.chainId);
     if (current) {
       if (!matches(record, metadataFor(current)) || current.recoveryAdvised) return;
@@ -444,11 +457,9 @@ export async function markMaintenanceRecoveryAdvised(record: MaintenanceOperatio
       pending.set(key, updated);
       return;
     }
-    const settled = getSettledMaintenanceOperation(record.address, record.providerUrl, record.leaseUuid, record.chainId);
-    if (settled?.idempotencyKey === record.idempotencyKey && !settled.recoveryAdvised) {
-      persistSettled({ ...settled, recoveryAdvised: true }, settled.outcome);
-    }
-  });
+    // A settling tab may have won the race. Keep this tab's intent without
+    // growing its receipt or blocking routine work in every other tab.
+  }); } catch { /* Local evidence still protects recovery when shared storage fails. */ }
 }
 
 /** Clear only a newly prepared operation that no concurrent caller dispatched. */
@@ -497,6 +508,7 @@ export async function retireAbsentMaintenanceOperation(input: Omit<MaintenanceSc
       logError('maintenanceOperation.retireAbsent', storageError());
     }
   } finally {
+    try { retireMaintenanceRecoveryIntent(input); } catch { /* Invalid stale provider URLs are already handled above. */ }
     releaseAbsentMaintenanceCompletions({ address: input.address, chainId: input.chainId ?? runtimeConfig.PUBLIC_CHAIN_ID, leaseUuid: input.leaseUuid });
   }
 }
@@ -529,7 +541,7 @@ export async function commitMaintenanceObservation(
     if (!observation.isCurrent()) return false;
     if (observation.settled) {
       try {
-        persistSettled({ ...record, recoveryAdvised: metadata.recoveryAdvised }, observation.outcome ?? 'settled');
+        persistSettled({ ...record, recoveryAdvised: metadata.recoveryAdvised || getMaintenanceRecoveryIntent(record)?.idempotencyKey === record.idempotencyKey }, observation.outcome ?? 'settled');
       } catch {
         observation.apply();
         throw new MaintenanceSettlementStorageError(MAINTENANCE_CLEANUP_MESSAGE);

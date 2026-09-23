@@ -95,6 +95,10 @@ export interface BatchEntry {
 export interface BatchSuccessItem {
   name: string;
   url?: string;
+  /** Verified provider success can still require local recovery cleanup. */
+  localCleanupPending?: boolean;
+  /** Authored guidance rendered beside the app name in the summary. */
+  detail?: string;
 }
 
 /**
@@ -108,8 +112,6 @@ export interface BatchSuccessItem {
  */
 export interface BatchResultItem extends BatchSuccessItem {
   outcome?: 'unconfirmed' | 'cancelled';
-  /** Extra copy rendered next to the name in the summary (e.g. the SDK's "may still be starting" note). */
-  detail?: string;
 }
 
 export interface BatchRunnerOptions<E extends BatchEntry> {
@@ -161,7 +163,7 @@ function sanitizeDiagnostic(detail: string | undefined): string | undefined {
 }
 
 function sanitizeProgressDetail(phase: DeployProgress['phase'], detail: string | undefined): string | undefined {
-  return phase === 'failed' || phase === 'unconfirmed' ? sanitizeDiagnostic(detail) : detail;
+  return phase === 'failed' || phase === 'unconfirmed' || phase === 'ready' ? sanitizeDiagnostic(detail) : detail;
 }
 
 /** Bound JSON length, including escaped quotes/backslashes and surrogate pairs.
@@ -249,7 +251,8 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
           const detail = result.detail ?? (batchProgress[i].phase === 'failed' ? batchProgress[i].detail : undefined);
           updateProgress('failed', detail ?? 'Cancelled');
         } else {
-          succeeded.push(result);
+          succeeded.push({ ...result, ...(result.detail !== undefined && { detail: sanitizeDiagnostic(result.detail) }) });
+          if (result.localCleanupPending) updateProgress('ready', result.detail ?? 'Local cleanup remains pending');
         }
       } catch (error) {
         // Safety net — executeOne should handle its own errors, but if it
@@ -313,33 +316,37 @@ export interface BatchSummaryOptions {
 
 export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
   const {
-    succeeded, failed, cancelled = [], unconfirmed: rawUnconfirmed = [], unconfirmedLabel = 'Still pending',
+    succeeded: rawSucceeded, failed, cancelled = [], unconfirmed: rawUnconfirmed = [], unconfirmedLabel = 'Still pending',
     dataKey, verb, failedNoun, batchProgress, operation, onProgress,
   } = opts;
 
   // Single predicate behind BOTH the overall progress phase and the failure
   // branch below, so the ProgressCard and the chat text can never disagree.
   // An unconfirmed batch has not landed, but it is not a failed batch either.
-  const nothingLanded = succeeded.length === 0 && rawUnconfirmed.length === 0;
+  const nothingLanded = rawSucceeded.length === 0 && rawUnconfirmed.length === 0;
   // Rows disappear when the next tool starts. Preserve the failure reason in
   // the tool result so both the user and model can act on it afterwards.
   const failureDetails = new Map(batchProgress?.filter((row) => row.phase === 'failed').map((row) => [row.name, row.detail]));
-  // Failed reasons appear once in message/error. Unconfirmed reasons retain
-  // their existing structured field and message copy, so reserve both copies.
+  // Failed reasons appear once in message/error. Unconfirmed reasons and local
+  // cleanup warnings have both a structured field and a message copy.
   const detailedUnconfirmed = rawUnconfirmed.filter((entry) => entry.detail !== undefined).length;
+  const detailedSucceeded = rawSucceeded.filter((entry) => entry.detail !== undefined).length;
+  const cleanupPending = rawSucceeded.filter((entry) => entry.localCleanupPending).length;
   const diagnosticCopies = failed.filter((name) => failureDetails.get(name) !== undefined).length
-    + 2 * detailedUnconfirmed;
-  // Include each detail's property/comma and the chat serializer's two-space
-  // indentation, not just the compact JSON representation.
-  let textBudget = Math.max(0, AI_BATCH_DIAGNOSTIC_CHARS - 20 * detailedUnconfirmed);
+    + 2 * (detailedUnconfirmed + detailedSucceeded);
+  // Include each detail's property/comma, cleanup flag and two-space indentation,
+  // not just the compact JSON representation.
+  let textBudget = Math.max(0, AI_BATCH_DIAGNOSTIC_CHARS - 20 * detailedUnconfirmed - 60 * detailedSucceeded);
   let perCopyBudget = Math.floor(textBudget / Math.max(1, diagnosticCopies));
   const exceedsShare = (detail: string | undefined) => detail !== undefined
     && JSON.stringify(sanitizeDiagnostic(detail)).length > perCopyBudget;
   const shortened = failed.some((name) => exceedsShare(failureDetails.get(name)))
-    || rawUnconfirmed.some((entry) => exceedsShare(entry.detail));
+    || rawUnconfirmed.some((entry) => exceedsShare(entry.detail))
+    || rawSucceeded.some((entry) => exceedsShare(entry.detail));
   // Large batches may need shortened per-app details. Reserve one complete
   // next step rather than leaving the model with only partial instructions.
   const sharedNextSteps = [
+    cleanupPending > 0 ? 'Provider outcomes were verified, but local cleanup remains pending. Restore browser storage access, then check app_status or retry the same confirmation; do not start a new command for recovery.' : '',
     failed.length > 0 ? 'Check app_status and app_diagnostics for each failed app.' : '',
     rawUnconfirmed.length === 0 ? '' : operation === 'restart' || operation === 'update'
       ? 'Check app_status and app_releases for each unknown outcome. Recover only a command still pending, using its original key and exact payload. Do not use new_command for recovery. Do not submit a new command or automatically stop/redeploy while its outcome is unresolved.'
@@ -352,6 +359,9 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     perCopyBudget = Math.floor(textBudget / Math.max(1, diagnosticCopies));
   }
   const unconfirmed = rawUnconfirmed.map((entry) => ({ ...entry, detail: fitDiagnostic(entry.detail, perCopyBudget) }));
+  const succeeded = rawSucceeded.map((entry) => ({ ...entry,
+    ...(entry.detail !== undefined && { detail: fitDiagnostic(entry.detail, perCopyBudget) }),
+  }));
   const failedText = failed.map((name) => {
     const detail = fitDiagnostic(failureDetails.get(name), perCopyBudget);
     return detail ? `${name}: ${detail}` : name;
@@ -365,6 +375,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     // Every segment is conditional, so zero counts are never printed.
     const segments = [
       succeeded.length > 0 ? `${succeeded.length} ${verb.toLowerCase()}` : '',
+      cleanupPending > 0 ? `${cleanupPending} local cleanup pending` : '',
       failed.length > 0 ? `${failed.length} failed` : '',
       unconfirmed.length > 0 ? `${unconfirmed.length} ${unconfirmedLabel.toLowerCase()}` : '',
       cancelled.length > 0 ? `${cancelled.length} cancelled` : '',
@@ -400,7 +411,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
 
   const parts: string[] = [];
   if (succeeded.length > 0) {
-    const lines = succeeded.map((d) => d.url ? `${d.name}: ${d.url}` : d.name);
+    const lines = succeeded.map((d) => `${d.url ? `${d.name}: ${d.url}` : d.name}${d.detail ? ` — ${d.detail}` : ''}`);
     parts.push(`${verb}:\n${lines.map((l) => `- ${l}`).join('\n')}`);
   }
   if (unconfirmed.length > 0) {

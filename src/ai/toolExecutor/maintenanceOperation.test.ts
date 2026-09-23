@@ -18,6 +18,7 @@ const update = { ...scope, operation: 'update' as const, manifest, previousManif
 
 beforeEach(async () => {
   localStorage.clear();
+  sessionStorage.clear();
   vi.resetModules();
   operations = await import('./maintenanceOperation');
 });
@@ -250,16 +251,56 @@ describe('maintenance operation retention', () => {
     await otherTab.markMaintenanceRecoveryAdvised(command);
     await operations.completeMaintenanceOperation(command, undefined, 'failed');
     expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)?.recoveryAdvised).toBe(true);
-    const next = await operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: command.idempotencyKey });
+    const next = await operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: command.idempotencyKey, recoveryIntentKey: command.idempotencyKey });
     await operations.completeMaintenanceOperation(next, undefined, 'succeeded');
     expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)?.recoveryAdvised).toBe(false);
+  });
+
+  it('keeps recovery advice in memory when both storage writes fail and another tab settles without seeing it', async () => {
+    const sessionWrites = vi.fn(() => { throw new Error('Quota exceeded'); });
+    vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: sessionWrites, removeItem: vi.fn() });
+    vi.resetModules();
+    operations = await import('./maintenanceOperation');
+    const command = await operations.getOrCreateMaintenanceOperation(restart);
+    const storage = localStorage;
+    const writes = vi.fn(() => { throw new Error('Quota exceeded'); });
+    vi.stubGlobal('localStorage', {
+      getItem: storage.getItem.bind(storage), removeItem: storage.removeItem.bind(storage), setItem: writes,
+    });
+    await expect(operations.markMaintenanceRecoveryAdvised(command)).resolves.toBeUndefined();
+    expect(writes).toHaveBeenCalledOnce();
+    expect(sessionWrites).toHaveBeenCalledOnce();
+    expect(JSON.parse(storage.getItem(storage.key(0)!)!).recoveryAdvised).toBe(false);
+    vi.stubGlobal('localStorage', storage);
+    const { getMaintenanceRecoveryIntent } = await import('./maintenanceRecoveryIntent');
+    expect(getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(command.idempotencyKey);
+    vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
+    vi.resetModules();
+    const otherTab = await import('./maintenanceOperation');
+    await otherTab.completeMaintenanceOperation(command, undefined, 'succeeded');
+    expect(otherTab.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)?.recoveryAdvised).toBe(false);
+    await expect(operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: command.idempotencyKey })).rejects.toThrow(/recovery advice/);
+  });
+
+  it('retains late advice only in this tab without growing or poisoning another tab’s routine settled receipt', async () => {
+    const command = await operations.getOrCreateMaintenanceOperation(restart);
+    await operations.completeMaintenanceOperation(command, undefined, 'succeeded');
+    const storage = localStorage;
+    const writes = vi.fn(() => { throw new Error('Quota exceeded'); });
+    vi.stubGlobal('localStorage', {
+      getItem: storage.getItem.bind(storage), removeItem: storage.removeItem.bind(storage), setItem: writes,
+    });
+    await expect(operations.markMaintenanceRecoveryAdvised(command)).resolves.toBeUndefined();
+    expect(writes).not.toHaveBeenCalled();
+    expect(operations.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)?.recoveryAdvised).toBe(false);
+    await expect(operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: command.idempotencyKey })).rejects.toThrow(/recovery advice/);
   });
 
   it('restores a blocking receipt if a prepared successor is discarded after reload', async () => {
     const command = await operations.getOrCreateMaintenanceOperation(update);
     await operations.markMaintenanceRecoveryAdvised(command);
     await operations.completeMaintenanceOperation(command, undefined, 'failed');
-    const successor = await operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: command.idempotencyKey });
+    const successor = await operations.getOrCreateMaintenanceOperation({ ...restart, previousOperationKey: command.idempotencyKey, recoveryIntentKey: command.idempotencyKey });
     vi.resetModules();
     const otherTab = await import('./maintenanceOperation');
     expect(await otherTab.discardUnsubmittedMaintenanceOperation(successor)).toBe(true);
@@ -267,7 +308,7 @@ describe('maintenance operation retention', () => {
       idempotencyKey: command.idempotencyKey, recoveryAdvised: true,
     });
     expect(JSON.stringify(localStorage)).not.toContain('private-secret');
-    await expect(otherTab.getOrCreateMaintenanceOperation(restart)).rejects.toThrow(/previous maintenance command/);
+    await expect(otherTab.getOrCreateMaintenanceOperation(restart)).rejects.toThrow(/recovery advice/);
   });
 
   it('reads legacy separate receipts conservatively and migrates them on the next settlement', async () => {

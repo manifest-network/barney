@@ -23,7 +23,7 @@ export async function recoverReleaseManifest(encoded: string | undefined, payloa
 
 export type MaintenancePayloadRecovery =
   | { outcome: 'recovered'; manifest: string }
-  | { outcome: 'attachment_mismatch' | 'history_unavailable' | 'no_match' };
+  | { outcome: 'history_unavailable' | 'no_match' };
 
 export async function recoverMaintenancePayload(
   command: MaintenanceOperation,
@@ -54,7 +54,9 @@ export async function recoverMaintenancePayload(
         return { outcome: 'recovered', manifest: candidate };
       }
     }
-    return { outcome: 'attachment_mismatch' };
+    // A turn keeps supplying its attachment to every tool call. A mismatch must
+    // not hide retained bytes or history that can recover the original command.
+    signal?.throwIfAborted();
   }
   if (command.manifest !== undefined) return { outcome: 'recovered', manifest: command.manifest };
   if (!signing) return { outcome: 'history_unavailable' };

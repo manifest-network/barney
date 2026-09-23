@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createAIStore, type AIStore } from '../aiStore';
 import type { AppEntry } from '../../registry/appRegistry';
+import { getOrCreateMaintenanceOperation, retireAbsentMaintenanceOperation } from '../../ai/toolExecutor/maintenanceOperation';
 
 // ---------------------------------------------------------------------------
 // Deterministic IDs
@@ -91,6 +92,26 @@ afterEach(() => {
 });
 
 describe('requestStopApp', () => {
+  it.each(['restart', 'update'] as const)('warns on the AppCard stop confirmation while a %s remains pending', async operation => {
+    const app = makeApp({ name: 'redis', providerUrl: 'https://s049-u002.manifest0.net/api/fred', leaseUuid: crypto.randomUUID() });
+    findApp.mockReturnValue(app);
+    const store = setupStore();
+    const scope = { address: store.getState().address!, chainId: store.getState().chainId,
+      providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid };
+    await getOrCreateMaintenanceOperation({ ...scope, operation, baselineReleaseVersions: [1],
+      ...(operation === 'update' && { manifest: '{"image":"nginx:new"}' }),
+    });
+
+    store.getState().requestStopApp(app.name);
+
+    const state = store.getState();
+    expect(state.pendingConfirmation?.action.args).toEqual({ app_name: app.name, leaseUuid: app.leaseUuid });
+    expect(state.pendingConfirmation?.action.description).toContain('Fred may execute pending maintenance for "redis" until its lease closes.');
+    expect(state.pendingConfirmation?.action.description).toContain('it does not recover the pending command');
+    expect(state.messages.at(-1)?.content).toBe(state.pendingConfirmation?.action.description);
+    await retireAbsentMaintenanceOperation(scope);
+  });
+
   // Locks in the executor's single-app branch discriminator: when args has
   // app_name + leaseUuid (and NO `entries`), `executeConfirmedStopApp`
   // falls through the bulk branch (line 1959) and takes the single-app

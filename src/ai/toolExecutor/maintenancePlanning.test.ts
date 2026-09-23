@@ -42,11 +42,81 @@ function payload(): PayloadAttachment {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  sessionStorage.clear();
   clearCompletedMaintenance(scope);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+function isolatedSessionStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() { return values.size; }, clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); },
+    removeItem: (key) => { values.delete(key); }, key: (index) => [...values.keys()][index] ?? null,
+  };
+}
 
 describe('maintenance planning admission and settled receipts', () => {
+  it.each(['restart', 'update'] as const)('keeps %s observation-only when recovery advice survives a missing command record, even for an explicit new command', async (operation) => {
+    const { app, options } = setup();
+    const command = await getOrCreateMaintenanceOperation({
+      ...scope, providerUrl, leaseUuid: app.leaseUuid, operation, baselineReleaseVersions: [1],
+      ...(operation === 'update' && { manifest }),
+    });
+    await markMaintenanceOperationDispatched(command);
+    localStorage.clear();
+    // A late response can retain advice even if another context removed the
+    // command marker. That absence cannot establish a provider verdict.
+    await markMaintenanceRecoveryAdvised(command);
+    for (const new_command of [false, true]) {
+      const args = { app_name: app.name, new_command };
+      for (const result of [await executeRestartApp(args, options), await executeUpdateApp(args, options, payload())]) {
+        expect(result.requiresConfirmation).toBeUndefined();
+        expect(result.error).toContain('outcome remains unknown');
+        expect(result.error).not.toContain('already settled');
+      }
+    }
+    await expect(getOrCreateMaintenanceOperation({ ...scope, providerUrl, leaseUuid: app.leaseUuid,
+      operation: 'restart', recoveryIntentKey: command.idempotencyKey, baselineReleaseVersions: [1] })).rejects.toThrow(/outcome remains unknown/);
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps tab A’s old recovery advice guarded across a deliberate successor and reload without blocking tab B’s routine work', async () => {
+    const { app, options } = setup();
+    const tabAStorage = sessionStorage;
+    const command = await getOrCreateMaintenanceOperation({
+      ...scope, providerUrl, leaseUuid: app.leaseUuid, operation: 'restart', baselineReleaseVersions: [1],
+    });
+    await markMaintenanceRecoveryAdvised(command);
+    vi.stubGlobal('sessionStorage', isolatedSessionStorage());
+    vi.resetModules();
+    const tabB = await import('./maintenanceOperation');
+    const tabBTools = await import('./compositeTransactions');
+    await tabB.completeMaintenanceOperation(command, undefined, 'succeeded');
+    const deliberate = await tabBTools.executeRestartApp({ app_name: app.name, new_command: true }, options);
+    expect(deliberate.requiresConfirmation).toBe(true);
+    const successor = await tabB.getOrCreateMaintenanceOperation({ ...scope, providerUrl, leaseUuid: app.leaseUuid,
+      operation: 'restart', idempotencyKey: deliberate.pendingAction!.args.idempotencyKey as string,
+      previousOperationKey: command.idempotencyKey, baselineReleaseVersions: [1, 2] });
+    await tabB.markMaintenanceOperationDispatched(successor);
+    await tabB.completeMaintenanceOperation(successor, undefined, 'succeeded');
+    expect(tabB.getSettledMaintenanceOperation(address, providerUrl, app.leaseUuid)?.recoveryAdvised).toBe(false);
+    expect((await tabBTools.executeRestartApp({ app_name: app.name }, options)).requiresConfirmation).toBe(true);
+
+    vi.stubGlobal('sessionStorage', tabAStorage);
+    vi.resetModules();
+    const tabA = await import('./compositeTransactions');
+    for (const next of [await tabA.executeRestartApp({ app_name: app.name }, options), await tabA.executeUpdateApp({ app_name: app.name }, options, payload())]) {
+      expect(next.requiresConfirmation).toBeUndefined();
+      expect(next.error).toContain('has already settled');
+    }
+    const approvedNew = await tabA.executeRestartApp({ app_name: app.name, new_command: true }, options);
+    expect(approvedNew.pendingAction?.args).toMatchObject({ recoveryIntentKey: command.idempotencyKey, previousOperationKey: successor.idempotencyKey });
+    // Showing a card never consumes the old advice.
+    expect((await tabA.executeRestartApp({ app_name: app.name }, options)).requiresConfirmation).toBeUndefined();
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
   it.each(['succeeded', 'failed'] as const)('preserves older retry advice after a legacy pending update settles %s through a reloaded status read', async (outcome) => {
     const { app, options } = setup();
     const command = await getOrCreateMaintenanceOperation({

@@ -22,6 +22,9 @@ import { handleDeployManifestError } from './deployError';
 import { makeRegistry } from './testHelpers';
 import { LeaseState } from '../../api/billing';
 import type { AppEntry } from '../../registry/appRegistry';
+import { AI_BATCH_GUIDANCE_CHARS, AI_DEPLOY_LOG_PREVIEW_CHARS } from '../../config/constants';
+import { nextStepFor } from './failureGuidance';
+import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
 
 vi.mock('../../api/billing', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/billing')>()),
@@ -396,6 +399,51 @@ describe('handleDeployManifestError — provider verdict at the poll step', () =
   // mockResolvedValue, so a `getLease` set by one test leaks into the next and
   // silently changes which branch it exercises.
   beforeEach(() => vi.resetAllMocks());
+
+  it.each([false, true])('retains the last panic line and guidance in a bounded batch row (NFC expansion: %s)', async (expandingUnicode) => {
+    const panic = 'panic: nil pointer at main.go:42';
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1,
+      reason: 'ContainerExited', message: 'container exited unexpectedly' } as never);
+    const logText = expandingUnicode ? '\u0344'.repeat(900) : 'startup detail '.repeat(64);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ logs: { web: `earliest-line\n${logText}\n${panic}` } } as never);
+    const batch = await runBatchWithConcurrency({
+      entries: [{ name: 'test-app' }, { name: 'healthy' }], initialPhase: 'provisioning', intermediatePhases: ['provisioning'],
+      executeOne: async ({ name }, _index, progress) => {
+        if (name === 'healthy') return { name };
+        const result = await handleDeployManifestError(partialError('poll'), ctx({ maxDetailChars: AI_BATCH_GUIDANCE_CHARS }));
+        progress('failed', result.error);
+        return null;
+      },
+    });
+    const row = batch.batchProgress[0].detail!;
+    expect([...row].length).toBeLessThanOrEqual(AI_BATCH_GUIDANCE_CHARS);
+    expect(row).toContain('Deployment failed: the provider reported the deployment as failed.');
+    expect(row).toContain(nextStepFor('ContainerExited', 'test-app'));
+    expect(row).toContain('Use get_logs(app_name="test-app", tail=200) for more:');
+    expect(row).toContain(panic);
+    expect(row).not.toContain('earliest-line');
+    const summary = summarizeBatchResult({ ...batch, dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys' });
+    expect(summary.data).toMatchObject({ message: expect.stringContaining(panic) });
+  });
+
+  it('bounds code-point allocation for a large log while preserving safe ending line breaks', async () => {
+    const ending = '\nlast setup line\n\u202e\u0000panic: nil pointer at main.go:42\nstack frame 💥';
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1, reason: 'ContainerExited' } as never);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ logs: { web: '💥'.repeat(5_000_000) + ending } } as never);
+    const arrays = vi.spyOn(Array, 'from');
+    try {
+      const result = await handleDeployManifestError(partialError('poll'), ctx());
+      const text = result.error!;
+      expect(text).toContain('last setup line\n panic: nil pointer at main.go:42\nstack frame 💥');
+      expect(text).not.toMatch(/[\p{Cf}\uFFFD]/u);
+      expect(text).not.toContain('\u0000');
+      expect(new TextDecoder().decode(new TextEncoder().encode(text))).toBe(text);
+      const preview = text.split('for more:\n')[1];
+      expect([...preview].length).toBeLessThanOrEqual(AI_DEPLOY_LOG_PREVIEW_CHARS);
+      const stringInputs = arrays.mock.calls.map(([input]) => input).filter((input): input is string => typeof input === 'string');
+      expect(Math.max(...stringInputs.map((input) => input.length))).toBeLessThanOrEqual(2 * AI_DEPLOY_LOG_PREVIEW_CHARS);
+    } finally { arrays.mockRestore(); }
+  });
 
   it('reports a poll verdict as failed while the chain lease is still ACTIVE', async () => {
     // Reaching the 2nd throw site with failedStep 'poll' means the poll raised

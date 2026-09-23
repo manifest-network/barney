@@ -63,7 +63,8 @@ On dev, **Outcome unknown** means the restart or update may still execute. Check
 the app's status and releases first. Acknowledged commands can settle from those
 checks even after a reload. Retrying an unresolved command reuses its original
 key and exact manifest; after reloading, Barney can recover matching bytes from
-provider history or verify a reattached file merged with saved defaults. If
+provider history or verify a reattached file merged with saved defaults. A mismatched
+attachment does not block recovery from retained bytes or matching history. If
 neither matches, the exact reviewed manifest is required. Do not replace it
 with a new command or automatically stop/redeploy to recover uncertainty.
 An unavailable history read can be retried. If a successful read finds no matching
@@ -91,6 +92,8 @@ Restart all tetris apps          (the AI lists matching apps first)
 ### `stop_app`
 
 **What it does.** Closes the lease, terminating the running container(s) and freeing credits.
+Both chat and the app overview's Stop button warn when maintenance is pending: Fred may
+execute that command until the lease closes. Batch confirmations name the affected apps.
 
 **Example prompts.**
 
@@ -148,7 +151,7 @@ What's deploying?
 
 ### `app_status`
 
-**What it does.** Shows an app overview with its name, status, provider progress, deployment endpoint, and service endpoints for stacks. Selecting an app in the sidebar refreshes this view directly, even when AI chat is unavailable. Custom-domain setup and management are secondary buttons within the overview; **Details** includes size, image, and creation time. Lease status and workload availability are shown separately. Cached service details are collapsed and labeled as saved or last known; a fresh empty inventory removes stale port rows. A temporary connection-read failure preserves the established URL and offers any differing provider-reported endpoint separately. Internal services show **No published ports**. Terminal deployments show an inactive endpoint. If another request or confirmation is active, selecting an app explains how to finish it first; that notice clears once the action ends. Desktop status checks keep keyboard focus on the selected app; mobile selection immediately opens the chat so you can watch or cancel the check. After a lifecycle operation, saved connections are refreshed before being used for DNS target checks. Recovery makes up to four initial attempts; invalidated saved connections get four more at five-minute intervals. Each attempt also checks whether the workload failed. Select the app again to refresh after those attempts are exhausted. Attached-domain controls remain available while the chain lease is pending or active, including when the workload endpoint is inactive; closed leases hide those controls. A restart or update requested in chat can continue after the status check confirms readiness.
+**What it does.** Shows an app overview with its name, status, provider progress, deployment endpoint, and service endpoints for stacks. Selecting an app in the sidebar refreshes this view directly, even when AI chat is unavailable. Custom-domain setup and management are secondary buttons within the overview; **Details** includes size, image, and creation time. Lease status and workload availability are shown separately. Cached service details are collapsed and labeled as saved or last known; a fresh empty inventory removes stale port rows. A temporary connection-read failure preserves the established URL and offers any differing provider-reported endpoint separately. Internal services show **No published ports**. Terminal deployments show an inactive endpoint. If another request or confirmation is active, selecting an app explains how to finish it first; that notice clears once the action ends. Desktop status checks keep keyboard focus on the selected app; mobile selection immediately opens the chat so you can watch or cancel the check. After a lifecycle operation, saved connections are refreshed before being used for DNS target checks. Recovery makes up to four initial attempts; invalidated saved connections or uncertain maintenance readiness get four more at five-minute intervals. Fresh connection information and reloads do not shorten that readiness allowance. Each attempt also checks whether the workload failed. Select the app again to refresh after those attempts are exhausted. Attached-domain controls remain available while the chain lease is pending or active, including when the workload endpoint is inactive; closed leases hide those controls. A restart or update requested in chat can continue after the status check confirms readiness.
 
 **Example prompts.**
 

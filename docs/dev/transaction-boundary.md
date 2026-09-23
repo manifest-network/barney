@@ -53,7 +53,8 @@ remain in memory. A retry uses those exact bytes without rebuilding passwords.
 After reload, an original attachment can be merged with cached defaults only
 as a candidate: its exact hash must match. Without an attachment, provider
 release history can supply hash-matching bytes for a recovery confirmation;
-that lookup does not establish command admission or completion. If neither
+that lookup does not establish command admission or completion. An attachment that does not
+match falls through to retained bytes and history rather than blocking recovery within the turn. If neither
 source matches, the exact reviewed payload is still required. A failed history read or rejected
 signature remains retryable and does not establish that the bytes are permanently lost. A durable rejection
 creates no release: if its response and a generated/edited payload are both lost,
@@ -77,6 +78,12 @@ command. Routine directly reported outcomes allow follow-up work immediately. Le
 records without the advice flag conservatively retain that barrier. Deliberate
 `new_command: true` planning acknowledges a blocking receipt; no flag bypasses pending work.
 Every new confirmation binds the previous receipt's key so another settlement refuses dispatch.
+A tab also retains a nonsecret recovery intent in sessionStorage and memory: another tab's
+later successor cannot erase old advice here. Only dispatch of an explicitly confirmed new
+command consumes its bound intent. Advice marking does not rewrite an already-settled receipt,
+and storage-write failures preserve local recovery evidence without failing status queries.
+If that intent survives but neither a pending record nor a settled receipt exists, both planning
+and execution refuse a new command, including `new_command: true`; missing metadata proves no outcome.
 Cancellation before dispatch restores any prior receipt. Verified provider outcomes and manifest
 updates survive receipt-write failure; cached exact retries repeat local cleanup without another
 POST. If storage cannot be read to verify current command identity, the provider verdict remains
@@ -108,7 +115,14 @@ are applied only when their own snapshot fields remain current. Uncertain
 maintenance marks connection inventory and readiness stale independently, scheduling bounded
 background status reads without changing the prior provider observation (including an absent
 observation). Shared foreground/background logic restores DNS evidence on a fresh connection
-read while continuing readiness observation through missing or in-progress statuses.
+read while continuing readiness observation through missing or in-progress statuses. Uncertain
+readiness keeps the extended eight-attempt allowance after foreground refreshes and reloads;
+false and unset freshness flags compare equally when checking a registry snapshot.
+
+Successful batch maintenance preserves any local-cleanup warning in its result, summary and
+progress. Automatic deploy diagnostics keep the provider verdict and guidance before a bounded
+log tail; batch previews retain the final log lines within their row budget. Single-deploy logs
+preserve line breaks, and preview processing slices the input before code-point conversion.
 
 The confirmation UI preserves unchanged payload bytes and disables editing of
 recovery payloads. Focused tests use the real SDK lifecycle and authentication

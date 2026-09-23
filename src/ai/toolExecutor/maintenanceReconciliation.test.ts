@@ -42,6 +42,7 @@ beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
   localStorage.clear();
+  sessionStorage.clear();
   operations = await import('./maintenanceOperation');
   reconcile = (await import('./maintenanceReconciliation')).reconcilePendingMaintenance;
   fred = await import('../../api/fred');

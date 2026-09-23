@@ -1,5 +1,5 @@
 import { asLeaseUuid } from '@manifest-network/manifest-sdk';
-import { createMaintenanceIdempotencyKey, metaHashHex, restartApp, updateApp, waitForLeaseStatus } from '@manifest-network/manifest-sdk/deploy';
+import { createMaintenanceIdempotencyKey, metaHashHex, ProviderApiError, restartApp, updateApp, waitForLeaseStatus } from '@manifest-network/manifest-sdk/deploy';
 import { getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { browserEventTransport } from '../../api/eventTransport';
 import { AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
@@ -38,6 +38,7 @@ import {
   reserveMaintenanceCompletions, type MaintenanceCompletionReservation, type MaintenanceResult,
 } from './maintenanceCompletion';
 import { settledMaintenanceRefusal } from './maintenanceRefusal';
+import { consumeMaintenanceRecoveryIntent, rememberMaintenanceRecoveryIntent } from './maintenanceRecoveryIntent';
 import type { ToolExecutorOptions } from './types';
 
 function withCleanupWarning(value: MaintenanceResult, warning = MAINTENANCE_CLEANUP_MESSAGE): MaintenanceResult {
@@ -60,6 +61,7 @@ export async function executeMaintenance(
     manifest?: string;
     expectPending?: boolean;
     previousOperationKey?: string;
+    recoveryIntentKey?: string;
   },
   options: ToolExecutorOptions,
 ): Promise<MaintenanceResult> {
@@ -152,9 +154,14 @@ export async function executeMaintenance(
         if (saved && saved.idempotencyKey === input.idempotencyKey && saved.operation === operation
           && saved.payloadHash === priorResult.payloadHash
           && (priorResult.result.outcome === 'succeeded' || priorResult.result.outcome === 'failed')) {
+          command = saved;
           await completeMaintenanceOperation(saved, undefined, priorResult.result.outcome);
         }
       } catch { cleanupFailed = true; }
+      if (cleanupFailed) {
+        rememberMaintenanceRecoveryIntent({ address, chainId, providerUrl, leaseUuid, operation, idempotencyKey: input.idempotencyKey! });
+        if (command) await markMaintenanceRecoveryAdvised(command);
+      }
       assertCurrent();
       const result = cleanupFailed ? withCleanupWarning(priorResult.result) : priorResult.result;
       onProgress({ phase: result.outcome === 'succeeded' ? 'ready' : result.outcome === 'failed' ? 'failed' : 'unconfirmed', operation,
@@ -179,7 +186,7 @@ export async function executeMaintenance(
     }
     if (operation === 'update') {
       const validationError = await validateManifestForProvider(input.manifest ?? '', providerUrl);
-      if (validationError) throw new Error(validationError);
+      if (validationError) return { outcome: 'failed', result: { success: false, error: `${verb} could not be prepared: ${validationError}` } };
     }
     // A replay can acknowledge an old pending command while the source is still
     // ready. Only releases newer than the ORIGINAL pre-dispatch snapshot count.
@@ -193,6 +200,7 @@ export async function executeMaintenance(
       baselineReleaseVersions: baseline,
       expectPending: input.expectPending || existedBeforeAttempt,
       previousOperationKey: input.previousOperationKey,
+      recoveryIntentKey: input.recoveryIntentKey,
     });
     command = prepared.command;
     recoveryKey = command.idempotencyKey;
@@ -216,7 +224,9 @@ export async function executeMaintenance(
           throw error;
         }
         dispatchStarted = true;
-        return ctx.fetch(...args);
+        const request = ctx.fetch(...args);
+        try { consumeMaintenanceRecoveryIntent(prepared.command, input.recoveryIntentKey); } catch { /* Keep observing the submitted request if tab storage becomes unreadable. */ }
+        return request;
       },
     };
     onProgress({ phase: operation === 'restart' ? 'restarting' : 'updating', operation, detail: `${verb} requested...` });
@@ -239,6 +249,7 @@ export async function executeMaintenance(
     }
     onProgress({ phase: 'provisioning', operation, detail: 'Waiting for runtime and operation outcome...' });
     let status;
+    let readinessWaitRejected = false;
     try {
       status = await waitForLeaseStatus(ctx, asLeaseUuid(leaseUuid), {
         timeout: AI_LEASE_WAIT_TIMEOUT_MS,
@@ -248,6 +259,7 @@ export async function executeMaintenance(
       });
     } catch (error) {
       if (isAbortError(error)) throw error;
+      readinessWaitRejected = true;
       // A failed readiness wait can still have a definite command verdict.
       // Fresh reads below distinguish failed replacement from missing evidence.
     }
@@ -273,13 +285,18 @@ export async function executeMaintenance(
       url = endpoint.url ?? (previous ? resolveAppEndpoint(previous) : undefined);
       Object.assign(patch, {
         provisionState: 'confirmed',
-        readinessStale: false,
+        ...(registrySnapshot?.readinessStale && { readinessStale: false }),
         ...connectionPatch({ url: endpoint.url, connection: endpoint.connection, connectionStale: !endpoint.connection }, previous),
       });
     } else if (provision) {
       const provisionState = reconcileProvisionStatus(provision.status, appRegistry.getAppByLease(address, leaseUuid)?.provisionState);
       if (provisionState) patch.provisionState = provisionState;
-      if (provisionState === 'failed') patch.readinessStale = false;
+      if (provisionState === 'failed' && registrySnapshot?.readinessStale) patch.readinessStale = false;
+    } else if (readinessWaitRejected) {
+      // Releases can prove the command failed while runtime readiness remains
+      // unknown. Keep observing that independent outcome after this call ends.
+      patch.readinessStale = true;
+      patch.connectionStale = true;
     }
     signal?.throwIfAborted();
     const settled = verdict.outcome !== 'unconfirmed';
@@ -317,9 +334,13 @@ export async function executeMaintenance(
     });
     assertCurrent();
     if (result) {
-      if (projectionApplied) rememberMaintenanceCompletion(command, result, completionEpoch);
-      onProgress({ phase: result.outcome === 'succeeded' ? 'ready' : 'failed', operation,
-        detail: cleanupWarning ?? result.result.error });
+      if (cleanupWarning) await markMaintenanceRecoveryAdvised(command);
+      try {
+        assertCurrent();
+        if (projectionApplied) rememberMaintenanceCompletion(command, result, completionEpoch);
+        onProgress({ phase: result.outcome === 'succeeded' ? 'ready' : 'failed', operation,
+          detail: cleanupWarning ?? result.result.error });
+      } catch { /* A late storage lock must not update an invalidated UI session. */ }
       return cleanupWarning ? withCleanupWarning(result, cleanupWarning) : result;
     }
     if (!applied) {
@@ -337,6 +358,7 @@ export async function executeMaintenance(
       return observationOnly(`${dispatchStarted ? 'No further maintenance request was sent.' : input.expectPending ? 'This recovery request was not sent.' : 'This maintenance request was not sent.'} ${detail.message}`);
     }
     if (error instanceof MaintenanceOperationRefusalError) {
+      if (error.command) await markMaintenanceRecoveryAdvised(error.command);
       onProgress({ phase: 'failed', operation, detail: error.message });
       return { outcome: 'failed', result: { success: false, error: error.message } };
     }
@@ -359,6 +381,7 @@ export async function executeMaintenance(
       } catch {
         retirementFailed = true;
       }
+      if (retirementFailed) await markMaintenanceRecoveryAdvised(command);
       const safeRefusal = sanitizeForDisplay(refusal, 512);
       const detail = `${verb} failed: ${safeRefusal}${/[.!?…]$/.test(safeRefusal) ? '' : '.'}`;
       const result: MaintenanceResult = { outcome: 'failed', result: { success: false, error: detail } };
@@ -384,8 +407,12 @@ export async function executeMaintenance(
     }
     const preparationError = localDispatchError ?? error;
     if (isAbortError(preparationError)) return { outcome: 'cancelled', result: { success: false, error: `${verb} cancelled before dispatch.` } };
-    return { outcome: 'failed', result: { success: false, error: preparationError instanceof Error
-      ? sanitizeForDisplay(preparationError.message, FAILURE_DETAIL_CHARS) : `${verb} could not be prepared.` } };
+    const detail = preparationError instanceof Error
+      ? ProviderApiError.isProviderApiError(preparationError)
+        ? sanitizeForDisplay(preparationError.message, FAILURE_DETAIL_CHARS)
+        : preparationError.message
+      : 'Unknown preparation error.';
+    return { outcome: 'failed', result: { success: false, error: `${verb} could not be prepared: ${detail}` } };
   } finally {
     if (reservation) {
       let retainPending = false;

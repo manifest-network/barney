@@ -107,7 +107,10 @@ Barney keeps update contents in memory to protect secrets. After a browser
 reload, retry using only the app name to look for matching bytes in provider
 release history. You can also reattach the original file: Barney tries its
 original merge with saved defaults and requires an exact payload fingerprint
-match. Generated passwords and confirmation edits cannot be regenerated; if
+match. A mismatched attachment does not prevent recovery from retained bytes or
+history. If the history read fails or signing is rejected, reconnect the wallet
+if needed and retry; those failures do not mean the payload is permanently lost.
+Generated passwords and confirmation edits cannot be regenerated; if
 the provider has no matching manifest, the exact reviewed bytes are needed.
 Rejected updates create no release. If that rejection's response and the exact
 payload are both lost, Barney cannot resolve the command through the available
@@ -125,6 +128,9 @@ Barney retains the last settled command's identity across tabs and reloads. If
 you follow old retry advice after it settled, Barney reports that receipt instead
 of offering another operation. Check the outcome first. If you deliberately want
 another restart or update, ask for a new operation; its confirmation says so.
+If Barney reports a missing saved command record, the outcome is still unknown.
+Check app status and release history; asking for a new operation cannot bypass
+that uncertainty.
 
 Each wallet session has room for 128 completed or pending operations. Barney
 checks the whole batch before confirmation and reserves room before starting it,

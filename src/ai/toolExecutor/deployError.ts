@@ -17,6 +17,28 @@ import { isTerminalLeaseState } from '../../utils/leaseState';
 import { appCardConnection } from './appCardConnection';
 import { AI_DEPLOY_LOG_PREVIEW_CHARS } from '../../config/constants';
 
+/** Preserve safe log line breaks and the final lines without allocating an
+ * array for the provider's potentially multi-megabyte response. */
+function logPreviewTail(raw: string, maxChars: number): string {
+  if (maxChars <= 0) return '';
+  const bounded = raw.slice(-2 * maxChars);
+  // The UTF-16 window may start halfway through a surrogate pair. Remove that
+  // fragment before normalization, which can shrink the rest of the excerpt.
+  const aligned = bounded.length < raw.length ? bounded.replace(/^[\uDC00-\uDFFF]/u, '') : bounded;
+  const clean = aligned.normalize('NFC')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (point) => point === '\n' ? '\n' : ' ')
+    .replace(/[^\S\n]+/g, ' ')
+    .trim();
+  // NFC can expand canonical characters (e.g. U+0344), so cap AFTER it runs.
+  // Only the small UTF-16 window is ever normalized or split into code points.
+  const points = Array.from(clean);
+  const shortened = bounded.length < raw.length || points.length > maxChars;
+  const retained = shortened ? maxChars - 1 : maxChars;
+  const tail = retained > 0 ? points.slice(-retained).join('').trim() : '';
+  return `${shortened ? '…' : ''}${tail}`;
+}
+
 /**
  * Best-effort fetch of provider logs and provision status for failed deploys.
  * Creates a fresh auth token since the original may be stale after long polling.
@@ -27,7 +49,8 @@ async function fetchFailureLogs(
   leaseUuid: string,
   _address: string,
   signing: SigningContext | undefined,
-  appName: string
+  appName: string,
+  maxDetailChars?: number,
 ): Promise<string | null> {
   if (!signing) return null;
 
@@ -62,11 +85,15 @@ async function fetchFailureLogs(
         const logText = logEntries
           .map(([service, text]) => `[${service}]\n${typeof text === 'string' ? text : JSON.stringify(text)}`)
           .join('\n');
-        const logTail = Array.from(logText).slice(-AI_DEPLOY_LOG_PREVIEW_CHARS).join('');
-        // Keep the lookup hint before the logs so a batch's shorter row preview
-        // cannot hide how to request the complete tail. Never cut away the
-        // provider verdict or curated next step to make room for raw log text.
-        parts.push(`Container logs (preview). Use get_logs(app_name="${appName}", tail=200) for more:\n${sanitizeForDisplay(logTail, AI_DEPLOY_LOG_PREVIEW_CHARS)}`);
+        const heading = `Container logs (preview). Use get_logs(app_name="${appName}", tail=200) for more:`;
+        // Reserve the verdict, curated next step and lookup hint first. A batch
+        // row uses its remaining room for the END of the logs, where exits and
+        // panics appear, before the generic display cap runs.
+        const prefixLength = Array.from([...parts, heading].join('\n\n')).length + 1;
+        const tailBudget = maxDetailChars === undefined ? AI_DEPLOY_LOG_PREVIEW_CHARS
+          : Math.max(0, Math.min(AI_DEPLOY_LOG_PREVIEW_CHARS, maxDetailChars - prefixLength));
+        const logTail = logPreviewTail(logText, tailBudget);
+        parts.push(`${heading}${logTail ? `\n${logTail}` : ''}`);
       }
     } catch (error) {
       logError('deployError.fetchFailureLogs.logs', error);
@@ -196,6 +223,8 @@ interface DeployErrorContext {
   signing: SigningContext;
   appRegistry: NonNullable<ToolExecutorOptions['appRegistry']>;
   onProgress?: ToolExecutorOptions['onProgress'];
+  /** Batch row budget, including the lead, guidance and ending log preview. */
+  maxDetailChars?: number;
 }
 
 /**
@@ -276,8 +305,9 @@ export async function handleDeployManifestError(
     if (partial && failedStep === 'poll') {
       logError('deployError.pollVerdict', error);
       appRegistry.updateApp(address, leaseUuid, { provisionState: 'failed' });
-      const diagnostics = providerUrl ? await fetchFailureLogs(providerUrl, leaseUuid, address, signing, name) : null;
       const lead = 'Deployment failed: the provider reported the deployment as failed.';
+      const diagnostics = providerUrl ? await fetchFailureLogs(providerUrl, leaseUuid, address, signing, name,
+        ctx.maxDetailChars === undefined ? undefined : ctx.maxDetailChars - Array.from(lead).length - 2) : null;
       onProgress?.({ phase: 'failed', detail: 'The provider reported the deployment as failed.' });
       return { success: false, error: diagnostics ? `${lead}\n\n${diagnostics}` : lead };
     }
@@ -342,13 +372,15 @@ export async function handleDeployManifestError(
     // error), and we cannot tell them apart.
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     onProgress?.({ phase: 'failed', detail: errMessage });
+    const lead = `Deployment failed: ${errMessage}`;
     const diagnostics = cancelled || !providerUrl
       ? null
-      : await fetchFailureLogs(providerUrl, leaseUuid, address, signing, name);
+      : await fetchFailureLogs(providerUrl, leaseUuid, address, signing, name,
+        ctx.maxDetailChars === undefined ? undefined : ctx.maxDetailChars - Array.from(lead).length - 2);
     // barney copy — NOT the SDK's "…close_lease" text (barney has no close_lease tool).
     const errorMsg = diagnostics
-      ? `Deployment failed: ${errMessage}\n\n${diagnostics}`
-      : `Deployment failed: ${errMessage}`;
+      ? `${lead}\n\n${diagnostics}`
+      : lead;
     return { success: false, error: errorMsg };
   }
 
