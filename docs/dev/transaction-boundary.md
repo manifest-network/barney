@@ -88,6 +88,9 @@ If that intent survives but neither a pending record nor a settled receipt exist
 and execution refuse a new command, including `new_command: true`; missing metadata proves no outcome.
 Cancellation before dispatch writes a smaller `not_sent` receipt with any prior blocking flag. It proves
 that only its matching recovery intent can be retired, including in an observing tab or restored transcript.
+Advice for a newer unsent command preserves an existing guard. Transcript restoration loads
+never-sent proof before selecting the oldest actionable advice, so retiring one temporary
+command cannot erase an older command's still-visible guidance.
 Verified provider outcomes and manifest
 updates survive receipt-write failure; cached exact retries repeat local cleanup without another
 POST. Replays identify the previously verified result; cancellation during cleanup leaves that verdict known.

@@ -19,6 +19,7 @@ import type { ChatMessage } from '../../contexts/aiTypes';
 import type { StoreApi } from 'zustand';
 import type { AIStore } from '../aiStore';
 import { retainMessageMaintenanceAdvice, restoreMessageMaintenanceAdvice } from '../../ai/toolExecutor/maintenanceRecoveryIntent';
+import { getSettledMaintenanceOperation } from '../../ai/toolExecutor/maintenanceOperation';
 
 const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const LEGACY_STORAGE_KEY_HISTORY = 'barney-ai-history';
@@ -136,7 +137,9 @@ export function loadHistory(identity: WalletIdentity): ChatMessage[] {
   const saved = historyStorage.load(key);
   if (saved && walletIdentitiesEqual(saved.identity, identity)) {
     const messages = rehydrateChatHistory(saved.messages);
-    restoreMessageMaintenanceAdvice(messages, identity);
+    restoreMessageMaintenanceAdvice(messages, identity, (advice) => {
+      getSettledMaintenanceOperation(advice.address, advice.providerUrl, advice.leaseUuid, advice.chainId);
+    });
     return messages;
   }
 

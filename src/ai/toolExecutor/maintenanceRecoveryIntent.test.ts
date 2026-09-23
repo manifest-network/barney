@@ -118,6 +118,48 @@ describe('tab-local maintenance recovery intent', () => {
     expect(state.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(secondKey);
   });
 
+  it('preserves unreadable prior storage when unsent advice is first observed and then retired', async () => {
+    const original = await import('./maintenanceRecoveryIntent');
+    original.rememberMaintenanceRecoveryIntent(command);
+    const key = storage.key(0)!;
+    const prior = storage.entries.get(key);
+    vi.resetModules();
+    const fresh = await import('./maintenanceRecoveryIntent');
+    storage.getItem.mockImplementation(() => { throw new Error('Storage temporarily unreadable'); });
+    fresh.rememberMaintenanceRecoveryIntent({ ...command, idempotencyKey: secondKey }, true);
+    expect(fresh.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(secondKey);
+    fresh.retireUnsentMaintenanceRecoveryIntent(command, secondKey);
+    expect(storage.setItem).toHaveBeenCalledOnce();
+    expect(storage.removeItem).not.toHaveBeenCalled();
+    expect(storage.entries.get(key)).toBe(prior);
+    expect(() => fresh.getMaintenanceRecoveryIntent(command)).toThrow('could not be read');
+    storage.getItem.mockImplementation((key) => storage.entries.get(key) ?? null);
+    expect(fresh.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(command.idempotencyKey);
+  });
+
+  it('captures new advice after a memory-only never-sent guard while prior storage remains unreadable', async () => {
+    const original = await import('./maintenanceRecoveryIntent');
+    original.rememberMaintenanceRecoveryIntent(command);
+    const storageKey = storage.key(0)!;
+    const prior = storage.entries.get(storageKey);
+    vi.resetModules();
+    const fresh = await import('./maintenanceRecoveryIntent');
+    storage.getItem.mockImplementation(() => { throw new Error('Storage temporarily unreadable'); });
+    fresh.rememberMaintenanceRecoveryIntent({ ...command, idempotencyKey: secondKey }, true);
+    fresh.retireUnsentMaintenanceRecoveryIntent(command, secondKey);
+    const nextKey = '33333333-3333-4333-8333-333333333333';
+    fresh.rememberMaintenanceRecoveryIntent({ ...command, idempotencyKey: nextKey }, true);
+    const rows = fresh.retainMessageMaintenanceAdvice([{ id: 'next-advice', role: 'tool', content: 'Recover the saved command.', timestamp: 1 }], command);
+    expect(rows[0].maintenanceRecoveryAdvice?.[0].idempotencyKey).toBe(nextKey);
+    fresh.retireUnsentMaintenanceRecoveryIntent(command, nextKey);
+    expect(() => fresh.getMaintenanceRecoveryIntent(command)).toThrow('could not be read');
+    expect(storage.setItem).toHaveBeenCalledOnce();
+    expect(storage.removeItem).not.toHaveBeenCalled();
+    expect(storage.entries.get(storageKey)).toBe(prior);
+    storage.getItem.mockImplementation((key) => storage.entries.get(key) ?? null);
+    expect(fresh.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(command.idempotencyKey);
+  });
+
   it('does not erase an entry that becomes malformed before consumption', async () => {
     const state = await import('./maintenanceRecoveryIntent');
     state.rememberMaintenanceRecoveryIntent(command);

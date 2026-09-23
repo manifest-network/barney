@@ -290,6 +290,8 @@ without either record, even `new_command: true` remains observation-only because
 confirmation binds the previous receipt's key; a changed receipt refuses dispatch. A never-sent
 cancellation leaves a compact `not_sent` receipt, preserving any prior blocking flag. Only its matching
 intent can be retired, so an observing tab is not stranded and newer advice remains guarded.
+Temporary advice for a newer unsent command cannot replace an older active guard. Transcript
+restoration reads never-sent proof first, then retains the oldest actionable advice per lease.
 Verified outcomes and manifest updates survive failed
 receipt writes, which cached exact retries reattempt without another provider request. If command
 identity cannot be read, preserve the provider verdict but defer registry projection and completed

@@ -34,7 +34,7 @@ function keyFor(scope: RecoveryScope): string {
 export function getMaintenanceRecoveryIntent(scope: RecoveryScope): MaintenanceRecoveryIntent | undefined {
   const key = keyFor(scope);
   const retained = memory.get(key);
-  if (retained && !retained.persisted) return neverSent.get(key) === retained.intent.idempotencyKey ? undefined : retained.intent;
+  if (retained && !retained.persisted && neverSent.get(key) !== retained.intent.idempotencyKey) return retained.intent;
   let raw: string | null | undefined;
   try {
     if (!storage) throw new Error('Session storage unavailable');
@@ -57,10 +57,19 @@ export function getMaintenanceRecoveryIntent(scope: RecoveryScope): MaintenanceR
   }
 }
 
-export function rememberMaintenanceRecoveryIntent(command: RecoveryScope & MaintenanceRecoveryIntent): void {
+export function rememberMaintenanceRecoveryIntent(command: RecoveryScope & MaintenanceRecoveryIntent, preserveExisting = false): void {
   const key = keyFor(command);
   if (neverSent.get(key) === command.idempotencyKey) return;
   const intent = Object.freeze({ operation: command.operation, idempotencyKey: command.idempotencyKey });
+  if (preserveExisting) {
+    try { if (getMaintenanceRecoveryIntent(command)) return; } catch {
+      // Preserve unreadable storage; this known command still needs an in-memory
+      // guard and transcript correlation while access is unavailable.
+      const retained = memory.get(key);
+      if (!retained || neverSent.get(key) === retained.intent.idempotencyKey) memory.set(key, { intent, persisted: false });
+      return;
+    }
+  }
   memory.set(key, { intent, persisted: false });
   try {
     if (storage) { storage.setItem(key, JSON.stringify(intent)); memory.set(key, { intent, persisted: true }); }
@@ -124,12 +133,33 @@ export function retainMessageMaintenanceAdvice(messages: ChatMessage[], identity
   return changed ? result : messages;
 }
 
-export function restoreMessageMaintenanceAdvice(messages: ChatMessage[], identity: WalletIdentity): void {
+export function restoreMessageMaintenanceAdvice(
+  messages: ChatMessage[],
+  identity: WalletIdentity,
+  prepareScope?: (advice: MaintenanceRecoveryAdvice) => void,
+): void {
+  const applicable: MaintenanceRecoveryAdvice[] = [];
+  const prepared = new Set<string>();
   for (const message of messages) {
     for (const advice of message.maintenanceRecoveryAdvice ?? []) {
       if (advice.chainId !== identity.chainId || advice.address !== identity.address
         || advice.rpcUrl !== runtimeConfig.PUBLIC_RPC_URL || advice.restUrl !== runtimeConfig.PUBLIC_REST_URL) continue;
-      rememberMaintenanceRecoveryIntent(advice);
+      applicable.push(advice);
+      const key = keyFor(advice);
+      if (prepared.has(key)) continue;
+      prepared.add(key);
+      // Learn authoritative never-sent proof before any later row can replace
+      // an older sent command's still-visible recovery advice.
+      try { prepareScope?.(advice); } catch { /* Unreadable proof cannot retire any advice. */ }
     }
+  }
+  const restored = new Set<string>();
+  for (const advice of applicable) {
+    const key = keyFor(advice);
+    if (restored.has(key) || neverSent.get(key) === advice.idempotencyKey) continue;
+    // Keep the oldest actionable row. If proof was temporarily unreadable,
+    // retiring a newer never-sent command later still cannot erase this guard.
+    rememberMaintenanceRecoveryIntent(advice);
+    restored.add(key);
   }
 }

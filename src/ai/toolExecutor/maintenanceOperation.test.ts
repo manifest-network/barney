@@ -510,6 +510,25 @@ describe('maintenance operation retention', () => {
     expect(otherTab.getSettledMaintenanceOperation(scope.address, scope.providerUrl, scope.leaseUuid)?.recoveryAdvised).toBe(true);
   });
 
+  it('replaces an older guard only after the newer advised command is authoritatively dispatched', async () => {
+    const first = await operations.getOrCreateMaintenanceOperation(restart);
+    await operations.markMaintenanceOperationDispatched(first);
+    await operations.markMaintenanceRecoveryAdvised(first);
+    await operations.completeMaintenanceOperation(first, undefined, 'succeeded');
+    const next = await operations.getOrCreateMaintenanceOperation({ ...restart,
+      previousOperationKey: first.idempotencyKey, recoveryIntentKey: first.idempotencyKey });
+    const intent = await import('./maintenanceRecoveryIntent');
+    await operations.markMaintenanceRecoveryAdvised(next);
+    expect(intent.getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(first.idempotencyKey);
+    await operations.markMaintenanceOperationDispatched(next);
+    expect(next.dispatched).toBe(false); // The caller’s immutable copy is stale.
+    await operations.markMaintenanceRecoveryAdvised(next);
+    expect(intent.getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(next.idempotencyKey);
+    intent.consumeMaintenanceRecoveryIntent(scope, first.idempotencyKey);
+    expect(intent.getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(next.idempotencyKey);
+    expect(await operations.discardUnsubmittedMaintenanceOperation(next)).toBe(false);
+  });
+
   it('keeps pending metadata and advice when the never-sent tombstone cannot be written', async () => {
     const command = await operations.getOrCreateMaintenanceOperation(restart);
     await operations.markMaintenanceRecoveryAdvised(command);

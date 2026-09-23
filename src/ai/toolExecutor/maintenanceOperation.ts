@@ -447,11 +447,14 @@ export async function markMaintenanceOperationAccepted(record: MaintenanceOperat
 
 /** Call before returning recovery advice, including read-only/reloaded recovery. */
 export async function markMaintenanceRecoveryAdvised(record: MaintenanceOperation): Promise<void> {
-  rememberMaintenanceRecoveryIntent(record);
+  // An unsent command may disappear safely. Its temporary advice must not
+  // replace an older sent command's still-visible recovery guard.
+  rememberMaintenanceRecoveryIntent(record, true);
   const key = storageKey(record);
   try { await withScopeLock(key, () => {
     const current = getPendingMaintenanceOperation(record.address, record.providerUrl, record.leaseUuid, record.chainId);
     if (current) {
+      if (matches(record, metadataFor(current)) && (current.dispatched !== false || current.accepted)) rememberMaintenanceRecoveryIntent(record);
       if (!matches(record, metadataFor(current)) || current.recoveryAdvised) return;
       const updated = Object.freeze({ ...current, recoveryAdvised: true });
       persist(key, updated);

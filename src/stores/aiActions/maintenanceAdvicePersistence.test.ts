@@ -37,6 +37,71 @@ beforeEach(() => { localStorage.clear(); sessionStorage.clear(); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('maintenance advice attached to saved conversation rows', () => {
+  it.each([false, true])('preserves older sent-command advice when a newer never-sent row is restored (proof read fails=%s)', async (proofReadFails) => {
+    const a = await tab();
+    const first = await a.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1] });
+    await a.state.markMaintenanceOperationDispatched(first);
+    await a.state.markMaintenanceRecoveryAdvised(first);
+    a.history.saveHistory(identity, [row('k1-advice', 'Recover the saved first restart.')], true);
+    await a.state.completeMaintenanceOperation(first, undefined, 'succeeded');
+
+    const b = await tab();
+    const messages = b.history.loadHistory(identity);
+    const second = await b.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1, 2],
+      previousOperationKey: first.idempotencyKey, recoveryIntentKey: first.idempotencyKey });
+    await b.state.markMaintenanceOperationDispatched(second);
+    b.intent.consumeMaintenanceRecoveryIntent(scope, first.idempotencyKey);
+    await b.state.completeMaintenanceOperation(second, undefined, 'succeeded');
+    const third = await b.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1, 2, 3],
+      previousOperationKey: second.idempotencyKey });
+    await b.state.markMaintenanceRecoveryAdvised(third);
+    b.history.saveHistory(identity, [...messages, row('k3-advice', 'Recover the saved third restart.')], true);
+    expect(await b.state.discardUnsubmittedMaintenanceOperation(third)).toBe(true);
+    expect(b.state.getSettledMaintenanceOperation(scope.address, providerUrl, app.leaseUuid)).toMatchObject({ outcome: 'not_sent', recoveryAdvised: false });
+
+    const c = await tab();
+    const storage = localStorage;
+    if (proofReadFails) vi.stubGlobal('localStorage', {
+      getItem: (key: string) => { if (key.startsWith('barney:maintenance:v1:')) throw new Error('Metadata temporarily unavailable'); return storage.getItem(key); },
+      setItem: storage.setItem.bind(storage), removeItem: storage.removeItem.bind(storage),
+    });
+    c.history.loadHistory(identity);
+    vi.stubGlobal('localStorage', storage);
+    const replay = await c.tools.executeRestartApp({ app_name: app.name }, options());
+    expect(replay.requiresConfirmation).toBeUndefined();
+    expect(replay.error).toContain('already settled');
+    expect(c.intent.getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(first.idempotencyKey);
+    expect((await c.tools.executeRestartApp({ app_name: app.name, new_command: true }, options())).pendingAction?.args).toMatchObject({
+      previousOperationKey: third.idempotencyKey, recoveryIntentKey: first.idempotencyKey,
+    });
+  });
+
+  it('keeps a live tab’s older guard when another tab’s advised but unsent successor is discarded', async () => {
+    const a = await tab();
+    const first = await a.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1] });
+    await a.state.markMaintenanceOperationDispatched(first);
+    await a.state.markMaintenanceRecoveryAdvised(first);
+    a.history.saveHistory(identity, [row('k1-advice', 'Recover the saved first restart.')], true);
+    await a.state.completeMaintenanceOperation(first, undefined, 'succeeded');
+    const b = await tab();
+    const second = await b.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1, 2],
+      previousOperationKey: first.idempotencyKey });
+    await b.state.markMaintenanceOperationDispatched(second);
+    await b.state.completeMaintenanceOperation(second, undefined, 'succeeded');
+    const third = await b.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1, 2, 3],
+      previousOperationKey: second.idempotencyKey });
+    await a.state.markMaintenanceRecoveryAdvised(third);
+    expect(a.intent.getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(first.idempotencyKey);
+    await b.state.discardUnsubmittedMaintenanceOperation(third);
+    expect((await a.tools.executeRestartApp({ app_name: app.name }, options())).requiresConfirmation).toBeUndefined();
+    const deliberate = await a.tools.executeRestartApp({ app_name: app.name, new_command: true }, options());
+    expect(deliberate.pendingAction?.args).toMatchObject({ previousOperationKey: third.idempotencyKey, recoveryIntentKey: first.idempotencyKey });
+    a.intent.consumeMaintenanceRecoveryIntent(scope, third.idempotencyKey);
+    expect(a.intent.getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(first.idempotencyKey);
+    a.intent.consumeMaintenanceRecoveryIntent(scope, first.idempotencyKey);
+    expect((await a.tools.executeRestartApp({ app_name: app.name }, options())).requiresConfirmation).toBe(true);
+  });
+
   it.each([false, true])('keeps A’s advice through B’s successful successor and a new tab C (session quota=%s)', async (quota) => {
     const a = await tab(quota);
     const first = await a.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1] });
