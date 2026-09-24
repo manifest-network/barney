@@ -143,7 +143,7 @@ background status reads while preserving prior confirmed/failed verdicts. Explic
 a missing verdict with `unconfirmed`; absent or unmodelled status adds no provision observation. Maintenance, foreground status and background hydration share the provision/readiness patch,
 so suppressed in-progress readings always retain bounded follow-up eligibility. Ordinary query and
 discovery reads apply it only when a Fred response arrived: a rejected status fetch or token mint
-preserves the prior flag. `app_status` additionally reconciles pending maintenance; a failed provision
+preserves the prior flag. `app_status` and `app_releases` additionally reconcile pending maintenance; a failed provision
 read or authentication in that path can still set the flag and grant eight attempts because the
 command needs a runtime observation. An arrived response with omitted,
 empty or unmodelled status still schedules follow-up; maintenance also keeps its missing-verdict
@@ -168,6 +168,10 @@ with a count and `get_logs` lookup. Cancelled rows retain any previously verifie
 summary after the progress card disappears. Shortened summaries distinguish never-submitted
 cancelled deploys, which may be deployed again, from cancelled maintenance that requires observation. Internal rendering metadata is stripped from progress and tool results. Single-deploy logs
 preserve line breaks, and preview processing scans trailing noise in linear time and slices the input before code-point conversion.
+Caught errors in balance, log, diagnostic and release queries, and executor catch-alls, are sanitized
+and capped at 256 retained code points plus an ellipsis before entering chat/model-facing prose. Authored row breaks and successful log output
+are preserved. Saved chat errors keep up to 10,240 UTF-16 code units, including a truncation ellipsis,
+on both write and load; oversized batch alerts are shortened rather than dropped.
 Manifest validation diagnostics are sanitized and bounded to 4,096 code points in planning and both
 provider confirmation paths; ordinary preparation diagnostics keep their smaller cap.
 

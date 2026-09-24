@@ -15,6 +15,7 @@ import type { ToolExecutorOptions } from './types';
 import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
+import { FAILURE_DETAIL_CHARS } from './helpers';
 
 // Mock external modules
 vi.mock('../../api/appDiscovery', () => ({
@@ -673,6 +674,15 @@ describe('executeGetBalance', () => {
   it('returns error without wallet', async () => {
     const result = await executeGetBalance(makeOptions({ address: undefined }));
     expect(result.success).toBe(false);
+  });
+
+  it('bounds a multiline balance transport error without losing its authored prefix', async () => {
+    mockGetBalance.mockRejectedValueOnce(new Error(`Upstream\n\u0000\u202e unavailable ${'x'.repeat(1_000)}`));
+    const result = await executeGetBalance(makeOptions());
+    const prefix = 'Failed to fetch balance: ';
+    expect(result.error).toContain(`${prefix}Upstream unavailable `);
+    expect(result.error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+    expect(Array.from(result.error!.slice(prefix.length))).toHaveLength(FAILURE_DETAIL_CHARS + 1);
   });
 
   it('returns error without clientManager', async () => {

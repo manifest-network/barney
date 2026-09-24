@@ -148,8 +148,12 @@ describe('read-only maintenance reconciliation', () => {
     ['image pull failed!', 'image pull failed!'], ['image pull failed…', 'image pull failed…'],
     ['image pull failed.', 'image pull failed.'], ['image pull failed:', 'image pull failed.'],
     ['provider said "no."', 'provider said "no."'],
+    ['image pull failed: ;', 'image pull failed.'], ['image pull failed , :', 'image pull failed.'],
+    [':', ''],
   ].map(([message, ending]) => ({ operation, message, ending }))))('separates a reconciled $operation failure ending in "$message" from cleanup guidance and retains it on replay', async ({ operation, message, ending }) => {
     const command = await prepare(operation);
+    const reason = operation === 'restart' ? 'RestartFailed' : 'UpdateFailed';
+    const detail = ending ? `${reason}: ${ending}` : `${reason}.`;
     const storage = localStorage;
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
@@ -162,21 +166,21 @@ describe('read-only maintenance reconciliation', () => {
     });
     try {
       const result = await reconcile(app, options, history(release(1), release(2, 'failed', {
-        reason: operation === 'restart' ? 'RestartFailed' : 'UpdateFailed', message,
+        reason, message,
       })));
       expect(result).toMatchObject({ outcome: 'failed', runtimeReady: true,
-        detail: expect.stringContaining(`${ending} The provider outcome was verified`) });
+        detail: expect.stringContaining(`${detail} The provider outcome was verified`) });
       expect(result?.detail).not.toMatch(/[!?….]\. /u);
       const { getCompletedMaintenance } = await import('./maintenanceCompletion');
       const cached = getCompletedMaintenance(command);
-      expect(cached?.result.result.error?.endsWith(ending)).toBe(true);
+      expect(cached?.result.result.error?.endsWith(detail)).toBe(true);
       const { executeMaintenance } = await import('./maintenanceExecution');
       const replay = await executeMaintenance({ ...scope, app_name: app.name, operation,
         idempotencyKey: command.idempotencyKey, ...(operation === 'update' && { manifest: payload }),
       }, { ...options, clientManager: {} as NonNullable<ToolExecutorOptions['clientManager']> });
       expect(replay.outcome).toBe('failed');
       expect(replay.result.error).toContain(`Previously verified ${operation}`);
-      expect(replay.result.error).toContain(`${ending} The provider outcome was verified`);
+      expect(replay.result.error).toContain(`${detail} The provider outcome was verified`);
       expect(replay.result.error).not.toMatch(/[!?….]\. /u);
       expect(replay.result.error).toContain('No new maintenance request was sent.');
       expect(fetch).not.toHaveBeenCalled();

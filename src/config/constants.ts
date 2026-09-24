@@ -163,6 +163,9 @@ export const AI_BATCH_DEPLOY_CONCURRENCY = getNumericConfig('PUBLIC_AI_BATCH_DEP
 /** Maximum serialized diagnostic text in one batch tool result. Keeps provider
  * error bodies from consuming the persisted conversation's prompt budget. */
 export const AI_BATCH_DIAGNOSTIC_CHARS = 8_192;
+/** Per-message persisted error bound in UTF-16 units, including any ellipsis.
+ * Covers the batch diagnostic budget plus room for names and summary framing. */
+export const AI_HISTORY_ERROR_CHARS = AI_BATCH_DIAGNOSTIC_CHARS + 2_048;
 
 /** Per-row bound for Barney's guidance after individual provider fields have
  * been sanitized. Leaves room for full recovery instructions and next steps. */

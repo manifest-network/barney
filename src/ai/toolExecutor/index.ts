@@ -33,6 +33,8 @@ import {
 } from './compositeTransactions';
 import type { ToolResult, ToolExecutorOptions, PayloadAttachment } from './types';
 import { isAbortError } from '../../api/utils';
+import { sanitizeForDisplay } from '../../utils/sanitizeText';
+import { FAILURE_DETAIL_CHARS } from './helpers';
 import { createMaintenanceAdviceCollector, mergeMaintenanceAdvice } from './maintenanceRecoveryIntent';
 
 // Re-export types
@@ -105,7 +107,7 @@ async function executeToolImpl(
       if (isAbortError(error)) throw error;
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS),
       };
     }
   }
@@ -135,7 +137,7 @@ async function executeToolImpl(
       if (isAbortError(error)) throw error;
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS),
       };
     }
   }
@@ -148,7 +150,7 @@ async function executeToolImpl(
       if (isAbortError(error)) throw error;
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS),
       };
     }
   }
@@ -210,7 +212,7 @@ async function executeConfirmedToolImpl(
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS),
     };
   }
 }

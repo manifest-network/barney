@@ -5173,13 +5173,17 @@ describe('executeConfirmedUpdateApp', () => {
     ['is the image private?', 'is the image private?'],
     ['provider said "no."', 'provider said "no."'],
     ['provider said "no.":', 'provider said "no."'],
+    ['image pull failed: ;', 'image pull failed.'],
+    ['image pull failed , :', 'image pull failed.'],
+    [':', ''],
   ].map(([message, ending]) => ({ ...branch, message, ending }))))('punctuates legacy $reason/$status detail "$message" before its next step', async ({ status, reason, lead, message, ending }) => {
+    const detail = ending ? `${reason}: ${ending}` : `${reason}.`;
     mockUpdateReachingProvision({ status, reason, fail_count: 1, message });
     const app = makeApp({ manifest: PREVIOUS_MANIFEST });
     const result = await runUpdate(makeRegistry([app]), app);
     expect(result.success).toBe(false);
     expect(result.error).toContain(lead);
-    expect(result.error).toContain(`${reason}: ${ending} `);
+    expect(result.error).toContain(`${detail} `);
     expect(result.error).not.toMatch(/:\.|\?\.|"\./u);
     expect(result.error).toContain(reason === 'ContainerExited' || status === 'failed' && reason === 'UpdateFailed'
       ? `Use app_status("${app.name}") to check.`

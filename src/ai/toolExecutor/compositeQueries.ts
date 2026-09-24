@@ -33,7 +33,7 @@ import { buildBarneyCtx } from './capabilityCtx';
 import { nextStepFor } from './failureGuidance';
 import { reconcilePendingMaintenance } from './maintenanceReconciliation';
 import { retireAbsentMaintenanceOperation } from './maintenanceOperation';
-import { resolveAppEndpoint } from './helpers';
+import { FAILURE_DETAIL_CHARS, resolveAppEndpoint } from './helpers';
 import { refreshAppConnection } from './deployUrl';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import { getDomainAssignments } from '../../api/leaseDomains';
@@ -490,7 +490,7 @@ export async function executeGetBalance(
     logError('compositeQueries.executeGetBalance', error);
     return {
       success: false,
-      error: `Failed to fetch balance: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error: `Failed to fetch balance: ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 
@@ -771,7 +771,7 @@ export async function executeGetLogs(
     logError('compositeQueries.executeGetLogs.sign', error);
     return {
       success: false,
-      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+      error: `Failed to sign request: ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown signing error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 
@@ -782,7 +782,7 @@ export async function executeGetLogs(
     logError('compositeQueries.executeGetLogs', error);
     return {
       success: false,
-      error: `Failed to fetch logs for "${app.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error: `Failed to fetch logs for "${app.name}": ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 
@@ -927,7 +927,7 @@ export async function executeAppDiagnostics(
     logError('compositeQueries.executeAppDiagnostics.sign', error);
     return {
       success: false,
-      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+      error: `Failed to sign request: ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown signing error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 
@@ -958,7 +958,7 @@ export async function executeAppDiagnostics(
     logError('compositeQueries.executeAppDiagnostics', error);
     return {
       success: false,
-      error: `Failed to fetch diagnostics for "${app.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error: `Failed to fetch diagnostics for "${app.name}": ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 }
@@ -1001,7 +1001,7 @@ export async function executeAppReleases(
     logError('compositeQueries.executeAppReleases.sign', error);
     return {
       success: false,
-      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+      error: `Failed to sign request: ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown signing error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 
@@ -1026,7 +1026,7 @@ export async function executeAppReleases(
     logError('compositeQueries.executeAppReleases', error);
     return {
       success: false,
-      error: `Failed to fetch releases for "${app.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error: `Failed to fetch releases for "${app.name}": ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 }

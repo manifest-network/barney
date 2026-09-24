@@ -29,7 +29,10 @@ afterEach(() => {
 
 it('omits the unused selector for query contexts while mutations still validate configuration', async () => {
   vi.resetModules();
-  vi.doMock('../../config/runtimeConfig', () => ({ runtimeConfig: { PUBLIC_FRED_COMPATIBILITY: 'PR240' } }));
+  vi.doMock('../../config/runtimeConfig', async () => {
+    const actual = await vi.importActual<typeof import('../../config/runtimeConfig')>('../../config/runtimeConfig');
+    return { ...actual, runtimeConfig: { ...actual.runtimeConfig, PUBLIC_FRED_COMPATIBILITY: 'PR240' } };
+  });
   const { buildBarneyCtx: build } = await import('./capabilityCtx');
   vi.mocked(getReadClient).mockResolvedValue({ query: {} } as Awaited<ReturnType<typeof getReadClient>>);
   const chain = {} as CosmosClientManager;

@@ -3,6 +3,8 @@ import { createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { ChatMessage } from '../../contexts/aiTypes';
 
 const sendMessage = vi.fn();
@@ -101,7 +103,8 @@ describe('MessageBubble — error alerts', () => {
     expect(result.success).toBe(false);
     const style = document.createElement('style');
     // Load the application's rules without the build-time Tailwind import.
-    style.textContent = readFileSync('src/index.css', 'utf8').replace(/^@import[^\n]+/gm, '');
+    const stylesheetPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../index.css');
+    style.textContent = readFileSync(stylesheetPath, 'utf8').replace(/^@import[^\n]+/gm, '');
     document.head.appendChild(style);
     try {
       render(makeError(result.error!));
@@ -111,6 +114,7 @@ describe('MessageBubble — error alerts', () => {
       expect(text.textContent).toContain('provider was asked\nddd:');
       expect(getComputedStyle(text).whiteSpace).toBe('pre-line');
       expect(getComputedStyle(text).wordBreak).toBe('break-word');
+      expect(getComputedStyle(text.parentElement!).alignItems).toBe('flex-start');
     } finally { style.remove(); }
   });
 });

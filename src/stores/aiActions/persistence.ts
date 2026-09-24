@@ -8,6 +8,7 @@ import {
   type AISettings,
 } from '../../ai/validation';
 import { logError } from '../../utils/errors';
+import { boundPersistedError } from '../../utils/persistedError';
 import { createVersionedStorage } from '../../utils/versionedStorage';
 import type { WalletIdentity } from '../../utils/walletIdentity';
 import {
@@ -253,9 +254,11 @@ export function saveHistory(
   const toSave = messages
     .filter((m) => !m.isStreaming)
     // eslint-disable-next-line @typescript-eslint/no-unused-vars -- see comment above
-    .map(({ card, toolCalls, ...rest }) =>
-      card ? { ...rest, content: `[${card.type} displayed to user]` } : rest
-    );
+    .map(({ card, toolCalls, error, ...rest }) => ({
+      ...rest,
+      ...(card && { content: `[${card.type} displayed to user]` }),
+      error: boundPersistedError(error),
+    }));
   if (toSave.length === 0) {
     historyStorage.clear(key);
     return;

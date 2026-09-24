@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import * as ipaddr from 'ipaddr.js';
 import type { ChatMessage } from '../contexts/aiTypes';
+import { boundPersistedError } from '../utils/persistedError';
 
 // ============================================================================
 // Settings Validation
@@ -132,7 +133,7 @@ const PersistedMessageSchema = z.object({
   thinking: z.string().max(MAX_CONTENT_LENGTH).optional().catch(undefined),
   toolCallId: z.string().max(64).optional().catch(undefined),
   toolName: z.string().max(64).optional().catch(undefined),
-  error: z.string().max(2048).optional().catch(undefined),
+  error: z.preprocess(boundPersistedError, z.string().optional()),
   // Transient/UI markers preserved through validation so filters and
   // rehydrate branches downstream can act on them. Whitelist explicitly —
   // every new flag on ChatMessage must be decided about here:

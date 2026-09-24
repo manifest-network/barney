@@ -326,10 +326,13 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
     ['image pull failed!', 'image pull failed!'], ['image pull failed…', 'image pull failed…'],
     ['image pull failed.', 'image pull failed.'], ['image pull failed:', 'image pull failed.'],
     ['provider said "no."', 'provider said "no."'],
+    ['image pull failed: ;', 'image pull failed.'], ['image pull failed , :', 'image pull failed.'],
+    [':', ''],
   ])(
     'separates failed verdict %j from a cleanup warning without doubled punctuation', async (message, ending) => {
       const { apps: [app], plans: [plan], options } = setup();
       const reason = operation === 'restart' ? 'RestartFailed' : 'UpdateFailed';
+      const detail = ending ? `${reason}: ${ending}` : `${reason}.`;
       vi.mocked(providerFetch).mockImplementationOnce(async () => {
         histories.set(app.leaseUuid, history(app.leaseUuid, release(1), { ...release(2, 'failed', reason), message }));
         failNextReceiptWrite();
@@ -337,7 +340,7 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
       });
       const result = await dispatch(operation, plan, options);
       expect(result.success).toBe(false);
-      expect(result.error).toContain(`${ending} The provider outcome was verified`);
+      expect(result.error).toContain(`${detail} The provider outcome was verified`);
       expect(result.error).not.toMatch(/[!?….]\. /u);
       expect(result.error).toContain('previous runtime is healthy');
       expect(providerFetch).toHaveBeenCalledTimes(1);
@@ -944,7 +947,7 @@ describe('independent maintenance verdicts', () => {
         return histories.get(leaseUuid)!;
       });
     }
-    const messages = new Map([['aaa', 'image pull failed.'], ['bbb', 'image pull failed:'], ['ccc', 'provider said "no."']]);
+    const messages = new Map([['aaa', 'image pull failed.'], ['bbb', 'image pull failed: ;'], ['ccc', 'provider said "no."']]);
     vi.mocked(providerFetch).mockImplementation(async (input) => {
       const target = apps.find(entry => String(input).includes(entry.leaseUuid))!;
       const message = messages.get(target.name);
@@ -969,7 +972,7 @@ describe('independent maintenance verdicts', () => {
     for (const [name, detail] of [['aaa', 'image pull failed.'], ['bbb', 'image pull failed.'], ['ccc', 'provider said "no."']]) {
       const row = text.split('\n').find((line) => line.includes(`${name}: Restart failed`));
       expect(row, `missing failed row for ${name}`).toContain(`${name}: Restart failed`);
-      expect(row).toContain(detail);
+      expect(row?.endsWith(detail), `unexpected ending for ${name}: ${row}`).toBe(true);
       expect(row).not.toMatch(new RegExp(`(?:${[...messages.keys()].filter((other) => other !== name).join('|')}): Restart failed`));
     }
     if (reverseCompletion) expect(completionOrder).toEqual(apps.map((app) => app.name).reverse());

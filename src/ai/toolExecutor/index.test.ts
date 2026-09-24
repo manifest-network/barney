@@ -3,6 +3,7 @@ import { executeTool, executeConfirmedTool } from './index';
 import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import type { ToolResult, ToolExecutorOptions } from './types';
 import { maintenanceRecoveryAdvice } from './maintenanceRecoveryIntent';
+import { FAILURE_DETAIL_CHARS } from './helpers';
 
 vi.mock('./compositeQueries', () => ({
   executeListApps: vi.fn(),
@@ -443,5 +444,33 @@ describe('executeConfirmedTool', () => {
       success: false,
       error: 'tx failed',
     });
+  });
+});
+
+describe('executor error display boundaries', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['query', 'get_balance', executeGetBalance, executeTool],
+    ['planning', 'deploy_app', executeDeployApp, executeTool],
+    ['cosmos', 'cosmos_query', executeCosmosQuery, executeTool],
+    ['confirmed', 'fund_credits', executeConfirmedFundCredits, executeConfirmedTool],
+  ] as const)('bounds untrusted thrown messages in the %s catch-all', async (_branch, tool, executor, dispatch) => {
+    vi.mocked(executor).mockRejectedValueOnce(new Error(`Upstream failure\n\u0000\u202e\u2028\t${'x'.repeat(2_000)}`));
+    const result = await dispatch(tool, {}, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/^Upstream failure /);
+    expect(result.error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+    expect(Array.from(result.error!)).toHaveLength(FAILURE_DETAIL_CHARS + 1);
+    expect(result.error?.endsWith('…')).toBe(true);
+  });
+
+  it.each([
+    ['get_logs', executeGetLogs, executeTool],
+    ['restart_app', executeConfirmedRestartApp, executeConfirmedTool],
+  ] as const)('preserves authored multiline error results from %s', async (tool, executor, dispatch) => {
+    const result: ToolResult = { success: false, error: 'Failed: web: Image pull failed.\nworker: Provisioning failed.\nCheck app_diagnostics for each app.' };
+    vi.mocked(executor).mockResolvedValueOnce(result);
+    expect(await dispatch(tool, {}, makeOptions())).toBe(result);
   });
 });

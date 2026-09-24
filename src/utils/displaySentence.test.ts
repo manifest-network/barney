@@ -16,7 +16,13 @@ describe('finishDisplaySentence', () => {
     ['provider replied ("no…"),', 'provider replied ("no…")'],
     ['image pull failed.:', 'image pull failed.'],
     ['image pull failed! ;', 'image pull failed!'],
+    ['image pull failed: ;', 'image pull failed.'],
+    ['image pull failed , :', 'image pull failed.'],
+    ['image pull failed. , :', 'image pull failed.'],
+    ['provider said "no.": ;', 'provider said "no."'],
+    ['UpdateFailed: :', 'UpdateFailed.'],
     ['provider said "no:"', 'provider said "no:".'],
+    [' : ; , ', ''],
     ['  ', ''],
   ])('finishes %j without changing quoted content', (input, expected) => {
     expect(finishDisplaySentence(input)).toBe(expected);
