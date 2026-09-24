@@ -5220,6 +5220,18 @@ describe('executeConfirmedUpdateApp', () => {
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('running');
   });
 
+  it.each([
+    { status: 'ready', error: 'Update failed, previous version restored.' },
+    { status: 'failed', error: 'Update failed and rollback failed. Use app_status("my-app") to check.' },
+  ])('omits separator-only legacy diagnostics after the $status rollback verdict', async ({ status, error }) => {
+    mockUpdateReachingProvision({ status, fail_count: 1, last_error: ': ; , ' });
+    const app = makeApp({ name: 'my-app', manifest: PREVIOUS_MANIFEST });
+    const result = await runUpdate(makeRegistry([app]), app);
+    expect(result).toMatchObject({ success: false, error });
+    expect(updateApp).toHaveBeenCalledTimes(1);
+    expect(getLeaseProvision).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a clean update as a success and does not revert the manifest', async () => {
     // The twin of the rollback fixture: reason/message CLEARED by
     // onEnterReadyFromReplaceCompleted. fail_count is non-zero on purpose — a

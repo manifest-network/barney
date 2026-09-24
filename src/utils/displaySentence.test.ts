@@ -27,4 +27,12 @@ describe('finishDisplaySentence', () => {
   ])('finishes %j without changing quoted content', (input, expected) => {
     expect(finishDisplaySentence(input)).toBe(expected);
   });
+
+  it('preserves long interior separator runs while removing only the trailing run', () => {
+    const separators = ' \t,;\u00a0:\n'.repeat(4096);
+    const sentence = `Failed${separators}provider said "no."`;
+    expect(finishDisplaySentence(`${sentence}${separators}`)).toBe(sentence);
+    expect(finishDisplaySentence(`Failed${separators}again`)).toBe(`Failed${separators}again.`);
+    expect(finishDisplaySentence(separators)).toBe('');
+  });
 });

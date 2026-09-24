@@ -6,7 +6,7 @@
 import { z } from 'zod';
 import * as ipaddr from 'ipaddr.js';
 import type { ChatMessage } from '../contexts/aiTypes';
-import { boundPersistedError } from '../utils/persistedError';
+import { loadPersistedError } from '../utils/persistedError';
 
 // ============================================================================
 // Settings Validation
@@ -133,7 +133,9 @@ const PersistedMessageSchema = z.object({
   thinking: z.string().max(MAX_CONTENT_LENGTH).optional().catch(undefined),
   toolCallId: z.string().max(64).optional().catch(undefined),
   toolName: z.string().max(64).optional().catch(undefined),
-  error: z.preprocess(boundPersistedError, z.string().optional()),
+  error: z.string().optional().catch(undefined),
+  // Persisted-only marker: absent/malformed means legacy raw provider text.
+  errorFormat: z.literal('authored').optional().catch(undefined),
   // Transient/UI markers preserved through validation so filters and
   // rehydrate branches downstream can act on them. Whitelist explicitly —
   // every new flag on ChatMessage must be decided about here:
@@ -151,8 +153,9 @@ const PersistedMessageSchema = z.object({
   awaitingConfirmation: z.boolean().optional().catch(undefined),
   transactionInFlight: z.boolean().optional().catch(undefined),
   local: z.boolean().optional().catch(undefined),
-}).transform((msg): ChatMessage => ({
+}).transform(({ errorFormat, ...msg }): ChatMessage => ({
   ...msg,
+  error: loadPersistedError(msg.error, errorFormat),
   // Normalize undefined → false so downstream truthiness checks behave.
   // The old transform hard-set `isStreaming: false`, which clobbered a
   // persisted `true` and short-circuited the rehydrate Interrupted branch.

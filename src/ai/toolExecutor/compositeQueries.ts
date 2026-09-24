@@ -1056,7 +1056,12 @@ export async function executeRequestFaucet(
       error: 'Faucet is temporarily unavailable. Please try again in a few minutes.',
     };
   }
-  const { results } = faucetResult;
+  // Credit failures are returned values, and the SDK preserves the HTTP body.
+  // Bound each detail before it reaches either prose or structured tool data.
+  const results = faucetResult.results.map((result) => result.success ? result : {
+    ...result,
+    error: sanitizeForDisplay(result.error ?? 'Unknown error', FAILURE_DETAIL_CHARS),
+  });
 
   const allSuccess = results.every((r) => r.success);
   const allFailed = results.every((r) => !r.success);

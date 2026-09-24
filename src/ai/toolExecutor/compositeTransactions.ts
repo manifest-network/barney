@@ -2352,7 +2352,7 @@ export async function executeConfirmedUpdateApp(
                 : 'Update failed and rollback failed.',
             operation: 'update',
           });
-          const detail = failureText(provision, 'no detail reported');
+          const detail = finishDisplaySentence(failureText(provision, 'no detail reported'));
           // Curated per-reason guidance through barney's remapper — never the
           // SDK's `guidanceFor` directly: `Unknown`'s SDK sentence says
           // `get_logs({ lease_uuid })`, a call shape barney's
@@ -2360,19 +2360,21 @@ export async function executeConfirmedUpdateApp(
           // EVERY arm because ImagePullFailed's line is the only actionable one
           // for the preflight branch; absent for an unknown reason.
           const nextStep = nextStepFor(reason, name);
-          const suffix = nextStep ? ` ${nextStep}` : '';
           return {
             success: false,
             // The preflight copy must not claim what is serving — the registry
             // records fred's `failed` verdict — so it leads with the failure and
             // keeps "nothing was changed" as blast-radius reassurance only.
-            error: preflight
-              ? `Update failed: the image could not be pulled, so the new version was never applied and ` +
-                `nothing was changed on the provider. ${finishDisplaySentence(detail)}${suffix}`
-              : rollbackOk
-                ? `Update failed, previous version restored. ${finishDisplaySentence(detail)}${suffix}`
-                : `Update failed and rollback failed. ${finishDisplaySentence(detail)} ` +
-                  `Use app_status("${name}") to check.${suffix}`,
+            error: [
+              preflight
+                ? 'Update failed: the image could not be pulled, so the new version was never applied and nothing was changed on the provider.'
+                : rollbackOk
+                  ? 'Update failed, previous version restored.'
+                  : 'Update failed and rollback failed.',
+              detail,
+              !preflight && !rollbackOk ? `Use app_status("${name}") to check.` : undefined,
+              nextStep,
+            ].filter(Boolean).join(' '),
           };
         }
       } catch (error) {

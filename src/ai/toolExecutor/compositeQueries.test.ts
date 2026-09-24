@@ -1724,6 +1724,27 @@ describe('executeRequestFaucet', () => {
     expect(data.message).toContain('cooldown active');
   });
 
+  it.each([false, true])('uses a bounded fallback for omitted failure detail (mixed: %s)', async (mixed) => {
+    const successful = { denom: 'umfx', success: true };
+    const failed = { denom: 'factory/addr/upwr', success: false };
+    vi.mocked(requestFaucet).mockResolvedValue({
+      address: ADDRESS,
+      results: mixed ? [successful, failed] : [failed],
+    });
+
+    const result = await executeRequestFaucet(makeOptions());
+    expect(result.success).toBe(mixed);
+    if (mixed) {
+      const data = result.data as { message: string; results: { denom: string; success: boolean; error?: string }[] };
+      expect(data.message).toContain('factory/addr/upwr (Unknown error)');
+      expect(data.results).toEqual([successful, { ...failed, error: 'Unknown error' }]);
+      expect(data.results[0]).toBe(successful);
+    } else {
+      expect(result.error).toContain('factory/addr/upwr: Unknown error');
+    }
+    expect(failed).not.toHaveProperty('error');
+  });
+
   it('returns user-friendly error and logs when requestFaucet throws', async () => {
     vi.mocked(requestFaucet).mockRejectedValue(
       new Error('Faucet has no tokens configured')

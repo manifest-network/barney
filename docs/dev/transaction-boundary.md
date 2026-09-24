@@ -169,9 +169,15 @@ summary after the progress card disappears. Shortened summaries distinguish neve
 cancelled deploys, which may be deployed again, from cancelled maintenance that requires observation. Internal rendering metadata is stripped from progress and tool results. Single-deploy logs
 preserve line breaks, and preview processing scans trailing noise in linear time and slices the input before code-point conversion.
 Caught errors in balance, log, diagnostic and release queries, and executor catch-alls, are sanitized
-and capped at 256 retained code points plus an ellipsis before entering chat/model-facing prose. Authored row breaks and successful log output
-are preserved. Saved chat errors keep up to 10,240 UTF-16 code units, including a truncation ellipsis,
-on both write and load; oversized batch alerts are shortened rather than dropped.
+and capped at 256 retained code points plus an ellipsis before entering chat/model-facing prose.
+Failed faucet rows use the same sanitizer before all-failed/partial-success messages and structured
+results are composed. Authored row breaks and successful log output are preserved. New saved error
+rows carry an `errorFormat: 'authored'` marker; marked errors keep up to 10,240 UTF-16 code units on
+both write and load. Oversized alerts retain beginning and ending portions with an explicit omission
+notice, preserving closing guidance. Unmarked or unrecognized-format legacy errors are sanitized at
+the 256-code-point cap before display or re-save. The marker does not enter runtime messages. The
+envelope stays v1; older builds still apply their previous load limit and must be refreshed to read
+the newer diagnostics.
 Manifest validation diagnostics are sanitized and bounded to 4,096 code points in planning and both
 provider confirmation paths; ordinary preparation diagnostics keep their smaller cap.
 

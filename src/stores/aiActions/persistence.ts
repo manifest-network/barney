@@ -258,6 +258,7 @@ export function saveHistory(
       ...rest,
       ...(card && { content: `[${card.type} displayed to user]` }),
       error: boundPersistedError(error),
+      errorFormat: typeof error === 'string' ? 'authored' as const : undefined,
     }));
   if (toSave.length === 0) {
     historyStorage.clear(key);
