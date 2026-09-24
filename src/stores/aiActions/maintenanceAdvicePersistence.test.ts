@@ -4,8 +4,19 @@ import { runtimeConfig } from '../../config/runtimeConfig';
 import type { ChatMessage } from '../../contexts/aiTypes';
 import type { AIStore } from '../aiStore';
 import { makeRegistry } from '../../ai/toolExecutor/testHelpers';
+import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
+import type { SigningContext } from '../../ai/toolExecutor/types';
 
-vi.mock('../../config/fredCompatibility', () => ({ fredCompatibilityForProvider: () => 'pr240' }));
+vi.mock('../../config/fredCompatibility', () => ({ fredCompatibilityForProvider: () => 'pr240', getFredCompatibility: () => 'pr240' }));
+const boundary = vi.hoisted(() => ({ fetch: vi.fn(), releases: vi.fn(), provision: vi.fn(), wait: vi.fn() }));
+vi.mock('../../api/providerFetchAdapter', () => ({ providerFetch: boundary.fetch }));
+vi.mock('../../api/readClient', () => ({ getReadClient: vi.fn(async () => ({ query: {} })) }));
+vi.mock('../../api/fred', async (original) => ({ ...await original<typeof import('../../api/fred')>(),
+  getLeaseReleases: boundary.releases, getLeaseProvision: boundary.provision }));
+vi.mock('@manifest-network/manifest-sdk/deploy', async (original) => ({ ...await original<typeof import('@manifest-network/manifest-sdk/deploy')>(),
+  waitForLeaseStatus: boundary.wait }));
+vi.mock('../../ai/toolExecutor/deployUrl', async (original) => ({ ...await original<typeof import('../../ai/toolExecutor/deployUrl')>(),
+  resolveAppUrl: vi.fn(async () => ({ url: 'https://app.example.com' })) }));
 
 const identity = { address: 'manifest1transcript', chainId: runtimeConfig.PUBLIC_CHAIN_ID };
 const providerUrl = 'https://provider.example';
@@ -42,7 +53,7 @@ function adviceRow(current: Awaited<ReturnType<typeof tab>>, command: Parameters
 beforeEach(() => { localStorage.clear(); sessionStorage.clear(); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-describe('maintenance advice attached to saved conversation rows', () => {
+describe('maintenance advice attached to saved conversation rows', { timeout: 20_000 }, () => {
   it.each([false, true])('preserves older sent-command advice when a newer never-sent row is restored (proof read fails=%s)', async (proofReadFails) => {
     const a = await tab();
     const first = await a.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1] });
@@ -209,29 +220,89 @@ describe('maintenance advice attached to saved conversation rows', () => {
     expect((await afterTrim.tools.executeRestartApp({ app_name: app.name }, options())).requiresConfirmation).toBe(true);
   });
 
-  it('registers a receipt-only refusal as live source advice before another tab replaces the receipt', async () => {
+  it('does not arm a sticky guard from a receipt-only planning refusal', async () => {
     const a = await tab();
     const first = await a.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1] });
     await a.state.markMaintenanceOperationDispatched(first);
     await a.state.markMaintenanceRecoveryAdvised(first);
     await a.state.completeMaintenanceOperation(first, undefined, 'succeeded');
     const b = await tab();
-    expect(b.intent.getMaintenanceRecoveryIntent(scope)).toBeUndefined();
     const collector = b.intent.createMaintenanceAdviceCollector();
     const refusal = await b.tools.executeRestartApp({ app_name: app.name }, { ...options(), onMaintenanceRecoveryAdvice: collector.onAdvice });
     expect(refusal.error).toContain('already settled');
-    expect(collector.advice).toEqual([b.intent.maintenanceRecoveryAdvice(first)]);
-    expect(b.intent.getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(first.idempotencyKey);
-    b.history.saveHistory(identity, [{ ...row('refusal', refusal.error!), maintenanceRecoveryAdvice: collector.advice }], true);
-    const c = await tab();
-    const second = await c.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1, 2],
-      previousOperationKey: first.idempotencyKey });
-    await c.state.markMaintenanceOperationDispatched(second);
-    await c.state.completeMaintenanceOperation(second, undefined, 'succeeded');
-    expect((await b.tools.executeRestartApp({ app_name: app.name }, options())).error).toContain('already settled');
-    const d = await tab();
-    expect(d.history.loadHistory(identity)[0].maintenanceRecoveryAdvice?.[0].idempotencyKey).toBe(first.idempotencyKey);
-    expect((await d.tools.executeRestartApp({ app_name: app.name }, options())).error).toContain('already settled');
+    expect(collector.advice).toEqual([]);
+    expect(b.intent.getMaintenanceRecoveryIntent(scope)).toBeUndefined();
+    b.history.saveHistory(identity, [row('refusal', refusal.error!)], true);
+    const second = await a.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1, 2],
+      previousOperationKey: first.idempotencyKey, recoveryIntentKey: first.idempotencyKey });
+    await a.state.markMaintenanceOperationDispatched(second);
+    a.intent.consumeMaintenanceRecoveryIntent(scope, first.idempotencyKey);
+    await a.state.completeMaintenanceOperation(second, undefined, 'succeeded');
+    expect((await b.tools.executeRestartApp({ app_name: app.name }, options())).requiresConfirmation).toBe(true);
+    const reloaded = await tab(false, b.session);
+    expect(reloaded.history.loadHistory(identity)[0].maintenanceRecoveryAdvice).toBeUndefined();
+    expect((await reloaded.tools.executeRestartApp({ app_name: app.name }, options())).requiresConfirmation).toBe(true);
+  });
+
+  it.each(['restart', 'restart all', 'update'].flatMap((action) => [false, true].map((quota) => ({ action, quota }))))('does not carry an old source key through $action refusals after source trimming (quota=$quota)', async ({ action, quota }) => {
+    const a = await tab();
+    const first = await a.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1] });
+    await a.state.markMaintenanceOperationDispatched(first);
+    await a.state.markMaintenanceRecoveryAdvised(first);
+    await a.state.completeMaintenanceOperation(first, undefined, 'succeeded');
+    a.history.saveHistory(identity, [adviceRow(a, first, 'original', 'Recover the saved restart.')], true);
+    const second = await a.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1, 2],
+      previousOperationKey: first.idempotencyKey, recoveryIntentKey: first.idempotencyKey });
+    await a.state.markMaintenanceOperationDispatched(second);
+    a.intent.consumeMaintenanceRecoveryIntent(scope, first.idempotencyKey);
+    await a.state.completeMaintenanceOperation(second, undefined, 'succeeded');
+    const b = await tab(quota);
+    const messages = b.history.loadHistory(identity);
+    const collector = b.intent.createMaintenanceAdviceCollector();
+    const opts = { ...options(), onMaintenanceRecoveryAdvice: collector.onAdvice };
+    const refusal = action === 'update'
+      ? await b.tools.executeUpdateApp({ app_name: app.name }, opts)
+      : await b.tools.executeRestartApp({ app_name: action === 'restart all' ? 'all' : app.name }, opts);
+    expect(refusal.requiresConfirmation).toBeUndefined();
+    expect(collector.advice).toEqual([]);
+    // Keep the refusal row while ordinary transcript trimming removes the
+    // genuine original advice. The refusal must not become its replacement.
+    const refusalRow = row('refusal', refusal.error ?? JSON.stringify(refusal.data));
+    const third = await b.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1, 2, 3],
+      previousOperationKey: second.idempotencyKey, recoveryIntentKey: first.idempotencyKey });
+    await b.state.markMaintenanceOperationDispatched(third);
+    b.intent.consumeMaintenanceRecoveryIntent(scope, first.idempotencyKey);
+    await b.state.completeMaintenanceOperation(third, undefined, 'succeeded');
+    for (let index = 0; index < 3; index++) expect((await b.tools.executeRestartApp({ app_name: app.name }, options())).requiresConfirmation).toBe(true);
+    const fourth = await b.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1, 2, 3, 4],
+      previousOperationKey: third.idempotencyKey });
+    await b.state.markMaintenanceOperationDispatched(fourth);
+    await b.state.completeMaintenanceOperation(fourth, undefined, 'succeeded');
+    const chat = Array.from({ length: 40 }, (_, index) => row(`chat-${index}`, 'Unrelated conversation.'));
+    b.history.saveHistory(identity, [...messages.slice(1), refusalRow, ...chat], true);
+    for (let index = 0; index < 3; index++) {
+      const fresh = await tab();
+      const restored = fresh.history.loadHistory(identity);
+      expect(restored.every((message) => !message.maintenanceRecoveryAdvice?.length)).toBe(true);
+      expect(fresh.intent.getMaintenanceRecoveryIntent(scope)).toBeUndefined();
+      expect((await fresh.tools.executeRestartApp({ app_name: app.name }, options())).requiresConfirmation).toBe(true);
+      fresh.history.saveHistory(identity, restored, true);
+    }
+  });
+
+  it('keeps missing-record refusals observation-only without copying the original safeguard', async () => {
+    const current = await tab();
+    const command = { ...scope, operation: 'restart' as const, idempotencyKey: crypto.randomUUID() };
+    current.intent.rememberMaintenanceRecoveryIntent(command);
+    const collector = current.intent.createMaintenanceAdviceCollector();
+    const opts = { ...options(), onMaintenanceRecoveryAdvice: collector.onAdvice };
+    for (const result of [await current.tools.executeRestartApp({ app_name: app.name, new_command: true }, opts),
+      await current.tools.executeUpdateApp({ app_name: app.name, new_command: true }, opts)]) {
+      expect(result.requiresConfirmation).toBeUndefined();
+      expect(result.error).toContain('outcome remains unknown');
+    }
+    expect(collector.advice).toEqual([]);
+    expect(current.intent.getMaintenanceRecoveryIntent(scope)?.idempotencyKey).toBe(command.idempotencyKey);
   });
 
   it('does not collect, restore, or serialize maintenance advice during streaming token frames', async () => {
@@ -295,6 +366,50 @@ describe('maintenance advice attached to saved conversation rows', () => {
     expect(result.requiresConfirmation).toBe(true);
     expect(result.pendingAction?.args.previousOperationKey).toBeUndefined();
     expect(b.intent.getMaintenanceRecoveryIntent(scope)).toBeUndefined();
+  });
+
+  it('retires another tab’s never-sent source advice through an ordinary confirmed successor and new-tab transcript reload', async () => {
+    const a = await tab();
+    const unsent = await a.state.getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1] });
+    const b = await tab();
+    const collector = b.intent.createMaintenanceAdviceCollector();
+    const recoveryPlan = await b.tools.executeRestartApp({ app_name: app.name }, { ...options(), onMaintenanceRecoveryAdvice: collector.onAdvice });
+    expect(recoveryPlan.pendingAction?.args).toMatchObject({ expectPending: true, idempotencyKey: unsent.idempotencyKey });
+    expect(collector.advice).toHaveLength(1);
+    const source = { ...row('unsent-advice', recoveryPlan.confirmationMessage!), maintenanceRecoveryAdvice: collector.advice };
+    b.history.saveHistory(identity, [source], true);
+    expect(await a.state.discardUnsubmittedMaintenanceOperation(unsent)).toBe(true);
+
+    // Exercise the real confirmation and SDK request boundary for the ordinary
+    // successor. Only provider I/O and the readiness wait are controlled.
+    const plan = await b.tools.executeRestartApp({ app_name: app.name }, options());
+    expect(plan.requiresConfirmation).toBe(true);
+    expect(plan.pendingAction?.args).not.toHaveProperty('recoveryIntentKey');
+    expect(plan.pendingAction?.args.idempotencyKey).not.toBe(unsent.idempotencyKey);
+    let posted = false;
+    boundary.fetch.mockImplementation(async () => { posted = true; return new Response('{"status":"restarting"}', { status: 202 }); });
+    boundary.releases.mockImplementation(async () => ({ lease_uuid: app.leaseUuid, tenant: identity.address, provider_uuid: 'provider',
+      releases: posted
+        ? [{ version: 1, status: 'superseded', image: 'nginx', created_at: '2026-09-24T12:00:00Z' },
+          { version: 2, status: 'active', image: 'nginx', created_at: '2026-09-24T12:01:00Z' }]
+        : [{ version: 1, status: 'active', image: 'nginx', created_at: '2026-09-24T12:00:00Z' }] }));
+    boundary.provision.mockResolvedValue({ status: 'ready', fail_count: 0 });
+    boundary.wait.mockResolvedValue({ state: 1, phase: 'ready' });
+    const { createProviderAuth } = await import('@manifest-network/manifest-sdk/deploy');
+    const { asAddress } = await import('@manifest-network/manifest-sdk');
+    const providerAuth = createProviderAuth({ getAddress: async () => asAddress(identity.address),
+      getSigner: async () => { throw new Error('No chain signer needed'); },
+      signArbitrary: async () => ({ pub_key: { type: 'tendermint/PubKeySecp256k1', value: 'cHVia2V5' }, signature: 'c2lnbmF0dXJl' }),
+    }, { chainId: identity.chainId });
+    const signing = { providerAuth, authTokens: { getAuthToken: (leaseUuid: string) => providerAuth.providerToken({ address: identity.address, leaseUuid }) } } as unknown as SigningContext;
+    const result = await b.tools.executeConfirmedRestartApp(plan.pendingAction!.args, {} as CosmosClientManager, { ...options(), signing });
+    expect(result.success).toBe(true);
+    expect(boundary.fetch).toHaveBeenCalledOnce();
+    b.history.saveHistory(identity, [source, row('success', 'The ordinary restart succeeded.')], true);
+    const c = await tab();
+    expect(c.history.loadHistory(identity)[0].maintenanceRecoveryAdvice?.[0].idempotencyKey).toBe(unsent.idempotencyKey);
+    expect(c.intent.getMaintenanceRecoveryIntent(scope)).toBeUndefined();
+    expect((await c.tools.executeRestartApp({ app_name: app.name }, options())).requiresConfirmation).toBe(true);
   });
 
   it('does not let an older network’s advice suppress the active network’s guard', async () => {

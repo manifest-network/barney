@@ -12,7 +12,7 @@ import {
   PROVISION_FAILED,
   PROVISION_IN_PROGRESS,
 } from '@manifest-network/manifest-sdk/deploy';
-import type { ProvisionState } from '../../registry/appRegistry';
+import type { AppEntry, ProvisionState } from '../../registry/appRegistry';
 import { PROVISION_STATUS_CHARS, sanitizeForDisplay } from '../../utils/sanitizeText';
 
 /** fred's soft-delete: the workload is torn down and only its volumes are kept
@@ -61,7 +61,7 @@ export function isUnsettledProvisionStatus(status: string | undefined): boolean 
  * OBSERVATION.
  *
  * Visible progress records 'unconfirmed'; the caller keeps it from retracting
- * an earlier confirmation. `unknown` explicitly reports unconfirmed readiness.
+ * an earlier confirmation or failure. `unknown` explicitly reports unconfirmed readiness.
  * Absent values carry no observation, as do
  * future values this client does not model.
  */
@@ -82,4 +82,18 @@ export function reconcileProvisionStatus(
   return (previous === 'confirmed' || previous === 'failed') && isUnsettledProvisionStatus(status)
     ? undefined
     : classifyProvisionStatus(status);
+}
+
+/** Preserve prior verdicts while keeping an unsettled runtime eligible for
+ * bounded background observation. A missing reading never invents a verdict. */
+export function provisionObservationPatch(
+  status: string | undefined,
+  previous: Pick<AppEntry, 'provisionState' | 'readinessStale'> | null | undefined,
+): Pick<Partial<AppEntry>, 'provisionState' | 'readinessStale'> {
+  const provisionState = reconcileProvisionStatus(status, previous?.provisionState);
+  const settled = provisionState === 'confirmed' || provisionState === 'failed' || status === PROVISION_RETAINED;
+  return {
+    ...(provisionState !== undefined && { provisionState }),
+    ...(settled ? previous?.readinessStale && { readinessStale: false } : { readinessStale: true }),
+  };
 }

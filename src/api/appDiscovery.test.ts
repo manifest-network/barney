@@ -197,7 +197,25 @@ describe('hydrateDiscoveredApp', () => {
     const previous = app({ provisionState: undefined });
     vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'unknown' });
     await hydrateDiscoveredApp(address, previous, signing);
-    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'unconfirmed', status: 'deploying' });
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'unconfirmed', status: 'deploying', readinessStale: true });
+  });
+
+  it.each(['restarting', 'updating', 'provisioning', 'unknown'])('preserves a failure during %s and follows the runtime to ready', async (provision_status) => {
+    const previous = app({ provisionState: 'failed', readinessStale: true });
+    vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status });
+    expect(await hydrateDiscoveredApp(address, previous, signing)).toMatchObject({ complete: false });
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'failed', status: 'failed', readinessStale: true });
+    await hydrateDiscoveredApp(address, registry.getApps(address)[0], signing);
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'confirmed', status: 'running', readinessStale: false });
+  });
+
+  it.each([undefined, '', 'quiescing'])('does not invent readiness from %s for an unobserved app', async (provision_status) => {
+    const previous = app({ provisionState: undefined });
+    vi.mocked(getLeaseStatus).mockResolvedValueOnce({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status });
+    expect(await hydrateDiscoveredApp(address, previous, signing)).toMatchObject({ complete: false });
+    const observed = registry.getAppByLease(address, LEASE_UUID);
+    expect(observed?.provisionState).toBeUndefined();
+    expect(observed).toMatchObject({ status: 'running', readinessStale: true });
   });
 
   it.each([
@@ -263,7 +281,7 @@ describe('hydrateDiscoveredApp', () => {
     vi.mocked(getLeaseStatus).mockRejectedValueOnce(new Error('offline'));
     vi.mocked(getLeaseConnectionInfo).mockRejectedValueOnce(new Error('offline'));
     await hydrateDiscoveredApp(address, previous, signing);
-    expect(registry.getAppByLease(address, LEASE_UUID)).toEqual(previous);
+    expect(registry.getAppByLease(address, LEASE_UUID)).toEqual({ ...previous, readinessStale: true });
   });
 
   it('keeps a completed status observation when the connection endpoint never resolves', async () => {

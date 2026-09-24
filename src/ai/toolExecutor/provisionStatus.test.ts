@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { PROVISION_IN_PROGRESS } from '@manifest-network/manifest-sdk/deploy';
-import { classifyProvisionStatus, displayProvisionStatus, isUnsettledProvisionStatus, reconcileProvisionStatus } from './provisionStatus';
+import { classifyProvisionStatus, displayProvisionStatus, isUnsettledProvisionStatus, provisionObservationPatch, reconcileProvisionStatus } from './provisionStatus';
+import { maintenanceReadinessPatch } from './maintenanceReadiness';
+import type { AppEntry, ProvisionState } from '../../registry/appRegistry';
 
 describe('displayProvisionStatus', () => {
   it('displays unknown readiness while withholding absent readings', () => {
@@ -79,5 +81,28 @@ describe('reconcileProvisionStatus', () => {
     expect(reconcileProvisionStatus('retained', 'confirmed')).toBe('unconfirmed');
     expect(reconcileProvisionStatus('failed', 'confirmed')).toBe('failed');
     expect(reconcileProvisionStatus('failing', 'confirmed')).toBe('failed');
+  });
+});
+
+describe('provisionObservationPatch', () => {
+  it.each(['restarting', 'updating', 'provisioning', 'unknown'])('preserves verdicts and follows %s across maintenance and status observations', (status) => {
+    for (const prior of [undefined, 'unconfirmed', 'confirmed', 'failed'] as const) {
+      const snapshot = { provisionState: prior } as AppEntry;
+      const expected = prior === 'confirmed' || prior === 'failed'
+        ? { readinessStale: true } : { provisionState: 'unconfirmed', readinessStale: true };
+      expect(provisionObservationPatch(status, snapshot)).toEqual(expected);
+      expect(maintenanceReadinessPatch(status, snapshot)).toEqual(expected);
+    }
+  });
+
+  it.each([undefined, '', 'quiescing'])('keeps absent or unmodelled readiness %s observable without inventing a verdict', (status) => {
+    for (const provisionState of [undefined, 'confirmed', 'failed'] as const) {
+      expect(provisionObservationPatch(status, { provisionState })).toEqual({ readinessStale: true });
+    }
+  });
+
+  it.each<[string, ProvisionState]>([['ready', 'confirmed'], ['failed', 'failed'], ['failing', 'failed'], ['retained', 'unconfirmed']])('settles %s and clears only an existing recheck flag', (status, provisionState) => {
+    expect(provisionObservationPatch(status, { provisionState: 'failed' })).toEqual({ provisionState });
+    expect(provisionObservationPatch(status, { provisionState: 'failed', readinessStale: true })).toEqual({ provisionState, readinessStale: false });
   });
 });

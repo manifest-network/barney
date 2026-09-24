@@ -549,7 +549,7 @@ describe('executeAppStatus', () => {
       } as Awaited<ReturnType<typeof appStatus>>);
       const result = await executeAppStatus({ app_name: app.name }, makeOptions({ appRegistry: registry, signing: mockSigning }));
       expect(result.success).toBe(true);
-      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ status: 'failed', provisionState: 'failed' });
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ status: 'failed', provisionState: 'failed', readinessStale: true });
     });
 
     it('reconciles to running and refreshes connection from appStatus', async () => {
@@ -1843,12 +1843,11 @@ describe('F4 — app_status records fred’s provision verdict', () => {
 
     const result = await run(registry);
 
-    // Exact object, not objectContaining: this test's predecessor pinned that
-    // ONLY the chain observation was written, and that exactness is the half
-    // that catches a writer quietly adding a field it did not observe.
+    // Explicit progress records unconfirmed readiness and schedules the same
+    // bounded follow-up as maintenance and background discovery.
     expect(registry.updateApp).toHaveBeenCalledWith(
       ADDRESS, app.leaseUuid,
-      { chainState: 'active', provisionState: 'unconfirmed' },
+      { chainState: 'active', provisionState: 'unconfirmed', readinessStale: true },
     );
     expect((result.data as any).status).toBe('deploying');
   });
@@ -1880,7 +1879,7 @@ describe('F4 — app_status records fred’s provision verdict', () => {
 
     const result = await run(registry);
 
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active', readinessStale: true });
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBeUndefined();
     expect((result.data as any).status).toBe('running');
   });
@@ -1938,7 +1937,7 @@ describe('F4 — app_status records fred’s provision verdict', () => {
 
     const result = await run(registry);
 
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active', readinessStale: true });
     const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
     expect(stored?.chainState).toBe('active');
     expect(stored?.provisionState).toBe('failed');

@@ -167,6 +167,65 @@ describe('maintenance batch uncertainty', () => {
     expect(ordinary.error).toBe('No restarts completed — Cancelled: app: Cancelled (batch aborted).');
   });
 
+  it.each([undefined, 'deploy'] as const)('does not request observations of never-submitted cancelled deployments in a shortened summary (operation: %s)', async (operation) => {
+    const abort = new AbortController();
+    const executeOne = vi.fn(async ({ name }: { name: string }, index: number, progress: (phase: 'failed', detail: string) => void) => {
+      if (index < 20) {
+        progress('failed', 'Container failed to start. '.repeat(35));
+        return null;
+      }
+      abort.abort();
+      progress('failed', 'Cancelled before deployment was submitted');
+      return { name, outcome: 'cancelled' as const };
+    });
+    const batch = await runBatchWithConcurrency({
+      entries: Array.from({ length: 22 }, (_, index) => ({ name: `app-${index}` })),
+      initialPhase: 'creating_lease', intermediatePhases: ['creating_lease'], operation,
+      signal: abort.signal, concurrency: 1, executeOne,
+    });
+    expect(executeOne).toHaveBeenCalledTimes(21);
+    expect(batch.cancelled).toEqual(['app-20', 'app-21']);
+    const options = { ...batch, operation, dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys' };
+    const result = summarizeBatchResult(options);
+    expect(result.error).toContain('Details were shortened.');
+    expect(result.error).toContain('Cancelled deployments were never submitted; they can be deployed again.');
+    expect(result.error).not.toContain('for cancelled apps before requesting new work');
+    expect(result.error).not.toContain('app_releases');
+    expect(result.error).toContain('app-20: Cancelled before deployment was submitted');
+    expect(result.error).toContain('app-21: Cancelled (batch aborted).');
+    const without = summarizeBatchResult({ ...options, batchProgress: batch.batchProgress.map(({ name, phase }) => ({ name, phase })) });
+    for (const indentation of [undefined, 2]) {
+      expect(JSON.stringify(result, null, indentation).length - JSON.stringify(without, null, indentation).length)
+        .toBeLessThanOrEqual(AI_BATCH_DIAGNOSTIC_CHARS);
+    }
+  });
+
+  it.each(['restart', 'update'] as const)('keeps observation guidance and the verified %s verdict for a cancelled replay in a shortened summary', (operation) => {
+    const detail = `Recovery cancelled. The previous ${operation} outcome remains verified as succeeded. No new maintenance request was sent.`;
+    const failed = Array.from({ length: 20 }, (_, index) => `failed-${index}`);
+    const options = {
+      succeeded: [{ name: 'fresh' }], failed, cancelled: ['cached'], operation,
+      batchProgress: [
+        ...failed.map((name) => ({ name, phase: 'failed' as const, detail: 'Provider request failed. '.repeat(35) })),
+        { name: 'cached', phase: 'failed' as const, detail },
+      ],
+      dataKey: operation === 'restart' ? 'restarted' : 'updated',
+      verb: operation === 'restart' ? 'Restarted' : 'Updated', failedNoun: `${operation}s`,
+    };
+    const result = summarizeBatchResult(options);
+    const message = (result.data as { message: string }).message;
+    expect(message).toContain('Details were shortened.');
+    expect(message).toContain('Check app_status and app_releases for cancelled apps before requesting new work.');
+    expect(message).toContain(`Cancelled: cached: ${detail}`);
+    expect(message).not.toContain('Cancelled deployments were never submitted');
+    expect(JSON.stringify(result).split(detail)).toHaveLength(2);
+    const without = summarizeBatchResult({ ...options, batchProgress: options.batchProgress.map(({ name, phase }) => ({ name, phase })) });
+    for (const indentation of [undefined, 2]) {
+      expect(JSON.stringify(result, null, indentation).length - JSON.stringify(without, null, indentation).length)
+        .toBeLessThanOrEqual(AI_BATCH_DIAGNOSTIC_CHARS);
+    }
+  });
+
   it('finishes a cancelled row even when the per-item executor emitted only active progress', async () => {
     const onProgress = vi.fn();
     const batch = await runBatchWithConcurrency({

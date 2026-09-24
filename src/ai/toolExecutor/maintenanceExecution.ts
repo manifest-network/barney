@@ -42,8 +42,9 @@ import { consumeMaintenanceRecoveryIntent, rememberMaintenanceRecoveryIntent, ma
 import type { ToolExecutorOptions } from './types';
 
 function withCleanupWarning(value: MaintenanceResult, warning = MAINTENANCE_CLEANUP_MESSAGE): MaintenanceResult {
+  const failure = value.result.error ?? 'Maintenance failed.';
   if (!value.result.success) return { ...value, result: { success: false,
-    error: `${value.result.error ?? 'Maintenance failed.'} ${warning}` } };
+    error: `${failure}${/[.!?…]$/.test(failure) ? '' : '.'} ${warning}` } };
   const data = value.result.data && typeof value.result.data === 'object' ? value.result.data as Record<string, unknown> : {};
   return { ...value, result: { success: true, data: { ...data, localCleanupPending: true,
     message: `${typeof data.message === 'string' ? data.message : 'Maintenance succeeded.'} ${warning}` } } };
@@ -310,7 +311,8 @@ export async function executeMaintenance(
     if (settled && operation === 'update' && (verdict.outcome === 'succeeded' || command.previousManifest !== undefined)) {
       patch.manifest = verdict.outcome === 'succeeded' ? sanitizeManifestForStorage(command.manifest!) : command.previousManifest;
     }
-    const failure = `${verb} failed${verdict.runtimeReady ? '; the previous runtime is healthy' : ''}. ${verdict.detail ?? ''}`.trim();
+    const failureDetail = `${verb} failed${verdict.runtimeReady ? '; the previous runtime is healthy' : ''}. ${verdict.detail ?? ''}`.trim();
+    const failure = `${failureDetail}${/[.!?…]$/.test(failureDetail) ? '' : '.'}`;
     const result: MaintenanceResult | undefined = !settled ? undefined : verdict.outcome === 'failed'
       ? { outcome: 'failed', result: { success: false, error: failure } }
       : { outcome: 'succeeded', url, result: { success: true, data: {

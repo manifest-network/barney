@@ -358,7 +358,9 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     failed.length > 0 ? 'Check app_status and app_diagnostics for each failed app.' : '',
     failed.some((name) => failureRows.get(name)?.diagnostic?.logs.length)
       ? 'Use get_logs(app_name, tail=200) for full logs from each failed service.' : '',
-    cancelled.length > 0 ? 'Check app_status and app_releases for cancelled apps before requesting new work.' : '',
+    cancelled.length === 0 ? '' : operation === 'restart' || operation === 'update'
+      ? 'Check app_status and app_releases for cancelled apps before requesting new work.'
+      : 'Cancelled deployments were never submitted; they can be deployed again.',
     rawUnconfirmed.length === 0 ? '' : operation === 'restart' || operation === 'update'
       ? 'Check app_status and app_releases for each unknown outcome. Recover only a command still pending, using its original key and exact payload. Do not use new_command for recovery. Do not submit a new command or automatically stop/redeploy while its outcome is unresolved.'
       : 'Check app_status for each still-deploying app. Only use stop_app if you have decided to abandon that deployment.',

@@ -21,6 +21,9 @@ export interface MaintenanceRecoveryAdvice extends MaintenanceRecoveryIntent, Re
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const memory = new Map<string, { intent: MaintenanceRecoveryIntent; persisted: boolean }>();
 const consumed = new Map<string, Set<string>>();
+// A quota fallback can acknowledge this live tab even when no write is possible.
+// Reload may conservatively restore an original advice row until storage works.
+const volatileConsumed = new Map<string, Set<string>>();
 const observed = new Map<string, Map<string, MaintenanceRecoveryIntent['operation']>>();
 const neverSent = new Map<string, Set<string>>();
 class SessionStorageUnavailable extends Error {}
@@ -68,7 +71,10 @@ function readStored(key: string): MaintenanceRecoveryIntent | undefined {
   if (!storage) throw new SessionStorageUnavailable('Session storage unavailable');
   let raw;
   try { raw = storage.getItem(key); } catch { throw new SessionStorageUnavailable('Session storage unavailable'); }
-  if (raw === null) { consumed.delete(key); return undefined; }
+  if (raw === null) {
+    consumed.set(key, new Set(volatileConsumed.get(key)));
+    return undefined;
+  }
   const value = JSON.parse(raw) as Partial<MaintenanceRecoveryIntent> & { c?: unknown; h?: unknown };
   if (!value || typeof value !== 'object'
     || Object.keys(value).some((field) => !['operation', 'idempotencyKey', 'c', 'h'].includes(field))) throw new Error('Invalid session entry');
@@ -77,7 +83,7 @@ function readStored(key: string): MaintenanceRecoveryIntent | undefined {
   if (value.h !== undefined && (!Array.isArray(value.h) || value.h.length > MAINTENANCE_CONSUMED_ADVICE_LIMIT
     || value.h.some((item) => !Array.isArray(item) || item.length !== 2 || (item[0] !== 'restart' && item[0] !== 'update')
       || typeof item[1] !== 'string' || !UUID_V4.test(item[1])))) throw new Error('Invalid observed identities');
-  const used = new Set((value.c ?? []) as string[]);
+  const used = bounded([...(value.c ?? []) as string[], ...(volatileConsumed.get(key) ?? [])]);
   let intent: MaintenanceRecoveryIntent | undefined;
   if (value.operation !== undefined || value.idempotencyKey !== undefined) {
     if ((value.operation !== 'restart' && value.operation !== 'update')
@@ -154,17 +160,32 @@ export function consumeMaintenanceRecoveryIntent(scope: RecoveryScope, expectedK
     if (!storage) return;
     const seen = [...(observed.get(key)?.keys() ?? []), expectedKey].filter((id) => !neverSent.get(key)?.has(id));
     const used = bounded([...(consumed.get(key) ?? []), ...seen]);
-    storage.setItem(key, serialized(key, undefined, used, new Map()));
+    const acknowledgement = serialized(key, undefined, used, new Map());
+    try {
+      storage.setItem(key, acknowledgement);
+      volatileConsumed.delete(key);
+    } catch (error) {
+      if (!(error instanceof DOMException) || error.name !== 'QuotaExceededError') return;
+      // Removing this already-checked entry can free quota even when a browser
+      // rejects a shrinking replacement. Never use this for unknown/read errors.
+      storage.removeItem(key);
+      volatileConsumed.set(key, used);
+      try {
+        storage.setItem(key, acknowledgement);
+        volatileConsumed.delete(key);
+      } catch { /* The live tab retains the deliberate acknowledgement. */ }
+    }
     consumed.set(key, used);
     observed.delete(key);
     memory.delete(key);
-  } catch { /* Keep the active guard unless suppression is durable. */ }
+  } catch { /* Read or removal failure keeps the active guard. */ }
 }
 
 export function retireMaintenanceRecoveryIntent(scope: RecoveryScope): void {
   const key = keyFor(scope);
   memory.delete(key);
   consumed.delete(key);
+  volatileConsumed.delete(key);
   observed.delete(key);
   try { storage?.removeItem(key); } catch { /* The closed lease cannot execute more maintenance. */ }
 }

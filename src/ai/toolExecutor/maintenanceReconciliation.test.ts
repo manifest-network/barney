@@ -75,14 +75,15 @@ async function reload() {
 const pending = () => operations.getPendingMaintenanceOperation(address, app.providerUrl, app.leaseUuid);
 
 describe('read-only maintenance reconciliation', () => {
-  it.each(['confirmed', 'failed', undefined].flatMap(previous => [undefined, 'restarting', 'updating', 'unknown', ''].map(status => ({ previous, status }))))('preserves $previous readiness when failed command settlement sees runtime status $status', async ({ previous, status }) => {
+  it.each(['confirmed', 'failed', undefined].flatMap(previous => [undefined, 'restarting', 'updating', 'unknown', ''].map(status => ({ previous, status }))))('reconciles prior $previous readiness when failed command settlement sees runtime status $status', async ({ previous, status }) => {
     await prepare();
     options.appRegistry!.updateApp(address, app.leaseUuid, { provisionState: previous as AppEntry['provisionState'] });
     if (status === undefined) vi.mocked(fred.getLeaseProvision).mockRejectedValueOnce(new Error('Provision unavailable'));
     else vi.mocked(fred.getLeaseProvision).mockResolvedValueOnce({ status, fail_count: 0 });
     expect(await reconcile(app, options, history(release(1), release(2, 'failed')))).toMatchObject({ outcome: 'failed' });
     const updated = options.appRegistry!.getAppByLease(address, app.leaseUuid)!;
-    expect(updated.provisionState).toBe(previous);
+    // Explicit progress records unconfirmed only in the absence of a verdict.
+    expect(updated.provisionState).toBe(previous ?? (status ? 'unconfirmed' : undefined));
     expect(updated.readinessStale).toBe(true);
     expect(pending()).toBeUndefined();
   });
@@ -140,6 +141,47 @@ describe('read-only maintenance reconciliation', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it.each((['restart', 'update'] as const).flatMap(operation => [
+    'image pull failed', 'is the image private?', 'image pull failed!', 'image pull failed…', 'image pull failed.',
+  ].map(message => ({ operation, message }))))('separates a reconciled $operation failure ending in "$message" from cleanup guidance and retains it on replay', async ({ operation, message }) => {
+    const command = await prepare(operation);
+    const storage = localStorage;
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    vi.stubGlobal('localStorage', {
+      getItem: storage.getItem.bind(storage), removeItem: storage.removeItem.bind(storage),
+      setItem: (key: string, value: string) => {
+        if (Object.hasOwn(JSON.parse(value), 'settled')) throw new Error('Storage unavailable');
+        storage.setItem(key, value);
+      },
+    });
+    try {
+      const result = await reconcile(app, options, history(release(1), release(2, 'failed', {
+        reason: operation === 'restart' ? 'RestartFailed' : 'UpdateFailed', message,
+      })));
+      const ending = /[.!?…]$/.test(message) ? message : `${message}.`;
+      expect(result).toMatchObject({ outcome: 'failed', runtimeReady: true,
+        detail: expect.stringContaining(`${ending} The provider outcome was verified`) });
+      expect(result?.detail).not.toMatch(/[!?….]\. /u);
+      const { getCompletedMaintenance } = await import('./maintenanceCompletion');
+      const cached = getCompletedMaintenance(command);
+      expect(cached?.result.result.error?.endsWith(ending)).toBe(true);
+      const { executeMaintenance } = await import('./maintenanceExecution');
+      const replay = await executeMaintenance({ ...scope, app_name: app.name, operation,
+        idempotencyKey: command.idempotencyKey, ...(operation === 'update' && { manifest: payload }),
+      }, { ...options, clientManager: {} as NonNullable<ToolExecutorOptions['clientManager']> });
+      expect(replay.outcome).toBe('failed');
+      expect(replay.result.error).toContain(`Previously verified ${operation}`);
+      expect(replay.result.error).toContain(`${ending} The provider outcome was verified`);
+      expect(replay.result.error).not.toMatch(/[!?….]\. /u);
+      expect(replay.result.error).toContain('No new maintenance request was sent.');
+      expect(fetch).not.toHaveBeenCalled();
+      expect(fred.getLeaseProvision).toHaveBeenCalledTimes(1);
+      expect(fred.getLeaseReleases).not.toHaveBeenCalled();
+      expect(pending()?.idempotencyKey).toBe(command.idempotencyKey);
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it.each([false, true])('does not overwrite a successor command while reconciling an old read (successor settled: %s)', async (settleSuccessor) => {

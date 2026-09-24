@@ -27,7 +27,7 @@ import {
   type ConnectionDetails,
   type ProviderHealthResponse,
 } from '@manifest-network/manifest-sdk/deploy';
-import { displayProvisionStatus, reconcileProvisionStatus } from './provisionStatus';
+import { displayProvisionStatus, provisionObservationPatch } from './provisionStatus';
 import { appCardConnection } from './appCardConnection';
 import { buildBarneyCtx } from './capabilityCtx';
 import { nextStepFor } from './failureGuidance';
@@ -280,17 +280,18 @@ export async function executeAppStatus(
       endpointRefreshed = refresh.endpointRefreshed;
       providerEndpoint = refresh.providerEndpoint;
       connectionRefreshed = refresh.connectionRefreshed;
+      const readiness = provisionObservationPatch(fredStatus?.provision_status, app);
       const accessChanged = Object.keys(refresh.patch).length > 0;
-      const provisionState = reconcileProvisionStatus(fredStatus?.provision_status, app.provisionState);
       providerStatus = displayProvisionStatus(fredStatus?.provision_status);
       workloadStatusUnavailable = providerStatus === undefined;
       if (app.chainState !== 'active'
-          || (provisionState !== undefined && app.provisionState !== provisionState)
+          || (readiness.provisionState !== undefined && app.provisionState !== readiness.provisionState)
+          || (readiness.readinessStale !== undefined && !!app.readinessStale !== readiness.readinessStale)
           || accessChanged) {
         recordObservation({
           chainState: 'active',
-          ...(provisionState !== undefined ? { provisionState } : {}),
           ...refresh.patch,
+          ...readiness,
         });
       }
     }

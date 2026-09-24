@@ -137,8 +137,11 @@ Commands cancelled before any request was sent leave proof that they were not se
 so repeated cancellations and later successful work do not revive that advice or invalidate
 an already-approved card. Barney retains the most recent 128 such proofs per lease; advice older
 than that can conservatively require an explicit request for a new operation. Recovery safeguards
-attach only to the result that issued the advice. Reloading the same tab after a deliberate new
-command preserves its acknowledgement; unrelated later chat rows do not carry old safeguards.
+attach only to the result that issued pending-command recovery advice. Planning refusals and batch
+skips do not create new copies. Reloading the same tab after a deliberate new command normally
+preserves its acknowledgement; unrelated later chat rows do not carry old safeguards. If storage is
+full and the acknowledgement cannot be saved, it still releases the guard in the current tab;
+reloading an original advice row can conservatively require another explicit request.
 The tab retains the latest 128 acknowledgements per lease. Restoring still-older advice can
 require another explicit request for new work.
 
@@ -151,7 +154,9 @@ remain recoverable; clearing history does not cancel or discard them.
 After an uncertain restart or update, background checks continue for a bounded
 number of attempts even when the app was previously healthy. The sidebar keeps
 the last observed readiness until a fresh provider observation changes it. You
-can always request `app_status` if those checks are exhausted.
+can always request `app_status` if those checks are exhausted. A failed app that Fred starts
+re-provisioning also receives bounded background checks after an in-progress status read,
+so it can return to running without another manual refresh.
 
 ### "App is failed"
 

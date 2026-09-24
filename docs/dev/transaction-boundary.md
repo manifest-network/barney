@@ -84,9 +84,13 @@ command whose bound key still matches consumes the tab's guard and its earlier o
 A durable tab-local consumed-key record prevents reload from
 rearming it. This retains the newest 128 consumed keys per lease; older restored advice can
 conservatively require deliberate new intent. Nonsecret scoped identities attach only to the tool result that issued the advice;
-unrelated and older rows never inherit them. Loading an advice-bearing row in another tab restores
+unrelated and older rows never inherit them. Planning-only refusals and batch skips neither emit
+new carrier rows nor arm a guard in a tab that saw only a settled receipt. Loading an advice-bearing row in another tab restores
 its guard, including after a successor or sessionStorage quota failure. Token streaming does not scan
-recovery intents or copy advice.
+recovery intents or copy advice. If quota rejects the compact acknowledgment, consumption can
+remove only the matching readable session entry and retry the smaller write. Continued quota failure
+keeps acknowledgment in memory, allowing routine work in that tab; reload can conservatively restore
+an original source row. Unknown storage errors or a different active identity never authorize removal.
 Advice marking does not rewrite an already-settled receipt,
 and storage-write failures preserve local recovery evidence without failing status queries.
 If that intent survives but neither a pending record nor a settled receipt exists, both planning
@@ -135,8 +139,9 @@ of readiness-flag refreshes. Clearing readiness staleness and changing connectio
 observations require their own snapshot fields to remain current; missing or unsettled
 runtime status can reassert readiness staleness without retracting a verdict. Uncertain
 maintenance marks connection inventory and readiness stale independently, scheduling bounded
-background status reads without changing the prior provider observation (including an absent
-observation). Shared foreground/background logic restores DNS evidence on a fresh connection
+background status reads while preserving prior confirmed/failed verdicts. Explicit progress fills
+a missing verdict with `unconfirmed`; absent or unmodelled status adds no provision observation. Maintenance, foreground status and background hydration share the provision/readiness patch,
+so suppressed in-progress readings always retain bounded follow-up eligibility. Shared foreground/background logic restores DNS evidence on a fresh connection
 read while continuing readiness observation through missing or in-progress statuses. Uncertain
 readiness keeps the extended eight-attempt allowance after foreground refreshes and reloads;
 false and unset freshness flags compare equally when checking a registry snapshot.
@@ -149,7 +154,8 @@ tail per service. Batch summaries redistribute unused diagnostic space and rende
 reason, lookup and service tails at the final budget, preserving headers and ending lines.
 A row that fits the verdict and curated next step retains both and omits excess service excerpts
 with a count and `get_logs` lookup. Cancelled rows retain any previously verified outcome in the
-summary after the progress card disappears. Internal rendering metadata is stripped from progress and tool results. Single-deploy logs
+summary after the progress card disappears. Shortened summaries distinguish never-submitted
+cancelled deploys, which may be deployed again, from cancelled maintenance that requires observation. Internal rendering metadata is stripped from progress and tool results. Single-deploy logs
 preserve line breaks, and preview processing scans trailing noise in linear time and slices the input before code-point conversion.
 Manifest validation diagnostics are sanitized and bounded to 4,096 code points in planning and both
 provider confirmation paths; ordinary preparation diagnostics keep their smaller cap.

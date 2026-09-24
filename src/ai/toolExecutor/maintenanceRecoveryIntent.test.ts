@@ -195,6 +195,54 @@ describe('tab-local maintenance recovery intent', () => {
     expect(reloaded.getMaintenanceRecoveryIntent(command)).toBeUndefined();
   });
 
+  it('retries a compact durable acknowledgement after quota rejects an in-place replacement', async () => {
+    const state = await import('./maintenanceRecoveryIntent');
+    state.rememberMaintenanceRecoveryIntent(command);
+    storage.setItem.mockImplementation((key, value) => {
+      if (storage.entries.has(key)) throw new DOMException('Quota', 'QuotaExceededError');
+      storage.entries.set(key, value);
+    });
+    state.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey);
+    expect(storage.removeItem).toHaveBeenCalledOnce();
+    expect(state.getMaintenanceRecoveryIntent(command)).toBeUndefined();
+    vi.resetModules();
+    const reloaded = await import('./maintenanceRecoveryIntent');
+    reloaded.rememberMaintenanceRecoveryIntent(command);
+    expect(reloaded.getMaintenanceRecoveryIntent(command)).toBeUndefined();
+  });
+
+  it('releases only the acknowledged live guard when quota rejects all writes, then conservatively restores a surviving source after reload', async () => {
+    const state = await import('./maintenanceRecoveryIntent');
+    state.rememberMaintenanceRecoveryIntent(command);
+    storage.setItem.mockImplementation(() => { throw new DOMException('Quota', 'QuotaExceededError'); });
+    state.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey);
+    expect(storage.length).toBe(0);
+    for (let index = 0; index < 3; index++) {
+      expect(state.getMaintenanceRecoveryIntent(command)).toBeUndefined();
+      state.rememberMaintenanceRecoveryIntent(command);
+    }
+    expect(state.getMaintenanceRecoveryIntent(command)).toBeUndefined();
+    state.rememberMaintenanceRecoveryIntent({ ...command, idempotencyKey: secondKey });
+    expect(state.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(secondKey);
+    state.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey);
+    expect(state.getMaintenanceRecoveryIntent(command)?.idempotencyKey).toBe(secondKey);
+    const messages = [{ id: 'source', role: 'tool' as const, content: 'Recover saved restart.', timestamp: 1,
+      maintenanceRecoveryAdvice: [state.maintenanceRecoveryAdvice(command)] }];
+    vi.resetModules();
+    const reloaded = await import('./maintenanceRecoveryIntent');
+    reloaded.restoreMessageMaintenanceAdvice(messages, { address: command.address, chainId: command.chainId });
+    expect(reloaded.getMaintenanceRecoveryIntent(command)).toEqual(intent);
+  });
+
+  it('keeps the guard if quota fallback cannot remove the matching saved entry', async () => {
+    const state = await import('./maintenanceRecoveryIntent');
+    state.rememberMaintenanceRecoveryIntent(command);
+    storage.setItem.mockImplementation(() => { throw new DOMException('Quota', 'QuotaExceededError'); });
+    storage.removeItem.mockImplementation(() => { throw new Error('Removal denied'); });
+    state.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey);
+    expect(state.getMaintenanceRecoveryIntent(command)).toEqual(intent);
+  });
+
   it('retains the barrier if consuming its stored entry fails', async () => {
     const state = await import('./maintenanceRecoveryIntent');
     state.rememberMaintenanceRecoveryIntent(command);

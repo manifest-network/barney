@@ -19,6 +19,11 @@ export interface MaintenanceReconciliation extends Omit<MaintenanceOutcome, 'run
   readonly operation?: 'restart' | 'update';
 }
 
+function endSentence(text: string): string {
+  const trimmed = text.trim();
+  return trimmed && !/[.!?…]$/.test(trimmed) ? `${trimmed}.` : trimmed;
+}
+
 /** Observe a retained command without needing its raw update payload or issuing a POST. */
 export async function reconcilePendingMaintenance(
   app: AppEntry,
@@ -105,7 +110,7 @@ export async function reconcilePendingMaintenance(
           name: app.name, url, status: 'running',
         } } }
         : { outcome: 'failed', result: { success: false,
-          error: `${verb} failed${verdict.runtimeReady ? '; the previous runtime is healthy' : ''}. ${verdict.detail ?? ''}`.trim(),
+          error: endSentence(`${verb} failed${verdict.runtimeReady ? '; the previous runtime is healthy' : ''}. ${verdict.detail ?? ''}`),
         } }, completionEpoch);
     },
   }).catch((error: unknown) => {
@@ -121,5 +126,5 @@ export async function reconcilePendingMaintenance(
   }
   const { runtimeReady, ...outcome } = verdict;
   return { operation: command.operation, ...outcome, ...(provision ? { runtimeReady } : observedReadiness),
-    ...(cleanupDetail && { detail: [outcome.detail, cleanupDetail].filter(Boolean).join(' ') }) };
+    ...(cleanupDetail && { detail: [outcome.detail ? endSentence(outcome.detail) : '', cleanupDetail].filter(Boolean).join(' ') }) };
 }

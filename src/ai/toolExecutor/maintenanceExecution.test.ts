@@ -128,7 +128,7 @@ function failNextReceiptWrite(): void {
 }
 
 describe.each(['restart', 'update'] as const)('%s runtime observation after command settlement', (operation) => {
-  it.each(['confirmed', 'failed', undefined].flatMap(previous => ['restarting', 'updating', 'unknown', ''].map(status => ({ previous, status }))))('preserves $previous readiness and schedules observation after a rejected wait with status "$status"', async ({ previous, status }) => {
+  it.each(['confirmed', 'failed', undefined].flatMap(previous => ['restarting', 'updating', 'unknown', ''].map(status => ({ previous, status }))))('reconciles prior $previous readiness and schedules observation after a rejected wait with status "$status"', async ({ previous, status }) => {
     const { apps: [app], plans: [plan], options, appRegistry } = setup();
     appRegistry.updateApp(ADDRESS, app.leaseUuid, { provisionState: previous as AppEntry['provisionState'] });
     vi.mocked(waitForLeaseStatus).mockImplementationOnce(async () => {
@@ -138,7 +138,9 @@ describe.each(['restart', 'update'] as const)('%s runtime observation after comm
     vi.mocked(getLeaseProvision).mockResolvedValueOnce({ status, fail_count: 0 });
     expect((await dispatch(operation, plan, options)).error).toContain('failed');
     const updated = appRegistry.getAppByLease(ADDRESS, app.leaseUuid)!;
-    expect(updated.provisionState).toBe(previous);
+    // Explicit progress is an unconfirmed observation only when there is no
+    // prior verdict, consistently with app_status and background discovery.
+    expect(updated.provisionState).toBe(previous ?? (status ? 'unconfirmed' : undefined));
     expect(updated.readinessStale).toBe(true);
     expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
   });
@@ -316,6 +318,25 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
     expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ status: 'running', manifest: OLD_MANIFEST });
     expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
   });
+
+  it.each(['image pull failed', 'is the image private?', 'image pull failed!', 'image pull failed…', 'image pull failed.'])(
+    'separates failed verdict %j from a cleanup warning without doubled punctuation', async (message) => {
+      const { apps: [app], plans: [plan], options } = setup();
+      const reason = operation === 'restart' ? 'RestartFailed' : 'UpdateFailed';
+      vi.mocked(providerFetch).mockImplementationOnce(async () => {
+        histories.set(app.leaseUuid, history(app.leaseUuid, release(1), { ...release(2, 'failed', reason), message }));
+        failNextReceiptWrite();
+        return accepted();
+      });
+      const result = await dispatch(operation, plan, options);
+      expect(result.success).toBe(false);
+      const ending = /[.!?…]$/.test(message) ? message : `${message}.`;
+      expect(result.error).toContain(`${ending} The provider outcome was verified`);
+      expect(result.error).not.toMatch(/[!?….]\. /u);
+      expect(result.error).toContain('previous runtime is healthy');
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('verifies a failed command after the readiness wait rejects and releases its key', async () => {
     const { apps: [app], plans: [plan], options, appRegistry } = setup();
