@@ -157,7 +157,9 @@ the last observed readiness until a fresh provider observation changes it. You
 can always request `app_status` if those checks are exhausted. A failed app that Fred starts
 re-provisioning also receives bounded background checks after an in-progress status read,
 so it can return to running without another manual refresh. An unreachable provider or failed
-authentication alone does not start a new readiness-check cycle; already-needed checks remain bounded.
+authentication during an ordinary status check does not start a new readiness-check cycle. Pending
+maintenance still needs a runtime observation and can schedule follow-up even when that read fails;
+those checks remain bounded.
 
 ### "App is failed"
 

@@ -1631,6 +1631,99 @@ describe('appRegistry', () => {
   // consumers (`useRegistryApps`, `AppsSidebar`) get cross-tab updates for
   // free without subscribing to `storage` themselves.
   describe('cross-tab storage event sync', () => {
+    function remoteWrite(address: string, oldValue: string | null, newValue: string | null) {
+      const key = `barney-apps-${address}`;
+      if (newValue === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, newValue);
+      window.dispatchEvent(new StorageEvent('storage', { key, oldValue, newValue, storageArea: localStorage }));
+    }
+
+    it.each([
+      { previous: { chainState: 'active', provisionState: 'confirmed' }, updates: { readinessStale: true } },
+      { previous: { chainState: 'active', provisionState: 'confirmed', readinessStale: true }, updates: { readinessStale: false } },
+      { previous: { chainState: 'active', provisionState: 'failed' }, updates: { readinessStale: true } },
+      { previous: { provisionState: 'confirmed' }, updates: { chainState: 'active' } },
+      { previous: { chainState: 'active' }, updates: { provisionState: 'confirmed' } },
+    ] as Array<{ previous: Partial<AppEntry>; updates: Partial<AppEntry> }>)('silently receives status-neutral observations $updates and refreshes the read cache', ({ previous, updates }) => {
+      const app = addApp(ADDR_A, makeApp(previous));
+      const next = { ...app, ...updates };
+      const listener = vi.fn();
+      const unsubscribe = subscribeToRegistry(listener);
+      try {
+        remoteWrite(ADDR_A, JSON.stringify([app]), JSON.stringify([next]));
+        expect(listener).not.toHaveBeenCalled();
+        expect(getApps(ADDR_A)).toEqual([next]);
+        // A fresh direct read updates the fallback as well, without requiring
+        // a subscriber notification to obtain the remote observation.
+        const read = vi.spyOn(localStorage, 'getItem').mockImplementation(() => { throw new Error('Storage blocked'); });
+        try { expect(getApps(ADDR_A)).toEqual([next]); } finally { read.mockRestore(); }
+      } finally { unsubscribe(); }
+    });
+
+    it.each([
+      ['derived status', { provisionState: 'failed', status: 'failed' }],
+      ['derived status with stale raw summary', { provisionState: 'failed' }],
+      ['raw status with unchanged derivation', { status: 'failed' }],
+      ['domain assignment', { customDomains: [{ serviceName: '', customDomain: 'new.example.com' }] }],
+      ['connection inventory', { connection: { host: 'new.example.com' } }],
+      ['connection freshness', { connectionStale: true }],
+      ['name', { name: 'new-name' }],
+      ['endpoint', { url: 'https://new.example.com' }],
+    ] as Array<[string, Partial<AppEntry>]>)('notifies and refreshes the cache after a remote %s change', (_label, updates) => {
+      const app = addApp(ADDR_A, makeApp({ chainState: 'active', provisionState: 'confirmed' }));
+      const next = { ...app, readinessStale: true, ...updates };
+      const listener = vi.fn();
+      const unsubscribe = subscribeToRegistry(listener);
+      try {
+        remoteWrite(ADDR_A, JSON.stringify([app]), JSON.stringify([next]));
+        expect(listener).toHaveBeenCalledExactlyOnceWith(ADDR_A);
+        expect(getApps(ADDR_A)).toEqual([next]);
+      } finally { unsubscribe(); }
+    });
+
+    it.each(['add', 'remove', 'delete', 'reorder'] as const)('notifies for a remote registry %s', (operation) => {
+      const first = addApp(ADDR_A, makeApp());
+      const second = addApp(ADDR_A, makeApp({ leaseUuid: 'second-lease', name: 'second' }));
+      const next = operation === 'add' ? [first, second, makeApp({ leaseUuid: 'third-lease', name: 'third' })]
+        : operation === 'remove' ? [first] : operation === 'reorder' ? [second, first] : null;
+      const listener = vi.fn();
+      const unsubscribe = subscribeToRegistry(listener);
+      try {
+        remoteWrite(ADDR_A, JSON.stringify([first, second]), next && JSON.stringify(next));
+        expect(listener).toHaveBeenCalledExactlyOnceWith(ADDR_A);
+        expect(getApps(ADDR_A)).toEqual(next ?? []);
+      } finally { unsubscribe(); }
+    });
+
+    it('normalizes complete schema-valid snapshots without notifying for provider-only fields', () => {
+      const app = addApp(ADDR_A, makeApp({ connection: { host: 'provider.example.com', metadata: { region: 'dev' }, services: {} } }));
+      const raw = { ...app, connection: { services: {}, host: 'provider.example.com', protocol: 'tcp', metadata: { region: 'dev' } }, readinessStale: true };
+      const listener = vi.fn();
+      const unsubscribe = subscribeToRegistry(listener);
+      try {
+        remoteWrite(ADDR_A, JSON.stringify([app]), JSON.stringify([raw]));
+        expect(listener).not.toHaveBeenCalled();
+        expect(getApps(ADDR_A)).toEqual([{ ...app, readinessStale: true }]);
+      } finally { unsubscribe(); }
+    });
+
+    it.each(['malformed previous', 'malformed next', 'partial previous', 'partial next', 'non-array previous'] as const)('notifies conservatively for a %s snapshot', (caseName) => {
+      const app = addApp(ADDR_A, makeApp({ chainState: 'active', provisionState: 'confirmed' }));
+      const next = { ...app, readinessStale: true };
+      const oldValue = caseName === 'malformed previous' ? '{broken'
+        : caseName === 'partial previous' ? JSON.stringify([app, { leaseUuid: 'invalid' }])
+          : caseName === 'non-array previous' ? '{}' : JSON.stringify([app]);
+      const newValue = caseName === 'malformed next' ? '{broken'
+        : caseName === 'partial next' ? JSON.stringify([next, { leaseUuid: 'invalid' }]) : JSON.stringify([next]);
+      const listener = vi.fn();
+      const unsubscribe = subscribeToRegistry(listener);
+      try {
+        remoteWrite(ADDR_A, oldValue, newValue);
+        expect(listener).toHaveBeenCalledExactlyOnceWith(ADDR_A);
+        expect(getApps(ADDR_A)).toEqual(caseName === 'malformed next' ? [] : [next]);
+      } finally { unsubscribe(); }
+    });
+
     it.each(['update', 'remove'] as const)(
       'preserves unsaved local changes after a remote %s until a local save succeeds',
       (operation) => {

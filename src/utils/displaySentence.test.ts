@@ -11,6 +11,11 @@ describe('finishDisplaySentence', () => {
     ['provider said “why?”', 'provider said “why?”'],
     ['provider said ‘no!’', 'provider said ‘no!’'],
     ['provider replied ("no…")', 'provider replied ("no…")'],
+    ['provider said "no.":', 'provider said "no."'],
+    ['provider said “why?”;', 'provider said “why?”'],
+    ['provider replied ("no…"),', 'provider replied ("no…")'],
+    ['image pull failed.:', 'image pull failed.'],
+    ['image pull failed! ;', 'image pull failed!'],
     ['provider said "no:"', 'provider said "no:".'],
     ['  ', ''],
   ])('finishes %j without changing quoted content', (input, expected) => {

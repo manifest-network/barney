@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
+import { readFileSync } from 'node:fs';
 import type { ChatMessage } from '../../contexts/aiTypes';
 
 const sendMessage = vi.fn();
@@ -19,6 +20,7 @@ vi.mock('../../contexts/aiStoreContext', () => ({
 
 import { MessageBubble } from './MessageBubble';
 import { TRANSACTION_FINISHED_AFTER_CONTEXT_CHANGE_MESSAGE } from '../../stores/authorization';
+import { summarizeBatchResult } from '../../ai/toolExecutor/batchRunner';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -81,6 +83,35 @@ describe('MessageBubble — card details', () => {
     expect(details).not.toBeNull();
     flushSync(() => { details!.click(); });
     expect(container.querySelector('.message-tool-content')?.textContent).toContain('nginx');
+  });
+});
+
+describe('MessageBubble — error alerts', () => {
+  it('preserves visible rows and wrapping in a batch failure alert', () => {
+    const result = summarizeBatchResult({
+      succeeded: [], failed: ['aaa', 'bbb'], cancelled: ['ccc', 'ddd'],
+      batchProgress: [
+        { name: 'aaa', phase: 'failed', detail: 'Lease creation failed: insufficient funds' },
+        { name: 'bbb', phase: 'failed', detail: 'Provisioning failed: ImagePullFailed' },
+        { name: 'ccc', phase: 'failed', detail: 'Cancelled before the provider was asked' },
+        { name: 'ddd', phase: 'failed', detail: 'Cancelled (batch aborted)' },
+      ],
+      operation: 'deploy', dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys',
+    });
+    expect(result.success).toBe(false);
+    const style = document.createElement('style');
+    // Load the application's rules without the build-time Tailwind import.
+    style.textContent = readFileSync('src/index.css', 'utf8').replace(/^@import[^\n]+/gm, '');
+    document.head.appendChild(style);
+    try {
+      render(makeError(result.error!));
+      const text = container.querySelector<HTMLElement>('.message-error > span')!;
+      expect(text.textContent).toContain('insufficient funds\nbbb:');
+      expect(text.textContent).toContain('\nCancelled: ccc:');
+      expect(text.textContent).toContain('provider was asked\nddd:');
+      expect(getComputedStyle(text).whiteSpace).toBe('pre-line');
+      expect(getComputedStyle(text).wordBreak).toBe('break-word');
+    } finally { style.remove(); }
   });
 });
 

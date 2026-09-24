@@ -5163,6 +5163,31 @@ describe('executeConfirmedUpdateApp', () => {
     );
   }
 
+  it.each([
+    { status: 'ready', reason: 'ContainerExited', lead: 'has since failed' },
+    { status: 'failed', reason: 'ImagePullFailed', lead: 'nothing was changed on the provider' },
+    { status: 'ready', reason: 'UpdateFailed', lead: 'previous version restored' },
+    { status: 'failed', reason: 'UpdateFailed', lead: 'rollback failed' },
+  ].flatMap(branch => [
+    ['image pull failed:', 'image pull failed.'],
+    ['is the image private?', 'is the image private?'],
+    ['provider said "no."', 'provider said "no."'],
+    ['provider said "no.":', 'provider said "no."'],
+  ].map(([message, ending]) => ({ ...branch, message, ending }))))('punctuates legacy $reason/$status detail "$message" before its next step', async ({ status, reason, lead, message, ending }) => {
+    mockUpdateReachingProvision({ status, reason, fail_count: 1, message });
+    const app = makeApp({ manifest: PREVIOUS_MANIFEST });
+    const result = await runUpdate(makeRegistry([app]), app);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain(lead);
+    expect(result.error).toContain(`${reason}: ${ending} `);
+    expect(result.error).not.toMatch(/:\.|\?\.|"\./u);
+    expect(result.error).toContain(reason === 'ContainerExited' || status === 'failed' && reason === 'UpdateFailed'
+      ? `Use app_status("${app.name}") to check.`
+      : FRED_REASON_GUIDANCE[reason as 'ImagePullFailed' | 'UpdateFailed'].nextStep);
+    expect(updateApp).toHaveBeenCalledTimes(1);
+    expect(getLeaseProvision).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a rolled-back update as a failure and restores the previous manifest', async () => {
     mockUpdateReachingProvision({
       status: 'ready',

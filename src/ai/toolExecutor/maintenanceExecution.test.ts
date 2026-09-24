@@ -463,8 +463,19 @@ describe('pre-dispatch cancellation and local failures', () => {
       expect(await discardUnsubmittedMaintenanceOperation(unsent)).toBe(true);
     }
     expect(providerFetch).not.toHaveBeenCalled();
+    // A batch may dispatch the second entry first. Control that ordering so
+    // the identity assertion cannot accidentally rely on entry order again.
+    let secondRequested: (() => void) | undefined;
+    if (mode === 'batch') {
+      const secondRequest = new Promise<void>((resolve) => { secondRequested = resolve; });
+      vi.mocked(getLeaseReleases).mockImplementation(async (_provider, leaseUuid) => {
+        if (leaseUuid === app.leaseUuid) await secondRequest;
+        return histories.get(leaseUuid)!;
+      });
+    }
     vi.mocked(providerFetch).mockImplementation(async (input) => {
       const target = apps.find(entry => String(input).includes(entry.leaseUuid))!;
+      if (target.leaseUuid === apps[1]?.leaseUuid) secondRequested?.();
       histories.set(target.leaseUuid, history(target.leaseUuid, release(1, 'superseded'), release(2)));
       return accepted();
     });
@@ -475,7 +486,12 @@ describe('pre-dispatch cancellation and local failures', () => {
     expect((result.data as { message?: string }).message ?? '').not.toMatch(/Outcome unknown|unconfirmed|skipped/);
     if (mode === 'batch') expect(result.data).toMatchObject({ unconfirmed: [], failed: [] });
     expect(providerFetch).toHaveBeenCalledTimes(apps.length);
-    expect(requests()[0].key).toBe(planned.idempotencyKey);
+    const sent = requests();
+    for (const expected of mode === 'batch' ? [planned, plans[1]] : [planned]) {
+      const request = sent.find((entry) => entry.url.includes(expected.leaseUuid));
+      expect(request?.key).toBe(expected.idempotencyKey);
+    }
+    if (mode === 'batch') expect(sent[0].url).toContain(apps[1].leaseUuid);
   });
 
   it.each(['cancel', 'mint rejection'] as const)('releases another tab’s advice lock after a pre-HTTP %s', async (failure) => {
@@ -913,8 +929,21 @@ describe('independent maintenance verdicts', () => {
     expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeDefined();
   });
 
-  it.each([false, true])('separates complete failed restart sentences in the batch result (partial success: %s)', async (partialSuccess) => {
+  it.each([false, true].flatMap(partialSuccess => [false, true].map(reverseCompletion => ({ partialSuccess, reverseCompletion }))))('separates complete failed restart sentences (partial success=$partialSuccess, reverse completion=$reverseCompletion)', async ({ partialSuccess, reverseCompletion }) => {
     const { apps, plans, options } = setup(['aaa', 'bbb', 'ccc', ...(partialSuccess ? ['ready'] : [])]);
+    const completionOrder: string[] = [];
+    const finished = new Map<string, () => void>();
+    const completed = new Map(apps.map((app) => [app.leaseUuid, new Promise<void>((resolve) => { finished.set(app.name, resolve); })]));
+    if (reverseCompletion) {
+      // Release each earlier entry only after the next app has its terminal
+      // verdict. This exercises a known reverse result-bucket order without
+      // introducing timer sleeps or changing production ordering.
+      vi.mocked(getLeaseReleases).mockImplementation(async (_provider, leaseUuid) => {
+        const index = apps.findIndex((app) => app.leaseUuid === leaseUuid);
+        if (index < apps.length - 1) await completed.get(apps[index + 1].leaseUuid);
+        return histories.get(leaseUuid)!;
+      });
+    }
     const messages = new Map([['aaa', 'image pull failed.'], ['bbb', 'image pull failed:'], ['ccc', 'provider said "no."']]);
     vi.mocked(providerFetch).mockImplementation(async (input) => {
       const target = apps.find(entry => String(input).includes(entry.leaseUuid))!;
@@ -924,12 +953,26 @@ describe('independent maintenance verdicts', () => {
         : history(target.leaseUuid, release(1), { ...release(2, 'failed', 'RestartFailed'), message }));
       return accepted();
     });
-    const result = await executeConfirmedRestartApp({ app_name: 'all', entries: plans }, chain, options);
+    const result = await executeConfirmedRestartApp({ app_name: 'all', entries: plans }, chain, {
+      ...options,
+      onProgress: (progress) => {
+        for (const row of progress.batch ?? []) {
+          if ((row.phase === 'ready' || row.phase === 'failed') && !completionOrder.includes(row.name)) {
+            completionOrder.push(row.name);
+            finished.get(row.name)?.();
+          }
+        }
+      },
+    });
     const text = result.error ?? (result.data as { message: string }).message;
     expect(result.success).toBe(partialSuccess);
-    expect(text).toContain('image pull failed.\nbbb: Restart failed');
-    expect(text).toContain('image pull failed.\nccc: Restart failed');
-    expect(text).toContain('provider said "no."');
+    for (const [name, detail] of [['aaa', 'image pull failed.'], ['bbb', 'image pull failed.'], ['ccc', 'provider said "no."']]) {
+      const row = text.split('\n').find((line) => line.includes(`${name}: Restart failed`));
+      expect(row, `missing failed row for ${name}`).toContain(`${name}: Restart failed`);
+      expect(row).toContain(detail);
+      expect(row).not.toMatch(new RegExp(`(?:${[...messages.keys()].filter((other) => other !== name).join('|')}): Restart failed`));
+    }
+    if (reverseCompletion) expect(completionOrder).toEqual(apps.map((app) => app.name).reverse());
     expect(text).not.toMatch(/\.,|:\.|"\./u);
     expect(providerFetch).toHaveBeenCalledTimes(apps.length);
   });

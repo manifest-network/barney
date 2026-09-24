@@ -141,13 +141,18 @@ runtime status can reassert readiness staleness without retracting a verdict. Un
 maintenance marks connection inventory and readiness stale independently, scheduling bounded
 background status reads while preserving prior confirmed/failed verdicts. Explicit progress fills
 a missing verdict with `unconfirmed`; absent or unmodelled status adds no provision observation. Maintenance, foreground status and background hydration share the provision/readiness patch,
-so suppressed in-progress readings always retain bounded follow-up eligibility. Query and discovery
-paths apply it only when a Fred response arrived: a rejected status fetch or token mint preserves
-the prior flag and does not start or extend readiness checks. An arrived response with omitted,
+so suppressed in-progress readings always retain bounded follow-up eligibility. Ordinary query and
+discovery reads apply it only when a Fred response arrived: a rejected status fetch or token mint
+preserves the prior flag. `app_status` additionally reconciles pending maintenance; a failed provision
+read or authentication in that path can still set the flag and grant eight attempts because the
+command needs a runtime observation. An arrived response with omitted,
 empty or unmodelled status still schedules follow-up; maintenance also keeps its missing-verdict
-follow-up. Apps missing inventory keep the four-attempt budget during outages unless confirmed
-saved inventory was invalidated. Changes to `readinessStale` persist silently so they do not interrupt DNS probes;
-the recovery driver reads the flag on its own tick. Shared foreground/background logic restores DNS evidence on a fresh connection
+follow-up. Apps missing inventory keep the four-attempt budget during outages unless they have
+uncertain maintenance readiness, an unsettled provider observation, or confirmed saved inventory
+that was invalidated. Changes to `readinessStale` persist silently so they do not interrupt DNS probes, including in other
+tabs when both stored snapshots validate and visible fields/status are unchanged. Cross-tab events
+still invalidate the read cache; the recovery driver reads the flag on its own tick. Visible changes
+and invalid snapshots continue to notify subscribers. Shared foreground/background logic restores DNS evidence on a fresh connection
 read while continuing readiness observation through missing or in-progress statuses. Uncertain
 readiness keeps the extended eight-attempt allowance after foreground refreshes and reloads;
 false and unset freshness flags compare equally when checking a registry snapshot.

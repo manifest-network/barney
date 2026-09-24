@@ -426,7 +426,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     const cancelledPart = finishDisplaySentence(`Cancelled: ${cancelledText}`);
     return {
       success: false,
-      error: `No ${failedNoun} completed — ${[failedPart, cancelledPart].filter(Boolean).join(' ')}${summaryGuidance ? `\n${summaryGuidance}` : ''}`,
+      error: `No ${failedNoun} completed — ${[failedPart, cancelledPart].filter(Boolean).join('\n')}${summaryGuidance ? `\n${summaryGuidance}` : ''}`,
     };
   }
 

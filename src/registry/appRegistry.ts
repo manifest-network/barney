@@ -253,10 +253,10 @@ function notify(address: string): void {
  * traffic from another tab on a different wallet is harmless.
  *
  * Unsaved local state ignores remote changes until a local save succeeds.
- * For clean caches, `newValue === null` (the other tab cleared its registry /
- * disconnected) is intentionally NOT special-cased: subscribers re-read via
- * `getApps`, which returns `[]` on a missing key. The notify-then-reread pattern
- * stays uniform.
+ * Clean caches are invalidated even for observation-only changes. Those
+ * changes stay silent when both snapshots validate and their visible values
+ * and derived statuses agree; recovery reads fresh observations on its own tick.
+ * Removal, invalid data and any visible change notify subscribers to re-read.
  *
  * `event.key === null` (devtools `localStorage.clear()`) is skipped — no
  * address info to route with, and subscribers will re-read on their next
@@ -275,6 +275,7 @@ function handleStorageEvent(event: StorageEvent): void {
   // A remote cache update must not discard their only surviving copy.
   if (unsavedAddresses.has(address)) return;
   memoryApps.delete(address);
+  if (sameVisibleStorageSnapshot(event.oldValue, event.newValue)) return;
   notify(address);
 }
 
@@ -560,6 +561,28 @@ function sameStructurally(field: keyof AppEntry, a: unknown, b: unknown): boolea
  * into by someone who has checked the subscribers.
  */
 const OBSERVATION_ONLY_FIELDS = new Set<string>(['chainState', 'provisionState', 'readinessStale']);
+
+/** Invalid/partial snapshots must use the normal re-read and cleanup path.
+ * Parsing both complete arrays also normalizes provider-only connection fields. */
+function sameVisibleStorageSnapshot(oldValue: string | null, newValue: string | null): boolean {
+  if (oldValue === null || newValue === null) return false;
+  try {
+    const previous = z.array(AppEntrySchema).safeParse(JSON.parse(oldValue));
+    const next = z.array(AppEntrySchema).safeParse(JSON.parse(newValue));
+    if (!previous.success || !next.success || previous.data.length !== next.data.length) return false;
+    return previous.data.every((app, index) => {
+      const updated = next.data[index];
+      if (deriveAppStatus(app) !== deriveAppStatus(updated)) return false;
+      return [...new Set([...Object.keys(app), ...Object.keys(updated)])].every((field) => {
+        if (OBSERVATION_ONLY_FIELDS.has(field)) return true;
+        const key = field as keyof AppEntry;
+        return STRUCTURAL_FIELDS.has(key) ? sameStructurally(key, app[key], updated[key]) : Object.is(app[key], updated[key]);
+      });
+    });
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Update fields on an existing app (matched by leaseUuid). Returns updated entry or null.

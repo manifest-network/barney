@@ -19,7 +19,7 @@ import { ProviderApiError } from '../../api/provider-api';
 import { getLeaseProvision, type FredLeaseStatus } from '../../api/fred';
 import { DENOMS } from '../../api/config';
 import { fromBaseUnits, toBaseUnits } from '../../utils/format';
-import { logError, normalizeErrorPunctuation } from '../../utils/errors';
+import { logError } from '../../utils/errors';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import { finishDisplaySentence } from '../../utils/displaySentence';
 import { isAbortError, withTimeout } from '../../api/utils';
@@ -2319,7 +2319,7 @@ export async function executeConfirmedUpdateApp(
               success: false,
               error:
                 `The update applied but "${name}" has since failed: ` +
-                `${normalizeErrorPunctuation(failureText(provision, 'no detail reported'))}. ` +
+                `${finishDisplaySentence(failureText(provision, 'no detail reported'))} ` +
                 `Use app_status("${name}") to check.`,
             };
           }
@@ -2368,10 +2368,10 @@ export async function executeConfirmedUpdateApp(
             // keeps "nothing was changed" as blast-radius reassurance only.
             error: preflight
               ? `Update failed: the image could not be pulled, so the new version was never applied and ` +
-                `nothing was changed on the provider. ${normalizeErrorPunctuation(detail)}.${suffix}`
+                `nothing was changed on the provider. ${finishDisplaySentence(detail)}${suffix}`
               : rollbackOk
-                ? `Update failed, previous version restored. ${normalizeErrorPunctuation(detail)}.${suffix}`
-                : `Update failed and rollback failed. ${normalizeErrorPunctuation(detail)}. ` +
+                ? `Update failed, previous version restored. ${finishDisplaySentence(detail)}${suffix}`
+                : `Update failed and rollback failed. ${finishDisplaySentence(detail)} ` +
                   `Use app_status("${name}") to check.${suffix}`,
           };
         }

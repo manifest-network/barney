@@ -129,7 +129,23 @@ describe('maintenance batch uncertainty', () => {
     const result = summarizeBatchResult({ succeeded: [], failed: ['blocked'], cancelled: ['cancelled'],
       batchProgress: [{ name: 'blocked', phase: 'failed', detail: 'release v7 is deploying.' }],
       operation: 'restart', dataKey: 'restarted', verb: 'Restarted', failedNoun: 'restarts' });
-    expect(result.error).toBe('No restarts completed — Failed: blocked: release v7 is deploying. Cancelled: cancelled.');
+    expect(result.error).toBe('No restarts completed — Failed: blocked: release v7 is deploying.\nCancelled: cancelled.');
+  });
+
+  it('separates failed and cancelled detail rows when no deployment completed', () => {
+    const result = summarizeBatchResult({ succeeded: [], failed: ['aaa', 'bbb'], cancelled: ['ccc', 'ddd'],
+      batchProgress: [
+        { name: 'aaa', phase: 'failed', detail: 'Lease creation failed: insufficient funds' },
+        { name: 'bbb', phase: 'failed', detail: 'Provisioning failed: ImagePullFailed' },
+        { name: 'ccc', phase: 'failed', detail: 'Cancelled before deployment was submitted' },
+        { name: 'ddd', phase: 'failed', detail: 'Cancelled (batch aborted)' },
+      ], dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys' });
+    expect(result.error?.split('\n')).toEqual([
+      'No deploys completed — Failed: aaa: Lease creation failed: insufficient funds',
+      'bbb: Provisioning failed: ImagePullFailed.',
+      'Cancelled: ccc: Cancelled before deployment was submitted',
+      'ddd: Cancelled (batch aborted).',
+    ]);
   });
 
   it.each([8, 9])('keeps newline-separated diagnostic rows within the serialized budget at %i near-limit entries', (count) => {

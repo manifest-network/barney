@@ -42,7 +42,7 @@ import { useVisibilityPolling } from './useVisibilityPolling';
 import { resolveDnsViaDoh, probeHttps, computeStatus } from '../utils/customDomainStatus';
 import { resolveExpectedCnameTarget } from '../utils/connection';
 import { logError } from '../utils/errors';
-import { addApp, updateApp, type AppEntry } from '../registry/appRegistry';
+import { addApp, getAppByLease, updateApp, type AppEntry } from '../registry/appRegistry';
 import { useRegistryApps } from './useRegistryApps';
 
 function makeApp(overrides: Partial<AppEntry> = {}): AppEntry {
@@ -285,8 +285,8 @@ describe('useDnsStatusPolling', () => {
     abortSpy.mockRestore();
   });
 
-  it('keeps an in-flight DNS probe alive when only registry readiness freshness changes', async () => {
-    const address = 'manifest1readiness-dns';
+  it.each(['local', 'cross-tab'] as const)('keeps an in-flight DNS probe alive after a %s registry readiness change', async (source) => {
+    const address = `manifest1readiness-dns-${source}`;
     localStorage.clear();
     const app = makeApp({ chainState: 'active', provisionState: 'confirmed' });
     addApp(address, app);
@@ -308,7 +308,17 @@ describe('useDnsStatusPolling', () => {
     const signal = vi.mocked(resolveDnsViaDoh).mock.lastCall![1];
 
     for (const readinessStale of [true, false]) {
-      flushSync(() => { updateApp(address, app.leaseUuid, { readinessStale }); });
+      flushSync(() => {
+        if (source === 'local') updateApp(address, app.leaseUuid, { readinessStale });
+        else {
+          const key = `barney-apps-${address}`;
+          const oldValue = localStorage.getItem(key)!;
+          const newValue = JSON.stringify([{ ...JSON.parse(oldValue)[0], readinessStale }]);
+          localStorage.setItem(key, newValue);
+          window.dispatchEvent(new StorageEvent('storage', { key, oldValue, newValue, storageArea: localStorage }));
+        }
+      });
+      expect(getAppByLease(address, app.leaseUuid)?.readinessStale).toBe(readinessStale);
       expect(signal?.aborted).toBe(false);
     }
     finishDns({ result: 'ok' });
