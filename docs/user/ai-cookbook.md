@@ -59,8 +59,9 @@ Update wordpress to use a new theme  (File attached: stack.json)
 
 **What it does.** Restarts the container(s) without changing the manifest.
 
-On dev, **Outcome unknown** means the restart or update may still execute. Check
-the app's status and releases first. Acknowledged commands can settle from those
+On dev, **Outcome unknown** means the restart or update may still execute. The
+error alert's **Check status** button asks Barney to read the affected apps' status
+and releases before further maintenance. Acknowledged commands can settle from those
 checks even after a reload. Retrying an unresolved command reuses its original
 key and exact manifest; after reloading, Barney can recover matching bytes from
 provider history or verify a reattached file merged with saved defaults. A mismatched

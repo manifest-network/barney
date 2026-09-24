@@ -109,6 +109,20 @@ function isTransactionCancellation(error: unknown): boolean {
     && (error as { code?: unknown }).code === ManifestMCPErrorCode.OPERATION_CANCELLED;
 }
 
+/** Bound SDK diagnostics without losing a cancellation's submission warning. */
+function transactionErrorForDisplay(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : fallback;
+  const cancelled = isTransactionCancellation(error);
+  const sent = cancelled ? cancelledTransactionWasSent(error) : undefined;
+  const detail = sanitizeForDisplay(message, FAILURE_DETAIL_CHARS);
+  if (!cancelled || detail === message) return detail;
+  // The SDK places arbitrary abort reasons before this safety guidance. A cap
+  // may remove its ending, so restore the classified facts as authored prose.
+  return `${detail} ${sent === false
+    ? 'No transaction was sent.'
+    : 'The transaction may still commit on-chain. Check on-chain status before retrying; do not blindly retry.'}`;
+}
+
 /**
  * The provisioning OBSERVATION carried by a `waitForLeaseStatus` REJECTION.
  *
@@ -256,7 +270,7 @@ export async function executeDeployApp(
       manifestResult = await buildStackManifest({ services: parsed.services });
     } catch (error) {
       logError('compositeTransactions.executeDeployApp.buildStackManifest', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to build stack manifest' };
+      return { success: false, error: sanitizeForDisplay(error instanceof Error ? error.message : 'Failed to build stack manifest', FAILURE_DETAIL_CHARS) };
     }
 
     payload = manifestResult.payload;
@@ -1257,7 +1271,7 @@ export async function executeConfirmedStopApp(
       },
     };
   } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : 'Failed to stop app' };
+    return { success: false, error: transactionErrorForDisplay(err, 'Failed to stop app') };
   }
 }
 
@@ -1306,7 +1320,7 @@ export async function executeConfirmedFundCredits(
       { waitForConfirmation: true, signal: options.signal },
     );
     if (result.code !== 0) {
-      return { success: false, error: result.rawLog || 'Failed to fund credits' };
+      return { success: false, error: sanitizeForDisplay(result.rawLog || 'Failed to fund credits', FAILURE_DETAIL_CHARS) };
     }
     return {
       success: true,
@@ -1325,7 +1339,7 @@ export async function executeConfirmedFundCredits(
           : 'Credit funding may have been submitted. Check your credit balance before retrying.',
       };
     }
-    return { success: false, error: error instanceof Error ? error.message : 'Failed to fund credits' };
+    return { success: false, error: sanitizeForDisplay(error instanceof Error ? error.message : 'Failed to fund credits', FAILURE_DETAIL_CHARS) };
   }
 }
 
@@ -1959,7 +1973,7 @@ export async function executeUpdateApp(
       manifestResult = await buildStackManifest({ services: parsed.services });
     } catch (error) {
       logError('compositeTransactions.executeUpdateApp.buildStackManifest', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to build stack manifest' };
+      return { success: false, error: sanitizeForDisplay(error instanceof Error ? error.message : 'Failed to build stack manifest', FAILURE_DETAIL_CHARS) };
     }
 
     payload = manifestResult.payload;
@@ -2676,7 +2690,7 @@ export async function executeConfirmedSetCustomDomain(
     );
   } catch (err) {
     logError('compositeTransactions.executeConfirmedSetCustomDomain', err);
-    return { success: false, error: err instanceof Error ? err.message : 'Failed to set custom domain.' };
+    return { success: false, error: transactionErrorForDisplay(err, 'Failed to set custom domain.') };
   }
 
   if (result.code !== 0) {

@@ -860,8 +860,8 @@ export async function executeLeaseHistory(
       state: LEASE_STATE_LABELS[lease.state as LeaseState] || 'unknown',
       created: lease.createdAt ? new Date(lease.createdAt).toISOString() : undefined,
       closed: lease.closedAt ? new Date(lease.closedAt).toISOString() : undefined,
-      closureReason: lease.closureReason || undefined,
-      rejectionReason: lease.rejectionReason || undefined,
+      closureReason: lease.closureReason ? sanitizeForDisplay(lease.closureReason, FAILURE_DETAIL_CHARS) : undefined,
+      rejectionReason: lease.rejectionReason ? sanitizeForDisplay(lease.rejectionReason, FAILURE_DETAIL_CHARS) : undefined,
     };
   });
 
@@ -946,7 +946,7 @@ export async function executeAppDiagnostics(
       success: true,
       data: {
         app_name: app.name,
-        status: provision.status,
+        status: displayProvisionStatus(provision.status),
         fail_count: provision.fail_count,
         ...(failure?.reason !== undefined && { reason: sanitizeForDisplay(failure.reason, DIAGNOSTIC_REASON_CHARS) }),
         ...(failure?.message !== undefined && { message: sanitizeForDisplay(failure.message, DIAGNOSTIC_MESSAGE_CHARS) }),
@@ -1014,8 +1014,16 @@ export async function executeAppReleases(
         app_name: app.name,
         // Historical manifests contain secrets; keep raw bytes out of chat persistence.
         releases: releasesResponse.releases.map((release) => {
-          const publicRelease = { ...release };
+          const publicRelease: Record<string, unknown> = { ...release };
           delete publicRelease.manifest;
+          // Keep the raw history above for correlation and exact-payload
+          // recovery; only the public diagnostic fields are display text.
+          for (const field of ['reason', 'message', 'error', 'last_error'] as const) {
+            if (typeof publicRelease[field] === 'string') {
+              publicRelease[field] = sanitizeForDisplay(publicRelease[field],
+                field === 'reason' ? DIAGNOSTIC_REASON_CHARS : DIAGNOSTIC_MESSAGE_CHARS);
+            }
+          }
           return publicRelease;
         }),
         count: releasesResponse.releases.length,

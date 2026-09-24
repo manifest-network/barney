@@ -23,6 +23,8 @@ vi.mock('../../contexts/aiStoreContext', () => ({
 import { MessageBubble } from './MessageBubble';
 import { TRANSACTION_FINISHED_AFTER_CONTEXT_CHANGE_MESSAGE } from '../../stores/authorization';
 import { summarizeBatchResult } from '../../ai/toolExecutor/batchRunner';
+import { historyStorageKey, loadHistory, saveHistory } from '../../stores/aiActions/persistence';
+import { createWalletIdentity } from '../../utils/walletIdentity';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -89,6 +91,34 @@ describe('MessageBubble — card details', () => {
 });
 
 describe('MessageBubble — error alerts', () => {
+  it('uses source-row recovery advice for a failed status query instead of a signing retry suggestion', () => {
+    render({ ...makeError('Wallet rejected signature'), role: 'tool', toolName: 'app_status',
+      maintenanceRecoveryAdvice: [{ operation: 'update', idempotencyKey: '11111111-1111-4111-8111-111111111111',
+        address: 'manifest1recovery', chainId: 'manifest-test', providerUrl: 'https://provider.example',
+        leaseUuid: '22222222-2222-4222-8222-222222222222', rpcUrl: 'https://rpc.example', restUrl: 'https://rest.example' }] });
+    expect(findButton('Try again')).toBeNull();
+    expect(findButton('Deploy an app')).toBeNull();
+    expect(findButton('Check status')).not.toBeNull();
+  });
+
+  it.each(['restart_app', 'update_app'].flatMap(toolName => [false, true].map(reloaded => ({ toolName, reloaded }))))(
+    'offers observation rather than deployment for $toolName recovery (reloaded: $reloaded)', ({ toolName, reloaded }) => {
+      const identity = createWalletIdentity('manifest-test', 'manifest1recovery')!;
+      const message: ChatMessage = { ...makeError('Outcome unknown. Recover the original command with its same key and exact payload. Do not submit a new command.'),
+        role: 'tool', toolName, local: false };
+      try {
+        if (reloaded) saveHistory(identity, [message], true);
+        render(reloaded ? loadHistory(identity)[0] : message);
+        expect(findButton('Deploy an app')).toBeNull();
+        expect(findButton('Try again')).toBeNull();
+        const check = findButton('Check status');
+        expect(check).not.toBeNull();
+        flushSync(() => { check!.click(); });
+        expect(sendMessage).toHaveBeenCalledWith('Check app_status and app_releases for the affected apps before any further maintenance.');
+      } finally { localStorage.removeItem(historyStorageKey(identity)); }
+    },
+  );
+
   it('preserves visible rows and wrapping in a batch failure alert', () => {
     const result = summarizeBatchResult({
       succeeded: [], failed: ['aaa', 'bbb'], cancelled: ['ccc', 'ddd'],

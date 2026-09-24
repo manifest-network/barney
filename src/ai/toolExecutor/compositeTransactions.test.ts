@@ -2550,6 +2550,17 @@ describe('executeFundCredits', () => {
 describe('executeConfirmedFundCredits', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('bounds a returned nonzero result rawLog before display', async () => {
+    const rawLog = `Rejected\n\u0000\u202e${'🦕'.repeat(1_000)}`;
+    vi.mocked(fundCredits).mockResolvedValue({ code: 7, transactionHash: 'hash', rawLog } as any);
+    const result = await executeConfirmedFundCredits({ amount: 1, address: ADDRESS }, CLIENT_MANAGER, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+    expect(result.error).not.toMatch(/[\uD800-\uDFFF]/u);
+    expect(Array.from(result.error!)).toHaveLength(257);
+    expect(fundCredits).toHaveBeenCalledOnce();
+  });
+
   it('funds credits successfully', async () => {
     vi.mocked(fundCredits).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
 

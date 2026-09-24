@@ -43,7 +43,7 @@ reload before trying the operation again.
 
 The dev edge must allow `Idempotency-Key` alongside `Authorization` and
 `Content-Type` for the existing Barney origin. A read-only preflight on
-2026-09-22 still returned only `Content-Type,Authorization,Accept`; the disallowed
+2026-09-24 still returned only `Content-Type,Authorization,Accept`; the disallowed
 origin received no `Access-Control-Allow-Origin`. Updating Barney alone cannot
 enable browser maintenance until the Traefik policy is deployed.
 
@@ -62,7 +62,9 @@ while an unlisted origin receives no allow-origin header. Then exercise a
 disposable workload from the browser: restart/update, exact retry after a lost
 response, and compensated failure. Record both runtime readiness and release
 outcome in [ENG-976](https://linear.app/liftedinit/issue/ENG-976). Local simulated
-transport tests do not establish these deployed-workload acceptance checks.
+transport tests do not establish these deployed-workload acceptance checks. The
+[ENG-976 boundary review](../audits/eng-976/README.md) records the implementation
+acceptance criteria, evidence and separate rollout gate.
 
 ## Required configuration
 

@@ -66,7 +66,14 @@ const ERROR_PATTERNS: Array<{ pattern: RegExp; suggestions: ErrorSuggestion[] }>
   },
 ];
 
-function getErrorSuggestions(error: string): ErrorSuggestion[] {
+function getErrorSuggestions(message: ChatMessage): ErrorSuggestion[] {
+  const { error, toolName, maintenanceRecoveryAdvice } = message;
+  if (!error) return [];
+  // Recovery prose can contain "payload" or "signature". Those words must
+  // not turn a maintenance result into a suggestion to deploy another app.
+  if (toolName === 'restart_app' || toolName === 'update_app' || maintenanceRecoveryAdvice?.length) {
+    return [{ label: 'Check status', message: 'Check app_status and app_releases for the affected apps before any further maintenance.' }];
+  }
   for (const { pattern, suggestions } of ERROR_PATTERNS) {
     if (pattern.test(error)) return suggestions;
   }
@@ -95,7 +102,7 @@ export const MessageBubble = memo(function MessageBubble({ message }: MessageBub
   // (streaming tokens, dnsStatuses, deployProgress).
   const sendMessage = useAIStore((s) => s.sendMessage);
   const retrySkuTiers = useAIStore((s) => s.retrySkuTiers);
-  const suggestions = error ? getErrorSuggestions(error) : [];
+  const suggestions = getErrorSuggestions(message);
 
   const isUser = role === 'user';
   const isTool = role === 'tool';

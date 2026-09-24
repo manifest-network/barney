@@ -171,13 +171,23 @@ preserve line breaks, and preview processing scans trailing noise in linear time
 Caught errors in balance, log, diagnostic and release queries, and executor catch-alls, are sanitized
 and capped at 256 retained code points plus an ellipsis before entering chat/model-facing prose.
 Failed faucet rows use the same sanitizer before all-failed/partial-success messages and structured
-results are composed. Authored row breaks and successful log output are preserved. New saved error
+results are composed. Returned chain failures and manifest-builder exceptions use the same detail
+bound; shortening cancellation text retains complete authored submission guidance. Named
+release/lease failure fields and diagnostic status are bounded in the public projection after raw
+history has been used for recovery. Authored row breaks and successful log output are preserved. New saved error
 rows carry an `errorFormat: 'authored'` marker; marked errors keep up to 10,240 UTF-16 code units on
 both write and load. Oversized alerts retain beginning and ending portions with an explicit omission
 notice, preserving closing guidance. Unmarked or unrecognized-format legacy errors are sanitized at
 the 256-code-point cap before display or re-save. The marker does not enter runtime messages. The
 envelope stays v1; older builds still apply their previous load limit and must be refreshed to read
-the newer diagnostics.
+the newer diagnostics. Maintenance error rows and other error rows carrying recovery advice offer
+read-only status/releases checks instead of generic keyword-based deployment suggestions.
+History omits executable tool calls, so interior unmatched historical tool results become labeled
+assistant context only in the model projection; exact result text and saved recovery metadata remain
+intact. Leading orphan results are still discarded.
+Valid adjacent live tool-call groups retain their protocol roles and IDs.
+The [ENG-976 boundary review](../audits/eng-976/README.md) records the acceptance
+criteria and scoped exceptions.
 Manifest validation diagnostics are sanitized and bounded to 4,096 code points in planning and both
 provider confirmation paths; ordinary preparation diagnostics keep their smaller cap.
 
