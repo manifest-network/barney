@@ -7,7 +7,7 @@
  */
 
 import { AI_BATCH_DEPLOY_CONCURRENCY, AI_BATCH_DIAGNOSTIC_CHARS, AI_BATCH_GUIDANCE_CHARS } from '../../config/constants';
-import { normalizeErrorPunctuation } from '../../utils/errors';
+import { finishDisplaySentence } from '../../utils/displaySentence';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { DeployProgress } from '../progress';
 import { FAILURE_DETAIL_CHARS } from './helpers';
@@ -381,11 +381,11 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     const row = failureRows.get(name);
     const detail = fitDiagnostic(row?.detail, budgets[index], row?.diagnostic);
     return detail ? `${name}: ${detail}` : name;
-  }).join(', ');
+  }).join(failed.some((name) => failureRows.get(name)?.detail) ? '\n' : ', ');
   const cancelledText = cancelled.map((name, index) => {
     const detail = fitDiagnostic(failureRows.get(name)?.detail, budgets[failed.length + rawUnconfirmed.length + rawSucceeded.length + index]);
     return detail ? `${name}: ${detail}` : name;
-  }).join(', ');
+  }).join(cancelled.some((name) => failureRows.get(name)?.detail) ? '\n' : ', ');
 
   // Maintenance has a neutral terminal phase: no verified restart/update may
   // be reported as complete just because the runner finished waiting. Deploy
@@ -422,8 +422,8 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     if (cancelled.length === 0) {
       return { success: false, error: `All ${failedNoun} failed: ${failedText}${summaryGuidance ? `\n${summaryGuidance}` : ''}` };
     }
-    const failedPart = failed.length > 0 ? `Failed: ${normalizeErrorPunctuation(failedText)}.` : '';
-    const cancelledPart = `Cancelled: ${normalizeErrorPunctuation(cancelledText)}.`;
+    const failedPart = failed.length > 0 ? finishDisplaySentence(`Failed: ${failedText}`) : '';
+    const cancelledPart = finishDisplaySentence(`Cancelled: ${cancelledText}`);
     return {
       success: false,
       error: `No ${failedNoun} completed — ${[failedPart, cancelledPart].filter(Boolean).join(' ')}${summaryGuidance ? `\n${summaryGuidance}` : ''}`,
@@ -439,8 +439,8 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     const lines = unconfirmed.map((u) => u.detail ? `${u.name}: ${u.detail}` : u.name);
     parts.push(`${unconfirmedLabel}:\n${lines.map((l) => `- ${l}`).join('\n')}`);
   }
-  if (failed.length > 0) parts.push(`Failed: ${normalizeErrorPunctuation(failedText)}.`);
-  if (cancelled.length > 0) parts.push(`Cancelled: ${normalizeErrorPunctuation(cancelledText)}.`);
+  if (failed.length > 0) parts.push(finishDisplaySentence(`Failed: ${failedText}`));
+  if (cancelled.length > 0) parts.push(finishDisplaySentence(`Cancelled: ${cancelledText}`));
   if (summaryGuidance) parts.push(summaryGuidance);
 
   return {

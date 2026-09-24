@@ -280,7 +280,9 @@ export async function executeAppStatus(
       endpointRefreshed = refresh.endpointRefreshed;
       providerEndpoint = refresh.providerEndpoint;
       connectionRefreshed = refresh.connectionRefreshed;
-      const readiness = provisionObservationPatch(fredStatus?.provision_status, app);
+      // An unavailable response is not a new readiness observation. An arrived
+      // degraded response may still omit provision_status and require follow-up.
+      const readiness = fredStatus ? provisionObservationPatch(fredStatus.provision_status, app) : {};
       const accessChanged = Object.keys(refresh.patch).length > 0;
       providerStatus = displayProvisionStatus(fredStatus?.provision_status);
       workloadStatusUnavailable = providerStatus === undefined;

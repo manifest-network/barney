@@ -156,7 +156,8 @@ number of attempts even when the app was previously healthy. The sidebar keeps
 the last observed readiness until a fresh provider observation changes it. You
 can always request `app_status` if those checks are exhausted. A failed app that Fred starts
 re-provisioning also receives bounded background checks after an in-progress status read,
-so it can return to running without another manual refresh.
+so it can return to running without another manual refresh. An unreachable provider or failed
+authentication alone does not start a new readiness-check cycle; already-needed checks remain bounded.
 
 ### "App is failed"
 

@@ -144,8 +144,11 @@ describe('read-only maintenance reconciliation', () => {
   });
 
   it.each((['restart', 'update'] as const).flatMap(operation => [
-    'image pull failed', 'is the image private?', 'image pull failed!', 'image pull failed…', 'image pull failed.',
-  ].map(message => ({ operation, message }))))('separates a reconciled $operation failure ending in "$message" from cleanup guidance and retains it on replay', async ({ operation, message }) => {
+    ['image pull failed', 'image pull failed.'], ['is the image private?', 'is the image private?'],
+    ['image pull failed!', 'image pull failed!'], ['image pull failed…', 'image pull failed…'],
+    ['image pull failed.', 'image pull failed.'], ['image pull failed:', 'image pull failed.'],
+    ['provider said "no."', 'provider said "no."'],
+  ].map(([message, ending]) => ({ operation, message, ending }))))('separates a reconciled $operation failure ending in "$message" from cleanup guidance and retains it on replay', async ({ operation, message, ending }) => {
     const command = await prepare(operation);
     const storage = localStorage;
     const fetch = vi.fn();
@@ -161,7 +164,6 @@ describe('read-only maintenance reconciliation', () => {
       const result = await reconcile(app, options, history(release(1), release(2, 'failed', {
         reason: operation === 'restart' ? 'RestartFailed' : 'UpdateFailed', message,
       })));
-      const ending = /[.!?…]$/.test(message) ? message : `${message}.`;
       expect(result).toMatchObject({ outcome: 'failed', runtimeReady: true,
         detail: expect.stringContaining(`${ending} The provider outcome was verified`) });
       expect(result?.detail).not.toMatch(/[!?….]\. /u);

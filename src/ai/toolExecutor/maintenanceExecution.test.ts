@@ -7,6 +7,7 @@ import {
 import { getReadClient } from '../../api/readClient';
 import { providerFetch } from '../../api/providerFetchAdapter';
 import { getLeaseProvision, getLeaseReleases } from '../../api/fred';
+import { runtimeConfig } from '../../config/runtimeConfig';
 import { sanitizeManifestForStorage, type AppEntry } from '../../registry/appRegistry';
 import { resolveAppUrl } from './deployUrl';
 import { executeConfirmedRestartApp, executeConfirmedUpdateApp, executeRestartApp, executeUpdateApp } from './compositeTransactions';
@@ -97,6 +98,7 @@ function requests() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearCompletedMaintenance({ address: ADDRESS, chainId: runtimeConfig.PUBLIC_CHAIN_ID });
   localStorage.clear();
   sessionStorage.clear();
   histories.clear();
@@ -319,8 +321,13 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
     expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
   });
 
-  it.each(['image pull failed', 'is the image private?', 'image pull failed!', 'image pull failed…', 'image pull failed.'])(
-    'separates failed verdict %j from a cleanup warning without doubled punctuation', async (message) => {
+  it.each([
+    ['image pull failed', 'image pull failed.'], ['is the image private?', 'is the image private?'],
+    ['image pull failed!', 'image pull failed!'], ['image pull failed…', 'image pull failed…'],
+    ['image pull failed.', 'image pull failed.'], ['image pull failed:', 'image pull failed.'],
+    ['provider said "no."', 'provider said "no."'],
+  ])(
+    'separates failed verdict %j from a cleanup warning without doubled punctuation', async (message, ending) => {
       const { apps: [app], plans: [plan], options } = setup();
       const reason = operation === 'restart' ? 'RestartFailed' : 'UpdateFailed';
       vi.mocked(providerFetch).mockImplementationOnce(async () => {
@@ -330,7 +337,6 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
       });
       const result = await dispatch(operation, plan, options);
       expect(result.success).toBe(false);
-      const ending = /[.!?…]$/.test(message) ? message : `${message}.`;
       expect(result.error).toContain(`${ending} The provider outcome was verified`);
       expect(result.error).not.toMatch(/[!?….]\. /u);
       expect(result.error).toContain('previous runtime is healthy');
@@ -907,6 +913,27 @@ describe('independent maintenance verdicts', () => {
     expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeDefined();
   });
 
+  it.each([false, true])('separates complete failed restart sentences in the batch result (partial success: %s)', async (partialSuccess) => {
+    const { apps, plans, options } = setup(['aaa', 'bbb', 'ccc', ...(partialSuccess ? ['ready'] : [])]);
+    const messages = new Map([['aaa', 'image pull failed.'], ['bbb', 'image pull failed:'], ['ccc', 'provider said "no."']]);
+    vi.mocked(providerFetch).mockImplementation(async (input) => {
+      const target = apps.find(entry => String(input).includes(entry.leaseUuid))!;
+      const message = messages.get(target.name);
+      histories.set(target.leaseUuid, message === undefined
+        ? history(target.leaseUuid, release(1, 'superseded'), release(2))
+        : history(target.leaseUuid, release(1), { ...release(2, 'failed', 'RestartFailed'), message }));
+      return accepted();
+    });
+    const result = await executeConfirmedRestartApp({ app_name: 'all', entries: plans }, chain, options);
+    const text = result.error ?? (result.data as { message: string }).message;
+    expect(result.success).toBe(partialSuccess);
+    expect(text).toContain('image pull failed.\nbbb: Restart failed');
+    expect(text).toContain('image pull failed.\nccc: Restart failed');
+    expect(text).toContain('provider said "no."');
+    expect(text).not.toMatch(/\.,|:\.|"\./u);
+    expect(providerFetch).toHaveBeenCalledTimes(apps.length);
+  });
+
   it.each(['succeeded', 'failed'] as const)('preserves a verified update %s during storage-read loss without caching away its pending manifest projection', async (outcome) => {
     const { apps: [app], plans: [plan], options, appRegistry } = setup();
     const storage = localStorage;
@@ -1236,10 +1263,11 @@ it.each(['single', 'batch'] as const)('caps and sanitizes raw provider baseline 
     ? await executeConfirmedRestartApp(plans[0], chain, options)
     : await executeConfirmedRestartApp({ app_name: 'all', entries: plans }, chain, { ...options, onProgress: progress });
   expect(result.success).toBe(false);
-  expect(result.error).not.toMatch(/[\p{Cf}\p{Cc}]/u);
+  expect(result.error?.replace(/\n/g, '')).not.toMatch(/[\p{Cf}\p{Cc}]/u);
   if (mode === 'single') expect([...result.error!].length).toBeLessThanOrEqual(257 + 'Restart could not be prepared: '.length);
   else {
     expect(result.error!.length).toBeLessThan(750);
+    expect(result.error?.split('\n')).toHaveLength(2);
     const rows = progress.mock.calls.at(-1)?.[0].batch as Array<{ detail?: string }>;
     expect(rows.every((row) => [...(row.detail ?? '')].length <= 257 + 'Restart could not be prepared: '.length)).toBe(true);
   }

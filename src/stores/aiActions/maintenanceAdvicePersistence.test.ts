@@ -381,7 +381,8 @@ describe('maintenance advice attached to saved conversation rows', { timeout: 20
     expect(await a.state.discardUnsubmittedMaintenanceOperation(unsent)).toBe(true);
 
     // Exercise the real confirmation and SDK request boundary for the ordinary
-    // successor. Only provider I/O and the readiness wait are controlled.
+    // successor. Provider I/O, token minting, and the readiness wait are controlled;
+    // the real SDK still constructs and submits the restart request.
     const plan = await b.tools.executeRestartApp({ app_name: app.name }, options());
     expect(plan.requiresConfirmation).toBe(true);
     expect(plan.pendingAction?.args).not.toHaveProperty('recoveryIntentKey');
@@ -397,14 +398,21 @@ describe('maintenance advice attached to saved conversation rows', { timeout: 20
     boundary.wait.mockResolvedValue({ state: 1, phase: 'ready' });
     const { createProviderAuth } = await import('@manifest-network/manifest-sdk/deploy');
     const { asAddress } = await import('@manifest-network/manifest-sdk');
+    const signArbitrary = vi.fn(async () => ({ pub_key: { type: 'tendermint/PubKeySecp256k1', value: 'cHVia2V5' }, signature: 'c2lnbmF0dXJl' }));
     const providerAuth = createProviderAuth({ getAddress: async () => asAddress(identity.address),
       getSigner: async () => { throw new Error('No chain signer needed'); },
-      signArbitrary: async () => ({ pub_key: { type: 'tendermint/PubKeySecp256k1', value: 'cHVia2V5' }, signature: 'c2lnbmF0dXJl' }),
+      signArbitrary,
     }, { chainId: identity.chainId });
+    const providerToken = vi.spyOn(providerAuth, 'providerToken').mockResolvedValue('test-provider-token');
     const signing = { providerAuth, authTokens: { getAuthToken: (leaseUuid: string) => providerAuth.providerToken({ address: identity.address, leaseUuid }) } } as unknown as SigningContext;
     const result = await b.tools.executeConfirmedRestartApp(plan.pendingAction!.args, {} as CosmosClientManager, { ...options(), signing });
     expect(result.success).toBe(true);
     expect(boundary.fetch).toHaveBeenCalledOnce();
+    expect(providerToken).toHaveBeenCalled();
+    expect(signArbitrary).not.toHaveBeenCalled();
+    const request = boundary.fetch.mock.calls[0][1] as RequestInit;
+    expect(new Headers(request.headers).get('Idempotency-Key')).toBe(plan.pendingAction!.args.idempotencyKey);
+    expect(new Headers(request.headers).get('Authorization')).toContain('test-provider-token');
     b.history.saveHistory(identity, [source, row('success', 'The ordinary restart succeeded.')], true);
     const c = await tab();
     expect(c.history.loadHistory(identity)[0].maintenanceRecoveryAdvice?.[0].idempotencyKey).toBe(unsent.idempotencyKey);

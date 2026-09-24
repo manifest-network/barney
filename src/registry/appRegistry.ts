@@ -41,7 +41,7 @@ export const AppEntrySchema = z.object({
   /** A lifecycle operation may have replaced the saved service addresses.
    * Keep the inventory for reference, but do not use it as current DNS evidence. */
   connectionStale: z.boolean().optional(),
-  /** A dispatched maintenance command needs a fresh runtime observation.
+  /** Maintenance or an unsettled provider response needs a fresh runtime observation.
    * Independent of connection freshness so healthy DNS evidence remains usable. */
   readinessStale: z.boolean().optional(),
   /** DERIVED from the two observations below; a passed-in `status` is only rule 5's fallback. */
@@ -553,12 +553,13 @@ function sameStructurally(field: keyof AppEntry, a: unknown, b: unknown): boolea
 }
 
 /**
- * Fields no subscriber renders — they reach the UI only via the derived `status`,
+ * Fields no subscriber renders — observations reach the UI via derived `status`,
+ * while readiness freshness is read by the recovery driver's own polling tick,
  * so a write touching just these persists without notifying. A DENY-list on
  * purpose: a field added later defaults to NOTIFYING, so silence must be opted
  * into by someone who has checked the subscribers.
  */
-const OBSERVATION_ONLY_FIELDS = new Set<string>(['chainState', 'provisionState']);
+const OBSERVATION_ONLY_FIELDS = new Set<string>(['chainState', 'provisionState', 'readinessStale']);
 
 /**
  * Update fields on an existing app (matched by leaseUuid). Returns updated entry or null.

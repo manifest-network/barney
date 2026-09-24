@@ -165,7 +165,8 @@ export function consumeMaintenanceRecoveryIntent(scope: RecoveryScope, expectedK
       storage.setItem(key, acknowledgement);
       volatileConsumed.delete(key);
     } catch (error) {
-      if (!(error instanceof DOMException) || error.name !== 'QuotaExceededError') return;
+      if (!(error instanceof DOMException)
+        || (error.name !== 'QuotaExceededError' && error.name !== 'NS_ERROR_DOM_QUOTA_REACHED')) return;
       // Removing this already-checked entry can free quota even when a browser
       // rejects a shrinking replacement. Never use this for unknown/read errors.
       storage.removeItem(key);

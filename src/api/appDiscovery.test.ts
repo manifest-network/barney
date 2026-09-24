@@ -276,12 +276,12 @@ describe('hydrateDiscoveredApp', () => {
     expect(hasPendingRecoveryAuthentication(signing.authTokens)).toBe(false);
   });
 
-  it('does not change a workload verdict or access details when both reads fail', async () => {
-    const previous = app({ provisionState: 'confirmed', url: 'https://saved.example.com' });
+  it.each(['confirmed', 'failed'] as const)('does not change the prior %s verdict, readiness scheduling, or access when both reads fail', async (provisionState) => {
+    const previous = app({ provisionState, url: 'https://saved.example.com' });
     vi.mocked(getLeaseStatus).mockRejectedValueOnce(new Error('offline'));
     vi.mocked(getLeaseConnectionInfo).mockRejectedValueOnce(new Error('offline'));
     await hydrateDiscoveredApp(address, previous, signing);
-    expect(registry.getAppByLease(address, LEASE_UUID)).toEqual({ ...previous, readinessStale: true });
+    expect(registry.getAppByLease(address, LEASE_UUID)).toEqual(previous);
   });
 
   it('keeps a completed status observation when the connection endpoint never resolves', async () => {

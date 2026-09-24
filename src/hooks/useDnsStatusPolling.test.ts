@@ -42,7 +42,8 @@ import { useVisibilityPolling } from './useVisibilityPolling';
 import { resolveDnsViaDoh, probeHttps, computeStatus } from '../utils/customDomainStatus';
 import { resolveExpectedCnameTarget } from '../utils/connection';
 import { logError } from '../utils/errors';
-import type { AppEntry } from '../registry/appRegistry';
+import { addApp, updateApp, type AppEntry } from '../registry/appRegistry';
+import { useRegistryApps } from './useRegistryApps';
 
 function makeApp(overrides: Partial<AppEntry> = {}): AppEntry {
   return {
@@ -282,6 +283,38 @@ describe('useDnsStatusPolling', () => {
 
     expect(abortSpy).not.toHaveBeenCalled();
     abortSpy.mockRestore();
+  });
+
+  it('keeps an in-flight DNS probe alive when only registry readiness freshness changes', async () => {
+    const address = 'manifest1readiness-dns';
+    localStorage.clear();
+    const app = makeApp({ chainState: 'active', provisionState: 'confirmed' });
+    addApp(address, app);
+    let pollFn: () => Promise<unknown> = async () => undefined;
+    vi.mocked(useVisibilityPolling).mockImplementation((cb) => { pollFn = cb; });
+    let finishDns!: (value: { result: 'ok' }) => void;
+    vi.mocked(resolveDnsViaDoh).mockReturnValueOnce(new Promise((resolve) => { finishDns = resolve; }));
+    vi.mocked(probeHttps).mockResolvedValue({ result: 'ok' } as any);
+    vi.mocked(computeStatus).mockReturnValue({ kind: 'active' } as any);
+    const RegistryWrapper = () => {
+      useDnsStatusPolling(useRegistryApps(address));
+      return null;
+    };
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    mounted = { container, root: createRoot(container) };
+    flushSync(() => { mounted!.root.render(createElement(RegistryWrapper)); });
+    const polling = pollFn();
+    const signal = vi.mocked(resolveDnsViaDoh).mock.lastCall![1];
+
+    for (const readinessStale of [true, false]) {
+      flushSync(() => { updateApp(address, app.leaseUuid, { readinessStale }); });
+      expect(signal?.aborted).toBe(false);
+    }
+    finishDns({ result: 'ok' });
+    await polling;
+    expect(setDnsStatuses.mock.lastCall![0].get('lease-1::app.example.com')).toMatchObject({ kind: 'active' });
+    expect(resolveDnsViaDoh).toHaveBeenCalledOnce();
   });
 
   // Regression: prior to this fix, the cleanup effect at useDnsStatusPolling.ts:99

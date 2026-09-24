@@ -132,6 +132,24 @@ describe('maintenance batch uncertainty', () => {
     expect(result.error).toBe('No restarts completed — Failed: blocked: release v7 is deploying. Cancelled: cancelled.');
   });
 
+  it.each([8, 9])('keeps newline-separated diagnostic rows within the serialized budget at %i near-limit entries', (count) => {
+    const detail = 'Provider said "no." ' + 'x'.repeat(980) + '.';
+    const failed = Array.from({ length: count - 1 }, (_, index) => `failed-${index}`);
+    const options = { succeeded: [{ name: 'ready' }], failed, cancelled: ['cancelled'],
+      batchProgress: [...failed, 'cancelled'].map(name => ({ name, phase: 'failed' as const, detail })),
+      operation: 'restart' as const, dataKey: 'restarted', verb: 'Restarted', failedNoun: 'restarts' };
+    const result = summarizeBatchResult(options);
+    const without = summarizeBatchResult({ ...options, batchProgress: options.batchProgress.map(({ name, phase }) => ({ name, phase })) });
+    const message = (result.data as { message: string }).message;
+    expect(message).toMatch(/\nfailed-1: Provider said "no\."/u);
+    expect(message.includes('Details were shortened')).toBe(count === 9);
+    expect(message).not.toContain('., failed-');
+    for (const indentation of [undefined, 2]) {
+      expect(JSON.stringify(result, null, indentation).length - JSON.stringify(without, null, indentation).length)
+        .toBeLessThanOrEqual(AI_BATCH_DIAGNOSTIC_CHARS);
+    }
+  });
+
   it.each([false, true])('includes a cancelled replay verdict in the tool result (partial success: %s)', async (partialSuccess) => {
     const detail = 'Replay cancelled before any new request. The earlier restart remains verified as succeeded.';
     const batch = await runBatchWithConcurrency({

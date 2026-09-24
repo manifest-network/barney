@@ -188,7 +188,9 @@ export async function hydrateDiscoveredApp(
       ? response.connection : undefined;
     const patch: Partial<AppEntry> = {
       ...refreshAppConnection(status, connection, snapshot).patch,
-      ...provisionObservationPatch(status && isTerminalLeaseState(status.state) ? 'failed' : status?.provision_status, snapshot),
+      // A rejected read cannot reopen a completed readiness check. Keep missing
+      // provision_status meaningful only when the provider response arrived.
+      ...(status && provisionObservationPatch(isTerminalLeaseState(status.state) ? 'failed' : status.provision_status, snapshot)),
     };
     const updated = Object.keys(patch).length > 0
       ? registry.updateApp(address, snapshot.leaseUuid, patch)

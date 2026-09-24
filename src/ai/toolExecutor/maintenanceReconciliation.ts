@@ -3,6 +3,7 @@ import type { FredLeaseReleases } from '@manifest-network/manifest-sdk/deploy';
 import { getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import { sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { runtimeConfig } from '../../config/runtimeConfig';
+import { finishDisplaySentence } from '../../utils/displaySentence';
 import { maintenanceReadinessPatch } from './maintenanceReadiness';
 import { maintenanceRegistryPatch } from './maintenanceRegistryPatch';
 import { recoverReleaseManifest } from './maintenancePayload';
@@ -17,11 +18,6 @@ export interface MaintenanceReconciliation extends Omit<MaintenanceOutcome, 'run
   /** Omitted when this read did not observe runtime readiness. */
   readonly runtimeReady?: boolean;
   readonly operation?: 'restart' | 'update';
-}
-
-function endSentence(text: string): string {
-  const trimmed = text.trim();
-  return trimmed && !/[.!?…]$/.test(trimmed) ? `${trimmed}.` : trimmed;
 }
 
 /** Observe a retained command without needing its raw update payload or issuing a POST. */
@@ -110,7 +106,7 @@ export async function reconcilePendingMaintenance(
           name: app.name, url, status: 'running',
         } } }
         : { outcome: 'failed', result: { success: false,
-          error: endSentence(`${verb} failed${verdict.runtimeReady ? '; the previous runtime is healthy' : ''}. ${verdict.detail ?? ''}`),
+          error: finishDisplaySentence(`${verb} failed${verdict.runtimeReady ? '; the previous runtime is healthy' : ''}. ${verdict.detail ?? ''}`),
         } }, completionEpoch);
     },
   }).catch((error: unknown) => {
@@ -126,5 +122,5 @@ export async function reconcilePendingMaintenance(
   }
   const { runtimeReady, ...outcome } = verdict;
   return { operation: command.operation, ...outcome, ...(provision ? { runtimeReady } : observedReadiness),
-    ...(cleanupDetail && { detail: [outcome.detail ? endSentence(outcome.detail) : '', cleanupDetail].filter(Boolean).join(' ') }) };
+    ...(cleanupDetail && { detail: [outcome.detail ? finishDisplaySentence(outcome.detail) : '', cleanupDetail].filter(Boolean).join(' ') }) };
 }

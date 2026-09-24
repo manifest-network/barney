@@ -195,11 +195,11 @@ describe('tab-local maintenance recovery intent', () => {
     expect(reloaded.getMaintenanceRecoveryIntent(command)).toBeUndefined();
   });
 
-  it('retries a compact durable acknowledgement after quota rejects an in-place replacement', async () => {
+  it.each(['QuotaExceededError', 'NS_ERROR_DOM_QUOTA_REACHED'])('retries a compact durable acknowledgement after %s rejects an in-place replacement', async (quotaName) => {
     const state = await import('./maintenanceRecoveryIntent');
     state.rememberMaintenanceRecoveryIntent(command);
     storage.setItem.mockImplementation((key, value) => {
-      if (storage.entries.has(key)) throw new DOMException('Quota', 'QuotaExceededError');
+      if (storage.entries.has(key)) throw new DOMException('Quota', quotaName);
       storage.entries.set(key, value);
     });
     state.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey);
@@ -211,10 +211,10 @@ describe('tab-local maintenance recovery intent', () => {
     expect(reloaded.getMaintenanceRecoveryIntent(command)).toBeUndefined();
   });
 
-  it('releases only the acknowledged live guard when quota rejects all writes, then conservatively restores a surviving source after reload', async () => {
+  it.each(['QuotaExceededError', 'NS_ERROR_DOM_QUOTA_REACHED'])('releases only the acknowledged live guard after %s rejects all writes, then conservatively restores a surviving source after reload', async (quotaName) => {
     const state = await import('./maintenanceRecoveryIntent');
     state.rememberMaintenanceRecoveryIntent(command);
-    storage.setItem.mockImplementation(() => { throw new DOMException('Quota', 'QuotaExceededError'); });
+    storage.setItem.mockImplementation(() => { throw new DOMException('Quota', quotaName); });
     state.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey);
     expect(storage.length).toBe(0);
     for (let index = 0; index < 3; index++) {
@@ -234,12 +234,21 @@ describe('tab-local maintenance recovery intent', () => {
     expect(reloaded.getMaintenanceRecoveryIntent(command)).toEqual(intent);
   });
 
-  it('keeps the guard if quota fallback cannot remove the matching saved entry', async () => {
+  it.each(['QuotaExceededError', 'NS_ERROR_DOM_QUOTA_REACHED'])('keeps the guard if %s fallback cannot remove the matching saved entry', async (quotaName) => {
     const state = await import('./maintenanceRecoveryIntent');
     state.rememberMaintenanceRecoveryIntent(command);
-    storage.setItem.mockImplementation(() => { throw new DOMException('Quota', 'QuotaExceededError'); });
+    storage.setItem.mockImplementation(() => { throw new DOMException('Quota', quotaName); });
     storage.removeItem.mockImplementation(() => { throw new Error('Removal denied'); });
     state.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey);
+    expect(state.getMaintenanceRecoveryIntent(command)).toEqual(intent);
+  });
+
+  it.each(['SecurityError', 'NS_ERROR_FAILURE'])('does not remove the guard for non-quota DOMException %s', async (name) => {
+    const state = await import('./maintenanceRecoveryIntent');
+    state.rememberMaintenanceRecoveryIntent(command);
+    storage.setItem.mockImplementation(() => { throw new DOMException('Storage unavailable', name); });
+    state.consumeMaintenanceRecoveryIntent(command, command.idempotencyKey);
+    expect(storage.removeItem).not.toHaveBeenCalled();
     expect(state.getMaintenanceRecoveryIntent(command)).toEqual(intent);
   });
 

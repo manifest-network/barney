@@ -21,6 +21,7 @@ import { DENOMS } from '../../api/config';
 import { fromBaseUnits, toBaseUnits } from '../../utils/format';
 import { logError, normalizeErrorPunctuation } from '../../utils/errors';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
+import { finishDisplaySentence } from '../../utils/displaySentence';
 import { isAbortError, withTimeout } from '../../api/utils';
 import { AI_BATCH_GUIDANCE_CHARS, AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS, FRED_POLL_INTERVAL_MS } from '../../config/constants';
 import { connectionPatch, deriveUrlFromConnection, FAILURE_DETAIL_CHARS, failureText, resolveAppEndpoint } from './helpers';
@@ -2167,7 +2168,7 @@ export async function executeConfirmedUpdateApp(
       expectPending: plan._maintenanceRetry || plan.expectPending,
     }, { ...options, clientManager })).result;
     if (!plan._maintenanceAttachmentUnused) return result;
-    if (!result.success) return { ...result, error: `${result.error ? `${result.error}${/[.!?…]$/.test(result.error) ? '' : '.'} ` : ''}The attached file was not used.` };
+    if (!result.success) return { ...result, error: `${result.error ? `${finishDisplaySentence(result.error)} ` : ''}The attached file was not used.` };
     const data = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {};
     return { success: true, data: { ...data, attachmentUnused: true,
       message: `${typeof data.message === 'string' ? data.message : ''} ${MAINTENANCE_ATTACHMENT_UNUSED_MESSAGE}`.trim() } };

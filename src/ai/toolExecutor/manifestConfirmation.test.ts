@@ -398,8 +398,12 @@ it.each(['uncertain', 'rejected'] as const)('does not claim a %s recovery verifi
   expect(result.error).not.toContain('this confirms');
 });
 
-it.each(['is the image private?', 'pull failed!', 'pull failed…', 'pull failed.', 'pull failed'])(
-  'preserves terminal punctuation for a refused recovery ending in %j', async (error) => {
+it.each([
+  ['is the image private?', 'is the image private?'], ['pull failed!', 'pull failed!'],
+  ['pull failed…', 'pull failed…'], ['pull failed.', 'pull failed.'], ['pull failed', 'pull failed.'],
+  ['pull failed:', 'pull failed.'], ['provider said "no."', 'provider said "no."'],
+])(
+  'preserves terminal punctuation for a refused recovery ending in %j', async (error, ending) => {
     const app: AppEntry = { name: 'web', leaseUuid: crypto.randomUUID(), providerUrl: DEV,
       providerUuid: 'provider', size: 'small', createdAt: 0, status: 'running', chainState: 'active', provisionState: 'confirmed', manifest: '{"image":"nginx"}' };
     const options = optionsFor(DEV, [app]);
@@ -411,7 +415,6 @@ it.each(['is the image private?', 'pull failed!', 'pull failed…', 'pull failed
     expect(recovery.pendingAction?.args._maintenanceAttachmentUnused).toBe(true);
     vi.mocked(providerFetch).mockResolvedValueOnce(new Response(JSON.stringify({ code: 400, error }), { status: 400 }));
     const result = await executeConfirmedUpdateApp(recovery.pendingAction!.args, chain, options);
-    const ending = /[.!?…]$/.test(error) ? error : `${error}.`;
     expect(result.error).toBe(`Update failed: ${ending} The attached file was not used.`);
     expect(providerFetch).toHaveBeenCalledTimes(2);
   },

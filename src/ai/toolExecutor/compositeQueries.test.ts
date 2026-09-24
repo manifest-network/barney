@@ -1937,11 +1937,12 @@ describe('F4 — app_status records fred’s provision verdict', () => {
 
     const result = await run(registry);
 
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active', readinessStale: true });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active' });
     const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
     expect(stored?.chainState).toBe('active');
     expect(stored?.provisionState).toBe('failed');
     expect(stored?.status).toBe('failed');
+    expect(stored?.readinessStale).toBeUndefined();
     expect((result.data as any).status).toBe('failed');
   });
 

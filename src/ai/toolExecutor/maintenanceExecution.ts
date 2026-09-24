@@ -8,6 +8,7 @@ import { sanitizeManifestForStorage } from '../../registry/appRegistry';
 import { isAbortError } from '../../api/utils';
 import { createProgressReporter } from '../progress';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
+import { finishDisplaySentence } from '../../utils/displaySentence';
 import { buildBarneyCtx } from './capabilityCtx';
 import { connectionPatch, FAILURE_DETAIL_CHARS, resolveAppEndpoint } from './helpers';
 import { resolveAppUrl } from './deployUrl';
@@ -44,7 +45,7 @@ import type { ToolExecutorOptions } from './types';
 function withCleanupWarning(value: MaintenanceResult, warning = MAINTENANCE_CLEANUP_MESSAGE): MaintenanceResult {
   const failure = value.result.error ?? 'Maintenance failed.';
   if (!value.result.success) return { ...value, result: { success: false,
-    error: `${failure}${/[.!?…]$/.test(failure) ? '' : '.'} ${warning}` } };
+    error: `${finishDisplaySentence(failure)} ${warning}` } };
   const data = value.result.data && typeof value.result.data === 'object' ? value.result.data as Record<string, unknown> : {};
   return { ...value, result: { success: true, data: { ...data, localCleanupPending: true,
     message: `${typeof data.message === 'string' ? data.message : 'Maintenance succeeded.'} ${warning}` } } };
@@ -312,7 +313,7 @@ export async function executeMaintenance(
       patch.manifest = verdict.outcome === 'succeeded' ? sanitizeManifestForStorage(command.manifest!) : command.previousManifest;
     }
     const failureDetail = `${verb} failed${verdict.runtimeReady ? '; the previous runtime is healthy' : ''}. ${verdict.detail ?? ''}`.trim();
-    const failure = `${failureDetail}${/[.!?…]$/.test(failureDetail) ? '' : '.'}`;
+    const failure = finishDisplaySentence(failureDetail);
     const result: MaintenanceResult | undefined = !settled ? undefined : verdict.outcome === 'failed'
       ? { outcome: 'failed', result: { success: false, error: failure } }
       : { outcome: 'succeeded', url, result: { success: true, data: {
@@ -392,7 +393,7 @@ export async function executeMaintenance(
       }
       if (retirementFailed) await markMaintenanceRecoveryAdvised(command, options.onMaintenanceRecoveryAdvice);
       const safeRefusal = sanitizeForDisplay(refusal, 512);
-      const detail = `${verb} failed: ${safeRefusal}${/[.!?…]$/.test(safeRefusal) ? '' : '.'}`;
+      const detail = finishDisplaySentence(`${verb} failed: ${safeRefusal}`);
       const result: MaintenanceResult = { outcome: 'failed', result: { success: false, error: detail } };
       try {
         options.assertAuthorization?.();

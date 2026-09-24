@@ -188,7 +188,7 @@ describe('useAppRecovery', () => {
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'failed', readinessStale: false });
   });
 
-  it.each(['provisioning', 'restarting', 'updating', 'unknown'].flatMap(provision_status =>
+  it.each(['provisioning', 'restarting', 'updating', 'unknown', undefined, ''].flatMap(provision_status =>
     (['failed', undefined] as const).map(prior => ({ provision_status, prior }))))('follows app_status $provision_status from prior $prior to background readiness', async ({ provision_status, prior }) => {
     const app = addApp({ provisionState: prior, url: 'https://app.example.com',
       connection: { host: '', fqdn: 'app.example.com' }, connectionStale: false });
@@ -200,9 +200,11 @@ describe('useAppRecovery', () => {
     const result = await executeAppStatus({ app_name: app.name }, {
       address, clientManager: {} as CosmosClientManager, appRegistry: registry, signing: store.getState().signing!, tiers: [],
     });
-    const expected = { provisionState: prior ?? 'unconfirmed', status: prior ? 'failed' : 'deploying', readinessStale: true };
-    expect(result.data).toMatchObject({ status: expected.status, provision_status });
+    const expectedState = prior ?? (provision_status ? 'unconfirmed' : undefined);
+    const expected = { status: prior ? 'failed' : provision_status ? 'deploying' : 'running', readinessStale: true };
+    expect(result.data).toMatchObject({ status: expected.status, provision_status: provision_status || undefined });
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject(expected);
+    expect(registry.getAppByLease(address, LEASE_UUID)?.provisionState).toBe(expectedState);
 
     // The first background observation agrees with the foreground badge and
     // keeps polling even though fresh connection data removed its stale flag.
@@ -210,11 +212,36 @@ describe('useAppRecovery', () => {
     await render();
     expect(getLeaseStatus).toHaveBeenCalledTimes(1);
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject(expected);
+    expect(registry.getAppByLease(address, LEASE_UUID)?.provisionState).toBe(expectedState);
     await advance(AUTO_REFRESH_INTERVAL_MS);
     expect(getLeaseStatus).toHaveBeenCalledTimes(2);
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState: 'confirmed', status: 'running', readinessStale: false });
     await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS);
     expect(getLeaseStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['confirmed', 'failed'] as const)('does not reopen finished %s recovery after an outage status check or remount', async (provisionState) => {
+    const app = addApp({ provisionState, readinessStale: false, connectionStale: false,
+      url: 'https://app.example.com', connection: { host: '', fqdn: 'app.example.com' } });
+    vi.mocked(appStatus).mockResolvedValue({ lease_uuid: app.leaseUuid,
+      chainState: { state: LeaseState.LEASE_STATE_ACTIVE, providerUuid: PROVIDER_UUID, createdAt: '', closedAt: undefined, items: [] },
+    });
+    vi.mocked(getLeaseStatus).mockRejectedValue(new Error('Provider unavailable'));
+    vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Provider unavailable'));
+    await render();
+    const result = await executeAppStatus({ app_name: app.name }, {
+      address, clientManager: {} as CosmosClientManager, appRegistry: registry, signing: store.getState().signing!, tiers: [],
+    });
+    expect(result.data).toMatchObject({ workloadStatusUnavailable: true });
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ provisionState, readinessStale: false });
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    act(() => root.unmount());
+    root = createRoot(container);
+    await render();
+    await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
+    expect(getLeaseStatus).not.toHaveBeenCalled();
+    expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
+    expect(getAuthToken).not.toHaveBeenCalled();
   });
 
   it.each([150, 300, 600].flatMap(failedAfter => [false, true].map(reload => ({ failedAfter, reload }))))('observes failure after $failedAfter seconds despite foreground connection refresh and reload=$reload', async ({ failedAfter, reload }) => {
@@ -367,9 +394,9 @@ describe('useAppRecovery', () => {
     });
     vi.mocked(getLeaseStatus).mockRejectedValue(new Error('Provider unavailable'));
     vi.mocked(getLeaseConnectionInfo).mockRejectedValue(new Error('Provider unavailable'));
-    // A missing runtime observation schedules the bounded readiness budget,
-    // independently of whether this browser already knows the endpoints.
-    const maxAttempts = APP_CONNECTION_RECOVERY_MAX_ATTEMPTS;
+    // No provider response means no new readiness flag: only existing stale
+    // saved inventory qualifies for the extended connection-recovery budget.
+    const maxAttempts = saved ? APP_CONNECTION_RECOVERY_MAX_ATTEMPTS : APP_RECOVERY_MAX_ATTEMPTS;
     await render();
     await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
     expect(getLeaseStatus).toHaveBeenCalledTimes(maxAttempts);
@@ -378,6 +405,7 @@ describe('useAppRecovery', () => {
     await advance(APP_CONNECTION_RECOVERY_INTERVAL_MS * APP_CONNECTION_RECOVERY_MAX_ATTEMPTS);
     expect(getAuthToken).toHaveBeenCalledTimes(maxAttempts * 2);
     expect(registry.getAppByLease(address, LEASE_UUID)?.provisionState).toBe('confirmed');
+    expect(registry.getAppByLease(address, LEASE_UUID)?.readinessStale).toBeUndefined();
   });
 
   it('caps newly confirmed stale-inventory recovery without resetting used attempts', async () => {

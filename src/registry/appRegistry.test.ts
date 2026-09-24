@@ -803,6 +803,38 @@ describe('appRegistry', () => {
       } finally { unsub(); }
     });
 
+    it.each(['confirmed', 'failed'] as const)('persists readiness freshness without notifying for a %s app', (provisionState) => {
+      const app = makeApp({ chainState: 'active', provisionState });
+      addApp(ADDR_A, app);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      const setItem = spyOnSetItem();
+      try {
+        for (const readinessStale of [true, false]) {
+          updateApp(ADDR_A, app.leaseUuid, { readinessStale });
+          expect(getApp(ADDR_A, app.name)?.readinessStale).toBe(readinessStale);
+          expect(getApp(ADDR_A, app.name)?.status).toBe(provisionState === 'confirmed' ? 'running' : 'failed');
+        }
+        expect(setItem).toHaveBeenCalledTimes(2);
+        expect(listener).not.toHaveBeenCalled();
+        updateApp(ADDR_A, app.leaseUuid, { readinessStale: false });
+        expect(setItem).toHaveBeenCalledTimes(2);
+      } finally { setItem.mockRestore(); unsub(); }
+    });
+
+    it('notifies when a readiness refresh accompanies a new workload verdict', () => {
+      const app = makeApp({ chainState: 'active', provisionState: 'failed', readinessStale: true });
+      addApp(ADDR_A, app);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      try {
+        updateApp(ADDR_A, app.leaseUuid, { provisionState: 'confirmed', readinessStale: false });
+        expect(getApp(ADDR_A, app.name)).toMatchObject({ status: 'running', readinessStale: false });
+        expect(listener).toHaveBeenCalledOnce();
+        expect(listener).toHaveBeenCalledWith(ADDR_A);
+      } finally { unsub(); }
+    });
+
     it('re-asserting an observation already stored writes nothing at all', () => {
       // The steady-state cost of re-observation on a 15s timer: after the
       // first write, every subsequent tick is free — no JSON.stringify, no
@@ -1121,7 +1153,7 @@ describe('appRegistry', () => {
       ['url', { url: 'https://x.example.com' }],
     ] as const)('notifies on a change to %s (outside the observation deny-list)', (_label, updates) => {
       // `url` is deliberately included: no subscriber reads it TODAY, but the
-      // predicate is a deny-list of the two observation fields, so anything
+      // predicate is a deny-list of observation fields, so anything
       // else defaults to notifying. Locks that default in.
       const app = makeApp({ status: 'running', chainState: 'active' });
       addApp(ADDR_A, app);
