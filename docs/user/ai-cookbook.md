@@ -59,9 +59,11 @@ Update wordpress to use a new theme  (File attached: stack.json)
 
 **What it does.** Restarts the container(s) without changing the manifest.
 
-On dev, **Outcome unknown** means the restart or update may still execute. The
-error alert's **Check status** button asks Barney to read the affected apps' status
-and releases before further maintenance. Acknowledged commands can settle from those
+On dev, **Outcome unknown** means the restart or update may still execute. For a
+single app, the error alert's **Check status** button asks Barney to read its status
+and releases before further maintenance. For a batch containing unknown outcomes,
+the live progress card and result summary identify them; that result has no error-alert button.
+Ask Barney to check those apps' status and releases. Acknowledged commands can settle from those
 checks even after a reload. Retrying an unresolved command reuses its original
 key and exact manifest; after reloading, Barney can recover matching bytes from
 provider history or verify a reattached file merged with saved defaults. A mismatched
@@ -295,7 +297,7 @@ Show staking validators
 - **Local fast-path for example apps.** Any prompt beginning with `deploy` is checked locally: the text after `deploy` is split on `,`/`and`/`&` and each name is matched against the example-app catalog. If two or more names match, Barney batch-deploys the matched subset directly (unmatched names are silently dropped, not sent to the model); if exactly one matches, it deploys that one. Only when NO name matches an example app is the whole prompt sent to the model. To force the AI path, phrase the request differently ("Please deploy redis and postgres for me").
 - **For bulk stop/restart**, use comma-separated lists or `all`. The AI will fall back to `list_apps` first if you ask by pattern (e.g. "stop all tetris apps").
 - **The `/help` slash command** prints the in-app cheat sheet.
-- **Saved batch failures** remain visible after reloading chat history. Very long alerts keep the beginning and end, including closing guidance, with an explicit notice for omitted text. Older saved errors are shown as short summaries. Refresh older Barney tabs to read the newer saved diagnostics.
+- **Saved batch failures** remain visible after reloading chat history. Very long alerts keep the beginning and end, including closing guidance, with an explicit notice for omitted text. Older saved errors are shown as short summaries. Refresh older Barney tabs before continuing chat: an older tab can rewrite saved diagnostics in its older format. Refreshing cannot restore alert formatting already lost in that rewrite.
 - **The `/clear` slash command** wipes the active wallet/network's chat history (other wallets and on-chain state are unaffected).
 - **If a tool fails transiently**, the underlying network calls retry automatically with exponential backoff (`AI_MAX_RETRIES`, default 3 attempts on top of the initial call) before the failure is surfaced. If the tool still returns a transient error, the AI is instructed to retry the call once more before giving up. The next message you see is a plain-language error and a suggested next step.
 

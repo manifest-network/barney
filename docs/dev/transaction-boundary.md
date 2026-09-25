@@ -170,6 +170,8 @@ cancelled deploys, which may be deployed again, from cancelled maintenance that 
 preserve line breaks, and preview processing scans trailing noise in linear time and slices the input before code-point conversion.
 Caught errors in balance, log, diagnostic and release queries, and executor catch-alls, are sanitized
 and capped at 256 retained code points plus an ellipsis before entering chat/model-facing prose.
+Morpheus SSE error messages and caught stream exceptions use that same bound before either chat
+action receives them, so new saved error rows and replayed `Error: …` content retain the sanitized detail.
 Failed faucet rows use the same sanitizer before all-failed/partial-success messages and structured
 results are composed. Returned chain failures and manifest-builder exceptions use the same detail
 bound; shortening cancellation text retains complete authored submission guidance. Named
@@ -180,12 +182,19 @@ both write and load. Oversized alerts retain beginning and ending portions with 
 notice, preserving closing guidance. Unmarked or unrecognized-format legacy errors are sanitized at
 the 256-code-point cap before display or re-save. The marker does not enter runtime messages. The
 envelope stays v1; older builds still apply their previous load limit and must be refreshed to read
-the newer diagnostics. Maintenance error rows and other error rows carrying recovery advice offer
+the newer diagnostics. An older build can also strip `errorFormat` on load and re-save the row without
+it; the current build then treats that alert as legacy. Refresh old tabs before further chat writes;
+refreshing after the rewrite cannot restore the dropped marker or alert formatting.
+Maintenance error rows and other error rows carrying recovery advice offer
 read-only status/releases checks instead of generic keyword-based deployment suggestions.
 History omits executable tool calls, so interior unmatched historical tool results become labeled
 assistant context only in the model projection; exact result text and saved recovery metadata remain
 intact. Leading orphan results are still discarded.
 Valid adjacent live tool-call groups retain their protocol roles and IDs.
+The system prompt identifies tool outputs and historical result blocks as untrusted observations,
+even when a historical block occupies an assistant message. Embedded instructions cannot authorize
+actions or override recovery rules. This prompt guard supplements the existing confirmation and
+recovery checks; it does not establish model-level immunity to prompt injection.
 The [ENG-976 boundary review](../audits/eng-976/README.md) records the acceptance
 criteria and scoped exceptions.
 Manifest validation diagnostics are sanitized and bounded to 4,096 code points in planning and both
