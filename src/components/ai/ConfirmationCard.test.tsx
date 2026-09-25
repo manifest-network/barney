@@ -62,6 +62,91 @@ function makeAction(overrides?: Partial<PendingAction>): PendingAction {
   };
 }
 
+describe('ConfirmationCard exact manifest payloads', () => {
+  const single = '{\n "env" : { "TOKEN" : "saved-secret" }, "ports": {"80/tcp": {}}, "image" : "nginx:1.27", "tmpfs": []\n}\n';
+  const stack = '{\n "services" : { "web": { "env": {"TOKEN":"saved-secret"}, "ports": {"80/tcp": {}}, "image": "nginx:1.27" }, "db": {"image":"redis:8", "env":{}} }\n}\n';
+
+  function renderCard(toolName: string, manifest: string, retry = false) {
+    const action = makeAction({
+      toolName,
+      args: { app_name: 'my-app', _generatedManifest: manifest, ...(retry ? { _maintenanceRetry: true } : {}) },
+    });
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const onConfirm = vi.fn();
+    const render = (next: PendingAction) => flushSync(() => {
+      root.render(createElement(ConfirmationCard, { action: next, onConfirm, onCancel: vi.fn() }));
+    });
+    render(action);
+    return {
+      action, container, onConfirm, render,
+      confirm: () => flushSync(() => (container.querySelector('button.btn-success') as HTMLButtonElement).click()),
+      cleanup: () => { flushSync(() => root.unmount()); container.remove(); },
+    };
+  }
+
+  it.each([
+    ['deploy_app', 'single', single], ['deploy_app', 'stack', stack],
+    ['update_app', 'single', single], ['update_app', 'stack', stack],
+  ])('preserves untouched %s %s bytes instead of serializing the editor', (toolName, _format, manifest) => {
+    const card = renderCard(toolName, manifest);
+    try {
+      card.confirm();
+      expect(card.onConfirm).toHaveBeenCalledTimes(1);
+      const override = card.onConfirm.mock.calls[0][0];
+      expect(override?.editedManifestJson).toBeUndefined();
+      expect(card.action.args._generatedManifest).toBe(manifest);
+    } finally {
+      card.cleanup();
+    }
+  });
+
+  it.each([['single', single], ['stack', stack]])('still submits an intentional %s manifest edit', (_format, manifest) => {
+    const card = renderCard('update_app', manifest);
+    try {
+      flushSync(() => (card.container.querySelector('button[aria-label="Remove port 80/tcp"]') as HTMLButtonElement).click());
+      card.confirm();
+      const edited = JSON.parse(card.onConfirm.mock.calls[0][0].editedManifestJson);
+      expect((edited.services?.web ?? edited).ports).toBeUndefined();
+      expect((edited.services?.web ?? edited).image).toBe('nginx:1.27');
+    } finally {
+      card.cleanup();
+    }
+  });
+
+  it.each([['single', single], ['stack', stack]])('shows a read-only %s recovery summary and supplies no payload override', (_format, manifest) => {
+    const card = renderCard('update_app', manifest, true);
+    try {
+      expect(card.container.querySelector('input, textarea, select')).toBeNull();
+      expect(card.container.querySelector('[data-testid="stack-manifest-editor"]')).toBeNull();
+      expect(card.container.querySelector('[data-testid="maintenance-manifest-summary"]')?.textContent).toContain('nginx:1.27');
+      expect(card.container.textContent).toContain('80/tcp');
+      expect(card.container.textContent).toContain('TOKEN=••••');
+      expect(card.container.textContent).not.toContain('saved-secret');
+      card.confirm();
+      expect(card.onConfirm).toHaveBeenCalledExactlyOnceWith(undefined);
+      expect(card.action.args._generatedManifest).toBe(manifest);
+    } finally {
+      card.cleanup();
+    }
+  });
+
+  it('discards stale editor overrides if the same card becomes a recovery confirmation', () => {
+    const card = renderCard('update_app', single);
+    try {
+      flushSync(() => (card.container.querySelector('button[aria-label="Remove port 80/tcp"]') as HTMLButtonElement).click());
+      card.render({ ...card.action, args: { ...card.action.args, _maintenanceRetry: true } });
+      expect(card.container.querySelector('input, textarea, select')).toBeNull();
+      expect(card.container.textContent).toContain('80/tcp');
+      card.confirm();
+      expect(card.onConfirm).toHaveBeenCalledExactlyOnceWith(undefined);
+    } finally {
+      card.cleanup();
+    }
+  });
+});
+
 describe('ConfirmationCard', () => {
   it('can be instantiated with non-deploy action', () => {
     const onConfirm = vi.fn();

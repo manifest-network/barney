@@ -15,6 +15,7 @@ import type { ToolExecutorOptions } from './types';
 import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
+import { FAILURE_DETAIL_CHARS } from './helpers';
 
 // Mock external modules
 vi.mock('../../api/appDiscovery', () => ({
@@ -539,6 +540,19 @@ describe('executeAppStatus', () => {
       vi.mocked(getReadClient).mockResolvedValue({ query: {} } as any);
     });
 
+    it.each(['restarting', 'updating', 'provisioning'])('keeps the previous failure badge while Fred reports %s', async (provision_status) => {
+      const app = makeApp({ status: 'failed', chainState: 'active', provisionState: 'failed' });
+      const registry = makeRegistry([app]);
+      vi.mocked(appStatus).mockResolvedValue({
+        lease_uuid: app.leaseUuid,
+        chainState: { state: 2, providerUuid: 'p1', createdAt: '', closedAt: undefined, items: [] },
+        fredStatus: { state: 2, provision_status },
+      } as Awaited<ReturnType<typeof appStatus>>);
+      const result = await executeAppStatus({ app_name: app.name }, makeOptions({ appRegistry: registry, signing: mockSigning }));
+      expect(result.success).toBe(true);
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ status: 'failed', provisionState: 'failed', readinessStale: true });
+    });
+
     it('reconciles to running and refreshes connection from appStatus', async () => {
       const app = makeApp({ status: 'deploying' });
       const registry = makeRegistry([app]);
@@ -660,6 +674,15 @@ describe('executeGetBalance', () => {
   it('returns error without wallet', async () => {
     const result = await executeGetBalance(makeOptions({ address: undefined }));
     expect(result.success).toBe(false);
+  });
+
+  it('bounds a multiline balance transport error without losing its authored prefix', async () => {
+    mockGetBalance.mockRejectedValueOnce(new Error(`Upstream\n\u0000\u202e unavailable ${'x'.repeat(1_000)}`));
+    const result = await executeGetBalance(makeOptions());
+    const prefix = 'Failed to fetch balance: ';
+    expect(result.error).toContain(`${prefix}Upstream unavailable `);
+    expect(result.error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+    expect(Array.from(result.error!.slice(prefix.length))).toHaveLength(FAILURE_DETAIL_CHARS + 1);
   });
 
   it('returns error without clientManager', async () => {
@@ -1701,6 +1724,27 @@ describe('executeRequestFaucet', () => {
     expect(data.message).toContain('cooldown active');
   });
 
+  it.each([false, true])('uses a bounded fallback for omitted failure detail (mixed: %s)', async (mixed) => {
+    const successful = { denom: 'umfx', success: true };
+    const failed = { denom: 'factory/addr/upwr', success: false };
+    vi.mocked(requestFaucet).mockResolvedValue({
+      address: ADDRESS,
+      results: mixed ? [successful, failed] : [failed],
+    });
+
+    const result = await executeRequestFaucet(makeOptions());
+    expect(result.success).toBe(mixed);
+    if (mixed) {
+      const data = result.data as { message: string; results: { denom: string; success: boolean; error?: string }[] };
+      expect(data.message).toContain('factory/addr/upwr (Unknown error)');
+      expect(data.results).toEqual([successful, { ...failed, error: 'Unknown error' }]);
+      expect(data.results[0]).toBe(successful);
+    } else {
+      expect(result.error).toContain('factory/addr/upwr: Unknown error');
+    }
+    expect(failed).not.toHaveProperty('error');
+  });
+
   it('returns user-friendly error and logs when requestFaucet throws', async () => {
     vi.mocked(requestFaucet).mockRejectedValue(
       new Error('Faucet has no tokens configured')
@@ -1830,12 +1874,11 @@ describe('F4 — app_status records fred’s provision verdict', () => {
 
     const result = await run(registry);
 
-    // Exact object, not objectContaining: this test's predecessor pinned that
-    // ONLY the chain observation was written, and that exactness is the half
-    // that catches a writer quietly adding a field it did not observe.
+    // Explicit progress records unconfirmed readiness and schedules the same
+    // bounded follow-up as maintenance and background discovery.
     expect(registry.updateApp).toHaveBeenCalledWith(
       ADDRESS, app.leaseUuid,
-      { chainState: 'active', provisionState: 'unconfirmed' },
+      { chainState: 'active', provisionState: 'unconfirmed', readinessStale: true },
     );
     expect((result.data as any).status).toBe('deploying');
   });
@@ -1867,7 +1910,7 @@ describe('F4 — app_status records fred’s provision verdict', () => {
 
     const result = await run(registry);
 
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { chainState: 'active', readinessStale: true });
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBeUndefined();
     expect((result.data as any).status).toBe('running');
   });
@@ -1930,6 +1973,7 @@ describe('F4 — app_status records fred’s provision verdict', () => {
     expect(stored?.chainState).toBe('active');
     expect(stored?.provisionState).toBe('failed');
     expect(stored?.status).toBe('failed');
+    expect(stored?.readinessStale).toBeUndefined();
     expect((result.data as any).status).toBe('failed');
   });
 

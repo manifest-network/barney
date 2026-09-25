@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { executeTool, executeConfirmedTool } from './index';
 import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import type { ToolResult, ToolExecutorOptions } from './types';
+import { maintenanceRecoveryAdvice } from './maintenanceRecoveryIntent';
+import { FAILURE_DETAIL_CHARS } from './helpers';
 
 vi.mock('./compositeQueries', () => ({
   executeListApps: vi.fn(),
@@ -34,6 +36,7 @@ vi.mock('./compositeTransactions', () => ({
 }));
 
 import {
+  executeAppStatus,
   executeGetBalance,
   executeGetLogs,
   executeListApps,
@@ -80,6 +83,28 @@ function makeOptions(overrides: Partial<ToolExecutorOptions> = {}): ToolExecutor
 describe('executeTool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('keeps advice with its own result when two tool invocations overlap', async () => {
+    const first = maintenanceRecoveryAdvice({ address: ADDRESS, providerUrl: 'https://provider.example', leaseUuid: crypto.randomUUID(),
+      operation: 'restart', idempotencyKey: crypto.randomUUID() });
+    const second = { ...first, leaseUuid: crypto.randomUUID(), idempotencyKey: crypto.randomUUID(), operation: 'update' as const };
+    let finishFirst!: () => void;
+    vi.mocked(executeAppStatus).mockImplementationOnce(async (_args, options) => {
+      options.onMaintenanceRecoveryAdvice?.(first);
+      await new Promise<void>((resolve) => { finishFirst = resolve; });
+      options.onMaintenanceRecoveryAdvice?.(first);
+      return { success: true, data: { message: 'First recovery advice' } };
+    }).mockImplementationOnce(async (_args, options) => {
+      options.onMaintenanceRecoveryAdvice?.(second);
+      return { success: false, error: 'Second recovery advice' };
+    });
+    const pending = executeTool('app_status', { app_name: 'first' }, makeOptions());
+    const later = await executeTool('app_status', { app_name: 'second' }, makeOptions());
+    finishFirst();
+    expect(later.maintenanceRecoveryAdvice).toEqual([second]);
+    expect((await pending).maintenanceRecoveryAdvice).toEqual([first]);
+    expect(later.error).toBe('Second recovery advice');
   });
 
   // --- Query tools ---
@@ -263,6 +288,20 @@ describe('executeConfirmedTool', () => {
     vi.clearAllMocks();
   });
 
+  it('collects independent batch advice identities without adding them to the model result', async () => {
+    const advice = [0, 1].map(() => maintenanceRecoveryAdvice({ address: ADDRESS, providerUrl: 'https://provider.example',
+      leaseUuid: crypto.randomUUID(), operation: 'restart', idempotencyKey: crypto.randomUUID() }));
+    const data = { message: 'Two restart outcomes are unconfirmed.' };
+    vi.mocked(executeConfirmedRestartApp).mockImplementationOnce(async (_args, _client, options) => {
+      for (const entry of advice) options.onMaintenanceRecoveryAdvice?.(entry);
+      return { success: true, data };
+    });
+    const result = await executeConfirmedTool('restart_app', { entries: [] }, makeOptions());
+    expect(result.maintenanceRecoveryAdvice).toEqual(advice);
+    expect(result.data).toBe(data);
+    expect(JSON.stringify(result.data)).not.toContain(advice[0].idempotencyKey);
+  });
+
   it('fails closed when the immutable authorization context is missing', async () => {
     const result = await executeConfirmedTool(
       'deploy_app',
@@ -405,5 +444,33 @@ describe('executeConfirmedTool', () => {
       success: false,
       error: 'tx failed',
     });
+  });
+});
+
+describe('executor error display boundaries', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['query', 'get_balance', executeGetBalance, executeTool],
+    ['planning', 'deploy_app', executeDeployApp, executeTool],
+    ['cosmos', 'cosmos_query', executeCosmosQuery, executeTool],
+    ['confirmed', 'fund_credits', executeConfirmedFundCredits, executeConfirmedTool],
+  ] as const)('bounds untrusted thrown messages in the %s catch-all', async (_branch, tool, executor, dispatch) => {
+    vi.mocked(executor).mockRejectedValueOnce(new Error(`Upstream failure\n\u0000\u202e\u2028\t${'x'.repeat(2_000)}`));
+    const result = await dispatch(tool, {}, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/^Upstream failure /);
+    expect(result.error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+    expect(Array.from(result.error!)).toHaveLength(FAILURE_DETAIL_CHARS + 1);
+    expect(result.error?.endsWith('…')).toBe(true);
+  });
+
+  it.each([
+    ['get_logs', executeGetLogs, executeTool],
+    ['restart_app', executeConfirmedRestartApp, executeConfirmedTool],
+  ] as const)('preserves authored multiline error results from %s', async (tool, executor, dispatch) => {
+    const result: ToolResult = { success: false, error: 'Failed: web: Image pull failed.\nworker: Provisioning failed.\nCheck app_diagnostics for each app.' };
+    vi.mocked(executor).mockResolvedValueOnce(result);
+    expect(await dispatch(tool, {}, makeOptions())).toBe(result);
   });
 });

@@ -6,9 +6,14 @@
  * executeConfirmedBatchRestart.
  */
 
-import { AI_BATCH_DEPLOY_CONCURRENCY } from '../../config/constants';
+import { AI_BATCH_DEPLOY_CONCURRENCY, AI_BATCH_DIAGNOSTIC_CHARS, AI_BATCH_GUIDANCE_CHARS } from '../../config/constants';
+import { finishDisplaySentence } from '../../utils/displaySentence';
+import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { DeployProgress } from '../progress';
+import { FAILURE_DETAIL_CHARS } from './helpers';
 import type { SignResult, ToolResult } from './types';
+import { renderDeployDiagnostic, type DeployFailureDiagnostic } from './deployDiagnostic';
+import { allocateDiagnosticBudgets } from './diagnosticBudget';
 
 // ---------------------------------------------------------------------------
 // Signing Mutex
@@ -71,6 +76,9 @@ export function computeOverallPhase(
   if (phases.every((p) => p === 'ready' || p === 'failed')) {
     return phases.some((p) => p === 'ready') ? 'ready' : 'failed';
   }
+  if (phases.every((p) => p === 'ready' || p === 'failed' || p === 'unconfirmed')) {
+    return 'unconfirmed';
+  }
   for (const phase of intermediatePhases) {
     if (phases.some((p) => p === phase)) return phase;
   }
@@ -89,6 +97,12 @@ export interface BatchEntry {
 export interface BatchSuccessItem {
   name: string;
   url?: string;
+  /** Verified provider success can still require local recovery cleanup. */
+  localCleanupPending?: boolean;
+  /** A cached result describes earlier work, not a new provider request. */
+  replayed?: boolean;
+  /** Authored guidance rendered beside the app name in the summary. */
+  detail?: string;
 }
 
 /**
@@ -102,8 +116,6 @@ export interface BatchSuccessItem {
  */
 export interface BatchResultItem extends BatchSuccessItem {
   outcome?: 'unconfirmed' | 'cancelled';
-  /** Extra copy rendered next to the name in the summary (e.g. the SDK's "may still be starting" note). */
-  detail?: string;
 }
 
 export interface BatchRunnerOptions<E extends BatchEntry> {
@@ -134,7 +146,7 @@ export interface BatchRunnerOptions<E extends BatchEntry> {
   executeOne: (
     entry: E,
     index: number,
-    updateProgress: (phase: DeployProgress['phase'], detail?: string) => void,
+    updateProgress: (phase: DeployProgress['phase'], detail?: string, diagnostic?: DeployFailureDiagnostic) => void,
   ) => Promise<BatchResultItem | null>;
 }
 
@@ -145,7 +157,34 @@ export interface BatchRunResult {
   unconfirmed: BatchResultItem[];
   /** Aborted by the user rather than failed: never queued (the signal aborted before its turn), or `executeOne` said so. */
   cancelled: string[];
-  batchProgress: Array<{ name: string; phase: DeployProgress['phase']; detail?: string }>;
+  batchProgress: Array<{ name: string; phase: DeployProgress['phase']; detail?: string; diagnostic?: DeployFailureDiagnostic }>;
+}
+
+function sanitizeDiagnostic(detail: string | undefined): string | undefined {
+  // These strings include Barney's next steps, after provider fields have been
+  // bounded at their source. A provider-field cap would cut off that guidance.
+  return detail === undefined ? undefined : sanitizeForDisplay(detail, AI_BATCH_GUIDANCE_CHARS);
+}
+
+function sanitizeProgressDetail(phase: DeployProgress['phase'], detail: string | undefined): string | undefined {
+  return phase === 'failed' || phase === 'unconfirmed' || phase === 'ready' ? sanitizeDiagnostic(detail) : detail;
+}
+
+/** Fit an allocated JSON budget, including quotes, escapes and surrogate pairs. */
+function fitDiagnostic(detail: string | undefined, budget: number, diagnostic?: DeployFailureDiagnostic): string | undefined {
+  const clean = sanitizeDiagnostic(detail);
+  if (clean === undefined || budget < 3) return undefined;
+  if (JSON.stringify(clean).length <= budget) return clean;
+  if (diagnostic) return renderDeployDiagnostic(diagnostic, budget, true);
+  let result = '';
+  let length = 3; // JSON quotes and the final ellipsis.
+  for (const point of clean) {
+    const size = JSON.stringify(point).length - 2;
+    if (length + size > budget) break;
+    result += point;
+    length += size;
+  }
+  return `${result}…`;
 }
 
 export async function runBatchWithConcurrency<E extends BatchEntry>(
@@ -162,7 +201,7 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
     executeOne,
   } = opts;
 
-  const batchProgress: Array<{ name: string; phase: DeployProgress['phase']; detail?: string }> =
+  const batchProgress: BatchRunResult['batchProgress'] =
     entries.map((e) => ({ name: e.name, phase: initialPhase, detail: 'Waiting...' }));
 
   const emitProgress = () => {
@@ -173,7 +212,7 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
     onProgress?.({
       phase: overallPhase,
       ...(operation ? { operation } : {}),
-      batch: batchProgress.map((b) => ({ ...b })),
+      batch: batchProgress.map(({ name, phase, detail }) => ({ name, phase, detail })),
     });
   };
 
@@ -196,8 +235,8 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
     if (signal?.aborted) break;
     queuedCount = i + 1;
 
-    const updateProgress = (phase: DeployProgress['phase'], detail?: string) => {
-      batchProgress[i] = { name: entries[i].name, phase, detail };
+    const updateProgress = (phase: DeployProgress['phase'], detail?: string, diagnostic?: DeployFailureDiagnostic) => {
+      batchProgress[i] = { name: entries[i].name, phase, detail: sanitizeProgressDetail(phase, detail), ...(diagnostic && { diagnostic }) };
       emitProgress();
     };
 
@@ -207,11 +246,18 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
         if (!result) {
           failed.push(entries[i].name);
         } else if (result.outcome === 'unconfirmed') {
-          unconfirmed.push(result);
+          unconfirmed.push({ ...result, detail: sanitizeDiagnostic(result.detail) });
+          if (operation === 'restart' || operation === 'update') {
+            updateProgress('unconfirmed', result.detail ?? batchProgress[i].detail ?? 'Outcome unknown');
+          }
         } else if (result.outcome === 'cancelled') {
           cancelled.push(result.name);
+          const detail = result.detail ?? (batchProgress[i].phase === 'failed' ? batchProgress[i].detail : undefined);
+          updateProgress('failed', detail ?? 'Cancelled');
         } else {
-          succeeded.push(result);
+          succeeded.push({ ...result, ...(result.detail !== undefined && { detail: sanitizeDiagnostic(result.detail) }) });
+          if (result.localCleanupPending || result.replayed) updateProgress('ready', result.detail
+            ?? (result.localCleanupPending ? 'Local cleanup remains pending' : 'Previous result recovered; no new request sent'));
         }
       } catch (error) {
         // Safety net — executeOne should handle its own errors, but if it
@@ -219,7 +265,7 @@ export async function runBatchWithConcurrency<E extends BatchEntry>(
         batchProgress[i] = {
           name: entries[i].name,
           phase: 'failed',
-          detail: error instanceof Error ? error.message : 'Unknown error',
+          detail: sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS),
         };
         emitProgress();
         failed.push(entries[i].name);
@@ -266,7 +312,7 @@ export interface BatchSummaryOptions {
   /** Noun for the "all failed" error (e.g. 'deploys', 'restarts'). */
   failedNoun: string;
   /** Batch progress for the final progress emission. */
-  batchProgress?: Array<{ name: string; phase: DeployProgress['phase']; detail?: string }>;
+  batchProgress?: BatchRunResult['batchProgress'];
   /** Optional operation for the final progress emission. */
   operation?: DeployProgress['operation'];
   /** Progress callback for the final emission. */
@@ -275,30 +321,89 @@ export interface BatchSummaryOptions {
 
 export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
   const {
-    succeeded, failed, cancelled = [], unconfirmed = [], unconfirmedLabel = 'Still pending',
+    succeeded: rawSucceeded, failed, cancelled = [], unconfirmed: rawUnconfirmed = [], unconfirmedLabel = 'Still pending',
     dataKey, verb, failedNoun, batchProgress, operation, onProgress,
   } = opts;
 
   // Single predicate behind BOTH the overall progress phase and the failure
   // branch below, so the ProgressCard and the chat text can never disagree.
   // An unconfirmed batch has not landed, but it is not a failed batch either.
-  const nothingLanded = succeeded.length === 0 && unconfirmed.length === 0;
+  const nothingLanded = rawSucceeded.length === 0 && rawUnconfirmed.length === 0;
+  // Rows disappear when the next tool starts. Preserve the failure reason in
+  // the tool result so both the user and model can act on it afterwards.
+  const failureRows = new Map(batchProgress?.filter((row) => row.phase === 'failed').map((row) => [row.name, row]));
+  // Failed reasons appear once in message/error. Unconfirmed reasons and local
+  // cleanup warnings have both a structured field and a message copy.
+  const detailedUnconfirmed = rawUnconfirmed.filter((entry) => entry.detail !== undefined).length;
+  const detailedSucceeded = rawSucceeded.filter((entry) => entry.detail !== undefined).length;
+  const cleanupPending = rawSucceeded.filter((entry) => entry.localCleanupPending).length;
+  const replayed = rawSucceeded.filter((entry) => entry.replayed).length;
+  const inputs = [
+    ...failed.map((name) => ({ detail: failureRows.get(name)?.detail, copies: 1 })),
+    ...rawUnconfirmed.map((entry) => ({ detail: entry.detail, copies: 2 })),
+    ...rawSucceeded.map((entry) => ({ detail: entry.detail, copies: 2 })),
+    ...cancelled.map((name) => ({ detail: failureRows.get(name)?.detail, copies: 1 })),
+  ];
+  const demands = inputs.map(({ detail, copies }) => ({
+    size: detail === undefined ? 0 : JSON.stringify(sanitizeDiagnostic(detail)).length, copies,
+  }));
+  // Include structured detail/flag fields and two-space indentation as well as
+  // text copies. Short entries return their unused share to longer diagnostics.
+  let textBudget = Math.max(0, AI_BATCH_DIAGNOSTIC_CHARS - 20 * detailedUnconfirmed - 90 * detailedSucceeded);
+  const shortened = demands.reduce((total, entry) => total + entry.size * entry.copies, 0) > textBudget;
+  // Large batches may need shortened per-app details. Reserve one complete
+  // next step rather than leaving the model with only partial instructions.
+  const sharedNextSteps = [
+    cleanupPending > 0 ? 'Provider outcomes were verified, but local cleanup remains pending. Restore browser storage access, then check app_status or retry the same confirmation; do not start a new command for recovery.' : '',
+    failed.length > 0 ? 'Check app_status and app_diagnostics for each failed app.' : '',
+    failed.some((name) => failureRows.get(name)?.diagnostic?.logs.length)
+      ? 'Use get_logs(app_name, tail=200) for full logs from each failed service.' : '',
+    cancelled.length === 0 ? '' : operation === 'restart' || operation === 'update'
+      ? 'Check app_status and app_releases for cancelled apps before requesting new work.'
+      : 'Cancelled deployments were never submitted; they can be deployed again.',
+    rawUnconfirmed.length === 0 ? '' : operation === 'restart' || operation === 'update'
+      ? 'Check app_status and app_releases for each unknown outcome. Recover only a command still pending, using its original key and exact payload. Do not use new_command for recovery. Do not submit a new command or automatically stop/redeploy while its outcome is unresolved.'
+      : 'Check app_status for each still-deploying app. Only use stop_app if you have decided to abandon that deployment.',
+  ].filter(Boolean).join(' ');
+  const summaryGuidance = shortened ? `Details were shortened. ${sharedNextSteps}` : undefined;
+  if (summaryGuidance) {
+    // JSON quotes account for the two escaped characters of the added newline.
+    textBudget = Math.max(0, textBudget - JSON.stringify(summaryGuidance).length);
+  }
+  const budgets = allocateDiagnosticBudgets(demands, textBudget);
+  const unconfirmed = rawUnconfirmed.map((entry, index) => ({ ...entry,
+    detail: fitDiagnostic(entry.detail, budgets[failed.length + index]),
+  }));
+  const succeeded = rawSucceeded.map((entry, index) => ({ ...entry,
+    ...(entry.detail !== undefined && { detail: fitDiagnostic(entry.detail, budgets[failed.length + rawUnconfirmed.length + index]) }),
+  }));
+  const failedText = failed.map((name, index) => {
+    const row = failureRows.get(name);
+    const detail = fitDiagnostic(row?.detail, budgets[index], row?.diagnostic);
+    return detail ? `${name}: ${detail}` : name;
+  }).join(failed.some((name) => failureRows.get(name)?.detail) ? '\n' : ', ');
+  const cancelledText = cancelled.map((name, index) => {
+    const detail = fitDiagnostic(failureRows.get(name)?.detail, budgets[failed.length + rawUnconfirmed.length + rawSucceeded.length + index]);
+    return detail ? `${name}: ${detail}` : name;
+  }).join(cancelled.some((name) => failureRows.get(name)?.detail) ? '\n' : ', ');
 
-  // Emit final progress. An unconfirmed entry's ROW reads 'failed' because
-  // 'ready'/'failed' are the ProgressCard's only terminal phases — same
-  // trade-off as the single-deploy path (deployError.ts, arm 2a). That is a
-  // per-row concession; the OVERALL phase follows `nothingLanded`.
+  // Maintenance has a neutral terminal phase: no verified restart/update may
+  // be reported as complete just because the runner finished waiting. Deploy
+  // retains its existing summary contract.
+  const maintenanceUnconfirmed = (operation === 'restart' || operation === 'update') && unconfirmed.length > 0;
   if (onProgress) {
     // Every segment is conditional, so zero counts are never printed.
     const segments = [
-      succeeded.length > 0 ? `${succeeded.length} ${verb.toLowerCase()}` : '',
+      succeeded.length > replayed ? `${succeeded.length - replayed} ${verb.toLowerCase()}` : '',
+      replayed > 0 ? `${replayed} previous ${replayed === 1 ? 'result' : 'results'} recovered` : '',
+      cleanupPending > 0 ? `${cleanupPending} local cleanup pending` : '',
       failed.length > 0 ? `${failed.length} failed` : '',
       unconfirmed.length > 0 ? `${unconfirmed.length} ${unconfirmedLabel.toLowerCase()}` : '',
       cancelled.length > 0 ? `${cancelled.length} cancelled` : '',
     ].filter(Boolean);
-    const allSucceeded = segments.length === 1 && succeeded.length > 0;
+    const allSucceeded = segments.length === 1 && succeeded.length > 0 && replayed === 0;
     onProgress({
-      phase: nothingLanded ? 'failed' : 'ready',
+      phase: maintenanceUnconfirmed ? 'unconfirmed' : nothingLanded ? 'failed' : 'ready',
       ...(operation ? { operation } : {}),
       // No segments at all means an empty batch — never emit '' or 'All 0 apps'.
       detail: segments.length === 0
@@ -306,7 +411,7 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
         : allSucceeded
           ? `All ${succeeded.length} ${succeeded.length === 1 ? 'app' : 'apps'} ${verb.toLowerCase()}!`
           : segments.join(', '),
-      ...(batchProgress ? { batch: batchProgress.map((b) => ({ ...b })) } : {}),
+      ...(batchProgress ? { batch: batchProgress.map(({ name, phase, detail }) => ({ name, phase, detail: sanitizeProgressDetail(phase, detail) })) } : {}),
     });
   }
 
@@ -315,27 +420,28 @@ export function summarizeBatchResult(opts: BatchSummaryOptions): ToolResult {
     // batch — keep the original message (test/UX contract). Otherwise name both
     // buckets so the abort isn't hidden behind a bare "all failed".
     if (cancelled.length === 0) {
-      return { success: false, error: `All ${failedNoun} failed: ${failed.join(', ')}` };
+      return { success: false, error: `All ${failedNoun} failed: ${failedText}${summaryGuidance ? `\n${summaryGuidance}` : ''}` };
     }
-    const failedPart = failed.length > 0 ? `Failed: ${failed.join(', ')}.` : '';
-    const cancelledPart = `Cancelled: ${cancelled.join(', ')}.`;
+    const failedPart = failed.length > 0 ? finishDisplaySentence(`Failed: ${failedText}`) : '';
+    const cancelledPart = finishDisplaySentence(`Cancelled: ${cancelledText}`);
     return {
       success: false,
-      error: `No ${failedNoun} completed — ${[failedPart, cancelledPart].filter(Boolean).join(' ')}`,
+      error: `No ${failedNoun} completed — ${[failedPart, cancelledPart].filter(Boolean).join('\n')}${summaryGuidance ? `\n${summaryGuidance}` : ''}`,
     };
   }
 
   const parts: string[] = [];
   if (succeeded.length > 0) {
-    const lines = succeeded.map((d) => d.url ? `${d.name}: ${d.url}` : d.name);
+    const lines = succeeded.map((d) => `${d.url ? `${d.name}: ${d.url}` : d.name}${d.detail ? ` — ${d.detail}` : ''}`);
     parts.push(`${verb}:\n${lines.map((l) => `- ${l}`).join('\n')}`);
   }
   if (unconfirmed.length > 0) {
     const lines = unconfirmed.map((u) => u.detail ? `${u.name}: ${u.detail}` : u.name);
     parts.push(`${unconfirmedLabel}:\n${lines.map((l) => `- ${l}`).join('\n')}`);
   }
-  if (failed.length > 0) parts.push(`Failed: ${failed.join(', ')}.`);
-  if (cancelled.length > 0) parts.push(`Cancelled: ${cancelled.join(', ')}.`);
+  if (failed.length > 0) parts.push(finishDisplaySentence(`Failed: ${failedText}`));
+  if (cancelled.length > 0) parts.push(finishDisplaySentence(`Cancelled: ${cancelledText}`));
+  if (summaryGuidance) parts.push(summaryGuidance);
 
   return {
     success: true,

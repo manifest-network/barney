@@ -6,6 +6,7 @@ import { createAIStore, type AIStore } from '../aiStore';
 import { createWalletIdentity } from '../../utils/walletIdentity';
 import { historyStorageKey } from './persistence';
 import { parseTransactionPlan } from '../../ai/toolExecutor/transactionPlans';
+import { runtimeConfig } from '../../config/runtimeConfig';
 
 // ---------------------------------------------------------------------------
 // Deterministic IDs
@@ -162,6 +163,9 @@ function makeToolMessage(id: string): ChatMessage {
 }
 
 const fakeClientManager = { fake: true } as unknown as NonNullable<AIStore['clientManager']>;
+const recoveryAdvice = [{ operation: 'restart' as const, idempotencyKey: '11111111-1111-4111-8111-111111111111',
+  address: 'manifest1test', chainId: 'manifest-test', providerUrl: 'https://provider.example', leaseUuid: '550e8400-e29b-41d4-a716-446655440000',
+  rpcUrl: runtimeConfig.PUBLIC_RPC_URL, restUrl: runtimeConfig.PUBLIC_REST_URL }];
 
 function setupStore(overrides: Record<string, unknown> = {}): Store {
   const store = createAIStore();
@@ -203,6 +207,17 @@ afterEach(() => {
 // ===========================================================================
 
 describe('confirmAction', () => {
+  it('retains recovery metadata on the confirmed tool row without copying it onto the assistant reply', async () => {
+    const store = setupStore({ pendingConfirmation: makePendingConfirmation({ action: { toolName: 'restart_app' } }),
+      messages: [makeToolMessage('tool_msg_1')] });
+    mockExecuteConfirmedTool.mockResolvedValueOnce({ success: false, error: 'Recover the pending restart.', maintenanceRecoveryAdvice: recoveryAdvice });
+    mockProcessStream.mockResolvedValueOnce(makeStreamResult());
+    await store.getState().confirmAction();
+    expect(store.getState().messages.filter((message) => message.maintenanceRecoveryAdvice?.length)).toEqual([
+      expect.objectContaining({ id: 'tool_msg_1', maintenanceRecoveryAdvice: recoveryAdvice }),
+    ]);
+    store.getState().destroy();
+  });
   it.each(['stop_app', 'restart_app', 'update_app'])('invalidates pre-operation query results before dispatching %s, including ambiguous failures', async (toolName) => {
     for (const success of [true, false]) {
       const store = setupStore({
@@ -293,6 +308,31 @@ describe('confirmAction', () => {
   // Manifest edit application
   // -----------------------------------------------------------------------
   describe('manifest edit application', () => {
+    it.each([
+      '{ "image" : "nginx", "env": {} }\n',
+      '{\n "services" : { "web" : { "image" : "nginx" } }\n}\n',
+    ])('preserves exact saved recovery bytes when confirmation supplies no editor override', async (manifest) => {
+      const payload = { bytes: new TextEncoder().encode(manifest), size: manifest.length, hash: 'original-hash' };
+      const idempotencyKey = '11111111-1111-4111-8111-111111111111';
+      const pending = makePendingConfirmation({
+        action: {
+          id: 'action_1', toolName: 'update_app',
+          args: { app_name: 'my-app', _generatedManifest: manifest, _maintenanceRetry: true, idempotencyKey },
+          description: 'Recover saved update?', payload,
+        },
+      });
+      const store = setupStore({ pendingConfirmation: pending, messages: [makeToolMessage('tool_msg_1')] });
+      mockExecuteConfirmedTool.mockResolvedValueOnce({ success: true, data: {} });
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult());
+
+      await store.getState().confirmAction();
+
+      const callArgs = mockExecuteConfirmedTool.mock.calls[0];
+      expect(callArgs[1]._generatedManifest).toBe(manifest);
+      expect(callArgs[1].idempotencyKey).toBe(idempotencyKey);
+      expect(callArgs[3]).toBe(payload);
+    });
+
     it('replaces _generatedManifest with editedManifestJson and clears payload', async () => {
       const toolMsg = makeToolMessage('tool_msg_1');
       const pending = makePendingConfirmation({
@@ -600,6 +640,7 @@ describe('confirmAction', () => {
       finishTransaction({
         success: true,
         data: { message: 'Deployment completed for the previous wallet.' },
+        maintenanceRecoveryAdvice: recoveryAdvice,
       });
       await confirming;
 
@@ -610,6 +651,7 @@ describe('confirmAction', () => {
       const originIdentity = createWalletIdentity('manifest-test', 'manifest1test')!;
       const persisted = localStorage.getItem(historyStorageKey(originIdentity));
       expect(persisted).toContain('Deployment completed for the previous wallet.');
+      expect(persisted).toContain(recoveryAdvice[0].idempotencyKey);
 
       store.getState().setWalletContext({
         clientManager: fakeClientManager,
@@ -624,6 +666,7 @@ describe('confirmAction', () => {
         awaitingConfirmation: false,
         error: undefined,
         content: expect.stringContaining('Deployment completed for the previous wallet.'),
+        maintenanceRecoveryAdvice: recoveryAdvice,
       });
       expect(store.getState().messages).toContainEqual(expect.objectContaining({
         role: 'assistant',

@@ -4,7 +4,7 @@ Barney plans and previews product actions, obtains user confirmation, then calls
 
 ## Transaction inventory (ENG-830)
 
-Reviewed against the pinned `@manifest-network/manifest-sdk` 0.22.0. There are no direct `cosmosTx`, `executeTx`, signing-client, or low-level broadcast calls in Barney product code. `src/build/transactionBoundary.test.ts` guards this boundary.
+Reviewed against the pinned `@manifest-network/manifest-sdk` 0.23.0. There are no direct `cosmosTx`, `executeTx`, signing-client, or low-level broadcast calls in Barney product code. `src/build/transactionBoundary.test.ts` guards this boundary.
 
 | Product action / caller | SDK operation | Approval data | Validation, fees, and cancellation |
 | --- | --- | --- | --- |
@@ -37,6 +37,173 @@ The wallet manager receives `MAX_TRANSACTION_GAS = 50_000_000`. SDK simulation r
 Web3Auth's `promptSign` automatically accepts SDK signature requests. It is not a human approval boundary. Chat approval is consumed once in `confirmAction`, with wallet/chain/client/signer generation checks and cancellation before dispatch and each SDK mutation. Account setup and off-chain authentication follow the separate policies in [security](security.md#5-transaction-confirmation).
 
 ## Regression coverage
+
+### Fred PR 240 maintenance (ENG-976)
+
+`capabilityCtx.ts` carries an explicit provider compatibility map. For `pr240`,
+`maintenanceExecution.ts` calls the SDK's `restartApp`/`updateApp` with one UUIDv4
+per logical command and `pollOptions: false`. The SDK owns fresh authentication
+on each invocation and its structured uncertain-request diagnostics. Barney
+does not automatically retry a mutation or replace its key after an error.
+
+`maintenanceOperation.ts` scopes recovery by chain/endpoints, wallet, provider,
+and lease. It persists the key, operation, exact-byte SHA-256, and original
+release-version baseline before dispatch. Raw payloads and prior manifests
+remain in memory. A retry uses those exact bytes without rebuilding passwords.
+After reload, an original attachment can be merged with cached defaults only
+as a candidate: its exact hash must match. Without an attachment, provider
+release history can supply hash-matching bytes for a recovery confirmation;
+that lookup does not establish command admission or completion. An attachment that does not
+match falls through to retained bytes and history rather than blocking recovery within the turn. If neither
+source matches, the exact reviewed payload is still required. A failed history read or rejected
+signature remains retryable and does not establish that the bytes are permanently lost. A durable rejection
+creates no release: if its response and a generated/edited payload are both lost,
+the tenant API offers no receipt lookup to resolve the command. Barney keeps it
+unresolved; deleting its metadata would not cancel Fred's command or make a new
+key safe. Fred's per-lease fence prevents overlapping work, but a new key can
+execute after the old command finishes and repeat the operation. If exact bytes
+cannot be recovered, a user may separately confirm `stop_app` to end the lease;
+this retires the record only after authoritative closure, and is termination,
+not update recovery. Browser storage
+failures block dispatch, but retirement after an authoritative closed lease is
+best-effort and cannot change the stop result. Web Locks coordinate state
+between tabs where supported; the fallback serializes only within one tab.
+Missing metadata drops stale memory, and a recovery confirmation
+requires the pending record to still exist. Settled confirmations are memoized
+in memory so retrying a batch does not resubmit already completed items.
+A compact nonsecret settled receipt replaces the pending record at the same storage
+key, using less quota, and persists across tabs and reloads. It blocks ordinary planning
+only when recovery advice was issued, preventing stale retry advice from becoming a new
+command. Routine directly reported outcomes allow follow-up work immediately. Legacy pending
+records without the advice flag conservatively retain that barrier. Deliberate
+`new_command: true` planning acknowledges a blocking receipt; no flag bypasses pending work.
+Every new confirmation binds the previous receipt's key so another settlement refuses dispatch.
+A tab also retains a nonsecret recovery intent in sessionStorage and memory: another tab's
+later successor cannot erase old advice here. Only dispatch of an explicitly confirmed new
+command whose bound key still matches consumes the tab's guard and its earlier observed advice.
+A durable tab-local consumed-key record prevents reload from
+rearming it. This retains the newest 128 consumed keys per lease; older restored advice can
+conservatively require deliberate new intent. Nonsecret scoped identities attach only to the tool result that issued the advice;
+unrelated and older rows never inherit them. Planning-only refusals and batch skips neither emit
+new carrier rows nor arm a guard in a tab that saw only a settled receipt. Loading an advice-bearing row in another tab restores
+its guard, including after a successor or sessionStorage quota failure. Token streaming does not scan
+recovery intents or copy advice. If quota rejects the compact acknowledgment, consumption can
+remove only the matching readable session entry and retry the smaller write. Continued quota failure
+keeps acknowledgment in memory, allowing routine work in that tab; reload can conservatively restore
+an original source row. Unknown storage errors or a different active identity never authorize removal.
+Advice marking does not rewrite an already-settled receipt,
+and storage-write failures preserve local recovery evidence without failing status queries.
+If that intent survives but neither a pending record nor a settled receipt exists, both planning
+and execution refuse a new command, including `new_command: true`; missing metadata proves no outcome.
+Cancellation before dispatch restores the previous sent receipt (or no receipt), retaining exact
+never-sent keys alongside it. It does not change the prior command identity or invalidate another
+approved card. These proofs survive later cancellations and settlements, retiring only matching advice
+in an observing tab or restored transcript. At most 128 proofs are retained per lease; exceptionally
+old advice whose proof has aged out conservatively requires deliberate new intent.
+Advice for a newer unsent command preserves an existing guard. If older advice arrives late,
+retiring the unsent command promotes that still-actionable identity instead of discarding it. Transcript restoration loads
+never-sent proof before selecting the oldest actionable advice, so retiring one temporary
+command cannot erase an older command's still-visible guidance. Preparing a previously cancelled
+confirmation with its same key atomically revokes only that key's never-sent proof before HTTP.
+Legacy development `not_sent` receipts retain their conservative identity because the prior sent
+receipt was not preserved and cannot be reconstructed.
+Verified provider outcomes and manifest
+updates survive receipt-write failure; cached exact retries repeat local cleanup without another
+POST. Replays identify the previously verified result; cancellation during cleanup leaves that verdict known.
+If storage cannot be read to verify current command identity, the provider verdict remains
+known but registry projection is deferred. No completed memo hides that work: restoring storage
+allows status reconciliation or same-key recovery to finish the projection safely.
+The session retains at most 128 completed/reserved identities without eviction.
+Planning checks capacity before offering a card; confirmed batches reserve all
+new entries atomically before any provider work. Unsubmitted slots are released,
+while dispatched unresolved commands retain theirs until authoritative closure, even when
+local storage cleanup fails. Existing pending operations
+remain recoverable at capacity, but new commands require clearing chat history
+to invalidate old confirmations.
+Wallet changes, history clearing, and store destruction also invalidate cache
+epochs so late responses cannot repopulate a previous session.
+A durable Fred refusal still retires its matching pending record after abort or
+session invalidation; cancellation cannot undo that authoritative receipt.
+
+`maintenanceOutcome.ts` evaluates command outcome separately from readiness.
+A 202 replay can precede execution while the source runtime is still ready.
+Verification therefore requires a single new consecutive settled release from
+the original baseline; a failed replacement can coexist with a healthy restored
+runtime. Missing reads, unchanged history, and ambiguous generations retain the
+recovery record. The Fred tenant API exposes no command key in release history,
+so multiple intervening operations cannot be attributed automatically and
+remain unconfirmed. Uncertain requests never authorize an automatic stop/redeploy
+or a replacement command. Settled updates project their command-owned manifest
+even after unrelated registry changes. Provision-state verdicts are independent
+of readiness-flag refreshes. Clearing readiness staleness and changing connection
+observations require their own snapshot fields to remain current; missing or unsettled
+runtime status can reassert readiness staleness without retracting a verdict. Uncertain
+maintenance marks connection inventory and readiness stale independently, scheduling bounded
+background status reads while preserving prior confirmed/failed verdicts. Explicit progress fills
+a missing verdict with `unconfirmed`; absent or unmodelled status adds no provision observation. Maintenance, foreground status and background hydration share the provision/readiness patch,
+so suppressed in-progress readings always retain bounded follow-up eligibility. Ordinary query and
+discovery reads apply it only when a Fred response arrived: a rejected status fetch or token mint
+preserves the prior flag. `app_status` and `app_releases` additionally reconcile pending maintenance; a failed provision
+read or authentication in that path can still set the flag and grant eight attempts because the
+command needs a runtime observation. An arrived response with omitted,
+empty or unmodelled status still schedules follow-up; maintenance also keeps its missing-verdict
+follow-up. Apps missing inventory keep the four-attempt budget during outages unless they have
+uncertain maintenance readiness, an unsettled provider observation, or confirmed saved inventory
+that was invalidated. Changes to `readinessStale` persist silently so they do not interrupt DNS probes, including in other
+tabs when both stored snapshots validate and visible fields/status are unchanged. Cross-tab events
+still invalidate the read cache; the recovery driver reads the flag on its own tick. Visible changes
+and invalid snapshots continue to notify subscribers. Shared foreground/background logic restores DNS evidence on a fresh connection
+read while continuing readiness observation through missing or in-progress statuses. Uncertain
+readiness keeps the extended eight-attempt allowance after foreground refreshes and reloads;
+false and unset freshness flags compare equally when checking a registry snapshot.
+Execution and reconciliation share this rule even after the command itself settles.
+When a fresh provision read fails, execution retains a settled runtime verdict from its wait.
+
+Successful batch maintenance preserves any local-cleanup warning in its result, summary and
+progress. Automatic deploy diagnostics keep the provider verdict and guidance before a bounded
+tail per service. Batch summaries redistribute unused diagnostic space and render compact
+reason, lookup and service tails at the final budget, preserving headers and ending lines.
+A row that fits the verdict and curated next step retains both and omits excess service excerpts
+with a count and `get_logs` lookup. Cancelled rows retain any previously verified outcome in the
+summary after the progress card disappears. Shortened summaries distinguish never-submitted
+cancelled deploys, which may be deployed again, from cancelled maintenance that requires observation. Internal rendering metadata is stripped from progress and tool results. Single-deploy logs
+preserve line breaks, and preview processing scans trailing noise in linear time and slices the input before code-point conversion.
+Caught errors in balance, log, diagnostic and release queries, and executor catch-alls, are sanitized
+and capped at 256 retained code points plus an ellipsis before entering chat/model-facing prose.
+Morpheus SSE error messages and caught stream exceptions use that same bound before either chat
+action receives them, so new saved error rows and replayed `Error: …` content retain the sanitized detail.
+Failed faucet rows use the same sanitizer before all-failed/partial-success messages and structured
+results are composed. Returned chain failures and manifest-builder exceptions use the same detail
+bound; shortening cancellation text retains complete authored submission guidance. Named
+release/lease failure fields and diagnostic status are bounded in the public projection after raw
+history has been used for recovery. Authored row breaks and successful log output are preserved. New saved error
+rows carry an `errorFormat: 'authored'` marker; marked errors keep up to 10,240 UTF-16 code units on
+both write and load. Oversized alerts retain beginning and ending portions with an explicit omission
+notice, preserving closing guidance. Unmarked or unrecognized-format legacy errors are sanitized at
+the 256-code-point cap before display or re-save. The marker does not enter runtime messages. The
+envelope stays v1; older builds still apply their previous load limit and must be refreshed to read
+the newer diagnostics. An older build can also strip `errorFormat` on load and re-save the row without
+it; the current build then treats that alert as legacy. Refresh old tabs before further chat writes;
+refreshing after the rewrite cannot restore the dropped marker or alert formatting.
+Maintenance error rows and other error rows carrying recovery advice offer
+read-only status/releases checks instead of generic keyword-based deployment suggestions.
+History omits executable tool calls, so interior unmatched historical tool results become labeled
+assistant context only in the model projection; exact result text and saved recovery metadata remain
+intact. Leading orphan results are still discarded.
+Valid adjacent live tool-call groups retain their protocol roles and IDs.
+The system prompt identifies tool outputs and historical result blocks as untrusted observations,
+even when a historical block occupies an assistant message. Embedded instructions cannot authorize
+actions or override recovery rules. This prompt guard supplements the existing confirmation and
+recovery checks; it does not establish model-level immunity to prompt injection.
+The [ENG-976 boundary review](../audits/eng-976/README.md) records the acceptance
+criteria and scoped exceptions.
+Manifest validation diagnostics are sanitized and bounded to 4,096 code points in planning and both
+provider confirmation paths; ordinary preparation diagnostics keep their smaller cap.
+
+The confirmation UI preserves unchanged payload bytes and disables editing of
+recovery payloads. Focused tests use the real SDK lifecycle and authentication
+methods with simulated transport failures, alongside storage, outcome, and
+provider-validation tests.
 
 - `transactionConsent.test.tsx` exercises real model dispatch and the rendered confirmation flow: unknown/removed/raw tool names, malformed amounts and raw overrides, automatic signature approval, cancellation, uncertain submission, and duplicate confirmation.
 - Existing executor/integration suites cover every retained operation, including single/bulk lifecycle actions, custom-domain attach/clear, batch deployment integrity, and account setup.

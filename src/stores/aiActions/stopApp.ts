@@ -15,6 +15,7 @@
 import type { AIStore } from '../aiStore';
 import { captureTransactionAuthorization } from '../authorization';
 import { transactionConfirmation } from '../../ai/toolExecutor/transactionPlans';
+import { pendingMaintenanceStopWarning } from '../../ai/toolExecutor/maintenanceStopWarning';
 import { generateMessageId, trimMessages, getAppRegistryAccess } from './utils';
 
 type Get = () => AIStore;
@@ -50,7 +51,8 @@ export function requestStopAppFn(get: Get, set: Set, appName: string): void {
   const syntheticToolCallId = generateMessageId();
   const toolMsgId = generateMessageId();
   const confirmationMessage =
-    `Stop app "${app.name}"? This will terminate the deployment and stop billing.`;
+    `Stop app "${app.name}"? This will terminate the deployment and stop billing.`
+    + pendingMaintenanceStopWarning([app], address, authorization.chainId);
   const plan = transactionConfirmation('stop_app', {
     app_name: app.name, leaseUuid: app.leaseUuid,
   }, confirmationMessage);

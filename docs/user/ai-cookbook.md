@@ -59,6 +59,37 @@ Update wordpress to use a new theme  (File attached: stack.json)
 
 **What it does.** Restarts the container(s) without changing the manifest.
 
+On dev, **Outcome unknown** means the restart or update may still execute. For a
+single app, the error alert's **Check status** button asks Barney to read its status
+and releases before further maintenance. For a batch containing unknown outcomes,
+the live progress card and result summary identify them; that result has no error-alert button.
+Ask Barney to check those apps' status and releases. Acknowledged commands can settle from those
+checks even after a reload. Retrying an unresolved command reuses its original
+key and exact manifest; after reloading, Barney can recover matching bytes from
+provider history or verify a reattached file merged with saved defaults. A mismatched
+attachment does not block recovery from retained bytes or matching history. The
+confirmation and result say when the attached file was not used; recovery checks
+the previously submitted update with its original key and payload. If
+neither matches, the exact reviewed manifest is required. Do not replace it
+with a new command or automatically stop/redeploy to recover uncertainty.
+An unavailable history read can be retried. If a successful read finds no matching
+bytes and the original file is permanently lost, a separately confirmed stop can end
+the deployment; it does not recover the update. Fred may execute the pending command
+until the lease closes. A healthy app can still have a failed restart if the provider restored
+the previous runtime. For a partially completed batch, retrying `restart all`
+recovers only the unresolved restarts.
+Receipts for previously uncertain commands survive tabs and reloads, so old retry
+advice cannot silently restart an app again. Ask explicitly for a new operation
+after a settled notice if another restart or update is intended. Ordinary completed
+commands allow the next requested restart or update without this extra step.
+Only results that actually advise pending-command recovery carry its safeguard; planning refusals
+and batch skips do not create new copies. Unrelated chat rows do not inherit it,
+and reloading the tab after a deliberate new command normally preserves its acknowledgement.
+If full browser storage prevents saving that acknowledgement, it remains effective in the current tab;
+reloading original advice can require an explicit new request again. A new tab
+loading the original advice still protects against an accidental repeat. A cached
+result explicitly identifies the previous operation; it does not send another request.
+
 **Example prompts.**
 
 ```
@@ -73,6 +104,8 @@ Restart all tetris apps          (the AI lists matching apps first)
 ### `stop_app`
 
 **What it does.** Closes the lease, terminating the running container(s) and freeing credits.
+Both chat and the app overview's Stop button warn when maintenance is pending: Fred may
+execute that command until the lease closes. Batch confirmations name the affected apps.
 
 **Example prompts.**
 
@@ -130,7 +163,8 @@ What's deploying?
 
 ### `app_status`
 
-**What it does.** Shows an app overview with its name, status, provider progress, deployment endpoint, and service endpoints for stacks. Selecting an app in the sidebar refreshes this view directly, even when AI chat is unavailable. Custom-domain setup and management are secondary buttons within the overview; **Details** includes size, image, and creation time. Lease status and workload availability are shown separately. Cached service details are collapsed and labeled as saved or last known; a fresh empty inventory removes stale port rows. A temporary connection-read failure preserves the established URL and offers any differing provider-reported endpoint separately. Internal services show **No published ports**. Terminal deployments show an inactive endpoint. If another request or confirmation is active, selecting an app explains how to finish it first; that notice clears once the action ends. Desktop status checks keep keyboard focus on the selected app; mobile selection immediately opens the chat so you can watch or cancel the check. After a lifecycle operation, saved connections are refreshed before being used for DNS target checks. Recovery makes up to four initial attempts; invalidated saved connections get four more at five-minute intervals. Each attempt also checks whether the workload failed. Select the app again to refresh after those attempts are exhausted. Attached-domain controls remain available while the chain lease is pending or active, including when the workload endpoint is inactive; closed leases hide those controls. A restart or update requested in chat can continue after the status check confirms readiness.
+**What it does.** Shows an app overview with its name, status, provider progress, deployment endpoint, and service endpoints for stacks. Selecting an app in the sidebar refreshes this view directly, even when AI chat is unavailable. Custom-domain setup and management are secondary buttons within the overview; **Details** includes size, image, and creation time. Lease status and workload availability are shown separately. Cached service details are collapsed and labeled as saved or last known; a fresh empty inventory removes stale port rows. A temporary connection-read failure preserves the established URL and offers any differing provider-reported endpoint separately. Internal services show **No published ports**. Terminal deployments show an inactive endpoint. If another request or confirmation is active, selecting an app explains how to finish it first; that notice clears once the action ends. Desktop status checks keep keyboard focus on the selected app; mobile selection immediately opens the chat so you can watch or cancel the check. After a lifecycle operation, saved connections are refreshed before being used for DNS target checks. Recovery makes up to four initial attempts; invalidated saved connections, uncertain maintenance, or a received provider response without a settled runtime verdict get four more at five-minute intervals. A failed ordinary status check does not start or extend those readiness checks. Checking an app with pending maintenance can still schedule follow-up when that command’s readiness cannot be verified. Fresh connection information and reloads do not shorten that readiness allowance. Each attempt also checks whether the workload failed. When Fred reports progress for a previously
+failed app, the badge keeps the last verdict and background checks follow it to a new one. Select the app again to refresh after those attempts are exhausted. Attached-domain controls remain available while the chain lease is pending or active, including when the workload endpoint is inactive; closed leases hide those controls. A restart or update requested in chat can continue after the status check confirms readiness.
 
 **Example prompts.**
 
@@ -263,6 +297,7 @@ Show staking validators
 - **Local fast-path for example apps.** Any prompt beginning with `deploy` is checked locally: the text after `deploy` is split on `,`/`and`/`&` and each name is matched against the example-app catalog. If two or more names match, Barney batch-deploys the matched subset directly (unmatched names are silently dropped, not sent to the model); if exactly one matches, it deploys that one. Only when NO name matches an example app is the whole prompt sent to the model. To force the AI path, phrase the request differently ("Please deploy redis and postgres for me").
 - **For bulk stop/restart**, use comma-separated lists or `all`. The AI will fall back to `list_apps` first if you ask by pattern (e.g. "stop all tetris apps").
 - **The `/help` slash command** prints the in-app cheat sheet.
+- **Saved batch failures** remain visible after reloading chat history. Very long alerts keep the beginning and end, including closing guidance, with an explicit notice for omitted text. Older saved errors are shown as short summaries. Refresh older Barney tabs before continuing chat: an older tab can rewrite saved diagnostics in its older format. Refreshing cannot restore alert formatting already lost in that rewrite.
 - **The `/clear` slash command** wipes the active wallet/network's chat history (other wallets and on-chain state are unaffected).
 - **If a tool fails transiently**, the underlying network calls retry automatically with exponential backoff (`AI_MAX_RETRIES`, default 3 attempts on top of the initial call) before the failure is surfaced. If the tool still returns a transient error, the AI is instructed to retry the call once more before giving up. The next message you see is a plain-language error and a suggested next step.
 

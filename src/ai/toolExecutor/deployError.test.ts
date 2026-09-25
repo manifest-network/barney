@@ -22,6 +22,10 @@ import { handleDeployManifestError } from './deployError';
 import { makeRegistry } from './testHelpers';
 import { LeaseState } from '../../api/billing';
 import type { AppEntry } from '../../registry/appRegistry';
+import { AI_BATCH_DIAGNOSTIC_CHARS, AI_BATCH_GUIDANCE_CHARS, AI_DEPLOY_LOG_PREVIEW_CHARS } from '../../config/constants';
+import { nextStepFor } from './failureGuidance';
+import { runBatchWithConcurrency, summarizeBatchResult } from './batchRunner';
+import type { DeployFailureDiagnostic } from './deployDiagnostic';
 
 vi.mock('../../api/billing', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/billing')>()),
@@ -396,6 +400,154 @@ describe('handleDeployManifestError — provider verdict at the poll step', () =
   // mockResolvedValue, so a `getLease` set by one test leaks into the next and
   // silently changes which branch it exercises.
   beforeEach(() => vi.resetAllMocks());
+
+  it.each([false, true])('retains the last panic line and guidance in a bounded batch row (NFC expansion: %s)', async (expandingUnicode) => {
+    const panic = 'panic: nil pointer at main.go:42';
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1,
+      reason: 'ContainerExited', message: 'container exited unexpectedly' } as never);
+    const logText = expandingUnicode ? '\u0344'.repeat(900) : 'startup detail '.repeat(64);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ logs: { web: `earliest-line\n${logText}\n${panic}` } } as never);
+    const batch = await runBatchWithConcurrency({
+      entries: [{ name: 'test-app' }, { name: 'healthy' }], initialPhase: 'provisioning', intermediatePhases: ['provisioning'],
+      executeOne: async ({ name }, _index, progress) => {
+        if (name === 'healthy') return { name };
+        let diagnostic: DeployFailureDiagnostic | undefined;
+        const result = await handleDeployManifestError(partialError('poll'), ctx({ maxDetailChars: AI_BATCH_GUIDANCE_CHARS,
+          onDiagnostic: (value: DeployFailureDiagnostic) => { diagnostic = value; } }));
+        progress('failed', result.error, diagnostic);
+        return null;
+      },
+    });
+    const row = batch.batchProgress[0].detail!;
+    expect([...row].length).toBeLessThanOrEqual(AI_BATCH_GUIDANCE_CHARS);
+    expect(row).toContain('Deployment failed: the provider reported the deployment as failed.');
+    expect(row).toContain(nextStepFor('ContainerExited', 'test-app'));
+    expect(row).toContain('Use get_logs(app_name="test-app", tail=200) for more:');
+    expect(row).toContain(panic);
+    expect(row).not.toContain('earliest-line');
+    const summary = summarizeBatchResult({ ...batch, dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys' });
+    expect(summary.data).toMatchObject({ message: expect.stringContaining(panic) });
+  });
+
+  it.each(['mixed-six', 'failed-24'] as const)('keeps ending panic lines and log lookups in %s summary budgeting', async (shape) => {
+    const panic = 'panic: nil pointer at main.go:42';
+    const names = Array.from({ length: shape === 'mixed-six' ? 6 : 24 }, (_, index) => `app-${index}`);
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1,
+      reason: 'ContainerExited', message: 'container exited unexpectedly' } as never);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ logs: {
+      web: `${'before crash '.repeat(250)}\n${panic}`,
+      worker: `${'heartbeat '.repeat(800)}worker-still-alive`,
+    } } as never);
+    const onProgress = vi.fn();
+    const batch = await runBatchWithConcurrency({
+      entries: names.map((name) => ({ name })), initialPhase: 'provisioning', intermediatePhases: ['provisioning'], onProgress,
+      executeOne: async ({ name }, index, progress) => {
+        if (shape === 'mixed-six' && index === 1) return { name };
+        if (shape === 'mixed-six' && index > 1) return { name, outcome: 'unconfirmed', detail: 'Still deploying. Check app_status before deciding whether to abandon this deployment.' };
+        let diagnostic: DeployFailureDiagnostic | undefined;
+        const result = await handleDeployManifestError(partialError('poll'), ctx({ name, maxDetailChars: AI_BATCH_GUIDANCE_CHARS,
+          onDiagnostic: (value: DeployFailureDiagnostic) => { diagnostic = value; } }));
+        progress('failed', result.error, diagnostic);
+        return null;
+      },
+    });
+    const options = { ...batch, dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys' };
+    const result = summarizeBatchResult(options);
+    const text = result.error ?? (result.data as { message: string }).message;
+    for (const name of batch.failed) {
+      expect(text).toContain(`get_logs(app_name="${name}", tail=200)`);
+    }
+    expect(text.split(panic)).toHaveLength(batch.failed.length + 1);
+    expect(text.split('[web]')).toHaveLength(batch.failed.length + 1);
+    expect(text.split('[worker]')).toHaveLength(batch.failed.length + 1);
+    expect(text.split('worker-still-alive')).toHaveLength(batch.failed.length + 1);
+    if (shape === 'mixed-six') {
+      expect(text).toContain(nextStepFor('ContainerExited', names[0]));
+      expect(text).not.toContain('Details were shortened');
+    }
+    const withoutDiagnostics = summarizeBatchResult({ ...options,
+      batchProgress: batch.batchProgress.map(({ name, phase }) => ({ name, phase })),
+      unconfirmed: batch.unconfirmed.map(({ name, outcome }) => ({ name, outcome })) });
+    for (const indentation of [undefined, 2]) {
+      expect(JSON.stringify(result, null, indentation).length - JSON.stringify(withoutDiagnostics, null, indentation).length).toBeLessThanOrEqual(AI_BATCH_DIAGNOSTIC_CHARS);
+    }
+    expect(JSON.stringify(onProgress.mock.calls)).not.toContain('"diagnostic":');
+    expect(JSON.stringify(result)).not.toContain('"logs":');
+  });
+
+  it.each([[6, true], [10, false], [16, true]] as const)('keeps fail count and complete guidance for a %i-service stack (long message: %s)', async (serviceCount, longMessage) => {
+    const message = longMessage ? 'container exited unexpectedly; '.repeat(20) : 'container exited unexpectedly';
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 7,
+      reason: 'ContainerExited', message } as never);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ logs: Object.fromEntries(Array.from({ length: serviceCount }, (_, index) => [
+      `service-${index}`, `${'startup '.repeat(200)}service-${index} panic: final crash line`,
+    ])) } as never);
+    let diagnostic: DeployFailureDiagnostic | undefined;
+    const result = await handleDeployManifestError(partialError('poll'), ctx({ maxDetailChars: AI_BATCH_GUIDANCE_CHARS,
+      onDiagnostic: (value: DeployFailureDiagnostic) => { diagnostic = value; } }));
+    const text = result.error!;
+    expect(text).toContain('Provision error (fail_count=7): ContainerExited:');
+    expect(text).toContain(nextStepFor('ContainerExited', 'test-app'));
+    expect(text).toContain('service-0 panic: final crash line');
+    const omitted = Number(text.match(/\((\d+) more services; use get_logs\.\)$/)?.[1]);
+    expect(omitted).toBeGreaterThan(0);
+    expect((text.match(/\[service-\d+\]/g)?.length ?? 0) + omitted).toBe(serviceCount);
+    expect([...text].length).toBeLessThanOrEqual(AI_BATCH_GUIDANCE_CHARS);
+    const summary = summarizeBatchResult({ succeeded: [{ name: 'healthy' }], failed: ['test-app'],
+      batchProgress: [{ name: 'test-app', phase: 'failed', detail: text, diagnostic }],
+      dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys' });
+    expect(summary.data).toMatchObject({ message: expect.stringContaining(nextStepFor('ContainerExited', 'test-app')!) });
+    expect(summary.data).toMatchObject({ message: expect.stringContaining('Provision error (fail_count=7)') });
+    expect(JSON.stringify(summary)).not.toContain('Details were shortened');
+  });
+
+  it.each([' ', '\u0000\u202e\r\n'])('keeps each service header and panic before a long trailing noise run (%j)', async (noise) => {
+    const panic = 'panic: nil pointer at main.go:42';
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1,
+      reason: 'ContainerExited', message: 'container exited unexpectedly' } as never);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ logs: {
+      web: `web startup\n${panic}${noise.repeat(100_000)}`,
+      worker: `${'heartbeat '.repeat(800)}worker-still-alive`,
+      empty: noise.repeat(100_000),
+    } } as never);
+    let diagnostic: DeployFailureDiagnostic | undefined;
+    const result = await handleDeployManifestError(partialError('poll'), ctx({ maxDetailChars: AI_BATCH_GUIDANCE_CHARS,
+      onDiagnostic: (value: DeployFailureDiagnostic) => { diagnostic = value; } }));
+    const text = result.error!;
+    expect(text).toContain(`[web]\nweb startup\n${panic}`);
+    expect(text).toContain('[worker]');
+    expect(text).toContain('worker-still-alive');
+    expect(text).toContain('[empty]\n(no visible log output)');
+    expect(text).not.toContain('\u0000');
+    expect(text).not.toMatch(/\p{Cf}/u);
+    expect([...text].length).toBeLessThanOrEqual(AI_BATCH_GUIDANCE_CHARS);
+    const summary = summarizeBatchResult({ succeeded: [], failed: ['test-app'],
+      batchProgress: [{ name: 'test-app', phase: 'failed', detail: text, diagnostic }],
+      dataKey: 'deployed', verb: 'Deployed', failedNoun: 'deploys' });
+    expect(summary.error).toContain(panic);
+    expect(summary.error).toContain('[web]');
+    expect(summary.error).toContain('[worker]');
+    expect(summary.error).toContain('worker-still-alive');
+  });
+
+  it('bounds code-point allocation for a large log while preserving safe ending line breaks', async () => {
+    const ending = '\nlast setup line\n\u202e\u0000panic: nil pointer at main.go:42\nstack frame 💥';
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 1, reason: 'ContainerExited' } as never);
+    vi.mocked(getLeaseLogs).mockResolvedValue({ logs: { web: '💥'.repeat(5_000_000) + ending } } as never);
+    const arrays = vi.spyOn(Array, 'from');
+    try {
+      const result = await handleDeployManifestError(partialError('poll'), ctx());
+      const text = result.error!;
+      expect(text).toContain('last setup line\n panic: nil pointer at main.go:42\nstack frame 💥');
+      expect(text).not.toMatch(/[\p{Cf}\uFFFD]/u);
+      expect(text).not.toContain('\u0000');
+      expect(new TextDecoder().decode(new TextEncoder().encode(text))).toBe(text);
+      const preview = text.split('for more:\n')[1];
+      expect([...preview].length).toBeLessThanOrEqual(AI_DEPLOY_LOG_PREVIEW_CHARS);
+      const stringInputs = arrays.mock.calls.map(([input]) => input).filter((input): input is string => typeof input === 'string');
+      expect(Math.max(...stringInputs.map((input) => input.length))).toBeLessThanOrEqual(2 * AI_DEPLOY_LOG_PREVIEW_CHARS);
+    } finally { arrays.mockRestore(); }
+  });
 
   it('reports a poll verdict as failed while the chain lease is still ACTIVE', async () => {
     // Reaching the 2nd throw site with failedStep 'poll' means the poll raised

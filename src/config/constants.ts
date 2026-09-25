@@ -36,7 +36,7 @@ export const MS_PER_SECOND = 1000;
 export const AUTO_REFRESH_INTERVAL_MS = 15_000;
 export const APP_RECOVERY_POLL_INTERVAL_MS = 1_000;
 export const APP_RECOVERY_MAX_ATTEMPTS = 4;
-/** Saved inventory gets four slower retries beyond the initial four attempts. */
+/** Stale inventory or uncertain readiness gets four slower retries beyond the initial four attempts. */
 export const APP_CONNECTION_RECOVERY_MAX_ATTEMPTS = 8;
 export const APP_CONNECTION_RECOVERY_INTERVAL_MS = 5 * 60_000;
 
@@ -159,6 +159,35 @@ export const AI_LEASE_WAIT_TIMEOUT_MS = 900_000;
 /** Maximum concurrent app deploys in a batch (runtime-configurable).
  * Limited by provider rate limiting (Fred defaults to 5 req/s per tenant, burst 10). */
 export const AI_BATCH_DEPLOY_CONCURRENCY = getNumericConfig('PUBLIC_AI_BATCH_DEPLOY_CONCURRENCY', 4);
+
+/** Maximum serialized diagnostic text in one batch tool result. Keeps provider
+ * error bodies from consuming the persisted conversation's prompt budget. */
+export const AI_BATCH_DIAGNOSTIC_CHARS = 8_192;
+/** Code points retained from an untrusted provider failure detail, before an ellipsis. */
+export const FAILURE_DETAIL_CHARS = 256;
+
+/** Per-message persisted error bound in UTF-16 units, including the omission notice.
+ * Covers the batch diagnostic budget plus room for names and summary framing. */
+export const AI_HISTORY_ERROR_CHARS = AI_BATCH_DIAGNOSTIC_CHARS + 2_048;
+/** Maximum saved ending portion of an oversized authored error. */
+export const AI_HISTORY_ERROR_TAIL_CHARS = 2_048;
+
+/** Per-row bound for Barney's guidance after individual provider fields have
+ * been sanitized. Leaves room for full recovery instructions and next steps. */
+export const AI_BATCH_GUIDANCE_CHARS = 1_024;
+/** Preparation failures can include wallet/storage guidance, but are untrusted text. */
+export const AI_MAINTENANCE_PREPARATION_DETAIL_CHARS = 1_024;
+/** Exact zero-HTTP proofs retained per lease; older advice stays conservative
+ * after eviction and can require another explicit command confirmation. */
+export const MAINTENANCE_NEVER_SENT_PROOF_LIMIT = 128;
+/** Per-tab suppression for explicitly consumed recovery advice. */
+export const MAINTENANCE_CONSUMED_ADVICE_LIMIT = 128;
+/** Manifest validation can report several actionable errors in one response. */
+export const AI_MANIFEST_VALIDATION_DETAIL_CHARS = 4_096;
+
+/** Automatic deploy diagnostics include only a bounded container-log tail;
+ * get_logs remains available for an explicit, larger log request. */
+export const AI_DEPLOY_LOG_PREVIEW_CHARS = 2_000;
 
 // ============================================
 // Fred WebSocket / Polling Constants

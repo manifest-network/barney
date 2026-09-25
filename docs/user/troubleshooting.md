@@ -93,6 +93,74 @@ You attached an oversized manifest (raw input) or asked for a stack with too man
 
 ## Runtime problems
 
+### Restart or update outcome is unconfirmed
+
+Check the app's status and releases. The provider may still execute a pending
+command after a timeout or lost response. On dev's PR240 provider, ask Barney to
+retry the same restart, or retry the update using only the app name; it recovers
+the saved command. For a bulk restart, retrying "all" recovers only unresolved
+restarts. Legacy v0.13 providers cannot deduplicate requests: inspect status and
+releases before deliberately submitting another command. Avoid changing the
+update or automatically stopping and redeploying to resolve uncertainty.
+
+Barney keeps update contents in memory to protect secrets. After a browser
+reload, retry using only the app name to look for matching bytes in provider
+release history. You can also reattach the original file: Barney tries its
+original merge with saved defaults and requires an exact payload fingerprint
+match. A mismatched attachment does not prevent recovery from retained bytes or
+history. If the history read fails or signing is rejected, reconnect the wallet
+if needed and retry; those failures do not mean the payload is permanently lost.
+Generated passwords and confirmation edits cannot be regenerated; if
+the provider has no matching manifest, the exact reviewed bytes are needed.
+Rejected updates create no release. If that rejection's response and the exact
+payload are both lost, Barney cannot resolve the command through the available
+provider API. Clearing chat or abandoning local metadata would not cancel it;
+do not use either as permission to send a replacement command.
+If the exact bytes are permanently lost, the only in-app exit is to deliberately
+stop the deployment through a separate confirmation. Fred may still execute the
+pending command until the lease closes. Stopping ends the deployment; it does
+not recover the update, and Barney does not automatically redeploy it.
+Recovery never changes the command's key or infers success from matching bytes. A
+healthy app can still have a failed restart or update if the provider restored
+the previous runtime. The operation result and app health are reported separately.
+
+Barney retains the last settled command's identity across tabs and reloads. If
+you follow old retry advice after it settled, Barney reports that receipt instead
+of offering another operation. Check the outcome first. If you deliberately want
+another restart or update, ask for a new operation; its confirmation says so.
+If Barney reports a missing saved command record, the outcome is still unknown.
+The conversation carrying that recovery advice blocks another command, including
+after restoring it in a new tab. App status and release history can show the current
+state, but those checks cannot recreate the missing command record or lift this block.
+A separately confirmed stop can end the deployment; it does not recover the command.
+Commands cancelled before any request was sent leave proof that they were not sent,
+so repeated cancellations and later successful work do not revive that advice or invalidate
+an already-approved card. Barney retains the most recent 128 such proofs per lease; advice older
+than that can conservatively require an explicit request for a new operation. Recovery safeguards
+attach only to the result that issued pending-command recovery advice. Planning refusals and batch
+skips do not create new copies. Reloading the same tab after a deliberate new command normally
+preserves its acknowledgement; unrelated later chat rows do not carry old safeguards. If storage is
+full and the acknowledgement cannot be saved, it still releases the guard in the current tab;
+reloading an original advice row can conservatively require another explicit request.
+The tab retains the latest 128 acknowledgements per lease. Restoring still-older advice can
+require another explicit request for new work.
+
+Each wallet session has room for 128 completed or pending operations. Barney
+checks the whole batch before confirmation and reserves room before starting it,
+so a capacity limit cannot cause only part of an approved batch to run. At the
+limit, clear chat history before starting new work. Existing pending commands
+remain recoverable; clearing history does not cancel or discard them.
+
+After an uncertain restart or update, background checks continue for a bounded
+number of attempts even when the app was previously healthy. The sidebar keeps
+the last observed readiness until a fresh provider observation changes it. You
+can always request `app_status` if those checks are exhausted. A failed app that Fred starts
+re-provisioning also receives bounded background checks after an in-progress status read,
+so it can return to running without another manual refresh. An unreachable provider or failed
+authentication during an ordinary status check does not start a new readiness-check cycle. Pending
+maintenance still needs a runtime observation and can schedule follow-up even when that read fails;
+those checks remain bounded.
+
 ### "App is failed"
 
 After provisioning succeeds, the container can still crash. `app_status <name>` and `get_logs <name>` surface what the container is saying. `app_diagnostics <name>` surfaces what the *provider* thinks happened.

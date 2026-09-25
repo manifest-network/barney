@@ -315,6 +315,13 @@ describe('confirmation flow (Zustand store)', () => {
       expect(store.getState().pendingConfirmation).toBe(stalePending);
       return;
     }
+    if (expectsNonDeployManifestOverride) {
+      // Untouched manifests retain their exact bytes. Make a real edit so this
+      // still exercises the non-deploy override path at the wallet guard.
+      const removePort = container.querySelector('button[aria-label="Remove port 80/tcp"]') as HTMLButtonElement;
+      expect(removePort).not.toBeNull();
+      await act(async () => { removePort.click(); });
+    }
     const executionTransitions: Array<Pick<AIStore,
       'isStreaming' | 'abortController' | 'activeTransactionMessageId' | 'messages'>> = [];
     const unsubscribe = store.subscribe((state) => {
@@ -338,9 +345,9 @@ describe('confirmation flow (Zustand store)', () => {
     if (expectsNonDeployManifestOverride) {
       const override = confirmActionSpy.mock.calls.at(-1)?.[0];
       expect(override?.editedManifestJson).toBeDefined();
-      expect(JSON.parse(override?.editedManifestJson ?? '{}')).toEqual(
-        JSON.parse('_generatedManifest' in args ? args._generatedManifest : '{}'),
-      );
+      const expectedManifest = JSON.parse('_generatedManifest' in args ? args._generatedManifest : '{}');
+      delete expectedManifest.ports;
+      expect(JSON.parse(override?.editedManifestJson ?? '{}')).toEqual(expectedManifest);
     }
     if (domainValidation === 'valid') {
       // This row has cleared the domain gate, so the call proves that a valid
