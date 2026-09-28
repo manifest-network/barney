@@ -429,8 +429,8 @@ function* emitToolCalls(
 
 /**
  * Check if the AI API is available.
- * GET the relay readiness endpoint. The relay caches a bounded provider-model
- * probe and also reports ledger health and hard-budget availability.
+ * GET the relay readiness endpoint. The relay caches bounded model-catalog and
+ * API-key authentication probes, plus ledger health and hard-budget availability.
  */
 export async function checkApiHealth(): Promise<boolean> {
   try {

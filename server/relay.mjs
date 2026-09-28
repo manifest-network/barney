@@ -10,7 +10,7 @@ import {
   setSessionCookie,
   verifyAdr36,
 } from './auth.mjs';
-import { loadRelayConfig, upstreamChatUrl, upstreamModelsUrl } from './config.mjs';
+import { loadRelayConfig, upstreamBalanceUrl, upstreamChatUrl, upstreamModelsUrl } from './config.mjs';
 import { estimateSpendMicroUsd, QuotaError, QuotaLedger } from './ledger.mjs';
 import { RelayMetrics } from './metrics.mjs';
 import {
@@ -229,20 +229,29 @@ export async function createRelay(options = {}) {
       const abort = new AbortController();
       const timer = setTimeout(() => abort.abort(), config.upstreamConnectTimeoutMs);
       try {
-        const response = await fetchImpl(upstreamModelsUrl(config), {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            Authorization: `Bearer ${config.apiKey}`,
-          },
-          redirect: 'error',
-          signal: abort.signal,
-        });
-        await response.body?.cancel().catch(() => {});
-        readinessResult = response.ok;
+        // The model catalog is public. Balance requires the inference API key,
+        // so probe both concurrently under one deadline without retaining balances.
+        const results = await Promise.all([
+          upstreamModelsUrl(config),
+          upstreamBalanceUrl(config),
+        ].map(async (url) => {
+          const response = await fetchImpl(url, {
+            method: 'GET',
+            headers: {
+              Accept: 'application/json',
+              Authorization: `Bearer ${config.apiKey}`,
+            },
+            redirect: 'error',
+            signal: abort.signal,
+          });
+          await response.body?.cancel().catch(() => {});
+          return response.ok;
+        }));
+        readinessResult = results.every(Boolean);
       } catch {
         readinessResult = false;
       } finally {
+        abort.abort();
         clearTimeout(timer);
         readinessCheckedAt = now();
         readinessInFlight = undefined;

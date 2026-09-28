@@ -208,7 +208,7 @@ If timeouts persist:
 
 ### "Connection lost" / "Disconnected"
 
-Barney runs a periodic readiness check against its server relay (`AI_HEALTH_CHECK_INTERVAL_MS`, 60 s). When checks fail, the badge in the chat header turns red and the interval backs off (capped at `AI_HEALTH_CHECK_MAX_BACKOFF` × the base interval). This free check uses a cached authenticated provider-model probe and verifies ledger/default-request budget availability without spending inference tokens.
+Barney runs a periodic readiness check against its server relay (`AI_HEALTH_CHECK_INTERVAL_MS`, 60 s). When checks fail, the badge in the chat header turns red and the interval backs off (capped at `AI_HEALTH_CHECK_MAX_BACKOFF` × the base interval). This free check caches provider model-catalog reachability and API-key authentication through the provider's balance endpoint, and verifies ledger/default-request budget availability without spending inference tokens. It does not evaluate the provider's balance or guarantee that a particular completion will succeed.
 
 If you see persistent disconnection on a self-hosted instance, the most common causes are:
 
