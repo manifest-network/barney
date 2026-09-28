@@ -382,19 +382,27 @@ export function getApps(address: string): AppEntry[] {
  * Import missing live leases without replacing local aliases or observations.
  * Chain activity alone cannot establish that a provider's workload is ready.
  * Provider hydration replaces the unconfirmed marker after an actual observation.
+ *
+ * `payloadlessLeaseUuids` names live leases the chain shows carry no deployment
+ * (no meta hash). They are not Barney apps; entries an earlier build imported
+ * for them are dropped in the same write.
  */
 export function discoverAppsFromChain(
   address: string,
   leases: readonly ChainAppSnapshot[],
+  payloadlessLeaseUuids: readonly string[] = [],
 ): AppEntry[] {
-  const apps = loadApps(address);
+  const payloadless = new Set(payloadlessLeaseUuids);
+  const loaded = loadApps(address);
+  const apps = loaded.filter((app) => !payloadless.has(app.leaseUuid));
+  const forgotten = apps.length !== loaded.length;
   const knownLeases = new Set(apps.map((app) => app.leaseUuid));
   const names = new Set(apps.map((app) => app.name));
   const imported: AppEntry[] = [];
 
   // Stable ordering makes fallback-name collisions independent of RPC ordering.
   for (const lease of [...leases].sort((a, b) => a.leaseUuid.localeCompare(b.leaseUuid))) {
-    if (knownLeases.has(lease.leaseUuid)) continue;
+    if (knownLeases.has(lease.leaseUuid) || payloadless.has(lease.leaseUuid)) continue;
     const suffix = lease.leaseUuid.toLowerCase().replace(/[^a-z0-9]/g, '').slice(-24) || 'lease';
     const baseName = `app-${suffix}`;
     let name = baseName;
@@ -424,7 +432,7 @@ export function discoverAppsFromChain(
     names.add(name);
   }
 
-  if (imported.length > 0) {
+  if (imported.length > 0 || forgotten) {
     saveApps(address, apps);
     notify(address);
   }
