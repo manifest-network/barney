@@ -14,12 +14,27 @@ import { asLeaseUuid } from '@manifest-network/manifest-sdk';
 import { logError } from '../../utils/errors';
 import type { SigningContext } from './types';
 import type { AppEntry } from '../../registry/appRegistry';
+import { classifyProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
+import { isTerminalLeaseState } from '../../utils/leaseState';
+
+/** A connection read is not a runtime verdict. Both foreground status queries
+ * and background discovery use this rule to retire maintenance rechecks. */
+export function readinessObservationPatch(
+  status: FredLeaseStatus | undefined,
+  previous: Pick<AppEntry, 'readinessStale'>,
+): Pick<Partial<AppEntry>, 'readinessStale'> {
+  if (!previous.readinessStale || !status) return {};
+  const observation = classifyProvisionStatus(status.provision_status);
+  return isTerminalLeaseState(status.state)
+    || (observation !== undefined && !isUnsettledProvisionStatus(status.provision_status))
+    ? { readinessStale: false } : {};
+}
 
 /** Refresh the primary endpoint independently of the saved service inventory. */
 export function refreshAppConnection(
   status: FredLeaseStatus | undefined,
   connection: ConnectionDetails | undefined,
-  previous: Pick<AppEntry, 'url' | 'connection'>,
+  previous: Pick<AppEntry, 'url' | 'connection' | 'readinessStale'>,
 ) {
   const shaped = connection ? deriveUrlFromConnection(connection) : undefined;
   // Status endpoints can be a lower-level IP:port hint. A failed connection
@@ -29,7 +44,8 @@ export function refreshAppConnection(
   const statusMatchesPrevious = statusUrl !== undefined && (statusUrl === previousUrl
     || (!!previousUrl && isDnsHostname(previousUrl) && statusUrl === `https://${previousUrl}`));
   const url = shaped?.url ?? (connection || !previousUrl ? statusUrl : undefined);
-  const patch = connectionPatch({ url, connection: shaped?.connection ?? connection });
+  const patch = { ...connectionPatch({ url, connection: shaped?.connection ?? connection }),
+    ...readinessObservationPatch(status, previous) };
   const providerEndpoint = !url && !statusMatchesPrevious ? statusUrl : undefined;
   return { patch, providerEndpoint, endpointRefreshed: url !== undefined || statusMatchesPrevious, connectionRefreshed: connection !== undefined };
 }

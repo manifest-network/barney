@@ -8,6 +8,7 @@ import {
   type AISettings,
 } from '../../ai/validation';
 import { logError } from '../../utils/errors';
+import { boundPersistedError } from '../../utils/persistedError';
 import { createVersionedStorage } from '../../utils/versionedStorage';
 import type { WalletIdentity } from '../../utils/walletIdentity';
 import {
@@ -18,6 +19,8 @@ import {
 import type { ChatMessage } from '../../contexts/aiTypes';
 import type { StoreApi } from 'zustand';
 import type { AIStore } from '../aiStore';
+import { restoreMessageMaintenanceAdvice } from '../../ai/toolExecutor/maintenanceRecoveryIntent';
+import { getSettledMaintenanceOperation } from '../../ai/toolExecutor/maintenanceOperation';
 
 const STORAGE_KEY_SETTINGS = 'barney-ai-settings';
 const LEGACY_STORAGE_KEY_HISTORY = 'barney-ai-history';
@@ -134,7 +137,11 @@ export function loadHistory(identity: WalletIdentity): ChatMessage[] {
   const key = historyStorageKey(identity);
   const saved = historyStorage.load(key);
   if (saved && walletIdentitiesEqual(saved.identity, identity)) {
-    return rehydrateChatHistory(saved.messages);
+    const messages = rehydrateChatHistory(saved.messages);
+    restoreMessageMaintenanceAdvice(messages, identity, (advice) => {
+      getSettledMaintenanceOperation(advice.address, advice.providerUrl, advice.leaseUuid, advice.chainId);
+    });
+    return messages;
   }
 
   // Nothing usable. Clear the key so the next load stays cheap — but not when
@@ -247,9 +254,12 @@ export function saveHistory(
   const toSave = messages
     .filter((m) => !m.isStreaming)
     // eslint-disable-next-line @typescript-eslint/no-unused-vars -- see comment above
-    .map(({ card, toolCalls, ...rest }) =>
-      card ? { ...rest, content: `[${card.type} displayed to user]` } : rest
-    );
+    .map(({ card, toolCalls, error, ...rest }) => ({
+      ...rest,
+      ...(card && { content: `[${card.type} displayed to user]` }),
+      error: boundPersistedError(error),
+      errorFormat: typeof error === 'string' ? 'authored' as const : undefined,
+    }));
   if (toSave.length === 0) {
     historyStorage.clear(key);
     return;

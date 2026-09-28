@@ -9,7 +9,6 @@
  * and only broadcasts when it is identical to the plan the user approved.
  */
 
-import { validateManifest } from '@manifest-network/manifest-sdk/deploy';
 import { getCreditAccount } from '../../api/billing';
 import { DENOMS } from '../../api/config';
 import { getProviders } from '../../api/sku';
@@ -27,7 +26,7 @@ import { MAX_PAYLOAD_SIZE, sha256, toHex } from '../../utils/hash';
 import { queryLeaseByCustomDomain } from '../../api/leaseByCustomDomain';
 import { isAbortError, throwIfAborted, withTimeout } from '../../api/utils';
 import type { PayloadAttachment, ToolExecutorOptions } from './types';
-import { validateManifestEnvNames } from './deployArgs';
+import { validateManifestEnvNames, validateManifestForProvider } from './deployArgs';
 
 export const BATCH_DEPLOY_PLAN_VERSION = 1 as const;
 
@@ -510,12 +509,6 @@ export async function planBatchDeploy(
       if (rejectDraft(draftIndex, error)) continue;
       return { success: false, error };
     }
-    const validation = validateManifest(parsed);
-    if (!validation.valid) {
-      const error = `Cannot deploy "${name}": invalid manifest: ${validation.errors.join('; ')}`;
-      if (rejectDraft(draftIndex, error)) continue;
-      return { success: false, error };
-    }
     const envError = validateManifestEnvNames(parsed);
     if (envError) {
       const error = `Cannot deploy "${name}": ${envError}`;
@@ -542,6 +535,13 @@ export async function planBatchDeploy(
     const provider = providers.find((candidate) => candidate.uuid === tier.providerUuid);
     if (!provider?.apiUrl) {
       const error = `No available provider found for the ${tier.skuName} tier.`;
+      if (rejectDraft(draftIndex, error)) continue;
+      return { success: false, error };
+    }
+
+    const manifestError = await validateManifestForProvider(manifest, provider.apiUrl);
+    if (manifestError) {
+      const error = `Cannot deploy "${name}": ${manifestError}`;
       if (rejectDraft(draftIndex, error)) continue;
       return { success: false, error };
     }

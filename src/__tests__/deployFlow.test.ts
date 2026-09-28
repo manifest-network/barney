@@ -177,7 +177,7 @@ describe('Deploy Flow Integration', () => {
     // Must be valid JSON — the deploy SDK JSON.parses the manifest string,
     // and the plan-phase guard (§3.9) now rejects non-JSON file uploads
     // (e.g. raw docker-compose YAML) before reaching confirmation.
-    const payloadBytes = new TextEncoder().encode(JSON.stringify({ image: 'nginx', port: '80' }));
+    const payloadBytes = new TextEncoder().encode(JSON.stringify({ image: 'nginx', ports: { '80/tcp': {} } }));
     const payload: PayloadAttachment = {
       filename: 'docker-compose.json',
       bytes: payloadBytes,

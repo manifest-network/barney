@@ -27,11 +27,13 @@ import {
   type ConnectionDetails,
   type ProviderHealthResponse,
 } from '@manifest-network/manifest-sdk/deploy';
-import { classifyProvisionStatus, displayProvisionStatus, isUnsettledProvisionStatus } from './provisionStatus';
+import { displayProvisionStatus, provisionObservationPatch } from './provisionStatus';
 import { appCardConnection } from './appCardConnection';
 import { buildBarneyCtx } from './capabilityCtx';
 import { nextStepFor } from './failureGuidance';
-import { resolveAppEndpoint } from './helpers';
+import { reconcilePendingMaintenance } from './maintenanceReconciliation';
+import { retireAbsentMaintenanceOperation } from './maintenanceOperation';
+import { FAILURE_DETAIL_CHARS, resolveAppEndpoint } from './helpers';
 import { refreshAppConnection } from './deployUrl';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import { getDomainAssignments } from '../../api/leaseDomains';
@@ -102,6 +104,9 @@ export async function executeListApps(
       if (appRegistry.getAppByLease(address, app.leaseUuid)?.chainState !== app.chainState) continue;
       const updated = appRegistry.updateApp(address, app.leaseUuid, { chainState });
       if (updated) app.status = updated.status;
+      if (chainState === 'absent' && app.providerUrl) {
+        await retireAbsentMaintenanceOperation({ address, providerUrl: app.providerUrl, leaseUuid: app.leaseUuid, chainId: options.authorization?.chainId });
+      }
     }
     const liveLeases = new Map([...pendingLeases, ...activeLeases].map((lease) => [lease.uuid, lease]));
     await discoverTenantApps(address, [...liveLeases.values()], { signal, registry: appRegistry });
@@ -187,7 +192,7 @@ export async function executeAppStatus(
 
   if (signing && options.clientManager) {
     try {
-      const ctx = await buildBarneyCtx(options.clientManager, signing);
+      const ctx = await buildBarneyCtx(options.clientManager, signing, { operation: 'query' });
       throwIfAborted(signal, 'app_status');
       const st = await appStatus(ctx, { address, leaseUuid: app.leaseUuid });
       throwIfAborted(signal, 'app_status');
@@ -249,6 +254,9 @@ export async function executeAppStatus(
   if (isTerminalLeaseState(leaseState)) {
     statusUnavailable = false;
     endpointInactive = true;
+    if (app.providerUrl) {
+      await retireAbsentMaintenanceOperation({ address, providerUrl: app.providerUrl, leaseUuid: app.leaseUuid, chainId: options.authorization?.chainId });
+    }
     if (app.chainState !== 'absent') {
       recordObservation({ chainState: 'absent' });
     }
@@ -262,8 +270,8 @@ export async function executeAppStatus(
       endpointInactive = true;
       // A terminal provider-side lease is a workload verdict even when the
       // chain still reports an active lease.
-      if (app.chainState !== 'active' || app.provisionState !== 'failed') {
-        recordObservation({ chainState: 'active', provisionState: 'failed' });
+      if (app.chainState !== 'active' || app.provisionState !== 'failed' || app.readinessStale) {
+        recordObservation({ chainState: 'active', provisionState: 'failed', ...(app.readinessStale && { readinessStale: false }) });
       }
     } else {
       const refresh = refreshAppConnection(fredStatus ?? undefined, refreshedConnection, app);
@@ -272,20 +280,20 @@ export async function executeAppStatus(
       endpointRefreshed = refresh.endpointRefreshed;
       providerEndpoint = refresh.providerEndpoint;
       connectionRefreshed = refresh.connectionRefreshed;
+      // An unavailable response is not a new readiness observation. An arrived
+      // degraded response may still omit provision_status and require follow-up.
+      const readiness = fredStatus ? provisionObservationPatch(fredStatus.provision_status, app) : {};
       const accessChanged = Object.keys(refresh.patch).length > 0;
-      const observed = classifyProvisionStatus(fredStatus?.provision_status);
-      // Progress can fill a gap, but cannot retract a previous confirmation.
-      const unsettled = isUnsettledProvisionStatus(fredStatus?.provision_status);
-      const provisionState = unsettled && app.provisionState === 'confirmed' ? undefined : observed;
       providerStatus = displayProvisionStatus(fredStatus?.provision_status);
       workloadStatusUnavailable = providerStatus === undefined;
       if (app.chainState !== 'active'
-          || (provisionState !== undefined && app.provisionState !== provisionState)
+          || (readiness.provisionState !== undefined && app.provisionState !== readiness.provisionState)
+          || (readiness.readinessStale !== undefined && !!app.readinessStale !== readiness.readinessStale)
           || accessChanged) {
         recordObservation({
           chainState: 'active',
-          ...(provisionState !== undefined ? { provisionState } : {}),
           ...refresh.patch,
+          ...readiness,
         });
       }
     }
@@ -302,6 +310,10 @@ export async function executeAppStatus(
     }
   }
 
+  const maintenance = !endpointInactive ? await reconcilePendingMaintenance(app, options, undefined, fredStatus?.provision_status) : undefined;
+  const reconciledApp = appRegistry.getAppByLease(address, app.leaseUuid) ?? app;
+  currentStatus = reconciledApp.status;
+
   const domainTargetsStale = !!app.connectionStale && !connectionRefreshed;
   // Keep the deployed endpoint intact, including its scheme, port, and path.
   const connectionUrl = endpointInactive ? undefined : resolveAppEndpoint({ url: appUrl, connection: appConnection });
@@ -309,9 +321,9 @@ export async function executeAppStatus(
   // Extract image from stored manifest (single-service or stack)
   let image: string | undefined;
   let serviceImages: Record<string, string> | undefined;
-  if (app.manifest) {
+  if (reconciledApp.manifest) {
     try {
-      const manifest = JSON.parse(app.manifest);
+      const manifest = JSON.parse(reconciledApp.manifest);
       if (typeof manifest.image === 'string') {
         image = manifest.image;
       } else if (manifest.services && typeof manifest.services === 'object') {
@@ -415,6 +427,7 @@ export async function executeAppStatus(
     name: app.name,
     status: currentStatus,
     provision_status: providerStatus,
+    ...(maintenance && { maintenance }),
     statusUnavailable,
     workloadStatusUnavailable,
     providerQuerySkipped: !signing || !options.clientManager,
@@ -477,7 +490,7 @@ export async function executeGetBalance(
     logError('compositeQueries.executeGetBalance', error);
     return {
       success: false,
-      error: `Failed to fetch balance: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error: `Failed to fetch balance: ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 
@@ -758,7 +771,7 @@ export async function executeGetLogs(
     logError('compositeQueries.executeGetLogs.sign', error);
     return {
       success: false,
-      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+      error: `Failed to sign request: ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown signing error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 
@@ -769,7 +782,7 @@ export async function executeGetLogs(
     logError('compositeQueries.executeGetLogs', error);
     return {
       success: false,
-      error: `Failed to fetch logs for "${app.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error: `Failed to fetch logs for "${app.name}": ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 
@@ -847,8 +860,8 @@ export async function executeLeaseHistory(
       state: LEASE_STATE_LABELS[lease.state as LeaseState] || 'unknown',
       created: lease.createdAt ? new Date(lease.createdAt).toISOString() : undefined,
       closed: lease.closedAt ? new Date(lease.closedAt).toISOString() : undefined,
-      closureReason: lease.closureReason || undefined,
-      rejectionReason: lease.rejectionReason || undefined,
+      closureReason: lease.closureReason ? sanitizeForDisplay(lease.closureReason, FAILURE_DETAIL_CHARS) : undefined,
+      rejectionReason: lease.rejectionReason ? sanitizeForDisplay(lease.rejectionReason, FAILURE_DETAIL_CHARS) : undefined,
     };
   });
 
@@ -914,7 +927,7 @@ export async function executeAppDiagnostics(
     logError('compositeQueries.executeAppDiagnostics.sign', error);
     return {
       success: false,
-      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+      error: `Failed to sign request: ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown signing error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 
@@ -933,7 +946,7 @@ export async function executeAppDiagnostics(
       success: true,
       data: {
         app_name: app.name,
-        status: provision.status,
+        status: displayProvisionStatus(provision.status),
         fail_count: provision.fail_count,
         ...(failure?.reason !== undefined && { reason: sanitizeForDisplay(failure.reason, DIAGNOSTIC_REASON_CHARS) }),
         ...(failure?.message !== undefined && { message: sanitizeForDisplay(failure.message, DIAGNOSTIC_MESSAGE_CHARS) }),
@@ -945,7 +958,7 @@ export async function executeAppDiagnostics(
     logError('compositeQueries.executeAppDiagnostics', error);
     return {
       success: false,
-      error: `Failed to fetch diagnostics for "${app.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error: `Failed to fetch diagnostics for "${app.name}": ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 }
@@ -988,25 +1001,40 @@ export async function executeAppReleases(
     logError('compositeQueries.executeAppReleases.sign', error);
     return {
       success: false,
-      error: `Failed to sign request: ${error instanceof Error ? error.message : 'Unknown signing error'}`,
+      error: `Failed to sign request: ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown signing error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 
   try {
     const releasesResponse = await getLeaseReleases(app.providerUrl, app.leaseUuid, authToken);
+    const maintenance = await reconcilePendingMaintenance(app, options, releasesResponse);
     return {
       success: true,
       data: {
         app_name: app.name,
-        releases: releasesResponse.releases,
+        // Historical manifests contain secrets; keep raw bytes out of chat persistence.
+        releases: releasesResponse.releases.map((release) => {
+          const publicRelease: Record<string, unknown> = { ...release };
+          delete publicRelease.manifest;
+          // Keep the raw history above for correlation and exact-payload
+          // recovery; only the public diagnostic fields are display text.
+          for (const field of ['reason', 'message', 'error', 'last_error'] as const) {
+            if (typeof publicRelease[field] === 'string') {
+              publicRelease[field] = sanitizeForDisplay(publicRelease[field],
+                field === 'reason' ? DIAGNOSTIC_REASON_CHARS : DIAGNOSTIC_MESSAGE_CHARS);
+            }
+          }
+          return publicRelease;
+        }),
         count: releasesResponse.releases.length,
+        ...(maintenance && { maintenance }),
       },
     };
   } catch (error) {
     logError('compositeQueries.executeAppReleases', error);
     return {
       success: false,
-      error: `Failed to fetch releases for "${app.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error: `Failed to fetch releases for "${app.name}": ${sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS)}`,
     };
   }
 }
@@ -1036,7 +1064,12 @@ export async function executeRequestFaucet(
       error: 'Faucet is temporarily unavailable. Please try again in a few minutes.',
     };
   }
-  const { results } = faucetResult;
+  // Credit failures are returned values, and the SDK preserves the HTTP body.
+  // Bound each detail before it reaches either prose or structured tool data.
+  const results = faucetResult.results.map((result) => result.success ? result : {
+    ...result,
+    error: sanitizeForDisplay(result.error ?? 'Unknown error', FAILURE_DETAIL_CHARS),
+  });
 
   const allSuccess = results.every((r) => r.success);
   const allFailed = results.every((r) => !r.success);

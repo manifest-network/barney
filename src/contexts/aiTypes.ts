@@ -5,6 +5,7 @@
 
 import type { ToolCall } from '../api/morpheus';
 import type { PendingAction } from '../ai/toolExecutor';
+import type { MaintenanceRecoveryAdvice } from '../ai/toolExecutor/maintenanceRecoveryIntent';
 
 /** Data for a logs display card. */
 export interface LogsCardData {
@@ -109,6 +110,8 @@ export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool';
   content: string;
+  /** Nonsecret command identities for recovery advice retained in this row. */
+  maintenanceRecoveryAdvice?: MaintenanceRecoveryAdvice[];
   thinking?: string;
   timestamp: number;
   toolCalls?: ToolCall[];

@@ -9,7 +9,7 @@ import * as appRegistry from '../registry/appRegistry';
 import type { AppEntry, ChainAppSnapshot } from '../registry/appRegistry';
 import type { AppRegistryAccess, SigningContext } from '../ai/toolExecutor/types';
 import { refreshAppConnection } from '../ai/toolExecutor/deployUrl';
-import { classifyProvisionStatus, isUnsettledProvisionStatus } from '../ai/toolExecutor/provisionStatus';
+import { provisionObservationPatch } from '../ai/toolExecutor/provisionStatus';
 import { AI_TOOL_API_TIMEOUT_MS, APP_RECOVERY_TIMEOUT_MS } from '../config/constants';
 import { logError } from '../utils/errors';
 import { isTerminalLeaseState } from '../utils/leaseState';
@@ -186,22 +186,19 @@ export async function hydrateDiscoveredApp(
     const connection = response?.lease_uuid === snapshot.leaseUuid
       && response.tenant === address && response.provider_uuid === snapshot.providerUuid
       ? response.connection : undefined;
-    const patch: Partial<AppEntry> = refreshAppConnection(status, connection, snapshot).patch;
-    if (status) {
-      const observed = classifyProvisionStatus(status.provision_status);
-      if (isTerminalLeaseState(status.state)) patch.provisionState = 'failed';
-      else if (observed !== undefined
-        && !(snapshot.provisionState === 'confirmed' && isUnsettledProvisionStatus(status.provision_status))) {
-        patch.provisionState = observed;
-      }
-    }
+    const patch: Partial<AppEntry> = {
+      ...refreshAppConnection(status, connection, snapshot).patch,
+      // A rejected read cannot reopen a completed readiness check. Keep missing
+      // provision_status meaningful only when the provider response arrived.
+      ...(status && provisionObservationPatch(isTerminalLeaseState(status.state) ? 'failed' : status.provision_status, snapshot)),
+    };
     const updated = Object.keys(patch).length > 0
       ? registry.updateApp(address, snapshot.leaseUuid, patch)
       : snapshot;
     if (updated) return {
       app: updated,
-      complete: updated.provisionState === 'failed'
-        || (updated.provisionState === 'confirmed' && !!connection
+      complete: (updated.provisionState === 'failed' && !updated.readinessStale)
+        || (updated.provisionState === 'confirmed' && !updated.readinessStale && !updated.connectionStale && !!connection
           && (!!updated.url || hasEmptyEndpointInventory(connection))),
     };
   } catch (error) {

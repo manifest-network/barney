@@ -6,6 +6,7 @@ import type { ToolCall } from '../../api/morpheus';
 import { isAbortError, withAbort } from '../../api/utils';
 import { getToolCallDescription, isValidToolName } from '../../ai/tools';
 import { executeTool, type ToolResult } from '../../ai/toolExecutor';
+import { mergeMaintenanceAdvice } from '../../ai/toolExecutor/maintenanceRecoveryIntent';
 import type { TransactionAuthorization } from '../../ai/toolExecutor/types';
 import {
   buildPayloadFromManifest,
@@ -161,7 +162,8 @@ function setSingleConfirmation(
 
   const updated = get().messages.map((m) =>
     m.id === conf.toolMessageId
-      ? { ...m, content: conf.result.confirmationMessage || 'Awaiting confirmation...', isStreaming: false, awaitingConfirmation: true }
+      ? { ...m, content: conf.result.confirmationMessage || 'Awaiting confirmation...', isStreaming: false, awaitingConfirmation: true,
+        ...(conf.result.maintenanceRecoveryAdvice?.length && { maintenanceRecoveryAdvice: mergeMaintenanceAdvice(m.maintenanceRecoveryAdvice, conf.result.maintenanceRecoveryAdvice) }) }
       : m
   );
   set({ messages: updated });
@@ -622,7 +624,8 @@ export async function processToolCallsFn(
       continueConversation &&= result.continueConversation === true;
       const updated = get().messages.map((m) =>
         m.id === toolMessageId
-          ? { ...m, content: JSON.stringify(result.data, bigIntReplacer, 2), card: result.displayCard, isStreaming: false }
+          ? { ...m, content: JSON.stringify(result.data, bigIntReplacer, 2), card: result.displayCard, isStreaming: false,
+            ...(result.maintenanceRecoveryAdvice?.length && { maintenanceRecoveryAdvice: mergeMaintenanceAdvice(m.maintenanceRecoveryAdvice, result.maintenanceRecoveryAdvice) }) }
           : m
       );
       set({ messages: updated });
@@ -633,7 +636,8 @@ export async function processToolCallsFn(
 
       const updated = get().messages.map((m) =>
         m.id === toolMessageId
-          ? { ...m, content: resultContent, error: result.success ? undefined : result.error, isStreaming: false }
+          ? { ...m, content: resultContent, error: result.success ? undefined : result.error, isStreaming: false,
+            ...(result.maintenanceRecoveryAdvice?.length && { maintenanceRecoveryAdvice: mergeMaintenanceAdvice(m.maintenanceRecoveryAdvice, result.maintenanceRecoveryAdvice) }) }
           : m
       );
       set({ messages: updated });

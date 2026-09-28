@@ -32,6 +32,7 @@ function getPhaseIndex(phase: string): number {
 function phaseIcon(phase: string, size: string = 'w-4 h-4') {
   if (phase === 'ready') return <CheckCircle className={`${size} text-success-400`} aria-hidden="true" />;
   if (phase === 'failed') return <AlertCircle className={`${size} text-error-400`} aria-hidden="true" />;
+  if (phase === 'unconfirmed') return <AlertCircle className={`${size} text-muted`} aria-hidden="true" />;
   return <Loader className={`${size} text-primary-400 animate-spin`} aria-hidden="true" />;
 }
 
@@ -39,7 +40,8 @@ export const ProgressCard = memo(function ProgressCard({ progress }: ProgressCar
   const currentIdx = getPhaseIndex(progress.phase);
   const isFailed = progress.phase === 'failed';
   const isReady = progress.phase === 'ready';
-  const isTerminal = isFailed || isReady;
+  const isUnconfirmed = progress.phase === 'unconfirmed';
+  const isTerminal = isFailed || isReady || isUnconfirmed;
 
   // Derive operation type from progress.operation (set by executors) or phase
   const operation = progress.operation ?? 'deploy';
@@ -64,14 +66,16 @@ export const ProgressCard = memo(function ProgressCard({ progress }: ProgressCar
     update: { active: 'Updating...', ready: 'Updated!', failed: 'Update Failed' },
     deploy: { active: 'Deploying...', ready: 'Deployed!', failed: 'Deployment Failed' },
   };
-  const title = isFailed
+  const title = isUnconfirmed ? 'Outcome unknown' : isFailed
     ? titles[operation].failed
     : isReady
       ? titles[operation].ready
       : titles[operation].active;
 
   // Build a concise screen-reader announcement for the current phase
-  const phaseLabel = isFailed
+  const phaseLabel = isUnconfirmed
+    ? `Outcome unknown${progress.detail ? `: ${progress.detail}` : ''}`
+    : isFailed
     ? `${titles[operation].failed}${progress.detail ? `: ${progress.detail}` : ''}`
     : isReady
       ? titles[operation].ready
@@ -110,8 +114,8 @@ export const ProgressCard = memo(function ProgressCard({ progress }: ProgressCar
           ))}
         </div>
       ) : isSimpleOperation ? (
-        isFailed && progress.detail ? (
-          <p className="progress-card__detail text-error-400">{progress.detail}</p>
+        (isFailed || isUnconfirmed) && progress.detail ? (
+          <p className={`progress-card__detail ${isFailed ? 'text-error-400' : 'text-muted'}`}>{progress.detail}</p>
         ) : null
       ) : (
         <div className="progress-card__steps">

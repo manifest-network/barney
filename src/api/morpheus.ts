@@ -5,7 +5,8 @@
  */
 
 import { logError } from '../utils/errors';
-import { HEALTH_CHECK_TIMEOUT_MS, AI_STREAM_TIMEOUT_MS } from '../config/constants';
+import { sanitizeForDisplay } from '../utils/sanitizeText';
+import { HEALTH_CHECK_TIMEOUT_MS, AI_STREAM_TIMEOUT_MS, FAILURE_DETAIL_CHARS } from '../config/constants';
 import { runtimeConfig } from '../config/runtimeConfig';
 import {
   fetchWithMorpheusSession,
@@ -304,7 +305,7 @@ export async function* streamChat(
         const errorMsg = typeof chunkError.message === 'string'
           ? chunkError.message
           : JSON.stringify(chunkError);
-        yield { type: 'error', error: errorMsg };
+        yield { type: 'error', error: sanitizeForDisplay(errorMsg, FAILURE_DETAIL_CHARS) };
         return;
       }
 
@@ -387,7 +388,7 @@ export async function* streamChat(
     }
     yield {
       type: 'error',
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: sanitizeForDisplay(error instanceof Error ? error.message : 'Unknown error', FAILURE_DETAIL_CHARS),
     };
   }
 }
@@ -428,8 +429,8 @@ function* emitToolCalls(
 
 /**
  * Check if the AI API is available.
- * GET the relay readiness endpoint. The relay caches a bounded provider-model
- * probe and also reports ledger health and hard-budget availability.
+ * GET the relay readiness endpoint. The relay caches bounded model-catalog and
+ * API-key authentication probes, plus ledger health and hard-budget availability.
  */
 export async function checkApiHealth(): Promise<boolean> {
   try {

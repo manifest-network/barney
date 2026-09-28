@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { formatConnectionUrl, extractPrimaryServicePorts, deriveUrlFromConnection } from './helpers';
+import { formatConnectionUrl, extractPrimaryServicePorts, deriveUrlFromConnection, FAILURE_DETAIL_CHARS } from './helpers';
 import { resolveExpectedCnameTarget } from '../../utils/connection';
 import {
   deriveAppName,
@@ -27,8 +27,9 @@ import type { ToolExecutorOptions, PayloadAttachment } from './types';
 import type { CosmosClientManager, DeployResult } from '@manifest-network/manifest-sdk';
 import type { AppEntry } from '../../registry/appRegistry';
 import { makeRegistry } from './testHelpers';
+import { getOrCreateMaintenanceOperation, getPendingMaintenanceOperation, retireAbsentMaintenanceOperation } from './maintenanceOperation';
 import { LeaseState } from '../../api/billing';
-import { AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS } from '../../config/constants';
+import { AI_BATCH_GUIDANCE_CHARS, AI_DEPLOY_PROVISION_TIMEOUT_MS, AI_LEASE_WAIT_TIMEOUT_MS } from '../../config/constants';
 import { ProviderApiError } from '../../api/provider-api';
 import { logError } from '../../utils/errors';
 
@@ -1796,7 +1797,7 @@ describe('executeDeployApp', () => {
     vi.mocked(getCreditAccount).mockResolvedValue({
       balances: [{ denom: DENOMS.PWR, amount: '100000000' }],
     } as any);
-    const json = JSON.stringify({ image: 'nginx', port: '80' });
+    const json = JSON.stringify({ image: 'nginx', ports: { '80/tcp': {} } });
     const payload: PayloadAttachment = {
       bytes: new TextEncoder().encode(json),
       filename: 'app.json',
@@ -2148,6 +2149,56 @@ describe('executeStopApp', () => {
     expect(result.requiresConfirmation).toBe(true);
   });
 
+  it.each(['single', 'batch'] as const)('warns about pending provider work before a %s stop without provider reads', async (mode) => {
+    const app = makeApp({ providerUrl: 'https://s049-u002.manifest0.net/api/fred', leaseUuid: crypto.randomUUID() });
+    await getOrCreateMaintenanceOperation({ address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid,
+      operation: 'update', manifest: '{"image":"nginx:new"}', baselineReleaseVersions: [1] });
+    const result = await executeStopApp({ app_name: mode === 'batch' ? 'all' : app.name },
+      makeOptions({ appRegistry: makeRegistry([app]) }));
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain(`Fred may execute pending maintenance for "${app.name}" until its lease closes.`);
+    expect(result.confirmationMessage).toContain('it does not recover the pending command');
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(getLease).not.toHaveBeenCalled();
+    expect(stopApp).not.toHaveBeenCalled();
+    await retireAbsentMaintenanceOperation({ address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid });
+  });
+
+  it('keeps a stop available when its local maintenance record is unreadable', async () => {
+    const app = makeApp({ providerUrl: 'https://s049-u002.manifest0.net/api/fred', leaseUuid: crypto.randomUUID() });
+    await getOrCreateMaintenanceOperation({ address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid,
+      operation: 'restart', baselineReleaseVersions: [1] });
+    const key = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)!)
+      .find((candidate) => candidate.includes(app.leaseUuid))!;
+    localStorage.setItem(key, 'corrupt private metadata');
+    const result = await executeStopApp({ app_name: app.name }, makeOptions({ appRegistry: makeRegistry([app]) }));
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('Saved maintenance could not be checked');
+    expect(result.confirmationMessage).toContain(`Saved maintenance could not be checked for "${app.name}"`);
+    expect(result.confirmationMessage).toContain('for this app until its lease closes');
+    expect(result.confirmationMessage).not.toContain('private metadata');
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(getLease).not.toHaveBeenCalled();
+    await retireAbsentMaintenanceOperation({ address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid });
+  });
+
+  it('names each affected app in a mixed batch stop warning', async () => {
+    const apps = ['cache', 'worker', 'web'].map(name => makeApp({ name,
+      providerUrl: 'https://s049-u002.manifest0.net/api/fred', leaseUuid: crypto.randomUUID() }));
+    for (const app of apps.slice(0, 2)) {
+      await getOrCreateMaintenanceOperation({ address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid,
+        operation: 'restart', baselineReleaseVersions: [1] });
+    }
+    const result = await executeStopApp({ app_name: 'all' }, makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.requiresConfirmation).toBe(true);
+    expect(result.confirmationMessage).toContain('pending maintenance for "cache", "worker" until their leases close');
+    expect(result.confirmationMessage).toContain('Stopping ends these deployments; it does not recover the pending commands.');
+    expect(result.confirmationMessage).not.toContain('"worker", "web"');
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(stopApp).not.toHaveBeenCalled();
+    for (const app of apps) await retireAbsentMaintenanceOperation({ address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid });
+  });
+
   it('returns confirmation for stop all with multiple running apps', async () => {
     const apps = [
       makeApp({ name: 'redis', leaseUuid: 'uuid-1' }),
@@ -2215,6 +2266,32 @@ describe('executeStopApp', () => {
 
 describe('executeConfirmedStopApp', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it.each(['stopped', 'cancelled', 'already_inactive'] as const)('retires maintenance after authoritative single-stop outcome %s', async (outcome) => {
+    const app = makeApp({ leaseUuid: crypto.randomUUID() });
+    const scope = { address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid };
+    await getOrCreateMaintenanceOperation({ ...scope, operation: 'restart', baselineReleaseVersions: [1] });
+    vi.mocked(stopApp).mockResolvedValue({ outcome } as never);
+    const result = await executeConfirmedStopApp({ app_name: app.name, leaseUuid: app.leaseUuid }, CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry([app]) }));
+    expect(result.success).toBe(true);
+    expect(getPendingMaintenanceOperation(ADDRESS, app.providerUrl!, app.leaseUuid)).toBeUndefined();
+  });
+
+  it('retains maintenance after a bulk CheckTx while retiring an already-inactive lease', async () => {
+    const apps = [makeApp({ name: 'first', leaseUuid: crypto.randomUUID() }), makeApp({ name: 'second', leaseUuid: crypto.randomUUID() })];
+    for (const app of apps) await getOrCreateMaintenanceOperation({
+      address: ADDRESS, providerUrl: app.providerUrl!, leaseUuid: app.leaseUuid, operation: 'restart', baselineReleaseVersions: [1],
+    });
+    vi.mocked(stopApp).mockResolvedValueOnce({ outcome: 'stopped' } as never).mockResolvedValueOnce({ outcome: 'already_inactive' } as never);
+    const result = await executeConfirmedStopApp({ app_name: 'all', entries: apps.map((app) => ({ app_name: app.name, leaseUuid: app.leaseUuid })) }, CLIENT_MANAGER,
+      makeOptions({ appRegistry: makeRegistry(apps) }));
+    expect(result.success).toBe(true);
+    expect(getPendingMaintenanceOperation(ADDRESS, apps[0].providerUrl!, apps[0].leaseUuid)).toBeDefined();
+    expect(getPendingMaintenanceOperation(ADDRESS, apps[1].providerUrl!, apps[1].leaseUuid)).toBeUndefined();
+    await retireAbsentMaintenanceOperation({ address: ADDRESS, providerUrl: apps[0].providerUrl!, leaseUuid: apps[0].leaseUuid });
+  });
+
 
   it('closes lease and updates registry (single, blocking)', async () => {
     vi.mocked(stopApp).mockResolvedValue({ outcome: 'stopped' } as any);
@@ -2472,6 +2549,17 @@ describe('executeFundCredits', () => {
 
 describe('executeConfirmedFundCredits', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('bounds a returned nonzero result rawLog before display', async () => {
+    const rawLog = `Rejected\n\u0000\u202e${'🦕'.repeat(1_000)}`;
+    vi.mocked(fundCredits).mockResolvedValue({ code: 7, transactionHash: 'hash', rawLog } as any);
+    const result = await executeConfirmedFundCredits({ amount: 1, address: ADDRESS }, CLIENT_MANAGER, makeOptions());
+    expect(result.success).toBe(false);
+    expect(result.error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+    expect(result.error).not.toMatch(/[\uD800-\uDFFF]/u);
+    expect(Array.from(result.error!)).toHaveLength(257);
+    expect(fundCredits).toHaveBeenCalledOnce();
+  });
 
   it('funds credits successfully', async () => {
     vi.mocked(fundCredits).mockResolvedValue({ code: 0, transactionHash: 'hash', rawLog: '' } as any);
@@ -3393,22 +3481,26 @@ describe('executeConfirmedBatchDeploy', () => {
   // is permanently false against a current provider — and when the container
   // never started there are no logs either, leaving a batch entry that reports
   // the failure with no cause at all.
-  it('surfaces the post-ENG-508 provision reason/message in a failed batch entry', async () => {
+  it.each([false, true])('surfaces provision diagnostics and complete batch next steps (long provider text: %s)', async (longProviderText) => {
+    const providerText = 'HTTP 403: \u202e<html>\u0000' + 'untrusted provider response '.repeat(180);
     vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
       await callOptions?.onLeaseCreated?.('lease-x', 'https://resolved.example.com');
-      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true, failedStep: 'poll' });
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED,
+        longProviderText ? providerText.slice(0, 4096) : 'provision failed', { partial: true, failedStep: 'poll' });
     });
     vi.mocked(getLeaseProvision).mockResolvedValueOnce({
-      status: 'failed', fail_count: 2, reason: 'ImagePullFailed', message: 'pull access denied for ngnix',
+      status: 'failed', fail_count: 2, reason: 'ImagePullFailed',
+      message: `pull access denied for ngnix${longProviderText ? ` ${providerText.slice(0, 4096)}` : ''}`,
     } as any);
-    vi.mocked(getLeaseLogs).mockResolvedValueOnce({ lease_uuid: 'lease-x', tenant: ADDRESS, provider_uuid: 'p1', logs: {} } as any);
+    const logs = longProviderText ? { web: 'earliest-line\n' + 'container detail\n'.repeat(250) + 'latest-line' } : {};
+    vi.mocked(getLeaseLogs).mockResolvedValueOnce({ lease_uuid: 'lease-x', tenant: ADDRESS, provider_uuid: 'p1', logs } as any);
 
     const onProgress = vi.fn();
     const entries = [
       { app_name: 'game1', size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1', providerUrl: 'https://fred.example.com', payload: makePayload() },
     ];
 
-    await executeConfirmedBatchDeploy(
+    const result = await executeConfirmedBatchDeploy(
       await confirmedBatchArgs(entries),
       CLIENT_MANAGER,
       makeOptions({ onProgress }),
@@ -3419,8 +3511,53 @@ describe('executeConfirmedBatchDeploy', () => {
       .flatMap((c) => (c[0] as { batch?: Array<{ detail?: string }> }).batch ?? [])
       .map((b) => b.detail ?? '');
     expect(details.some((d) => d.includes('ImagePullFailed: pull access denied for ngnix'))).toBe(true);
-    // The curated next step rides along — asserted against the real constant.
+    // Provider fields are bounded before Barney's complete next step is added.
     expect(details.some((d) => d.includes(FRED_REASON_GUIDANCE.ImagePullFailed.nextStep))).toBe(true);
+    expect(details.every((d) => Array.from(d).length <= AI_BATCH_GUIDANCE_CHARS + 1)).toBe(true);
+    expect(result.error).toContain(FRED_REASON_GUIDANCE.ImagePullFailed.nextStep);
+    expect(result.error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+    if (longProviderText) {
+      expect(result.error).toContain('Use get_logs(app_name="game1", tail=200) for more');
+      expect(result.error).toContain('latest-line');
+      expect(details.some((detail) => detail.includes('latest-line'))).toBe(true);
+      expect(result.error).not.toContain('earliest-line');
+      vi.mocked(getLeaseLogs).mockResolvedValueOnce({ lease_uuid: 'lease-x', tenant: ADDRESS, provider_uuid: 'p1', logs } as any);
+      const { executeGetLogs } = await import('./compositeQueries');
+      const fullLogs = await executeGetLogs({ app_name: 'game1', tail: 200 }, makeOptions({
+        appRegistry: makeRegistry([makeApp({ name: 'game1', leaseUuid: 'lease-x', status: 'failed' })]),
+      }));
+      expect(fullLogs).toMatchObject({ success: true, displayCard: { type: 'logs', data: { logs, truncated: false } } });
+      expect(getLeaseLogs).toHaveBeenLastCalledWith('https://fred.example.com', 'lease-x', 'mock-auth-token', 200);
+    }
+  });
+
+  it('keeps each failed service tail when a real 24-app batch summary is shortened', async () => {
+    const panic = 'panic: nil pointer at main.go:42';
+    let leaseIndex = 0;
+    vi.mocked(deployManifest).mockImplementation(async (_ctx, _spec, callOptions) => {
+      await callOptions?.onLeaseCreated?.(`failed-lease-${leaseIndex++}`, 'https://fred.example.com');
+      throw new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, 'provision failed', { partial: true, failedStep: 'poll' });
+    });
+    const entries = Array.from({ length: 24 }, (_, index) => ({
+      app_name: `failed-${index}`, size: 'micro', skuUuid: 'sku-1', providerUuid: 'p1',
+      providerUrl: 'https://fred.example.com', payload: makePayload(),
+    }));
+    for (let index = 0; index < entries.length; index += 1) {
+      vi.mocked(getLeaseProvision).mockResolvedValueOnce({ status: 'failed', fail_count: 1,
+        reason: 'ContainerExited', message: 'container exited unexpectedly' });
+      vi.mocked(getLeaseLogs).mockResolvedValueOnce({ lease_uuid: `failed-lease-${index}`, tenant: ADDRESS, provider_uuid: 'p1', logs: {
+        web: `${'startup line '.repeat(250)}\n${panic}`,
+        worker: `${'heartbeat '.repeat(80)}worker-still-alive`,
+      } });
+    }
+    const onProgress = vi.fn();
+    const result = await executeConfirmedBatchDeploy(await confirmedBatchArgs(entries), CLIENT_MANAGER, makeOptions({ onProgress }));
+    expect(result.success).toBe(false);
+    expect(result.error?.split(panic)).toHaveLength(25);
+    expect(result.error?.split('worker-still-alive')).toHaveLength(25);
+    for (const entry of entries) expect(result.error).toContain(`get_logs(app_name="${entry.app_name}", tail=200)`);
+    expect(JSON.stringify(onProgress.mock.calls)).not.toContain('"diagnostic":');
+    expect(result.error).toContain('Details were shortened');
   });
 
   it('does not count a readiness-unconfirmed entry as deployed', async () => {
@@ -3464,6 +3601,9 @@ describe('executeConfirmedBatchDeploy', () => {
     expect(data.failed).toHaveLength(0);
     expect(data.message).toContain('Still deploying');
     expect(data.message).toContain('postgres');
+    expect(data.message).toContain('Check with app_status("postgres").');
+    expect(data.message).toContain('Only stop_app("postgres") if you have decided to abandon it.');
+    expect(data.unconfirmed[0].detail).toContain('Only stop_app("postgres") if you have decided to abandon it.');
     // The exact claim the bug made.
     const lastProgress = onProgress.mock.calls.at(-1)![0];
     expect(lastProgress.detail).not.toContain('All 2 apps deployed!');
@@ -3797,7 +3937,7 @@ describe('executeConfirmedRestartApp', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('not in a restartable state');
+    expect(result.error).toContain('conflicting work or an invalid state');
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'failed' }));
   });
 
@@ -3822,13 +3962,8 @@ describe('executeConfirmedRestartApp', () => {
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'failed' });
   });
 
-  it('records unconfirmed — not failed — when the readiness wait rejects (timeout/error, no abort)', async () => {
-    // ENG-312: waitForLeaseStatus REJECTS on timeout, so an observation still
-    // has to be recorded here (the deleted waitForLeaseReady resolved instead
-    // and fell through to the terminal branch). N4 changes WHICH observation:
-    // a timeout is silence, not a verdict, so it is 'unconfirmed'. Verified
-    // against the 0.21.0 pin — waitForLeaseStatus RESOLVES at every terminal
-    // state, so a provider verdict never arrives as a rejection at all.
+  it('preserves unobserved readiness when the wait rejects (timeout/error, no abort)', async () => {
+    // A timeout schedules another read without inventing a provider observation.
     vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
     vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('deadline exceeded'));
 
@@ -3842,11 +3977,9 @@ describe('executeConfirmedRestartApp', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('may still be in progress');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
-    // The observation is still recorded (the anti-"stays running" guarantee the
-    // original test existed for), it just derives 'deploying' rather than
-    // asserting a failure verdict nobody gave.
-    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('deploying');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { connectionStale: true, readinessStale: true });
+    // Connection/readiness freshness changes independently of the recorded verdict.
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('running');
   });
 
   it('records failed when the wait rejection DOES carry a provider verdict (kind: poll_verdict)', async () => {
@@ -3871,10 +4004,10 @@ describe('executeConfirmedRestartApp', () => {
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('failed');
   });
 
-  it('records unconfirmed for a NON-transient provider error too (retryability is the wrong axis)', async () => {
+  it('preserves readiness for a non-transient provider error too (retryability is the wrong axis)', async () => {
     // isTransientProviderError would answer false for a 401, but "worth
     // retrying" is orthogonal to "did the workload come up". Neither says the
-    // provider gave a provisioning verdict, so both are 'unconfirmed'.
+    // provider gave a provisioning verdict, so neither changes readiness.
     vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
     vi.mocked(waitForLeaseStatus).mockRejectedValue(new ProviderApiError(401, 'unauthorized', { kind: 'http' }));
 
@@ -3886,7 +4019,7 @@ describe('executeConfirmedRestartApp', () => {
       makeOptions({ appRegistry: registry })
     );
 
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { connectionStale: true, readinessStale: true });
   });
 
   it('does NOT mark the app failed when the wait is aborted (user interrupt)', async () => {
@@ -4355,11 +4488,10 @@ describe('executeUpdateApp', () => {
     const result = await executeUpdateApp(
       { app_name: 'my-app', image: 'redis:8' },
       makeOptions({ appRegistry: makeRegistry([app]) }),
-      makePayload()
+      makeJsonPayload()
     );
     expect(result.success).toBe(true);
-    expect(result.pendingAction?.args._generatedManifest).toBeUndefined();
-    expect(result.confirmationMessage).toContain('new manifest');
+    expect(JSON.parse(result.pendingAction!.args._generatedManifest as string).image).toBe('nginx');
   });
 
   it('returns error when app is stopped', async () => {
@@ -4378,7 +4510,7 @@ describe('executeUpdateApp', () => {
     const result = await executeUpdateApp(
       { app_name: 'my-app' },
       makeOptions({ appRegistry: makeRegistry([app]) }),
-      makePayload()
+      makeJsonPayload()
     );
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
@@ -4390,7 +4522,7 @@ describe('executeUpdateApp', () => {
     const result = await executeUpdateApp(
       { app_name: 'my-app' },
       makeOptions({ appRegistry: makeRegistry([app]) }),
-      makePayload()
+      makeJsonPayload()
     );
     expect(result.success).toBe(true);
     expect(result.requiresConfirmation).toBe(true);
@@ -4505,7 +4637,7 @@ describe('executeUpdateApp', () => {
     expect(merged.env.POSTGRES_DB).toBe('newdb');
   });
 
-  it('preserves YAML payload when merge cannot parse it', async () => {
+  it('rejects YAML payload before confirmation', async () => {
     const yamlContent = 'image: nginx:latest\nports:\n  80/tcp: {}';
     const yamlBytes = new TextEncoder().encode(yamlContent);
     const payload: PayloadAttachment = {
@@ -4522,9 +4654,9 @@ describe('executeUpdateApp', () => {
       payload
     );
 
-    expect(result.success).toBe(true);
-    // _generatedManifest should NOT be set since YAML can't be parsed/merged
-    expect(result.pendingAction?.args._generatedManifest).toBeUndefined();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('JSON');
+    expect(result.pendingAction).toBeUndefined();
   });
 
   it('applies known image defaults for port/user/tmpfs in update (not env)', async () => {
@@ -4793,13 +4925,12 @@ describe('executeUpdateApp', () => {
     });
   });
 
-  it('merges old stop_grace_period, init, labels, depends_on into update', async () => {
+  it('merges old stop_grace_period, init and labels into update', async () => {
     const oldManifest = JSON.stringify({
       image: 'nginx:1.24',
       stop_grace_period: '30s',
       init: true,
       labels: { app: 'myapp', tier: 'basic' },
-      depends_on: { db: { condition: 'service_healthy' } },
     });
     const app = makeApp({ manifest: oldManifest });
     const result = await executeUpdateApp(
@@ -4812,7 +4943,6 @@ describe('executeUpdateApp', () => {
     expect(manifest.stop_grace_period).toBe('30s');
     expect(manifest.init).toBe(true);
     expect(manifest.labels).toEqual({ app: 'myapp', tier: 'basic' });
-    expect(manifest.depends_on).toEqual({ db: { condition: 'service_healthy' } });
   });
 
   it('new labels override old labels during update merge', async () => {
@@ -4894,7 +5024,7 @@ describe('executeConfirmedUpdateApp', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('not in an updatable state');
+    expect(result.error).toContain('conflicting work or an invalid state');
   });
 
   it('handles poll failure (non-active state)', async () => {
@@ -4919,7 +5049,7 @@ describe('executeConfirmedUpdateApp', () => {
     expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'failed' });
   });
 
-  it('records unconfirmed — not failed — when the readiness wait rejects (timeout/error, no abort)', async () => {
+  it('preserves unobserved readiness when the wait rejects (timeout/error, no abort)', async () => {
     // N4, update twin of the restart case: a wait that ended without an answer
     // is silence. Contrast the branches ABOVE, which keep writing 'failed' —
     // they run on a RESOLVED status or a settled /provision read, i.e. fred
@@ -4938,8 +5068,8 @@ describe('executeConfirmedUpdateApp', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('may still be in progress');
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
-    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('deploying');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { connectionStale: true, readinessStale: true });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('running');
   });
 
   it('does NOT mark the app failed when the UPDATE POST itself is aborted', async () => {
@@ -5044,6 +5174,35 @@ describe('executeConfirmedUpdateApp', () => {
     );
   }
 
+  it.each([
+    { status: 'ready', reason: 'ContainerExited', lead: 'has since failed' },
+    { status: 'failed', reason: 'ImagePullFailed', lead: 'nothing was changed on the provider' },
+    { status: 'ready', reason: 'UpdateFailed', lead: 'previous version restored' },
+    { status: 'failed', reason: 'UpdateFailed', lead: 'rollback failed' },
+  ].flatMap(branch => [
+    ['image pull failed:', 'image pull failed.'],
+    ['is the image private?', 'is the image private?'],
+    ['provider said "no."', 'provider said "no."'],
+    ['provider said "no.":', 'provider said "no."'],
+    ['image pull failed: ;', 'image pull failed.'],
+    ['image pull failed , :', 'image pull failed.'],
+    [':', ''],
+  ].map(([message, ending]) => ({ ...branch, message, ending }))))('punctuates legacy $reason/$status detail "$message" before its next step', async ({ status, reason, lead, message, ending }) => {
+    const detail = ending ? `${reason}: ${ending}` : `${reason}.`;
+    mockUpdateReachingProvision({ status, reason, fail_count: 1, message });
+    const app = makeApp({ manifest: PREVIOUS_MANIFEST });
+    const result = await runUpdate(makeRegistry([app]), app);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain(lead);
+    expect(result.error).toContain(`${detail} `);
+    expect(result.error).not.toMatch(/:\.|\?\.|"\./u);
+    expect(result.error).toContain(reason === 'ContainerExited' || status === 'failed' && reason === 'UpdateFailed'
+      ? `Use app_status("${app.name}") to check.`
+      : FRED_REASON_GUIDANCE[reason as 'ImagePullFailed' | 'UpdateFailed'].nextStep);
+    expect(updateApp).toHaveBeenCalledTimes(1);
+    expect(getLeaseProvision).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a rolled-back update as a failure and restores the previous manifest', async () => {
     mockUpdateReachingProvision({
       status: 'ready',
@@ -5070,6 +5229,18 @@ describe('executeConfirmedUpdateApp', () => {
       manifest: PREVIOUS_MANIFEST,
     });
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('running');
+  });
+
+  it.each([
+    { status: 'ready', error: 'Update failed, previous version restored.' },
+    { status: 'failed', error: 'Update failed and rollback failed. Use app_status("my-app") to check.' },
+  ])('omits separator-only legacy diagnostics after the $status rollback verdict', async ({ status, error }) => {
+    mockUpdateReachingProvision({ status, fail_count: 1, last_error: ': ; , ' });
+    const app = makeApp({ name: 'my-app', manifest: PREVIOUS_MANIFEST });
+    const result = await runUpdate(makeRegistry([app]), app);
+    expect(result).toMatchObject({ success: false, error });
+    expect(updateApp).toHaveBeenCalledTimes(1);
+    expect(getLeaseProvision).toHaveBeenCalledTimes(1);
   });
 
   it('reports a clean update as a success and does not revert the manifest', async () => {
@@ -5314,7 +5485,7 @@ describe('executeConfirmedUpdateApp', () => {
     expect(result.error).toContain('may or may not have been applied');
     expect(result.error).toContain(`app_status("${app.name}")`);
     expect(result.error).toContain(`app_releases("${app.name}")`);
-    expect(result.error).toContain('Do NOT stop the app and redeploy');
+    expect(result.error).toContain('do not automatically replay the request or stop/redeploy');
     expect(result.error).not.toContain('Update failed:');
     // The lease is very possibly live — never mark it failed, and never claim
     // barney's stored manifest is the one running.
@@ -5870,7 +6041,7 @@ describe('G1 — the abort guards key on the ERROR, not on the ambient signal', 
   // What the guard decides is the OPERATION's story. C2/C3 separates that from
   // the workload OBSERVATION: a POST-site throw is about initiating the restart,
   // so it reports a failed operation and records nothing.
-  it('restart POST: a provider 5xx landing under an aborted signal is a failure, not a cancellation', async () => {
+  it('restart POST: a provider 5xx under an aborted signal remains uncertain', async () => {
     vi.mocked(restartApp).mockRejectedValue(new ProviderApiError(503, '{"error":"backend unavailable","code":503}'));
 
     const app = makeApp({ chainState: 'active', provisionState: 'confirmed' });
@@ -5885,12 +6056,10 @@ describe('G1 — the abort guards key on the ERROR, not on the ambient signal', 
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('Restart failed');
+    expect(result.error).toContain('is unknown');
     expect(result.error).not.toContain('cancelled');
     expect(result.error).not.toContain('the app is unchanged');
-    // …and no provisioning verdict is invented from it. fred's 500 comes from
-    // `routeReplaceRestart`'s prelude, before the actor handoff — the containers
-    // were never touched, so the app is still running.
+    // No provisioning verdict is inferred from a failed request.
     expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, app.leaseUuid, expect.objectContaining({ provisionState: expect.anything() }));
     const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
     expect(stored?.provisionState).toBe('confirmed');
@@ -5912,13 +6081,11 @@ describe('G1 — the abort guards key on the ERROR, not on the ambient signal', 
       makeOptions({ appRegistry: registry, signal: controller.signal })
     );
 
-    // G1's point is unchanged and is what this test exists for: a real wait
-    // failure that merely COINCIDES with an aborted signal is still recorded,
-    // because the gate is the error's identity and not the ambient state. N4
-    // only changes WHICH observation gets recorded — 'unconfirmed', because a
-    // rejected wait never carries a provider verdict.
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
-    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('unconfirmed');
+    // A coincident aborted signal must not hide the need for a later read.
+    // The rejected wait itself carries no provider observation.
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { connectionStale: true, readinessStale: true });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBeUndefined();
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.readinessStale).toBe(true);
   });
 
   it('update POST: a 4xx landing under an aborted signal is a failure, not a cancellation', async () => {
@@ -6143,7 +6310,7 @@ describe('F4 — a writer with no observation invents none', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('may or may not have been applied');
-    expect(registry.updateApp).not.toHaveBeenCalled();
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { connectionStale: true, readinessStale: true });
     const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
     expect(stored?.provisionState).toBe('confirmed');
     expect(stored?.status).toBe('running');
@@ -6267,7 +6434,7 @@ describe('F4 — a writer with no observation invents none', () => {
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('running');
   });
 
-  it('a refused batch restart records nothing either', async () => {
+  it('uncertain batch restart retains its outcome and runtime observation', async () => {
     // The bulk path must not disagree with the single path about what a refusal
     // means — that split is how the two sets drifted in the first place.
     vi.mocked(restartApp).mockRejectedValue(new ProviderApiError(500, '{"error":"internal error","code":500}'));
@@ -6282,9 +6449,9 @@ describe('F4 — a writer with no observation invents none', () => {
       makeOptions({ appRegistry: registry }),
     );
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('All restarts failed: redis');
-    expect(registry.updateApp).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    expect((result.data as { message: string }).message).toContain('Outcome unknown:');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'uuid-1', { connectionStale: true, readinessStale: true });
     expect(registry.getAppByLease(ADDRESS, 'uuid-1')?.status).toBe('running');
   });
 });
@@ -6327,11 +6494,11 @@ describe('G1 (cont.) — error identity at the sites the first pass left uncover
     expect(result.success).toBe(false);
     // As above: G1 pins that the write HAPPENS despite the ambient abort; N4
     // pins that a connection reset is silence about provisioning, not a verdict.
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { provisionState: 'unconfirmed' });
-    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('deploying');
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, app.leaseUuid, { connectionStale: true, readinessStale: true });
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.status).toBe('running');
   });
 
-  it('batch restart POST: a real provider failure under an aborted signal lands in Failed, never Cancelled', async () => {
+  it('batch restart POST: a 503 under an aborted signal stays unconfirmed', async () => {
     // The existing G1 batch test asserts on `result.data.cancelled`, but an
     // all-nothing-landed batch returns `{success:false, error}` with NO `data`
     // at all — so that assertion cannot fail. Assert the string the user
@@ -6354,10 +6521,10 @@ describe('G1 (cont.) — error identity at the sites the first pass left uncover
       makeOptions({ appRegistry: registry, signal: controller.signal })
     );
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('All restarts failed: redis');
-    expect(result.error).not.toContain('Cancelled');
-    // The OPERATION is reported failed; the app it never touched stays running.
+    expect(result.success).toBe(true);
+    expect((result.data as { message: string }).message).toContain('Outcome unknown:');
+    expect((result.data as { cancelled: string[] }).cancelled).toEqual([]);
+    // A request error does not establish a workload-health verdict.
     expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, 'uuid-1', expect.objectContaining({ provisionState: expect.anything() }));
     expect(registry.getAppByLease(ADDRESS, 'uuid-1')?.status).toBe('running');
   });
@@ -6516,7 +6683,7 @@ describe('G3 (cont.) — the ProgressCard detail must not re-assert what the cop
 describe('G4 (cont.) — a mixed batch keeps the two outcomes apart per entry', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('routes the aborted waits to Cancelled and the one unanswered wait to Still restarting', async () => {
+  it('routes aborted waits to Cancelled and the unanswered wait to Outcome unknown', async () => {
     // Where G1 and G4 meet, and the only shape that distinguishes the fix from
     // "bucket everything as cancelled once the signal is aborted". All three
     // POSTs land; the user presses Stop; two waits reject with the signal's own
@@ -6551,7 +6718,7 @@ describe('G4 (cont.) — a mixed batch keeps the two outcomes apart per entry', 
     // non-abort separation it exists to pin is unchanged, only mongo's bucket.)
     const message = (result.data as { message: string }).message;
     expect(result.success).toBe(true);
-    expect(message).toContain('Still restarting:');
+    expect(message).toContain('Outcome unknown:');
     expect(message).toContain('mongo');
     expect(message).toContain('Cancelled:');
     expect(message).toContain('redis');
@@ -6560,13 +6727,10 @@ describe('G4 (cont.) — a mixed batch keeps the two outcomes apart per entry', 
     expect(message).not.toContain('All restarts failed');
     expect((result.data as { failed: string[] }).failed).toEqual([]);
 
-    // Only the entry whose wait failed for a NON-abort reason is recorded, and
-    // what it records is 'unconfirmed' (N4): a connection reset says the wait
-    // ended without an answer, not that the provider failed the restart. The
-    // aborted two record nothing at all — that is still the G1/G4 separation
-    // this test exists to pin, and it survives the value change.
-    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'uuid-3', { provisionState: 'unconfirmed' });
-    expect(registry.getAppByLease(ADDRESS, 'uuid-3')?.status).toBe('deploying');
+    // Every unanswered wait schedules later observation without inventing a
+    // readiness verdict, whether cancellation or a transport failure ended it.
+    expect(registry.updateApp).toHaveBeenCalledWith(ADDRESS, 'uuid-3', { connectionStale: true, readinessStale: true });
+    expect(registry.getAppByLease(ADDRESS, 'uuid-3')?.status).toBe('running');
     for (const uuid of ['uuid-1', 'uuid-2']) {
       expect(registry.updateApp).not.toHaveBeenCalledWith(ADDRESS, uuid, expect.objectContaining({ provisionState: expect.anything() }));
       expect(registry.getAppByLease(ADDRESS, uuid)?.provisionState).toBeUndefined();
@@ -6584,10 +6748,8 @@ describe('CP2 — a wait that never got an answer is not a failure', () => {
     return apps.map((a) => ({ app_name: a.name, leaseUuid: a.leaseUuid, providerUrl: a.providerUrl! }));
   }
 
-  it('batch restart: an unanswered readiness wait lands in Still restarting, not Failed', async () => {
-    // The catch already recorded 'unconfirmed' but returned null, so the
-    // registry said 'deploying' while the summary said "All restarts failed" —
-    // a failure verdict fred never issued.
+  it('batch restart: an unanswered readiness wait lands in Outcome unknown, not Failed', async () => {
+    // An unanswered wait must not become an invented failure verdict.
     vi.mocked(restartApp).mockResolvedValue(RESTART_OK);
     vi.mocked(waitForLeaseStatus).mockRejectedValue(new Error('waitForLeaseStatus timed out after 900000ms'));
 
@@ -6607,13 +6769,13 @@ describe('CP2 — a wait that never got an answer is not a failure', () => {
     const data = result.data as { unconfirmed: Array<{ name: string; detail?: string }>; failed: string[]; message: string };
     expect(data.unconfirmed.map((u) => u.name)).toEqual(['redis', 'postgres']);
     expect(data.failed).toEqual([]);
-    expect(data.message).toContain('Still restarting:');
+    expect(data.message).toContain('Outcome unknown:');
     expect(data.message).toContain('app_status("redis")');
     expect(data.message).not.toContain('All restarts failed');
-    // The bucket and the registry now agree.
+    // Outcome uncertainty does not invent a new readiness observation.
     for (const a of apps) {
-      expect(registry.getAppByLease(ADDRESS, a.leaseUuid)?.provisionState).toBe('unconfirmed');
-      expect(registry.getAppByLease(ADDRESS, a.leaseUuid)?.status).toBe('deploying');
+      expect(registry.getAppByLease(ADDRESS, a.leaseUuid)).toMatchObject({ readinessStale: true, status: 'running' });
+      expect(registry.getAppByLease(ADDRESS, a.leaseUuid)?.provisionState).toBeUndefined();
     }
   });
 
@@ -6658,7 +6820,8 @@ describe('CP2 — a wait that never got an answer is not a failure', () => {
     expect(details).toContain('Restart not confirmed');
     expect(details).not.toContain('Restart polling failed');
     expect(result.error).toContain('Restart may still be in progress');
-    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('unconfirmed');
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBeUndefined();
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.readinessStale).toBe(true);
   });
 
   it('single restart: a poll_verdict rejection reports the failure it records', async () => {
@@ -6705,7 +6868,8 @@ describe('CP2 — a wait that never got an answer is not a failure', () => {
     expect(details).toContain('Update not confirmed');
     expect(details).not.toContain('Update polling failed');
     expect(result.error).toContain('Update may still be in progress');
-    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('unconfirmed');
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBeUndefined();
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.readinessStale).toBe(true);
   });
 
   it('update: a poll_verdict rejection reports the failure it records', async () => {
@@ -6729,6 +6893,85 @@ describe('CP2 — a wait that never got an answer is not a failure', () => {
     expect(result.error).toContain('LEASE_STATE_CLOSED');
     expect(result.error).not.toContain('may still be in progress');
     expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('failed');
+  });
+});
+
+describe('legacy maintenance preserves readiness until a provider verdict arrives', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+  });
+
+  it.each(['single restart', 'batch restart', 'update'] as const)('%s preserves confirmed readiness on timeout and records an explicit failure', async (operation) => {
+    const app = makeApp({ chainState: 'active', provisionState: 'confirmed' });
+    for (const verdict of [false, true]) {
+      const registry = makeRegistry([app]);
+      vi.mocked(waitForLeaseStatus).mockRejectedValue(verdict
+        ? new ProviderApiError(0, 'Container exited', { kind: 'poll_verdict' })
+        : new Error('waitForLeaseStatus timed out after 900000ms'));
+      const entry = { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl };
+      const options = makeOptions({ appRegistry: registry });
+      const result = operation === 'update'
+        ? await executeConfirmedUpdateApp(entry, CLIENT_MANAGER, options, makePayload())
+        : await executeConfirmedRestartApp(operation === 'batch restart'
+          ? { app_name: 'all', entries: [entry] } : entry, CLIENT_MANAGER, options);
+
+      const stored = registry.getAppByLease(ADDRESS, app.leaseUuid);
+      expect(stored?.provisionState).toBe(verdict ? 'failed' : 'confirmed');
+      expect(stored?.status).toBe(verdict ? 'failed' : 'running');
+      if (verdict) {
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('Container exited');
+      } else if (operation === 'batch restart') {
+        expect(result.data).toMatchObject({ restarted: [], failed: [], unconfirmed: [{ name: app.name }] });
+      } else {
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('may still be in progress');
+      }
+    }
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
+  });
+});
+
+describe('legacy maintenance provider diagnostics', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['single', 'request'], ['batch', 'request'], ['single', 'poll verdict'], ['batch', 'poll verdict'], ['update', 'request'], ['update', 'poll verdict'],
+  ] as const)('bounds untrusted %s %s text at its source', async (mode, stage) => {
+    const raw = ('HTTP 403: \u202e<html>\u0000\r\n' + 'untrusted provider response '.repeat(180)).slice(0, 4096);
+    if (stage === 'request') {
+      vi.mocked(restartApp).mockRejectedValue(new ProviderApiError(403, raw));
+      vi.mocked(updateApp).mockRejectedValue(new ProviderApiError(403, raw));
+    }
+    else {
+      vi.mocked(restartApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+      vi.mocked(updateApp).mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+      vi.mocked(waitForLeaseStatus).mockRejectedValue(new ProviderApiError(0, raw, { kind: 'poll_verdict' }));
+    }
+    const app = makeApp();
+    const onProgress = vi.fn();
+    const entry = { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl };
+    const options = makeOptions({ appRegistry: makeRegistry([app]), onProgress });
+    const result = mode === 'update'
+      ? await executeConfirmedUpdateApp(entry, CLIENT_MANAGER, options, makePayload())
+      : await executeConfirmedRestartApp(mode === 'batch' ? { app_name: 'all', entries: [entry] } : entry, CLIENT_MANAGER, options);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('HTTP 403: <html>');
+    expect(result.error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+    expect(Array.from(result.error ?? '').length).toBeLessThan(FAILURE_DETAIL_CHARS + 100);
+    const details = onProgress.mock.calls.flatMap(([progress]) => mode === 'batch'
+      ? (progress.batch ?? []).map((row: { detail?: string }) => row.detail ?? '')
+      : [progress.detail ?? '']);
+    expect(details.some((detail) => detail.includes('HTTP 403: <html>'))).toBe(true);
+    for (const detail of details) {
+      expect(detail).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+      expect(Array.from(detail).length).toBeLessThan(FAILURE_DETAIL_CHARS + 100);
+    }
+    expect(getLeaseProvision).not.toHaveBeenCalled();
+    expect(getLeaseConnectionInfo).not.toHaveBeenCalled();
   });
 });
 
@@ -6757,11 +7000,11 @@ describe('batch summary and progress agree on an unconfirmed batch', () => {
     );
 
     expect(result.success).toBe(true);
-    expect((result.data as { message: string }).message).toContain('Still restarting:');
+    expect((result.data as { message: string }).message).toContain('Outcome unknown:');
 
     const last = onProgress.mock.calls.at(-1)![0] as { phase: string; detail?: string };
-    expect(last.phase).toBe('ready');
-    expect(last.detail).toBe('2 still restarting');
+    expect(last.phase).toBe('unconfirmed');
+    expect(last.detail).toBe('2 outcome unknown');
   });
 
   it('batch deploy: an all-succeeded batch still gets the unchanged headline and phase', async () => {
@@ -6934,5 +7177,57 @@ describe('lifecycle connection observations', () => {
       expect(registry.getAppByLease(ADDRESS, app.leaseUuid)?.provisionState).toBe('confirmed');
       expect(logError).toHaveBeenCalledWith('progress.onProgress', observerError);
     });
+  });
+});
+
+describe('legacy settled readiness clears the maintenance recheck', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getReadClient).mockResolvedValue({ query: {} } as Awaited<ReturnType<typeof getReadClient>>);
+    vi.mocked(restartApp).mockReset().mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'restarting' });
+    vi.mocked(updateApp).mockReset().mockResolvedValue({ lease_uuid: 'lease-uuid', status: 'updating' });
+    vi.mocked(waitForLeaseStatus).mockReset().mockResolvedValue({ state: LeaseState.LEASE_STATE_ACTIVE, provision_status: 'ready' });
+    vi.mocked(isLeaseFailureTerminal).mockReturnValue(false);
+    vi.mocked(getLeaseProvision).mockReset().mockResolvedValue({ status: 'ready', fail_count: 0 });
+    vi.mocked(getLeaseConnectionInfo).mockReset().mockResolvedValue({
+      lease_uuid: 'lease-uuid', tenant: ADDRESS, provider_uuid: 'p1', connection: { host: '127.0.0.1', fqdn: 'app.provider.example' },
+    });
+  });
+
+  it.each(['restart', 'batch restart', 'update'] as const)('%s clears an earlier recheck after a definitive wait result', async (operation) => {
+    for (const verdict of ['ready', 'resolved failure', 'poll failure'] as const) {
+      const app = makeApp({ chainState: 'active', provisionState: 'confirmed', readinessStale: true });
+      const registry = makeRegistry([app]);
+      vi.mocked(isLeaseFailureTerminal).mockReturnValue(verdict === 'resolved failure');
+      if (verdict === 'poll failure') {
+        vi.mocked(waitForLeaseStatus).mockRejectedValue(new ProviderApiError(0, 'Provider reported failed', { kind: 'poll_verdict' }));
+      } else {
+        vi.mocked(waitForLeaseStatus).mockResolvedValue({
+          state: LeaseState.LEASE_STATE_ACTIVE, provision_status: verdict === 'ready' ? 'ready' : 'failed',
+        });
+      }
+      const args = { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl };
+      const options = makeOptions({ appRegistry: registry });
+      if (operation === 'update') await executeConfirmedUpdateApp(args, CLIENT_MANAGER, options, makeJsonPayload());
+      else await executeConfirmedRestartApp(operation === 'batch restart' ? { app_name: 'all', entries: [args] } : args, CLIENT_MANAGER, options);
+      expect(registry.getAppByLease(ADDRESS, app.leaseUuid), verdict).toMatchObject({
+        readinessStale: false, provisionState: verdict === 'ready' ? 'confirmed' : 'failed',
+      });
+    }
+  });
+
+  it.each([
+    ['ready', 'UpdateFailed', 'confirmed'],
+    ['failed', 'UpdateFailed', 'failed'],
+    ['failed', 'ContainerExited', 'failed'],
+  ] as const)('clears the recheck after an update provision verdict %s/%s', async (status, reason, provisionState) => {
+    const app = makeApp({ chainState: 'active', provisionState: 'confirmed', readinessStale: true });
+    const registry = makeRegistry([app]);
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status, reason, fail_count: 1, message: 'Provider replacement result' });
+    await executeConfirmedUpdateApp(
+      { app_name: app.name, leaseUuid: app.leaseUuid, providerUrl: app.providerUrl },
+      CLIENT_MANAGER, makeOptions({ appRegistry: registry }), makeJsonPayload(),
+    );
+    expect(registry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ readinessStale: false, provisionState });
   });
 });

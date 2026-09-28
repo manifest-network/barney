@@ -8,6 +8,7 @@ import { failureDetail, type ConnectionDetails, type FredFailureSource } from '@
 import { isValidFqdn, nonEmptyPorts } from '../../utils/connection';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { AppEntry } from '../../registry/appRegistry';
+import { FAILURE_DETAIL_CHARS } from '../../config/constants';
 
 /** Service names that indicate a primary (user-facing) service in a stack. */
 const PRIMARY_SERVICE_NAMES = new Set(['web', 'app', 'frontend', 'ui']);
@@ -244,7 +245,7 @@ export { collectInstanceUrls } from '../../utils/connection';
 /** Cap on a rendered failure tail. Matches mono's own `MESSAGE_MAX`
  *  (packages/fred/src/failure-reason.ts): the sanitizer's 64-code-point default
  *  bisects fred's composed rollback suffixes and image references. */
-export const FAILURE_DETAIL_CHARS = 256;
+export { FAILURE_DETAIL_CHARS } from '../../config/constants';
 
 /**
  * One-line, display-safe failure tail for a fred `/status` or `/provision`

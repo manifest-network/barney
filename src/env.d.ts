@@ -10,6 +10,7 @@ interface ImportMetaEnv {
   readonly PUBLIC_GAS_PRICE?: string;
   readonly PUBLIC_CHAIN_ID?: string;
   readonly PUBLIC_FAUCET_URL?: string;
+  readonly PUBLIC_FRED_COMPATIBILITY?: string;
   readonly APP_VERSION: string;
   readonly DEV: boolean;
   readonly PROD: boolean;

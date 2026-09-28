@@ -368,6 +368,15 @@ describe('sendMessage', () => {
       expect(store.getState().deployProgress).toBeNull();
     });
 
+    it('clears completed maintenance uncertainty before a recovery request', async () => {
+      const store = setupStore({ deployProgress: { phase: 'unconfirmed', operation: 'restart' } });
+      mockProcessStream.mockResolvedValueOnce(makeStreamResult());
+
+      await store.getState().sendMessage('recover the pending restart');
+
+      expect(store.getState().deployProgress).toBeNull();
+    });
+
     it('preserves deploy progress when phase is creating_lease', async () => {
       const progress = { phase: 'creating_lease' as const };
       const store = setupStore({ deployProgress: progress });

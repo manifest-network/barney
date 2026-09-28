@@ -14,7 +14,7 @@ import type { AIStore } from '../aiStore';
 /** Preserve an active deployment while clearing a previous result's progress. */
 export function clearStaleDeployProgress(get: () => AIStore, set: (state: Partial<AIStore>) => void): void {
   const { deployProgress } = get();
-  if (!deployProgress || deployProgress.phase === 'ready' || deployProgress.phase === 'failed') {
+  if (!deployProgress || deployProgress.phase === 'ready' || deployProgress.phase === 'failed' || deployProgress.phase === 'unconfirmed') {
     set({ deployProgress: null });
   }
 }
@@ -76,9 +76,7 @@ export function toChatApiMessages(
 
   // trimMessages' tail slice (`slice(-AI_MAX_MESSAGES)`) can start the window
   // mid tool-call group, leaving leading `role:'tool'` messages whose assistant
-  // (carrying the matching tool_calls) was sliced off — a tail slice can only
-  // orphan the LEADING edge. (The streaming/local filter above never orphans:
-  // it can't drop an assistant-with-tool_calls, which is never streaming/local.)
+  // (carrying the matching tool_calls) was sliced off.
   // OpenAI-compatible backends 400 on a tool message with no preceding assistant
   // tool_calls, so strip that leading run. No-op when the window already starts
   // on a non-tool message.
@@ -88,15 +86,38 @@ export function toChatApiMessages(
   }
   const deorphaned = firstNonOrphan > 0 ? conversationMessages.slice(firstNonOrphan) : conversationMessages;
 
+  // Saved history deliberately omits executable tool calls. Keep its results
+  // as ordinary historical context rather than invalid protocol tool replies.
+  // Only the immediately preceding call group can own a live tool response;
+  // an older occurrence of the same ID must not authorize a detached reply.
+  const paired: ChatApiMessage[] = [];
+  const pendingCallIds = new Set<string>();
+  for (const message of deorphaned) {
+    if (message.role === 'tool') {
+      if (message.tool_call_id && pendingCallIds.delete(message.tool_call_id)) {
+        paired.push(message);
+      } else {
+        pendingCallIds.clear();
+        paired.push({ role: 'assistant', content: `Historical tool result:\n${message.content ?? ''}` });
+      }
+    } else {
+      pendingCallIds.clear();
+      if (message.role === 'assistant') {
+        for (const call of message.tool_calls ?? []) pendingCallIds.add(call.id);
+      }
+      paired.push(message);
+    }
+  }
+
   // Some models (e.g. Mistral) reject tool→user transitions without an
   // intermediate assistant message. Insert a synthetic one when needed.
   const fixed: ChatApiMessage[] = [];
-  for (let i = 0; i < deorphaned.length; i++) {
-    fixed.push(deorphaned[i]);
+  for (let i = 0; i < paired.length; i++) {
+    fixed.push(paired[i]);
     if (
-      deorphaned[i].role === 'tool' &&
-      i + 1 < deorphaned.length &&
-      deorphaned[i + 1].role === 'user'
+      paired[i].role === 'tool' &&
+      i + 1 < paired.length &&
+      paired[i + 1].role === 'user'
     ) {
       fixed.push({ role: 'assistant', content: 'Tool execution complete.' });
     }

@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { asAddress, asLeaseUuid, asProviderUuid, asSkuUuid, ManifestMCPErrorCode, noopLogger } from '@manifest-network/manifest-sdk';
 import { deployManifest, updateApp, validateManifest, type FredAuthCtx } from '@manifest-network/manifest-sdk/deploy';
 import { buildStackManifest } from '../manifest';
-import { buildImageManifestFromArgs, parseAndValidateStackServices } from './deployArgs';
+import { buildImageManifestFromArgs, parseAndValidateStackServices, validateManifestForProvider } from './deployArgs';
+import { getFredCompatibility } from '../../config/fredCompatibility';
+import { AI_MANIFEST_VALIDATION_DETAIL_CHARS } from '../../config/constants';
 
 const LEASE_UUID = asLeaseUuid('550e8400-e29b-41d4-a716-446655440000');
 
@@ -19,6 +21,61 @@ function preflightContext() {
 }
 
 describe('SDK preflight at Barney transaction boundaries', () => {
+  it('uses PR 240 rules for dev preview and update execution, retaining legacy rules elsewhere', async () => {
+    const manifest = '{"image":"nginx","labels":{"com.docker.compose.project":"tenant"}}';
+    const devProvider = 'https://s049-u002.manifest0.net/api/fred';
+    expect(await validateManifestForProvider(manifest, devProvider)).toContain("reserved prefix 'com.docker.compose.'");
+    expect(await validateManifestForProvider(manifest, 'https://provider.example.com')).toBeNull();
+
+    const { ctx, access } = preflightContext();
+    await expect(updateApp({ ...ctx, fredCompatibility: getFredCompatibility() }, {
+      address: asAddress('manifest1tenant'), leaseUuid: LEASE_UUID, manifest,
+    }, { providerUrl: devProvider, pollOptions: false }))
+      .rejects.toMatchObject({ code: ManifestMCPErrorCode.INVALID_CONFIG });
+    expect(access).not.toHaveBeenCalled();
+  });
+
+  it('validates the exact preview payload, including duplicate JSON keys', async () => {
+    expect(await validateManifestForProvider('{"image":"nginx","image":"redis"}',
+      'https://s049-u002.manifest0.net/api/fred')).toContain('duplicate');
+  });
+
+  it('does not quote private payload bytes in malformed JSON diagnostics', async () => {
+    const error = await validateManifestForProvider('{"image":"nginx","env":{"PASSWORD":private-password}}',
+      'https://s049-u002.manifest0.net/api/fred');
+    expect(error).toBe('Manifest must be valid JSON.');
+    expect(error).not.toContain('private-password');
+  });
+
+  it.each(['https://s049-u002.manifest0.net/api/fred', 'https://provider.example.com'])(
+    'sanitizes and bounds validation diagnostics for %s', async (providerUrl) => {
+      const manifest = JSON.stringify({ image: 'nginx', env: Object.fromEntries(Array.from({ length: 200 }, (_, i) =>
+        [`\u202EBAD=${i}${'long'.repeat(100)}\u200B\u0085`, 'value'])) });
+      const error = await validateManifestForProvider(manifest, providerUrl);
+      expect(error).toContain('Invalid manifest:');
+      expect(error).toContain('BAD=0');
+      expect(error).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+      expect(Array.from(error!).length).toBeLessThanOrEqual(AI_MANIFEST_VALIDATION_DETAIL_CHARS + 1);
+      expect(error).toContain('additional validation errors omitted');
+    },
+  );
+
+  it('selects dev validation after SDK provider resolution and before lease creation', async () => {
+    const { ctx, access } = preflightContext();
+    const provider = vi.fn().mockResolvedValue({ provider: { apiUrl: 'https://s049-u002.manifest0.net/api/fred' } });
+    const deploymentCtx = {
+      ...ctx, fredCompatibility: getFredCompatibility(),
+      chain: { getAddress: async () => asAddress('manifest1tenant'), acquireRateLimit: async () => {}, withBroadcastLock: access },
+      query: { liftedinit: { sku: { v1: { provider } } } },
+    } as unknown as FredAuthCtx;
+    await expect(deployManifest(deploymentCtx, {
+      manifest: '{"image":"nginx","labels":{"com.docker.compose.project":"tenant"}}',
+      sku: { kind: 'resolved', skuUuid: asSkuUuid('sku-1'), providerUuid: asProviderUuid('p1') },
+    })).rejects.toMatchObject({ code: ManifestMCPErrorCode.INVALID_CONFIG });
+    expect(provider).toHaveBeenCalledWith({ uuid: 'p1' });
+    expect(access).not.toHaveBeenCalled();
+  });
+
   it('rejects a malformed domain before creating a paid lease', async () => {
     const { ctx, access } = preflightContext();
     await expect(deployManifest(ctx, {

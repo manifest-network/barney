@@ -138,13 +138,17 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'restart_app',
-      description: 'Restart apps by name, comma-separated list, or "all" to restart all.',
+      description: 'Restart apps by name, comma-separated list, or "all". On pr240 providers, an unresolved restart is recovered with its original command key; "all" recovers only pending restarts when any exist. A settled-command notice for previously uncertain work prevents stale retry advice from creating another command. Set new_command only when the user deliberately wants another operation after that notice, never for a retry. Legacy v0.13 providers cannot deduplicate retries: observe app_status and app_releases before deliberately requesting another restart. Never automatically stop/redeploy to recover an uncertain result.',
       parameters: {
         type: 'object',
         properties: {
           app_name: {
             type: 'string',
             description: 'App name, comma-separated names (e.g. "redis,postgres"), or "all" to restart all running apps.',
+          },
+          new_command: {
+            type: 'boolean',
+            description: 'Explicitly request a NEW operation after Barney reports that the previous command settled. Use only for deliberate new work, never to recover an old request. Cannot bypass a pending command.',
           },
         },
         required: ['app_name'],
@@ -155,13 +159,17 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'update_app',
-      description: 'Update an app with a new manifest file, a new Docker image, or a new service stack definition.',
+      description: 'Update an app with a new manifest file, a new Docker image, or a new service stack definition. On pr240, retry an unresolved update with only app_name to recover its original key and exact payload. After reload, Barney checks provider history for matching bytes, or can verify the original attached file merged with saved defaults by its payload fingerprint. If no match exists, exact reviewed bytes are required; never regenerate passwords or replace a pending command. A settled-command notice for previously uncertain work prevents stale retries from creating another command; use new_command only for deliberate new work after that notice. Legacy v0.13 cannot deduplicate retries: observe app_status and app_releases before deliberately submitting another update. Never automatically stop/redeploy as recovery. If exact bytes are permanently lost and no recovery route remains, explain that a separately confirmed stop_app ends the deployment; it does not recover the update, and Fred may execute the pending command until the lease closes.',
       parameters: {
         type: 'object',
         properties: {
           app_name: {
             type: 'string',
             description: 'The name of the app to update.',
+          },
+          new_command: {
+            type: 'boolean',
+            description: 'Explicitly request a NEW operation after Barney reports that the previous command settled. Use only for deliberate new work, never to recover an old request. Cannot bypass a pending command.',
           },
           image: {
             type: 'string',

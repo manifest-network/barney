@@ -10,11 +10,12 @@ import { TerminalChainStateError, describeFredFailure } from '@manifest-network/
 import { logError } from '../../utils/errors';
 import { sanitizeForDisplay } from '../../utils/sanitizeText';
 import type { ToolResult, ToolExecutorOptions, SigningContext } from './types';
-import { connectionPatch, failureText } from './helpers';
+import { connectionPatch, FAILURE_DETAIL_CHARS, failureText } from './helpers';
 import { nextStepFor } from './failureGuidance';
 import { resolveAppUrl } from './deployUrl';
 import { isTerminalLeaseState } from '../../utils/leaseState';
 import { appCardConnection } from './appCardConnection';
+import { previewServiceLogs, renderDeployDiagnostic, type DeployFailureDiagnostic } from './deployDiagnostic';
 
 /**
  * Best-effort fetch of provider logs and provision status for failed deploys.
@@ -26,14 +27,14 @@ async function fetchFailureLogs(
   leaseUuid: string,
   _address: string,
   signing: SigningContext | undefined,
-  appName: string
-): Promise<string | null> {
+  appName: string,
+): Promise<Omit<DeployFailureDiagnostic, 'lead'> | null> {
   if (!signing) return null;
 
   try {
     const authToken = await signing.authTokens.getAuthToken(asLeaseUuid(leaseUuid));
 
-    const parts: string[] = [];
+    const diagnostic: Omit<DeployFailureDiagnostic, 'lead'> = { appName, logs: [] };
 
     // Fetch provision status first — more structured than raw logs
     try {
@@ -42,12 +43,13 @@ async function fetchFailureLogs(
       // pair — read neither directly; `describeFredFailure` covers both eras.
       if (describeFredFailure(provision)) {
         const detail = failureText(provision, 'no detail reported');
-        parts.push(`Provision error (fail_count=${provision.fail_count}): ${detail}`);
+        diagnostic.failure = detail;
+        diagnostic.failCount = provision.fail_count;
         // Via barney's remapper, never the SDK's `guidanceFor` — see
         // failureGuidance.ts. `reason` is an OPEN set: an unknown value yields
         // undefined here and is still relayed verbatim above, never rejected.
         const nextStep = nextStepFor(provision.reason, appName);
-        if (nextStep) parts.push(nextStep);
+        if (nextStep) diagnostic.nextStep = nextStep;
       }
     } catch (error) {
       logError('deployError.fetchFailureLogs.provision', error);
@@ -56,25 +58,12 @@ async function fetchFailureLogs(
     // Fetch container logs
     try {
       const response = await getLeaseLogs(providerUrl, leaseUuid, authToken, 100);
-      const logEntries = Object.entries(response.logs ?? {});
-      if (logEntries.length > 0) {
-        const logText = logEntries
-          .map(([service, text]) => `[${service}]\n${typeof text === 'string' ? text : JSON.stringify(text)}`)
-          .join('\n');
-        parts.push(`Container logs:\n${logText}`);
-      }
+      Object.assign(diagnostic, previewServiceLogs(response.logs ?? {}));
     } catch (error) {
       logError('deployError.fetchFailureLogs.logs', error);
     }
 
-    if (parts.length === 0) return null;
-
-    const combined = parts.join('\n\n');
-    // Truncate to last ~2000 chars to avoid bloating LLM context
-    if (combined.length > 2000) {
-      return '...' + combined.slice(-2000);
-    }
-    return combined;
+    return diagnostic.failure || diagnostic.logs.length > 0 ? diagnostic : null;
   } catch (error) {
     logError('deployError.fetchFailureLogs', error);
     return null;
@@ -196,6 +185,10 @@ interface DeployErrorContext {
   signing: SigningContext;
   appRegistry: NonNullable<ToolExecutorOptions['appRegistry']>;
   onProgress?: ToolExecutorOptions['onProgress'];
+  /** Batch row budget, including the lead, guidance and ending log preview. */
+  maxDetailChars?: number;
+  /** Internal structured preview for batch summaries; never persisted twice. */
+  onDiagnostic?: (diagnostic: DeployFailureDiagnostic) => void;
 }
 
 /**
@@ -227,13 +220,14 @@ export async function handleDeployManifestError(
     if (leaseUuid) {
       appRegistry.updateApp(address, leaseUuid, { chainState: 'absent', provisionState: 'failed' });
     }
-    onProgress?.({ phase: 'failed', detail: error.message });
-    return { success: false, error: `Deployment failed: ${error.message}` };
+    const detail = sanitizeForDisplay(error.message, FAILURE_DETAIL_CHARS);
+    onProgress?.({ phase: 'failed', detail });
+    return { success: false, error: `Deployment failed: ${detail}` };
   }
 
   // Case 2: post-lease throw.
   if (leaseUuid) {
-    const errMessage = error instanceof Error ? error.message : String(error);
+    const errMessage = sanitizeForDisplay(error instanceof Error ? error.message : String(error), FAILURE_DETAIL_CHARS);
     const details: DeployThrowDetails = error instanceof ManifestMCPError ? error.details : undefined;
     const cancelled = error instanceof ManifestMCPError && error.code === ManifestMCPErrorCode.OPERATION_CANCELLED;
 
@@ -275,10 +269,12 @@ export async function handleDeployManifestError(
     if (partial && failedStep === 'poll') {
       logError('deployError.pollVerdict', error);
       appRegistry.updateApp(address, leaseUuid, { provisionState: 'failed' });
-      const diagnostics = providerUrl ? await fetchFailureLogs(providerUrl, leaseUuid, address, signing, name) : null;
       const lead = 'Deployment failed: the provider reported the deployment as failed.';
+      const diagnostics = providerUrl ? await fetchFailureLogs(providerUrl, leaseUuid, address, signing, name) : null;
+      const diagnostic = diagnostics ? { ...diagnostics, lead } : undefined;
+      if (diagnostic) ctx.onDiagnostic?.(diagnostic);
       onProgress?.({ phase: 'failed', detail: 'The provider reported the deployment as failed.' });
-      return { success: false, error: diagnostics ? `${lead}\n\n${diagnostics}` : lead };
+      return { success: false, error: diagnostic ? renderDeployDiagnostic(diagnostic, ctx.maxDetailChars) : lead };
     }
 
     // An unknown/malformed step from a future SDK carries no readiness verdict.
@@ -341,19 +337,22 @@ export async function handleDeployManifestError(
     // error), and we cannot tell them apart.
     appRegistry.updateApp(address, leaseUuid, { status: 'failed' });
     onProgress?.({ phase: 'failed', detail: errMessage });
+    const lead = `Deployment failed: ${errMessage}`;
     const diagnostics = cancelled || !providerUrl
       ? null
       : await fetchFailureLogs(providerUrl, leaseUuid, address, signing, name);
+    const diagnostic = diagnostics ? { ...diagnostics, lead } : undefined;
+    if (diagnostic) ctx.onDiagnostic?.(diagnostic);
     // barney copy — NOT the SDK's "…close_lease" text (barney has no close_lease tool).
-    const errorMsg = diagnostics
-      ? `Deployment failed: ${errMessage}\n\n${diagnostics}`
-      : `Deployment failed: ${errMessage}`;
+    const errorMsg = diagnostic
+      ? renderDeployDiagnostic(diagnostic, ctx.maxDetailChars)
+      : lead;
     return { success: false, error: errorMsg };
   }
 
-  // Case 1: raw Error with NO lease (create-lease rejected) — surface the
-  // raw error; no failure-log fetch (there's no lease to fetch logs for).
-  const message = error instanceof Error ? error.message : 'Deployment failed';
+  // Case 1: raw Error with NO lease (create-lease rejected) — bound its display
+  // text; no failure-log fetch (there's no lease to fetch logs for).
+  const message = sanitizeForDisplay(error instanceof Error ? error.message : 'Deployment failed', FAILURE_DETAIL_CHARS);
   onProgress?.({ phase: 'failed', detail: message });
   return { success: false, error: message };
 }
