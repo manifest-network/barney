@@ -226,12 +226,22 @@ reservation, quotas, hard budget, and request limits—not merely inject a key.
 | Endpoint | Exposure | Meaning |
 |----------|----------|---------|
 | `/api/morpheus/healthz` | public through nginx | relay-process liveness only |
-| `/api/morpheus/readyz` | public/internal through nginx | ledger, default-request budget, and cached authenticated-provider readiness |
+| `/api/morpheus/readyz` | public/internal through nginx | ledger, default-request budget, and cached provider reachability and API-key authentication |
 | `/metrics` on relay port 8081 | loopback by default; private network only when explicitly bound | aggregate request, rejection, usage, spend, budget, concurrency, and max identity-quota utilization |
 
 Metrics never contain wallet addresses, identity hashes, prompts, cookies, or
 keys. Logs likewise use only request IDs, bounded event names, and numeric
 upstream statuses.
+
+Readiness probes `GET /models` and authenticated
+[`GET /billing/balance`](https://apidocs.mor.org/api-reference/billing/balance)
+in parallel under the shared upstream connection timeout (15 seconds by default).
+Both must succeed: the public model catalog alone does not validate an API key.
+The result is cached for `MORPHEUS_RELAY_READINESS_CACHE_SECONDS` (30 seconds by
+default), including failures. Probe response bodies are discarded; provider
+balances are neither logged nor exported. These free checks do not spend
+inference tokens or establish that a particular completion will succeed. The
+relay's durable accounting and default-request budget checks still apply.
 
 ## Updating
 

@@ -97,7 +97,7 @@ function authenticatedHeaders(auth, includeOrigin = true) {
   };
 }
 
-async function makeHarness({ config: configOverrides = {}, now, upstreamHandler } = {}) {
+async function makeHarness({ config: configOverrides = {}, now, upstreamHandler, fetchImpl } = {}) {
   const stateDirectory = await mkdtemp(join(tmpdir(), 'barney-relay-integration-'));
   const upstreamRequests = [];
   const upstream = createServer(async (request, response) => {
@@ -109,7 +109,12 @@ async function makeHarness({ config: configOverrides = {}, now, upstreamHandler 
     };
     upstreamRequests.push(record);
     if (upstreamHandler) await upstreamHandler(request, response, record, upstreamRequests.length);
-    else sendCompletion(response);
+    else if (request.url === '/api/v1/models' || request.url === '/api/v1/billing/balance') {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(request.url.endsWith('/models')
+        ? { data: [{ id: 'test-model' }] }
+        : { total_available: 100 }));
+    } else sendCompletion(response);
   });
   const upstreamUrl = await listen(upstream);
   const config = {
@@ -134,7 +139,7 @@ async function makeHarness({ config: configOverrides = {}, now, upstreamHandler 
     ...configOverrides,
   };
   const logs = [];
-  const relay = await createRelay({ config, now, logger: (entry) => logs.push(entry) });
+  const relay = await createRelay({ config, now, fetchImpl, logger: (entry) => logs.push(entry) });
   const relayAddress = await relay.listen(0, '127.0.0.1');
   return {
     config,
@@ -427,17 +432,120 @@ describe('authenticated Morpheus relay', () => {
     expect(budgetDown.upstreamRequests).toHaveLength(0);
   });
 
-  it('caches an authenticated upstream models probe for successful readiness', async () => {
-    const app = await harness();
+  it('caches both successful readiness probes and refreshes them after expiry', async () => {
+    let time = Date.now();
+    const app = await harness({ now: () => time });
 
     expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(200);
     expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(200);
-    expect(app.upstreamRequests).toHaveLength(1);
-    expect(app.upstreamRequests[0]).toMatchObject({
+    expect(app.upstreamRequests).toHaveLength(2);
+    expect(app.upstreamRequests).toEqual(expect.arrayContaining([
+      expect.objectContaining({ url: '/api/v1/models' }),
+      expect.objectContaining({ url: '/api/v1/billing/balance' }),
+    ]));
+    for (const request of app.upstreamRequests) expect(request).toMatchObject({
       method: 'GET',
-      url: '/api/v1/models',
       authorization: `Bearer ${API_KEY}`,
     });
+
+    time += app.config.readinessCacheMs;
+    expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(200);
+    expect(app.upstreamRequests).toHaveLength(4);
+    expect(app.relay.ledger.snapshot().provider.spendMicroUsd).toBe(0);
+  });
+
+  it('fails readiness for a rejected API key despite a public catalog, without exposing provider bodies', async () => {
+    let time = Date.now();
+    let balanceStatus = 401;
+    const privateBalance = 834792.610284;
+    const app = await harness({
+      now: () => time,
+      upstreamHandler: async (request, response) => {
+        response.writeHead(request.url.endsWith('/models') ? 200 : balanceStatus, {
+          'Content-Type': 'application/json',
+        });
+        response.end(JSON.stringify(request.url.endsWith('/models')
+          ? { data: [{ id: 'test-model' }] }
+          : { detail: `Invalid API key ${API_KEY}`, total_available: privateBalance }));
+      },
+    });
+    expect((await fetch(`${app.relayUrl}/api/morpheus/healthz`)).status).toBe(200);
+    const rejected = await fetch(`${app.relayUrl}/api/morpheus/readyz`);
+    expect(rejected.status).toBe(503);
+    expect(await rejected.json()).toEqual({ status: 'unavailable' });
+
+    balanceStatus = 200;
+    expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(503);
+    expect(app.upstreamRequests).toHaveLength(2);
+    time += app.config.readinessCacheMs;
+    const recovered = await fetch(`${app.relayUrl}/api/morpheus/readyz`);
+    expect(recovered.status).toBe(200);
+    expect(await recovered.json()).toEqual({ status: 'ready' });
+    expect(app.upstreamRequests).toHaveLength(4);
+    expect(app.upstreamRequests.every((request) => request.method === 'GET')).toBe(true);
+    const metrics = await (await fetch(`${app.relayUrl}/metrics`)).text();
+    for (const output of [JSON.stringify(app.logs), metrics]) {
+      expect(output).not.toContain(API_KEY);
+      expect(output).not.toContain(String(privateBalance));
+      expect(output).not.toContain('Invalid API key');
+    }
+    expect(app.relay.ledger.snapshot().provider.spendMicroUsd).toBe(0);
+  });
+
+  it('shares a single pair of in-flight probes across concurrent readiness requests', async () => {
+    const pending = [];
+    const fetchImpl = vi.fn((_url, options) => new Promise((resolve) => {
+      pending.push({ resolve, options });
+    }));
+    const app = await harness({ fetchImpl });
+    const requests = [
+      fetch(`${app.relayUrl}/api/morpheus/readyz`),
+      fetch(`${app.relayUrl}/api/morpheus/readyz`),
+    ];
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    expect(pending[0].options.signal).toBe(pending[1].options.signal);
+    for (const { resolve, options } of pending) {
+      expect(options).toMatchObject({ method: 'GET', redirect: 'error' });
+      resolve(Response.json({}));
+    }
+    expect((await Promise.all(requests)).map((response) => response.status)).toEqual([200, 200]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds both readiness probes with one deadline and caches a timeout', async () => {
+    const signals = [];
+    const fetchImpl = vi.fn((_url, { signal }) => new Promise((_resolve, reject) => {
+      signals.push(signal);
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }));
+    const app = await harness({ fetchImpl, config: { upstreamConnectTimeoutMs: 30 } });
+    expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(503);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(signals[0]).toBe(signals[1]);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(503);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels the other readiness probe after a network failure without leaking error details', async () => {
+    let modelSignal;
+    const fetchImpl = vi.fn((url, { signal }) => {
+      if (url.pathname.endsWith('/billing/balance')) {
+        return Promise.reject(new Error(`upstream error ${API_KEY}`));
+      }
+      modelSignal = signal;
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    });
+    const app = await harness({ fetchImpl });
+    const response = await fetch(`${app.relayUrl}/api/morpheus/readyz`);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ status: 'unavailable' });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(modelSignal.aborted).toBe(true);
+    expect(JSON.stringify(app.logs)).not.toContain(API_KEY);
+    expect(await (await fetch(`${app.relayUrl}/metrics`)).text()).not.toContain(API_KEY);
   });
 
   it('enforces per-identity concurrency', async () => {

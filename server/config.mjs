@@ -145,3 +145,7 @@ export function upstreamChatUrl(config) {
 export function upstreamModelsUrl(config) {
   return new URL('models', config.upstreamBaseUrl);
 }
+
+export function upstreamBalanceUrl(config) {
+  return new URL('billing/balance', config.upstreamBaseUrl);
+}
