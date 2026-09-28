@@ -165,7 +165,7 @@ describe('executeListApps', () => {
       lastSettledAt: new Date(recovered.createdAt),
       rejectionReason: '',
       closureReason: '',
-      metaHash: new Uint8Array(),
+      metaHash: new Uint8Array(32).fill(7),
       minLeaseDurationAtCreation: 0n,
       items: [],
     } satisfies Awaited<ReturnType<typeof getLeasesByTenant>>[number];
@@ -191,6 +191,38 @@ describe('executeListApps', () => {
       address, [lease], expect.objectContaining({ registry }),
     );
     expect(hydrateDiscoveredApp).not.toHaveBeenCalled();
+  });
+
+  it('omits a payloadless lease that an earlier build imported', async () => {
+    const registry = await import('../../registry/appRegistry');
+    const discovery = await vi.importActual<typeof import('../../api/appDiscovery')>('../../api/appDiscovery');
+    const address = 'manifest1payloadlesslist';
+    const imported = registry.addApp(address, makeApp({
+      name: 'app-payloadless', chainState: 'active', provisionState: 'unconfirmed', status: 'deploying',
+    }));
+    const lease = {
+      uuid: imported.leaseUuid,
+      tenant: address,
+      providerUuid: imported.providerUuid,
+      state: 2,
+      createdAt: new Date(imported.createdAt),
+      lastSettledAt: new Date(imported.createdAt),
+      rejectionReason: '',
+      closureReason: '',
+      metaHash: new Uint8Array(),
+      minLeaseDurationAtCreation: 0n,
+      items: [],
+    } satisfies Awaited<ReturnType<typeof getLeasesByTenant>>[number];
+    vi.mocked(getLeasesByTenant).mockImplementation(async (_address, state) =>
+      state === 2 ? [lease] : [],
+    );
+    vi.mocked(discoverTenantApps).mockImplementationOnce(discovery.discoverTenantApps);
+
+    const result = await executeListApps({}, makeOptions({ address, appRegistry: registry }));
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({ count: 0, apps: [] });
+    expect(registry.getAppByLease(address, imported.leaseUuid)).toBeNull();
   });
 
   it('returns a cold inventory without waiting for provider authentication', async () => {

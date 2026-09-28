@@ -132,6 +132,7 @@ describe('useRegistryReconciliation', () => {
       providerUuid: 'provider-1',
       state: LeaseState.LEASE_STATE_ACTIVE,
       createdAt: new Date('2026-09-01T12:00:00Z'),
+      metaHash: new Uint8Array(32).fill(7),
       items: [{ skuUuid: 'sku-1', serviceName: 'web', customDomain: 'web.example.com' }],
     } as Lease;
   }

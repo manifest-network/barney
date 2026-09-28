@@ -29,6 +29,7 @@ function lease(overrides: Partial<Lease> = {}): Lease {
     providerUuid: PROVIDER_UUID,
     state: LeaseState.LEASE_STATE_ACTIVE,
     createdAt: new Date('2026-01-01T12:00:00Z'),
+    metaHash: new Uint8Array(32).fill(7),
     items: [{ skuUuid: 'sku-1', serviceName: 'web', customDomain: 'web.example.com' }],
     ...overrides,
   } as Lease;
@@ -90,6 +91,27 @@ describe('discoverTenantApps', () => {
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({
       status: 'running', provisionState: 'confirmed', url: 'https://app.example.com',
     });
+  });
+
+  it('ignores live leases without a deployment and forgets entries an earlier build imported', async () => {
+    app({ name: 'app-payloadless', leaseUuid: 'payloadless-known' });
+    const result = await discoverTenantApps(address, [
+      lease(),
+      lease({ uuid: 'payloadless-new', metaHash: new Uint8Array() }),
+      lease({ uuid: 'payloadless-known', metaHash: new Uint8Array() }),
+    ]);
+    expect(result.map(entry => entry.leaseUuid)).toEqual([LEASE_UUID]);
+    expect(registry.getApps(address).map(entry => entry.leaseUuid)).toEqual([LEASE_UUID]);
+  });
+
+  it('forgets payloadless entries without reading catalogs when nothing needs importing', async () => {
+    app({ name: 'app-payloadless', leaseUuid: 'payloadless-known' });
+    await expect(discoverTenantApps(address, [
+      lease({ uuid: 'payloadless-known', metaHash: new Uint8Array() }),
+    ])).resolves.toEqual([]);
+    expect(registry.getApps(address)).toEqual([]);
+    expect(getProviders).not.toHaveBeenCalled();
+    expect(getSKUs).not.toHaveBeenCalled();
   });
 
   it('retains discovered apps through catalog failures and fills missing metadata on a later pass', async () => {

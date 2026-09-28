@@ -103,6 +103,34 @@ describe('appRegistry', () => {
       expect(getAppByLease(ADDR_A, pending.leaseUuid)?.status).toBe('failed');
     });
 
+    it('drops entries for payloadless leases in the same write and never imports them', () => {
+      const deployed = makeApp({ leaseUuid: 'lease-deployed', name: 'deployed' });
+      const payloadless = makeApp({ leaseUuid: 'lease-payloadless', name: 'app-payloadless' });
+      addApp(ADDR_A, deployed);
+      addApp(ADDR_A, payloadless);
+      addApp(ADDR_B, payloadless);
+      const listener = vi.fn();
+      const unsub = subscribeToRegistry(listener);
+      const setItem = vi.spyOn(localStorage, 'setItem');
+      try {
+        const imported = discoverAppsFromChain(
+          ADDR_A,
+          [makeChainApp({ leaseUuid: 'lease-new' }), makeChainApp({ leaseUuid: 'lease-payloadless-new' })],
+          ['lease-payloadless', 'lease-payloadless-new'],
+        );
+        expect(imported.map((app) => app.leaseUuid)).toEqual(['lease-new']);
+        expect(getApps(ADDR_A).map((app) => app.leaseUuid)).toEqual(['lease-deployed', 'lease-new']);
+        expect(getApps(ADDR_B)).toEqual([payloadless]);
+        expect(setItem).toHaveBeenCalledTimes(1);
+        expect(listener).toHaveBeenCalledTimes(1);
+
+        // Nothing left to forget or import: no write, no notification.
+        expect(discoverAppsFromChain(ADDR_A, [], ['lease-payloadless'])).toEqual([]);
+        expect(setItem).toHaveBeenCalledTimes(1);
+        expect(listener).toHaveBeenCalledTimes(1);
+      } finally { setItem.mockRestore(); unsub(); }
+    });
+
     it('preserves local names, manifests, and provider failures during repeated discovery', () => {
       const lease = makeChainApp();
       const app = makeApp({

@@ -20,6 +20,9 @@ interface DiscoveryOptions {
 }
 
 const missingSize = (app: AppEntry): boolean => !app.size || app.size === 'unknown';
+// Barney deploys always commit the manifest hash at lease creation; Fred
+// provisions a lease without one payloadlessly, with no manifest to manage.
+const hasDeployment = (lease: Lease): boolean => lease.metaHash?.length > 0;
 // Persistence strips unsupported provider fields (for example protocol), while
 // the memory fallback retains them. Normalize both sides to the registry schema
 // and sort nested keys so our own provider writes never reset the retry budget.
@@ -38,14 +41,22 @@ export async function discoverTenantApps(
 ): Promise<AppEntry[]> {
   signal?.throwIfAborted();
   const baseline = new Map(registry.getApps(address).map(app => [app.leaseUuid, app]));
-  const candidates = leases.filter(lease => {
+  const live = leases.filter(lease => lease.tenant === address
+    && (lease.state === LeaseState.LEASE_STATE_ACTIVE || lease.state === LeaseState.LEASE_STATE_PENDING));
+  // Leases without a deployment still bill, but they are not Barney apps.
+  const payloadless = live
+    .filter(lease => !hasDeployment(lease) && baseline.has(lease.uuid))
+    .map(lease => lease.uuid);
+  const candidates = live.filter(lease => {
     const previous = baseline.get(lease.uuid);
-    return lease.tenant === address
-      && (lease.state === LeaseState.LEASE_STATE_ACTIVE || lease.state === LeaseState.LEASE_STATE_PENDING)
+    return hasDeployment(lease)
       && lease.createdAt instanceof Date && Number.isFinite(lease.createdAt.getTime())
       && (!previous || !previous.providerUrl || missingSize(previous));
   });
-  if (candidates.length === 0) return [];
+  if (candidates.length === 0) {
+    if (payloadless.length > 0) registry.discoverAppsFromChain(address, [], payloadless);
+    return [];
+  }
 
   // A provider/SKU can be inactive while its existing leases remain live.
   // Independent failures must not hide authoritative chain inventory.
@@ -88,7 +99,7 @@ export async function discoverTenantApps(
       customDomains: getDomainAssignments(lease.items),
     });
   }
-  return registry.discoverAppsFromChain(address, snapshots);
+  return registry.discoverAppsFromChain(address, snapshots, payloadless);
 }
 
 export interface AppRecoveryObservation {
