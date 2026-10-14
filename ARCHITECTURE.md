@@ -348,7 +348,7 @@ tabs stays last-writer-wins.
 
 ### Runtime configuration
 
-`src/config/runtimeConfig.ts` resolves 18 client-side `PUBLIC_*` variables via:
+`src/config/runtimeConfig.ts` resolves 20 client-side `PUBLIC_*` variables via:
 
 1. `window.__RUNTIME_CONFIG__` (rendered into `/config.js` at container startup by `docker/env.sh`)
 2. `import.meta.env` (build-time inlined by Rsbuild from `.env*` files)

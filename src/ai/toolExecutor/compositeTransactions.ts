@@ -13,7 +13,8 @@ import {
 } from '@manifest-network/manifest-sdk';
 import { ManifestMCPError, ManifestMCPErrorCode } from '@manifest-network/manifest-sdk';
 import { getCreditAccount, getLease, LeaseState } from '../../api/billing';
-import { getProviders } from '../../api/sku';
+import { getDeployableProviders } from '../../api/deployableCatalog';
+import { isProviderAllowed, ProviderAllowlistError } from '../../config/providerAllowlist';
 import { resolveSizeOrCheapest } from '../../api/skuTiers';
 import { ProviderApiError } from '../../api/provider-api';
 import { getLeaseProvision, type FredLeaseStatus } from '../../api/fred';
@@ -403,9 +404,10 @@ export async function executeDeployApp(
   // Find provider — still need apiUrl, which isn't in ResolvedSkuTier.
   let providers;
   try {
-    providers = await withTimeout(getProviders(true), undefined, 'Fetch providers');
+    providers = await withTimeout(getDeployableProviders(), undefined, 'Fetch providers');
   } catch (error) {
     logError('compositeTransactions.deploy.fetchProviders', error);
+    if (error instanceof ProviderAllowlistError) return { success: false, error: error.message };
     return { success: false, error: 'Failed to fetch providers. Please try again.' };
   }
 
@@ -593,6 +595,9 @@ export async function executeConfirmedDeployApp(
   const skuUuid = plan.skuUuid;
   const providerUuid = plan.providerUuid;
   const providerUrl = plan.providerUrl;
+  if (!isProviderAllowed(providerUrl)) {
+    return { success: false, error: 'This deployment does not offer the planned provider. No transaction was submitted.' };
+  }
 
   // The exact JSON deployManifest will JSON.parse + validateManifest + hash
   // (its meta_hash must match the uploaded body — buildPayloadFromManifest

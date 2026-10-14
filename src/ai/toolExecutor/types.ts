@@ -5,7 +5,7 @@
 import type { CosmosClientManager, SignArbitraryResult } from '@manifest-network/manifest-sdk';
 import type { createAuthTokens, ProviderAuthPort } from '@manifest-network/manifest-sdk/deploy';
 import type { DeployProgress } from '../progress';
-import type { AppEntry } from '../../registry/appRegistry';
+import type { AppEntry, RegistryReadOptions } from '../../registry/appRegistry';
 import type { MessageCard } from '../../contexts/aiTypes';
 import type { ResolvedSkuTier } from '../../api/skuTiers';
 
@@ -200,10 +200,10 @@ export type ToolResult = (ToolResultSuccess | ToolResultFailure | ToolResultConf
 
 export interface AppRegistryAccess {
   discoverAppsFromChain: typeof import('../../registry/appRegistry').discoverAppsFromChain;
-  getApps: (address: string) => AppEntry[];
+  getApps: (address: string, options?: RegistryReadOptions) => AppEntry[];
   getApp: (address: string, name: string) => AppEntry | null;
   findApp: (address: string, name: string) => AppEntry | null;
-  getAppByLease: (address: string, leaseUuid: string) => AppEntry | null;
+  getAppByLease: (address: string, leaseUuid: string, options?: RegistryReadOptions) => AppEntry | null;
   addApp: (address: string, entry: AppEntry) => AppEntry;
   updateApp: (address: string, leaseUuid: string, updates: Partial<Omit<AppEntry, 'leaseUuid'>>) => AppEntry | null;
 }

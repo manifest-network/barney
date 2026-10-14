@@ -8,6 +8,14 @@ import type { AppEntry } from '../registry/appRegistry';
 import { AI_TOOL_API_TIMEOUT_MS, APP_RECOVERY_TIMEOUT_MS } from '../config/constants';
 
 vi.mock('./sku', () => ({ getProviders: vi.fn(), getSKUs: vi.fn() }));
+const runtime = vi.hoisted(() => ({ allowlist: '' }));
+vi.mock('../config/runtimeConfig', async (original) => {
+  const actual = await original<typeof import('../config/runtimeConfig')>();
+  return {
+    ...actual,
+    runtimeConfig: { ...actual.runtimeConfig, get PUBLIC_PROVIDER_ALLOWLIST() { return runtime.allowlist; } },
+  };
+});
 vi.mock('../utils/errors', () => ({ logError: vi.fn() }));
 vi.mock('@manifest-network/manifest-sdk/deploy', async original => ({
   ...await original<typeof import('@manifest-network/manifest-sdk/deploy')>(),
@@ -56,6 +64,7 @@ function connectionResult(connection: ConnectionDetails) {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  runtime.allowlist = '';
   address = `manifest1discovery${++sequence}`;
   vi.mocked(getProviders).mockResolvedValue([
     { uuid: PROVIDER_UUID, apiUrl: PROVIDER_URL, active: false } as Provider,
@@ -166,6 +175,81 @@ describe('discoverTenantApps', () => {
     await vi.advanceTimersByTimeAsync(AI_TOOL_API_TIMEOUT_MS);
     expect(await work).toHaveLength(1);
     expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ providerUrl: '', size: 'docker-small' });
+  });
+});
+
+describe('PUBLIC_PROVIDER_ALLOWLIST (ENG-1457)', () => {
+  const OTHER_LEASE = '550e8400-e29b-41d4-a716-446655440009';
+  const OTHER_PROVIDER = '550e8400-e29b-41d4-a716-446655440008';
+  const OTHER_URL = 'https://api.aoraki.example.com/api/fred';
+
+  beforeEach(() => {
+    vi.mocked(getProviders).mockResolvedValue([
+      { uuid: PROVIDER_UUID, apiUrl: PROVIDER_URL, active: true },
+      { uuid: OTHER_PROVIDER, apiUrl: OTHER_URL, active: true },
+    ] as Provider[]);
+    vi.mocked(getSKUs).mockResolvedValue([
+      { uuid: 'sku-1', providerUuid: PROVIDER_UUID, name: 'docker-small', active: true },
+      { uuid: 'sku-2', providerUuid: OTHER_PROVIDER, name: 'docker-small', active: true },
+    ] as SKU[]);
+  });
+
+  it('imports leases on other providers hidden, so no reader sees them and later passes skip the catalog', async () => {
+    runtime.allowlist = JSON.stringify([`${PROVIDER_URL}/`]);
+    const other = lease({ uuid: OTHER_LEASE, providerUuid: OTHER_PROVIDER, items: [{ skuUuid: 'sku-2', serviceName: '' }] as Lease['items'] });
+    const result = await discoverTenantApps(address, [lease(), other]);
+    expect(result.map(entry => entry.leaseUuid)).toEqual([LEASE_UUID]);
+    expect(registry.getApps(address).map(entry => entry.leaseUuid)).toEqual([LEASE_UUID]);
+    expect(registry.getAppByLease(address, OTHER_LEASE)).toBeNull();
+    const hidden = registry.getAppByLease(address, OTHER_LEASE, { includeHidden: true });
+    expect(hidden).toMatchObject({ providerUrl: OTHER_URL, size: 'docker-small' });
+    expect(registry.findApp(address, hidden!.name)).toBeNull();
+    expect(registry.getApp(address, hidden!.name)).toBeNull();
+
+    vi.mocked(getProviders).mockClear();
+    vi.mocked(getSKUs).mockClear();
+    await expect(discoverTenantApps(address, [lease(), other])).resolves.toEqual([]);
+    expect(getProviders).not.toHaveBeenCalled();
+    expect(getSKUs).not.toHaveBeenCalled();
+
+    await expect(hydrateDiscoveredApp(address, hidden!, signing)).resolves.toBeUndefined();
+    expect(signing.authTokens.getAuthToken).not.toHaveBeenCalled();
+    expect(getLeaseStatus).not.toHaveBeenCalled();
+  });
+
+  it('hides apps an earlier deploy stored on other providers without deleting their names or manifests', async () => {
+    app({ name: 'aoraki-app', leaseUuid: OTHER_LEASE, providerUuid: OTHER_PROVIDER, providerUrl: OTHER_URL, manifest: '{"image":"nginx"}' });
+    app({ name: 'mainnet-app' });
+    runtime.allowlist = JSON.stringify([PROVIDER_URL]);
+
+    expect(registry.getApps(address).map(entry => entry.name)).toEqual(['mainnet-app']);
+    expect(registry.findApp(address, 'aoraki')).toBeNull();
+    // Hidden names stay reserved, so they cannot become ambiguous if they reappear.
+    expect(registry.validateAppName('aoraki-app', address)).toContain('is already');
+    registry.updateApp(address, LEASE_UUID, { url: 'https://app.example.com' });
+    registry.discoverAppsFromChain(address, []);
+    expect(registry.getApps(address, { includeHidden: true })).toHaveLength(2);
+
+    runtime.allowlist = '';
+    expect(registry.getApp(address, 'aoraki-app')).toMatchObject({ manifest: '{"image":"nginx"}' });
+  });
+
+  it('keeps an app with an unresolved provider hidden until discovery resolves it to an allowed provider', async () => {
+    runtime.allowlist = JSON.stringify([PROVIDER_URL]);
+    vi.mocked(getProviders).mockRejectedValueOnce(new Error('offline'));
+    await expect(discoverTenantApps(address, [lease()])).resolves.toEqual([]);
+    expect(registry.getApps(address)).toEqual([]);
+    expect(registry.getAppByLease(address, LEASE_UUID, { includeHidden: true })).toMatchObject({ providerUrl: '' });
+
+    await discoverTenantApps(address, [lease()]);
+    expect(registry.getAppByLease(address, LEASE_UUID)).toMatchObject({ providerUrl: PROVIDER_URL });
+  });
+
+  it('hides every app, without deleting any, while the setting is invalid', () => {
+    app();
+    runtime.allowlist = PROVIDER_URL;
+    expect(registry.getApps(address)).toEqual([]);
+    expect(registry.getApps(address, { includeHidden: true })).toHaveLength(1);
   });
 });
 

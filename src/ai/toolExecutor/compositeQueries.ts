@@ -16,7 +16,8 @@ import {
   LEASE_STATE_MAP,
   type LeaseItem,
 } from '../../api/billing';
-import { getProviders, getSKUs, Unit } from '../../api/sku';
+import { Unit } from '../../api/sku';
+import { getDeployableCatalog } from '../../api/deployableCatalog';
 import { getProviderHealth } from '../../api/provider-api';
 import { getLeaseLogs, getLeaseProvision, getLeaseReleases } from '../../api/fred';
 import {
@@ -596,10 +597,7 @@ export async function executeBrowseCatalog(
 ): Promise<ToolResult> {
   const { signal } = options;
   throwIfAborted(signal, 'browse_catalog');
-  const [providers, skus] = await Promise.all([
-    withTimeout(getProviders(true), undefined, 'Fetch providers', signal),
-    withTimeout(getSKUs(true), undefined, 'Fetch SKUs', signal),
-  ]);
+  const { providers, skus } = await withTimeout(getDeployableCatalog(), undefined, 'Fetch catalog', signal);
   throwIfAborted(signal, 'browse_catalog');
 
   // Check provider health in parallel.

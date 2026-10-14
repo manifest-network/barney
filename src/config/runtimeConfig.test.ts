@@ -51,8 +51,8 @@ describe('getConfigValue', () => {
 });
 
 describe('runtimeConfig', () => {
-  it('exports all 18 keys as strings', () => {
-    expect(Object.keys(runtimeConfig)).toHaveLength(19);
+  it('exports all 20 keys as strings', () => {
+    expect(Object.keys(runtimeConfig)).toHaveLength(20);
     for (const value of Object.values(runtimeConfig)) {
       expect(typeof value).toBe('string');
     }

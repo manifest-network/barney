@@ -15,6 +15,7 @@ import { nextStepFor } from './failureGuidance';
 import { resolveAppUrl } from './deployUrl';
 import { isTerminalLeaseState } from '../../utils/leaseState';
 import { appCardConnection } from './appCardConnection';
+import { ProviderNotAllowedError } from './capabilityCtx';
 import { previewServiceLogs, renderDeployDiagnostic, type DeployFailureDiagnostic } from './deployDiagnostic';
 
 /**
@@ -352,7 +353,9 @@ export async function handleDeployManifestError(
 
   // Case 1: raw Error with NO lease (create-lease rejected) — bound its display
   // text; no failure-log fetch (there's no lease to fetch logs for).
-  const message = sanitizeForDisplay(error instanceof Error ? error.message : 'Deployment failed', FAILURE_DETAIL_CHARS);
+  let message = sanitizeForDisplay(error instanceof Error ? error.message : 'Deployment failed', FAILURE_DETAIL_CHARS);
+  // The SDK resolved a provider URL outside PUBLIC_PROVIDER_ALLOWLIST before create-lease.
+  if (error instanceof ProviderNotAllowedError) message = `${message} No transaction was submitted.`;
   onProgress?.({ phase: 'failed', detail: message });
   return { success: false, error: message };
 }
