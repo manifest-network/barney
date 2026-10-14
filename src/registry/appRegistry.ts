@@ -7,6 +7,7 @@
 
 import { z } from 'zod';
 import { logError } from '../utils/errors';
+import { isProviderAllowed } from '../config/providerAllowlist';
 
 export const APP_STATUSES = ['deploying', 'running', 'stopped', 'failed'] as const;
 export type AppStatus = (typeof APP_STATUSES)[number];
@@ -210,6 +211,21 @@ function copyApps(apps: readonly AppEntry[]): AppEntry[] {
 }
 
 /**
+ * ENG-1457: apps on providers outside PUBLIC_PROVIDER_ALLOWLIST do not exist
+ * for this deployment, so no tool, sidebar or background driver contacts
+ * them. They stay stored rather than deleted: correcting the setting restores
+ * local names and manifests. Writers keep operating on every stored entry.
+ */
+function visibleApps(apps: AppEntry[]): AppEntry[] {
+  return apps.filter((app) => isProviderAllowed(app.providerUrl));
+}
+
+export interface RegistryReadOptions {
+  /** Discovery bookkeeping only: include hidden entries so they are not re-imported. */
+  includeHidden?: boolean;
+}
+
+/**
  * In-tab change notifications.
  *
  * Mid-tool-execution writes (`executeAppStatus` updating customDomains,
@@ -360,7 +376,7 @@ export function validateAppName(
     return 'App name must be lowercase alphanumeric with hyphens, and cannot start or end with a hyphen.';
   }
   // Uniqueness check — only running/deploying apps block the name
-  const apps = loadApps(address);
+  const apps = visibleApps(loadApps(address));
   const existing = apps.find(
     (a) =>
       a.name === name &&
@@ -374,8 +390,9 @@ export function validateAppName(
 }
 
 /** Get all apps for a wallet address. */
-export function getApps(address: string): AppEntry[] {
-  return loadApps(address);
+export function getApps(address: string, options: RegistryReadOptions = {}): AppEntry[] {
+  const apps = loadApps(address);
+  return options.includeHidden ? apps : visibleApps(apps);
 }
 
 /**
@@ -436,12 +453,12 @@ export function discoverAppsFromChain(
     saveApps(address, apps);
     notify(address);
   }
-  return copyApps(imported);
+  return copyApps(visibleApps(imported));
 }
 
 /** Get a single app by exact name. Returns null if not found. */
 export function getApp(address: string, name: string): AppEntry | null {
-  return loadApps(address).find((a) => a.name === name) ?? null;
+  return visibleApps(loadApps(address)).find((a) => a.name === name) ?? null;
 }
 
 /**
@@ -459,7 +476,7 @@ export function getApp(address: string, name: string): AppEntry | null {
  * Returns null if no match or if multiple apps match ambiguously.
  */
 export function findApp(address: string, name: string): AppEntry | null {
-  const apps = loadApps(address);
+  const apps = visibleApps(loadApps(address));
   const lower = name.toLowerCase();
   const active = apps.filter((a) => a.status === 'running' || a.status === 'deploying');
 
@@ -493,8 +510,12 @@ export function findApp(address: string, name: string): AppEntry | null {
 }
 
 /** Get a single app by lease UUID. Returns null if not found. */
-export function getAppByLease(address: string, leaseUuid: string): AppEntry | null {
-  return loadApps(address).find((a) => a.leaseUuid === leaseUuid) ?? null;
+export function getAppByLease(
+  address: string,
+  leaseUuid: string,
+  options: RegistryReadOptions = {},
+): AppEntry | null {
+  return getApps(address, options).find((a) => a.leaseUuid === leaseUuid) ?? null;
 }
 
 /**

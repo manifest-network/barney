@@ -9,7 +9,8 @@
  * resources.
  */
 
-import { getSKUs, Unit } from './sku';
+import { Unit } from './sku';
+import { getDeployableSKUs } from './deployableCatalog';
 import type { SKU } from './sku';
 import { getDenomMetadata } from './config';
 import { fromBaseUnits } from '../utils/format';
@@ -177,11 +178,12 @@ export function hourlyPriceFromSku(sku: SKU): number {
 }
 
 /**
- * Fetch active SKUs from chain and join with env specs.
- * Throws on chain fetch failure (caller decides how to surface).
+ * Fetch active SKUs of deployable providers (PUBLIC_PROVIDER_ALLOWLIST) from
+ * chain and join with env specs.
+ * Throws on chain fetch failure or invalid allowlist (caller decides how to surface).
  */
 export async function resolveSkuTiers(specs: SkuSpecMap): Promise<ResolveResult> {
-  const skus = await getSKUs(true);  // activeOnly
+  const skus = await getDeployableSKUs();
 
   // Group SKUs by name. Multiple providers may offer the same SKU name at
   // different prices; collapsing to a single SKU per name (the old behavior)

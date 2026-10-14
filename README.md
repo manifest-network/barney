@@ -144,6 +144,7 @@ Set environment variables on the container. The `docker/env.sh` entrypoint valid
 | `PUBLIC_GAS_PRICE` | `0.0025factory/manifest1afk…/upwr` | Gas price for transaction fees |
 | `PUBLIC_CHAIN_ID` | _required_ | Chain ID for cosmos-kit and relay signing |
 | `PUBLIC_FAUCET_URL` | _(empty)_ | Faucet endpoint URL — enables account auto-provisioning when set |
+| `PUBLIC_PROVIDER_ALLOWLIST` | _(empty)_ | JSON array of provider `api_url`s; other providers and apps on them are treated as nonexistent ([details](docs/dev/deployment.md#provider-allowlist-eng-1457)) |
 | `PUBLIC_AI_STREAM_TIMEOUT_MS` | `30000` | Chat response-header/chunk timeout after a separate 120 s wallet-auth allowance, ms (max `120000`) |
 | `PUBLIC_AI_DEPLOY_PROVISION_TIMEOUT_MS` | `300000` | Deploy provisioning timeout, ms (max `600000`) |
 | `PUBLIC_AI_TOOL_API_TIMEOUT_MS` | `15000` | Blockchain API call timeout, ms (max `60000`) |

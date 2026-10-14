@@ -1,4 +1,5 @@
 import type { FredCompatibility, FredCompatibilityConfig } from '@manifest-network/manifest-sdk/deploy';
+import { canonicalProviderUrl } from './providerUrl';
 import { runtimeConfig } from './runtimeConfig';
 
 /** ENG-976: dev runs Fred PR 240; providers not listed here retain SDK v0.13 rules. */
@@ -7,14 +8,8 @@ export const DEFAULT_FRED_COMPATIBILITY: Readonly<Record<string, FredCompatibili
 });
 
 function providerKey(value: string): string {
-  try {
-    const url = new URL(value);
-    if (url.protocol === 'http:' || url.protocol === 'https:') {
-      return url.href.replace(/\/+$/, '');
-    }
-  } catch {
-    // Keep malformed URLs (which can contain credentials) out of diagnostics.
-  }
+  const key = canonicalProviderUrl(value);
+  if (key) return key;
   throw new Error('PUBLIC_FRED_COMPATIBILITY requires absolute HTTP(S) provider URLs.');
 }
 

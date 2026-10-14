@@ -66,6 +66,36 @@ transport tests do not establish these deployed-workload acceptance checks. The
 [ENG-976 boundary review](../audits/eng-976/README.md) records the implementation
 acceptance criteria, evidence and separate rollout gate.
 
+## Provider allowlist (ENG-1457)
+
+`PUBLIC_PROVIDER_ALLOWLIST` restricts a Barney deployment to the listed
+providers. It is a JSON array of provider `api_url` values, for example
+`["https://barney.manifest.network/api/fred"]`. Matching uses the same
+canonical form as `PUBLIC_FRED_COMPATIBILITY`: paths are significant and
+trailing slashes are normalized. Like the other `PUBLIC_*` settings, it is
+written into `/config.js` at container start and needs no rebuild.
+
+Unset or empty, every provider registered on chain remains available. When it
+is set, Barney treats every other provider as nonexistent:
+
+- The SKU tiers, single and batch deploy planning, and `browse_catalog` offer
+  only listed providers and their SKUs.
+- Apps on other providers are hidden from the sidebar, every app tool
+  (`list_apps`, `app_status`, logs, diagnostics, releases, restart, update,
+  stop, custom domains) and background recovery. Barney sends them no Fred
+  request, so it never guesses a protocol for them. An app whose provider has
+  not been resolved yet stays hidden until discovery resolves it.
+- Hidden apps stay in browser storage. Correcting the setting restores their
+  local names and manifests.
+
+Leases on other providers still bill. `lease_history` and the credit balance
+and burn rate are chain records and still include them. Barney cannot close
+them; closing one takes another chain client.
+
+`[]` allows no provider. An invalid value also allows no provider: deploys and
+`browse_catalog` report a configuration error and every app is hidden until
+the setting is corrected.
+
 ## Required configuration
 
 The relay deliberately has no unlimited financial defaults. Paid inference and

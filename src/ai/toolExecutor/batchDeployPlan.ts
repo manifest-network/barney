@@ -11,7 +11,8 @@
 
 import { getCreditAccount } from '../../api/billing';
 import { DENOMS } from '../../api/config';
-import { getProviders } from '../../api/sku';
+import { getDeployableProviders } from '../../api/deployableCatalog';
+import { ProviderAllowlistError } from '../../config/providerAllowlist';
 import {
   resolveSizeOrCheapest,
   resolveSkuTiers,
@@ -425,6 +426,7 @@ export async function planBatchDeploy(
   } catch (error) {
     rethrowPlanningInterruption(error, options);
     logError('batchDeployPlan.refreshPrices', error);
+    if (error instanceof ProviderAllowlistError) return { success: false, error: error.message };
     return {
       success: false,
       error: 'Could not refresh current deployment prices. No transaction was submitted.',
@@ -435,10 +437,10 @@ export async function planBatchDeploy(
   }
   assertPlanningCurrent(options);
 
-  let providers: Awaited<ReturnType<typeof getProviders>>;
+  let providers: Awaited<ReturnType<typeof getDeployableProviders>>;
   try {
     providers = await withTimeout(
-      getProviders(true),
+      getDeployableProviders(),
       undefined,
       'Fetch providers',
       options.signal,
@@ -446,6 +448,7 @@ export async function planBatchDeploy(
   } catch (error) {
     rethrowPlanningInterruption(error, options);
     logError('batchDeployPlan.fetchProviders', error);
+    if (error instanceof ProviderAllowlistError) return { success: false, error: error.message };
     return { success: false, error: 'Failed to fetch providers. Please try again.' };
   }
 

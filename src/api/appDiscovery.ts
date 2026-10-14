@@ -40,7 +40,9 @@ export async function discoverTenantApps(
   { signal, registry = appRegistry }: DiscoveryOptions = {},
 ): Promise<AppEntry[]> {
   signal?.throwIfAborted();
-  const baseline = new Map(registry.getApps(address).map(app => [app.leaseUuid, app]));
+  // Leases on providers outside PUBLIC_PROVIDER_ALLOWLIST are imported hidden;
+  // counting them as known stops every pass from re-reading the catalog.
+  const baseline = new Map(registry.getApps(address, { includeHidden: true }).map(app => [app.leaseUuid, app]));
   const live = leases.filter(lease => lease.tenant === address
     && (lease.state === LeaseState.LEASE_STATE_ACTIVE || lease.state === LeaseState.LEASE_STATE_PENDING));
   // Leases without a deployment still bill, but they are not Barney apps.
@@ -82,7 +84,7 @@ export async function discoverTenantApps(
     if (previous) {
       // Retry absent metadata after a catalog outage, without overwriting a
       // concurrent deployment, stop, rename, or fresher provider observation.
-      if (!unchanged(registry.getAppByLease(address, lease.uuid), previous)) continue;
+      if (!unchanged(registry.getAppByLease(address, lease.uuid, { includeHidden: true }), previous)) continue;
       const patch: Partial<AppEntry> = {};
       if (!previous.providerUrl && providerUrl) patch.providerUrl = providerUrl;
       if (missingSize(previous) && size) patch.size = size;
